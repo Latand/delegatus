@@ -1,43 +1,41 @@
 "use client";
 
-import { ArrowRightLeft } from "lucide-react";
-import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { createPortal } from "react-dom";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { effortTierLabel, roleName } from "@/components/builderCopy";
 import { ComposerBar } from "@/components/ComposerBar";
-import { DirectoryPicker } from "@/components/DirectoryPicker";
-import { RoleSection } from "@/components/DraftAgentPane";
-import { ChevronDown, X } from "@/components/icons";
-import { Z } from "@/components/layers";
-import { ReasoningControls } from "@/components/ReasoningControls";
-import { engineTintOf } from "@/components/utils";
+import { FeedMessageRow } from "@/components/conversation/OutboxBubbles";
+import { ChevronDown, Zap } from "@/components/icons";
+import { RuntimePopover, RuntimeSheet, tierWord, type AccountChoice, type RuntimePanel } from "@/components/RuntimePill";
+import { FeedSkeleton } from "@/components/skeletons";
+import { useAccountName } from "@/hooks/useEngineAccounts";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { effortScale } from "@/lib/agent/efforts";
 import { ENGINE_MODELS } from "@/lib/agent/models";
 import { useLocale } from "@/lib/i18n";
 
-import { AGENT_LAUNCH_ENGINES, EngineRadioGroup, LaunchAccountSelect, launchEngineLabel } from "./AgentLaunchControls";
+import { AGENT_LAUNCH_ENGINES, launchEngineLabel, type LaunchEngine } from "./AgentLaunchControls";
 import type { DraftLayout, DraftLayoutParts } from "./draftLayout";
 
 /*
- * Design prototypes for creating a new agent (docs/design/new-agent-redesign.md).
- * Three arrangements of the SAME draft: the state, the launch and every control
- * are the product's own (`DraftAgentPane`, `ComposerBar`, `ReasoningControls`,
- * `EngineRadioGroup`, `LaunchAccountSelect`, `DirectoryPicker`, `RoleSection`).
- * Only the kanban fixture installs one, through `?newagent=<n>`; nothing here
- * is reachable from the product.
+ * Design prototypes for creating a new agent (docs/design/new-agent-redesign.md,
+ * the operator's verdict of 2026-10-06). Creating an agent is the composer and
+ * nothing else: the product's own `ComposerBar` with the runtime pill a
+ * conversation's composer carries, and after Send the pane is the conversation.
+ * The state, the launch and its recovery stay in `DraftAgentPane`. Only the
+ * kanban fixture installs a look, through `?newagent=<n>`; nothing here is
+ * reachable from the product.
  */
 
-export const NEW_AGENT_LOOKS = [0, 1, 2, 3] as const;
+export const NEW_AGENT_LOOKS = [0, 1, 2] as const;
 export type NewAgentLook = (typeof NEW_AGENT_LOOKS)[number];
 
 const TITLES: Record<"en" | "uk", Record<NewAgentLook, string>> = {
-  en: { 0: "Today", 1: "The composer is the card", 2: "One line, opened where asked", 3: "A sheet at the button" },
-  uk: { 0: "Сьогодні", 1: "Композер і є карткою", 2: "Один рядок, що розкривається за запитом", 3: "Аркуш біля кнопки" },
+  en: { 0: "Today", 1: "Only the composer, the conversation opens on Send", 2: "The conversation pane from the first frame" },
+  uk: { 0: "Сьогодні", 1: "Лише композер, розмова відкривається після «Надіслати»", 2: "Панель розмови з першого кадру" },
 };
 
 /** What the fixture prepares before the page draws, for the states a press cannot reach in one step. */
-export const NEW_AGENT_SEEDS = ["handoff", "signed-out", "capability"] as const;
+export const NEW_AGENT_SEEDS = ["handoff", "signed-out", "refused"] as const;
 export type NewAgentSeed = (typeof NEW_AGENT_SEEDS)[number];
 
 export function parseNewAgent(search: string): { look: NewAgentLook; inner: boolean; seed: NewAgentSeed | null } | null {
@@ -70,615 +68,236 @@ export function NewAgentHost({ look }: { look: NewAgentLook }) {
         <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{TITLES[lang][look]}</span>
         <span style={{ marginLeft: "auto", opacity: 0.75, fontWeight: 500 }}>{width}×{height} · {lang}</span>
       </div>
-      <iframe data-na-frame={look} title={TITLES[lang][look]} src={`${location.pathname}?${inner.toString()}${location.hash}`} style={{ width, height, border: 0, display: "block" }} />
+      <iframe data-na-frame={look} title={TITLES[lang][look]} allow="microphone" src={`${location.pathname}?${inner.toString()}${location.hash}`} style={{ width, height, border: 0, display: "block" }} />
     </div>
   );
 }
 
 export const NEW_AGENT_STRIP = STRIP;
 
-/* What the board does around a draft, undone for the looks: the card that holds a draft gives it a fixed
-   conversation height and a title of its own («Untitled task»), and look 3 seats no card at all. A shipped
-   look would change the board's own rules; a prototype overrides them from here. The composer's parts are
-   reordered the same way: what a look puts under the field (`[data-na-below]`) comes before the composer's
-   thumbnails and messages, where a shipped look would hand it to the composer as a slot. */
+/* What the board does around a draft, undone for the looks: the card that holds a draft gives it a title of
+   its own («Untitled task») and a foot, and a fixed conversation height. Look 1 is as tall as the composer
+   until Send; look 2 keeps the conversation's height from the first frame. A shipped look would change the
+   board's own rules; a prototype overrides them from here. */
 const BOARD_CSS = `
-.kb .agent-draft:has([data-na-draft]) { height: auto; max-width: none; }
-.kb .card[data-id^="draft:"]:has([data-na-draft="1"], [data-na-draft="2"]) > :is(.head, .foot) { display: none; }
-.kb .card[data-id^="draft:"]:has([data-na-seat="3"]) { display: none; }
-.kb .agent-drafts:has([data-na-seat="3"]) { display: none; }
+.kb .card[data-id^="draft:"]:has([data-na-draft]) > :is(.head, .foot) { display: none; }
+.kb .agent-draft:has([data-na-draft="1"]:not([data-na-sent])) { height: auto; }
 .kb .card:not([data-id^="draft:"]) [data-na-draft] { border-top: 1px solid var(--border-default); padding-top: 8px; }
-[data-na-role] > div { border: 0; background: none; padding: 0; }
-[data-na-role] label[for^="draft-role-"] { display: none; }
-[data-na-form][data-na-reorder] > * { order: 3; }
-[data-na-form][data-na-reorder] > [data-testid="composer-input-unit"] { order: 1; }
-[data-na-draft="2"] [data-na-reorder] [data-testid="composer-options-row"] > div:first-child { display: contents; }
-[data-na-sheet] textarea { max-height: 96px; }
-[data-na-sheet][data-na-tight] textarea { max-height: 58px; }
-[data-na-phone] [role="radio"] { position: relative; }
-[data-na-phone] [role="radio"]::before { content: ""; position: absolute; inset: -9px 0; }
-[data-na-phone] [data-na-more] button { position: relative; }
-[data-na-phone] [data-na-more] button::before { content: ""; position: absolute; inset: -8px 0; }
-[data-na-draft] [role="radio"][aria-checked="false"] { border-color: var(--border-default); }
-.kb [data-na-anchor-open], [data-na-anchor-open] { background: var(--surface-well) !important; color: var(--color-primary) !important; }
+[data-na-opening] [data-skeleton="feed"] > :not(:last-child) { display: none; }
 `;
 
-/* The captions a shipped look would add to the catalog: the product names these fields only in the default
-   option of each select («model: default») and in its accessibility labels, which are sentences. */
-const CAPTIONS = {
-  en: { model: "Model", effort: "Effort", speed: "Speed", account: "Account", task: "Task", more: "More fields below" },
-  uk: { model: "Модель", effort: "Міркування", speed: "Швидкість", account: "Акаунт", task: "Задача", more: "Нижче є ще поля" },
-} as const;
-
-function useCaptions() {
-  const { locale } = useLocale();
-  return CAPTIONS[locale === "uk" ? "uk" : "en"];
-}
-
-const CAPTION = "min-w-0 truncate text-label font-semibold text-muted first-letter:uppercase";
-const ICON_BUTTON = "inline-flex shrink-0 items-center justify-center rounded-control text-muted hover:bg-sunken hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
-
-function Close({ parts, phone }: { parts: DraftLayoutParts; phone: boolean }) {
-  const { t } = useLocale();
-  return (
-    <button type="button" data-na-close="" className={`${ICON_BUTTON} ${phone ? "h-11 w-11" : "h-7 w-7"}`} aria-label={t("draft.dismiss")} title={t("draft.dismiss")} onClick={parts.onClose}>
-      <X className="h-4 w-4" aria-hidden />
-    </button>
-  );
-}
-
-/** The conversation a handoff draft continues, said in words wherever the look has no heading. */
-function Source({ parts }: { parts: DraftLayoutParts }) {
-  if (!parts.src) return null;
-  return (
-    <p data-na-source="" title={parts.src} className="flex min-w-0 items-center gap-1 text-caption font-semibold text-secondary">
-      <ArrowRightLeft className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden />
-      <span className="min-w-0 truncate first-letter:uppercase">{parts.heading}</span>
-    </p>
-  );
-}
-
-/** The launch in flight: the prompt as the operator's own bubble, and the product's status under it. */
-function Launching({ parts }: { parts: DraftLayoutParts }) {
-  const { t } = useLocale();
-  if (!parts.attempt) return null;
-  return (
-    <div className="flex flex-col gap-2">
-      <div className="flex justify-end">
-        <span className="min-w-0 max-w-[85%] whitespace-pre-wrap rounded-[10px] rounded-br-[3px] bg-accent-soft px-2.5 py-1.5 text-ui text-secondary">
-          {parts.attempt.prompt || t("draft.imagesOnly")}
-        </span>
-      </div>
-      {parts.launchStatus}
-    </div>
-  );
-}
+/** A model of another engine as a row of the pill's model list; the draft's own engine keeps its plain ids,
+    which is how the pill's panels look a model's name up. */
+const foreignModel = (engine: LaunchEngine, model: string) => `${engine}/${model}`;
 
 /**
- * The product's composer, whole: prompt, voice, images, the launch and every error it reports. `below` is
- * what a look keeps directly under the field, ahead of the thumbnails and the messages the composer adds.
+ * The runtime pill of a conversation's composer, over a draft. The popover and
+ * the phone's sheet are the pill's own; the draft answers them from its launch
+ * parameters and applies a choice to itself, since no conversation exists yet
+ * to reconfigure. The engine is chosen with the model: the list names every
+ * engine's models, and a model of another engine moves the draft to it.
  */
-function Prompt({ parts, leftSlot, below }: { parts: DraftLayoutParts; leftSlot: ReactNode; below?: ReactNode }) {
+function DraftRuntimePill({ parts }: { parts: DraftLayoutParts }) {
   const { t } = useLocale();
-  return (
-    <form
-      data-na-form=""
-      data-na-reorder={below === undefined ? undefined : ""}
-      className="flex min-w-0 flex-col gap-1.5"
-      aria-label={t("draft.promptAria")}
-      onSubmit={(event) => {
-        event.preventDefault();
-        parts.submit();
-      }}
-    >
-      {parts.capabilityAlert ? <div style={{ order: 0 }}>{parts.capabilityAlert}</div> : null}
-      <ComposerBar {...parts.composerProps} leftSlot={leftSlot} />
-      {below ? <div data-na-below="" style={{ order: 2 }} className="flex min-w-0 flex-col gap-1.5">{below}</div> : null}
-    </form>
-  );
-}
-
-function Engines({ parts }: { parts: DraftLayoutParts }) {
-  return <EngineRadioGroup engine={parts.launch.engine} engines={AGENT_LAUNCH_ENGINES} roomy disabled={parts.fieldsDisabled} onChange={parts.launch.setEngine} />;
-}
-
-/** The narrowest a runtime cell stands in one row, and the gap between two cells (`gap-x-1.5`). */
-const RUNTIME_CELL = 150;
-const RUNTIME_GAP = 6;
-
-/**
- * The width a select needs to draw its chosen value whole, arrow included: the browser's own answer, read
- * from a copy of the select that holds that one option and takes its natural width.
- */
-function chosenValueWidth(select: HTMLSelectElement): number {
-  const probe = select.cloneNode(false) as HTMLSelectElement;
-  probe.removeAttribute("id");
-  probe.removeAttribute("aria-label");
-  probe.setAttribute("aria-hidden", "true");
-  probe.append(new Option(select.selectedOptions[0]?.textContent ?? ""));
-  probe.style.cssText = "position:absolute;visibility:hidden;width:max-content;min-width:0;max-width:none;";
-  select.parentElement?.append(probe);
-  const width = probe.getBoundingClientRect().width;
-  probe.remove();
-  return Math.ceil(width);
-}
-
-/** Which cells share a row: all of them, or pairs, with a cell that needs more than half the grid on a row of its own. */
-function runtimeRows(needs: number[], width: number): number[][] {
-  const count = needs.length;
-  const cell = Math.max(RUNTIME_CELL, ...needs);
-  if (width >= count * cell + (count - 1) * RUNTIME_GAP) return [needs.map((_, index) => index)];
-  const half = (width - RUNTIME_GAP) / 2;
-  const rows: number[][] = [];
-  for (let index = 0; index < count; index += 1) {
-    const pair = index + 1 < count && needs[index]! <= half && needs[index + 1]! <= half;
-    rows.push(pair ? [index, index + 1] : [index]);
-    if (pair) index += 1;
-  }
-  return rows;
-}
-
-/**
- * Model, effort, speed and account as one grid of captioned cells: one row when the widest chosen value fits
- * a cell (never under 150 px each, gaps counted), two columns otherwise. A value that half the grid would cut
- * takes the whole row, and so does a cell left without a neighbour. The selects are the product's own, in
- * the order `ReasoningControls` and `LaunchAccountSelect` render them; the grid only seats each under its caption.
- */
-function RuntimeGrid({ parts, roomy }: { parts: DraftLayoutParts; roomy?: boolean }) {
-  const captions = useCaptions();
+  const isMobile = useIsMobile();
   const { launch } = parts;
-  const id = useId();
-  const grid = useRef<HTMLDivElement | null>(null);
-  const cells = [captions.model, captions.effort, ...(launch.engine === "codex" ? [captions.speed] : []), ...(launch.accounts.length ? [captions.account] : [])];
-  const count = cells.length;
-  const [seating, setSeating] = useState("");
-  const chosen = `${launch.engine}/${launch.model}/${launch.effort}/${launch.speed}/${launch.accountId ?? ""}/${captions.account}`;
+  const { engine } = launch;
+  const [open, setOpen] = useState(false);
+  const [panel, setPanel] = useState<RuntimePanel>("root");
+  const [at, setAt] = useState<{ bottom: number; left: number } | null>(null);
+  /* The document the pill stands in, which its panels portal into; read at the press that opens them. */
+  const [owner, setOwner] = useState<Document | null>(null);
+  const pillRef = useRef<HTMLButtonElement>(null);
+  const nameOf = useAccountName(engine === "codex" ? "codex" : "claude");
+
+  const modelOptions = useMemo(() => AGENT_LAUNCH_ENGINES.flatMap((owner) => ENGINE_MODELS[owner].map((model) => ({
+    ...model, id: owner === engine ? model.id : foreignModel(owner, model.id), label: `${launchEngineLabel(owner)} · ${model.label}`,
+  }))), [engine]);
+  const efforts = effortScale(engine, launch.model) ?? [];
+  /* No tier chosen is the engine's own default, which the phone's sheet says in the product's word for it. */
+  const face = { model: launch.model, effort: launch.effort || t("draft.effortDefault"), fast: launch.speed === "fast" };
+  const short = ENGINE_MODELS[engine].find((model) => model.id === launch.model)?.shortLabel ?? launch.model;
+  const tier = launch.effort ? tierWord(t, launch.effort, isMobile) : "";
+  const text = [launchEngineLabel(engine), short, tier, face.fast ? t("composer.speedFastTier") : ""].filter(Boolean).join(" · ");
+
+  const close = useCallback(() => {
+    setOpen(false);
+    setPanel("root");
+    pillRef.current?.focus();
+  }, []);
+  /* The popover opens upward, as a composer at the foot of a conversation needs. A draft's composer can
+     stand near the top of a column, so a popover that would leave the window opens downward instead. */
+  const place = useCallback(() => {
+    const pill = pillRef.current?.getBoundingClientRect();
+    const view = pillRef.current?.ownerDocument.defaultView;
+    if (!pill || !view) return;
+    const height = pillRef.current!.ownerDocument.querySelector<HTMLElement>("[data-runtime-popover]")?.offsetHeight ?? 0;
+    const above = view.innerHeight - pill.top + 6;
+    const fits = pill.top - 6 - height >= 8;
+    setAt({ bottom: Math.max(8, fits ? above : view.innerHeight - pill.bottom - 6 - height), left: Math.max(8, Math.min(pill.left, view.innerWidth - 248)) });
+  }, []);
   useLayoutEffect(() => {
-    const element = grid.current;
-    if (!element) return;
-    let live = true;
-    const measure = () => {
-      if (!live) return;
-      const needs = [...element.querySelectorAll<HTMLSelectElement>(":scope > select")].map(chosenValueWidth);
-      setSeating(runtimeRows(needs, element.clientWidth).map((row) => row.join(",")).join("|"));
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(element);
-    void document.fonts?.ready.then(measure);
-    return () => {
-      live = false;
-      observer.disconnect();
-    };
-  }, [count, chosen]);
-  /* Until the grid is measured, and whenever the cells changed since, pairs: the seating every width can hold. */
-  const measured = seating ? seating.split("|").map((row) => row.split(",").map(Number)) : [];
-  const rows = measured.flat().length === count ? measured : runtimeRows(cells.map(() => 0), 2 * RUNTIME_CELL);
-  const columns = Math.max(...rows.map((row) => row.length));
-  const seat = new Map(rows.flatMap((row, line) => row.map((cell, place) => [cell, { line, place, whole: columns > 1 && row.length === 1 }] as const)));
-  const order = (index: number, select: boolean) => seat.get(index)!.line * 2 * columns + (select ? columns : 0) + seat.get(index)!.place;
-  const whole = (index: number) => seat.get(index)!.whole;
-  const scope = `[data-na-runtime="${id}"]`;
+    if (open && !isMobile) place();
+  }, [open, panel, isMobile, place, efforts.length]);
+
+  const accountChoice: AccountChoice | null = engine === "copilot" ? null : {
+    runsOn: launch.launchAccountId,
+    next: launch.launchAccountId,
+    applying: false,
+    pick: (accountId) => {
+      launch.setAccountId(accountId);
+      if (!isMobile) close();
+    },
+  };
+  const selectModel = (key: string) => {
+    const foreign = AGENT_LAUNCH_ENGINES.find((owner) => owner !== engine && key.startsWith(`${owner}/`));
+    if (foreign) launch.setEngine(foreign);
+    launch.setModel(foreign ? key.slice(foreign.length + 1) : key);
+    if (!isMobile) close();
+  };
+  const panelProps = {
+    t, engine, modelOptions, account: launch.launchAccountId, nameOf, accountChoice, face, efforts,
+    speedShown: engine === "codex",
+    speedDetail: face.fast ? t("composer.speedFastTier") : t("composer.speedStandard"),
+    effortLocked: false, modelLocked: false, speedLocked: false, lockReason: "",
+    onSelectEffort: (value: string) => {
+      launch.setEffort(value);
+      if (!isMobile) close();
+    },
+    onSelectModel: selectModel,
+    onSelectFast: (fast: boolean) => {
+      launch.setSpeed(fast ? "fast" : "standard");
+      if (!isMobile) close();
+    },
+    onClose: close,
+  };
+  const picked = engine !== "copilot" && launch.accountId ? nameOf(launch.accountId) : "";
+
   return (
-    <div ref={grid} data-na-runtime={id} data-na-columns={columns} data-na-rows={rows.length} className="grid min-w-0 gap-x-1.5 gap-y-0.5" style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
-      <style>{`${scope} > select { width: 100%; min-width: 0; }${cells.map((_, index) => `${scope} > select:nth-of-type(${index + 1}) { order: ${order(index, true)};${whole(index) ? " grid-column: 1 / -1;" : ""} }`).join("")}`}</style>
-      {cells.map((caption, index) => (
-        <span key={caption} className={`${CAPTION} ${seat.get(index)!.line > 0 ? "pt-1" : ""}`} style={{ order: order(index, false), gridColumn: whole(index) ? "1 / -1" : undefined }}>{caption}</span>
-      ))}
-      <ReasoningControls
-        engine={launch.engine}
-        model={launch.model}
-        effort={launch.effort}
-        speed={launch.speed}
+    <span className="relative inline-flex min-w-0" onPointerDown={(event) => event.stopPropagation()}>
+      <button
+        ref={pillRef}
+        type="button"
         disabled={parts.fieldsDisabled}
-        roomy={roomy}
-        onModel={launch.setModel}
-        onEffort={launch.setEffort}
-        onSpeed={launch.setSpeed}
-      />
-      <LaunchAccountSelect draft={launch} disabled={parts.fieldsDisabled} roomy={roomy} />
-    </div>
+        aria-haspopup={isMobile ? "dialog" : "menu"}
+        aria-expanded={open}
+        aria-label={`${t("composer.runtimePill")} — ${text}${picked ? ` → ${picked}` : ""}`}
+        data-runtime-pill
+        data-na-pill=""
+        onClick={(event) => {
+          if (open) return close();
+          setOwner(event.currentTarget.ownerDocument);
+          setOpen(true);
+        }}
+        /* The face is the conversation pill's own, class for class (`RuntimePill`). */
+        className={isMobile
+          ? "flex h-11 min-w-0 shrink items-center rounded-control px-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60"
+          : `inline-flex h-7 min-w-0 shrink items-center gap-1 rounded-control px-1.5 text-label font-semibold text-secondary hover:bg-sunken hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none disabled:opacity-60 ${open ? "bg-sunken text-primary" : ""}`}
+      >
+        {isMobile ? (
+          <span className="inline-flex h-7 min-w-0 items-center gap-1 rounded-full bg-card px-2.5 text-label font-semibold text-secondary">
+            <span className="min-w-0 truncate">{text}{picked ? ` → ${picked}` : ""}</span>
+            <ChevronDown className="h-3 w-3 shrink-0" aria-hidden />
+          </span>
+        ) : (
+          <>
+            <Zap className="h-3.5 w-3.5 shrink-0 text-accent" aria-hidden />
+            <span className="max-w-[52vw] truncate md:max-w-[16rem]">{text}</span>
+            {picked ? <span className="max-w-[10rem] truncate text-accent" data-runtime-pill-next-account>→ {picked}</span> : null}
+            <ChevronDown className="h-3 w-3 shrink-0" aria-hidden />
+          </>
+        )}
+      </button>
+      {open && owner && !isMobile ? <RuntimePopover {...panelProps} panel={panel} setPanel={setPanel} at={at ?? { bottom: 8, left: 8 }} owner={owner} /> : null}
+      {open && owner && isMobile ? <RuntimeSheet {...panelProps} owner={owner} /> : null}
+    </span>
   );
 }
 
 /**
- * What a scrolling column of fields says at an edge that cuts it: a fade over the edge, and at the lower one
- * a chip that names what is hidden and scrolls to it. `surface` is the colour the column stands on.
+ * The conversation as it opens: the operator's first message as the feed's own
+ * row, and under it the feed's loading shape where the agent's first words will
+ * be, both at the foot of the pane, above the composer, where a feed keeps its
+ * latest rows. The launch says something in words only once it needs the operator.
  */
-function MoreCues({ above, below, surface, onMore }: { above: boolean; below: boolean; surface: string; onMore: () => void }) {
-  const captions = useCaptions();
+function Opening({ parts }: { parts: DraftLayoutParts }) {
+  const { t } = useLocale();
+  const attempt = parts.attempt!;
   return (
-    <>
-      {above ? <span aria-hidden data-na-more="above" className="pointer-events-none absolute inset-x-0 top-0 h-5 border-t border-border" style={{ background: `linear-gradient(to bottom, ${surface}, transparent)` }} /> : null}
-      {below ? (
-        <div data-na-more="below" className="pointer-events-none absolute inset-x-0 bottom-0 flex h-14 items-end justify-center pb-1.5" style={{ background: `linear-gradient(to top, ${surface} 40%, transparent)` }}>
-          <button
-            type="button"
-            aria-label={captions.more}
-            title={captions.more}
-            onClick={onMore}
-            className="pointer-events-auto inline-flex h-7 items-center gap-1 rounded-full border border-border bg-raised pl-1.5 pr-2 text-caption font-semibold text-secondary shadow-1 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-          >
-            <ChevronDown className="h-3.5 w-3.5 shrink-0" aria-hidden />
-            {captions.more}
-          </button>
-        </div>
-      ) : null}
-    </>
-  );
-}
-
-/** One press of the chip: most of what the column shows, so the last field read stays in sight. */
-function scrollOn(column: HTMLElement | null) {
-  column?.scrollBy({ top: Math.max(48, column.clientHeight - 56) });
-}
-
-function Field({ label, aside, children }: { label: string; aside?: ReactNode; children: ReactNode }) {
-  return (
-    <div className="flex min-w-0 flex-col gap-0.5">
-      <div className="flex min-w-0 items-center gap-1.5">
-        <span className={`flex-1 ${CAPTION}`}>{label}</span>
-        {aside}
-      </div>
-      {children}
+    <div data-na-opening="" className="flex min-h-0 flex-1 flex-col justify-end gap-3 overflow-hidden">
+      <FeedMessageRow entry={null} canonical={{ text: attempt.prompt || t("draft.imagesOnly") }} />
+      <FeedSkeleton className="!flex-none !px-0 !pb-1 !pt-0" />
+      {attempt.phase === "attention" || attempt.error ? parts.launchStatus : null}
     </div>
   );
 }
 
-function FolderField({ parts, openSignal, bare }: { parts: DraftLayoutParts; openSignal?: number; bare?: boolean }) {
+function Draft({ look, parts }: { look: 1 | 2; parts: DraftLayoutParts }) {
   const { t } = useLocale();
-  const picker = <DirectoryPicker id={`na-dirs-${parts.draftId}`} value={parts.cwd} dirs={parts.dirs} disabled={parts.fieldsDisabled} ariaLabel={t("draft.dirAria")} openSignal={openSignal} onChange={parts.setCwd} />;
-  return bare ? picker : <Field label={t("draft.directory")}>{picker}</Field>;
-}
-
-/** The product's role block (select, description, parameters, prompt preview), without its strip. */
-function RoleField({ parts, bare }: { parts: DraftLayoutParts; bare?: boolean }) {
-  const { t } = useLocale();
-  const block = (
-    <div data-na-role="" className="min-w-0 flex-1">
-      <RoleSection idPrefix={parts.draftId} roles={parts.roles} roleId={parts.roleId} roleParams={parts.roleParams} disabled={parts.fieldsDisabled} onSelectRole={parts.selectRole} onSetParam={parts.setRoleParam}>
-        {parts.roleExtras}
-      </RoleSection>
-    </div>
-  );
-  return bare ? block : <Field label={t("draft.role")}>{block}</Field>;
-}
-
-function Shell({ look, parts, phone, className, children }: { look: NewAgentLook; parts: DraftLayoutParts; phone: boolean; className: string; children: ReactNode }) {
-  const { t } = useLocale();
+  const phone = useIsMobile();
+  const sent = Boolean(parts.attempt);
+  const tall = look === 2 || sent || phone;
+  const { composer } = parts.composerProps;
+  const input = composer.inputRef;
+  const form = useRef<HTMLFormElement>(null);
+  /* The cursor is in the field the moment the draft opens. */
+  useEffect(() => {
+    input.current?.focus({ preventScroll: true });
+  }, [input]);
+  /* The composer is in sight when the draft opens and when Send makes the pane a conversation, with the first
+     message directly above it: the board reveals a card it opens the same way, and a shipped look would ask
+     the board for it. */
+  useEffect(() => {
+    form.current?.scrollIntoView({ block: "nearest" });
+  }, [sent]);
   return (
     /* `reader-host` is the board's own opt-out from its button reset (kanbanBoard.css:68), the one a conversation uses. */
-    <section data-pan-ignore data-na-draft={look} data-na-phone={phone ? "" : undefined} data-na-handoff={parts.src ? "" : undefined} aria-label={t("draft.paneAria")} className={`reader-host flex min-w-0 flex-col ${className}`}>
+    <section
+      data-pan-ignore
+      data-na-draft={look}
+      data-na-sent={sent ? "" : undefined}
+      aria-label={t("draft.paneAria")}
+      className={`reader-host flex min-w-0 flex-col gap-2 ${tall ? "h-full min-h-0 flex-1" : ""} ${phone ? "bg-card p-3" : ""}`}
+    >
       <style>{BOARD_CSS}</style>
-      {children}
+      {tall ? (sent ? <Opening parts={parts} /> : <div data-na-room="" className="min-h-0 flex-1" />) : null}
+      <form
+        ref={form}
+        data-na-form=""
+        className="flex min-w-0 shrink-0 flex-col gap-1.5"
+        aria-label={t("draft.promptAria")}
+        onSubmit={(event) => {
+          event.preventDefault();
+          parts.submit();
+        }}
+        onKeyDown={(event) => {
+          /* Escape on an empty field puts the draft away, as it does for a new task. */
+          if (event.key !== "Escape" || event.defaultPrevented || sent || composer.text || composer.attachments.attachments.length) return;
+          event.preventDefault();
+          parts.onClose();
+        }}
+      >
+        {parts.capabilityAlert}
+        <ComposerBar
+          {...parts.composerProps}
+          sendIdleClassName="border-accent bg-accent hover:opacity-90"
+          sendIdleStyle={undefined}
+          leftSlot={<DraftRuntimePill parts={parts} />}
+        />
+      </form>
     </section>
   );
 }
 
-/**
- * The phone's pane: what scrolls sits above, gathered at the foot; the composer never leaves the bottom edge.
- * When the settings hold more than the pane shows, each cut edge says so the way look 3's sheet does.
- */
-function PhonePane({ look, parts, settings }: { look: NewAgentLook; parts: DraftLayoutParts; settings: ReactNode }) {
-  const fields = useRef<HTMLDivElement | null>(null);
-  const [cut, setCut] = useState({ above: false, below: false });
-  useLayoutEffect(() => {
-    const column = fields.current;
-    if (!column) return;
-    const read = () => {
-      const above = column.scrollTop > 1;
-      const below = column.scrollHeight - column.clientHeight - column.scrollTop > 1;
-      setCut((current) => (current.above === above && current.below === below ? current : { above, below }));
-    };
-    read();
-    const observer = new ResizeObserver(read);
-    observer.observe(column);
-    if (column.firstElementChild) observer.observe(column.firstElementChild);
-    column.addEventListener("scroll", read, { passive: true });
-    return () => {
-      observer.disconnect();
-      column.removeEventListener("scroll", read);
-    };
-  }, []);
-  return (
-    <Shell look={look} parts={parts} phone className="h-full min-h-0 flex-1 gap-2 bg-card p-3">
-      <div className="relative flex min-h-0 flex-1 flex-col">
-        <div ref={fields} data-na-fields="" className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-          <div className="mt-auto flex min-w-0 flex-col gap-2">
-            <Source parts={parts} />
-            <Launching parts={parts} />
-            {settings}
-          </div>
-        </div>
-        <MoreCues above={cut.above} below={cut.below} surface="var(--surface-card)" onMore={() => scrollOn(fields.current)} />
-      </div>
-      <Prompt parts={parts} leftSlot={null} />
-    </Shell>
-  );
+function ComposerOnly(parts: DraftLayoutParts) {
+  return <Draft look={1} parts={parts} />;
 }
 
-/**
- * Look 1. The composer is the card: the box the orchestrator's conversation
- * already has, with the engine in the row under it where that conversation
- * keeps its runtime, the model beside the engine it depends on, and every
- * other setting a captioned field below.
- */
-function ComposerCard(parts: DraftLayoutParts) {
-  const phone = useIsMobile();
-  if (phone) {
-    /* The phone's own header already says «New agent · draft», so the pane adds no heading of its own. */
-    return (
-      <PhonePane look={1} parts={parts} settings={(
-        <>
-          <div className="flex min-h-11 min-w-0 items-center gap-1.5">
-            <Engines parts={parts} />
-            <span className="flex-1" />
-            <Close parts={parts} phone />
-          </div>
-          <RuntimeGrid parts={parts} />
-          <FolderField parts={parts} />
-          <RoleField parts={parts} />
-        </>
-      )} />
-    );
-  }
-  return (
-    <Shell look={1} parts={parts} phone={false} className="gap-2">
-      <header className="flex min-h-7 items-center gap-1.5">
-        <h3 title={parts.src || undefined} className="min-w-0 flex-1 truncate text-body font-semibold text-primary first-letter:uppercase">{parts.heading}</h3>
-        <Close parts={parts} phone={false} />
-      </header>
-      <Launching parts={parts} />
-      <Prompt parts={parts} leftSlot={<Engines parts={parts} />} below={<RuntimeGrid parts={parts} />} />
-      <FolderField parts={parts} />
-      <RoleField parts={parts} />
-    </Shell>
-  );
+function ConversationPane(parts: DraftLayoutParts) {
+  return <Draft look={2} parts={parts} />;
 }
 
-type Group = "runtime" | "folder" | "role";
-
-/**
- * Look 2. One line: the prompt, and under it what the agent will run on, said
- * in words on a single row. A word that is pressed opens its own controls
- * directly under that row and nothing else. The row starts with the close
- * button, a rule apart from the words, and ends with the image picker, which
- * keeps the far right as it does in the orchestrator's composer: closing
- * clears the draft, so it stands away from everything pressed while writing.
- */
-function OneLine(parts: DraftLayoutParts) {
-  const { t } = useLocale();
-  const phone = useIsMobile();
-  const [open, setOpen] = useState<Group | null>(null);
-  const [folderSignal, setFolderSignal] = useState(0);
-  const { launch } = parts;
-  const tint = engineTintOf(launch.engine);
-  const model = ENGINE_MODELS[launch.engine].find((entry) => entry.id === launch.model)?.label ?? (launch.model || t("draft.modelDefault"));
-  const account = launch.accounts.find((entry) => entry.id === launch.launchAccountId)?.label ?? null;
-  const role = parts.roles.find((entry) => entry.id === parts.roleId) ?? null;
-  const toggle = (group: Group) => {
-    setOpen((current) => (current === group ? null : group));
-    if (group === "folder") setFolderSignal((signal) => signal + 1);
-  };
-  /* The runtime is the longest of the three and the one that gives way: it alone is cut with an ellipsis
-     when the row runs out, and the folder and the role keep their words. */
-  const word = (group: Group, label: ReactNode, name: string, give: string) => (
-    <button
-      type="button"
-      data-na-open={group}
-      aria-expanded={open === group}
-      aria-label={name}
-      title={name}
-      onClick={() => toggle(group)}
-      className={`inline-flex items-center gap-1 rounded-control px-1.5 text-caption font-semibold text-secondary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 aria-expanded:bg-sunken aria-expanded:text-primary ${give} ${phone ? "min-h-11" : "h-7"}`}
-    >
-      <span className="min-w-0 truncate">{label}</span>
-      <ChevronDown className={`h-3 w-3 shrink-0 text-muted ${open === group ? "rotate-180" : ""}`} aria-hidden />
-    </button>
-  );
-  const words = (
-    <div data-na-words="" className="flex min-w-0 flex-1 flex-nowrap items-center gap-0.5 overflow-hidden">
-      {word("runtime", (
-        <>
-          <span style={{ color: tint.color }}>{launchEngineLabel(launch.engine)}</span>
-          {" · "}{model}
-          {launch.effort ? <>{" · "}{effortTierLabel(t, launch.effort)}</> : null}
-          {launch.engine === "codex" && launch.speed ? <>{" · "}{t(launch.speed === "fast" ? "draft.speedFast" : "draft.speedStandard")}</> : null}
-          {account ? <>{" · "}{account}</> : null}
-        </>
-      ), t("launch.reasoning"), "min-w-16 shrink")}
-      {word("folder", parts.cwd || t("draft.directory"), t("draft.dirAria"), "max-w-36 shrink-0")}
-      {word("role", role ? roleName(t, role) : t("draft.noRole"), t("draft.roleAria"), "max-w-32 shrink-0")}
-    </div>
-  );
-  const editor = open ? (
-    <div data-na-editor={open} className="flex min-w-0 flex-col gap-1.5 rounded-control bg-sunken p-2">
-      {open === "runtime" ? (
-        <>
-          <Engines parts={parts} />
-          <RuntimeGrid parts={parts} />
-        </>
-      ) : open === "folder" ? <FolderField parts={parts} openSignal={folderSignal} bare /> : <RoleField parts={parts} bare />}
-    </div>
-  ) : null;
-  const dismiss = (
-    <>
-      <Close parts={parts} phone={phone} />
-      <span aria-hidden className="mx-2 h-4 w-px shrink-0 bg-border" />
-    </>
-  );
-  if (phone) {
-    return (
-      <PhonePane look={2} parts={parts} settings={(
-        <>
-          <div className="flex min-w-0 items-center gap-1">
-            {dismiss}
-            {words}
-          </div>
-          {editor}
-        </>
-      )} />
-    );
-  }
-  return (
-    <Shell look={2} parts={parts} phone={false} className="gap-1.5">
-      <Source parts={parts} />
-      <Launching parts={parts} />
-      {/* One row inside the composer's own frame: the close button, the words, and the image picker last. */}
-      <Prompt parts={parts} leftSlot={<>{dismiss}{words}</>} below={editor} />
-    </Shell>
-  );
-}
-
-const SHEET_WIDTH = 440;
-/** What the foot gives back to the fields when they do not fit: the prompt shows three lines in place of five. */
-const TIGHT_GAIN = 38;
-
-/** The control the operator pressed: the card's own «+ Agent», or the header's. */
-function sheetAnchor(band: string, createLabel: string): HTMLElement | null {
-  const visible = (element: HTMLElement | null) => (element && element.getClientRects().length ? element : null);
-  return visible(band ? document.querySelector<HTMLElement>(`[data-add-agent="${CSS.escape(band)}"]`) : null)
-    ?? visible(document.querySelector<HTMLElement>("[data-new-agent]"))
-    ?? visible(document.querySelector<HTMLElement>(`[data-bar-control][aria-label="${CSS.escape(createLabel)}"]`));
-}
-
-interface SheetPlace {
-  top: number;
-  left: number;
-  maxHeight: number;
-  /** The board card whose «+ Agent» opened the sheet, by its title. */
-  task: string;
-}
-
-/**
- * Look 3. A sheet at the button: no card joins a column until an agent exists.
- * The fields are a captioned column that scrolls on its own; the composer, its
- * thumbnails and its errors are the sheet's foot and never leave the window.
- * When the column holds more than the window shows, the foot shortens its
- * prompt and each cut edge says so: a fade, and below it a chip that scrolls
- * to the next fields; the phone's pane says it the same way. The sheet starts under the board's bar and names the task
- * it was opened for.
- */
-function AnchoredSheet(parts: DraftLayoutParts) {
-  const { t } = useLocale();
-  const captions = useCaptions();
-  const phone = useIsMobile();
-  const sheet = useRef<HTMLElement | null>(null);
-  const fields = useRef<HTMLDivElement | null>(null);
-  const [place, setPlace] = useState<SheetPlace | null>(null);
-  const [cut, setCut] = useState({ above: false, below: false, tight: false });
-  const createLabel = t("dash.createMenu");
-  useLayoutEffect(() => {
-    if (phone) return;
-    let frame = 0;
-    let marked: HTMLElement | null = null;
-    const mark = (element: HTMLElement | null) => {
-      if (marked === element) return;
-      marked?.removeAttribute("data-na-anchor-open");
-      marked?.removeAttribute("aria-expanded");
-      marked = element;
-      marked?.setAttribute("data-na-anchor-open", "");
-      marked?.setAttribute("aria-expanded", "true");
-    };
-    /* The button moves while the board settles around it (the card that held the draft closes its seat),
-       so the sheet follows it frame by frame; a prototype can afford the reads. Under the button when the
-       sheet fits there, beside it otherwise, never above the bottom edge of the board's bar. */
-    const update = () => {
-      frame = requestAnimationFrame(update);
-      const element = sheetAnchor(parts.band, createLabel);
-      mark(element);
-      const anchor = element?.getBoundingClientRect();
-      const floor = (document.querySelector("header.bar")?.getBoundingClientRect().bottom ?? 46) + 6;
-      const ceiling = window.innerHeight - 12;
-      const width = Math.min(SHEET_WIDTH, window.innerWidth - 24);
-      /* What the sheet would take with nothing scrolled: its own height plus what the fields hide. */
-      const natural = (sheet.current?.offsetHeight ?? 0) + (fields.current ? fields.current.scrollHeight - fields.current.clientHeight : 0);
-      const height = Math.min(natural, ceiling - floor);
-      const clampLeft = (left: number) => Math.max(12, Math.min(left, window.innerWidth - width - 12));
-      const clampTop = (top: number) => Math.max(floor, Math.min(top, ceiling - height));
-      let next = { left: clampLeft(window.innerWidth), top: floor };
-      if (anchor) {
-        const below = Math.max(floor, anchor.bottom + 6);
-        if (below + height <= ceiling) next = { left: clampLeft(anchor.left), top: below };
-        else if (anchor.right + 8 + width <= window.innerWidth - 12) next = { left: anchor.right + 8, top: clampTop(anchor.top) };
-        else if (anchor.left - 8 - width >= 12) next = { left: anchor.left - 8 - width, top: clampTop(anchor.top) };
-        else next = { left: clampLeft(anchor.left), top: clampTop(below) };
-      }
-      const task = (parts.band ? element?.closest(".card")?.querySelector("h3.title")?.textContent?.trim() : "") ?? "";
-      const maxHeight = ceiling - next.top;
-      const column = fields.current;
-      if (column) {
-        const hidden = column.scrollHeight - column.clientHeight;
-        const above = column.scrollTop > 1;
-        const below = hidden - column.scrollTop > 1;
-        const spare = maxHeight - (sheet.current?.offsetHeight ?? 0);
-        /* The shorter prompt stays until the sheet has room for the longer one again, so the two never alternate. */
-        setCut((current) => {
-          const tight = hidden > 1 || (current.tight && spare < TIGHT_GAIN);
-          return current.above === above && current.below === below && current.tight === tight ? current : { above, below, tight };
-        });
-      }
-      setPlace((current) => (current && current.left === next.left && current.top === next.top && current.maxHeight === maxHeight && current.task === task ? current : { ...next, maxHeight, task }));
-    };
-    update();
-    return () => {
-      cancelAnimationFrame(frame);
-      mark(null);
-    };
-  }, [phone, parts.band, createLabel]);
-  const column = (close: boolean) => (
-    <>
-      <Field label={t("draft.engineAria")} aside={close ? <Close parts={parts} phone /> : null}><Engines parts={parts} /></Field>
-      <RuntimeGrid parts={parts} />
-      <FolderField parts={parts} />
-      <RoleField parts={parts} />
-    </>
-  );
-  if (phone) return <PhonePane look={3} parts={parts} settings={column(true)} />;
-  return (
-    <>
-      <span data-na-seat="3" hidden><style>{BOARD_CSS}</style></span>
-      {createPortal(
-        <section
-          ref={sheet}
-          data-na-draft={3}
-          data-na-sheet=""
-          data-na-tight={cut.tight ? "" : undefined}
-          data-na-handoff={parts.src ? "" : undefined}
-          role="dialog"
-          aria-label={t("draft.paneAria")}
-          style={{ top: place?.top ?? 0, left: place?.left ?? 0, maxHeight: place?.maxHeight, width: Math.min(SHEET_WIDTH, window.innerWidth - 24), visibility: place ? "visible" : "hidden" }}
-          className={`fixed ${Z.popover} flex flex-col rounded-surface border border-border bg-raised shadow-2`}
-        >
-          <header className="flex shrink-0 items-center gap-1.5 px-3 pb-1 pt-2.5">
-            <div className="flex min-w-0 flex-1 flex-col">
-              <h3 title={parts.src || undefined} className="min-w-0 truncate text-body font-semibold text-primary first-letter:uppercase">{parts.heading}</h3>
-              {place?.task ? (
-                <p data-na-task="" className="min-w-0 truncate text-caption text-muted">
-                  <span className="font-semibold">{captions.task}:</span> {place.task}
-                </p>
-              ) : null}
-            </div>
-            <Close parts={parts} phone={false} />
-          </header>
-          <div className="relative flex min-h-0 flex-1 flex-col">
-            <div ref={fields} data-na-fields="" className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto px-3 pb-3 pt-1.5">
-              {column(false)}
-            </div>
-            <MoreCues above={cut.above} below={cut.below} surface="var(--surface-raised)" onMore={() => scrollOn(fields.current)} />
-          </div>
-          <div data-na-foot="" className="flex shrink-0 flex-col gap-2 border-t border-border px-3 pb-3 pt-2.5">
-            <Launching parts={parts} />
-            <Prompt parts={parts} leftSlot={null} />
-          </div>
-        </section>,
-        document.body,
-      )}
-    </>
-  );
-}
-
-const LAYOUTS: Record<NewAgentLook, DraftLayout | null> = { 0: null, 1: ComposerCard, 2: OneLine, 3: AnchoredSheet };
+const LAYOUTS: Record<NewAgentLook, DraftLayout | null> = { 0: null, 1: ComposerOnly, 2: ConversationPane };
 
 export function newAgentLayout(look: NewAgentLook): DraftLayout | null {
   return LAYOUTS[look];

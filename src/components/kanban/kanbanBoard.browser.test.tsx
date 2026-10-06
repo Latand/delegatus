@@ -17954,27 +17954,26 @@ describe("parallel ask idle fallback", () => {
   }, 120_000);
 });
 
-describe("creating a new agent: today's draft and three numbered looks", () => {
+describe("creating a new agent: today's draft and the composer that replaces it", () => {
   /*
-   * docs/design/new-agent-redesign.md. The real Viewer over `?scenario=new-agent`, with the draft drawn in
-   * look 0 (today's) and looks 1 to 3 (`?newagent=<n>`): the page prints the look's number in a strip around
-   * the application's frame. Each look is walked through the same states at 1440x900, 1000x700 and a 390
-   * phone, light and dark, en and uk: empty, runtime chosen, a long prompt, an attachment, a refused launch,
-   * the narrowest column, and the draft a task card's own «+ Agent» opens. Five more states are drawn once per
-   * look, at 1440 in the light theme in English: a handoff draft, the reviewer's and the deployer's own
-   * fields, a signed-out account, and an image capability that could not be read. `scrolled` is added wherever
-   * a field column is cut (look 3's sheet, and every look's pane on the phone): the column after its «More
-   * fields below» chip was pressed. Design evidence only: the
-   * frames and the contact sheets go to `NEW_AGENT_OUT`, outside the repository, and the block asserts that
-   * every look keeps every option of the draft and measures what each look promises about its geometry.
+   * docs/design/new-agent-redesign.md, the operator's verdict of 2026-10-06. The real Viewer over
+   * `?scenario=new-agent`, with the draft drawn in look 0 (today's) and looks 1 and 2 (`?newagent=<n>`); the
+   * page prints the look's number in a strip around the application's frame. Each look is walked from the
+   * board's own button through the same moments at 1440x900, 1000x700 and a 390 phone, light and dark, en and
+   * uk: the empty form, the runtime pill open, the model and the account chosen, dictation in progress, the
+   * frame after Send, and the loaded conversation. On the desktop the same launch is walked from a task
+   * card's own «+ Agent». Three more states are drawn once per look, at 1440 in the light theme in English: a
+   * refused launch, a handoff draft and a signed-out account. Design evidence only: the frames and the
+   * comparison sheets go to `NEW_AGENT_OUT`, outside the repository, and the block asserts that looks 1 and 2
+   * hold the composer and nothing else, put the cursor in the field, and are the conversation after Send.
    *
    *   CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 NEW_AGENT_OUT=<dir> \
    *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "creating a new agent"
    *
    * `NEW_AGENT_ONLY` narrows a run while a look is being drawn: `looks=0,1;views=desktop-1440;langs=en;schemes=light`.
-   * A narrowed run keeps what it read beside its frames, so the four looks can be walked side by side
+   * A narrowed run keeps what it read beside its frames, so the looks can be walked side by side
    * (`looks=0`, `looks=1`, …, into one `NEW_AGENT_OUT`) and `NEW_AGENT_ONLY=merge` then opens no browser: it
-   * gathers the four readings, draws the sheets and writes the committed record.
+   * gathers the readings, draws the sheets and writes the committed record.
    */
   const OUT = process.env.NEW_AGENT_OUT ? path.resolve(process.env.NEW_AGENT_OUT) : null;
   const only = new Map((process.env.NEW_AGENT_ONLY ?? "").split(";").filter(Boolean).map((entry) => {
@@ -17983,21 +17982,20 @@ describe("creating a new agent: today's draft and three numbered looks", () => {
   }));
   const wanted = (key: string, value: string) => !only.has(key) || only.get(key)!.has(value);
   const STRIP = 40;
+  const LOOKS = [0, 1, 2] as const;
   const views = [
     { name: "desktop-1440", width: 1440, height: 900, touch: false },
     { name: "desktop-1000", width: 1000, height: 700, touch: false },
     { name: "phone-390", width: 390, height: 844, touch: true },
   ] as const;
-  const STATES = ["empty", "chosen", "long", "attachment", "error", "narrow", "task-card"] as const;
-  /* Drawn once per look: what a role or an account adds to the draft, and a draft that continues a conversation. */
-  const EXTRAS = ["handoff", "reviewer", "deployer", "signed-out", "capability"] as const;
-  const SEEDED = new Set<string>(["handoff", "signed-out", "capability"]);
-  /* One sheet: a block per caption, a row per state, each cell a frame scaled to one height. */
-  const CELL = 380;
+  const STATES = ["empty", "picker", "chosen", "dictation", "sent", "loaded", "task-card-empty", "task-card-sent", "task-card-loaded"] as const;
+  /* Drawn once per look. */
+  const EXTRAS = ["refused", "handoff", "signed-out"] as const;
   const caption = (text: string, width: number, height: number, size: number) => Buffer.from(
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="#1f2430"/><text x="14" y="${height / 2 + size / 3}" font-family="sans-serif" font-weight="700" font-size="${size}" fill="#fff">${text.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</text></svg>`,
   );
-  const sheet = async (file: string, title: string, blocks: { name: string; rows: { state: string; frames: string[] }[] }[]) => {
+  /* One sheet: a block per caption, a row per state, each cell a frame scaled to one height. */
+  const sheet = async (file: string, title: string, cell: number, blocks: { name: string; rows: { state: string; frames: string[] }[] }[]) => {
     const layers: { input: Buffer; left: number; top: number }[] = [];
     let top = 64;
     let widest = 0;
@@ -18005,18 +18003,20 @@ describe("creating a new agent: today's draft and three numbered looks", () => {
       const blockTop = top;
       top += 40;
       for (const row of block.rows) {
-        let left = 150;
+        let left = 190;
         const present = row.frames.filter((frame) => fs.existsSync(frame));
         if (!present.length) continue;
-        layers.push({ input: await sharp(caption(row.state, 142, CELL, 17)).png().toBuffer(), left: 0, top });
-        for (const frame of present) {
-          const input = await sharp(frame).resize({ height: CELL }).png().toBuffer();
-          const { width } = await sharp(input).metadata();
-          layers.push({ input, left, top });
-          left += width! + 8;
+        layers.push({ input: await sharp(caption(row.state, 182, cell, 17)).png().toBuffer(), left: 0, top });
+        /* A look with no frame for this moment (today's form has no pill to open) leaves its column empty,
+           so each look keeps its column down the sheet. */
+        const first = await sharp(present[0]!).metadata();
+        const column = Math.round(cell * (first.width! / first.height!));
+        for (const frame of row.frames) {
+          if (fs.existsSync(frame)) layers.push({ input: await sharp(frame).resize({ height: cell }).png().toBuffer(), left, top });
+          left += column + 8;
         }
         widest = Math.max(widest, left);
-        top += CELL + 8;
+        top += cell + 8;
       }
       layers.push({ input: await sharp(caption(block.name, 1600, 34, 18)).png().toBuffer(), left: 0, top: blockTop });
       top += 16;
@@ -18024,60 +18024,53 @@ describe("creating a new agent: today's draft and three numbered looks", () => {
     layers.push({ input: await sharp(caption(title, Math.max(widest, 1600), 56, 26)).png().toBuffer(), left: 0, top: 0 });
     await sharp({ create: { width: Math.max(widest, 1600), height: top, channels: 3, background: "#8a8f99" } }).composite(layers).png().toFile(file);
   };
-  const LONG = {
-    en: "Read docs/export.md and the CSV writer in src/export/csv.ts, then make the export stream rows instead of building the whole file in memory.\n\nKeep the column order and the header row exactly as they are today: three downstream scripts parse the file by position. Add a test with 200 000 synthetic rows that fails on the old writer by memory and passes on the new one.\n\nWhen it works, write what changed and how you checked it in the pull request, and stop before merging.",
-    uk: "Прочитай docs/export.md і записувач CSV у src/export/csv.ts, потім зроби так, щоб експорт передавав рядки потоком, а не збирав увесь файл у пам’яті.\n\nПорядок колонок і рядок заголовків залиш точно такими, як сьогодні: три сценарії далі розбирають файл за позицією. Додай тест на 200 000 синтетичних рядків, який падає на старому записувачі через пам’ять і проходить на новому.\n\nКоли запрацює, опиши в запиті на злиття, що змінилося і як ти це перевірив, і зупинись перед злиттям.",
-  } as const;
-  const SHORT = { en: "Compare these two export screens and list what differs", uk: "Порівняй ці два екрани експорту й перелічи відмінності" } as const;
+  const TYPED = { en: "Compare the two export screens and list what differs", uk: "Порівняй два екрани експорту й перелічи відмінності" } as const;
+  const SPOKEN = { en: "Read the README and tell me what this project is made of", uk: "Прочитай README і скажи, з чого складається цей проєкт" } as const;
 
-  browserTest("every look keeps every option, in every state, at three sizes, in both themes and languages", async () => {
+  browserTest("looks 1 and 2 are the composer alone, and the conversation after Send, at three sizes, in both themes and languages", async () => {
     const work = fs.mkdtempSync(path.join(os.tmpdir(), "new-agent-"));
     const out = OUT ?? path.join(work, "frames");
     fs.mkdirSync(out, { recursive: true });
-    const shots = [path.join(work, "export-before.png"), path.join(work, "export-after.png")];
-    await sharp({ create: { width: 320, height: 200, channels: 3, background: "#d9cfbd" } }).png().toFile(shots[0]!);
-    await sharp({ create: { width: 320, height: 200, channels: 3, background: "#7f93a8" } }).png().toFile(shots[1]!);
     const merge = only.has("merge");
     const readings: Record<string, unknown>[] = [];
     const walk = async () => {
     const server = await serveEvidenceFixture(work);
-    const browser = await chromium.launch(LAUNCH);
+    /* Dictation is recorded from the browser's own synthetic microphone. */
+    const browser = await chromium.launch({ ...LAUNCH, args: [...(LAUNCH.args ?? []), "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"] });
     try {
-      for (const look of [0, 1, 2, 3]) for (const view of views) for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) {
+      for (const look of LOOKS) for (const view of views) for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) {
         if (!wanted("looks", String(look)) || !wanted("views", view.name) || !wanted("schemes", scheme) || !wanted("langs", lang)) continue;
         const tr = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate(lang, key, params);
-        for (const pass of ["walk", "narrow", "task-card", ...EXTRAS] as const) {
-          if (pass !== "walk" && !wanted("states", pass)) continue;
+        for (const pass of ["header", "task-card", ...EXTRAS] as const) {
+          if (!wanted("passes", pass)) continue;
           const extra = (EXTRAS as readonly string[]).includes(pass);
           if (extra && (view.name !== "desktop-1440" || scheme !== "light" || lang !== "en")) continue;
           /* A card's own «+ Agent» is on the desktop board; the phone opens a draft from its menu alone. */
           if (pass === "task-card" && view.touch) continue;
-          /* The narrowest column: the desktop at its smallest supported width, the phone at 320. */
-          const width = pass !== "narrow" ? view.width : view.touch ? 320 : 760;
-          const height = view.height;
-          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=new-agent&newagent=${look}&frame=${width}x${height}${SEEDED.has(pass) ? `&naseed=${pass}` : ""}`, { width, height: height + STRIP }, scheme, lang, "reduce", view.touch);
+          const { width, height } = view;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=new-agent&newagent=${look}&frame=${width}x${height}${extra ? `&naseed=${pass}` : ""}`, { width, height: height + STRIP }, scheme, lang, "reduce", view.touch);
+          await context.grantPermissions(["microphone"]);
           const label = (state: string) => `look${look}-${view.name}-${scheme}-${lang}-${state}`;
-          const shoot = async (state: string) => {
-            if (!wanted("states", state)) return;
-            /* The launch button's tooltip follows the pointer and the focus the press left on it, and would lie
-               over the frame it is not part of. */
+          const settle = async () => {
+            /* A tooltip follows the pointer and the focus a press left, and would lie over the frame. */
             if (!view.touch) await page.mouse.move(0, 0);
-            if (state === "error") await page.frames()[1]!.addStyleTag({ content: '[role="tooltip"] { display: none !important; }' });
             await page.waitForTimeout(250);
-            await page.frames()[1]!.evaluate((selector) => document.querySelector(selector)?.scrollIntoView({ block: "nearest" }), `[aria-label="${tr("draft.paneAria")}"]`);
-            await page.waitForTimeout(150);
+          };
+          /* The launches the page asked for; the fixture answers them itself and keeps what each one carried. */
+          const launches = () => page.frames()[1]!.evaluate(() => (window as unknown as { launchRun: { requests: Record<string, unknown>[] } }).launchRun.requests);
+          const shoot = async (state: string) => {
+            /* Today's pane is brought into sight the way the looks bring themselves. */
+            if (look === 0) await page.frames()[1]!.evaluate((name) => [...document.querySelectorAll(`[aria-label="${name}"]`)].find((element) => element.getClientRects().length)?.scrollIntoView({ block: "nearest" }), tr("draft.paneAria"));
             await page.screenshot({ path: path.join(out, `${label(state)}.png`) });
           };
           try {
             const app = page.frameLocator("[data-na-frame]");
             await app.locator("[data-kanban-board] .card[data-id], [data-phone-card]").first().waitFor({ state: "attached", timeout: 30_000 });
-            /* An attention toast is another surface's and would lie over the draft. */
-            await page.frames()[1]!.addStyleTag({ content: "[data-attention-toast] { display: none !important; }" });
-            let cardTitle = "";
+            const inner = page.frames()[1]!;
+            /* An attention toast is another surface's and would lie over the draft; a tooltip is the pointer's. */
+            await inner.addStyleTag({ content: '[data-attention-toast], [role="tooltip"] { display: none !important; }' });
             if (pass === "task-card") {
-              const add = app.locator("[data-add-agent]:visible").first();
-              cardTitle = await add.evaluate((button) => button.closest(".card")?.querySelector("h3.title")?.textContent?.trim() ?? "");
-              await add.click();
+              await app.locator("[data-add-agent]:visible").first().click();
             } else if (pass === "handoff") {
               /* The fixture restored this draft the way the product restores a tab's drafts. */
             } else if (view.touch) {
@@ -18089,307 +18082,203 @@ describe("creating a new agent: today's draft and three numbered looks", () => {
               await app.locator(`[data-bar-control][aria-label="${tr("dash.createMenu")}"]`).click();
               await app.getByRole("menuitem", { name: tr("dash.newConvo") }).click();
             }
-            /* The draft, whichever look draws it: every control below is found inside it. */
             const draft = app.locator(`[aria-label="${tr("draft.paneAria")}"]`).first();
             const prompt = draft.locator(`textarea[aria-label="${tr("draft.promptTextAria")}"]`);
             await prompt.waitFor({ timeout: 15_000 });
-            /* A look that folds a group opens it where the driver asks, as the operator would. */
-            const reveal = async (group: string) => {
-              const opener = draft.locator(`[data-na-open="${group}"][aria-expanded="false"]`).first();
-              if (await opener.count()) await opener.click();
-            };
-            const inner = page.frames()[1]!;
-            const viewport = { width, height };
             const box = async (target: ReturnType<typeof draft.locator>) => {
               const rect = await target.first().boundingBox();
               if (!rect) throw new Error(`${label(pass)}: nothing to measure`);
               /* A frame locator answers in the page's coordinates; the application starts under the strip. */
               return { left: Math.round(rect.x), top: Math.round(rect.y - STRIP), right: Math.round(rect.x + rect.width), bottom: Math.round(rect.y - STRIP + rect.height) };
             };
-            const within = (rect: { left: number; top: number; right: number; bottom: number }) => rect.left >= 0 && rect.top >= 0 && rect.right <= viewport.width && rect.bottom <= viewport.height;
-            /* The four runtime selects of the look, as drawn: where each stands, and whether its chosen value
-               is cut by the box (the width the browser gives that value alone against the width the box has). */
-            const runtimeSelects = () => inner.evaluate((names) => {
-              const pane = [...document.querySelectorAll<HTMLElement>(`[aria-label="${names.pane}"]`)].find((element) => element.getClientRects().length);
-              return names.selects.flatMap((name) => {
-                const select = pane?.querySelector<HTMLSelectElement>(`select[aria-label="${name}"]`);
-                if (!select || !select.getClientRects().length) return [];
-                const text = select.selectedOptions[0]?.textContent ?? "";
-                const rect = select.getBoundingClientRect();
-                /* The browser's own answer, arrow included: the same select holding that one option at its natural width. */
-                const probe = select.cloneNode(false) as HTMLSelectElement;
-                probe.removeAttribute("id");
-                probe.removeAttribute("aria-label");
-                probe.append(new Option(text));
-                probe.style.cssText = "position:absolute;visibility:hidden;width:max-content;min-width:0;max-width:none;";
-                select.parentElement!.append(probe);
-                const needs = Math.ceil(probe.getBoundingClientRect().width);
-                probe.remove();
-                /* A select that takes the whole grid stands on its own row on purpose. */
-                const whole = rect.width >= select.parentElement!.clientWidth - 1;
-                return [{ name, text, top: Math.round(rect.top), has: Math.round(rect.width), needs, cut: needs > Math.round(rect.width), whole }];
-              });
-            }, { pane: tr("draft.paneAria"), selects: [tr("draft.modelAria"), tr("draft.reasoningAria"), tr("draft.speedAria"), tr("draft.accountAria", { engine: "Codex" })] });
-            /* What the rearranged looks promise about the runtime, at every size: no value cut, and no select
-               left alone beside an empty cell. A value half the grid would cut takes the whole row. */
-            const runtimeGeometry = async (state: string) => {
-              const selects = await runtimeSelects();
-              const rows = new Map<number, number>();
-              for (const select of selects) rows.set(select.top, (rows.get(select.top) ?? 0) + 1);
-              const geometry = { cut: selects.filter((select) => select.cut).map((select) => select.text), alone: selects.filter((select) => rows.get(select.top) === 1 && !select.whole).length, rows: rows.size, spare: selects.length ? Math.min(...selects.map((select) => select.has - select.needs)) : null };
+            const within = (rect: { left: number; top: number; right: number; bottom: number }) => rect.left >= 0 && rect.top >= 0 && rect.right <= width && rect.bottom <= height;
+            /* What the form holds: the composer's own parts, and every kind of field it must not hold. */
+            const controls = () => inner.evaluate((names) => {
+              const pane = [...document.querySelectorAll<HTMLElement>(`[aria-label="${names.pane}"]`)].find((element) => element.getClientRects().length)!;
+              const seen = (selector: string) => [...pane.querySelectorAll<HTMLElement>(selector)].filter((element) => element.getClientRects().length).length;
+              return {
+                voice: seen("button:has(svg.lucide-mic)"), prompt: seen("textarea"), images: pane.querySelectorAll('input[type="file"]').length,
+                launch: seen(`button[aria-label="${names.launch}"]`), pill: seen("[data-runtime-pill]"),
+                selects: seen("select"), radios: seen('[role="radio"]'), textInputs: seen('input:not([type="file"]):not([type="hidden"])'), details: seen("details"),
+                buttons: seen("button"), focused: document.activeElement === pane.querySelector("textarea"),
+                height: Math.round(pane.getBoundingClientRect().height),
+              };
+            }, { pane: tr("draft.paneAria"), launch: tr("composer.launchAgent") });
+            const composerOnly = async (state: string) => {
+              const read = await controls();
               if (look > 0) {
-                expect(selects.length, `${label(state)} runtime selects`).toBe(4);
-                expect(geometry.alone, `${label(state)} a select alone on its row`).toBe(0);
-                expect(geometry.cut, `${label(state)} values cut`).toEqual([]);
+                expect({ prompt: read.prompt, voice: read.voice, images: read.images, launch: read.launch, pill: read.pill }, `${label(state)} the composer's parts`).toEqual({ prompt: 1, voice: 1, images: 1, launch: 1, pill: 1 });
+                expect({ selects: read.selects, radios: read.radios, textInputs: read.textInputs, details: read.details }, `${label(state)} fields the form dropped`).toEqual({ selects: 0, radios: 0, textInputs: 0, details: 0 });
+                /* The runtime pill, the image picker, the microphone and Send: nothing else is pressed here. */
+                expect(read.buttons, `${label(state)} buttons`).toBeLessThanOrEqual(5);
+                /* The composer, whole, wherever the board's own conversation height leaves the pane's upper part. */
+                expect(within(await box(draft.locator("[data-na-form]"))), `${label(state)} the composer in the window`).toBe(true);
               }
-              return geometry;
+              return read;
             };
-            /* The phone's settings scroll above the composer. Whenever they hold more than the pane shows, the
-               cue stands over the cut edge, above the composer and inside the window. */
-            const phoneColumn = () => inner.evaluate((name) => {
-              const pane = [...document.querySelectorAll<HTMLElement>(`[aria-label="${name}"]`)].find((element) => element.getClientRects().length);
-              const column = pane?.querySelector<HTMLElement>("[data-na-fields]");
-              return column ? { scrollHeight: column.scrollHeight, clientHeight: column.clientHeight, scrollTop: Math.round(column.scrollTop) } : null;
-            }, tr("draft.paneAria"));
-            const phoneCue = async (state: string, owed: boolean) => {
-              if (!view.touch || look === 0) return null;
-              const column = await phoneColumn();
-              expect(column, `${label(state)} the phone's field column`).not.toBeNull();
-              const cut = column!.scrollHeight - column!.clientHeight - column!.scrollTop > 1;
-              const cue = draft.locator('[data-na-more="below"]');
-              if (owed) expect(cut, `${label(state)} fields cut on the phone`).toBe(true);
-              expect(await cue.count(), `${label(state)} cue over cut fields`).toBe(cut ? 1 : 0);
-              if (cut) {
-                const cueBox = await box(cue.locator("button"));
-                const field = await box(prompt);
-                expect(cueBox.bottom, `${label(state)} cue above the composer`).toBeLessThanOrEqual(field.top);
-                expect(within(cueBox), `${label(state)} cue in the window`).toBe(true);
+            /* After Send: the pane is the conversation. The first message is a row of the feed from the first
+               frame, the loading shape stands where the answer will be, and no status sentence stands in. */
+            const opening = async (state: string, text: string) => {
+              if (look === 0) {
+                /* Today's draft freezes with the prompt as a bubble and a sentence about the launch. */
+                const status = draft.locator('[role="status"]:has(svg.animate-spin)').first();
+                await status.waitFor({ timeout: 5_000 });
+                await shoot(state);
+                return { statusSentence: await status.innerText() };
               }
-              return { fields: column, cue: cut ? 1 : 0 };
+              const shape = draft.locator("[data-na-opening]");
+              await shape.waitFor({ timeout: 5_000 });
+              await shoot(state);
+              const found = {
+                firstMessage: await shape.locator("[data-message-row]").filter({ hasText: text }).count(),
+                loadingShape: await shape.locator('[data-skeleton="feed"]').count(),
+                statusSentence: await draft.getByText(tr("draft.launchedStructured")).count(),
+                pane: await box(draft),
+                message: await box(shape.locator("[data-message-row]")),
+                composer: await box(draft.locator("[data-na-form]")),
+              };
+              expect({ firstMessage: found.firstMessage, loadingShape: found.loadingShape, statusSentence: found.statusSentence }, `${label(state)} the conversation's opening shape`).toEqual({ firstMessage: 1, loadingShape: 1, statusSentence: 0 });
+              /* The first message and the composer under it are both in sight, whatever the pane's height. */
+              expect(within(found.message), `${label(state)} the first message in the window`).toBe(true);
+              expect(within(found.composer), `${label(state)} the composer in the window`).toBe(true);
+              return found;
             };
-            /* Look 2 says the runtime, the folder and the role on one row. */
-            const oneRow = async (state: string) => {
-              if (look !== 2) return null;
-              const tops = await draft.locator("[data-na-open]").evaluateAll((words) => words.map((word) => Math.round(word.getBoundingClientRect().top)));
-              expect(new Set(tops).size, `${label(state)} summary rows`).toBe(1);
-              return tops.length;
+            /* The loaded conversation is the product's own window: the first message once, and the agent's answer. */
+            const loaded = async (state: string, text: string) => {
+              const answer = app.getByText("Summary: the README describes the layout above", { exact: false }).filter({ visible: true }).first();
+              await answer.waitFor({ timeout: 30_000 });
+              await page.waitForTimeout(400);
+              /* The product's card is taller than the pane it replaced (its title and description row); the
+                 frame is taken with the conversation in sight. */
+              await app.locator("[data-message-row]").filter({ hasText: text }).filter({ visible: true }).first().evaluate((row) => (row.closest(".reader") ?? row).scrollIntoView({ block: "nearest" }));
+              await settle();
+              await shoot(state);
+              const rows = await app.locator("[data-message-row]").filter({ hasText: text }).filter({ visible: true }).count();
+              expect(rows, `${label(state)} the first message, once`).toBe(1);
+              expect(await app.locator(`[aria-label="${tr("draft.paneAria")}"]`).count(), `${label(state)} the draft is gone`).toBe(0);
+              return { firstMessage: rows };
             };
-            /* Closing clears the draft, so the close button keeps away from what is pressed while writing: the
-               image picker stays last in the composer's row, as in the orchestrator's composer, with the close
-               button on another row or 24 px off; and where a look seats it beside its summary words, 24 px
-               from the nearest of them. */
-            const closeGeometry = async (state: string) => {
-              if (look === 0) return null;
-              const read = await inner.evaluate((names) => {
-                const pane = [...document.querySelectorAll<HTMLElement>(`[aria-label="${names.pane}"]`)].find((element) => element.getClientRects().length);
-                const rect = (element: Element | null | undefined) => {
-                  if (!element || !element.getClientRects().length) return [];
-                  const box = element.getBoundingClientRect();
-                  return [{ left: Math.round(box.left), top: Math.round(box.top), right: Math.round(box.right), bottom: Math.round(box.bottom) }];
-                };
-                const row = pane?.querySelector('[data-testid="composer-options-row"]');
-                return {
-                  close: rect(pane?.querySelector("[data-na-close]"))[0] ?? null,
-                  image: [...(row?.querySelectorAll(`[aria-label="${names.image}"]`) ?? [])].flatMap(rect)[0] ?? null,
-                  controls: [...(row?.querySelectorAll("button, label, select, [role=radio]") ?? [])].flatMap(rect),
-                  words: [...(pane?.querySelectorAll("[data-na-open]") ?? [])].flatMap(rect),
-                };
-              }, { pane: tr("draft.paneAria"), image: tr("draft.addImages") });
-              type Box = { left: number; top: number; right: number; bottom: number };
-              const sameRow = (a: Box, b: Box) => a.top < b.bottom && b.top < a.bottom;
-              const apart = (a: Box, b: Box) => Math.max(b.left - a.right, a.left - b.right);
-              expect(read.close, `${label(state)} close button`).not.toBeNull();
-              const close = read.close!;
-              const beside = read.words.filter((word) => sameRow(close, word)).map((word) => apart(close, word));
-              const geometry: Record<string, unknown> = { closeToWord: beside.length ? Math.min(...beside) : null };
-              if (beside.length) expect(Math.min(...beside), `${label(state)} close button to the nearest word`).toBeGreaterThanOrEqual(24);
-              if (!view.touch) {
-                expect(read.image, `${label(state)} image picker`).not.toBeNull();
-                const image = read.image!;
-                geometry.imageLast = read.controls.every((control) => control.right <= image.right);
-                geometry.closeToImage = sameRow(close, image) ? apart(close, image) : "another row";
-                expect(geometry.imageLast, `${label(state)} image picker last in its row`).toBe(true);
-                if (sameRow(close, image)) expect(apart(close, image), `${label(state)} close button to the image picker`).toBeGreaterThanOrEqual(24);
+            if (pass === "refused") {
+              if (look > 0) {
+                /* The engine is chosen with the model: a model of another engine moves the draft to it. */
+                await draft.locator("[data-runtime-pill]").click();
+                await app.locator('[data-runtime-popover] [data-runtime-value="model"]').click();
+                await app.locator('[data-runtime-popover] [data-runtime-value="codex/gpt-6-astra"]').click();
+                expect((await draft.locator("[data-runtime-pill]").innerText()).replace(/\s+/g, " ").trim(), `${label(pass)} the pill names the engine`).toContain("Codex · 6-Astra");
               }
-              return geometry;
-            };
-            if (extra) {
-              const found: Record<string, number> = {};
-              if (pass === "handoff") {
-                const source = tr("draft.handoffLabel", { title: "Worker waiting for a seat" });
-                found.handoff = await draft.getByText(source, { exact: false }).filter({ visible: true }).count();
-              } else if (pass === "reviewer" || pass === "deployer") {
-                await reveal("role");
-                await draft.locator(`select[aria-label="${tr("draft.roleAria")}"]`).first().selectOption(pass);
-                found[pass] = pass === "reviewer"
-                  ? await draft.locator(`select[aria-label="${tr("draft.reviewsAria")}"]`).filter({ visible: true }).count()
-                  : await draft.locator(`input[aria-label="${tr("draft.deployConfirm")}"]`).filter({ visible: true }).count();
-              } else if (pass === "signed-out") {
-                const blocked = draft.locator('[data-testid="composer-send-blocked"]');
-                await blocked.waitFor({ timeout: 10_000 });
-                found.signedOut = await blocked.getByText(tr("launch.accountSignedOut", { label: "Account A", engine: "Claude" })).count();
-                found.signIn = await blocked.getByRole("button", { name: tr("launch.signInFirst", { engine: "Claude" }) }).count();
-              } else {
-                const alert = draft.locator('[role="alert"]').filter({ hasText: tr("composer.imageCapabilityError") });
-                await alert.waitFor({ timeout: 10_000 });
-                found.capability = await alert.count();
-                found.retry = await alert.getByRole("button", { name: tr("composer.imageCapabilityRetry") }).count();
-              }
-              await shoot(pass);
-              readings.push({ look, view: view.name, scheme, lang, state: pass, found, pageErrors });
-              for (const [name, count] of Object.entries(found)) expect(count, `${label(pass)} ${name}`).toBe(1);
-            } else if (pass === "task-card") {
-              await shoot("task-card");
-              const close = await closeGeometry("task-card");
-              if (look > 0 && look < 3) readings.push({ look, view: view.name, scheme, lang, state: pass, geometry: { ...close }, pageErrors });
-              if (look === 3) {
-                /* The sheet names the card it was opened for, and the button it hangs from says it is open. */
-                const sheetTask = await draft.locator("[data-na-task]").innerText();
-                expect(cardTitle.length, label("card title")).toBeGreaterThan(0);
-                expect(sheetTask, label("task named in the sheet")).toContain(cardTitle);
-                expect(await app.locator("[data-add-agent][data-na-anchor-open]").first().getAttribute("aria-expanded"), label("anchor open")).toBe("true");
-                readings.push({ look, view: view.name, scheme, lang, state: pass, found: { taskInSheet: 1, anchorOpen: 1 }, task: cardTitle, geometry: { ...close }, pageErrors });
-              }
-            } else if (pass === "narrow") {
-              await reveal("runtime");
-              await draft.getByRole("radio", { name: "Codex" }).first().click();
-              await draft.locator(`select[aria-label="${tr("draft.reasoningAria")}"]`).first().selectOption("high");
-              await prompt.fill(SHORT[lang]);
-              await shoot("narrow");
-              readings.push({ look, view: view.name, scheme, lang, state: pass, width, geometry: { ...await runtimeGeometry("narrow"), summaryWords: await oneRow("narrow"), ...await closeGeometry("narrow"), ...await phoneCue("narrow", false) }, pageErrors });
-            } else {
-              await shoot("empty");
-              /* The role comes first: it sets the runtime its preset names. Then Codex, pressed only when the
-                 preset left another engine: a press on the engine already chosen leaves the draft's image
-                 negotiation waiting for an answer nothing asks for again (docs/design/new-agent-redesign.md §3). */
-              await reveal("role");
-              await draft.locator(`select[aria-label="${tr("draft.roleAria")}"]`).first().selectOption("builder");
-              await reveal("runtime");
-              const codex = draft.getByRole("radio", { name: "Codex" }).first();
-              if (await codex.getAttribute("aria-checked") !== "true") await codex.click();
-              await draft.locator(`select[aria-label="${tr("draft.modelAria")}"]`).first().selectOption({ index: 1 });
-              await draft.locator(`select[aria-label="${tr("draft.reasoningAria")}"]`).first().selectOption("high");
-              await draft.locator(`select[aria-label="${tr("draft.speedAria")}"]`).first().selectOption("fast");
-              await shoot("chosen");
-              const chosen = { ...await runtimeGeometry("chosen"), summaryWords: await oneRow("chosen"), ...await closeGeometry("chosen") };
-              /* With the Builder role the columns of looks 1 and 3 hold more than a 390 px phone shows. */
-              const owed = look === 1 || look === 3;
-              await prompt.fill(LONG[lang]);
-              await shoot("long");
-              await phoneCue("long", owed);
-              await prompt.fill(SHORT[lang]);
-              await draft.locator('input[type="file"]').first().setInputFiles(shots);
-              await shoot("attachment");
-              await phoneCue("attachment", false);
-              /* The refusal is read with the long prompt and both images in place: the tallest a draft gets. */
-              await prompt.fill(LONG[lang]);
-              const launchButton = draft.getByRole("button", { name: tr("composer.launchAgent") }).first();
-              await launchButton.click();
+              await prompt.fill(TYPED[lang]);
+              await prompt.press("Enter");
               const refusal = draft.locator('[data-testid="composer-status"]').filter({ hasText: "export-csv" });
               await refusal.first().waitFor({ timeout: 10_000 });
-              await shoot("error");
-              const refused: Record<string, unknown> = { ...chosen };
-              const phone = await phoneCue("error", owed);
-              if (phone) {
-                Object.assign(refused, phone);
-                if (phone.cue) {
-                  /* Pressing the cue brings the role's parameters up, and the upper edge then says what went above. */
-                  await draft.locator('[data-na-more="below"] button').click();
-                  await page.waitForTimeout(200);
-                  const after = await phoneColumn();
-                  expect(after!.scrollTop, label("cue scrolls the fields")).toBeGreaterThan(0);
-                  expect(await draft.locator('[data-na-more="above"]').count(), label("cue over what scrolled away")).toBe(1);
-                  if (owed) {
-                    const reached = await inner.evaluate((names) => {
-                      const pane = [...document.querySelectorAll<HTMLElement>(`[aria-label="${names.pane}"]`)].find((element) => element.getClientRects().length);
-                      const column = pane!.querySelector<HTMLElement>("[data-na-fields]")!.getBoundingClientRect();
-                      const first = pane!.querySelector(`[role="group"][aria-label="${names.parameters}"] select`)!.getBoundingClientRect();
-                      return first.top >= column.top && first.bottom <= column.bottom;
-                    }, { pane: tr("draft.paneAria"), parameters: tr("draft.roleParameters") });
-                    expect(reached, label("role parameters after the cue")).toBe(true);
-                  }
-                  Object.assign(refused, { scrolledTo: after!.scrollTop });
-                  await shoot("scrolled");
+              await settle();
+              await shoot(pass);
+              const found = { refusal: await refusal.count(), promptKept: await prompt.inputValue() === TYPED[lang] ? 1 : 0 };
+              const posted = await launches();
+              if (look > 0) expect({ engine: posted[0]?.engine, model: posted[0]?.model }, `${label(pass)} the engine the model chose`).toEqual({ engine: "codex", model: "gpt-6-astra" });
+              readings.push({ look, view: view.name, scheme, lang, state: pass, found, launchedWith: { engine: posted[0]?.engine, model: posted[0]?.model }, controls: await composerOnly(pass), pageErrors });
+              expect(found, label(pass)).toEqual({ refusal: 1, promptKept: 1 });
+            } else if (pass === "handoff") {
+              await settle();
+              await shoot(pass);
+              const found = { sourceInPrompt: (await prompt.inputValue()).includes("/repo/pending-worker.jsonl") ? 1 : 0 };
+              readings.push({ look, view: view.name, scheme, lang, state: pass, found, controls: await composerOnly(pass), pageErrors });
+              expect(found, label(pass)).toEqual({ sourceInPrompt: 1 });
+            } else if (pass === "signed-out") {
+              const blocked = draft.locator('[data-testid="composer-send-blocked"]');
+              await blocked.waitFor({ timeout: 10_000 });
+              await settle();
+              await shoot(pass);
+              const found = {
+                signedOut: await blocked.getByText(tr("launch.accountSignedOut", { label: "Account A", engine: "Claude" })).count(),
+                signIn: await blocked.getByRole("button", { name: tr("launch.signInFirst", { engine: "Claude" }) }).count(),
+              };
+              readings.push({ look, view: view.name, scheme, lang, state: pass, found, pageErrors });
+              expect(found, label(pass)).toEqual({ signedOut: 1, signIn: 1 });
+            } else if (pass === "task-card") {
+              await settle();
+              await shoot("task-card-empty");
+              const empty = await composerOnly("task-card-empty");
+              if (look > 0) expect(empty.focused, `${label("task-card-empty")} cursor in the field`).toBe(true);
+              const card = await draft.evaluate((pane) => pane.closest(".card")?.getAttribute("data-id") ?? "");
+              await prompt.fill(TYPED[lang]);
+              /* Enter sends: no second step. */
+              await prompt.press("Enter");
+              const sent = await opening("task-card-sent", TYPED[lang]);
+              const done = await loaded("task-card-loaded", TYPED[lang]);
+              /* The conversation is on the card whose button was pressed. */
+              const holder = await app.locator("[data-message-row]").filter({ hasText: TYPED[lang] }).filter({ visible: true }).first().evaluate((row) => row.closest(".card")?.getAttribute("data-id") ?? "");
+              expect(holder, `${label("task-card-loaded")} the conversation on its card`).toBe(card);
+              readings.push({ look, view: view.name, scheme, lang, state: pass, card, empty, sent, loaded: done, pageErrors });
+            } else {
+              await settle();
+              await shoot("empty");
+              const empty = await composerOnly("empty");
+              /* «+ Agent» puts the cursor in the field at once. */
+              if (look > 0) expect(empty.focused, `${label("empty")} cursor in the field`).toBe(true);
+              const before = await box(draft);
+              let chosen: Record<string, unknown> = {};
+              if (look === 0) {
+                await draft.locator(`select[aria-label="${tr("draft.modelAria")}"]`).first().selectOption("fable");
+                await draft.locator(`select[aria-label="${tr("draft.reasoningAria")}"]`).first().selectOption("high");
+                await draft.locator(`select[aria-label="${tr("draft.accountAria", { engine: "Claude" })}"]`).first().selectOption("account-c");
+                await settle();
+                await shoot("chosen");
+              } else {
+                /* The model and the account are chosen in the runtime pill, as in a conversation's composer:
+                   a popover on the desktop, the «Next message» sheet on the phone. */
+                const pill = draft.locator("[data-runtime-pill]");
+                if (view.touch) {
+                  await pill.click();
+                  const runtimeSheet = app.locator("[data-runtime-sheet]");
+                  await runtimeSheet.waitFor({ timeout: 5_000 });
+                  await settle();
+                  await shoot("picker");
+                  await runtimeSheet.locator("[data-runtime-sheet-row]").filter({ hasText: "Claude · Fable" }).click();
+                  await runtimeSheet.locator("[data-runtime-sheet-row]").filter({ hasText: /^high$/ }).click();
+                  await runtimeSheet.locator('[data-runtime-sheet-account="account-c"]').click();
+                  await runtimeSheet.locator("[data-runtime-sheet-close]").click();
+                } else {
+                  const popover = app.locator("[data-runtime-popover]");
+                  await pill.click();
+                  await popover.locator('[data-runtime-value="model"]').click();
+                  await popover.locator('[data-runtime-row="model"]').first().waitFor({ timeout: 5_000 });
+                  await settle();
+                  await shoot("picker");
+                  expect(within(await box(popover)), `${label("picker")} the popover in the window`).toBe(true);
+                  await popover.locator('[data-runtime-value="fable"]').click();
+                  await pill.click();
+                  await popover.locator('[data-runtime-value="tier-high"]').click();
+                  await pill.click();
+                  await popover.locator('[data-runtime-value="account"]').click();
+                  await popover.locator('[data-runtime-value="account-account-c"]').click();
                 }
+                await settle();
+                await shoot("chosen");
+                const face = (await pill.innerText()).replace(/\s+/g, " ").trim();
+                chosen = { face };
+                expect(face, `${label("chosen")} the pill names what was chosen`).toContain("Fable");
+                expect(face, `${label("chosen")} the pill names the account`).toContain("Account C");
+                await composerOnly("chosen");
               }
-              if (!view.touch && look > 0) {
-                await reveal("runtime");
-                const engines = await box(draft.getByRole("radiogroup"));
-                const model = await box(draft.locator(`select[aria-label="${tr("draft.modelAria")}"]`));
-                const message = await box(refusal);
-                if (look === 1) {
-                  /* The model stands directly under the engine it depends on; thumbnails and the refusal come after both. */
-                  refused.engineToModel = model.top - engines.bottom;
-                  expect(model.top - engines.bottom, label("engine and model adjacent")).toBeLessThan(28);
-                  expect(message.top, label("refusal after the runtime")).toBeGreaterThanOrEqual(model.bottom);
-                }
-                if (look === 3) {
-                  /* The sheet starts under the board's bar, and its foot keeps the launch and the refusal in the window. */
-                  const sheetBox = await box(draft);
-                  const bar = await box(app.locator("header.bar"));
-                  const launch = await box(launchButton);
-                  Object.assign(refused, { sheet: sheetBox, bar: bar.bottom, launch, refusal: message });
-                  expect(sheetBox.top, label("sheet under the bar")).toBeGreaterThanOrEqual(bar.bottom);
-                  expect(within(sheetBox), label("sheet in the window")).toBe(true);
-                  expect(within(launch), label("launch in the window")).toBe(true);
-                  expect(within(message), label("refusal in the window")).toBe(true);
-                  /* Fields the window cuts are announced: whenever the column holds more than it shows, the cue
-                     stands over its lower edge, inside the sheet and above the foot. At 1000x700 the Builder's
-                     parameters are below the cut, so the cue has to be there; pressing it brings them up and
-                     the upper edge then says what was left above. */
-                  const columnState = () => inner.evaluate(() => {
-                    const column = document.querySelector<HTMLElement>("[data-na-sheet] [data-na-fields]")!;
-                    return { scrollHeight: column.scrollHeight, clientHeight: column.clientHeight, scrollTop: Math.round(column.scrollTop) };
-                  });
-                  const column = await columnState();
-                  const cue = app.locator('[data-na-sheet] [data-na-more="below"]');
-                  const cut = column.scrollHeight - column.clientHeight - column.scrollTop > 1;
-                  Object.assign(refused, { fields: column, cue: await cue.count() });
-                  if (view.name === "desktop-1000") expect(cut, label("fields cut at 1000x700")).toBe(true);
-                  expect(await cue.count(), label("cue over cut fields")).toBe(cut ? 1 : 0);
-                  if (cut) {
-                    const cueBox = await box(cue.locator("button"));
-                    const foot = await box(app.locator("[data-na-sheet] [data-na-foot]"));
-                    expect(cueBox.bottom, label("cue above the foot")).toBeLessThanOrEqual(foot.top);
-                    expect(within(cueBox), label("cue in the window")).toBe(true);
-                    await cue.locator("button").click();
-                    await page.waitForTimeout(200);
-                    const after = await columnState();
-                    expect(after.scrollTop, label("cue scrolls the fields")).toBeGreaterThan(0);
-                    expect(await app.locator('[data-na-sheet] [data-na-more="above"]').count(), label("cue over what scrolled away")).toBe(1);
-                    Object.assign(refused, { scrolledTo: after.scrollTop });
-                    await shoot("scrolled");
-                  }
-                }
+              /* Dictation: the composer's own microphone, then «stop and launch» sends what was said. */
+              await draft.locator("button:has(svg.lucide-mic)").first().click();
+              const stop = draft.getByRole("button", { name: tr("draft.stopAndLaunch") }).first();
+              await stop.waitFor({ timeout: 10_000 });
+              await page.waitForTimeout(900);
+              await settle();
+              await shoot("dictation");
+              await stop.click();
+              const sent = await opening("sent", SPOKEN[lang]);
+              if (look === 2 && !view.touch) {
+                /* Look 2 is the conversation's pane from the first frame: Send moves nothing. */
+                expect((sent as { pane: typeof before }).pane, `${label("sent")} the pane where it was`).toEqual(before);
               }
-              /* Every option of the draft, found in this look: a folded group is opened first, as it is for the operator. */
-              await reveal("runtime");
-              const count = (selector: string) => draft.locator(selector).count();
-              const runtime = {
-                engines: await draft.getByRole("radio").count(),
-                model: await count(`select[aria-label="${tr("draft.modelAria")}"]`),
-                effort: await count(`select[aria-label="${tr("draft.reasoningAria")}"]`),
-                speed: await count(`select[aria-label="${tr("draft.speedAria")}"]`),
-                account: await count(`select[aria-label="${tr("draft.accountAria", { engine: "Codex" })}"]`),
-              };
-              await reveal("folder");
-              const folder = await count(`[aria-label^="${tr("draft.dirAria")}: "]`);
-              await page.keyboard.press("Escape");
-              await reveal("role");
-              const role = {
-                role: await count(`select[aria-label="${tr("draft.roleAria")}"]`),
-                parameters: await count(`[role="group"][aria-label="${tr("draft.roleParameters")}"] select`),
-                rolePrompt: await count("details"),
-              };
-              const options = {
-                ...runtime, folder, ...role,
-                images: await count('input[type="file"]'), voice: await count("button:has(svg.lucide-mic)"), prompt: await prompt.count(),
-                launch: await draft.getByRole("button", { name: tr("composer.launchAgent") }).count(),
-                cancel: await count(`button[aria-label="${tr("draft.dismiss")}"]`),
-                error: await draft.locator("text=/export-csv/").count(),
-              };
-              readings.push({ look, view: view.name, scheme, lang, options, geometry: refused, pageErrors });
-              expect(options, label("options")).toEqual({ engines: 3, model: 1, effort: 1, speed: 1, account: 1, folder: 1, role: 1, parameters: 3, rolePrompt: 1, images: 1, voice: 1, prompt: 1, launch: 1, cancel: 1, error: 1 });
+              const done = await loaded("loaded", SPOKEN[lang]);
+              /* One press launched it, with what the pill said and the directory the board derived. */
+              const posted = await launches();
+              const launchedWith = { count: posted.length, engine: posted[0]?.engine, model: posted[0]?.model, effort: posted[0]?.effort, accountId: posted[0]?.accountId, cwd: posted[0]?.cwd, role: posted[0]?.role ?? null };
+              expect(launchedWith, `${label("sent")} what was launched`).toEqual({ count: 1, engine: "claude", model: "fable", effort: "high", accountId: "account-c", cwd: "/repo", role: null });
+              readings.push({ look, view: view.name, scheme, lang, state: pass, empty, chosen, launchedWith, pane: { before, sent: (sent as { pane?: typeof before }).pane ?? null }, sent, loaded: done, pageErrors });
             }
             expect(pageErrors, `${label(pass)} page errors`).toEqual([]);
           } catch (error) {
@@ -18407,30 +18296,21 @@ describe("creating a new agent: today's draft and three numbered looks", () => {
     };
     if (merge) {
       for (const file of fs.readdirSync(out).filter((name) => /^readings-.*\.json$/.test(name)).sort()) readings.push(...JSON.parse(fs.readFileSync(path.join(out, file), "utf8")) as Record<string, unknown>[]);
-      expect([...new Set(readings.map((reading) => reading.look))].sort(), "the looks that were walked").toEqual([0, 1, 2, 3]);
+      expect([...new Set(readings.map((reading) => reading.look))].sort(), "the looks that were walked").toEqual([...LOOKS]);
     } else {
       await walk();
-      if (only.size) fs.writeFileSync(path.join(out, `readings-${[...(only.get("looks") ?? ["all"])].join("_")}.json`), `${JSON.stringify(readings)}\n`);
+      if (only.size) fs.writeFileSync(path.join(out, `readings-${[...only.entries()].filter(([key]) => key !== "sheets").map(([key, values]) => `${key}-${[...values].join("_")}`).join("-") || "all"}.json`), `${JSON.stringify(readings)}\n`);
     }
     const frame = (look: number, view: string, scheme: string, lang: string, state: string) => path.join(out, `look${look}-${view}-${scheme}-${lang}-${state}.png`);
     const complete = !only.size || merge;
     if (complete || only.has("sheets")) {
-      const titles = ["Today", "1 · The composer is the card", "2 · One line, opened where asked", "3 · A sheet at the button"];
-      for (const look of [1, 2, 3]) {
-        await sheet(path.join(out, `sheet-look${look}.png`), `Creating a new agent — ${titles[look]} — each row: today, then look ${look}, at 1440, 1000 and the phone`, [["light", "en"], ["dark", "uk"]].map(([scheme, lang]) => ({
+      /* One sheet per size, each row one moment: today (0), then variant 1, then variant 2. */
+      for (const view of views) {
+        await sheet(path.join(out, `sheet-compare-${view.width}.png`), `Creating a new agent at ${view.width} px — each row: today (0), variant 1, variant 2`, view.touch ? 640 : 520, [["light", "en"], ["dark", "uk"]].map(([scheme, lang]) => ({
           name: `${scheme} · ${lang}`,
-          rows: [...STATES, "scrolled", ...(scheme === "light" ? EXTRAS : [])].map((state) => ({
-            state,
-            frames: views.flatMap((view) => [frame(0, view.name, scheme!, lang!, state), frame(look, view.name, scheme!, lang!, state)]),
-          })),
+          rows: [...STATES, ...(view.name === "desktop-1440" && scheme === "light" ? EXTRAS : [])].map((state) => ({ state, frames: LOOKS.map((look) => frame(look, view.name, scheme!, lang!, state)) })),
         })));
       }
-      await sheet(path.join(out, "sheet-compare.png"), "Creating a new agent — each row: today (0), then looks 1, 2 and 3", [
-        ["desktop-1440", "light", "en"], ["desktop-1000", "dark", "uk"], ["phone-390", "light", "uk"],
-      ].map(([view, scheme, lang]) => ({
-        name: `${view} · ${scheme} · ${lang}`,
-        rows: [...STATES, "scrolled", ...(view === "desktop-1440" ? EXTRAS : [])].map((state) => ({ state, frames: [0, 1, 2, 3].map((look) => frame(look, view!, scheme!, lang!, state)) })),
-      })));
     }
     if (complete) {
       fs.mkdirSync("evidence/new-agent-redesign", { recursive: true });

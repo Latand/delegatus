@@ -10,31 +10,45 @@
       "view": "desktop-1440",
       "scheme": "light",
       "lang": "en",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
+      "state": "header",
+      "empty": {
         "prompt": 1,
+        "voice": 1,
+        "images": 1,
         "launch": 1,
-        "cancel": 1,
-        "error": 1
+        "pill": 0,
+        "selects": 4,
+        "radios": 3,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 8,
+        "focused": true,
+        "height": 720
       },
-      "geometry": {
-        "cut": [
-          "Account B · active"
-        ],
-        "alone": 1,
-        "rows": 2,
-        "spare": -19,
-        "summaryWords": null
+      "chosen": {},
+      "launchedWith": {
+        "count": 1,
+        "engine": "claude",
+        "model": "fable",
+        "effort": "high",
+        "accountId": "account-c",
+        "cwd": "/repo",
+        "role": null
+      },
+      "pane": {
+        "before": {
+          "left": 782,
+          "top": 180,
+          "right": 1306,
+          "bottom": 900
+        },
+        "sent": null
+      },
+      "sent": {
+        "statusSentence": "Launched — confirming the agent. Don't send again; the panel attaches the conversation as soon as its transcript appears."
+      },
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     },
@@ -43,16 +57,57 @@
       "view": "desktop-1440",
       "scheme": "light",
       "lang": "en",
-      "state": "narrow",
-      "width": 760,
-      "geometry": {
-        "cut": [
-          "Account B · active"
-        ],
-        "alone": 2,
-        "rows": 3,
-        "spare": -19,
-        "summaryWords": null
+      "state": "task-card",
+      "card": "task:t-pending",
+      "empty": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 0,
+        "selects": 4,
+        "radios": 3,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 8,
+        "focused": true,
+        "height": 720
+      },
+      "sent": {
+        "statusSentence": "Launched — confirming the agent. Don't send again; the panel attaches the conversation as soon as its transcript appears."
+      },
+      "loaded": {
+        "firstMessage": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 0,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "en",
+      "state": "refused",
+      "found": {
+        "refusal": 1,
+        "promptKept": 1
+      },
+      "launchedWith": {
+        "engine": "claude",
+        "model": "opus"
+      },
+      "controls": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 0,
+        "selects": 4,
+        "radios": 3,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 8,
+        "focused": false,
+        "height": 720
       },
       "pageErrors": []
     },
@@ -63,29 +118,21 @@
       "lang": "en",
       "state": "handoff",
       "found": {
-        "handoff": 1
+        "sourceInPrompt": 1
       },
-      "pageErrors": []
-    },
-    {
-      "look": 0,
-      "view": "desktop-1440",
-      "scheme": "light",
-      "lang": "en",
-      "state": "reviewer",
-      "found": {
-        "reviewer": 1
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 0,
-      "view": "desktop-1440",
-      "scheme": "light",
-      "lang": "en",
-      "state": "deployer",
-      "found": {
-        "deployer": 1
+      "controls": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 0,
+        "selects": 4,
+        "radios": 3,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 8,
+        "focused": false,
+        "height": 720
       },
       "pageErrors": []
     },
@@ -105,11 +152,46 @@
       "look": 0,
       "view": "desktop-1440",
       "scheme": "light",
-      "lang": "en",
-      "state": "capability",
-      "found": {
-        "capability": 1,
-        "retry": 1
+      "lang": "uk",
+      "state": "header",
+      "empty": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 0,
+        "selects": 4,
+        "radios": 3,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 8,
+        "focused": true,
+        "height": 720
+      },
+      "chosen": {},
+      "launchedWith": {
+        "count": 1,
+        "engine": "claude",
+        "model": "fable",
+        "effort": "high",
+        "accountId": "account-c",
+        "cwd": "/repo",
+        "role": null
+      },
+      "pane": {
+        "before": {
+          "left": 782,
+          "top": 180,
+          "right": 1306,
+          "bottom": 900
+        },
+        "sent": null
+      },
+      "sent": {
+        "statusSentence": "Запущено — підтверджую агента. Не надсилай ще раз; панель підхопить розмову, щойно з'явиться її транскрипт."
+      },
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     },
@@ -118,49 +200,27 @@
       "view": "desktop-1440",
       "scheme": "light",
       "lang": "uk",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
+      "state": "task-card",
+      "card": "task:t-pending",
+      "empty": {
         "prompt": 1,
+        "voice": 1,
+        "images": 1,
         "launch": 1,
-        "cancel": 1,
-        "error": 1
+        "pill": 0,
+        "selects": 4,
+        "radios": 3,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 8,
+        "focused": true,
+        "height": 720
       },
-      "geometry": {
-        "cut": [
-          "Account B · активний"
-        ],
-        "alone": 1,
-        "rows": 2,
-        "spare": -39,
-        "summaryWords": null
+      "sent": {
+        "statusSentence": "Запущено — підтверджую агента. Не надсилай ще раз; панель підхопить розмову, щойно з'явиться її транскрипт."
       },
-      "pageErrors": []
-    },
-    {
-      "look": 0,
-      "view": "desktop-1440",
-      "scheme": "light",
-      "lang": "uk",
-      "state": "narrow",
-      "width": 760,
-      "geometry": {
-        "cut": [
-          "Account B · активний"
-        ],
-        "alone": 2,
-        "rows": 3,
-        "spare": -39,
-        "summaryWords": null
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     },
@@ -169,31 +229,45 @@
       "view": "desktop-1440",
       "scheme": "dark",
       "lang": "en",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
+      "state": "header",
+      "empty": {
         "prompt": 1,
+        "voice": 1,
+        "images": 1,
         "launch": 1,
-        "cancel": 1,
-        "error": 1
+        "pill": 0,
+        "selects": 4,
+        "radios": 3,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 8,
+        "focused": true,
+        "height": 720
       },
-      "geometry": {
-        "cut": [
-          "Account B · active"
-        ],
-        "alone": 1,
-        "rows": 2,
-        "spare": -19,
-        "summaryWords": null
+      "chosen": {},
+      "launchedWith": {
+        "count": 1,
+        "engine": "claude",
+        "model": "fable",
+        "effort": "high",
+        "accountId": "account-c",
+        "cwd": "/repo",
+        "role": null
+      },
+      "pane": {
+        "before": {
+          "left": 782,
+          "top": 180,
+          "right": 1306,
+          "bottom": 900
+        },
+        "sent": null
+      },
+      "sent": {
+        "statusSentence": "Launched — confirming the agent. Don't send again; the panel attaches the conversation as soon as its transcript appears."
+      },
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     },
@@ -202,16 +276,27 @@
       "view": "desktop-1440",
       "scheme": "dark",
       "lang": "en",
-      "state": "narrow",
-      "width": 760,
-      "geometry": {
-        "cut": [
-          "Account B · active"
-        ],
-        "alone": 2,
-        "rows": 3,
-        "spare": -19,
-        "summaryWords": null
+      "state": "task-card",
+      "card": "task:t-pending",
+      "empty": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 0,
+        "selects": 4,
+        "radios": 3,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 8,
+        "focused": true,
+        "height": 720
+      },
+      "sent": {
+        "statusSentence": "Launched — confirming the agent. Don't send again; the panel attaches the conversation as soon as its transcript appears."
+      },
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     },
@@ -220,31 +305,45 @@
       "view": "desktop-1440",
       "scheme": "dark",
       "lang": "uk",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
+      "state": "header",
+      "empty": {
         "prompt": 1,
+        "voice": 1,
+        "images": 1,
         "launch": 1,
-        "cancel": 1,
-        "error": 1
+        "pill": 0,
+        "selects": 4,
+        "radios": 3,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 8,
+        "focused": true,
+        "height": 720
       },
-      "geometry": {
-        "cut": [
-          "Account B · активний"
-        ],
-        "alone": 1,
-        "rows": 2,
-        "spare": -39,
-        "summaryWords": null
+      "chosen": {},
+      "launchedWith": {
+        "count": 1,
+        "engine": "claude",
+        "model": "fable",
+        "effort": "high",
+        "accountId": "account-c",
+        "cwd": "/repo",
+        "role": null
+      },
+      "pane": {
+        "before": {
+          "left": 782,
+          "top": 180,
+          "right": 1306,
+          "bottom": 900
+        },
+        "sent": null
+      },
+      "sent": {
+        "statusSentence": "Запущено — підтверджую агента. Не надсилай ще раз; панель підхопить розмову, щойно з'явиться її транскрипт."
+      },
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     },
@@ -253,16 +352,27 @@
       "view": "desktop-1440",
       "scheme": "dark",
       "lang": "uk",
-      "state": "narrow",
-      "width": 760,
-      "geometry": {
-        "cut": [
-          "Account B · активний"
-        ],
-        "alone": 2,
-        "rows": 3,
-        "spare": -39,
-        "summaryWords": null
+      "state": "task-card",
+      "card": "task:t-pending",
+      "empty": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 0,
+        "selects": 4,
+        "radios": 3,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 8,
+        "focused": true,
+        "height": 720
+      },
+      "sent": {
+        "statusSentence": "Запущено — підтверджую агента. Не надсилай ще раз; панель підхопить розмову, щойно з'явиться її транскрипт."
+      },
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     },
@@ -271,31 +381,45 @@
       "view": "desktop-1000",
       "scheme": "light",
       "lang": "en",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
+      "state": "header",
+      "empty": {
         "prompt": 1,
+        "voice": 1,
+        "images": 1,
         "launch": 1,
-        "cancel": 1,
-        "error": 1
+        "pill": 0,
+        "selects": 4,
+        "radios": 3,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 8,
+        "focused": true,
+        "height": 518
       },
-      "geometry": {
-        "cut": [
-          "Account B · active"
-        ],
-        "alone": 1,
-        "rows": 2,
-        "spare": -19,
-        "summaryWords": null
+      "chosen": {},
+      "launchedWith": {
+        "count": 1,
+        "engine": "claude",
+        "model": "fable",
+        "effort": "high",
+        "accountId": "account-c",
+        "cwd": "/repo",
+        "role": null
+      },
+      "pane": {
+        "before": {
+          "left": 342,
+          "top": 245,
+          "right": 962,
+          "bottom": 763
+        },
+        "sent": null
+      },
+      "sent": {
+        "statusSentence": "Launched — confirming the agent. Don't send again; the panel attaches the conversation as soon as its transcript appears."
+      },
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     },
@@ -304,16 +428,27 @@
       "view": "desktop-1000",
       "scheme": "light",
       "lang": "en",
-      "state": "narrow",
-      "width": 760,
-      "geometry": {
-        "cut": [
-          "Account B · active"
-        ],
-        "alone": 2,
-        "rows": 3,
-        "spare": -19,
-        "summaryWords": null
+      "state": "task-card",
+      "card": "task:t-links",
+      "empty": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 0,
+        "selects": 4,
+        "radios": 3,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 8,
+        "focused": true,
+        "height": 518
+      },
+      "sent": {
+        "statusSentence": "Launched — confirming the agent. Don't send again; the panel attaches the conversation as soon as its transcript appears."
+      },
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     },
@@ -322,31 +457,45 @@
       "view": "desktop-1000",
       "scheme": "light",
       "lang": "uk",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
+      "state": "header",
+      "empty": {
         "prompt": 1,
+        "voice": 1,
+        "images": 1,
         "launch": 1,
-        "cancel": 1,
-        "error": 1
+        "pill": 0,
+        "selects": 4,
+        "radios": 3,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 8,
+        "focused": true,
+        "height": 518
       },
-      "geometry": {
-        "cut": [
-          "Account B · активний"
-        ],
-        "alone": 1,
-        "rows": 2,
-        "spare": -39,
-        "summaryWords": null
+      "chosen": {},
+      "launchedWith": {
+        "count": 1,
+        "engine": "claude",
+        "model": "fable",
+        "effort": "high",
+        "accountId": "account-c",
+        "cwd": "/repo",
+        "role": null
+      },
+      "pane": {
+        "before": {
+          "left": 342,
+          "top": 245,
+          "right": 962,
+          "bottom": 763
+        },
+        "sent": null
+      },
+      "sent": {
+        "statusSentence": "Запущено — підтверджую агента. Не надсилай ще раз; панель підхопить розмову, щойно з'явиться її транскрипт."
+      },
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     },
@@ -355,16 +504,27 @@
       "view": "desktop-1000",
       "scheme": "light",
       "lang": "uk",
-      "state": "narrow",
-      "width": 760,
-      "geometry": {
-        "cut": [
-          "Account B · активний"
-        ],
-        "alone": 2,
-        "rows": 3,
-        "spare": -39,
-        "summaryWords": null
+      "state": "task-card",
+      "card": "task:t-links",
+      "empty": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 0,
+        "selects": 4,
+        "radios": 3,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 8,
+        "focused": true,
+        "height": 518
+      },
+      "sent": {
+        "statusSentence": "Запущено — підтверджую агента. Не надсилай ще раз; панель підхопить розмову, щойно з'явиться її транскрипт."
+      },
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     },
@@ -373,31 +533,45 @@
       "view": "desktop-1000",
       "scheme": "dark",
       "lang": "en",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
+      "state": "header",
+      "empty": {
         "prompt": 1,
+        "voice": 1,
+        "images": 1,
         "launch": 1,
-        "cancel": 1,
-        "error": 1
+        "pill": 0,
+        "selects": 4,
+        "radios": 3,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 8,
+        "focused": true,
+        "height": 518
       },
-      "geometry": {
-        "cut": [
-          "Account B · active"
-        ],
-        "alone": 1,
-        "rows": 2,
-        "spare": -19,
-        "summaryWords": null
+      "chosen": {},
+      "launchedWith": {
+        "count": 1,
+        "engine": "claude",
+        "model": "fable",
+        "effort": "high",
+        "accountId": "account-c",
+        "cwd": "/repo",
+        "role": null
+      },
+      "pane": {
+        "before": {
+          "left": 342,
+          "top": 245,
+          "right": 962,
+          "bottom": 763
+        },
+        "sent": null
+      },
+      "sent": {
+        "statusSentence": "Launched — confirming the agent. Don't send again; the panel attaches the conversation as soon as its transcript appears."
+      },
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     },
@@ -406,16 +580,27 @@
       "view": "desktop-1000",
       "scheme": "dark",
       "lang": "en",
-      "state": "narrow",
-      "width": 760,
-      "geometry": {
-        "cut": [
-          "Account B · active"
-        ],
-        "alone": 2,
-        "rows": 3,
-        "spare": -19,
-        "summaryWords": null
+      "state": "task-card",
+      "card": "task:t-links",
+      "empty": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 0,
+        "selects": 4,
+        "radios": 3,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 8,
+        "focused": true,
+        "height": 518
+      },
+      "sent": {
+        "statusSentence": "Launched — confirming the agent. Don't send again; the panel attaches the conversation as soon as its transcript appears."
+      },
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     },
@@ -424,31 +609,45 @@
       "view": "desktop-1000",
       "scheme": "dark",
       "lang": "uk",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
+      "state": "header",
+      "empty": {
         "prompt": 1,
+        "voice": 1,
+        "images": 1,
         "launch": 1,
-        "cancel": 1,
-        "error": 1
+        "pill": 0,
+        "selects": 4,
+        "radios": 3,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 8,
+        "focused": true,
+        "height": 518
       },
-      "geometry": {
-        "cut": [
-          "Account B · активний"
-        ],
-        "alone": 1,
-        "rows": 2,
-        "spare": -39,
-        "summaryWords": null
+      "chosen": {},
+      "launchedWith": {
+        "count": 1,
+        "engine": "claude",
+        "model": "fable",
+        "effort": "high",
+        "accountId": "account-c",
+        "cwd": "/repo",
+        "role": null
+      },
+      "pane": {
+        "before": {
+          "left": 342,
+          "top": 245,
+          "right": 962,
+          "bottom": 763
+        },
+        "sent": null
+      },
+      "sent": {
+        "statusSentence": "Запущено — підтверджую агента. Не надсилай ще раз; панель підхопить розмову, щойно з'явиться її транскрипт."
+      },
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     },
@@ -457,16 +656,27 @@
       "view": "desktop-1000",
       "scheme": "dark",
       "lang": "uk",
-      "state": "narrow",
-      "width": 760,
-      "geometry": {
-        "cut": [
-          "Account B · активний"
-        ],
-        "alone": 2,
-        "rows": 3,
-        "spare": -39,
-        "summaryWords": null
+      "state": "task-card",
+      "card": "task:t-links",
+      "empty": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 0,
+        "selects": 4,
+        "radios": 3,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 8,
+        "focused": true,
+        "height": 518
+      },
+      "sent": {
+        "statusSentence": "Запущено — підтверджую агента. Не надсилай ще раз; панель підхопить розмову, щойно з'явиться її транскрипт."
+      },
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     },
@@ -475,49 +685,45 @@
       "view": "phone-390",
       "scheme": "light",
       "lang": "en",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
+      "state": "header",
+      "empty": {
         "prompt": 1,
+        "voice": 1,
+        "images": 1,
         "launch": 1,
-        "cancel": 1,
-        "error": 1
+        "pill": 0,
+        "selects": 4,
+        "radios": 3,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 8,
+        "focused": false,
+        "height": 747
       },
-      "geometry": {
-        "cut": [
-          "Account B · active"
-        ],
-        "alone": 2,
-        "rows": 3,
-        "spare": -51,
-        "summaryWords": null
+      "chosen": {},
+      "launchedWith": {
+        "count": 1,
+        "engine": "claude",
+        "model": "fable",
+        "effort": "high",
+        "accountId": "account-c",
+        "cwd": "/repo",
+        "role": null
       },
-      "pageErrors": []
-    },
-    {
-      "look": 0,
-      "view": "phone-390",
-      "scheme": "light",
-      "lang": "en",
-      "state": "narrow",
-      "width": 320,
-      "geometry": {
-        "cut": [
-          "Account B · active"
-        ],
-        "alone": 2,
-        "rows": 3,
-        "spare": -88,
-        "summaryWords": null
+      "pane": {
+        "before": {
+          "left": 0,
+          "top": 97,
+          "right": 390,
+          "bottom": 844
+        },
+        "sent": null
+      },
+      "sent": {
+        "statusSentence": "Launched — confirming the agent. Don't send again; the panel attaches the conversation as soon as its transcript appears."
+      },
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     },
@@ -526,49 +732,45 @@
       "view": "phone-390",
       "scheme": "light",
       "lang": "uk",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
+      "state": "header",
+      "empty": {
         "prompt": 1,
+        "voice": 1,
+        "images": 1,
         "launch": 1,
-        "cancel": 1,
-        "error": 1
+        "pill": 0,
+        "selects": 4,
+        "radios": 3,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 8,
+        "focused": false,
+        "height": 747
       },
-      "geometry": {
-        "cut": [
-          "Account B · активний"
-        ],
-        "alone": 2,
-        "rows": 3,
-        "spare": -77,
-        "summaryWords": null
+      "chosen": {},
+      "launchedWith": {
+        "count": 1,
+        "engine": "claude",
+        "model": "fable",
+        "effort": "high",
+        "accountId": "account-c",
+        "cwd": "/repo",
+        "role": null
       },
-      "pageErrors": []
-    },
-    {
-      "look": 0,
-      "view": "phone-390",
-      "scheme": "light",
-      "lang": "uk",
-      "state": "narrow",
-      "width": 320,
-      "geometry": {
-        "cut": [
-          "Account B · активний"
-        ],
-        "alone": 4,
-        "rows": 4,
-        "spare": -114,
-        "summaryWords": null
+      "pane": {
+        "before": {
+          "left": 0,
+          "top": 97,
+          "right": 390,
+          "bottom": 844
+        },
+        "sent": null
+      },
+      "sent": {
+        "statusSentence": "Запущено — підтверджую агента. Не надсилай ще раз; панель підхопить розмову, щойно з'явиться її транскрипт."
+      },
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     },
@@ -577,49 +779,45 @@
       "view": "phone-390",
       "scheme": "dark",
       "lang": "en",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
+      "state": "header",
+      "empty": {
         "prompt": 1,
+        "voice": 1,
+        "images": 1,
         "launch": 1,
-        "cancel": 1,
-        "error": 1
+        "pill": 0,
+        "selects": 4,
+        "radios": 3,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 8,
+        "focused": false,
+        "height": 747
       },
-      "geometry": {
-        "cut": [
-          "Account B · active"
-        ],
-        "alone": 2,
-        "rows": 3,
-        "spare": -51,
-        "summaryWords": null
+      "chosen": {},
+      "launchedWith": {
+        "count": 1,
+        "engine": "claude",
+        "model": "fable",
+        "effort": "high",
+        "accountId": "account-c",
+        "cwd": "/repo",
+        "role": null
       },
-      "pageErrors": []
-    },
-    {
-      "look": 0,
-      "view": "phone-390",
-      "scheme": "dark",
-      "lang": "en",
-      "state": "narrow",
-      "width": 320,
-      "geometry": {
-        "cut": [
-          "Account B · active"
-        ],
-        "alone": 2,
-        "rows": 3,
-        "spare": -88,
-        "summaryWords": null
+      "pane": {
+        "before": {
+          "left": 0,
+          "top": 97,
+          "right": 390,
+          "bottom": 844
+        },
+        "sent": null
+      },
+      "sent": {
+        "statusSentence": "Launched — confirming the agent. Don't send again; the panel attaches the conversation as soon as its transcript appears."
+      },
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     },
@@ -628,49 +826,45 @@
       "view": "phone-390",
       "scheme": "dark",
       "lang": "uk",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
+      "state": "header",
+      "empty": {
         "prompt": 1,
+        "voice": 1,
+        "images": 1,
         "launch": 1,
-        "cancel": 1,
-        "error": 1
+        "pill": 0,
+        "selects": 4,
+        "radios": 3,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 8,
+        "focused": false,
+        "height": 747
       },
-      "geometry": {
-        "cut": [
-          "Account B · активний"
-        ],
-        "alone": 2,
-        "rows": 3,
-        "spare": -77,
-        "summaryWords": null
+      "chosen": {},
+      "launchedWith": {
+        "count": 1,
+        "engine": "claude",
+        "model": "fable",
+        "effort": "high",
+        "accountId": "account-c",
+        "cwd": "/repo",
+        "role": null
       },
-      "pageErrors": []
-    },
-    {
-      "look": 0,
-      "view": "phone-390",
-      "scheme": "dark",
-      "lang": "uk",
-      "state": "narrow",
-      "width": 320,
-      "geometry": {
-        "cut": [
-          "Account B · активний"
-        ],
-        "alone": 4,
-        "rows": 4,
-        "spare": -114,
-        "summaryWords": null
+      "pane": {
+        "before": {
+          "left": 0,
+          "top": 97,
+          "right": 390,
+          "bottom": 844
+        },
+        "sent": null
+      },
+      "sent": {
+        "statusSentence": "Запущено — підтверджую агента. Не надсилай ще раз; панель підхопить розмову, щойно з'явиться її транскрипт."
+      },
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     },
@@ -679,52 +873,72 @@
       "view": "desktop-1440",
       "scheme": "light",
       "lang": "en",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
+      "state": "header",
+      "empty": {
         "prompt": 1,
+        "voice": 1,
+        "images": 1,
         "launch": 1,
-        "cancel": 1,
-        "error": 1
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 82
       },
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 128,
-        "summaryWords": null,
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row",
-        "engineToModel": 26
+      "chosen": {
+        "face": "Claude · Fable · High → Account C"
       },
-      "pageErrors": []
-    },
-    {
-      "look": 1,
-      "view": "desktop-1440",
-      "scheme": "light",
-      "lang": "en",
-      "state": "narrow",
-      "width": 760,
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 56,
-        "summaryWords": null,
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row"
+      "launchedWith": {
+        "count": 1,
+        "engine": "claude",
+        "model": "fable",
+        "effort": "high",
+        "accountId": "account-c",
+        "cwd": "/repo",
+        "role": null
+      },
+      "pane": {
+        "before": {
+          "left": 782,
+          "top": 784,
+          "right": 1306,
+          "bottom": 866
+        },
+        "sent": {
+          "left": 782,
+          "top": 180,
+          "right": 1306,
+          "bottom": 900
+        }
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 782,
+          "top": 180,
+          "right": 1306,
+          "bottom": 900
+        },
+        "message": {
+          "left": 782,
+          "top": 694,
+          "right": 1306,
+          "bottom": 733
+        },
+        "composer": {
+          "left": 782,
+          "top": 818,
+          "right": 1306,
+          "bottom": 900
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     },
@@ -734,10 +948,76 @@
       "scheme": "light",
       "lang": "en",
       "state": "task-card",
-      "geometry": {
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row"
+      "card": "task:t-pending",
+      "empty": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 91
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 490,
+          "top": 180,
+          "right": 898,
+          "bottom": 900
+        },
+        "message": {
+          "left": 490,
+          "top": 676,
+          "right": 898,
+          "bottom": 733
+        },
+        "composer": {
+          "left": 490,
+          "top": 818,
+          "right": 898,
+          "bottom": 900
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "en",
+      "state": "refused",
+      "found": {
+        "refusal": 1,
+        "promptKept": 1
+      },
+      "launchedWith": {
+        "engine": "codex",
+        "model": "gpt-6-astra"
+      },
+      "controls": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": false,
+        "height": 103
       },
       "pageErrors": []
     },
@@ -748,29 +1028,21 @@
       "lang": "en",
       "state": "handoff",
       "found": {
-        "handoff": 1
+        "sourceInPrompt": 1
       },
-      "pageErrors": []
-    },
-    {
-      "look": 1,
-      "view": "desktop-1440",
-      "scheme": "light",
-      "lang": "en",
-      "state": "reviewer",
-      "found": {
-        "reviewer": 1
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 1,
-      "view": "desktop-1440",
-      "scheme": "light",
-      "lang": "en",
-      "state": "deployer",
-      "found": {
-        "deployer": 1
+      "controls": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 94
       },
       "pageErrors": []
     },
@@ -790,794 +1062,1309 @@
       "look": 1,
       "view": "desktop-1440",
       "scheme": "light",
+      "lang": "uk",
+      "state": "header",
+      "empty": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 82
+      },
+      "chosen": {
+        "face": "Claude · Fable · Високі → Account C"
+      },
+      "launchedWith": {
+        "count": 1,
+        "engine": "claude",
+        "model": "fable",
+        "effort": "high",
+        "accountId": "account-c",
+        "cwd": "/repo",
+        "role": null
+      },
+      "pane": {
+        "before": {
+          "left": 782,
+          "top": 784,
+          "right": 1306,
+          "bottom": 866
+        },
+        "sent": {
+          "left": 782,
+          "top": 180,
+          "right": 1306,
+          "bottom": 900
+        }
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 782,
+          "top": 180,
+          "right": 1306,
+          "bottom": 900
+        },
+        "message": {
+          "left": 782,
+          "top": 694,
+          "right": 1306,
+          "bottom": 733
+        },
+        "composer": {
+          "left": 782,
+          "top": 818,
+          "right": 1306,
+          "bottom": 900
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "uk",
+      "state": "task-card",
+      "card": "task:t-pending",
+      "empty": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 91
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 490,
+          "top": 180,
+          "right": 898,
+          "bottom": 900
+        },
+        "message": {
+          "left": 490,
+          "top": 676,
+          "right": 898,
+          "bottom": 733
+        },
+        "composer": {
+          "left": 490,
+          "top": 818,
+          "right": 898,
+          "bottom": 900
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "desktop-1440",
+      "scheme": "dark",
       "lang": "en",
-      "state": "capability",
+      "state": "header",
+      "empty": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 82
+      },
+      "chosen": {
+        "face": "Claude · Fable · High → Account C"
+      },
+      "launchedWith": {
+        "count": 1,
+        "engine": "claude",
+        "model": "fable",
+        "effort": "high",
+        "accountId": "account-c",
+        "cwd": "/repo",
+        "role": null
+      },
+      "pane": {
+        "before": {
+          "left": 782,
+          "top": 784,
+          "right": 1306,
+          "bottom": 866
+        },
+        "sent": {
+          "left": 782,
+          "top": 180,
+          "right": 1306,
+          "bottom": 900
+        }
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 782,
+          "top": 180,
+          "right": 1306,
+          "bottom": 900
+        },
+        "message": {
+          "left": 782,
+          "top": 694,
+          "right": 1306,
+          "bottom": 733
+        },
+        "composer": {
+          "left": 782,
+          "top": 818,
+          "right": 1306,
+          "bottom": 900
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "desktop-1440",
+      "scheme": "dark",
+      "lang": "en",
+      "state": "task-card",
+      "card": "task:t-pending",
+      "empty": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 91
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 490,
+          "top": 180,
+          "right": 898,
+          "bottom": 900
+        },
+        "message": {
+          "left": 490,
+          "top": 676,
+          "right": 898,
+          "bottom": 733
+        },
+        "composer": {
+          "left": 490,
+          "top": 818,
+          "right": 898,
+          "bottom": 900
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "desktop-1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "state": "header",
+      "empty": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 82
+      },
+      "chosen": {
+        "face": "Claude · Fable · Високі → Account C"
+      },
+      "launchedWith": {
+        "count": 1,
+        "engine": "claude",
+        "model": "fable",
+        "effort": "high",
+        "accountId": "account-c",
+        "cwd": "/repo",
+        "role": null
+      },
+      "pane": {
+        "before": {
+          "left": 782,
+          "top": 784,
+          "right": 1306,
+          "bottom": 866
+        },
+        "sent": {
+          "left": 782,
+          "top": 180,
+          "right": 1306,
+          "bottom": 900
+        }
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 782,
+          "top": 180,
+          "right": 1306,
+          "bottom": 900
+        },
+        "message": {
+          "left": 782,
+          "top": 694,
+          "right": 1306,
+          "bottom": 733
+        },
+        "composer": {
+          "left": 782,
+          "top": 818,
+          "right": 1306,
+          "bottom": 900
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "desktop-1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "state": "task-card",
+      "card": "task:t-pending",
+      "empty": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 91
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 490,
+          "top": 180,
+          "right": 898,
+          "bottom": 900
+        },
+        "message": {
+          "left": 490,
+          "top": 676,
+          "right": 898,
+          "bottom": 733
+        },
+        "composer": {
+          "left": 490,
+          "top": 818,
+          "right": 898,
+          "bottom": 900
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "desktop-1000",
+      "scheme": "light",
+      "lang": "en",
+      "state": "header",
+      "empty": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 82
+      },
+      "chosen": {
+        "face": "Claude · Fable · High → Account C"
+      },
+      "launchedWith": {
+        "count": 1,
+        "engine": "claude",
+        "model": "fable",
+        "effort": "high",
+        "accountId": "account-c",
+        "cwd": "/repo",
+        "role": null
+      },
+      "pane": {
+        "before": {
+          "left": 342,
+          "top": 303,
+          "right": 962,
+          "bottom": 385
+        },
+        "sent": {
+          "left": 342,
+          "top": 182,
+          "right": 962,
+          "bottom": 700
+        }
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 342,
+          "top": 182,
+          "right": 962,
+          "bottom": 700
+        },
+        "message": {
+          "left": 342,
+          "top": 494,
+          "right": 962,
+          "bottom": 533
+        },
+        "composer": {
+          "left": 342,
+          "top": 618,
+          "right": 962,
+          "bottom": 700
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "desktop-1000",
+      "scheme": "light",
+      "lang": "en",
+      "state": "task-card",
+      "card": "task:t-links",
+      "empty": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 91
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 342,
+          "top": 182,
+          "right": 962,
+          "bottom": 700
+        },
+        "message": {
+          "left": 342,
+          "top": 494,
+          "right": 962,
+          "bottom": 533
+        },
+        "composer": {
+          "left": 342,
+          "top": 618,
+          "right": 962,
+          "bottom": 700
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "desktop-1000",
+      "scheme": "light",
+      "lang": "uk",
+      "state": "header",
+      "empty": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 82
+      },
+      "chosen": {
+        "face": "Claude · Fable · Високі → Account C"
+      },
+      "launchedWith": {
+        "count": 1,
+        "engine": "claude",
+        "model": "fable",
+        "effort": "high",
+        "accountId": "account-c",
+        "cwd": "/repo",
+        "role": null
+      },
+      "pane": {
+        "before": {
+          "left": 342,
+          "top": 303,
+          "right": 962,
+          "bottom": 385
+        },
+        "sent": {
+          "left": 342,
+          "top": 182,
+          "right": 962,
+          "bottom": 700
+        }
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 342,
+          "top": 182,
+          "right": 962,
+          "bottom": 700
+        },
+        "message": {
+          "left": 342,
+          "top": 494,
+          "right": 962,
+          "bottom": 533
+        },
+        "composer": {
+          "left": 342,
+          "top": 618,
+          "right": 962,
+          "bottom": 700
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "desktop-1000",
+      "scheme": "light",
+      "lang": "uk",
+      "state": "task-card",
+      "card": "task:t-links",
+      "empty": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 91
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 342,
+          "top": 182,
+          "right": 962,
+          "bottom": 700
+        },
+        "message": {
+          "left": 342,
+          "top": 494,
+          "right": 962,
+          "bottom": 533
+        },
+        "composer": {
+          "left": 342,
+          "top": 618,
+          "right": 962,
+          "bottom": 700
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "desktop-1000",
+      "scheme": "dark",
+      "lang": "en",
+      "state": "header",
+      "empty": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 82
+      },
+      "chosen": {
+        "face": "Claude · Fable · High → Account C"
+      },
+      "launchedWith": {
+        "count": 1,
+        "engine": "claude",
+        "model": "fable",
+        "effort": "high",
+        "accountId": "account-c",
+        "cwd": "/repo",
+        "role": null
+      },
+      "pane": {
+        "before": {
+          "left": 342,
+          "top": 303,
+          "right": 962,
+          "bottom": 385
+        },
+        "sent": {
+          "left": 342,
+          "top": 182,
+          "right": 962,
+          "bottom": 700
+        }
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 342,
+          "top": 182,
+          "right": 962,
+          "bottom": 700
+        },
+        "message": {
+          "left": 342,
+          "top": 494,
+          "right": 962,
+          "bottom": 533
+        },
+        "composer": {
+          "left": 342,
+          "top": 618,
+          "right": 962,
+          "bottom": 700
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "desktop-1000",
+      "scheme": "dark",
+      "lang": "en",
+      "state": "task-card",
+      "card": "task:t-links",
+      "empty": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 91
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 342,
+          "top": 182,
+          "right": 962,
+          "bottom": 700
+        },
+        "message": {
+          "left": 342,
+          "top": 494,
+          "right": 962,
+          "bottom": 533
+        },
+        "composer": {
+          "left": 342,
+          "top": 618,
+          "right": 962,
+          "bottom": 700
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "desktop-1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "state": "header",
+      "empty": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 82
+      },
+      "chosen": {
+        "face": "Claude · Fable · Високі → Account C"
+      },
+      "launchedWith": {
+        "count": 1,
+        "engine": "claude",
+        "model": "fable",
+        "effort": "high",
+        "accountId": "account-c",
+        "cwd": "/repo",
+        "role": null
+      },
+      "pane": {
+        "before": {
+          "left": 342,
+          "top": 303,
+          "right": 962,
+          "bottom": 385
+        },
+        "sent": {
+          "left": 342,
+          "top": 182,
+          "right": 962,
+          "bottom": 700
+        }
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 342,
+          "top": 182,
+          "right": 962,
+          "bottom": 700
+        },
+        "message": {
+          "left": 342,
+          "top": 494,
+          "right": 962,
+          "bottom": 533
+        },
+        "composer": {
+          "left": 342,
+          "top": 618,
+          "right": 962,
+          "bottom": 700
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "desktop-1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "state": "task-card",
+      "card": "task:t-links",
+      "empty": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 91
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 342,
+          "top": 182,
+          "right": 962,
+          "bottom": 700
+        },
+        "message": {
+          "left": 342,
+          "top": 494,
+          "right": 962,
+          "bottom": 533
+        },
+        "composer": {
+          "left": 342,
+          "top": 618,
+          "right": 962,
+          "bottom": 700
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "phone-390",
+      "scheme": "light",
+      "lang": "en",
+      "state": "header",
+      "empty": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 747
+      },
+      "chosen": {
+        "face": "Claude · Fable · high → Account C"
+      },
+      "launchedWith": {
+        "count": 1,
+        "engine": "claude",
+        "model": "fable",
+        "effort": "high",
+        "accountId": "account-c",
+        "cwd": "/repo",
+        "role": null
+      },
+      "pane": {
+        "before": {
+          "left": 0,
+          "top": 97,
+          "right": 390,
+          "bottom": 844
+        },
+        "sent": {
+          "left": 0,
+          "top": 97,
+          "right": 390,
+          "bottom": 844
+        }
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 0,
+          "top": 97,
+          "right": 390,
+          "bottom": 844
+        },
+        "message": {
+          "left": 12,
+          "top": 570,
+          "right": 378,
+          "bottom": 663
+        },
+        "composer": {
+          "left": 12,
+          "top": 748,
+          "right": 378,
+          "bottom": 832
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "phone-390",
+      "scheme": "light",
+      "lang": "uk",
+      "state": "header",
+      "empty": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 747
+      },
+      "chosen": {
+        "face": "Claude · Fable · high → Account C"
+      },
+      "launchedWith": {
+        "count": 1,
+        "engine": "claude",
+        "model": "fable",
+        "effort": "high",
+        "accountId": "account-c",
+        "cwd": "/repo",
+        "role": null
+      },
+      "pane": {
+        "before": {
+          "left": 0,
+          "top": 97,
+          "right": 390,
+          "bottom": 844
+        },
+        "sent": {
+          "left": 0,
+          "top": 97,
+          "right": 390,
+          "bottom": 844
+        }
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 0,
+          "top": 97,
+          "right": 390,
+          "bottom": 844
+        },
+        "message": {
+          "left": 12,
+          "top": 548,
+          "right": 378,
+          "bottom": 641
+        },
+        "composer": {
+          "left": 12,
+          "top": 726,
+          "right": 378,
+          "bottom": 832
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "phone-390",
+      "scheme": "dark",
+      "lang": "en",
+      "state": "header",
+      "empty": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 747
+      },
+      "chosen": {
+        "face": "Claude · Fable · high → Account C"
+      },
+      "launchedWith": {
+        "count": 1,
+        "engine": "claude",
+        "model": "fable",
+        "effort": "high",
+        "accountId": "account-c",
+        "cwd": "/repo",
+        "role": null
+      },
+      "pane": {
+        "before": {
+          "left": 0,
+          "top": 97,
+          "right": 390,
+          "bottom": 844
+        },
+        "sent": {
+          "left": 0,
+          "top": 97,
+          "right": 390,
+          "bottom": 844
+        }
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 0,
+          "top": 97,
+          "right": 390,
+          "bottom": 844
+        },
+        "message": {
+          "left": 12,
+          "top": 570,
+          "right": 378,
+          "bottom": 663
+        },
+        "composer": {
+          "left": 12,
+          "top": 748,
+          "right": 378,
+          "bottom": 832
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "phone-390",
+      "scheme": "dark",
+      "lang": "uk",
+      "state": "header",
+      "empty": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 747
+      },
+      "chosen": {
+        "face": "Claude · Fable · high → Account C"
+      },
+      "launchedWith": {
+        "count": 1,
+        "engine": "claude",
+        "model": "fable",
+        "effort": "high",
+        "accountId": "account-c",
+        "cwd": "/repo",
+        "role": null
+      },
+      "pane": {
+        "before": {
+          "left": 0,
+          "top": 97,
+          "right": 390,
+          "bottom": 844
+        },
+        "sent": {
+          "left": 0,
+          "top": 97,
+          "right": 390,
+          "bottom": 844
+        }
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 0,
+          "top": 97,
+          "right": 390,
+          "bottom": 844
+        },
+        "message": {
+          "left": 12,
+          "top": 548,
+          "right": 378,
+          "bottom": 641
+        },
+        "composer": {
+          "left": 12,
+          "top": 726,
+          "right": 378,
+          "bottom": 832
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 2,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "en",
+      "state": "header",
+      "empty": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 720
+      },
+      "chosen": {
+        "face": "Claude · Fable · High → Account C"
+      },
+      "launchedWith": {
+        "count": 1,
+        "engine": "claude",
+        "model": "fable",
+        "effort": "high",
+        "accountId": "account-c",
+        "cwd": "/repo",
+        "role": null
+      },
+      "pane": {
+        "before": {
+          "left": 782,
+          "top": 179,
+          "right": 1306,
+          "bottom": 899
+        },
+        "sent": {
+          "left": 782,
+          "top": 179,
+          "right": 1306,
+          "bottom": 899
+        }
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 782,
+          "top": 179,
+          "right": 1306,
+          "bottom": 899
+        },
+        "message": {
+          "left": 782,
+          "top": 693,
+          "right": 1306,
+          "bottom": 732
+        },
+        "composer": {
+          "left": 782,
+          "top": 817,
+          "right": 1306,
+          "bottom": 899
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 2,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "en",
+      "state": "task-card",
+      "card": "task:t-pending",
+      "empty": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 720
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 490,
+          "top": 180,
+          "right": 898,
+          "bottom": 900
+        },
+        "message": {
+          "left": 490,
+          "top": 676,
+          "right": 898,
+          "bottom": 733
+        },
+        "composer": {
+          "left": 490,
+          "top": 818,
+          "right": 898,
+          "bottom": 900
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 2,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "en",
+      "state": "refused",
       "found": {
-        "capability": 1,
-        "retry": 1
+        "refusal": 1,
+        "promptKept": 1
       },
-      "pageErrors": []
-    },
-    {
-      "look": 1,
-      "view": "desktop-1440",
-      "scheme": "light",
-      "lang": "uk",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
+      "launchedWith": {
+        "engine": "codex",
+        "model": "gpt-6-astra"
+      },
+      "controls": {
         "prompt": 1,
-        "launch": 1,
-        "cancel": 1,
-        "error": 1
-      },
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 108,
-        "summaryWords": null,
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row",
-        "engineToModel": 26
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 1,
-      "view": "desktop-1440",
-      "scheme": "light",
-      "lang": "uk",
-      "state": "narrow",
-      "width": 760,
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 36,
-        "summaryWords": null,
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row"
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 1,
-      "view": "desktop-1440",
-      "scheme": "light",
-      "lang": "uk",
-      "state": "task-card",
-      "geometry": {
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row"
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 1,
-      "view": "desktop-1440",
-      "scheme": "dark",
-      "lang": "en",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
         "voice": 1,
-        "prompt": 1,
-        "launch": 1,
-        "cancel": 1,
-        "error": 1
-      },
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 128,
-        "summaryWords": null,
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row",
-        "engineToModel": 26
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 1,
-      "view": "desktop-1440",
-      "scheme": "dark",
-      "lang": "en",
-      "state": "narrow",
-      "width": 760,
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 56,
-        "summaryWords": null,
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row"
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 1,
-      "view": "desktop-1440",
-      "scheme": "dark",
-      "lang": "en",
-      "state": "task-card",
-      "geometry": {
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row"
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 1,
-      "view": "desktop-1440",
-      "scheme": "dark",
-      "lang": "uk",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
         "images": 1,
-        "voice": 1,
-        "prompt": 1,
         "launch": 1,
-        "cancel": 1,
-        "error": 1
-      },
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 108,
-        "summaryWords": null,
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row",
-        "engineToModel": 26
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 1,
-      "view": "desktop-1440",
-      "scheme": "dark",
-      "lang": "uk",
-      "state": "narrow",
-      "width": 760,
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 36,
-        "summaryWords": null,
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row"
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 1,
-      "view": "desktop-1440",
-      "scheme": "dark",
-      "lang": "uk",
-      "state": "task-card",
-      "geometry": {
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row"
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 1,
-      "view": "desktop-1000",
-      "scheme": "light",
-      "lang": "en",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
-        "prompt": 1,
-        "launch": 1,
-        "cancel": 1,
-        "error": 1
-      },
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 1,
-        "spare": 20,
-        "summaryWords": null,
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row",
-        "engineToModel": 26
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 1,
-      "view": "desktop-1000",
-      "scheme": "light",
-      "lang": "en",
-      "state": "narrow",
-      "width": 760,
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 56,
-        "summaryWords": null,
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row"
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 1,
-      "view": "desktop-1000",
-      "scheme": "light",
-      "lang": "en",
-      "state": "task-card",
-      "geometry": {
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row"
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 1,
-      "view": "desktop-1000",
-      "scheme": "light",
-      "lang": "uk",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
-        "prompt": 1,
-        "launch": 1,
-        "cancel": 1,
-        "error": 1
-      },
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 156,
-        "summaryWords": null,
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row",
-        "engineToModel": 26
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 1,
-      "view": "desktop-1000",
-      "scheme": "light",
-      "lang": "uk",
-      "state": "narrow",
-      "width": 760,
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 36,
-        "summaryWords": null,
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row"
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 1,
-      "view": "desktop-1000",
-      "scheme": "light",
-      "lang": "uk",
-      "state": "task-card",
-      "geometry": {
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row"
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 1,
-      "view": "desktop-1000",
-      "scheme": "dark",
-      "lang": "en",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
-        "prompt": 1,
-        "launch": 1,
-        "cancel": 1,
-        "error": 1
-      },
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 1,
-        "spare": 20,
-        "summaryWords": null,
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row",
-        "engineToModel": 26
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 1,
-      "view": "desktop-1000",
-      "scheme": "dark",
-      "lang": "en",
-      "state": "narrow",
-      "width": 760,
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 56,
-        "summaryWords": null,
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row"
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 1,
-      "view": "desktop-1000",
-      "scheme": "dark",
-      "lang": "en",
-      "state": "task-card",
-      "geometry": {
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row"
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 1,
-      "view": "desktop-1000",
-      "scheme": "dark",
-      "lang": "uk",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
-        "prompt": 1,
-        "launch": 1,
-        "cancel": 1,
-        "error": 1
-      },
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 156,
-        "summaryWords": null,
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row",
-        "engineToModel": 26
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 1,
-      "view": "desktop-1000",
-      "scheme": "dark",
-      "lang": "uk",
-      "state": "narrow",
-      "width": 760,
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 36,
-        "summaryWords": null,
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row"
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 1,
-      "view": "desktop-1000",
-      "scheme": "dark",
-      "lang": "uk",
-      "state": "task-card",
-      "geometry": {
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row"
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 1,
-      "view": "phone-390",
-      "scheme": "light",
-      "lang": "en",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
-        "prompt": 1,
-        "launch": 1,
-        "cancel": 1,
-        "error": 1
-      },
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 17,
-        "summaryWords": null,
-        "closeToWord": null,
-        "fields": {
-          "scrollHeight": 471,
-          "clientHeight": 306,
-          "scrollTop": 0
-        },
-        "cue": 1,
-        "scrolledTo": 165
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 1,
-      "view": "phone-390",
-      "scheme": "light",
-      "lang": "en",
-      "state": "narrow",
-      "width": 320,
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 3,
-        "spare": 22,
-        "summaryWords": null,
-        "closeToWord": null,
-        "fields": {
-          "scrollHeight": 609,
-          "clientHeight": 609,
-          "scrollTop": 0
-        },
-        "cue": 0
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 1,
-      "view": "phone-390",
-      "scheme": "light",
-      "lang": "uk",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
-        "prompt": 1,
-        "launch": 1,
-        "cancel": 1,
-        "error": 1
-      },
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 3,
-        "spare": 57,
-        "summaryWords": null,
-        "closeToWord": null,
-        "fields": {
-          "scrollHeight": 524,
-          "clientHeight": 306,
-          "scrollTop": 0
-        },
-        "cue": 1,
-        "scrolledTo": 218
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 1,
-      "view": "phone-390",
-      "scheme": "light",
-      "lang": "uk",
-      "state": "narrow",
-      "width": 320,
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 3,
-        "spare": 22,
-        "summaryWords": null,
-        "closeToWord": null,
-        "fields": {
-          "scrollHeight": 609,
-          "clientHeight": 609,
-          "scrollTop": 0
-        },
-        "cue": 0
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 1,
-      "view": "phone-390",
-      "scheme": "dark",
-      "lang": "en",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
-        "prompt": 1,
-        "launch": 1,
-        "cancel": 1,
-        "error": 1
-      },
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 17,
-        "summaryWords": null,
-        "closeToWord": null,
-        "fields": {
-          "scrollHeight": 471,
-          "clientHeight": 306,
-          "scrollTop": 0
-        },
-        "cue": 1,
-        "scrolledTo": 165
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 1,
-      "view": "phone-390",
-      "scheme": "dark",
-      "lang": "en",
-      "state": "narrow",
-      "width": 320,
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 3,
-        "spare": 22,
-        "summaryWords": null,
-        "closeToWord": null,
-        "fields": {
-          "scrollHeight": 609,
-          "clientHeight": 609,
-          "scrollTop": 0
-        },
-        "cue": 0
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 1,
-      "view": "phone-390",
-      "scheme": "dark",
-      "lang": "uk",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
-        "prompt": 1,
-        "launch": 1,
-        "cancel": 1,
-        "error": 1
-      },
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 3,
-        "spare": 57,
-        "summaryWords": null,
-        "closeToWord": null,
-        "fields": {
-          "scrollHeight": 524,
-          "clientHeight": 306,
-          "scrollTop": 0
-        },
-        "cue": 1,
-        "scrolledTo": 218
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 1,
-      "view": "phone-390",
-      "scheme": "dark",
-      "lang": "uk",
-      "state": "narrow",
-      "width": 320,
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 3,
-        "spare": 22,
-        "summaryWords": null,
-        "closeToWord": null,
-        "fields": {
-          "scrollHeight": 609,
-          "clientHeight": 609,
-          "scrollTop": 0
-        },
-        "cue": 0
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 2,
-      "view": "desktop-1440",
-      "scheme": "light",
-      "lang": "en",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
-        "prompt": 1,
-        "launch": 1,
-        "cancel": 1,
-        "error": 1
-      },
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 120,
-        "summaryWords": 3,
-        "closeToWord": 29,
-        "imageLast": true,
-        "closeToImage": 464
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 2,
-      "view": "desktop-1440",
-      "scheme": "light",
-      "lang": "en",
-      "state": "narrow",
-      "width": 760,
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 48,
-        "summaryWords": 3,
-        "closeToWord": 29,
-        "imageLast": true,
-        "closeToImage": 320
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 2,
-      "view": "desktop-1440",
-      "scheme": "light",
-      "lang": "en",
-      "state": "task-card",
-      "geometry": {
-        "closeToWord": 29,
-        "imageLast": true,
-        "closeToImage": 348
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": false,
+        "height": 720
       },
       "pageErrors": []
     },
@@ -1588,29 +2375,21 @@
       "lang": "en",
       "state": "handoff",
       "found": {
-        "handoff": 1
+        "sourceInPrompt": 1
       },
-      "pageErrors": []
-    },
-    {
-      "look": 2,
-      "view": "desktop-1440",
-      "scheme": "light",
-      "lang": "en",
-      "state": "reviewer",
-      "found": {
-        "reviewer": 1
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 2,
-      "view": "desktop-1440",
-      "scheme": "light",
-      "lang": "en",
-      "state": "deployer",
-      "found": {
-        "deployer": 1
+      "controls": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 720
       },
       "pageErrors": []
     },
@@ -1630,64 +2409,73 @@
       "look": 2,
       "view": "desktop-1440",
       "scheme": "light",
-      "lang": "en",
-      "state": "capability",
-      "found": {
-        "capability": 1,
-        "retry": 1
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 2,
-      "view": "desktop-1440",
-      "scheme": "light",
       "lang": "uk",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
+      "state": "header",
+      "empty": {
         "prompt": 1,
+        "voice": 1,
+        "images": 1,
         "launch": 1,
-        "cancel": 1,
-        "error": 1
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 720
       },
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 100,
-        "summaryWords": 3,
-        "closeToWord": 29,
-        "imageLast": true,
-        "closeToImage": 464
+      "chosen": {
+        "face": "Claude · Fable · Високі → Account C"
       },
-      "pageErrors": []
-    },
-    {
-      "look": 2,
-      "view": "desktop-1440",
-      "scheme": "light",
-      "lang": "uk",
-      "state": "narrow",
-      "width": 760,
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 28,
-        "summaryWords": 3,
-        "closeToWord": 29,
-        "imageLast": true,
-        "closeToImage": 320
+      "launchedWith": {
+        "count": 1,
+        "engine": "claude",
+        "model": "fable",
+        "effort": "high",
+        "accountId": "account-c",
+        "cwd": "/repo",
+        "role": null
+      },
+      "pane": {
+        "before": {
+          "left": 782,
+          "top": 179,
+          "right": 1306,
+          "bottom": 899
+        },
+        "sent": {
+          "left": 782,
+          "top": 179,
+          "right": 1306,
+          "bottom": 899
+        }
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 782,
+          "top": 179,
+          "right": 1306,
+          "bottom": 899
+        },
+        "message": {
+          "left": 782,
+          "top": 693,
+          "right": 1306,
+          "bottom": 732
+        },
+        "composer": {
+          "left": 782,
+          "top": 817,
+          "right": 1306,
+          "bottom": 899
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     },
@@ -1697,44 +2485,46 @@
       "scheme": "light",
       "lang": "uk",
       "state": "task-card",
-      "geometry": {
-        "closeToWord": 29,
-        "imageLast": true,
-        "closeToImage": 348
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 2,
-      "view": "desktop-1440",
-      "scheme": "dark",
-      "lang": "en",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
+      "card": "task:t-pending",
+      "empty": {
         "prompt": 1,
+        "voice": 1,
+        "images": 1,
         "launch": 1,
-        "cancel": 1,
-        "error": 1
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 720
       },
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 120,
-        "summaryWords": 3,
-        "closeToWord": 29,
-        "imageLast": true,
-        "closeToImage": 464
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 490,
+          "top": 180,
+          "right": 898,
+          "bottom": 900
+        },
+        "message": {
+          "left": 490,
+          "top": 676,
+          "right": 898,
+          "bottom": 733
+        },
+        "composer": {
+          "left": 490,
+          "top": 818,
+          "right": 898,
+          "bottom": 900
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     },
@@ -1743,17 +2533,72 @@
       "view": "desktop-1440",
       "scheme": "dark",
       "lang": "en",
-      "state": "narrow",
-      "width": 760,
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 48,
-        "summaryWords": 3,
-        "closeToWord": 29,
-        "imageLast": true,
-        "closeToImage": 320
+      "state": "header",
+      "empty": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 720
+      },
+      "chosen": {
+        "face": "Claude · Fable · High → Account C"
+      },
+      "launchedWith": {
+        "count": 1,
+        "engine": "claude",
+        "model": "fable",
+        "effort": "high",
+        "accountId": "account-c",
+        "cwd": "/repo",
+        "role": null
+      },
+      "pane": {
+        "before": {
+          "left": 782,
+          "top": 179,
+          "right": 1306,
+          "bottom": 899
+        },
+        "sent": {
+          "left": 782,
+          "top": 179,
+          "right": 1306,
+          "bottom": 899
+        }
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 782,
+          "top": 179,
+          "right": 1306,
+          "bottom": 899
+        },
+        "message": {
+          "left": 782,
+          "top": 693,
+          "right": 1306,
+          "bottom": 732
+        },
+        "composer": {
+          "left": 782,
+          "top": 817,
+          "right": 1306,
+          "bottom": 899
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     },
@@ -1763,1661 +2608,957 @@
       "scheme": "dark",
       "lang": "en",
       "state": "task-card",
-      "geometry": {
-        "closeToWord": 29,
-        "imageLast": true,
-        "closeToImage": 348
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 2,
-      "view": "desktop-1440",
-      "scheme": "dark",
-      "lang": "uk",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
+      "card": "task:t-pending",
+      "empty": {
         "prompt": 1,
-        "launch": 1,
-        "cancel": 1,
-        "error": 1
-      },
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 100,
-        "summaryWords": 3,
-        "closeToWord": 29,
-        "imageLast": true,
-        "closeToImage": 464
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 2,
-      "view": "desktop-1440",
-      "scheme": "dark",
-      "lang": "uk",
-      "state": "narrow",
-      "width": 760,
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 28,
-        "summaryWords": 3,
-        "closeToWord": 29,
-        "imageLast": true,
-        "closeToImage": 320
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 2,
-      "view": "desktop-1440",
-      "scheme": "dark",
-      "lang": "uk",
-      "state": "task-card",
-      "geometry": {
-        "closeToWord": 29,
-        "imageLast": true,
-        "closeToImage": 348
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 2,
-      "view": "desktop-1000",
-      "scheme": "light",
-      "lang": "en",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
         "voice": 1,
-        "prompt": 1,
-        "launch": 1,
-        "cancel": 1,
-        "error": 1
-      },
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 168,
-        "summaryWords": 3,
-        "closeToWord": 29,
-        "imageLast": true,
-        "closeToImage": 560
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 2,
-      "view": "desktop-1000",
-      "scheme": "light",
-      "lang": "en",
-      "state": "narrow",
-      "width": 760,
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 48,
-        "summaryWords": 3,
-        "closeToWord": 29,
-        "imageLast": true,
-        "closeToImage": 320
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 2,
-      "view": "desktop-1000",
-      "scheme": "light",
-      "lang": "en",
-      "state": "task-card",
-      "geometry": {
-        "closeToWord": 29,
-        "imageLast": true,
-        "closeToImage": 560
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 2,
-      "view": "desktop-1000",
-      "scheme": "light",
-      "lang": "uk",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
         "images": 1,
-        "voice": 1,
-        "prompt": 1,
         "launch": 1,
-        "cancel": 1,
-        "error": 1
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 720
       },
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 148,
-        "summaryWords": 3,
-        "closeToWord": 29,
-        "imageLast": true,
-        "closeToImage": 560
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 490,
+          "top": 180,
+          "right": 898,
+          "bottom": 900
+        },
+        "message": {
+          "left": 490,
+          "top": 676,
+          "right": 898,
+          "bottom": 733
+        },
+        "composer": {
+          "left": 490,
+          "top": 818,
+          "right": 898,
+          "bottom": 900
+        }
       },
-      "pageErrors": []
-    },
-    {
-      "look": 2,
-      "view": "desktop-1000",
-      "scheme": "light",
-      "lang": "uk",
-      "state": "narrow",
-      "width": 760,
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 28,
-        "summaryWords": 3,
-        "closeToWord": 29,
-        "imageLast": true,
-        "closeToImage": 320
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 2,
-      "view": "desktop-1000",
-      "scheme": "light",
-      "lang": "uk",
-      "state": "task-card",
-      "geometry": {
-        "closeToWord": 29,
-        "imageLast": true,
-        "closeToImage": 560
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     },
     {
       "look": 2,
-      "view": "desktop-1000",
+      "view": "desktop-1440",
       "scheme": "dark",
-      "lang": "en",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
+      "lang": "uk",
+      "state": "header",
+      "empty": {
+        "prompt": 1,
+        "voice": 1,
         "images": 1,
-        "voice": 1,
-        "prompt": 1,
         "launch": 1,
-        "cancel": 1,
-        "error": 1
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 720
       },
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 168,
-        "summaryWords": 3,
-        "closeToWord": 29,
-        "imageLast": true,
-        "closeToImage": 560
+      "chosen": {
+        "face": "Claude · Fable · Високі → Account C"
+      },
+      "launchedWith": {
+        "count": 1,
+        "engine": "claude",
+        "model": "fable",
+        "effort": "high",
+        "accountId": "account-c",
+        "cwd": "/repo",
+        "role": null
+      },
+      "pane": {
+        "before": {
+          "left": 782,
+          "top": 179,
+          "right": 1306,
+          "bottom": 899
+        },
+        "sent": {
+          "left": 782,
+          "top": 179,
+          "right": 1306,
+          "bottom": 899
+        }
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 782,
+          "top": 179,
+          "right": 1306,
+          "bottom": 899
+        },
+        "message": {
+          "left": 782,
+          "top": 693,
+          "right": 1306,
+          "bottom": 732
+        },
+        "composer": {
+          "left": 782,
+          "top": 817,
+          "right": 1306,
+          "bottom": 899
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     },
     {
       "look": 2,
-      "view": "desktop-1000",
-      "scheme": "dark",
-      "lang": "en",
-      "state": "narrow",
-      "width": 760,
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 48,
-        "summaryWords": 3,
-        "closeToWord": 29,
-        "imageLast": true,
-        "closeToImage": 320
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 2,
-      "view": "desktop-1000",
-      "scheme": "dark",
-      "lang": "en",
-      "state": "task-card",
-      "geometry": {
-        "closeToWord": 29,
-        "imageLast": true,
-        "closeToImage": 560
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 2,
-      "view": "desktop-1000",
-      "scheme": "dark",
-      "lang": "uk",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
-        "prompt": 1,
-        "launch": 1,
-        "cancel": 1,
-        "error": 1
-      },
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 148,
-        "summaryWords": 3,
-        "closeToWord": 29,
-        "imageLast": true,
-        "closeToImage": 560
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 2,
-      "view": "desktop-1000",
-      "scheme": "dark",
-      "lang": "uk",
-      "state": "narrow",
-      "width": 760,
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 28,
-        "summaryWords": 3,
-        "closeToWord": 29,
-        "imageLast": true,
-        "closeToImage": 320
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 2,
-      "view": "desktop-1000",
-      "scheme": "dark",
-      "lang": "uk",
-      "state": "task-card",
-      "geometry": {
-        "closeToWord": 29,
-        "imageLast": true,
-        "closeToImage": 560
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 2,
-      "view": "phone-390",
-      "scheme": "light",
-      "lang": "en",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
-        "prompt": 1,
-        "launch": 1,
-        "cancel": 1,
-        "error": 1
-      },
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 9,
-        "summaryWords": 3,
-        "closeToWord": 25,
-        "fields": {
-          "scrollHeight": 306,
-          "clientHeight": 306,
-          "scrollTop": 0
-        },
-        "cue": 0
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 2,
-      "view": "phone-390",
-      "scheme": "light",
-      "lang": "en",
-      "state": "narrow",
-      "width": 320,
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 3,
-        "spare": 14,
-        "summaryWords": 3,
-        "closeToWord": 25,
-        "fields": {
-          "scrollHeight": 609,
-          "clientHeight": 609,
-          "scrollTop": 0
-        },
-        "cue": 0
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 2,
-      "view": "phone-390",
-      "scheme": "light",
-      "lang": "uk",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
-        "prompt": 1,
-        "launch": 1,
-        "cancel": 1,
-        "error": 1
-      },
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 3,
-        "spare": 49,
-        "summaryWords": 3,
-        "closeToWord": 25,
-        "fields": {
-          "scrollHeight": 306,
-          "clientHeight": 306,
-          "scrollTop": 0
-        },
-        "cue": 0
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 2,
-      "view": "phone-390",
-      "scheme": "light",
-      "lang": "uk",
-      "state": "narrow",
-      "width": 320,
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 3,
-        "spare": 14,
-        "summaryWords": 3,
-        "closeToWord": 25,
-        "fields": {
-          "scrollHeight": 609,
-          "clientHeight": 609,
-          "scrollTop": 0
-        },
-        "cue": 0
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 2,
-      "view": "phone-390",
-      "scheme": "dark",
-      "lang": "en",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
-        "prompt": 1,
-        "launch": 1,
-        "cancel": 1,
-        "error": 1
-      },
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 9,
-        "summaryWords": 3,
-        "closeToWord": 25,
-        "fields": {
-          "scrollHeight": 306,
-          "clientHeight": 306,
-          "scrollTop": 0
-        },
-        "cue": 0
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 2,
-      "view": "phone-390",
-      "scheme": "dark",
-      "lang": "en",
-      "state": "narrow",
-      "width": 320,
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 3,
-        "spare": 14,
-        "summaryWords": 3,
-        "closeToWord": 25,
-        "fields": {
-          "scrollHeight": 609,
-          "clientHeight": 609,
-          "scrollTop": 0
-        },
-        "cue": 0
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 2,
-      "view": "phone-390",
-      "scheme": "dark",
-      "lang": "uk",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
-        "prompt": 1,
-        "launch": 1,
-        "cancel": 1,
-        "error": 1
-      },
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 3,
-        "spare": 49,
-        "summaryWords": 3,
-        "closeToWord": 25,
-        "fields": {
-          "scrollHeight": 306,
-          "clientHeight": 306,
-          "scrollTop": 0
-        },
-        "cue": 0
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 2,
-      "view": "phone-390",
-      "scheme": "dark",
-      "lang": "uk",
-      "state": "narrow",
-      "width": 320,
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 3,
-        "spare": 14,
-        "summaryWords": 3,
-        "closeToWord": 25,
-        "fields": {
-          "scrollHeight": 609,
-          "clientHeight": 609,
-          "scrollTop": 0
-        },
-        "cue": 0
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 3,
-      "view": "desktop-1440",
-      "scheme": "light",
-      "lang": "en",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
-        "prompt": 1,
-        "launch": 1,
-        "cancel": 1,
-        "error": 1
-      },
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 73,
-        "summaryWords": null,
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row",
-        "sheet": {
-          "left": 988,
-          "top": 54,
-          "right": 1428,
-          "bottom": 815
-        },
-        "bar": 48,
-        "launch": {
-          "left": 1376,
-          "top": 643,
-          "right": 1410,
-          "bottom": 677
-        },
-        "refusal": {
-          "left": 1001,
-          "top": 772,
-          "right": 1415,
-          "bottom": 802
-        },
-        "fields": {
-          "scrollHeight": 468,
-          "clientHeight": 468,
-          "scrollTop": 0
-        },
-        "cue": 0
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 3,
-      "view": "desktop-1440",
-      "scheme": "light",
-      "lang": "en",
-      "state": "narrow",
-      "width": 760,
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 73,
-        "summaryWords": null,
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row"
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 3,
-      "view": "desktop-1440",
-      "scheme": "light",
-      "lang": "en",
-      "state": "task-card",
-      "found": {
-        "taskInSheet": 1,
-        "anchorOpen": 1
-      },
-      "task": "Worker waiting for a seat",
-      "geometry": {
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row"
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 3,
-      "view": "desktop-1440",
-      "scheme": "light",
-      "lang": "en",
-      "state": "handoff",
-      "found": {
-        "handoff": 1
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 3,
-      "view": "desktop-1440",
-      "scheme": "light",
-      "lang": "en",
-      "state": "reviewer",
-      "found": {
-        "reviewer": 1
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 3,
-      "view": "desktop-1440",
-      "scheme": "light",
-      "lang": "en",
-      "state": "deployer",
-      "found": {
-        "deployer": 1
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 3,
-      "view": "desktop-1440",
-      "scheme": "light",
-      "lang": "en",
-      "state": "signed-out",
-      "found": {
-        "signedOut": 1,
-        "signIn": 1
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 3,
-      "view": "desktop-1440",
-      "scheme": "light",
-      "lang": "en",
-      "state": "capability",
-      "found": {
-        "capability": 1,
-        "retry": 1
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 3,
-      "view": "desktop-1440",
-      "scheme": "light",
-      "lang": "uk",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
-        "prompt": 1,
-        "launch": 1,
-        "cancel": 1,
-        "error": 1
-      },
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 53,
-        "summaryWords": null,
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row",
-        "sheet": {
-          "left": 988,
-          "top": 54,
-          "right": 1428,
-          "bottom": 815
-        },
-        "bar": 48,
-        "launch": {
-          "left": 1376,
-          "top": 643,
-          "right": 1410,
-          "bottom": 677
-        },
-        "refusal": {
-          "left": 1001,
-          "top": 772,
-          "right": 1415,
-          "bottom": 802
-        },
-        "fields": {
-          "scrollHeight": 468,
-          "clientHeight": 468,
-          "scrollTop": 0
-        },
-        "cue": 0
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 3,
-      "view": "desktop-1440",
-      "scheme": "light",
-      "lang": "uk",
-      "state": "narrow",
-      "width": 760,
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 53,
-        "summaryWords": null,
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row"
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 3,
-      "view": "desktop-1440",
-      "scheme": "light",
-      "lang": "uk",
-      "state": "task-card",
-      "found": {
-        "taskInSheet": 1,
-        "anchorOpen": 1
-      },
-      "task": "Worker waiting for a seat",
-      "geometry": {
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row"
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 3,
-      "view": "desktop-1440",
-      "scheme": "dark",
-      "lang": "en",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
-        "prompt": 1,
-        "launch": 1,
-        "cancel": 1,
-        "error": 1
-      },
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 73,
-        "summaryWords": null,
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row",
-        "sheet": {
-          "left": 988,
-          "top": 54,
-          "right": 1428,
-          "bottom": 815
-        },
-        "bar": 48,
-        "launch": {
-          "left": 1376,
-          "top": 643,
-          "right": 1410,
-          "bottom": 677
-        },
-        "refusal": {
-          "left": 1001,
-          "top": 772,
-          "right": 1415,
-          "bottom": 802
-        },
-        "fields": {
-          "scrollHeight": 468,
-          "clientHeight": 468,
-          "scrollTop": 0
-        },
-        "cue": 0
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 3,
-      "view": "desktop-1440",
-      "scheme": "dark",
-      "lang": "en",
-      "state": "narrow",
-      "width": 760,
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 73,
-        "summaryWords": null,
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row"
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 3,
-      "view": "desktop-1440",
-      "scheme": "dark",
-      "lang": "en",
-      "state": "task-card",
-      "found": {
-        "taskInSheet": 1,
-        "anchorOpen": 1
-      },
-      "task": "Worker waiting for a seat",
-      "geometry": {
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row"
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 3,
-      "view": "desktop-1440",
-      "scheme": "dark",
-      "lang": "uk",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
-        "prompt": 1,
-        "launch": 1,
-        "cancel": 1,
-        "error": 1
-      },
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 53,
-        "summaryWords": null,
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row",
-        "sheet": {
-          "left": 988,
-          "top": 54,
-          "right": 1428,
-          "bottom": 815
-        },
-        "bar": 48,
-        "launch": {
-          "left": 1376,
-          "top": 643,
-          "right": 1410,
-          "bottom": 677
-        },
-        "refusal": {
-          "left": 1001,
-          "top": 772,
-          "right": 1415,
-          "bottom": 802
-        },
-        "fields": {
-          "scrollHeight": 468,
-          "clientHeight": 468,
-          "scrollTop": 0
-        },
-        "cue": 0
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 3,
-      "view": "desktop-1440",
-      "scheme": "dark",
-      "lang": "uk",
-      "state": "narrow",
-      "width": 760,
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 53,
-        "summaryWords": null,
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row"
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 3,
       "view": "desktop-1440",
       "scheme": "dark",
       "lang": "uk",
       "state": "task-card",
-      "found": {
-        "taskInSheet": 1,
-        "anchorOpen": 1
-      },
-      "task": "Worker waiting for a seat",
-      "geometry": {
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row"
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 3,
-      "view": "desktop-1000",
-      "scheme": "light",
-      "lang": "en",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
+      "card": "task:t-pending",
+      "empty": {
         "prompt": 1,
+        "voice": 1,
+        "images": 1,
         "launch": 1,
-        "cancel": 1,
-        "error": 1
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 720
       },
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 73,
-        "summaryWords": null,
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row",
-        "sheet": {
-          "left": 404,
-          "top": 94,
-          "right": 844,
-          "bottom": 688
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 490,
+          "top": 180,
+          "right": 898,
+          "bottom": 900
         },
-        "bar": 88,
-        "launch": {
-          "left": 792,
-          "top": 516,
-          "right": 826,
-          "bottom": 550
+        "message": {
+          "left": 490,
+          "top": 676,
+          "right": 898,
+          "bottom": 733
         },
-        "refusal": {
-          "left": 417,
-          "top": 645,
-          "right": 831,
-          "bottom": 675
-        },
-        "fields": {
-          "scrollHeight": 468,
-          "clientHeight": 339,
-          "scrollTop": 0
-        },
-        "cue": 1,
-        "scrolledTo": 129
+        "composer": {
+          "left": 490,
+          "top": 818,
+          "right": 898,
+          "bottom": 900
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     },
     {
-      "look": 3,
+      "look": 2,
       "view": "desktop-1000",
       "scheme": "light",
       "lang": "en",
-      "state": "narrow",
-      "width": 760,
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 73,
-        "summaryWords": null,
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row"
+      "state": "header",
+      "empty": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 518
+      },
+      "chosen": {
+        "face": "Claude · Fable · High → Account C"
+      },
+      "launchedWith": {
+        "count": 1,
+        "engine": "claude",
+        "model": "fable",
+        "effort": "high",
+        "accountId": "account-c",
+        "cwd": "/repo",
+        "role": null
+      },
+      "pane": {
+        "before": {
+          "left": 342,
+          "top": 182,
+          "right": 962,
+          "bottom": 700
+        },
+        "sent": {
+          "left": 342,
+          "top": 182,
+          "right": 962,
+          "bottom": 700
+        }
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 342,
+          "top": 182,
+          "right": 962,
+          "bottom": 700
+        },
+        "message": {
+          "left": 342,
+          "top": 494,
+          "right": 962,
+          "bottom": 533
+        },
+        "composer": {
+          "left": 342,
+          "top": 618,
+          "right": 962,
+          "bottom": 700
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     },
     {
-      "look": 3,
+      "look": 2,
       "view": "desktop-1000",
       "scheme": "light",
       "lang": "en",
       "state": "task-card",
-      "found": {
-        "taskInSheet": 1,
-        "anchorOpen": 1
-      },
-      "task": "Repair old links in the release notes",
-      "geometry": {
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row"
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 3,
-      "view": "desktop-1000",
-      "scheme": "light",
-      "lang": "uk",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
+      "card": "task:t-links",
+      "empty": {
         "prompt": 1,
+        "voice": 1,
+        "images": 1,
         "launch": 1,
-        "cancel": 1,
-        "error": 1
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 518
       },
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 53,
-        "summaryWords": null,
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row",
-        "sheet": {
-          "left": 404,
-          "top": 94,
-          "right": 844,
-          "bottom": 688
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 342,
+          "top": 182,
+          "right": 962,
+          "bottom": 700
         },
-        "bar": 88,
-        "launch": {
-          "left": 792,
-          "top": 516,
-          "right": 826,
-          "bottom": 550
+        "message": {
+          "left": 342,
+          "top": 494,
+          "right": 962,
+          "bottom": 533
         },
-        "refusal": {
-          "left": 417,
-          "top": 645,
-          "right": 831,
-          "bottom": 675
-        },
-        "fields": {
-          "scrollHeight": 468,
-          "clientHeight": 339,
-          "scrollTop": 0
-        },
-        "cue": 1,
-        "scrolledTo": 129
+        "composer": {
+          "left": 342,
+          "top": 618,
+          "right": 962,
+          "bottom": 700
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     },
     {
-      "look": 3,
+      "look": 2,
       "view": "desktop-1000",
       "scheme": "light",
       "lang": "uk",
-      "state": "narrow",
-      "width": 760,
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 53,
-        "summaryWords": null,
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row"
+      "state": "header",
+      "empty": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 518
+      },
+      "chosen": {
+        "face": "Claude · Fable · Високі → Account C"
+      },
+      "launchedWith": {
+        "count": 1,
+        "engine": "claude",
+        "model": "fable",
+        "effort": "high",
+        "accountId": "account-c",
+        "cwd": "/repo",
+        "role": null
+      },
+      "pane": {
+        "before": {
+          "left": 342,
+          "top": 182,
+          "right": 962,
+          "bottom": 700
+        },
+        "sent": {
+          "left": 342,
+          "top": 182,
+          "right": 962,
+          "bottom": 700
+        }
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 342,
+          "top": 182,
+          "right": 962,
+          "bottom": 700
+        },
+        "message": {
+          "left": 342,
+          "top": 494,
+          "right": 962,
+          "bottom": 533
+        },
+        "composer": {
+          "left": 342,
+          "top": 618,
+          "right": 962,
+          "bottom": 700
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     },
     {
-      "look": 3,
+      "look": 2,
       "view": "desktop-1000",
       "scheme": "light",
       "lang": "uk",
       "state": "task-card",
-      "found": {
-        "taskInSheet": 1,
-        "anchorOpen": 1
-      },
-      "task": "Repair old links in the release notes",
-      "geometry": {
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row"
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 3,
-      "view": "desktop-1000",
-      "scheme": "dark",
-      "lang": "en",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
+      "card": "task:t-links",
+      "empty": {
         "prompt": 1,
+        "voice": 1,
+        "images": 1,
         "launch": 1,
-        "cancel": 1,
-        "error": 1
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 518
       },
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 73,
-        "summaryWords": null,
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row",
-        "sheet": {
-          "left": 404,
-          "top": 94,
-          "right": 844,
-          "bottom": 688
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 342,
+          "top": 182,
+          "right": 962,
+          "bottom": 700
         },
-        "bar": 88,
-        "launch": {
-          "left": 792,
-          "top": 516,
-          "right": 826,
-          "bottom": 550
+        "message": {
+          "left": 342,
+          "top": 494,
+          "right": 962,
+          "bottom": 533
         },
-        "refusal": {
-          "left": 417,
-          "top": 645,
-          "right": 831,
-          "bottom": 675
-        },
-        "fields": {
-          "scrollHeight": 468,
-          "clientHeight": 339,
-          "scrollTop": 0
-        },
-        "cue": 1,
-        "scrolledTo": 129
+        "composer": {
+          "left": 342,
+          "top": 618,
+          "right": 962,
+          "bottom": 700
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     },
     {
-      "look": 3,
+      "look": 2,
       "view": "desktop-1000",
       "scheme": "dark",
       "lang": "en",
-      "state": "narrow",
-      "width": 760,
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 73,
-        "summaryWords": null,
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row"
+      "state": "header",
+      "empty": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 518
+      },
+      "chosen": {
+        "face": "Claude · Fable · High → Account C"
+      },
+      "launchedWith": {
+        "count": 1,
+        "engine": "claude",
+        "model": "fable",
+        "effort": "high",
+        "accountId": "account-c",
+        "cwd": "/repo",
+        "role": null
+      },
+      "pane": {
+        "before": {
+          "left": 342,
+          "top": 182,
+          "right": 962,
+          "bottom": 700
+        },
+        "sent": {
+          "left": 342,
+          "top": 182,
+          "right": 962,
+          "bottom": 700
+        }
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 342,
+          "top": 182,
+          "right": 962,
+          "bottom": 700
+        },
+        "message": {
+          "left": 342,
+          "top": 494,
+          "right": 962,
+          "bottom": 533
+        },
+        "composer": {
+          "left": 342,
+          "top": 618,
+          "right": 962,
+          "bottom": 700
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     },
     {
-      "look": 3,
+      "look": 2,
       "view": "desktop-1000",
       "scheme": "dark",
       "lang": "en",
       "state": "task-card",
-      "found": {
-        "taskInSheet": 1,
-        "anchorOpen": 1
-      },
-      "task": "Repair old links in the release notes",
-      "geometry": {
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row"
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 3,
-      "view": "desktop-1000",
-      "scheme": "dark",
-      "lang": "uk",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
+      "card": "task:t-links",
+      "empty": {
         "prompt": 1,
+        "voice": 1,
+        "images": 1,
         "launch": 1,
-        "cancel": 1,
-        "error": 1
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 518
       },
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 53,
-        "summaryWords": null,
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row",
-        "sheet": {
-          "left": 404,
-          "top": 94,
-          "right": 844,
-          "bottom": 688
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 342,
+          "top": 182,
+          "right": 962,
+          "bottom": 700
         },
-        "bar": 88,
-        "launch": {
-          "left": 792,
-          "top": 516,
-          "right": 826,
-          "bottom": 550
+        "message": {
+          "left": 342,
+          "top": 494,
+          "right": 962,
+          "bottom": 533
         },
-        "refusal": {
-          "left": 417,
-          "top": 645,
-          "right": 831,
-          "bottom": 675
-        },
-        "fields": {
-          "scrollHeight": 468,
-          "clientHeight": 339,
-          "scrollTop": 0
-        },
-        "cue": 1,
-        "scrolledTo": 129
+        "composer": {
+          "left": 342,
+          "top": 618,
+          "right": 962,
+          "bottom": 700
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     },
     {
-      "look": 3,
+      "look": 2,
       "view": "desktop-1000",
       "scheme": "dark",
       "lang": "uk",
-      "state": "narrow",
-      "width": 760,
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 53,
-        "summaryWords": null,
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row"
+      "state": "header",
+      "empty": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 518
+      },
+      "chosen": {
+        "face": "Claude · Fable · Високі → Account C"
+      },
+      "launchedWith": {
+        "count": 1,
+        "engine": "claude",
+        "model": "fable",
+        "effort": "high",
+        "accountId": "account-c",
+        "cwd": "/repo",
+        "role": null
+      },
+      "pane": {
+        "before": {
+          "left": 342,
+          "top": 182,
+          "right": 962,
+          "bottom": 700
+        },
+        "sent": {
+          "left": 342,
+          "top": 182,
+          "right": 962,
+          "bottom": 700
+        }
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 342,
+          "top": 182,
+          "right": 962,
+          "bottom": 700
+        },
+        "message": {
+          "left": 342,
+          "top": 494,
+          "right": 962,
+          "bottom": 533
+        },
+        "composer": {
+          "left": 342,
+          "top": 618,
+          "right": 962,
+          "bottom": 700
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     },
     {
-      "look": 3,
+      "look": 2,
       "view": "desktop-1000",
       "scheme": "dark",
       "lang": "uk",
       "state": "task-card",
-      "found": {
-        "taskInSheet": 1,
-        "anchorOpen": 1
+      "card": "task:t-links",
+      "empty": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 518
       },
-      "task": "Repair old links in the release notes",
-      "geometry": {
-        "closeToWord": null,
-        "imageLast": true,
-        "closeToImage": "another row"
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 342,
+          "top": 182,
+          "right": 962,
+          "bottom": 700
+        },
+        "message": {
+          "left": 342,
+          "top": 494,
+          "right": 962,
+          "bottom": 533
+        },
+        "composer": {
+          "left": 342,
+          "top": 618,
+          "right": 962,
+          "bottom": 700
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     },
     {
-      "look": 3,
+      "look": 2,
       "view": "phone-390",
       "scheme": "light",
       "lang": "en",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
+      "state": "header",
+      "empty": {
         "prompt": 1,
-        "launch": 1,
-        "cancel": 1,
-        "error": 1
-      },
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 17,
-        "summaryWords": null,
-        "closeToWord": null,
-        "fields": {
-          "scrollHeight": 501,
-          "clientHeight": 306,
-          "scrollTop": 0
-        },
-        "cue": 1,
-        "scrolledTo": 195
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 3,
-      "view": "phone-390",
-      "scheme": "light",
-      "lang": "en",
-      "state": "narrow",
-      "width": 320,
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 3,
-        "spare": 22,
-        "summaryWords": null,
-        "closeToWord": null,
-        "fields": {
-          "scrollHeight": 609,
-          "clientHeight": 609,
-          "scrollTop": 0
-        },
-        "cue": 0
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 3,
-      "view": "phone-390",
-      "scheme": "light",
-      "lang": "uk",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
         "voice": 1,
-        "prompt": 1,
+        "images": 1,
         "launch": 1,
-        "cancel": 1,
-        "error": 1
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 747
       },
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 3,
-        "spare": 57,
-        "summaryWords": null,
-        "closeToWord": null,
-        "fields": {
-          "scrollHeight": 554,
-          "clientHeight": 306,
-          "scrollTop": 0
+      "chosen": {
+        "face": "Claude · Fable · high → Account C"
+      },
+      "launchedWith": {
+        "count": 1,
+        "engine": "claude",
+        "model": "fable",
+        "effort": "high",
+        "accountId": "account-c",
+        "cwd": "/repo",
+        "role": null
+      },
+      "pane": {
+        "before": {
+          "left": 0,
+          "top": 97,
+          "right": 390,
+          "bottom": 844
         },
-        "cue": 1,
-        "scrolledTo": 248
+        "sent": {
+          "left": 0,
+          "top": 97,
+          "right": 390,
+          "bottom": 844
+        }
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 0,
+          "top": 97,
+          "right": 390,
+          "bottom": 844
+        },
+        "message": {
+          "left": 12,
+          "top": 570,
+          "right": 378,
+          "bottom": 663
+        },
+        "composer": {
+          "left": 12,
+          "top": 748,
+          "right": 378,
+          "bottom": 832
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     },
     {
-      "look": 3,
+      "look": 2,
       "view": "phone-390",
       "scheme": "light",
       "lang": "uk",
-      "state": "narrow",
-      "width": 320,
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 3,
-        "spare": 22,
-        "summaryWords": null,
-        "closeToWord": null,
-        "fields": {
-          "scrollHeight": 609,
-          "clientHeight": 609,
-          "scrollTop": 0
+      "state": "header",
+      "empty": {
+        "prompt": 1,
+        "voice": 1,
+        "images": 1,
+        "launch": 1,
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 747
+      },
+      "chosen": {
+        "face": "Claude · Fable · high → Account C"
+      },
+      "launchedWith": {
+        "count": 1,
+        "engine": "claude",
+        "model": "fable",
+        "effort": "high",
+        "accountId": "account-c",
+        "cwd": "/repo",
+        "role": null
+      },
+      "pane": {
+        "before": {
+          "left": 0,
+          "top": 97,
+          "right": 390,
+          "bottom": 844
         },
-        "cue": 0
+        "sent": {
+          "left": 0,
+          "top": 97,
+          "right": 390,
+          "bottom": 844
+        }
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 0,
+          "top": 97,
+          "right": 390,
+          "bottom": 844
+        },
+        "message": {
+          "left": 12,
+          "top": 548,
+          "right": 378,
+          "bottom": 641
+        },
+        "composer": {
+          "left": 12,
+          "top": 726,
+          "right": 378,
+          "bottom": 832
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     },
     {
-      "look": 3,
+      "look": 2,
       "view": "phone-390",
       "scheme": "dark",
       "lang": "en",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
+      "state": "header",
+      "empty": {
         "prompt": 1,
+        "voice": 1,
+        "images": 1,
         "launch": 1,
-        "cancel": 1,
-        "error": 1
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 747
       },
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 2,
-        "spare": 17,
-        "summaryWords": null,
-        "closeToWord": null,
-        "fields": {
-          "scrollHeight": 501,
-          "clientHeight": 306,
-          "scrollTop": 0
+      "chosen": {
+        "face": "Claude · Fable · high → Account C"
+      },
+      "launchedWith": {
+        "count": 1,
+        "engine": "claude",
+        "model": "fable",
+        "effort": "high",
+        "accountId": "account-c",
+        "cwd": "/repo",
+        "role": null
+      },
+      "pane": {
+        "before": {
+          "left": 0,
+          "top": 97,
+          "right": 390,
+          "bottom": 844
         },
-        "cue": 1,
-        "scrolledTo": 195
+        "sent": {
+          "left": 0,
+          "top": 97,
+          "right": 390,
+          "bottom": 844
+        }
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 0,
+          "top": 97,
+          "right": 390,
+          "bottom": 844
+        },
+        "message": {
+          "left": 12,
+          "top": 570,
+          "right": 378,
+          "bottom": 663
+        },
+        "composer": {
+          "left": 12,
+          "top": 748,
+          "right": 378,
+          "bottom": 832
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     },
     {
-      "look": 3,
-      "view": "phone-390",
-      "scheme": "dark",
-      "lang": "en",
-      "state": "narrow",
-      "width": 320,
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 3,
-        "spare": 22,
-        "summaryWords": null,
-        "closeToWord": null,
-        "fields": {
-          "scrollHeight": 609,
-          "clientHeight": 609,
-          "scrollTop": 0
-        },
-        "cue": 0
-      },
-      "pageErrors": []
-    },
-    {
-      "look": 3,
+      "look": 2,
       "view": "phone-390",
       "scheme": "dark",
       "lang": "uk",
-      "options": {
-        "engines": 3,
-        "model": 1,
-        "effort": 1,
-        "speed": 1,
-        "account": 1,
-        "folder": 1,
-        "role": 1,
-        "parameters": 3,
-        "rolePrompt": 1,
-        "images": 1,
-        "voice": 1,
+      "state": "header",
+      "empty": {
         "prompt": 1,
+        "voice": 1,
+        "images": 1,
         "launch": 1,
-        "cancel": 1,
-        "error": 1
+        "pill": 1,
+        "selects": 0,
+        "radios": 0,
+        "textInputs": 0,
+        "details": 0,
+        "buttons": 4,
+        "focused": true,
+        "height": 747
       },
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 3,
-        "spare": 57,
-        "summaryWords": null,
-        "closeToWord": null,
-        "fields": {
-          "scrollHeight": 554,
-          "clientHeight": 306,
-          "scrollTop": 0
-        },
-        "cue": 1,
-        "scrolledTo": 248
+      "chosen": {
+        "face": "Claude · Fable · high → Account C"
       },
-      "pageErrors": []
-    },
-    {
-      "look": 3,
-      "view": "phone-390",
-      "scheme": "dark",
-      "lang": "uk",
-      "state": "narrow",
-      "width": 320,
-      "geometry": {
-        "cut": [],
-        "alone": 0,
-        "rows": 3,
-        "spare": 22,
-        "summaryWords": null,
-        "closeToWord": null,
-        "fields": {
-          "scrollHeight": 609,
-          "clientHeight": 609,
-          "scrollTop": 0
+      "launchedWith": {
+        "count": 1,
+        "engine": "claude",
+        "model": "fable",
+        "effort": "high",
+        "accountId": "account-c",
+        "cwd": "/repo",
+        "role": null
+      },
+      "pane": {
+        "before": {
+          "left": 0,
+          "top": 97,
+          "right": 390,
+          "bottom": 844
         },
-        "cue": 0
+        "sent": {
+          "left": 0,
+          "top": 97,
+          "right": 390,
+          "bottom": 844
+        }
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 0,
+          "top": 97,
+          "right": 390,
+          "bottom": 844
+        },
+        "message": {
+          "left": 12,
+          "top": 548,
+          "right": 378,
+          "bottom": 641
+        },
+        "composer": {
+          "left": 12,
+          "top": 726,
+          "right": 378,
+          "bottom": 832
+        }
+      },
+      "loaded": {
+        "firstMessage": 1
       },
       "pageErrors": []
     }

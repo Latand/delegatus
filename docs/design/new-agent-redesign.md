@@ -1,18 +1,201 @@
-# Creating a new agent: today's draft and three numbered looks
+# Creating a new agent: the composer, and the conversation after Send
 
-Design only. Nothing in this note ships: the three looks are prototypes that
+Design only. Nothing in this note ships: the two variants are prototypes that
 only the kanban evidence fixture can install, and the product draws today's
 draft exactly as before.
 
-The operator's verdict (2026-10-06) keeps the orchestrator conversation, the
-pipelines interface and the overall layout, and names the form for creating a
-new agent as one of the surfaces to redo: "the menu for creating a new agent
-looks crooked, especially when you press + Agent and it appears in a card".
-This note lists what the form holds today, says what is crooked about it, and
-offers three looks that keep every option and are built from the product's own
-components.
+## Operator verdict 2026-10-06
 
-## 1. Where a new agent is drafted
+On looks 1, 2 and 3 of this lane, all three rejected. His words, verbatim
+(Russian, voice transcript):
+
+> Хуйня этот дизайн… там все 3 варианта, компоузеры вышли хуёвые. Нет, это
+> должно быть минимально… мне даже кажется, что это может быть вот как сейчас
+> у нас… нижняя часть компоузера наша сейчас, вот как она сейчас выглядит, её
+> нужно без всяких промпт роли, роли там вообще не нужно добавлять. Это должно
+> быть максимально быстро создаваться агент, то есть сразу мне должен быть
+> инпут, минимальный, то есть я должен голосом там мочь это всё закинуть,
+> выбрать модельку аккаунта, как вот у нас сейчас в компоузере это происходит,
+> и оно типа поехало. Сразу запускается. Сразу у меня рендерится экран… в
+> который подгружается уже разговор, как у нас это обычно делается. Типа того,
+> как у нас оркестратор загружается.
+
+On the two points the first brief left open, roles and the working directory,
+he answered the same day in the seat chat. His words, verbatim (Russian):
+
+> Да, я думаю, что роли нужны только оркестратору, поэтому они действительно
+> не нужны нам здесь. Рабочая папка я тоже не вижу смысла её брать, пусть
+> берётся это под этот проект, её не нужно показывать.
+
+What follows from it, and what this note now describes:
+
+1. Creating an agent is the composer. The form is the lower part of today's
+   conversation composer as the product draws it, and nothing else.
+2. «+ Agent» puts the cursor in the field. The prompt can be dictated. The
+   model and the account are chosen the way the composer chooses them today.
+   Send launches at once.
+3. After Send the pane is the conversation: the first message as a normal row,
+   the loading shape a conversation has while it opens, then the transcript.
+4. At most two numbered variants, beside today's form (0).
+5. Roles belong to the orchestrator only. The form has no role control of any
+   kind, and no other place in the UI is owed to them.
+6. The working directory is never shown and never asked. It is the directory
+   of the project the form was opened in.
+
+The earlier three looks and their frames are kept for the record only (section
+9).
+
+## 1. The form
+
+One component, the product's `ComposerBar`
+(`src/components/ComposerBar.tsx`), with the same parts it has under the
+orchestrator's conversation:
+
+| Part | What it is | Where it comes from |
+| --- | --- | --- |
+| The field | the composer's own textarea; Enter sends, Shift+Enter breaks the line | `src/components/ComposerBar.tsx:682` |
+| The microphone | the composer's dictation; while it records, the send button reads «stop and launch» and sends what was said | `src/components/ComposerBar.tsx:519` |
+| Send | the composer's send button, in the accent colour a conversation uses | `src/components/ComposerBar.tsx:428` |
+| Attachments | the composer's picker in the row under the field, with its thumbnails | `src/components/ComposerBar.tsx:522` |
+| Model, reasoning, speed, account | the runtime pill a conversation's composer carries, with its own popover on the desktop and its own «Next message» sheet on the phone | `RuntimePopover` and `RuntimeSheet`, `src/components/RuntimePill.tsx` |
+
+The form holds no select, no radio group, no text input, no folded section and
+no heading. The driver counts them in every frame of variants 1 and 2 and
+finds none.
+
+**The engine is chosen with the model.** A conversation's pill never offers an
+engine, because a conversation has one. A draft has to pick it, so the pill's
+model list names every engine's models («Claude · Opus 5.5», «Codex ·
+GPT-6-Astra», «Copilot · Auto») and choosing a model of another engine moves
+the draft to that engine. The pill's face says the engine, the model, the
+reasoning tier once one is chosen, and the account once one is picked:
+«Claude · Fable · High → Account C», the same arrow the conversation's pill
+shows for a picked account.
+
+**No tier chosen** means the engine's own default, as today. The face then
+says the engine and the model only. The conversation's pill always shows a
+tier because a running conversation has one.
+
+**Closing an unsent draft.** The composer has no close button and the form
+adds none. Escape in the empty field puts the draft away, as it does for a new
+task; the «agents open» rail keeps its «Close all»; the phone keeps its back
+button.
+
+**Errors** are the composer's own lines under the field: a refused launch
+with the prompt kept in the field, a signed-out account with its sign-in
+button, an attachment that cannot be sent.
+
+## 2. Two variants
+
+Both are the form of section 1 and behave the same after Send. They differ in
+one thing: how much room the draft takes before the first message is sent.
+
+**Variant 1. Only the composer; the conversation opens on Send.** The draft is
+as tall as the composer, about 90 px: a field and the row under it. Opened
+from the board's «+ Agent» it is a short card at the top of its column; opened
+from a task card's «+ Agent» it is one more row inside that card. On Send the
+card grows to the height the board gives a conversation, and the composer
+stays in sight with the first message directly above it.
+
+**Variant 2. The conversation's pane from the first frame.** The draft takes
+the height the board gives a conversation from the moment it opens, empty
+above, with the composer at its foot, the way an empty conversation looks. On
+Send nothing moves: the first message and the loading shape appear above the
+composer, in a pane that keeps its place and its size (the driver compares the
+pane's box before and after Send at 1440 and 1000 px).
+
+On the phone the two are the same screen: the phone's pane is the whole
+window either way, with the composer on its bottom edge.
+
+| | Variant 1 | Variant 2 |
+| --- | --- | --- |
+| Before Send, in a column | about 90 px | the conversation's height (about 620 px at 1440x900, 588 px at 1000x700) |
+| Before Send, in a task card | one row in the card | the card grows by the conversation's height at once |
+| On Send | the card grows downward; the board below it moves | nothing moves |
+| Several drafts open | they stack as short rows | each takes a conversation's height |
+| The phone | the same as variant 2 | the same as variant 1 |
+
+## 3. After Send
+
+Today the draft freezes: the prompt becomes a bubble, a sentence says «agent
+launched — waiting for the conversation to appear here…», and the form's
+strips stay above it until the conversation replaces the pane.
+
+In both variants the pane is the conversation from the press:
+
+- the first message is the feed's own row (`FeedMessageRow`,
+  `src/components/conversation/OutboxBubbles.tsx:376`), the component a
+  conversation draws the operator's messages with;
+- under it stands the feed's loading shape (`FeedSkeleton`,
+  `src/components/skeletons.tsx:288`), the one the orchestrator's conversation
+  shows while it opens. Only its last block is drawn, the lines where the
+  agent's first words will be: the blocks above it stand for earlier history,
+  and a new conversation has none;
+- the composer stays under them, locked until the launch answers;
+- no sentence about the launch is shown. The product's own status line
+  appears only when the launch needs the operator (a launch that could not be
+  confirmed, or one that failed).
+
+When the launch answers, the product hands the pane over to the real
+conversation, as it does today, and the transcript fills in. That hand-over is
+untouched product behaviour, and it has one seam worth knowing: the product's
+conversation card adds a title row and a runtime row above the feed and draws
+the first message at the top of an otherwise empty feed, with the chips
+«Starting» and «First message: queued» under it. The first message therefore
+moves from the foot of the pane to its top at that moment, in variant 1, in
+variant 2 and today alike. Removing that move is a change to the conversation
+window and belongs to its own lane.
+
+## 4. What the old form had that this one drops
+
+| The old form had | In this form | Where it stays reachable |
+| --- | --- | --- |
+| Engine radios (Claude, Codex, Copilot) | dropped as a control | The engine is chosen with the model, in the pill's model list. |
+| Model, effort and speed selects | dropped as selects | The pill: reasoning tiers, «Model», «Speed» (Codex). |
+| Account select | dropped as a select | The pill: «Account», listing the engine's signed-in accounts. |
+| Working directory field, its picker and its list of recent directories | dropped | Working directory: the project's, never shown and never asked, by the operator's decision (section 5). |
+| Role select | dropped | Roles: orchestrator only, by the operator's decision. |
+| Role parameters (mode, domain, size and the like) | dropped | Roles: orchestrator only, by the operator's decision. |
+| Role prompt preview | dropped | Roles: orchestrator only, by the operator's decision. |
+| Reviewer's conversation («reviews») | dropped | Gone from the UI. A review of a conversation is started as a review flow or a pipeline's review stage, through an orchestrator. |
+| Deployer's confirmation field | dropped | Gone from the UI. A deploy is a Deployer stage of a pipeline, with the operator's approval there. |
+| Handoff source in the heading, and its path as a line | dropped as rows | A handoff still opens this form from the conversation it continues. The field arrives filled with the product's own sentence naming the source transcript, which is what the new agent reads. |
+| Task the draft belongs to | kept | The card the form sits in; the launch lands on that card. |
+| Cancel button | dropped | Escape in the empty field, the «agents open» rail's «Close all», the phone's back button. |
+| «new agent» chip under the field, the hint in the blank area, the engine badge, the status dot, the 4 px engine bar, the draft card's own title and foot | dropped | Nowhere; each repeated what the placeholder and the pill say. |
+| The engine's colour on the send button | dropped | Send is the accent colour, as in a conversation. |
+| Launch-in-flight sentence | dropped while all is well | Shown only when the launch needs the operator. |
+| Image capability alert with Retry | kept | Above the field, only when the server could not say whether the engine takes images. |
+| Prompt, images, voice, launch, the composer's errors | kept | The composer. |
+
+## 5. Values the launch still needs
+
+| Value | What the form uses | Rule |
+| --- | --- | --- |
+| Project | the project whose board «+ Agent» was pressed on | unchanged |
+| Working directory | the project's canonical root | `initialDraftCwd`, `src/components/ProjectDashboard.tsx:651`; the board seeds it into the draft at `:1387` and `:1405` |
+| Working directory of a handoff | the source conversation's own directory | `src/components/ProjectDashboard.tsx:1435`, confirmed by `GET /api/spawn` |
+| Task | the card whose «+ Agent» was pressed; none from the board's own button | `setDraftBand`, `src/components/ProjectDashboard.tsx:1404` |
+| Engine and model | Claude with its default model; a handoff starts on its source's engine | `useAgentLaunchDraft`, `src/components/draft/AgentLaunchControls.tsx:220` |
+| Effort, speed | the engine's defaults | unchanged |
+| Account | the engine's active account | `resolveLaunchAccountId`, `src/components/draft/AgentLaunchControls.tsx:104` |
+| Role | none | a launch from this form carries no role |
+
+One entry point has no directory to derive today. While a project's root is
+unresolved (the board has not yet matched the project to a folder on disk),
+`resolvedDraftCwd` is empty and the draft is seeded with `/`
+(`src/components/ProjectDashboard.tsx:651`); the board replaces that seed once
+the root resolves (`resolveSystemDraftCwd`, `:671`). Today the operator sees
+`/` in the folder field and can correct it. In this form he would launch in
+`/` unseen, so a shipped version has to hold Send, with the composer's own
+blocked-send line, until the project's root is known. The prototype does not
+do this; the fixture's project always has a root.
+
+The driver reads the launch request of every walk: one request per Send, the
+engine, model, tier and account the pill showed, the directory `/repo` (the
+fixture project's root), and no role.
+
+## 6. Where a new agent is drafted, and what today's form holds
 
 | Entry | Where |
 | --- | --- |
@@ -21,358 +204,130 @@ components.
 | A task card's «+ Agent» | `src/components/kanban/KanbanCard.tsx:881` |
 | The phone's menu row | `src/components/ProjectDashboard.tsx:2053`, drawn by `src/components/mobile/MobileFocusView.tsx:685` |
 | The draft inside a card | `CardDrafts`, `src/components/kanban/KanbanDrafts.tsx:37` |
-| Header «+ Task» | `src/components/ProjectBar.tsx:137`, composer at `src/components/kanban/KanbanDrafts.tsx:73` |
-| A pipeline stage's draft message | `StageDraftMessage`, `src/components/kanban/StageDraft.tsx:70` |
 
 Every agent draft, whichever entry opened it, is one component:
-`DraftAgentPane` (`src/components/DraftAgentPane.tsx`). The three looks rearrange
-that component, so each of them applies to the header button, a card's button
-and the phone at once.
+`DraftAgentPane` (`src/components/DraftAgentPane.tsx`), so a variant applies to
+the header button, a card's button and the phone at once. «+ Task» and a
+pipeline stage's draft message are other surfaces and stay as they are.
 
-Two neighbours stay as they are. «+ Task» opens a task composer with a title
-and a text and no runtime; it launches nothing. A stage draft
-(`src/components/kanban/StageDraft.tsx:138` field, `:176` error, `:198` edit)
-is a message to a stage whose engine, model and role were set in the pipeline
-editor (`src/components/pipelines/StagePlaceholderPane.tsx:56`), and the
-pipelines interface is one of the surfaces the operator keeps.
-
-## 2. What the form holds today
-
-Line numbers are for `src/components/DraftAgentPane.tsx` unless a file is named.
+Today's form (0), line numbers in `src/components/DraftAgentPane.tsx` unless a
+file is named:
 
 | # | Option | Control today | Where |
 | --- | --- | --- | --- |
-| 1 | Engine | three radios (Claude, Codex, Copilot) in the tinted header | `:935`; `EngineRadioGroup`, `src/components/draft/AgentLaunchControls.tsx:306` |
-| 2 | Account | select at the header's left edge, cut to 112 px | `:933`; `LaunchAccountSelect`, `src/components/draft/AgentLaunchControls.tsx:353` |
-| 3 | Model | select in the fourth strip | `:979`; `src/components/ReasoningControls.tsx:54` |
-| 4 | Effort | select beside the model | `src/components/ReasoningControls.tsx:74` |
-| 5 | Speed (Codex) | select beside the effort | `src/components/ReasoningControls.tsx:90` |
-| 6 | Working folder | picker in the second strip | `:955`; `src/components/DirectoryPicker.tsx` |
-| 7 | Task | the card the draft was opened from; the draft sits in that card | `src/components/kanban/KanbanDrafts.tsx:37` |
-| 8 | Role | select in the third strip | `:965`; `RoleSection` `:162`, select `:192` |
-| 9 | Role parameters | one select per parameter, each with a helper line | `:208` |
-| 10 | Role prompt preview | a folded `details` | `:233` |
-| 11 | Reviewer's conversation, deployer's confirmation | appear when the role asks | `:839`, `:859` |
-| 12 | Handoff source | the heading says which conversation the draft continues | `:909` |
-| 13 | Prompt | the shared composer's field | `:1027`; `src/components/ComposerBar.tsx` |
-| 14 | Images | picker in the composer's second row, thumbnails under it | `src/components/ComposerBar.tsx:524`, `:819` |
-| 15 | Voice | the composer's microphone | `src/components/ComposerBar.tsx` |
-| 16 | Launch | the composer’s send button, tinted by the engine | `:887` |
-| 17 | Cancel | a bordered 12 px cross at the header's right edge | `:942` |
-| 18 | Errors | refused launch (`src/components/DraftLaunchStatus.tsx:27`), composer status (`src/components/ComposerBar.tsx:873`), a signed-out account with its sign-in route (`src/components/ComposerBar.tsx:829`), the image capability alert with Retry (`:867`) | |
-| 19 | Launch in flight | the prompt as the operator's bubble and a status line | `:992` |
+| 1 | Engine | three radios in the tinted header | `:935` |
+| 2 | Account | select at the header's left edge, cut to 112 px | `:933` |
+| 3 | Model, effort, speed | three selects in the fourth strip | `:979` |
+| 4 | Working folder | picker in the second strip | `:955` |
+| 5 | Role, its parameters, its prompt preview | the third strip | `:965`, `RoleSection` `:162` |
+| 6 | Reviewer's conversation, deployer's confirmation | appear when the role asks | `:839`, `:859` |
+| 7 | Handoff source | the heading | `:909` |
+| 8 | Prompt, images, voice, launch | the shared composer at the bottom of a 620 px card | `:1027` |
+| 9 | Cancel | a bordered 12 px cross | `:942` |
+| 10 | Launch in flight | the prompt as a bubble and a status sentence | `:992` |
 
-## 3. What is crooked
+What is crooked about it, read from the frames of look 0: a card inside a
+card with two titles; four strips with four backgrounds; a fixed 620 px height
+around an empty form, with the field as the last thing on it; controls cut and
+sized unlike the rest of the board (the 112 px account select, the 12 px
+cross, the composer's buttons shrunk to dots by the board's button reset); and
+everything the operator did not come for standing between him and the field.
 
-Read from the frames of look 0 (`look0-*.png`) at all three sizes.
+## 7. Costs and recommendation
 
-1. **A card inside a card.** The pane has its own border, shadow, radius and a
-   4 px engine-coloured bar, and it sits inside a kanban card that already has
-   a border, a title («Untitled task») and a foot. Two frames, two titles.
-2. **A fixed conversation height for an empty form.** The board gives a draft
-   `--conv-in-card-h` (`src/components/kanban/kanbanBoard.css:1082`), about
-   620 px. At 1440x900 the empty draft fills the column from top to bottom and
-   roughly 300 px of it is a blank area with a centred hint. The prompt field,
-   the one thing the operator came to fill, is the last thing on the card and
-   lands under the fold at 1000x700.
-3. **Four strips, four backgrounds.** Tinted header, sunken folder strip,
-   bordered role block, sunken reasoning strip, then white. Each strip has its
-   own divider and its own 10 px label, so the form reads as a stack of
-   unrelated toolbars.
-4. **The order follows the code.** Account, then a status dot, then the engine,
-   then the title; the folder; the role; and only then the model, two strips
-   away from the engine it depends on. The account is the first control and
-   the one the operator changes least.
-5. **Sizes that match nothing else.** The account select is cut to 112 px and
-   shows «Account B · ac». The cancel button is a 12 px cross in a bordered
-   box about 22 by 18 px, while the board's own icon buttons are 28 px and
-   borderless. Labels are 10 px beside 11 and 12 px controls. Four corner radii
-   meet in one card: 10, 8, 7 and 6 px. Inside the board the composer's
-   microphone and launch button shrink to dots of about 14 px, a third of the
-   size the same composer has in the orchestrator conversation, because the
-   board's button reset reaches them.
-6. **The engine radios are text on a tinted bar.** Unselected engines have no
-   outline, so «Claude Codex Copilot new conversation» reads as one phrase.
-7. **The composer repeats the card.** Under the field a chip says «new agent»,
-   which the heading, the card title and the rail entry already say.
-8. **The narrow column.** At 760 px the reasoning strip wraps, with the speed
-   select alone on a second line, and the header truncates both the account
-   and the heading. The phone does the same: the speed wraps under the model
-   and the heading is cut to «ne…».
-9. **A long prompt.** The field grows inside the fixed height and takes the
-   room from the blank area, so the card stays 620 px whether the prompt is
-   one line or twelve.
-10. **A launch error** appears under the composer, at the very bottom of a
-    620 px card, far from the folder or account that caused it.
+**Both variants.** `DraftAgentPane`'s render shrinks to the composer and the
+opening shape. The runtime pill needs a second source: today `RuntimePill`
+reads a conversation and reconfigures it, and a draft has to answer the same
+popover and sheet from its own launch parameters (the prototype exports the
+pill's two panels and draws the pill's face beside them; a shipped version
+gives the pill itself a draft source, so there is one face). The model list
+gains the engine's name in front of each model, seventeen rows on the desktop.
+The role block, the directory picker and the reviewer and deployer fields
+leave the draft; `RoleSection` stays for the pipeline editor. The board's
+rules for a draft card lose its title and foot.
 
-One defect of behaviour, seen while driving the form and left alone in this
-lane: pressing the engine that is already chosen leaves the draft's image
-negotiation waiting for an answer nothing asks for again, and the image picker
-stays disabled. The driver avoids that press. It deserves its own issue.
+**Variant 1** also needs the board to keep the composer in sight when the card
+grows on Send (the prototype scrolls it into view itself). The column under
+the draft moves once, at the press.
 
-The 14 px buttons of point 5 have a one-class remedy whichever look is chosen:
-the board's reset (`src/components/kanban/kanbanBoard.css:68`) spares whatever
-sits inside `.reader-host`, the class a conversation in a card carries and a
-draft does not. All three looks carry it.
+**Variant 2** needs nothing more, and costs room: an empty pane of a
+conversation's height for as long as the draft is unsent, in a column or
+inside a task card.
 
-## 4. Three looks
-
-All three draw the same draft. `DraftAgentPane` keeps the state, the launch and
-its recovery, and hands its parts to a layout
-(`src/components/draft/draftLayout.ts`). The parts are the product's own:
-`ComposerBar`, `EngineRadioGroup`, `LaunchAccountSelect`, `ReasoningControls`,
-`DirectoryPicker`, `RoleSection`, `DraftLaunchStatus`. No look draws a control
-of its own. Colours, type steps, radii and spacing are the existing tokens.
-
-Three things are shared by every look.
-
-- **The runtime grid.** Model, effort, speed and account are one grid of
-  captioned cells of equal width. All cells stand on one row when a cell holds
-  the widest chosen value whole, arrow included, and is at least 150 px, with
-  the 6 px gaps between cells counted. The width a value needs is the
-  browser's own: the grid reads it from a copy of the select that holds that
-  one option. Otherwise the grid has two columns, so Codex reads as two rows
-  of two. A value that half the grid would cut takes the whole row, and so
-  does a cell left without a neighbour (Claude with an account, or the speed
-  once the account below it has a row of its own), so no select stands beside
-  an empty cell and no chosen value is cut at any size. Two cases decided
-  this. Look 2 at 1000x700: its open «runtime» group gave each of four cells
-  about 145 px, and «Account B · активний» lost its last letter under the
-  arrow; the group stands as two rows of two there. The phone, where selects
-  are drawn at 16 px: at 390 px in Ukrainian the account needs more than half
-  the pane, so the model and the effort share a row and the speed and the
-  account take one each; at 320 px the same happens in English.
-- **The engine chips at the 32 px step** (`roomy`), the size the orchestrator's
-  create panel uses, and every chip outlined: the chosen one in its engine's
-  colour, the others in the default border. Three boxes read as three
-  choices, and the first chip's edge stands on the edge of the fields under
-  it. On the phone each chip's touch area is 44 px tall.
-- **A caption over every field**: model, effort, speed, account, directory,
-  role. The role block is `RoleSection` without its strip. Two captions repeat
-  a word of the product's own default option under them («Effort» over
-  «effort: default», «Speed» over «speed: default»); a shipped look would
-  shorten those options to «default».
-- **A cut column says so.** Wherever a column of fields scrolls (look 3's
-  sheet, and the settings of every look on the phone) an edge that hides
-  fields fades out, and the lower one carries a chip, «More fields below»,
-  that scrolls to them when pressed.
-
-### Look 1. The composer is the card
-
-The draft is the composer the orchestrator conversation already uses, as tall
-as its content. A heading with a 28 px borderless close button; the prompt
-field; the engine in the composer's own row, where the conversation keeps its
-runtime; the runtime grid directly under the engine, so the model sits beside
-the engine it depends on; then the thumbnails and any message of the composer;
-the directory; the role. The card's second title and foot are gone. An empty
-draft is about 300 px tall in place of 620.
-
-On the phone the pane adds no heading, because the phone's own header already
-says «New agent · draft». The settings gather above the composer, the close
-button ends the engine row, and the composer stays on the bottom edge while the
-settings scroll. With a role chosen and a long prompt the settings hold more
-than the pane shows: the lower edge then fades under the «More fields below»
-chip, and one press brings the role's parameters up.
-
-### Look 2. One line, opened where asked
-
-The prompt field, and under it one row that says in words what the agent will
-run on: «Codex · GPT-6-Astra · high · fast · Account B», the folder, the role.
-The row never wraps: when it runs out, the runtime is cut with an ellipsis and
-the folder and the role keep their words. The row is inside the composer's
-frame, so the draft has no gutter of its own. It starts with the close button,
-a rule and 24 px apart from the first word, and ends with the image picker,
-which keeps the far right as it does in the orchestrator's composer. Closing
-clears the draft without asking, so the close button stands away from the
-picker, the microphone and the launch. Pressing a word opens that group's controls directly under
-the row and nothing else; pressing it again folds them. The runtime group is
-the engine chips over the runtime grid. A handoff draft names the conversation
-it continues on a line above the field. An operator who accepts the defaults
-sees a field and a sentence, about 110 px.
-
-### Look 3. A sheet at the button
-
-No card joins a column until an agent exists. The form opens as a sheet under
-the button that was pressed (the header's, or a card's own «+ Agent»), beside
-it when there is no room below, and never above the bottom edge of the board's
-bar. The button stays marked as open while the sheet is. The sheet's heading
-names the draft, and under it the task whose button opened it. Inside, a
-captioned column that scrolls on its own: engine, the runtime grid, directory,
-role. The composer is the sheet's foot: the prompt (five lines at most, then
-it scrolls), the thumbnails, the launch and every error stay in the window
-whatever the role adds above. When the column holds more than the window
-shows, the foot gives room back (the prompt shows three lines) and the cut
-edge says so: the fields fade out under a chip, «More fields below», that
-scrolls to them when pressed, and the upper edge fades the same way once
-something has scrolled above it. A role's parameters, or the deployer's
-required field, are never cut without that sign. On the phone the same column
-fills the pane above the composer and carries the same sign at its cut edge.
-There look 3 differs from look 1 in one caption («Agent engine» over the
-chips): a phone has no button to hang a sheet from, so both are the phone's
-own full-screen pane.
-
-## 5. Where each option is
-
-| Option | Today (0) | Look 1 | Look 2 | Look 3 |
-| --- | --- | --- | --- | --- |
-| Engine | header strip | composer's row | «runtime» group; named in the summary | first field |
-| Model | fourth strip | runtime grid, under the engine | «runtime» group; named in the summary | runtime grid |
-| Effort | fourth strip | runtime grid | «runtime» group; named in the summary | runtime grid |
-| Speed | fourth strip | runtime grid | «runtime» group; named in the summary | runtime grid |
-| Account | header's left edge, cut | runtime grid | «runtime» group; named in the summary | runtime grid |
-| Working folder | second strip | «Directory» field | «folder» word opens the picker | «Directory» field |
-| Task | the card holding the draft | the card holding the draft | the card holding the draft | named under the sheet's heading; its button marked open |
-| Role | third strip | «Role» field | «role» word opens the block | «Role» field |
-| Role parameters, prompt preview | under the role | under the role | inside the «role» group | under the role |
-| Reviewer's conversation, deployer's confirmation | under the role's parameters | the same | inside the «role» group | the same |
-| Handoff source | heading | heading | a line above the field | heading |
-| Prompt | bottom of the card | top of the card | the card itself | foot of the sheet |
-| Images | composer | composer | composer | composer, in the foot |
-| Voice | composer | composer | composer | composer |
-| Launch | composer | composer | composer | composer, in the foot |
-| Cancel | bordered cross, header | 28 px close, heading | 28 px close, start of the summary row, a rule apart from the words | 28 px close, heading |
-| Refused launch | under the composer, bottom of the card | under the runtime grid | under the summary row and whatever it opened | foot of the sheet |
-| Signed-out account and its sign-in | under the composer | under the runtime grid, next to the account | under the summary row | foot of the sheet |
-| Image capability alert with Retry | above the composer | above the field | above the field | foot of the sheet, above the field |
-| Launch in flight | bubble and status in the blank area | bubble and status above the field | the same | the same, in the foot |
-
-### What is removed on purpose
-
-| Element today | Where | Looks | Why it can go |
-| --- | --- | --- | --- |
-| The blank area's hint («Choose an engine and a directory, write the first prompt…») and the engine badge above it | `:1002` to `:1008` | 1, 2, 3 | The field's placeholder says the same in six words, and the blank area is gone with the fixed height. |
-| The handoff hint («The new agent will first read the parent conversation's transcript…») | `:1007` | 1, 2, 3 | The seeded prompt of a handoff draft already says which file the agent reads. |
-| The handoff source's path as a line of text | `:1009` to `:1013` | 1, 2, 3 | It stays as the tooltip of the line that names the source. |
-| The «new agent» chip under the field, whose tooltip says whether the launch is structured or a tmux window | `:898` to `:903` | 1, 2, 3 | The heading, the rail and the placeholder say «new agent»; the placeholder also differs between the two kinds of launch. |
-| The card's own title («Untitled task») and foot around the draft | board | 1, 2 | Two titles for one draft. |
-| The draft card itself and its fixed conversation height | board | 3 (card), 1 and 2 (height) | Look 3 seats no card; looks 1 and 2 are as tall as their content. |
-| The 4 px engine-coloured bar and the status dot of the header | `:931`, `:934` | 1, 2, 3 | The chosen engine chip and the launch button carry the engine's colour. |
-
-Nothing else is dropped. The driver asserts the table. For every look, at
-every size, theme and language, it finds three engines, the model, effort,
-speed and account selects, the folder picker, the role select with its three
-parameters and prompt preview, the prompt field, the image input, the
-microphone, the launch button, the cancel button and the refused launch. Once
-per look it also finds the handoff source as visible text, the reviewer's
-conversation select, the deployer's confirmation field, the signed-out message
-with its sign-in button, and the image capability alert with Retry
-(`evidence/new-agent-redesign/options.json`).
-
-## 6. Costs
-
-**Look 1.** The smallest change. `DraftAgentPane`'s render is rewritten, about
-a hundred lines; the board's fixed height for a draft and the draft card's own
-title and foot go; `RoleSection` gains a variant without its strip, which
-`StagePlaceholderPane` must keep ignoring. `ComposerBar` gains a slot between
-its options row and its thumbnails for the runtime grid (the prototype reorders
-the composer's parts from a style block instead). Six short captions are new
-strings in both languages. No new interaction. With a role chosen the card is
-about 520 px tall, since the role block's helper lines are long; shortening
-them is a change to the role catalog's copy.
-
-**Look 2.** Everything look 1 needs, plus a disclosure with three groups: its
-focus order, its keyboard handling, and summary strings in both languages. An
-option costs one press more than today. A summary is only as good as its
-longest value: at 760 px the runtime is cut after the effort, and the full
-value is one press away. On the phone the pane is the whole screen and the
-composer keeps its bottom edge, so a draft on defaults is two rows under about
-420 px of empty pane, the way a conversation looks before its first message.
-
-**Look 3.** The largest change. A sheet needs placement, a focus trap, and a
-rule for a press outside it that never loses a long prompt. The board loses the
-draft card, so the «agents open» rail and the draft's persistence across a
-reload need new rules. The sheet covers what is under the button while it is
-open: under the header's button that is the right column of the orchestrator's
-conversation, and beside a card's button it is part of the next column. It
-changes nothing in either, and both are back when the sheet closes, but look 1
-and look 2 cover nothing at all. At 1000x700 with a role chosen the field
-column scrolls inside the sheet, and the sheet has to say so, which is one
-more piece of chrome (the chip over the cut edge). In return the columns never move when a draft
-opens.
-
-**All three, on the phone.** The phone draws its selects at 16 px, and half a
-pane does not hold every value: «Account B · активний» at 390 px, «Account B ·
-active» and the product's own «швидкість: дефолт» at 320 px. The runtime grid
-gives each such value the whole row, so the grid is three rows where the
-desktop has two (model and effort, speed, account), about 60 px taller. The
-driver reads `cut` empty at 390 and 320 px in both languages and both themes.
-With the Builder role and a long prompt the settings of looks 1 and 3 are
-taller than the pane; the chip over the cut edge is the price, as in look 3's
-sheet.
-
-## 7. Recommendation
-
-Look 1. It answers each point of section 3 with the component the operator
-already praised, keeps every option in sight, adds no interaction to learn, and
-costs the least to ship. Look 2's summary row is the natural folded state of
-look 1 for operators who launch on defaults: the same row the orchestrator's
-conversation shows as «Opus 5.5 · Light». Look 3 solves a problem the operator
-did not name (columns shifting) at the price of a new surface that lies over
-others.
+**Recommendation: variant 1.** It is the smallest thing that can be on the
+board before there is an agent, which is what «минимально» asks for, and from
+a task card it reads as one more row of that card. Its one movement happens at
+the press that asked for a conversation. Variant 2 is the choice if a pane
+that never changes size matters more than the room it holds while empty.
 
 ## 8. Evidence
 
-The looks run in the existing kanban driver and fixture: the scenario
+The variants run in the existing kanban driver and fixture: the scenario
 `new-agent` in `src/components/kanban/issue1695Evidence.fixture.tsx`, the
 block «creating a new agent» in
 `src/components/kanban/kanbanBoard.browser.test.tsx`. `?newagent=<n>` draws the
 draft in look n, 0 being today's, and the page prints the number and the name
-in a strip outside the application's frame.
+in a strip outside the application's frame. The fixture's launch runs on the
+clock the `launch-cls` scenario already had, with the receipt held 1.5 s
+longer so the frame between the press and the receipt can be read, and it
+answers dictation with a fixed sentence.
 
 ```
 CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 NEW_AGENT_OUT=<dir> \
   bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "creating a new agent"
 ```
 
-Each look is walked through seven states (empty, engine and model chosen, a
-long prompt, an attachment, a refused launch with the long prompt and both
-images still in place, the narrowest column, the draft a task card's own button
-opens) at 1440x900, 1000x700 and a 390 px phone, light and dark, in English and
-Ukrainian. Five more states are drawn once per look, at 1440 in the light
-theme in English: a handoff draft, the reviewer's field, the deployer's field,
-a signed-out account, and an image capability that could not be read. Look 3
-adds one frame wherever its field column is cut (at 1000x700), and every look
-adds one wherever the phone's settings are cut: the column after the «More
-fields below» chip was pressed. That is 352 frames, one contact sheet per look beside today's form, and one sheet
-comparing all four. The frames and sheets are written outside the repository
-and are not committed.
+Each look is walked at 1440x900, 1000x700 and a 390 px phone, light and dark,
+in English and Ukrainian, from the board's own button: the empty form, the
+runtime pill open on its model list (the phone's sheet), the model and the
+account chosen, dictation in progress, the frame after Send, the loaded
+conversation. On the desktop the launch is walked again from a task card's own
+«+ Agent»: empty, after Send, loaded. Three more states are drawn once per
+look, at 1440 in the light theme in English: a refused launch, a handoff
+draft, a signed-out account. 285 frames, and one comparison sheet per size
+with today, variant 1 and variant 2 side by side in every row. The frames and
+sheets are written outside the repository and are not committed.
 
-Beside the options, the driver measures what the looks promise
-(`geometry` in `evidence/new-agent-redesign/options.json`):
+What the driver asserts for variants 1 and 2
+(`evidence/new-agent-redesign/options.json`):
 
-- looks 1 to 3, every size (1440, 1000, 760, and the phone at 390 and 320):
-  four runtime selects, none beside an empty cell, and no chosen value cut by
-  its select. A value is cut when the select is narrower than the browser draws the same
-  select around that one value (`spare` is the smallest difference, in px,
-  among the four). The earlier measure compared the text's width with the box
-  less 16 px for the arrow, which is less than Chrome's arrow takes, and it
-  passed the cut select of look 2 at 1000x700 in Ukrainian;
-- look 1: the model starts within 28 px of the engine chips, and the refusal
-  starts below the model;
-- look 2: the three words of the summary share one row at 1440, 1000, 760 and
-  on the phone;
-- look 3: the sheet starts at or below the bottom edge of the board's bar and
-  lies inside the window, and so do the launch button and the refusal, with
-  the Builder role, the long prompt and two images; the sheet opened from a
-  card names that card, and the card's button reports `aria-expanded`;
-  whenever the field column holds more than it shows, the «More fields below»
-  chip stands over the cut edge, above the foot and inside the window, and at
-  1000x700 with the Builder role it has to be there; pressing it scrolls the
-  column, and the upper edge then carries its own fade;
-- looks 1 to 3, the phone: whenever the settings hold more than the pane
-  shows, the «More fields below» chip stands over the cut edge, above the
-  prompt field and inside the window; with the Builder role and the long
-  prompt at 390 px looks 1 and 3 have to show it, pressing it scrolls the
-  column until the role's first parameter is in sight, and the upper edge then
-  carries its own fade;
-- looks 1 to 3, the desktop widths: the image picker is the last control of
-  the composer's row, and the close button is on another row or at least
-  24 px from it; look 2, every size: the close button is at least 24 px from
-  the nearest summary word.
+- the form holds one field, one microphone, one image input, one send button
+  and one runtime pill, and no select, radio, text input or folded section,
+  with at most five buttons in all, and the whole composer is inside the
+  window;
+- the cursor is in the field when the draft opens, from the board's button and
+  from a task card's;
+- the pill's popover is inside the window, and after the choice the pill's
+  face names the model and the account;
+- one Send makes one launch request, carrying the engine, model, tier and
+  account that were chosen, the project's root as the directory, and no role;
+  a model of another engine launches that engine;
+- after Send the pane holds the first message as a row of the feed and the
+  loading shape, and no status sentence; the message and the composer are both
+  inside the window; in variant 2 the pane's box is the same before and after;
+- the loaded conversation shows the first message once and the agent's answer,
+  the draft is gone, and a draft opened from a task card ends as a
+  conversation on that card;
+- a refused launch keeps the prompt in the field and says why; a handoff draft
+  arrives with its source in the field; a signed-out account offers its
+  sign-in;
+- no page error in any walk.
 
-Limits of the prototypes: a look overrides the board's rules for a draft card
-and the order of the composer's parts from a style block of its own, where a
-shipped look would change those rules; the fixture refuses every launch, so
-the frames show the refusal and no launch in flight; look 3's sheet has no
-focus trap and no outside-press rule, and it reads the task's title from the
-card it was opened from.
+Limits of the prototypes. The pill's face is drawn in the prototype beside
+the pill's real panels, class for class. A look overrides the board's rules
+for a draft card from a style block of its own. The loading shape is trimmed
+to its last block by the same style block. The phone's sheet is headed «Next
+message», the conversation's wording, which also fits a first message. In the
+frames of the loaded conversation the driver scrolls the product's card into
+sight, because that card is taller than the pane it replaced; at 1000x700 the
+board's conversation height is taller than the board's visible area, today as
+well, so the frames there show the composer end of the pane.
+
+## 9. The rejected looks
+
+Looks 1 to 3 of the first round (the composer as a card with a runtime grid,
+a one-line summary that opened groups, a sheet anchored to the button) kept
+every option of today's form on the surface and were rejected for that. Their
+frames and sheets are kept beside the new ones in a folder named
+`rejected-looks-1-3`; their code is removed from the branch and remains in its
+history (`abed14684`).
