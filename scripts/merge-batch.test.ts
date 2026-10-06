@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { withAgentConfigSandbox } from "../src/lib/runtime/agentConfigSandbox";
 import { applyClaudeSpawnPolicy } from "../src/lib/agent/spawnPolicy";
 import { agentCodexPublicationPolicy } from "../src/lib/git/agentPublicationIdentity";
-import { report, attributeBatchTests, compareBatchTests, parseReviewedPrs, batchMessage, touchedTests, noticePrs, git, patchId, MergeBatch, localGateCommands, requiredVerdict, nextRefresh, MAX_REQUIRED_CHECK_POLLS, MAX_TEST_CONFIRMATION_RUNS, commandRunner, type CommandRunner } from "./merge-batch";
+import { report, attributeBatchTests, compareBatchTests, parseReviewedPrs, batchMessage, touchedTests, noticePrs, git, patchId, MergeBatch, localGateCommands, requiredVerdict, nextRefresh, MAX_REQUIRED_CHECK_POLLS, MAX_TEST_CONFIRMATION_RUNS, commandRunner, type CommandRunner, candidateOf, type Candidate } from "./merge-batch";
 import type { TestRun, TestSite } from "./local-gate-tests";
 import * as merger from "./merge-batch";
 
@@ -230,7 +230,7 @@ function fixture() {
     git(repo, ["add", "."]); git(repo, ["commit", "-m", `Seed ${file}`]); git(repo, ["push", "origin", "main"]);
     base = git(repo, ["rev-parse", "HEAD"]);
   };
-  const gh = async (args: string[]) => {
+  const gh = async (args: string[]): Promise<string> => {
     if (args[0] === "pr" && args[1] === "view") return JSON.stringify(views.get(Number(args[2])));
     throw new Error(`Unexpected GH request: ${args.slice(0, 2).join(" ")}`);
   };
@@ -327,7 +327,7 @@ test("a type-check gate that cannot run stops the batch without accusing a PR", 
   expect(batch.read().gated).toBeNull();
 });
 
-test("batch gate permits a nonzero native baseline and retains candidate-only regression coverage after removal", async () => {
+test("batch gate samples fresh native main for every candidate after removal", async () => {
   const f = fixture();
   f.seed("existing.test.ts", "baseline test version");
   const a = f.addPr(12, "good.txt", "good");
@@ -340,8 +340,6 @@ test("batch gate permits a nonzero native baseline and retains candidate-only re
       const native = readFileSync(join(cwd, file), "utf8") === "baseline test version";
       if (native) baselineRuns++;
       else if (!existsSync(join(cwd, "bad.txt"))) validatedRemainder = true;
-      // A later green main sample cannot erase its earlier failure evidence.
-      if (native && baselineRuns > 1) return testResult(file, [], ["pre-existing", "regression"]);
       return testResult(file, native || !existsSync(join(cwd, "bad.txt")) ? ["pre-existing"] : ["pre-existing", "regression"],
         native || !existsSync(join(cwd, "bad.txt")) ? ["regression"] : []);
     }
@@ -351,9 +349,9 @@ test("batch gate permits a nonzero native baseline and retains candidate-only re
   await batch.build(`12@${a},13@${b},14@${c}`);
   const state = await batch.gate();
   expect(state.rows.map(row => row.status)).toEqual(["clean", "culprit", "clean"]);
-  expect(baselineRuns).toBe(1);
+  expect(baselineRuns).toBeGreaterThan(1);
   expect(validatedRemainder).toBeTrue();
-  expect(state.gated).toBe(state.tip);
+  expect(state.gated?.tip).toBe(state.tip);
   expect(state.rows[1]!.head).toBe(b);
   expect(git(f.repo, ["ls-remote", "origin", "refs/heads/topic-13"]).split(/\s/)[0]).toBe(b);
 });
@@ -392,10 +390,10 @@ test("full batch gate withholds a regression discovered while the initial failur
   const state = await batch.gate();
   expect(state.rows.map(row => row.status)).toEqual(["clean", "culprit"]);
   expect(state.rows[1]!.head).toBe(culprit);
-  expect(state.testDecisions![0]!.attributed[0]!.test.name).toBe("B");
+  expect(state.attributionLog[0]!.test.name).toBe("B");
   expect(report(state)).toContain("B; candidate failed; confirmations fail, fail, fail");
   expect(report(state)).toContain("without #13: pass");
-  expect(state.gated).toBe(state.tip);
+  expect(state.gated?.tip).toBe(state.tip);
   expect(existsSync(join(state.work, "bad.ts"))).toBeFalse();
 }, 30_000);
 
@@ -415,7 +413,7 @@ function landingFixture(mode: "green" | "attributed" | "unknown" | "privacy-file
     return { code: 0, output: "" };
   };
   const run = runOverride ?? setupRun?.(f) ?? defaultRun;
-  const gh = async (args: string[]) => {
+  const gh = async (args: string[]): Promise<string> => {
     calls.push(args);
     const batch = JSON.parse(readFileSync(stateFile, "utf8"));
     if (args[0] === "api" && args[1] === "installation/repositories?per_page=100") {
@@ -539,7 +537,7 @@ test("one run lands the healthy PR after attributing a faulty new test to its au
 }, 30_000);
 
 for (const restored of ["assertion", "file"] as const) {
-  test(`removing one culprit restores a native ${restored} that withholds a second culprit before landing`, async () => {
+  test(`round 3 removal restores a native ${restored} and withholds both regressions before landing`, async () => {
     const f = landingFixture("green", async (cwd, args, env) => args[1] === "bun" && args[2] === "test"
       ? commandRunner(cwd, args.slice(1), env) : successfulCommand(args));
     f.seed("a.js", "exports.value = 1;\n");
@@ -563,7 +561,7 @@ for (const restored of ["assertion", "file"] as const) {
     await f.batch.build(`12@${first},13@${second},14@${healthy}`);
     const gated = await f.batch.gate();
     expect(gated.rows.map(row => row.status)).toEqual(["culprit", "culprit", "clean"]);
-    const evidence = gated.testDecisions!.flatMap(decision => decision.attributed).find(entry => entry.test.name === "B")!;
+    const evidence = gated.attributionLog.find(entry => entry.test.name === "B")!;
     expect(evidence.prs).toEqual([13]);
     expect(evidence.confirmation).toEqual(["fail", "fail", "fail"]);
     expect(evidence.removals.find(sample => sample.removed.join() === "13")!.outcome).toBe("pass");
@@ -578,6 +576,7 @@ for (const restored of ["assertion", "file"] as const) {
     expect(native.code).toBe(0);
     expect(native.output).toContain("2 pass");
     expect(report(landed)).toContain("#13 | culprit test regression");
+    await reviewedDetectorsGreen(f, [first, second, healthy]);
   }, 30_000);
 }
 
@@ -618,15 +617,14 @@ for (const outcome of ["regression", "pre-existing", "between-test error"] as co
       return;
     }
     const gated = await f.batch.gate();
-    expect(Object.keys(gated.testCorpus!)).toEqual([]);
-    expect(gated.testBaseline!.files).toEqual(["b.test.ts"]);
+    expect(gated.gated?.candidate.main).toBe(gated.base);
     if (outcome === "pre-existing") {
       expect(gated.rows.map(row => row.status)).toEqual(["culprit", "clean", "clean"]);
       expect(report(gated)).toContain("Pre-existing failures (permitted):\n- b.test.ts");
-      expect(gated.testDecisions!.flatMap(decision => decision.attributed)).toHaveLength(0);
+      expect(gated.attributionLog).toHaveLength(0);
     } else {
       expect(gated.rows.map(row => row.status)).toEqual(["culprit", "culprit", "clean"]);
-      expect(gated.testDecisions!.flatMap(decision => decision.attributed)[0]!.confirmation).toEqual(["fail", "fail", "fail"]);
+      expect(gated.attributionLog[0]!.confirmation).toEqual(["fail", "fail", "fail"]);
     }
     const landed = await f.batch.land();
     expect(landed.rows[2]!.status).toBe("merged");
@@ -667,12 +665,11 @@ for (const mode of ["green", "behind"] as const) {
     await f.batch.build(`12@${removed},13@${second},14@${first},15@${healthy}`);
     const gated = await f.batch.gate();
     expect(gated.rows.map(row => row.status)).toEqual(["head-moved", "culprit", "culprit", "clean"]);
-    expect(gated.testPaths).toContain("restored.test.ts");
+    expect(gated.gated?.candidate.prs.map(pr => pr.number)).toEqual([15]);
     expect(gated.rows[0]!.paths).toEqual([]);
     if (mode === "behind") {
       await expect(f.batch.land()).rejects.toThrow("Main moved more than three times");
-      expect(f.batch.read().testPaths).toContain("restored.test.ts");
-      expect(f.batch.read().testBaseline!.files).toContain("restored.test.ts");
+      expect(f.batch.read().attributionLog.some(entry => entry.test.file === "restored.test.ts")).toBeTrue();
       return;
     }
     const landed = await f.batch.land();
@@ -698,7 +695,7 @@ for (const mode of ["new", "modified"] as const) {
     const state = f.batch.read();
     expect(state.gated).toBeNull();
     expect(state.rows.map(row => row.status)).toEqual(["clean", "clean", "clean"]);
-    expect(Buffer.from(state.testCorpus!["adder.test.ts"]!, "base64").toString()).toBe(contents);
+    expect(git(state.work, ["show", `${detector}:adder.test.ts`])).toBe(contents.trimEnd());
     expect(readFileSync(join(state.work, "adder.test.ts"), "utf8")).toBe(contents);
     await expect(f.batch.land()).rejects.toThrow("Run gate before land");
     expect(f.calls.some(args => args[0] === "pr" && ["create", "merge", "close"].includes(args[1]!))).toBeFalse();
@@ -982,7 +979,7 @@ test("unreadable forge credentials refuse landing without disclosing diagnostics
 test("forge credentials are checked again immediately before the merge", async () => {
   const f = landingFixture();
   const head = f.addPr(12, "a.txt", "good");
-  const gh = async (args: string[]) => {
+  const gh = async (args: string[]): Promise<string> => {
     const result = await f.batch.gh(args);
     if (args[0] === "pr" && args[1] === "create") f.forge.credential = "personal";
     return result;
@@ -1228,10 +1225,10 @@ test("PR removal keeps the reviewed regression test when its author is healthy",
   const built = await batch.build(`12@${source},13@${detector}`);
   const state = await batch.gate();
   expect(state.rows.map((row) => row.status)).toEqual(["culprit", "clean"]);
-  expect(state.gated).toBe(state.tip);
+  expect(state.gated?.tip).toBe(state.tip);
   expect(existsSync(join(state.work, "adder.test.ts"))).toBe(true);
   expect(git(state.work, ["show", `${state.tip}:adder.js`])).toContain("a + b");
-  expect(built.testCorpus).toBeUndefined();
+  expect(built.gated).toBeNull();
 });
 
 for (const mode of ["new", "modified", "added assertion"] as const) {
@@ -1257,11 +1254,11 @@ for (const mode of ["new", "modified", "added assertion"] as const) {
     expect(state.rows.map(row => row.status)).toEqual(["clean", "culprit"]);
     expect(state.rows[1]!.head).toBe(culprit);
     expect(git(f.repo, ["ls-remote", "origin", "refs/heads/topic-13"]).split(/\s/)[0]).toBe(culprit);
-    expect(state.gated).toBe(state.tip);
+    expect(state.gated?.tip).toBe(state.tip);
     expect(revalidated).toBeTrue();
     expect(existsSync(join(state.work, "healthy.txt"))).toBeTrue();
-    expect(Object.keys(state.testCorpus!)).toEqual(existing ? ["new.test.ts"] : []);
-    const evidence = state.testDecisions![0]!.attributed[0]!;
+    expect(state.gated?.notApplicable.some(entry => entry.file === "new.test.ts")).toBeTrue();
+    const evidence = state.attributionLog[0]!;
     expect(evidence.prs).toEqual([13]);
     expect(evidence.reason).toBe("test change regression");
     expect(report(state)).toContain(`without #13 (native tests): ${mode === "modified" ? "pass" : "absent"}`);
@@ -1281,4 +1278,308 @@ test("a skipped native assertion cannot clear a faulty test change", async () =>
   await batch.build(`12@${healthy},13@${faulty}`);
   await expect(batch.gate()).rejects.toThrow("missing or skipped test");
   expect(batch.read().gated).toBeNull();
+}, 30_000);
+
+
+const realTests: CommandRunner = async (cwd, args, env) => args[1] === "bun" && args[2] === "test"
+  ? commandRunner(cwd, args.slice(1), env) : successfulCommand(args);
+
+function extendPr(f: ReturnType<typeof fixture>, number: number, changes: Record<string, string | null>): string {
+  git(f.repo, ["checkout", `topic-${number}`]);
+  for (const [file, contents] of Object.entries(changes)) {
+    if (contents === null) rmSync(join(f.repo, file));
+    else writeFileSync(join(f.repo, file), contents);
+  }
+  git(f.repo, ["add", "."]); git(f.repo, ["commit", "-m", "Complete reviewed patch"]);
+  const head = git(f.repo, ["rev-parse", "HEAD"]);
+  git(f.repo, ["push", "origin", `${head}:refs/pull/${number}/head`, `${head}:refs/heads/topic-${number}`]);
+  f.views.get(number)!.headRefOid = head;
+  git(f.repo, ["checkout", "main"]);
+  return head;
+}
+
+async function reviewedDetectorsGreen(f: ReturnType<typeof landingFixture>, heads: string[]) {
+  const seen = new Set<string>();
+  for (const head of ["HEAD", ...heads]) {
+    const files = git(f.repo, ["ls-tree", "-r", "--name-only", head]).split("\n").filter(file => /\.test\.ts$/.test(file));
+    for (const file of files) {
+      const contents = git(f.repo, ["show", `${head}:${file}`]);
+      const key = JSON.stringify([file, contents]);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const path = join(f.repo, file), original = existsSync(path) ? readFileSync(path) : undefined;
+      try {
+        writeFileSync(path, contents);
+        const result = await commandRunner(f.repo, [process.execPath, "test", `./${file}`], {
+          ...process.env, LLV_STATE_DIR: join(f.root, "landed-check-state"),
+        });
+        expect(result.output).not.toContain("(fail)");
+        expect(result.code).toBe(0);
+      } finally {
+        if (original) writeFileSync(path, original);
+        else rmSync(path);
+      }
+    }
+  }
+  expect(git(f.repo, ["status", "--porcelain"])).toBe("");
+}
+
+function unchangedCulprit(f: ReturnType<typeof landingFixture>, number: number, head: string) {
+  expect(f.batch.read().rows.find(row => row.number === number)!.head).toBe(head);
+  expect(git(f.repo, ["ls-remote", "origin", `refs/heads/topic-${number}`]).split(/\s/)[0]).toBe(head);
+  expect(f.calls.some(args => args[0] === "pr" && args[1] === "close" && args[2] === String(number))).toBeFalse();
+}
+
+test("round 1 landing confirms a newly discovered failure before publishing a fresh remainder", async () => {
+  let runs = 0;
+  const f = landingFixture("green", async (cwd, args, env) => {
+    if (args[1] === "bun" && args[2] === "test") {
+      const bad = existsSync(join(cwd, "bad.txt"));
+      return realTests(cwd, args, { ...(env ?? process.env), SAMPLE: bad && ++runs === 1 ? "first" : "later" });
+    }
+    return successfulCommand(args);
+  });
+  f.seed("check.test.ts", "const { test, expect } = require('bun:test');\nconst fs = require('node:fs');\n"
+    + "test('initial intermittent', () => expect(process.env.SAMPLE).not.toBe('first'));\n"
+    + "test('later regression', () => expect(fs.existsSync('bad.txt') && process.env.SAMPLE !== 'first').toBe(false));\n");
+  const healthy = f.addPr(12, "healthy.txt", "healthy");
+  const bad = f.addPr(13, "bad.txt", "regression");
+  await f.batch.build(`12@${healthy},13@${bad}`);
+  await f.batch.gate();
+  const state = await f.batch.land();
+  expect(state.rows.map(row => row.status)).toEqual(["merged", "culprit"]);
+  expect(state.attributionLog[0]!.test.name).toBe("later regression");
+  expect(state.attributionLog[0]!.confirmation).toEqual(["fail", "fail", "fail"]);
+  unchangedCulprit(f, 13, bad);
+  await reviewedDetectorsGreen(f, [healthy, bad]);
+}, 30_000);
+
+test("round 2 landing retains a healthy new feature detector through native absence probes", async () => {
+  const f = landingFixture("green", realTests);
+  f.seed("config.js", "exports.factor = 2;\n");
+  const feature = f.addPr(12, "feature.js", "const { factor } = require('./config.js');\nexports.double = x => x * factor;\n");
+  const bad = f.addPr(13, "config.js", "exports.factor = 3;\n");
+  const detector = f.addPr(14, "feature.test.ts", "const { test, expect } = require('bun:test');\n"
+    + "const fs = require('node:fs');\nconst double = fs.existsSync('feature.js') ? require('./feature.js').double : undefined;\n"
+    + "test('double', () => expect(double?.(2)).toBe(4));\n");
+  const healthy = f.addPr(15, "healthy.txt", "healthy");
+  await f.batch.build(`12@${feature},13@${bad},14@${detector},15@${healthy}`);
+  await f.batch.gate();
+  const state = await f.batch.land();
+  expect(state.rows.map(row => row.status)).toEqual(["merged", "culprit", "merged", "merged"]);
+  unchangedCulprit(f, 13, bad);
+  expect(git(f.repo, ["log", "--reverse", "--format=%s", `${state.base}..HEAD`]).split("\n"))
+    .toEqual(["Feature 12 (#12)", "Feature 14 (#14)", "Feature 15 (#15)"]);
+  await reviewedDetectorsGreen(f, [feature, bad, detector, healthy]);
+}, 30_000);
+
+test("round 4 main refresh revalidates a withheld reviewed detector before any new publication", async () => {
+  const f = landingFixture("green", realTests);
+  f.seed("config.js", "exports.adjust = x => x;\n");
+  f.seed("b.js", "const { adjust } = require('./config.js');\nexports.value = adjust(1);\n");
+  f.addPr(12, "config.js", "exports.adjust = x => x / 2;\n");
+  const detector = extendPr(f, 12, { "b.test.ts": "const { test, expect } = require('bun:test');\nconst b = require('./b.js');\ntest('B', () => expect(b.value).toBe(1));\n" });
+  const bad = f.addPr(13, "b.js", "const { adjust } = require('./config.js');\nexports.value = adjust(2);\n");
+  const healthy = f.addPr(14, "healthy.txt", "healthy");
+  let refreshed = false;
+  const gh = async (args: string[]): Promise<string> => {
+    if (args[0] === "pr" && args[1] === "view" && args[2] === "99" && !refreshed) {
+      refreshed = true;
+      f.seed("main.txt", "advanced");
+      f.views.get(12)!.headRefOid = f.base;
+      return JSON.stringify({ state: "OPEN", headRefOid: batch.read().tip, mergeStateStatus: "BEHIND" });
+    }
+    if (args[0] === "pr" && args[1] === "edit") {
+      const state = batch.read();
+      expect(state.gated!.candidate.prs.map(pr => pr.number)).toEqual([14]);
+      expect(state.attributionLog.some(entry => entry.prs.includes(13) && entry.test.file === "b.test.ts")).toBeTrue();
+    }
+    return f.batch.gh(args);
+  };
+  const batch = new MergeBatch(f.repo, f.batch.stateFile, realTests, gh, async () => {});
+  await batch.build(`12@${detector},13@${bad},14@${healthy}`);
+  await batch.gate();
+  const state = await batch.land();
+  expect(state.rows.map(row => row.status)).toEqual(["head-moved", "culprit", "merged"]);
+  expect(state.rows[0]!.head).toBe(detector);
+  unchangedCulprit(f, 13, bad);
+  expect(state.attributionLog[0]!.candidate.main).toBe(state.base);
+  expect(state.attributionLog[0]!.confirmation).toEqual(["fail", "fail", "fail"]);
+  await reviewedDetectorsGreen(f, [detector, bad, healthy]);
+}, 30_000);
+
+test("main refresh appends attribution without erasing withheld PR evidence", async () => {
+  const f = landingFixture("green", realTests);
+  const healthy = f.addPr(12, "healthy.txt", "healthy");
+  const bad = f.addPr(13, "fault.test.ts", "const { test, expect } = require('bun:test');\ntest('fault', () => expect(1).toBe(2));\n");
+  let refreshes = 0;
+  const gh = async (args: string[]): Promise<string> => {
+    if (args[0] === "pr" && args[1] === "view" && args[2] === "99" && refreshes < 2) {
+      f.seed(`main-${++refreshes}.txt`, "advanced");
+      return JSON.stringify({ state: "OPEN", headRefOid: batch.read().tip, mergeStateStatus: "BEHIND" });
+    }
+    return f.batch.gh(args);
+  };
+  const batch = new MergeBatch(f.repo, f.batch.stateFile, realTests, gh, async () => {});
+  await batch.build(`12@${healthy},13@${bad}`);
+  const gated = await batch.gate();
+  const originalLog = JSON.stringify(gated.attributionLog);
+  const state = await batch.land();
+  expect(state.rows.map(row => row.status)).toEqual(["merged", "culprit"]);
+  expect(JSON.stringify(state.attributionLog)).toBe(originalLog);
+  expect(state.attributionLog[0]!.candidate.main).not.toBe(state.base);
+  expect(report(state)).toContain("fault; candidate failed; confirmations fail, fail, fail");
+  expect(report(state)).toContain("without #13 (native tests): absent");
+  expect(report(state)).toContain(`established on ${JSON.stringify(gated.attributionLog[0]!.candidate)}`);
+  unchangedCulprit(f, 13, bad);
+  expect(state.gated!.notApplicable.some(entry => entry.file === "fault.test.ts" && entry.reason.includes("confirmed faulty literal"))).toBeTrue();
+  await reviewedDetectorsGreen(f, [healthy]);
+}, 30_000);
+
+test("random event sequences publish only the last fully validated candidate tuple", async () => {
+  const totals = { culprit: 0, main: 0, head: 0, publications: 0, validations: 0 };
+  for (let seed = 1; seed <= 12; seed++) {
+    let randomState = seed;
+    const random = () => { randomState = (Math.imul(randomState, 1664525) + 1013904223) >>> 0; return randomState; };
+    const events: ("culprit" | "main" | "head" | "none")[] = ["culprit", "main", "head", "main", "none", "none"];
+    for (let index = events.length - 1; index > 0; index--) {
+      const other = random() % (index + 1);
+      [events[index], events[other]] = [events[other]!, events[index]!];
+    }
+    let failureFound = false, mainMoves = 0;
+    let lastFullyValidated: Candidate | undefined;
+    const f = landingFixture("green", async (cwd, args) => {
+      const state = batch.read();
+      if (cwd === state.work || args.includes("--paths")) event();
+      if (args[1] === "bun" && args[2] === "test") {
+        const fails = failureFound && existsSync(join(cwd, "bad.txt"));
+        return testResult("property.test.ts", fails ? ["regression"] : [], fails ? [] : ["regression"]);
+      }
+      return successfulCommand(args);
+    });
+    f.seed("property.test.ts", "synthetic detector");
+    const healthy = f.addPr(12, "healthy.txt", "healthy");
+    const moving = f.addPr(13, "moving.txt", "moving");
+    const bad = f.addPr(14, "bad.txt", "bad");
+    const event = () => {
+      const next = events.shift();
+      if (next === "main") { f.seed(`advance-${++mainMoves}.txt`, "main advanced"); totals.main++; }
+      if (next === "head") { f.views.get(13)!.headRefOid = f.base; totals.head++; }
+      if (next === "culprit") { failureFound = true; totals.culprit++; }
+    };
+    const gh = async (args: string[]): Promise<string> => {
+      if (args[0] === "pr" && args[1] === "view" && args[2] === "99" && events.length) {
+        event();
+        return JSON.stringify({ state: "OPEN", headRefOid: batch.read().tip, mergeStateStatus: "BEHIND" });
+      }
+      if (args[0] === "pr" && ["create", "edit", "merge"].includes(args[1]!)) {
+        const state = batch.read(), published = candidateOf(state);
+        expect(published).toEqual(lastFullyValidated!);
+        expect(state.gated!.candidate).toEqual(lastFullyValidated!);
+        expect(state.gated!.tip).toBe(state.tip);
+        expect(published.main).toBe(git(f.repo, ["ls-remote", "origin", "refs/heads/main"]).split(/\s/)[0]!);
+        for (const pr of published.prs) expect(f.views.get(pr.number)!.headRefOid).toBe(pr.head);
+        expect(git(f.repo, ["ls-remote", "origin", `refs/heads/${state.branch}`]).split(/\s/)[0]).toBe(state.tip);
+        totals.publications++;
+      }
+      return f.batch.gh(args);
+    };
+    class ObservedBatch extends MergeBatch {
+      override async gate() {
+        const state = await super.gate();
+        lastFullyValidated = structuredClone(state.gated!.candidate);
+        totals.validations++;
+        return state;
+      }
+    }
+    const batch = new ObservedBatch(f.repo, f.batch.stateFile, f.batch.run, gh, async () => {});
+    await batch.build(`12@${healthy},13@${moving},14@${bad}`);
+    await batch.gate();
+    const state = await batch.land();
+    expect(events).toEqual([]);
+    expect(state.rows.map(row => row.status)).toEqual(["merged", "head-moved", "culprit"]);
+    unchangedCulprit(f, 14, bad);
+  }
+  expect(totals.culprit).toBe(12); expect(totals.main).toBe(24); expect(totals.head).toBe(12);
+  expect(totals.publications).toBeGreaterThanOrEqual(24);
+  expect(totals.validations).toBeGreaterThanOrEqual(12);
+}, 120_000);
+
+test("a withheld reviewed detector reports its missing reviewed module as not applicable", async () => {
+  let moved = false;
+  const f = landingFixture("green", async (cwd, args, env) => {
+    if (!moved && args[1] === "bun" && args[2] === "test") {
+      moved = true; f.views.get(12)!.headRefOid = f.base;
+    }
+    return realTests(cwd, args, env);
+  });
+  f.addPr(12, "feature.js", "exports.value = 1;\n");
+  const reviewed = extendPr(f, 12, { "feature.test.ts": "const { test, expect } = require('bun:test');\n"
+    + "const feature = require('./feature.js');\ntest('feature', () => expect(feature.value).toBe(1));\n" });
+  const healthy = f.addPr(13, "healthy.txt", "healthy");
+  await f.batch.build(`12@${reviewed},13@${healthy}`);
+  const gated = await f.batch.gate();
+  expect(gated.gated!.notApplicable).toEqual([{ source: `#12@${reviewed}`, file: "feature.test.ts",
+    reason: "reviewed detector cannot load without withheld PR code (missing module)" }]);
+  expect(report(gated)).toContain("Not applicable reviewed detectors:");
+  const state = await f.batch.land();
+  expect(state.rows.map(row => row.status)).toEqual(["head-moved", "merged"]);
+  expect(state.rows[0]!.head).toBe(reviewed);
+}, 30_000);
+
+for (const fault of ["package", "runtime"] as const) {
+  test(`a withheld detector's ${fault} load error remains a hard gate failure`, async () => {
+    const f = landingFixture("green", realTests);
+    const contents = "const { test, expect } = require('bun:test');\n"
+      + (fault === "package" ? "require('fixture-package-that-does-not-exist');\n" : "throw new Error('fixture runtime error');\n")
+      + "test('fixture', () => expect(1).toBe(1));\n";
+    const detector = f.addPr(12, "fault.test.ts", contents);
+    const healthy = f.addPr(13, "healthy.txt", "healthy");
+    f.views.get(12)!.isDraft = true;
+    await f.batch.build(`12@${detector},13@${healthy}`);
+    await expect(f.batch.gate()).rejects.toThrow("between-test error");
+    expect(f.batch.read().gated).toBeNull();
+    expect(f.calls.some(args => args[0] === "pr" && ["create", "merge"].includes(args[1]!))).toBeFalse();
+  }, 30_000);
+}
+
+test("a receipt for another tuple cannot publish even when the built tip matches", async () => {
+  const f = landingFixture("green");
+  const healthy = f.addPr(12, "healthy.txt", "healthy");
+  await f.batch.build(`12@${healthy}`);
+  const state = await f.batch.gate();
+  state.gated!.candidate.prs[0]!.head = state.base;
+  f.batch.save(state);
+  await expect(f.batch.land()).rejects.toThrow("exact candidate has not completed full validation");
+  expect(f.calls.some(args => args[0] === "pr" && ["create", "merge"].includes(args[1]!))).toBeFalse();
+}, 30_000);
+
+test("a retained PR deleting a main module cannot make a withheld detector not applicable", async () => {
+  const f = landingFixture("green", realTests);
+  f.seed("feature.js", "exports.value = 1;\n");
+  const detector = f.addPr(12, "feature.test.ts", "const { test, expect } = require('bun:test');\n"
+    + "const feature = require('./feature.js');\ntest('feature', () => expect(feature.value).toBe(1));\n");
+  f.addPr(13, "healthy.txt", "healthy");
+  const deletion = extendPr(f, 13, { "feature.js": null });
+  f.views.get(12)!.isDraft = true;
+  await f.batch.build(`12@${detector},13@${deletion}`);
+  await expect(f.batch.gate()).rejects.toThrow("between-test error");
+  expect(f.batch.read().gated).toBeNull();
+  expect(f.calls.some(args => args[0] === "pr" && ["create", "merge"].includes(args[1]!))).toBeFalse();
+}, 30_000);
+
+
+test("native inventory includes an untouched spec detector before publishing", async () => {
+  const f = landingFixture("green", realTests);
+  f.seed("unchanged.spec.ts", "const { test, expect } = require('bun:test');\nconst fs = require('node:fs');\n"
+    + "test('regression', () => expect(fs.existsSync('bad.txt')).toBe(false));\n");
+  const bad = f.addPr(12, "bad.txt", "regression");
+  const healthy = f.addPr(13, "healthy.txt", "healthy");
+  await f.batch.build(`12@${bad},13@${healthy}`);
+  await f.batch.gate();
+  const state = await f.batch.land();
+  expect(state.rows.map(row => row.status)).toEqual(["culprit", "merged"]);
+  expect(state.attributionLog[0]!.test.file).toBe("unchanged.spec.ts");
+  unchangedCulprit(f, 12, bad);
+  expect((await commandRunner(f.repo, [process.execPath, "test", "./unchanged.spec.ts"])).code).toBe(0);
 }, 30_000);

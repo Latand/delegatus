@@ -28,81 +28,71 @@ body paragraph (up to 600 characters), and deduplicated machine credit.
 Human `users.noreply` author identities add no trailers; an existing
 non-machine `Co-Authored-By` trailer is refused.
 
-`gate` runs the commands from `localGateCommands` through `/var/tmp/llv-gate`:
-frozen dependency installation, TypeScript, ESLint on changed source files,
-changed tests and existing sibling tests by file path, and the publication
-gate with `--check-commits`. Each command has isolated state under `/var/tmp`.
-The commands are in one replaceable function for the CI/local-hooks lane.
-Test files run one at a time with a JUnit report and an isolated home, config,
-state and temp root. The gate compares each assertion's file, suite, name and
-occurrence with the native tests on the pinned main baseline. A failure present
-on both is reported as pre-existing and permits the batch, regardless of the
-baseline exit code. The first complete baseline sample is retained across batch
-rebuilds and gate retries; a later green sample cannot erase evidence of a
-pre-existing failure. Main movement invalidates that sample. Files and tests
-introduced by the candidate have no baseline
-observation; the gate judges them on the candidate alone. It never copies new
-candidate tests onto main for baseline evidence.
-When revalidation discovers another selected file, its native main result is
-sampled once and added to the pinned baseline without resampling earlier files.
-Files absent on main are recorded as sampled with no baseline observations.
+`gate` validates one exact candidate: main's full SHA and the ordered list of
+PR numbers with their full reviewed head SHAs. It installs frozen dependencies,
+runs TypeScript, comparative ESLint, tests and the trusted publication gate
+through `/var/tmp/llv-gate`. Commands use isolated state; tests also use isolated
+home, config and temp roots and run one file at a time with JUnit reports.
 
-An assertion failing only on the candidate gets three fresh runs of its file.
-Every full rerun is compared with the pinned baseline, including failures first
-seen during confirmation. Each new identity needs three subsequent observations.
-Confirmation stops after at most six full file rounds; an identity still awaiting
-confirmation refuses the batch. Pre-existing failures discovered in reruns are
-also reported separately.
-If any observes it passing, the report lists it as intermittent and permits it.
-Missing, skipped or incomplete confirmation results provide no passing evidence.
-For a confirmed failure, the gate replays the batch with each PR omitted in turn
-and runs the affected files with the original candidate test corpus. Keeping
-that corpus prevents a test-adding PR's removal from hiding another PR's bug.
-Every subject installs its own frozen dependencies. A removal that creates a
-behaviour conflict stops the pass.
+Every validation starts from Git snapshots. Its test inventory contains every
+native test file in the candidate tree, plus every test file at each input PR's
+reviewed head, including withheld, moved and deferred PRs. Identical file versions
+are sampled once within that validation. Different versions run separately;
+removing a PR cannot hide a detector or a restored native assertion. Relative
+module load failures for withheld detectors are reported as not applicable only
+when the missing module was introduced at that reviewed head, is absent from
+main and is absent from the candidate. Runtime exceptions, missing packages and
+incomplete runs stay hard failures.
 
-The report names the PR whose omission clears a failure. If multiple omissions
-clear it, those PRs are reported as `integration: needs both`. If no single
-omission clears it, the gate samples a combined removal and restores PRs one at
-a time to establish a minimal clearing removal set, with the same integration
-label. When the preserved candidate test still fails with all PRs removed, the
-gate checks changes to the test itself only when the entire candidate test file
-contains self-contained literal assertions registered with `bun:test`. This
-conservative syntax check supplies independent evidence that the failure cannot
-observe implementation code or project data. Imports of project code, external
-inputs, snapshots and unsupported test syntax leave attribution uncertain and
-stop the pass with the detector retained. Native omission alone proves only
-who wrote a test, including a healthy detector of a new feature.
-For supported files, the gate omits the test-writing PRs using each subject's
-native test versions, then restores them one at a time to find a minimal
-clearing removal set. A skipped test supplies no passing evidence. The report
-labels these failures `test change regression` and records the native samples.
-Only files with proven faulty test changes are replaced with the remaining
-batch's native versions before revalidation. All other candidate detectors stay
-installed, so removing a healthy test author cannot hide an implementation bug.
-Each rebuilt batch also runs its current native test versions, including
-assertions and files restored by removing a PR. Selection includes the original
-batch's changed test paths and the remaining batch's touched/sibling tests,
-even when no test file survived in the initial candidate. Versions identical to
-the retained corpus reuse that run; differing native versions get a separate
-sample. New failures in either version follow the same bounded confirmation and
-attribution procedure, retaining that version during PR-removal probes. Healthy
-regression detectors remain in the retained corpus throughout revalidation.
-A failure that neither search can attribute stops the pass.
-The preserved-corpus search costs at most one combined sample plus one
-sample per PR for each such assertion. Removal and confirmation observations
-remain in the private run record and the report. Test-change attribution adds
-at most one native sample plus one per PR that wrote the affected test file.
+The baseline is a fresh sample of native main tests at that candidate's main
+SHA. Candidate-only files and assertions supply no baseline evidence. A test
+failing on both main and the candidate is pre-existing, reported separately and
+permitted regardless of main's nonzero test exit. Between-test errors and a gate
+that cannot run, including installation or type checking, stop with their own
+cause.
 
-Attributed PRs are withheld at their unchanged reviewed heads. The remaining
-reviewed patches are rebuilt in input order, then all gates run again before
-publication. Pre-existing and intermittent assertions permit the batch;
-between-test errors, invalid or incomplete test reports, dependency installation
-and type-check failures remain hard failures with their own cause. Privacy and
-other non-test gates retain their existing attribution and stop rules.
+A new failure gets three subsequent observations of its file. Every confirmation
+rerun discovers additional failures against the same baseline; a new identity
+needs its own three observations. Six rounds bound confirmation. A passing
+observation permits an intermittent failure; missing or skipped assertions never
+provide passing evidence. Exhausting the budget stops the batch.
 
-`land` requires a gated exact tip, checks original heads again, pushes only
-the owned batch branch, and creates one batch PR. Its body carries the
+Confirmed failures are checked on subjects with each PR removed, preserving the
+exact detector under investigation. Every subject installs frozen dependencies.
+A behaviour conflict stops the pass. A clearing omission names the responsible
+PR; multiple clearing omissions report `integration: needs both`. If no single
+omission clears it, combined removals find a minimal clearing set. If all
+implementation removals leave a failure, test-change attribution requires
+independent proof that the entire file contains self-contained literal
+`bun:test` assertions. Native test omission then establishes their authorship;
+absence alone cannot blame a healthy feature detector. Unsupported or
+project-dependent assertions without clearing evidence stop attribution.
+
+After a faulty literal test author is withheld, its reviewed file is still run.
+Its independent faulty assertions are confirmed afresh and explicitly reported
+as not applicable to the remaining implementation. Other assertions and every
+healthy reviewed detector continue to judge the candidate. Historical attribution
+never supplies an exemption or a passing observation.
+
+The script holds three kinds of state: immutable reviewed heads, one completed
+validation receipt, and an append-only attribution log. The receipt names the
+candidate tuple and built tip, current decisions and applicability reasons.
+Removing a culprit, main movement, head movement or rebuilding a changed patch
+voids it completely. All gates, detector discovery and baseline sampling restart;
+no corpus, baseline, pass list or detector selection survives as evidence. There
+is no validation cache. Publication and merge require the receipt's tuple and
+tip to match, with fresh main and head checks at both boundaries.
+
+Each attribution entry records its establishing tuple, detector source, failing
+test identity, confirmations and removal observations. Rebuilds and main refreshes
+never delete or rewrite entries. The report prints historical evidence for every
+withheld culprit while current pre-existing and intermittent results come from
+the completed validation. Clean PRs remain in input order and their complete
+rebuilt candidate must pass before publication. Culprit heads stay unchanged.
+Privacy and other non-test gates retain their existing attribution and stop rules.
+
+`land` requires a fully validated exact candidate and tip, checks original heads
+again, pushes only the owned batch branch, and creates one batch PR. Its body carries the
 original PR references and their closing issue references. It obtains required
 check names from main's protection and waits for those checks to be present,
 finished and green. Optional failures do not hold this batch. A red required
@@ -110,9 +100,9 @@ check is attributed only through diagnostic commit/path notices in its failed
 workflow log. A red without a usable notice stops without merging; ordinary
 checkout log hashes cannot accuse a PR.
 
-Main movement triggers rebase, classification against the original reviewed
-patches, gates and a lease-protected update of the owned batch branch. Three
-refreshes are allowed. The merge uses `gh pr merge --rebase
+Main movement triggers reconstruction from the original reviewed patches, full
+validation and a lease-protected update of the owned batch branch. Three refreshes
+are allowed. The merge uses `gh pr merge --rebase
 --match-head-commit`, preserving one commit per original PR. It verifies the
 landed chain's patches, then closes each unchanged original with a receipt
 linking its landed SHA and batch PR. Original branches stay in place. A head
