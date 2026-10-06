@@ -7,7 +7,7 @@ import { procBackend } from "@/lib/proc";
 import { processMatches, terminateHeadlessReviewerGroup } from "@/lib/agent/headless";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { createManagedClaudeAccount } from "@/lib/accounts/claude";
-import { advertisedSlots, runClaimedRequest, runningCount } from "./runner";
+import { advertisedSlots, HANDOFF_DETAIL, memberLimitDetail, runClaimedRequest, runningCount } from "./runner";
 import { relayActivity } from "./activity";
 import { dropRun, externalRelayFile, readRunLedger, updateRelayStore, type PairedRelay } from "./store";
 import { confirmRelayPairing } from "./pairing";
@@ -700,7 +700,7 @@ test("a hand-off completes as declined/handoff with no text, and its exchange is
   try {
     const paired = relay(`${server.origin}/v1`);
     const outcome = await runClaimedRequest(paired, { ...contextRequest, request_id: "rq_handoff" }, undefined, { command: handoffStub(seen) });
-    const sent = { lease_id: sampleRequest.lease_id, outcome: "declined", reason: "handoff", detail: null, retry_after_s: null };
+    const sent = { lease_id: sampleRequest.lease_id, outcome: "declined", reason: "handoff", detail: HANDOFF_DETAIL, retry_after_s: null };
     expect(outcome).toEqual(sent as typeof outcome);
     expect(completions).toEqual([sent]);
     const { schema, prompt } = JSON.parse(fs.readFileSync(seen, "utf8"));
@@ -778,3 +778,63 @@ test("declines, lost leases and refused completions are recorded too", async () 
     await server.close();
   }
 }, 15_000);
+
+test("every relay answer runs with the native web search, and the record says so", async () => {
+  const server = await startTestRelay((req) => ({ body: req.url?.endsWith("/complete") ? { status: "accepted", duplicate: false } : { status: "ok" } }));
+  const argsFile = path.join(root, "web-search-args.json");
+  const script = stub(
+    `const a=process.argv.slice(2);await Bun.stdin.text();await Bun.write(${JSON.stringify(argsFile)},JSON.stringify(a));await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Done',reply_to:null}));`,
+  );
+  try {
+    const paired = relay(`${server.origin}/v1`);
+    expect(await runClaimedRequest(paired, { ...sampleRequest, request_id: "rq_web_search" }, undefined, { command: script })).toMatchObject({ outcome: "answered" });
+    expect(JSON.parse(fs.readFileSync(argsFile, "utf8"))).toContain("web_search=live");
+    expect(readAnswerRecord(paired.id, "target_1", "rq_web_search")).toMatchObject({ profile: { webSearch: true }, admitted: true, requester: null });
+  } finally {
+    await server.close();
+  }
+});
+test("the member limit declines a member past it, per chat, and never counts the owner or admins", async () => {
+  const completions: { reason?: string; detail?: string | null; retry_after_s?: number | null }[] = [];
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body as never);
+    return { body: req.url?.endsWith("/complete") ? { status: "accepted", duplicate: false } : { status: "ok" } };
+  });
+  const script = stub(
+    `const a=process.argv.slice(2);await Bun.stdin.text();await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Done',reply_to:null}));`,
+  );
+  const ask = (n: number, requester: Record<string, unknown> | null, chat = "chat_key_aaaaaaaaaaaa", target?: Partial<PairedRelay["targets"][number]>) => {
+    const paired = relay(`${server.origin}/v1`);
+    paired.targets[0] = { ...paired.targets[0]!, id: "target_limit", memberLimitPerHour: 2, ...target };
+    return runClaimedRequest(paired, {
+      ...sampleRequest, request_id: `rq_limit_${n}`, target_id: paired.targets[0]!.id, chat: { key: chat },
+      input: { ...sampleRequest.input, requester },
+    }, undefined, { command: script });
+  };
+  const member = { author_key: "u_m", role: "member", is_owner: false, anonymous: false };
+  try {
+    expect(await ask(1, member)).toMatchObject({ outcome: "answered" });
+    expect(await ask(2, member)).toMatchObject({ outcome: "answered" });
+    const third = await ask(3, member);
+    expect(third).toMatchObject({ outcome: "declined", reason: "member_limit", detail: memberLimitDetail(2) });
+    const retry = (third as { retry_after_s: number }).retry_after_s;
+    expect(retry).toBeGreaterThan(3500);
+    expect(retry).toBeLessThanOrEqual(3600);
+    expect(readAnswerRecord("relay_1", "target_limit", "rq_limit_3")).toMatchObject({
+      outcome: "declined:member_limit", admitted: false, chatKey: "chat_key_aaaaaaaaaaaa",
+      requester: { authorKey: "u_m", role: "member", isOwner: false, anonymous: false },
+    });
+    // Another chat counts on its own; admins and the owner are not counted.
+    expect(await ask(4, member, "chat_key_bbbbbbbbbbbb")).toMatchObject({ outcome: "answered" });
+    expect(await ask(5, { ...member, role: "admin" })).toMatchObject({ outcome: "answered" });
+    expect(await ask(6, { ...member, is_owner: true })).toMatchObject({ outcome: "answered" });
+    // Another member is not affected; 0 and null are no limit; no requester block is never counted.
+    expect(await ask(7, { ...member, author_key: "u_other" })).toMatchObject({ outcome: "answered" });
+    expect(await ask(8, member, undefined, { memberLimitPerHour: 0 })).toMatchObject({ outcome: "answered" });
+    expect(await ask(9, member, undefined, { memberLimitPerHour: null })).toMatchObject({ outcome: "answered" });
+    expect(await ask(10, null)).toMatchObject({ outcome: "answered" });
+    expect(completions.filter((body) => body.reason === "member_limit")).toHaveLength(1);
+  } finally {
+    await server.close();
+  }
+}, 60_000);

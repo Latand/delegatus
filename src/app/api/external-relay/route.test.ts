@@ -234,6 +234,10 @@ test("settings this install refuses answer with local codes, never the service's
       JSON.stringify({ target: { id: "bot", effort: "high" } }),
       "{not json",
       JSON.stringify({ unknown: true }),
+      JSON.stringify({ target: { id: "bot", memberLimitPerHour: -1 } }),
+      JSON.stringify({ target: { id: "bot", memberLimitPerHour: 2.5 } }),
+      JSON.stringify({ target: { id: "bot", memberLimitPerHour: "10" } }),
+      JSON.stringify({ target: { id: "bot", memberLimitPerHour: 1001 } }),
     ].map(async (body) => {
       const response = await patch(body);
       return [response.status, (await response.json()).error];
@@ -245,11 +249,20 @@ test("settings this install refuses answer with local codes, never the service's
     [400, "refused_here"],
     [400, "refused_here"],
     [400, "refused_here"],
+    [400, "refused_here"],
+    [400, "refused_here"],
+    [400, "refused_here"],
+    [400, "refused_here"],
   ]);
   expect(
     readRelayStore().relays.find((relay) => relay.id === "route_relay")?.targets[0]
       ?.concurrency,
   ).toBe(1);
+  // The member limit takes a whole number up to 1000, or null for no limit.
+  for (const value of [0, 25, null]) {
+    expect((await patch(JSON.stringify({ target: { id: "bot", memberLimitPerHour: value } }))).status).toBe(200);
+    expect(readRelayStore().relays.find((relay) => relay.id === "route_relay")?.targets[0]?.memberLimitPerHour).toBe(value);
+  }
 });
 test("recent answers and one exchange are read-only reads for the operator alone", async () => {
   const { answerRecorder } = await import("@/lib/externalRelay/answers");
@@ -263,7 +276,7 @@ test("recent answers and one exchange are read-only reads for the operator alone
     claimedAt: null,
     input: { conversation: [{ id: "m1", text: "When is the meetup?" }], respond_to: "m1", request_text: null },
   })!;
-  recorder.begin("claude", "opus");
+  recorder.begin("claude", "opus", { webSearch: true });
   recorder.finish({ outcome: "answered", answer: { action: "reply", text: "Thursday.", reply_to: "m1" }, delivery: "accepted" });
   const params = (extra: Record<string, string> = {}) => ({ params: Promise.resolve({ id: "route_relay", targetId: "bot", requestId: "rq_route", ...extra }) });
   const url = `${origin}/api/external-relay/relays/route_relay/targets/bot/answers`;

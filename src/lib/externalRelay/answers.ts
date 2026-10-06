@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { statePath } from "@/lib/configDir";
+import type { ExternalRelayRequester } from "./protocol";
+import type { RelayAnswerProfile } from "./profile";
 
 /**
  * One read-only record per relayed request this install claimed (relay.md
@@ -19,6 +21,13 @@ const PREVIEW_CHARS = 160;
 const safeId = /^[A-Za-z0-9_-]{1,64}$/;
 
 export type RelayAnswerDelivery = "accepted" | "refused" | "unconfirmed";
+/** Who asked, as the service's requester block says. Recorded, never trusted for access. */
+export type RelayAnswerRequester = {
+  authorKey: string;
+  role: "member" | "admin";
+  isOwner: boolean;
+  anonymous: boolean;
+};
 export type RelayAnswerRecord = {
   v: 1;
   requestId: string;
@@ -28,6 +37,13 @@ export type RelayAnswerRecord = {
   engine: string | null;
   model: string | null;
   claimedAt: string | null;
+  /** The request's chat key (§A.8), when it carried one. */
+  chatKey: string | null;
+  requester: RelayAnswerRequester | null;
+  /** True once the run was reserved: the answers the member limit counts. */
+  admitted: boolean;
+  /** The answer profile the run was given; null when it never ran. */
+  profile: RelayAnswerProfile | null;
   startedAt: string;
   finishedAt: string | null;
   durationMs: number | null;
@@ -101,6 +117,8 @@ export function answerRecorder(base: {
   targetId: unknown;
   targetName: string | null;
   claimedAt: unknown;
+  chatKey?: string | null;
+  requester?: ExternalRelayRequester | null;
   input: unknown;
 }) {
   const { requestId, targetId } = base;
@@ -117,6 +135,12 @@ export function answerRecorder(base: {
     engine: null,
     model: null,
     claimedAt: typeof base.claimedAt === "string" ? base.claimedAt : null,
+    chatKey: base.chatKey ?? null,
+    requester: base.requester
+      ? { authorKey: base.requester.author_key, role: base.requester.role, isOwner: base.requester.is_owner, anonymous: base.requester.anonymous }
+      : null,
+    admitted: false,
+    profile: null,
     startedAt: new Date(started).toISOString(),
     finishedAt: null,
     durationMs: null,
@@ -131,8 +155,8 @@ export function answerRecorder(base: {
   return {
     get begun() { return begun; },
     get finished() { return finished; },
-    begin(engine: string | null, model: string | null) {
-      record = { ...record, engine, model };
+    begin(engine: string | null, model: string | null, profile: RelayAnswerProfile) {
+      record = { ...record, engine, model, profile, admitted: true };
       begun = true;
       try {
         writeRecord(file, record);
@@ -243,6 +267,33 @@ export function listAnswerRecords(relayId: string, targetId: string, limit = REL
     });
   }
   return rows;
+}
+
+/**
+ * The answers this install ran for one member in one chat since `sinceMs`
+ * (§B.8), and when the oldest of them started. A request without a chat key
+ * counts against the member's other keyless requests to the target.
+ */
+export function countMemberAnswers(scope: {
+  relayId: string;
+  targetId: string;
+  chatKey: string | null;
+  authorKey: string;
+  sinceMs: number;
+}): { count: number; oldestMs: number | null } {
+  let count = 0;
+  let oldestMs: number | null = null;
+  if (!safeId.test(scope.relayId) || !safeId.test(scope.targetId)) return { count, oldestMs };
+  for (const file of recordFiles(targetDir(scope.relayId, scope.targetId))) {
+    const started = Number(recordName.exec(path.basename(file))?.[1]);
+    // Newest first: the rest started before the window.
+    if (started < scope.sinceMs) break;
+    const record = readRecord(file);
+    if (!record?.admitted || record.requester?.authorKey !== scope.authorKey || (record.chatKey ?? null) !== scope.chatKey) continue;
+    count += 1;
+    oldestMs = started;
+  }
+  return { count, oldestMs };
 }
 
 /** One record, or null when it is unknown or expired. */

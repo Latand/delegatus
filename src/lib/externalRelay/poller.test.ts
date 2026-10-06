@@ -88,7 +88,7 @@ test("boot sweep settles dead owners, keeps live owners, and removes run directo
     });
     // Each run's answer record is open; only the dead owner's is settled.
     for (const requestId of ["stale", "live"])
-      answerRecorder({ requestId, relayId: "relay", targetId: "target", targetName: null, claimedAt: null, input: { request_text: requestId } })!.begin("codex", "gpt-6-sol");
+      answerRecorder({ requestId, relayId: "relay", targetId: "target", targetName: null, claimedAt: null, input: { request_text: requestId } })!.begin("codex", "gpt-6-sol", { webSearch: true });
     await sweepExternalRelayOrphans();
     expect(readAnswerRecord("relay", "target", "stale")).toMatchObject({
       state: "finished", outcome: "failed:install_restarted", delivery: "unconfirmed", input: { request_text: "stale" },

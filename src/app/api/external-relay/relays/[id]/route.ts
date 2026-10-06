@@ -45,6 +45,7 @@ export async function PATCH(req: NextRequest, context: Context) {
                 "project",
                 "concurrency",
                 "hardCapMinutes",
+                "memberLimitPerHour",
               ].includes(key),
           )))
     )
@@ -86,6 +87,11 @@ export async function PATCH(req: NextRequest, context: Context) {
               !Number.isInteger(next.hardCapMinutes) ||
               next.hardCapMinutes < 1 ||
               next.hardCapMinutes > 240 ||
+              (next.memberLimitPerHour !== undefined &&
+                next.memberLimitPerHour !== null &&
+                (!Number.isInteger(next.memberLimitPerHour) ||
+                  next.memberLimitPerHour < 0 ||
+                  next.memberLimitPerHour > 1000)) ||
               typeof next.enabled !== "boolean"
             )
               throw new ExternalRelayError("refused_here", 400);

@@ -141,6 +141,7 @@ export const inputSchema = z.object({
     )
     .optional(),
 });
+const chatKey = z.string().regex(/^[A-Za-z0-9_-]{16,64}$/);
 export const requestSchema = z.object({
   request_id: id,
   lease_id: leaseId,
@@ -148,6 +149,9 @@ export const requestSchema = z.object({
   target_id: id,
   claimed_at: time,
   liveness: livenessSchema,
+  // The chat key of §A.8, kept for the member limit and the records. A
+  // malformed one is dropped, as an unknown field would be.
+  chat: z.object({ key: chatKey }).optional().catch(undefined),
   input: inputSchema,
   answer: z.object({
     max_chars: z.number().int().min(1).max(32000),
@@ -155,6 +159,7 @@ export const requestSchema = z.object({
   }),
 });
 export type ExternalRelayRequest = z.infer<typeof requestSchema>;
+export type ExternalRelayRequester = z.infer<typeof requesterSchema>;
 export type ExternalRelayDescriptor = z.infer<typeof descriptorSchema>;
 export type ExternalRelayTarget = z.infer<typeof targetSchema>;
 export type ExternalRelayOwner = z.infer<typeof ownerSchema>;

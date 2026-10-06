@@ -24,6 +24,16 @@ implemented: no install lists `chat_conversations` in its claim, and before
 this revision nothing of an exchange outlived its run. The probe behind the
 transport choice is `docs/design/relay-integration-probe.md`.
 
+The operator amended that design on 2026-10-06, and the amendment is part of
+**[rc]**: every relay answer may use the engine's native web search (§B.6);
+the install keeps a per-member limit and declines a member past it as
+`member_limit` (§B.8); the requester block's `is_owner` is recorded and
+grants nothing yet; a hand-off carries a fixed line written by the install;
+and the slice 2 read feature is named `relay_tool_calls`. The owner's
+unrestricted tier and the persistent conversation per chat with compaction
+are deferred to the next slice; the requester is already the input of the
+profile choice and of the record, so that tier can branch on it.
+
 ## Originating requirement of this revision
 
 Operator, 2026-09-29, pinned on the task "Relay contract delta: one-tap
@@ -1130,7 +1140,7 @@ unknown fields, rule A.2.6), so only the CLI answer schema in §A.8 is closed.
           "properties": {
             "lease_id": { "$ref": "#/$defs/LeaseId" },
             "outcome": { "const": "declined" },
-            "reason": { "enum": ["not_configured", "disabled", "busy", "no_capacity", "unsupported_kind", "invalid_request", "profile_error", "handoff"] },
+            "reason": { "enum": ["not_configured", "disabled", "busy", "no_capacity", "unsupported_kind", "invalid_request", "profile_error", "handoff", "member_limit"] },
             "detail": { "anyOf": [{ "type": "string", "maxLength": 200 }, { "type": "null" }] },
             "retry_after_s": { "anyOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }] }
           }
@@ -1227,10 +1237,11 @@ of a target's chats.
 
 **[rc]** The schema above gained `Requester` and `ServiceTool`, the optional
 properties `Input.requester`, `Input.short_term_memory` and `Input.tools`,
-and the declined reason `handoff`. Tool names are unique within one request.
-The service sends the three properties, and accepts `handoff`, only for a
-pairing whose latest claim listed `requester_context` (§A.8). A synthetic
-request's new input fields, and the hand-off completion:
+and the declined reasons `handoff` and `member_limit`. Tool names are unique
+within one request. The service sends the three properties, and accepts the
+two reasons, only for a pairing whose latest claim listed
+`requester_context` (§A.8). A synthetic request's new input fields, a
+hand-off and a member past the limit:
 
 ```json
 { "requester": { "author_key": "u_a", "role": "admin",
@@ -1244,7 +1255,12 @@ request's new input fields, and the hand-off completion:
 
 ```json
 { "lease_id": "ls_Zq3vN8bY1xKp4LmT0aW9rE", "outcome": "declined", "reason": "handoff",
-  "detail": null, "retry_after_s": null }
+  "detail": "The agent handed this request to the service's own assistant.", "retry_after_s": null }
+```
+
+```json
+{ "lease_id": "ls_Zq3vN8bY1xKp4LmT0aW9rE", "outcome": "declined", "reason": "member_limit",
+  "detail": "This member reached 10 answers in the last hour in this chat.", "retry_after_s": 1260 }
 ```
 
 ## A.6 Liveness and fallback
@@ -1369,7 +1385,9 @@ Rules:
   derives an outcome from it.
 - The Phase 1 answer profile has no tools (§B.6), so an install sends only
   `note` today. The `tool_*` kinds are defined now so a relay service's
-  renderer is ready when a later phase grants tools.
+  renderer is ready when a later phase grants tools. **[rc]** The native web
+  search is that first tool: a search sends `tool_start` (and on Codex
+  `tool_done`) with `tool: "web_search"`.
 - `Request.answer.progress = "none"` tells the install not to ask the agent
   for status lines. A relay service that wants in-chat progress sends
   `"notes"`.
@@ -1461,14 +1479,18 @@ request without them is answered exactly as above.
 | `tools` | the relay service | The service's tools that the requester's role may use: a unique `name` of at most 64 characters, a one-line `summary` of at most 240, and a `mode`. At most 128. |
 
 - `mode: "direct"` names a tool the install could call itself once a later
-  feature negotiates reads (reserved as `direct_reads`); `"handoff"` names
+  feature negotiates reads (`relay_tool_calls`, slice 2); `"handoff"` names
   one only the service's own agent performs. An install that lists only
   `requester_context` calls no tool, so to it both modes are reasons to hand
   off. Until a pairing lists a read feature, the service SHOULD mark every
   tool `handoff`.
 - The block informs the model and authorizes nothing. The service checks
   every action against its own record of the message, never against what
-  the install reports.
+  the install reports. The service derives `is_owner` from its own record of
+  the message. The install records it with the exchange (§B.2) and grants
+  nothing from it in this revision; a later owner tier will branch on it.
+- The install counts answers per `author_key` for its member limit (§B.8),
+  so the key stays stable for one person in one target.
 - Media of the triggering message and of the message it replies to travels
   as text appended to that message's `text`: a transcript, a description, or
   a status when neither is available. It stays within the 16 000-character
@@ -1517,7 +1539,16 @@ check (`failed` / `invalid_answer`). On `declined` / `handoff` the service
 answers the original request with its own agent, from its own stored copy,
 with its own role checks, confirmations and charges, whatever the target's
 `fallback`, `"none"` included, and it posts no fallback notice: nothing
-failed.
+failed. **[rc]** The completion's `detail` is a fixed line the install
+writes ("The agent handed this request to the service's own assistant."),
+so a person reading the service's logs sees why; it never carries model
+text or arguments.
+
+**[rc] Member limit.** When a request's requester is past the target's
+per-member limit (§B.8), the install completes it as `declined` /
+`member_limit` with a human-readable `detail` and `retry_after_s` set to
+when the oldest counted answer leaves the hour. The service treats it like
+any decline: its target's `fallback` decides whether its own agent answers.
 
 **[delta] The chat key.** A request MAY carry `chat: {key}`. The key is
 opaque, stable and scoped to one target:
@@ -1677,7 +1708,7 @@ to version 1. The path, the header and `Descriptor.versions` stay at 1.
 
 | Change | What changes on the wire | Class | An install without the feature with a revised service | A revised install with a service without it |
 |---|---|---|---|---|
-| Requester context (§A.8) | The `requester_context` claim feature; optional `Input.requester`, `Input.short_term_memory` and `Input.tools`; media text inside `Message.text`; the declined reason `handoff` | v1, additive | Does not list the feature, so it receives none of the fields and never sends `handoff`. Media text in `Message.text` reaches it too. | Receives no fields, so it answers with the two-action schema and never hands off. |
+| Requester context (§A.8) | The `requester_context` claim feature; optional `Input.requester`, `Input.short_term_memory` and `Input.tools`; media text inside `Message.text`; the declined reasons `handoff` and `member_limit` | v1, additive | Does not list the feature, so it receives none of the fields and never sends `handoff`. Media text in `Message.text` reaches it too. | Receives no fields, so it answers with the two-action schema and never hands off. |
 
 No change needs version 2, because nothing a Phase 1 party already sends or
 accepts changes meaning. Two changes were shaped to stay that way. A busy
@@ -1724,9 +1755,11 @@ pairing.
   platform ids out of chat listings and titles (§A.4).
 - **[rc]** Send the requester context only to a pairing whose latest claim
   listed `requester_context`, within `max_response_bytes`, and accept
-  `handoff` only from such a pairing. On `declined` / `handoff`, answer the
-  original request with the service's own agent regardless of `fallback`,
-  and take no argument of an action from the install (§A.8).
+  `handoff` and `member_limit` only from such a pairing. On `declined` /
+  `handoff`, answer the original request with the service's own agent
+  regardless of `fallback`, and take no argument of an action from the
+  install. On `declined` / `member_limit`, apply `fallback` as for any
+  decline (§A.8).
 
 ---
 
@@ -1777,7 +1810,7 @@ New files:
 | `<state>/external-relay/runs.json` | 0600 | In-flight runs only: request id, lease id, relay id, target id, child pid and process identity, owning Viewer pid and identity, run directory, start time. No chat text. |
 | `<state>/external-relay/codex-homes/<account id>/` | 0700 | The Codex answer home of §B.6.2. |
 | `<os temp root>/llv-external-relay-XXXXXX/` | 0700 (`mkdtemp`) | One run: `cwd/`, `schema.json`, `catalog.json` (Codex), `stdout.log`, `stderr.txt`, `answer.json` (Codex). Removed when the run settles, on every path. |
-| **[rc]** `<state>/external-relay/answers/<relay id>/<target id>/<start ms>_<request id>.json` | 0600 in 0700 directories | One record per claimed request whose ids are valid (`src/lib/externalRelay/answers.ts`): `Request.input` exactly as received (unknown fields included), engine and model, claim, start and end times, duration, `state` (`running` or `finished`), the outcome (`answered`, `declined:<reason>`, `failed:<reason>` or `lease_lost`; hand-off is `declined:handoff`), the answer or hand-off, and whether the service acknowledged the completion (`accepted`, `refused` or `unconfirmed`). No credential, no lease id. Written `running` when the run is reserved and `finished` before the run's ledger entry is dropped. Kept `RELAY_ANSWER_RETENTION_DAYS` (30) after it finished; readers hide an expired record at once and the controller removes it within the hour. |
+| **[rc]** `<state>/external-relay/answers/<relay id>/<target id>/<start ms>_<request id>.json` | 0600 in 0700 directories | One record per claimed request whose ids are valid (`src/lib/externalRelay/answers.ts`): `Request.input` exactly as received (unknown fields included), the chat key, the requester (`authorKey`, `role`, `isOwner`, `anonymous`), whether the run was admitted, the answer profile it ran with, engine and model, claim, start and end times, duration, `state` (`running` or `finished`), the outcome (`answered`, `declined:<reason>`, `failed:<reason>` or `lease_lost`; hand-off is `declined:handoff`), the answer or hand-off, and whether the service acknowledged the completion (`accepted`, `refused` or `unconfirmed`). No credential, no lease id. Written `running` when the run is reserved and `finished` before the run's ledger entry is dropped. Kept `RELAY_ANSWER_RETENTION_DAYS` (30) after it finished; readers hide an expired record at once and the controller removes it within the hour. |
 | **[delta]** `relays.json`, new optional fields | as above | Per relay: `features`, `verify_channel`, `icon` (`{type, sha256, source, fetchedAt}`) and `connected` (`{at, via: "auto" \| "click", acknowledged}`). Per pending pairing: `startedAt` (when the operator clicked Connect, carried across refreshes), `engine` (the setup guide's choice, `claude` or `codex`, absent when the pairing started in settings, carried across refreshes) and the watcher's last status. At the top level, per origin and kept after unpair: `knownOwners` (`{origin, namespace, id, display_name, addedAt}`, at most 20 per origin); `previousOwners` (`{origin, namespace, id, display_name, at}`, one per origin, overwritten by each completion); and `rejectedOwners` (`{origin, namespace, id, display_name, rejectedAt}`, at most 20 per origin, the oldest dropped first). Together they are the stranger check of §A.3 rule 3. Readers accept the file without these fields, so `v` stays 1. |
 | **[delta]** `<state>/external-relay/conversations.json` | 0600 | The chat conversation map (§B.14). Per conversation: id, relay id, target id, chat key, engine, engine session id, the account last used, cwd, turns, created and last-turn times, the ids of messages seen since the last compaction (at most 1 000), the frame digest, the last prompt size, compactions, and `state` (`idle`, `running` with its request id, or `broken`). It holds no chat text. |
 | **[delta]** `<state>/external-relay/conversations/<conversation id>/codex/` | 0700 | A Codex conversation's own `CODEX_HOME`: the `auth.json` link of the account that runs the turn, and the conversation's rollout and CLI state. |
@@ -1918,7 +1951,9 @@ else.
 1. Validate the request against the schema and limits; otherwise complete
    `declined` / `invalid_request`.
 2. Find the target. Unknown or not configured: `declined` / `not_configured`.
-   Paused: `declined` / `disabled`. Concurrency full: `declined` / `busy`.
+   Paused: `declined` / `disabled`. **[rc]** A member past the target's
+   limit: `declined` / `member_limit` (§B.8). Concurrency full: `declined` /
+   `busy`.
 3. Resolve an account with
    `accountManager.resolveHeadlessSpawn(engine, null, [], target.project, target.model)`
    (`src/lib/accounts/manager.ts:557-594` [code]). `exhausted` completes
@@ -2053,9 +2088,9 @@ environment scrub, and keep separate flag sets.
 
 | Requirement | Codex | Claude | Evidence |
 |---|---|---|---|
-| No command execution | `--disable shell_tool --disable unified_exec` | `--tools ""` | [phase 0]; E3 |
+| No command execution | `--disable shell_tool --disable unified_exec` | `--tools` naming no command tool | [phase 0]; E3 |
 | No apps, plugins or connectors | `--disable apps --disable plugins` | `--strict-mcp-config` with no `--mcp-config` | [phase 0]: without them both engines expose the signed-in account's hosted apps or connectors |
-| No web search | `-c web_search=disabled` | `--tools ""` (no web tools) | [phase 0] |
+| **[rc]** The native web search, and no other web tool | `-c web_search=live` | `--tools WebSearch --allowedTools WebSearch` (no `WebFetch`) | E9 |
 | No sub-agent tools | per-run catalog without `multi_agent_version`; `--disable multi_agent` alone does not remove them | `--tools ""` (no agent tool); init tripwire | E2; E6 |
 | No other acting tools | `--disable view_image`, catalog without `apply_patch_tool_type`, `--disable image_generation --disable goals --disable memories --disable browser_use --disable computer_use --disable sleep_tool` | `--tools ""`, `--restricted` | E3; E6 |
 | No personal instruction files | a dedicated answer `CODEX_HOME` with no `AGENTS.md`; `-c project_doc_max_bytes=0` blocks project files from the cwd and its ancestors | `--restricted --safe-mode`; cwd outside `$HOME` | E1; E6; test 7 |
@@ -2111,7 +2146,7 @@ codex exec -
   --disable shell_tool --disable unified_exec --disable apps --disable plugins
   --disable multi_agent --disable goals --disable image_generation --disable memories
   --disable browser_use --disable computer_use --disable sleep_tool --disable view_image
-  -c web_search=disabled
+  -c web_search=live            [rc]; disabled for a profile without web search
   -c project_doc_max_bytes=0
   -c skills.include_instructions=false
   -c include_environment_context=false
@@ -2146,7 +2181,7 @@ Viewer's spawn endpoint.
 claude -p
   --output-format stream-json --verbose
   --restricted --safe-mode
-  --tools "" --strict-mcp-config
+  --tools WebSearch --allowedTools WebSearch --strict-mcp-config    [rc]; --tools "" without web search
   --json-schema '<schema JSON>'
   --no-session-persistence
   --model <model> --effort <effort>
@@ -2170,7 +2205,9 @@ cwd: <runDir>/cwd
   alone kept the marker out, and so did the pair; `--safe-mode` without
   `--restricted` was not run. Both are passed.
 - **`--tools ""`** leaves only `StructuredOutput`, the tool through which the
-  CLI returns the schema answer (E6). **`--strict-mcp-config`** with no
+  CLI returns the schema answer (E6). **[rc]** `--tools WebSearch` adds the
+  native search and nothing else; `--allowedTools WebSearch` lets it run in
+  print mode, where nobody can approve a tool (E9). **`--strict-mcp-config`** with no
   `--mcp-config` loads no MCP server, including the account's hosted
   connectors [phase 0].
 - **No `--session-id`**: there is no transcript to find. Provider accounts
@@ -2205,11 +2242,20 @@ catch drift in the field. Each kills the group and completes the lease as
 - **Claude:** the first `system` / `init` event must list exactly
   `tools: ["StructuredOutput"]` and `mcp_servers: []` (it did in the probes,
   E6). Any `tool_use` block other than `StructuredOutput` trips it too.
+  **[rc]** With web search the list must be exactly `StructuredOutput` and
+  `WebSearch`, and a `WebSearch` tool use is admitted (E9).
 - **Codex:** any `item.*` event whose item type is not `agent_message`,
   `reasoning` or `error` (a command, file change, MCP call, web search,
-  sub-agent call or anything new) trips it. This allowlist fails closed: an
+  sub-agent call or anything new) trips it. **[rc]** With web search the
+  item type `web_search` is admitted too, and nothing else new (E9). This allowlist fails closed: an
   unknown but harmless item type also fails the run, and the probe test of
   §B.11 is where a new CLI version shows it.
+
+**[rc] Who gets which profile.** `answerProfileFor(requester)` in
+`src/lib/externalRelay/profile.ts` chooses the profile from the request's
+requester. In this revision every requester, the owner included, gets the
+profile above with web search, and nothing is granted from `is_owner`. The
+owner's unrestricted tier is the next slice's, and branches there.
 
 ### B.6.6 [delta] The profile in a long-lived conversation
 
@@ -2237,6 +2283,8 @@ same tripwires on the next turn.
 | Claude | `assistant` content block `text` | `note` with the first non-empty line |
 | Claude | `tool_use` `StructuredOutput` (the answer) | none |
 | both | reasoning or thinking blocks | none; they carry no text [phase 0] |
+| **[rc]** Codex | `item.started` / `item.completed` with a `web_search` item | `tool_start` / `tool_done`, `tool: "web_search"` |
+| **[rc]** Claude | `tool_use` `WebSearch` | `tool_start`, `tool: "web_search"` (the result arrives in a later event that is not mapped) |
 
 Every label goes through `redactTranscriptText`
 (`src/components/feed/toolRedaction.ts:9-12` [code]), has its whitespace
@@ -2261,6 +2309,19 @@ to summarize.
   agents binds a dedicated account to that project; the project's binding
   then fences the pick (`src/lib/accounts/manager.ts:579-587` [code]).
 - There is no install-wide cap across targets (deferred).
+- **[rc] Member limit.** Each target has `memberLimitPerHour`: answers per
+  member per hour in each chat. Absent means the default,
+  `RELAY_MEMBER_ANSWERS_PER_HOUR` (10, `src/lib/externalRelay/profile.ts`);
+  null or 0 means no limit. Before reserving a run, the runner counts the
+  target's answer records of the last hour that were admitted to run for
+  the same `author_key` and the same chat key (a request without a key
+  counts against the member's other keyless ones). At the limit it declines
+  `member_limit` (§A.8). A requester with `is_owner` or `role: "admin"` is
+  never counted, and a request without a requester block is never limited.
+  The count reads records, so it survives a restart, and two requests of one
+  member that arrive in the same instant can both pass. The setting is the
+  target's and applies to every chat of it; a chat of its own can get one
+  once the install lists chats (§B.15).
 - **[delta] One turn at a time per conversation.** A conversation runs at
   most one turn, across Viewer generations too. Reserving a turn sets the
   conversation to `running` inside the `conversations.json` lock. That lock
@@ -2291,7 +2352,7 @@ and 409 in staging (`isStagingMode`):
 | `GET /api/external-relay/pairings/[id]` | Polls the pairing once; returns its status and, when awaiting, the owner identity to confirm. |
 | `POST /api/external-relay/pairings/[id]` `{ownerId}` | Confirms; stores the credential; starts the loop. |
 | `DELETE /api/external-relay/pairings/[id]` | Cancels a pending pairing. |
-| `PATCH /api/external-relay/relays/[id]` | Pause or resume; target settings (engine, model, effort, project, concurrency, hard cap). |
+| `PATCH /api/external-relay/relays/[id]` | Pause or resume; target settings (engine, model, effort, project, concurrency, hard cap, **[rc]** `memberLimitPerHour`: a whole number from 0 to 1000, or null). |
 | `PATCH /api/external-relay/relays/[id]/targets/[targetId]` | Forwards `answered_by` and `fallback` to the relay service. |
 | `DELETE /api/external-relay/relays/[id]` | Unpairs: `DELETE {api}/pairing`, then removes the relay locally; when the service is unreachable it removes it anyway and says the service could not be told, as linked installs do. **[delta]** It also deletes the relay's conversations (§B.14). |
 | **[rc]** `GET /api/external-relay/relays/[id]/targets/[targetId]/answers` | The target's answer records, newest first, at most 50: times, duration, outcome, delivery, and the first 160 characters of the message and of the answer. Reads local files only; never calls the service. |
@@ -2307,6 +2368,12 @@ and 409 in staging (`isStagingMode`):
 status from `relays.json` and no longer calls the service (§B.13).
 `POST /api/external-relay/pairings/[id]` `{ownerId}` stays, for the click
 fallback. Every new route has the guards above.
+
+**[rc] Member limit.** Each target row has an "Answers per member per
+hour" / "Відповідей на учасника за годину" number field, showing the default
+until the operator sets one, saved when it loses focus. Empty or 0 is no
+limit. Its hint says that it counts in each chat, that the owner and chat
+admins are not counted, and that past it the service's fallback decides.
 
 **[rc] Recent answers.** Each target row of the relay card ends with a
 "Recent answers" / "Останні відповіді" disclosure. Opening it reads the list
@@ -2506,6 +2573,7 @@ Bun pin are untouched, so `scripts/verify-runtime-host.ts` is not needed.
 | 22 | **[rc]** `src/lib/externalRelay/runner.test.ts` with the stub CLI of test 4 | With tools, the schema offers `handoff` and the completion is exactly `declined` / `handoff` with null `detail` and `retry_after_s`; without tools the schema keeps two actions. Records: input as received, engine, model, outcome, delivery `accepted` / `refused`, a declined request, a lost lease, no record for ids that cannot name a file, and neither the lease id nor the credential in any record. |
 | 23 | **[rc]** `src/lib/externalRelay/answers.test.ts`, `src/lib/externalRelay/poller.test.ts`, `src/app/api/external-relay/route.test.ts` | One 30-day constant: a record ended 29.99 days ago is read and kept, one ended 30.01 days ago is hidden and pruned, a running one is never pruned. The list is newest first and bounded. The orphan sweep finishes a dead owner's record as `failed:install_restarted` and leaves a live one running. The claim sends `features: ["requester_context"]`. Both routes keep every guard and refuse an agent caller. |
 | 24 | **[rc]** `ExternalRelaySection.dom.test.tsx`, and the `relay-answers` case of `scripts/capture-board-geometry.ts` | The disclosure, the list, one exchange read-only with no field to type into, back, empty and expired, in English and Ukrainian, chat text as plain text. The capture renders the list and one exchange in the real settings dialog at 1440 and 390 in both languages, with no sideways overflow. |
+| 25 | **[rc]** `src/lib/agent/ephemeral.test.ts`, `src/lib/externalRelay/progress.test.ts`, `src/lib/externalRelay/runner.test.ts`, `src/app/api/external-relay/route.test.ts`, `ExternalRelaySection.dom.test.tsx`, and test 7 with `LLV_ANSWER_PROFILE_PROBE=1` | Web search: the argument lists add only `web_search=live` and `--tools WebSearch --allowedTools WebSearch`, every other hardening stays; the tripwire admits the search events only with web search on, and still trips on `WebFetch`, `Bash`, MCP, command and file items; every relay run is launched with it and its record says so. Member limit: a member's third request at a limit of 2 is declined `member_limit` with its line and a `retry_after_s` under an hour; another chat, another member, an admin, the owner, a limit of 0 or null, and a request without a requester all pass; the route takes 0 to 1000 or null and refuses the rest; the field shows the default and saves a number or no limit. |
 
 ## B.12 [delta] Branding: the service's name and look
 
@@ -2912,6 +2980,13 @@ account's connected apps (mail, file storage, code hosting); without
 both engines emit progress events before a schema-valid answer; the first
 event arrives about 0.9 s (Codex) and 3.4 s (Claude) after spawn; and no Codex
 sandbox mode starts on the build host.
+
+**[rc] E8 and E9, 2026-10-06**, codex-cli 0.159.3 and Claude Code 2.1.284.
+
+| # | Finding |
+|---|---|
+| E8 | Against the recording stub (test 7's method, no quota), the Claude profile with `--tools WebSearch --allowedTools WebSearch` offers the model exactly `StructuredOutput` and `WebSearch`, and no instruction marker reaches the request. The Codex stub probe does not start on this host, on the base commit as on this one: the CLI refuses the `--disable future_worker` that the feature inventory reports. |
+| E9 | One live run per engine through `runEphemeralAgent`, on signed-in accounts at the lowest effort, in a scratch state directory, with a prompt asking for one web search. Codex printed `item.started` and `item.completed` with an item of type `web_search` (`query`, `action: {type: "search", query}`, `results`) and nothing else new; Claude's init listed `tools: ["StructuredOutput", "WebSearch"]`, `mcp_servers: []`, then a `tool_use` named `WebSearch` and its `tool_result`. With the tripwire before this revision both runs were stopped as violations; with the one of §B.6.5 both ended `done` with a schema-valid answer built on the search. |
 
 **A finding outside this lane.** E2 also applies to ordinary Codex spawns and
 to headless reviewers. Both rely on `multi_agent: false`

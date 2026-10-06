@@ -154,9 +154,9 @@
  * With BOARD_CAPTURE_CASE=relay-answers it renders the relay card's Recent
  * answers (docs/design/relay.md §B.9) on a home with one paired relay, a
  * fake relay service on loopback that never hands a request out, and five
- * invented answer records: the list, a hand-off opened read-only, and a long
- * answer with its received input unfolded, at 1440 × 900 and 390 × 844 in en
- * and uk. It requires each label in its language, no editable field, no
+ * invented answer records: the member limit field, the list, a hand-off
+ * opened read-only, and a long answer with its received input unfolded, at
+ * 1440 × 900 and 390 × 844 in en and uk. It requires each label in its language, no editable field, no
  * sideways overflow and 44 px controls on the phone.
  *
  * With BOARD_CAPTURE_CASE=seat-creation it renders what the orchestrator pane
@@ -7133,6 +7133,13 @@ async function relayAnswersMain(): Promise<void> {
       }, scope);
       const t = (key: Parameters<typeof translate>[1]) => translate(lang, key);
       must((await toggle.textContent()) === t("externalRelay.answers.open"), `${tag}: the toggle reads ${await toggle.textContent()}`);
+      /* The member limit field sits in the same row, showing the default. */
+      const limit = page.locator("[data-external-relay-target=bot-1] [data-external-relay-member-limit]");
+      await limit.evaluate((node) => node.scrollIntoView({ block: "center" }));
+      const limitBox = await limit.boundingBox();
+      must((await limit.inputValue()) === "10", `${tag}: the member limit shows ${await limit.inputValue()}`);
+      must((limitBox?.height ?? 0) >= 43.5, `${tag}: the member limit field is ${limitBox?.height} px tall`);
+      await page.screenshot({ path: path.join(renderDir, `${tag}-member-limit.png`) });
       await toggle.click();
       await page.waitForSelector("[data-external-relay-answer-list]", { timeout: 15_000 });
       await page.evaluate(() => document.querySelector("[data-external-relay-answers=bot-1]")?.scrollIntoView({ block: "start" }));

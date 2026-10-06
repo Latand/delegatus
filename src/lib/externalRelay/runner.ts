@@ -23,7 +23,13 @@ import {
 import { answerPrompt } from "./prompt";
 import { progressForEvent } from "./progress";
 import { noteRelayProgress } from "./activity";
-import { answerRecorder, type RelayAnswerDelivery } from "./answers";
+import { answerRecorder, countMemberAnswers, type RelayAnswerDelivery } from "./answers";
+import {
+  answerProfileFor,
+  exemptFromMemberLimit,
+  memberLimitFor,
+  RELAY_MEMBER_LIMIT_WINDOW_MS,
+} from "./profile";
 import {
   changeRun,
   dropRun,
@@ -83,13 +89,18 @@ const declined = (
   lease_id: string,
   reason: string,
   retry_after_s: number | null = null,
+  detail: string | null = null,
 ): ExternalRelayCompletion => ({
   lease_id,
   outcome: "declined",
   reason,
-  detail: null,
+  detail,
   retry_after_s,
 });
+/** The line a hand-off carries (§A.8). It is the install's own words: nothing the model wrote. */
+export const HANDOFF_DETAIL = "The agent handed this request to the service's own assistant.";
+export const memberLimitDetail = (limit: number) =>
+  `This member reached ${limit} answers in the last hour in this chat.`;
 const failed = (lease_id: string, reason: string): ExternalRelayCompletion => ({
   lease_id,
   outcome: "failed",
@@ -162,6 +173,8 @@ export async function runClaimedRequest(
     targetId,
     targetName: relay.targets.find((item) => item.id === targetId)?.name ?? null,
     claimedAt: rawRequest.claimed_at,
+    chatKey: request?.chat?.key ?? null,
+    requester: request?.input.requester ?? null,
     input: rawRequest.input,
   });
   const finish = async (body: ExternalRelayCompletion, stallMs = 45_000) => {
@@ -198,6 +211,32 @@ export async function runClaimedRequest(
     return finish(declined(leaseId, "not_configured"));
   if (relay.paused || !target.enabled)
     return finish(declined(leaseId, "disabled"));
+  // The member limit (§B.8): a member past it is declined, and the service's
+  // fallback setting decides whether its own agent answers instead.
+  const requester = request.input.requester;
+  const limit = memberLimitFor(target);
+  if (requester && limit !== null && !exemptFromMemberLimit(requester)) {
+    const now = Date.now();
+    const used = countMemberAnswers({
+      relayId: relay.id,
+      targetId: target.id,
+      chatKey: request.chat?.key ?? null,
+      authorKey: requester.author_key,
+      sinceMs: now - RELAY_MEMBER_LIMIT_WINDOW_MS,
+    });
+    if (used.count >= limit)
+      return finish(
+        declined(
+          leaseId,
+          "member_limit",
+          used.oldestMs === null
+            ? null
+            : Math.max(1, Math.ceil((used.oldestMs + RELAY_MEMBER_LIMIT_WINDOW_MS - now) / 1000)),
+          memberLimitDetail(limit),
+        ),
+      );
+  }
+  const profile = answerProfileFor(requester);
   if (activeDrain()) return finish(declined(leaseId, "busy"));
   let runDir: string | null = null;
   let recorded = false;
@@ -226,7 +265,7 @@ export async function runClaimedRequest(
     if (admission === "duplicate") return null;
     if (admission === "full") return await finish(declined(leaseId, "busy"));
     recorded = true;
-    recorder?.begin(target.engine, target.model);
+    recorder?.begin(target.engine, target.model, profile);
     markActive(relay, target);
     const selection = accountManager.resolveHeadlessSpawn(
       target.engine,
@@ -264,6 +303,7 @@ export async function runClaimedRequest(
         schema: offersHandoff(request) ? handoffAnswerSchema : answerSchema,
         runDir,
         hardCapMs: target.hardCapMinutes * 60_000,
+        webSearch: profile.webSearch,
         runtime,
         onEvent: (event) => {
           const progress = progressForEvent(event);
@@ -359,7 +399,7 @@ export async function runClaimedRequest(
     // A hand-off returns the request to the service, which answers it with
     // its own agent (§A.8); it carries no text from this install.
     const body: ExternalRelayCompletion = completion?.action === "handoff"
-      ? declined(leaseId, "handoff")
+      ? declined(leaseId, "handoff", null, HANDOFF_DETAIL)
       : completion
       ? {
           lease_id: leaseId,

@@ -8,6 +8,7 @@ import { useEngineAccounts } from "@/hooks/useEngineAccounts";
 import { effortScale } from "@/lib/agent/efforts";
 import { defaultModelFor, ENGINE_MODELS } from "@/lib/agent/models";
 import { KNOWN_RELAYS, verifyUrlAllowed, type KnownRelayInfo } from "@/lib/externalRelay/knownRelays";
+import { RELAY_MEMBER_ANSWERS_PER_HOUR } from "@/lib/externalRelay/profile";
 import { useLocale, type TFunction } from "@/lib/i18n";
 
 /**
@@ -33,6 +34,7 @@ type Target = {
   project: string | null;
   concurrency: number;
   hardCapMinutes: number;
+  memberLimitPerHour?: number | null;
 };
 export type RelayView = {
   id: string;
@@ -108,6 +110,7 @@ const REASON_KEYS: Record<string, Parameters<TFunction>[0]> = {
   hard_cap: "externalRelay.reason.hardCap",
   profile_violation: "externalRelay.reason.profileViolation",
   install_restarted: "externalRelay.reason.installRestarted",
+  member_limit: "externalRelay.reason.memberLimit",
 };
 const DELIVERY_KEYS = {
   accepted: "externalRelay.answers.delivery.accepted",
@@ -498,6 +501,39 @@ function RecentAnswers({ relayId, targetId }: { relayId: string; targetId: strin
   );
 }
 
+/**
+ * Answers per member per hour in each chat (relay.md §B.8). The field shows
+ * the default until the operator sets a number; an empty field or 0 is no
+ * limit. It is saved when the field loses focus or on Enter.
+ */
+function MemberLimitField({ target, busy, onChange }: { target: Target; busy: boolean; onChange: (patch: Partial<Target>) => void }) {
+  const { t } = useLocale();
+  const stored = target.memberLimitPerHour === undefined ? RELAY_MEMBER_ANSWERS_PER_HOUR : target.memberLimitPerHour;
+  const shown = stored ? String(stored) : "";
+  const [draft, setDraft] = useState(shown);
+  const [editing, setEditing] = useState(false);
+  const save = () => {
+    setEditing(false);
+    const text = draft.trim();
+    const value = text === "" ? null : Number(text);
+    if (value !== null && (!Number.isInteger(value) || value < 0 || value > 1000)) { setDraft(shown); return; }
+    if ((value || null) !== (stored || null)) onChange({ memberLimitPerHour: value });
+  };
+  return (
+    <label className="flex min-w-0 flex-col gap-1 text-ui font-semibold text-primary">
+      {t("externalRelay.target.memberLimit")}
+      <input type="number" inputMode="numeric" min={0} max={1000} step={1} data-external-relay-member-limit="" disabled={busy}
+        aria-label={`${t("externalRelay.target.memberLimit")} · ${target.name}`} placeholder={t("externalRelay.target.memberLimitNone")}
+        value={editing ? draft : shown} className={input}
+        onFocus={() => { setDraft(shown); setEditing(true); }}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={save}
+        onKeyDown={(event) => { if (event.key === "Enter") (event.target as HTMLInputElement).blur(); }} />
+      <span className="text-ui font-normal text-muted">{t("externalRelay.target.memberLimitHint")}</span>
+    </label>
+  );
+}
+
 function TargetRow({ relay, target, running, signedIn, busy, onChange, onRoute }: {
   relay: RelayView;
   target: Target;
@@ -547,6 +583,7 @@ function TargetRow({ relay, target, running, signedIn, busy, onChange, onRoute }
             {[1, 2, 3, 4].map((count) => <option key={count} value={count}>{count}</option>)}
           </select>
         ))}
+        <div className="sm:col-span-2"><MemberLimitField target={target} busy={busy} onChange={onChange} /></div>
       </div>
       <label className="flex min-h-11 items-center gap-3 text-primary">
         <input type="checkbox" data-external-relay-answered-by={target.answered_by} checked={target.answered_by === "install"} disabled={busy || relay.paused || (target.answered_by !== "install" && !canAnswer)}

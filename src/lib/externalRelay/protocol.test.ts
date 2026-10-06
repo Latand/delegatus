@@ -146,3 +146,10 @@ test("handoff is an answer only when the request lists the service's tools", () 
     reply_to: null,
   });
 });
+test("a request's chat key is kept when valid and dropped when malformed", () => {
+  expect(requestSchema.parse({ ...sampleRequest, chat: { key: "ck_3Rw9TtYqL0pZx7VbN2mD4e" } }).chat).toEqual({ key: "ck_3Rw9TtYqL0pZx7VbN2mD4e" });
+  const malformed = requestSchema.safeParse({ ...sampleRequest, chat: { key: "short" } });
+  expect(malformed.success).toBe(true);
+  expect(malformed.data?.chat).toBeUndefined();
+  expect(requestSchema.parse(sampleRequest).chat).toBeUndefined();
+});

@@ -30,7 +30,7 @@ function age(relayId: string, targetId: string, requestId: string, days: number)
 }
 function finished(requestId: string, text = "Hello", targetId = "target") {
   const recorder = answerRecorder({ requestId, relayId: "relay", targetId, targetName: "Target", claimedAt: null, input: input(text) })!;
-  recorder.begin("claude", "opus");
+  recorder.begin("claude", "opus", { webSearch: true });
   recorder.finish({ outcome: "answered", answer: { action: "reply", text: `Re: ${text}`, reply_to: "m1" }, delivery: "accepted" });
   return recorder;
 }
@@ -53,7 +53,7 @@ test("the retention is one 30-day constant for readers and pruning", () => {
 
 test("a running record is never pruned, however old its file", () => {
   const recorder = answerRecorder({ requestId: "rq_running", relayId: "relay", targetId: "slow", targetName: null, claimedAt: null, input: input("Still going") })!;
-  recorder.begin("codex", "gpt-6-sol");
+  recorder.begin("codex", "gpt-6-sol", { webSearch: true });
   const file = recordFile("relay", "slow", "rq_running");
   const at = (Date.now() - 40 * DAY) / 1000;
   fs.utimesSync(file, at, at);

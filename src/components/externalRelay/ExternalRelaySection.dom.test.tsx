@@ -610,3 +610,26 @@ test("recent answers in Ukrainian, empty and expired", async () => {
     setLocale("en");
   }
 });
+
+test("the member limit shows the default, saves a number on leaving the field, and saves an empty field as no limit", async () => {
+  accounts({ claude: [signedIn("main")] });
+  answers.relay = { relays: [relay({ targets: [target({ engine: "claude", model: "opus", answered_by: "install" })] })], pending: [], status: [] };
+  route((url, init) => url === "/api/external-relay/relays/relay-1" && init?.method === "PATCH" ? jsonResponse({ relay: relay() }) : undefined);
+  const host = await mount(<ExternalRelaySection />);
+  const row = host.querySelector("[data-external-relay-target=bot-1]")!;
+  const field = row.querySelector("[data-external-relay-member-limit]") as HTMLInputElement;
+  expect(field.value).toBe("10");
+  expect(row.textContent).toContain("Answers per member per hour");
+  expect(row.textContent).toContain("The owner and chat admins are not counted.");
+  const patches = () => harness.calls.filter((call) => call.method === "PATCH").map((call) => call.body);
+  await act(async () => { field.focus(); });
+  await act(async () => typeInto(field, "3"));
+  await act(async () => { field.blur(); });
+  await act(async () => settle());
+  expect(patches()).toEqual([{ target: { id: "bot-1", memberLimitPerHour: 3 } }]);
+  await act(async () => { field.focus(); });
+  await act(async () => typeInto(field, ""));
+  await act(async () => { field.blur(); });
+  await act(async () => settle());
+  expect(patches().at(-1)).toEqual({ target: { id: "bot-1", memberLimitPerHour: null } });
+});
