@@ -2723,7 +2723,8 @@ test("a seat whose mandate predates the contract gets its clauses in the wake; a
     ticks.push(rig.sent[0]!.text);
   }
   expect(ticks[1]).toContain("Standing monitor note unchanged since your last wake");
-  expect(Buffer.byteLength(ticks[1]!)).toBeLessThanOrEqual(1_700);
+  // The fallback now also carries the operator-wait shutdown clause.
+  expect(Buffer.byteLength(ticks[1]!)).toBeLessThanOrEqual(2_100);
   console.log(`[#2030] v20 seat tick bytes: note shown ${Buffer.byteLength(ticks[0]!)}, note unchanged ${Buffer.byteLength(ticks[1]!)}`);
   const current = harness({ pipelines: OPEN_LANE, state: OVERDUE, seat: CURRENT_SEAT });
   await runSeatTickCheck(PROJECT, current.deps);

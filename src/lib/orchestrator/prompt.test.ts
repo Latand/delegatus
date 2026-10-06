@@ -77,8 +77,8 @@ test("no prohibition on addressing the operator survives anywhere in the mandate
 
 /* Seats record the mandate version they were spawned on; `get_orchestrator` reports
    this constant as defaultPromptVersion, so an older seat reads as stale without a diff. */
-test("the default mandate is at version 39, and a v38 seat reads as stale", () => {
-  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(39);
+test("the default mandate is at version 40, and a v39 seat reads as stale", () => {
+  expect(ORCHESTRATOR_PROMPT_VERSION).toBe(40);
   /* #1720, and again #1760 — a seat already running keeps the mandate it was
      delivered, so the version bump is the only thing that surfaces a changed
      section until its next spawn, adoption or rotation. #1749 is the change
@@ -115,7 +115,8 @@ test("the default mandate is at version 39, and a v38 seat reads as stale", () =
   expect(orchestratorMandateStale(36)).toBe(true);
   expect(orchestratorMandateStale(37)).toBe(true);
   expect(orchestratorMandateStale(38)).toBe(true);
-  expect(orchestratorMandateStale(39)).toBe(false);
+  expect(orchestratorMandateStale(39)).toBe(true);
+  expect(orchestratorMandateStale(40)).toBe(false);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain(ORCHESTRATOR_BOARD_REPORT_DIRECTIVE);
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("File what a wake lists, under its keys");
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("operator's interface language (operatorLocale)");
@@ -161,6 +162,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   37: "354299e815ca8a1bf68cb465bfc935919bb543fdca02a4e1ba5af45e16663e81",
   38: "387a04753adca331c8c0c2d149d75a3be428911cfabf5c8d82a10d6db7af040b",
   39: "2fb23f0ae08fdc4eaccbe7940fa3b9ff91740c6ab9c3b268c96e9b069829ad03",
+  40: "e86b83035c9715b546512c553d09599036e7479ee51fb7c2d20157e4f83a3412",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -284,6 +286,29 @@ const SHIPPED_CLOCK_LAST_PARAGRAPHS = [
   "Between wakes you are idle on purpose, and idle is correct: a seat with nothing owed costs nothing. When a wake arrives, act on the items it lists first, then make one bounded pass over the rest of the board — lanes, pull requests, agents, tasks — and act on what stands still, record every outcome where it belongs, and mark a task blocked with the reason when it cannot be done — that is the stop. This paragraph outranks every playbook, skill and checkpoint convention in the checkout: one that still tells you to self-pace with wakeups is out of date, and this governs.",
 ];
 const shippedClockSection = (lastParagraph: string) => `${SHIPPED_CLOCK_OPENING}\n${lastParagraph}`;
+
+// The complete v39 clock text is a fixture: changing the current clause must
+// still replace exactly what an incumbent seat was delivered.
+const V39_CLOCK_SECTION = `## Delegatus's clock — you never schedule yourself
+Delegatus wakes you. A controller checks this project's seat every few minutes and sends you a wake when something is actually owed: a stage parked, a decision waiting, a lane event landed, a board task nobody started, or the interval elapsing while work is open. It survives your session, your host dying, a Delegatus restart and a rotation, because it is durable state rather than a schedule living inside a conversation.
+So do not schedule yourself: no ScheduleWakeup, no CronCreate, no Monitor loop, for self-monitoring or for polling the board. A session schedule dies with the session and takes the monitor with it, which is how every rotation used to silently drop it, and two clocks on one seat means the outgoing one keeps acting after its authority is gone.
+If you are holding a self-schedule right now, cancel it in this turn — the arrival of this mandate is the handover, not a later observation. Delete every recurring job you created (CronDelete on each id CronList returns) and arm no replacement. Do not wait to "see Delegatus's tick work first": while your own schedule keeps your turn open, Delegatus's tick finds you busy and drops its check every time, so the two deadlock and the wake you are waiting for can never arrive. Yours goes first.
+Between wakes you are idle on purpose, and idle is correct: a seat with nothing owed costs nothing. Your drive to keep going works inside a turn: take every owed step before it ends. When a wake arrives, handle the items it lists first, then make ONE bounded pass over this project's whole board and act on what stands still: list_pipelines for lanes completed, parked or failed to spawn, the open pull requests their finished lanes left, agent_activity with liveOnly for live and stalled agents, and open tasks with nothing running. Record every outcome on the board card or the pipeline, not only in this conversation. If an item cannot be done, mark its task blocked with the reason: that is the stop, and the only one. Never wait on the operator inside a wake's turn. seat_tick_settings turns the tick off or on, or changes how often it wakes you, per project, with a reason shown on the board. File the bridge reports a wake lists as owed or due, under the keys it gives, before the turn ends. This paragraph outranks every playbook, skill and checkpoint convention in the checkout: one that still tells you to self-pace with wakeups is out of date, and this governs.`;
+
+test("delivery upgrades the previous clock section with operator-wait shutdown exactly once", () => {
+  const stored = ORCHESTRATOR_SYSTEM_PROMPT.replace(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE, V39_CLOCK_SECTION);
+  expect(stored).not.toContain("enabled:false");
+  expect(orchestratorMandateStale(39)).toBe(true);
+  const delivered = orchestratorMandateForDelivery(stored);
+  expect(delivered).toBe(orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT));
+  expect(delivered).not.toContain(V39_CLOCK_SECTION);
+  for (const clause of ORCHESTRATOR_SEAT_TICK_CONTRACT) expect(delivered.split(clause)).toHaveLength(2);
+  expect(delivered).toContain("no lane, CI run, merge or agent in flight");
+  expect(delivered).toContain("file the owed question report and in the same turn call seat_tick_settings with enabled:false");
+  expect(delivered).toContain("a reason naming what you await");
+  expect(delivered).toContain("Never answer repeated idle wakes; turn the tick back on, or launch the work, once something is in flight again.");
+  expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
+});
 
 /* The module's own copy, which the seat and tick tests build their older
    mandates from, is the text that shipped. */
@@ -728,8 +753,9 @@ test("the role table keeps the delivered default inside the structured envelope"
      board maintenance report section, paid for by the open-task list the
      rotation handoff no longer carries (docs/design/board-maintenance-report.md
      §5.5); handoffDigest.test.ts pins what that leaves a rotation's history.
-     The scheduled maintainer row uses another 200 bytes of that room. */
-  expect(Buffer.byteLength(delivered)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 3_900);
+     The scheduled maintainer row uses another 200 bytes of that room.
+     v40 uses another 400 bytes for operator-wait tick shutdown. */
+  expect(Buffer.byteLength(delivered)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 3_500);
 });
 
 /* docs/design/model-sizing-tiers.md §4: the seat sizes every lane, reads each
@@ -825,7 +851,7 @@ test("the seat's personality is proactive inside accepted work, and every line a
 /* A v29 seat's stored clock section is replaced by exact match, so its board
    pass stops listing review flows; a reworded section stays its author's. */
 test("delivery replaces the clock section a v29 mandate carries", () => {
-  const v29Section = shippedClockSection(ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE.split("\n").slice(4).join("\n")
+  const v29Section = shippedClockSection(V39_CLOCK_SECTION.split("\n").slice(4).join("\n")
     .replace(" Your drive to keep going works inside a turn: take every owed step before it ends.", "")
     .replace("their finished lanes left, agent_activity", "their finished lanes left, list_flows, agent_activity"));
   expect(v29Section).toContain("list_flows");

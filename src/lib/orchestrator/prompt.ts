@@ -88,7 +88,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-export const ORCHESTRATOR_PROMPT_VERSION = 39;
+export const ORCHESTRATOR_PROMPT_VERSION = 40;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -167,7 +167,8 @@ const SEAT_TICK_REPORT_CLAUSE = "File the bridge reports a wake lists as owed or
 /** The contract as v29 shipped it, kept so delivery recognizes that section. */
 const SEAT_TICK_CONTRACT_V29: readonly string[] = [...SEAT_TICK_CONTRACT_V21, SEAT_TICK_REPORT_CLAUSE];
 
-export const ORCHESTRATOR_SEAT_TICK_CONTRACT: readonly string[] = [
+/** The contract as v30–v39 shipped it, kept for exact-match delivery upgrades. */
+const SEAT_TICK_CONTRACT_V30: readonly string[] = [
   /* v30 (docs/design/agent-prompt-contract.md §2.8): the seat composes no
      review flows, so the board pass no longer lists them. */
   "When a wake arrives, handle the items it lists first, then make ONE bounded pass over this project's whole board and act on what stands still: "
@@ -175,6 +176,11 @@ export const ORCHESTRATOR_SEAT_TICK_CONTRACT: readonly string[] = [
     + "agent_activity with liveOnly for live and stalled agents, and open tasks with nothing running.",
   ...SEAT_TICK_CONTRACT_V21.slice(1),
   SEAT_TICK_REPORT_CLAUSE,
+];
+
+export const ORCHESTRATOR_SEAT_TICK_CONTRACT: readonly string[] = [
+  ...SEAT_TICK_CONTRACT_V30,
+  "When a wake finds nothing changed and nothing can change until the operator answers (no lane, CI run, merge or agent in flight), file the owed question report and in the same turn call seat_tick_settings with enabled:false and a reason naming what you await. Never answer repeated idle wakes; turn the tick back on, or launch the work, once something is in flight again.",
 ];
 
 /**
@@ -212,8 +218,8 @@ export const ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE = `${CLOCK_OPENING}
 ${CLOCK_IDLE} ${ORCHESTRATOR_SEAT_TICK_CONTRACT.join(" ")} ${CLOCK_OUTRANKS}`;
 
 /**
- * The clock section exactly as it shipped before v21 (#2030): v11–v16, then
- * v17–v20. Neither carries the tick contract the wake stopped repeating, and
+ * The clock sections exactly as they shipped before the current contract.
+ * v11–v20 lack the tick contract; v21–v39 carry earlier versions of it, and
  * delivery appends the current section only to a mandate WITHOUT the heading,
  * which every mandate composed from one of these bodies has. So delivery
  * replaces these texts, by exact string match and by nothing else, the way it
@@ -221,6 +227,8 @@ ${CLOCK_IDLE} ${ORCHESTRATOR_SEAT_TICK_CONTRACT.join(" ")} ${CLOCK_OUTRANKS}`;
  * keeps its wording, and only text the Viewer put there is taken back.
  */
 const SHIPPED_CLOCK_SECTIONS: readonly string[] = [
+  /* v30–v39, before operator-only waiting turned the tick off. */
+  `${CLOCK_OPENING}\n${CLOCK_IDLE} ${SEAT_TICK_CONTRACT_V30.join(" ")} ${CLOCK_OUTRANKS}`,
   /* v29, whose board pass still listed review flows. */
   `${ORCHESTRATOR_SHIPPED_CLOCK_OPENING}\n${CLOCK_IDLE_V11} ${SEAT_TICK_CONTRACT_V29.join(" ")} ${CLOCK_OUTRANKS}`,
   /* v21–v28, before the report clause joined the contract. */
