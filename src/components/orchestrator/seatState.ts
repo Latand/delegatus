@@ -1,6 +1,6 @@
 import { isAccountMutationContention } from "@/lib/accounts/contentionMessage";
 import { currentConversationFile } from "@/lib/accounts/identity";
-import type { MessageKey } from "@/lib/i18n";
+import type { Locale, MessageKey, TFunction } from "@/lib/i18n";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateStale } from "@/lib/orchestrator/prompt";
 import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { parseSeatDeputyViews, type SeatDeputyView } from "@/lib/orchestrator/deputyView";
@@ -10,7 +10,7 @@ import type { FileEntry } from "@/lib/types";
 
 import type { StripSurface } from "../agentCapabilities";
 import { attentionId } from "../attention";
-import type { OrchestratorIncumbent } from "./incumbent";
+import type { IncumbentRotationCause, IncumbentTelegramAction, OrchestratorIncumbent } from "./incumbent";
 
 /*
  * The orchestrator panel's state machine, as a pure module (PRD #976 slice A).
@@ -337,13 +337,57 @@ export interface RotationHint {
   /** Context usage percent behind a `strongly_recommend`, when it is known. */
   contextPercent: number | null;
   reasons: ("context" | "dead")[];
-  /** Slice B: the SERVER's own reasons, verbatim — each names the threshold it
-      crossed and whether the number behind it is an estimate. Never re-worded
-      here, because re-wording a threshold is how two surfaces start disagreeing
-      about the same seat. Absent on a client-derived hint. */
-  notes?: readonly string[];
+  /** Slice B: the SERVER's own reasons, as data. Each carries the number it
+      crossed and whether that number is an estimate, so the banner words the
+      same threshold `get_orchestrator` reports, in the operator's language.
+      Absent on a client-derived hint. */
+  causes?: readonly IncumbentRotationCause[];
   /** Where the advisory came from. Absent means client-derived (slice A). */
   source?: "server" | "client";
+}
+
+/**
+ * What the rotation banner says under its title: one line per cause, each in
+ * the operator's language with the action to take. A cause is said once. A cause the server reported as data is worded from that data; the
+ * client's own two readings fill in only what the server did not name.
+ */
+export function rotationBannerLines(t: TFunction, locale: Locale, rotation: RotationHint): string[] {
+  const number = (value: number) => value.toLocaleString(locale === "uk" ? "uk-UA" : "en-US");
+  const lines: string[] = [];
+  const named = new Set<IncumbentRotationCause["kind"]>();
+  for (const cause of rotation.causes ?? []) {
+    if (named.has(cause.kind)) continue;
+    named.add(cause.kind);
+    if (cause.kind === "context") {
+      lines.push(t(cause.estimated ? "orchPanel.rotationContextTokensEstimated" : "orchPanel.rotationContextTokens", {
+        tokens: number(cause.tokens),
+        threshold: number(cause.thresholdTokens),
+      }));
+    } else if (cause.kind === "compactions") {
+      lines.push(t("orchPanel.rotationCompactions", { count: number(cause.count), threshold: number(cause.threshold) }));
+    } else if (cause.kind === "transcript") {
+      lines.push(t("orchPanel.rotationTranscript", { size: number(cause.megabytes), threshold: number(cause.thresholdMegabytes) }));
+    } else {
+      lines.push(t("orchPanel.rotationDead"));
+    }
+  }
+  if (rotation.reasons.includes("context") && !named.has("context")) {
+    lines.push(t("orchPanel.rotationContext", { percent: String(rotation.contextPercent ?? 0) }));
+  }
+  if (rotation.reasons.includes("dead") && !named.has("host_gone")) lines.push(t("orchPanel.rotationDead"));
+  return [...new Set(lines)];
+}
+
+/**
+ * The one line the seat shows while its Telegram tool waits on the operator:
+ * what happened and what to do, in the interface language. Null when nothing
+ * is asked of them.
+ */
+export function telegramActionLine(t: TFunction, action: IncumbentTelegramAction | null | undefined): string | null {
+  if (action === "sign_in") return t("orchPanel.telegramSignIn");
+  if (action === "check") return t("orchPanel.telegramCheck");
+  if (action === "restart") return t("orchPanel.telegramRestart");
+  return null;
 }
 
 /** `ROTATION_THRESHOLD_FRACTION` (`@/lib/orchestrator/contextPolicy`) as a
@@ -814,7 +858,7 @@ function rotationHintOf(file: FileEntry | null, liveness: SeatLiveness, incumben
       level: server.level === "strongly_recommend" ? "strongly_recommend" : "recommend",
       contextPercent: incumbent?.context?.percent ?? null,
       reasons,
-      notes: server.reasons,
+      causes: server.causes,
       source: "server",
     };
   }

@@ -72,36 +72,14 @@ describe("shared memory settings", () => {
         enabled = true;
         const { page, context, pageErrors } = await openFixture(browser, server.base + "#p=atlas", { width, height: 900 }, "light", locale, "reduce", width === 390);
         try {
+          /* Titles whose file the index no longer holds still read: the chip counts them and the rows behind it are plain text. */
           const offers = page.locator("[data-memory-offer]"); await offers.nth(1).waitFor();
-          const offer = offers.first(), shortOffer = offers.nth(1);
-          expect(await shortOffer.evaluate(el => el.tagName)).toBe("P");
-          expect(await shortOffer.locator("summary").count()).toBe(0);
-          /* The folded line keeps the bubble's trailing edge and measure, and on the phone its target is 44 px
-             and clear of the copy control above it. */
-          const edges = await page.evaluate(() => {
-            const box = (el: Element | null) => el?.getBoundingClientRect();
-            const bubble = box(document.querySelector("[data-user-bubble]")), summary = box(document.querySelector("[data-memory-offer] summary"));
-            const actions = box(document.querySelector("[data-mobile-message-actions] button"));
-            return { bubbleRight: bubble!.right, summaryLeft: summary!.left, summaryRight: summary!.right, summaryTop: summary!.top, summaryHeight: summary!.height, actionsBottom: actions?.bottom ?? 0, row: document.querySelector("[data-memory-offer]")!.parentElement!.getBoundingClientRect().width };
-          });
-          expect(Math.abs(edges.summaryRight - edges.bubbleRight)).toBeLessThanOrEqual(1);
-          expect(edges.summaryLeft).toBeGreaterThanOrEqual(edges.summaryRight - edges.row * (width === 390 ? .86 : .75) - 1);
-          if (width === 390) {
-            expect(edges.summaryHeight).toBeGreaterThanOrEqual(44);
-            expect(edges.summaryTop).toBeGreaterThanOrEqual(edges.actionsBottom - 1);
-            const top = await page.evaluate(() => { const r = document.querySelector("[data-memory-offer] summary")!.getBoundingClientRect(); return document.elementFromPoint(r.right - 4, r.top + .5)?.closest("summary") !== null; });
-            expect(top).toBe(true);
-          } else {
-            const offerGeometry = await offer.locator("summary").evaluate(el => ({ height: el.getBoundingClientRect().height, line: Number.parseFloat(getComputedStyle(el).lineHeight) }));
-            expect(offerGeometry.height).toBeLessThanOrEqual(offerGeometry.line + 1);
-          }
+          const offer = offers.first();
+          expect((await offer.locator("[data-memory-chip]").innerText()).trim()).toBe(translate(locale, "memory.message.chip", { n: 15 }));
+          await offer.locator("[data-memory-chip]").click();
+          expect(await offer.locator("span[data-memory-title]").count()).toBe(15);
+          expect(await offer.locator("button[data-memory-title]").count()).toBe(0);
           expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-          await page.screenshot({ path: path.join(out, `offer-${locale}-${width}.png`) });
-          await offer.locator("summary").click();
-          /* Opened, the same line carries every title once: nothing is repeated under it. */
-          expect(await offer.locator("p").count()).toBe(0);
-          const opened = await offer.innerText();
-          for (let i = 1; i <= 15; i++) expect(opened.match(new RegExp(`constraint ${i}(?!\\d)`, "g"))).toHaveLength(1);
           await page.screenshot({ path: path.join(out, `offer-open-${locale}-${width}.png`) });
           await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-settings")));
           const setting = page.locator("[data-memory-setting]"); await setting.waitFor();
@@ -346,6 +324,195 @@ describe("shared memory settings", () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   }, 120_000);
+
+  browserTest("a message says what memory did with it: a chip that opens, a quiet line, or nothing", async () => {
+    const out = path.resolve(".artifacts/memory-on-message"); fs.mkdirSync(out, { recursive: true });
+    /* The reader is the product's own document preview; only the bytes it asks for are stubbed. Invented text. */
+    const texts: Record<string, string> = {
+      "privacy-gate-prompt-key.md": "---\nname: privacy-gate-prompt-key\ndescription: An object key at the start of a line trips the publication gate.\n---\n\n# Privacy gate and the prompt key\n\nThe publication gate reads a line that starts with the key as transcript content.\n\n**How to apply:** move the key off the start of the line, then run the gate again from the merge base.\n",
+      "short-chrome-tmpdir.md": "---\nname: short-chrome-tmpdir\ndescription: Chrome needs a short temp directory when a stage starts it.\n---\n\n# Short Chrome temp directory\n\nGive Chrome alone a short temp directory through a wrapper script.\n",
+      "no-update-branch.md": "---\nname: no-update-branch\ndescription: Re-merge in a temporary worktree.\n---\n\n# No update-branch\n\nMerge again in a temporary worktree and push the result.\n",
+    };
+    const server = await serveEvidenceFixture(out, "src/components/memory/memoryEvidence.fixture.tsx", {
+      "/api/artifact": (request: Request) => {
+        const url = new URL(request.url), name = path.basename(url.searchParams.get("path") ?? ""), text = texts[name];
+        if (!text) return Response.json({ error: "missing", code: "not-found" }, { status: 404 });
+        const bytes = new TextEncoder().encode(text);
+        if (url.searchParams.get("mode") === "meta") return Response.json({ name, kind: "text", mime: "text/markdown", size: bytes.length, mtimeMs: 1790000000000, etag: "\"fixture\"" });
+        return new Response(bytes, { status: request.headers.has("range") ? 206 : 200, headers: { "content-type": "text/markdown; charset=utf-8", etag: "\"fixture\"" } });
+      },
+      "/api/memory/settings": { enabled: true, reasons: [], keySource: "file", capUsd: 1, spentUsd: 0, month: "2026-10",
+        counts: { decisions: 0, delivered: 0, prepared: 0, noCandidates: 0, noMatches: 0, skipped: 0, failed: 0 } },
+      "/api/asks-you/key": { present: true, source: "file" },
+      "/api/telemetry": { enabled: false, locked: false, noticeDismissed: true },
+    });
+    const launched = await chromium.launchServer({ executablePath: process.env.CHROME_BIN, headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    const pid = launched.process().pid;
+    fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid, closed: false }));
+    const browser = await chromium.connect(launched.wsEndpoint());
+    const cases: unknown[] = [];
+    /* What the page draws for one case: boxes, type size, and the contrast of the text against what is painted behind it. */
+    const read = (page: Page) => page.evaluate(() => {
+      const scope = document.querySelector("[data-memory-case]")!;
+      const channel = (value: number) => { const c = value / 255; return c <= .03928 ? c / 12.92 : ((c + .055) / 1.055) ** 2.4; };
+      const rgb = (color: string) => (color.match(/[\d.]+/g) ?? []).map(Number);
+      const luminance = (color: string) => { const [r, g, b] = rgb(color); return .2126 * channel(r) + .7152 * channel(g) + .0722 * channel(b); };
+      const behind = (el: Element) => {
+        for (let node: Element | null = el; node; node = node.parentElement) {
+          const color = getComputedStyle(node).backgroundColor, alpha = rgb(color)[3];
+          if (color !== "transparent" && alpha !== 0) return color;
+        }
+        return "rgb(255, 255, 255)";
+      };
+      const text = (el: Element | null) => {
+        if (!el) return null;
+        const style = getComputedStyle(el), a = luminance(style.color), b = luminance(behind(el)), r = el.getBoundingClientRect();
+        return { text: (el as HTMLElement).innerText.trim(), tag: el.tagName, size: Number.parseFloat(style.fontSize), contrast: Math.round((Math.max(a, b) + .05) / (Math.min(a, b) + .05) * 100) / 100,
+          left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height, clipped: el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1 };
+      };
+      const box = (el: Element | null) => { const r = el?.getBoundingClientRect(); return r ? { left: r.left, right: r.right, top: r.top, bottom: r.bottom, height: r.height } : null; };
+      return {
+        bubble: box(scope.querySelector("[data-user-bubble]"))!, answer: box(scope.querySelector("[data-user-bubble]")!.closest(".my-3")!.nextElementSibling),
+        sender: box(scope.querySelector("[data-message-sender]")), actions: box(scope.querySelector("[data-mobile-message-actions] button")),
+        chip: text(scope.querySelector("[data-memory-chip]")), chevronRight: scope.querySelector("[data-memory-chip] svg:last-child")?.getBoundingClientRect().right ?? null,
+        expanded: scope.querySelector("[data-memory-chip]")?.getAttribute("aria-expanded") ?? null,
+        titles: [...scope.querySelectorAll("[data-memory-title]")].filter(el => (el as HTMLElement).offsetParent !== null).map(text),
+        none: text(scope.querySelector("[data-memory-none]")),
+        fits: document.documentElement.scrollWidth <= window.innerWidth,
+      };
+    });
+    try {
+      for (const lang of ["en", "uk"] as const) for (const width of [1440, 390] as const) for (const scheme of SCHEMES) {
+        const phone = width === 390, viewport = { width, height: phone ? 844 : 900 };
+        const open = async (query: string) => {
+          const opened = await openFixture(browser, `${server.base}?${query}`, viewport, scheme, lang, "reduce", phone);
+          await opened.page.locator("[data-memory-case] [data-user-bubble]").waitFor();
+          return opened;
+        };
+        const shot = (page: Page, name: string) => page.screenshot({ path: path.join(out, `${name}_${width}_${scheme}_${lang}.png`) });
+        for (const outcome of ["three", "one"] as const) {
+          const count = outcome === "three" ? 3 : 1;
+          const { page, context, pageErrors } = await open(`message=${outcome}`);
+          try {
+            const chip = page.locator("[data-memory-case] [data-memory-chip]"); await chip.waitFor();
+            const closed = await read(page);
+            expect(closed.chip).toMatchObject({ text: translate(lang, "memory.message.chip", { n: count }), tag: "BUTTON", size: 12 });
+            expect(closed.chip!.contrast).toBeGreaterThanOrEqual(4.5);
+            expect(closed.expanded).toBe("false");
+            expect(closed.titles).toEqual([]);
+            /* The chip ends on the bubble's trailing edge and sits under the bubble; on the phone it is a 44 px target clear of the copy control. */
+            expect(Math.abs(closed.chevronRight! - closed.bubble.right)).toBeLessThanOrEqual(1);
+            expect(closed.chip!.top).toBeGreaterThanOrEqual(closed.bubble.bottom);
+            if (phone) {
+              expect(closed.chip!.height).toBeGreaterThanOrEqual(44); expect(closed.chip!.width).toBeGreaterThanOrEqual(44);
+              expect(closed.chip!.top).toBeGreaterThanOrEqual(closed.actions!.bottom - 1);
+            }
+            expect(closed.fits).toBe(true);
+            await shot(page, `${outcome}-closed`);
+            /* A real button: the keyboard reaches it, opens it and folds it again. */
+            await chip.focus();
+            expect(await page.evaluate(() => document.activeElement?.hasAttribute("data-memory-chip"))).toBe(true);
+            await page.keyboard.press("Enter");
+            await page.locator("[data-memory-case] [data-memory-title]").first().waitFor();
+            await page.keyboard.press("Enter");
+            await page.locator("[data-memory-case] [data-memory-title]").first().waitFor({ state: "hidden" });
+            await page.evaluate(() => (document.activeElement as HTMLElement).blur());
+            await chip.click();
+            await page.locator("[data-memory-case] [data-memory-title]").first().waitFor();
+            const opened = await read(page);
+            expect(opened.expanded).toBe("true");
+            /* Opening the list moves nothing above it. */
+            expect(opened.bubble).toEqual(closed.bubble);
+            expect(opened.chip!.top).toBe(closed.chip!.top);
+            expect(opened.titles).toHaveLength(count);
+            for (const title of opened.titles) {
+              expect(title).toMatchObject({ tag: "BUTTON", size: 12, clipped: false });
+              expect(title!.contrast).toBeGreaterThanOrEqual(4.5);
+              expect(title!.left).toBeGreaterThanOrEqual(0); expect(title!.right).toBeLessThanOrEqual(opened.bubble.right + 1);
+              if (phone) expect(title!.height).toBeGreaterThanOrEqual(44);
+            }
+            /* One per row, top to bottom, each whole. */
+            for (let i = 1; i < opened.titles.length; i++) expect(opened.titles[i]!.top).toBeGreaterThanOrEqual(opened.titles[i - 1]!.bottom - 1);
+            expect(opened.fits).toBe(true);
+            await shot(page, `${outcome}-opened`);
+            /* A title opens that memory's text in the document preview the feed's file links open. */
+            await page.locator("[data-memory-case] [data-memory-title]").first().click();
+            const reader = page.locator("[data-artifact-preview]"); await reader.waitFor();
+            await reader.getByText("How to apply:").waitFor();
+            expect(await reader.getAttribute("data-artifact-kind")).toBe("text");
+            if (outcome === "three") await shot(page, "three-reader");
+            expect(pageErrors).toEqual([]);
+            cases.push({ lang, width, scheme, outcome, closed, opened: { chip: opened.chip, titles: opened.titles, fits: opened.fits }, reader: "document preview", pageErrors });
+          } finally { await context.close(); }
+        }
+        {
+          const { page, context, pageErrors } = await open("message=none");
+          try {
+            await page.locator("[data-memory-case] [data-memory-none]").waitFor();
+            const seen = await read(page);
+            expect(seen.none).toMatchObject({ text: translate(lang, "memory.message.none"), tag: "P", size: 12, clipped: false });
+            expect(seen.none!.contrast).toBeGreaterThanOrEqual(4.5);
+            expect(Math.abs(seen.none!.right - seen.bubble.right)).toBeLessThanOrEqual(1);
+            expect(seen.chip).toBeNull();
+            expect(await page.locator("[data-memory-case] [data-memory-none] button, [data-memory-case] [data-memory-none] a").count()).toBe(0);
+            expect(seen.fits).toBe(true); expect(pageErrors).toEqual([]);
+            await shot(page, "none");
+            cases.push({ lang, width, scheme, outcome: "none", none: seen.none, bubble: seen.bubble, pageErrors });
+          } finally { await context.close(); }
+        }
+        {
+          const { page, context, pageErrors } = await open("message=empty");
+          try {
+            const seen = await read(page);
+            expect(seen.chip).toBeNull(); expect(seen.none).toBeNull();
+            expect(pageErrors).toEqual([]);
+            await shot(page, "empty");
+            cases.push({ lang, width, scheme, outcome: "empty", bubble: seen.bubble, answer: seen.answer, pageErrors });
+          } finally { await context.close(); }
+        }
+        if (scheme !== "light") continue;
+        {
+          /* A turn in a live feed: nothing is drawn or reserved until memory is confirmed, and its arrival moves only what is below the bubble. */
+          const { page, context, pageErrors } = await open("message=three&live=1&team=1");
+          try {
+            const before = await read(page);
+            expect(before.chip).toBeNull(); expect(before.none).toBeNull();
+            const empty = await open("message=empty&team=1");
+            try { expect((await read(empty.page)).answer).toEqual(before.answer); } finally { await empty.context.close(); }
+            await page.evaluate(() => window.dispatchEvent(new Event("fixture:memory-confirmed")));
+            await page.locator("[data-memory-case] [data-memory-chip]").waitFor();
+            const after = await read(page);
+            expect(after.bubble).toEqual(before.bubble); expect(after.sender).toEqual(before.sender);
+            expect(after.answer!.top).toBeGreaterThan(before.answer!.top);
+            /* The sender caption stays above the bubble and the chip below it. */
+            expect(after.sender!.bottom).toBeLessThanOrEqual(after.bubble.top); expect(after.chip!.top).toBeGreaterThanOrEqual(after.bubble.bottom);
+            expect(pageErrors).toEqual([]);
+            await shot(page, "live-team-arrived");
+            cases.push({ lang, width, scheme, outcome: "live with a sender caption", before: { bubble: before.bubble, sender: before.sender, answer: before.answer },
+              after: { bubble: after.bubble, sender: after.sender, answer: after.answer, chip: after.chip }, pushedBelow: after.answer!.top - before.answer!.top, pageErrors });
+          } finally { await context.close(); }
+        }
+        for (const outcome of ["three", "none"] as const) {
+          /* A Codex record carries no structured reference: the same row is found by its journal identity. */
+          const { page, context, pageErrors } = await open(`message=${outcome}&engine=codex`);
+          try {
+            await page.locator(`[data-memory-case] ${outcome === "three" ? "[data-memory-chip]" : "[data-memory-none]"}`).waitFor();
+            const seen = await read(page);
+            if (outcome === "three") expect(seen.chip!.text).toBe(translate(lang, "memory.message.chip", { n: 3 }));
+            else expect(seen.none!.text).toBe(translate(lang, "memory.message.none"));
+            expect(pageErrors).toEqual([]);
+            await shot(page, `codex-${outcome}`);
+            cases.push({ lang, width, scheme, outcome: `codex ${outcome}`, chip: seen.chip, none: seen.none, pageErrors });
+          } finally { await context.close(); }
+        }
+      }
+      fs.mkdirSync("evidence/shared-memory", { recursive: true });
+      fs.writeFileSync("evidence/shared-memory/message.json", JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", cases }, null, 2) + "\n");
+    } finally {
+      await browser.close(); await launched.close(); server.stop();
+      fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid, closed: true }));
+    }
+  }, 600_000);
 
 });
 
