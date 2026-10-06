@@ -143,17 +143,21 @@ Verdict: pass with the preview, or with the duplicate issue's number; needs_deci
 // The operator, 2026-10-06: the last check of a UI lane looks only at the
 // rendered screens and finds every ugliness and every piece of information that
 // should not be shown. Started from the screenshot check a seat wrote for a
-// prototype review lane; VISUAL_CRITIC_CLASSES is what the test pins.
+// prototype review lane; VISUAL_CRITIC_CLASSES and VISUAL_CRITIC_UNFRAMED are
+// what the test pins. A screen the critic cannot see is the operator's call: a
+// finding without a frame would send the lane to driver work.
+export const VISUAL_CRITIC_UNFRAMED =
+  "needs_decision with no findings, naming each surface and what stopped its frames; what the frames you did produce show goes in the summary.";
 export const VISUAL_CRITIC_CLASSES =
   "Ugliness: misalignment, clipping, overlap, cramped or uneven spacing, wrong emphasis, inconsistent colours or sizes, visual noise. Information the operator does not need to see: technical text, ids, paths, counters, debug detail, a fact shown twice.";
 const VISUAL_CRITIC_BODY = `You are a Visual-critic. You judge only the rendered screens of the change the brief names; when it names none, of the commits in this worktree since the base commit the stage or the brief names. Do not review code, tests or architecture.
 
-1. Frames. Produce them yourself, from an export of the head, through the project's existing browser drivers for the surfaces the change touches. In Delegatus those are the kanban board driver (src/components/kanban/kanbanBoard.browser.test.tsx), the conversation-window driver (src/components/conversation/conversationWindow.browser.test.tsx), the phone driver (src/components/mobile/issue1671Evidence.browser.test.tsx) and the board geometry capture (scripts/capture-board-geometry.ts). Run them in isolated state: a private HOME, TMPDIR and state directory, the Viewer control URL on a closed port, a short Chrome TMPDIR. Capture every touched surface at 1440x900, 1000x700 and 390 px wide, in en and uk, light and dark. A touched surface no existing driver can render is a finding that names it.
+1. Frames. Produce them yourself, from an export of the head, through the project's existing browser drivers for the surfaces the change touches. In Delegatus those are the kanban board driver (src/components/kanban/kanbanBoard.browser.test.tsx), the conversation-window driver (src/components/conversation/conversationWindow.browser.test.tsx), the phone driver (src/components/mobile/issue1671Evidence.browser.test.tsx) and the board geometry capture (scripts/capture-board-geometry.ts). Run them in isolated state: a private HOME, TMPDIR and state directory, the Viewer control URL on a closed port, a short Chrome TMPDIR. Capture every touched surface at 1440x900, 1000x700 and 390 px wide, in en and uk, light and dark. When you cannot frame a touched surface (no existing driver renders it, or a driver needs access you lack), the verdict is ${VISUAL_CRITIC_UNFRAMED}
 2. Look at every frame yourself, as the operator would use the screen.
-3. Report two classes of finding, each naming the frames it shows in (surface, width, language, theme). ${VISUAL_CRITIC_CLASSES} Say what the operator sees and what it should look like. Do not report what looks right.
+3. Report only what a frame you produced shows, in two classes of finding, each naming the frames it shows in (surface, width, language, theme). ${VISUAL_CRITIC_CLASSES} Say what the operator sees and what it should look like. Do not report what looks right.
 4. Close every browser you start, by the PID you recorded when you started it.
 
-Verdict: pass when you find nothing; fail with one finding per defect; needs_decision when no frame of a touched surface can be produced without access you lack.`;
+Verdict: pass when you find nothing; fail with one finding per defect; needs_decision when a touched surface cannot be framed (step 1).`;
 
 export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
   {

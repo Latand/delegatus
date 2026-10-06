@@ -145,6 +145,28 @@ test("a visual-critic stage resolves read-only on the role's Claude Opus runtime
   expect(resolvePipelineRole({ role: { roleId: "visual-critic" }, effort: "xhigh" }, "run", pipelineRoleLookup).role).toMatchObject({ effort: "xhigh", access: "read-only" });
 });
 
+/* Visual judgement runs on Claude, never Codex, and the critic never writes:
+   an edited Claude runtime launches, a Codex runtime or a read-write stage does
+   not, and the other read-only roles still take the access a stage asks for. */
+test("a visual-critic stage runs only on Claude and only read-only", () => {
+  const critic = { roleId: "visual-critic" as const };
+  expect(resolvePipelineRole({ role: critic, model: "fable", effort: "max" }, "run", pipelineRoleLookup).role)
+    .toMatchObject({ engine: "claude", model: "fable", effort: "max", access: "read-only" });
+  expect(resolvePipelineRole({ role: critic, access: "read-only" }, "run", pipelineRoleLookup).role).toMatchObject({ access: "read-only" });
+  expect(resolvePipelineRole({ role: critic, engine: "codex", model: "gpt-6.1-sol", effort: "high" }, "run", pipelineRoleLookup))
+    .toEqual({ error: "visual-critic runs on claude only" });
+  expect(resolvePipelineRole({ role: critic, access: "read-write" }, "run", pipelineRoleLookup))
+    .toEqual({ error: "role visual-critic is read-only; a stage cannot give it read-write access" });
+  /* A lookup whose row claims read-write cannot widen the contract either. */
+  const writable: typeof pipelineRoleLookup = (roleId, params) => {
+    const row = pipelineRoleLookup(roleId, params);
+    return row ? { ...row, access: "read-write" } : null;
+  };
+  expect(resolvePipelineRole({ role: critic }, "run", writable).role?.access).toBe("read-only");
+  expect(resolvePipelineRole({ role: { roleId: "reviewer" }, access: "read-write" }, "run", pipelineRoleLookup).role?.access).toBe("read-write");
+  expect(resolvePipelineRole({ role: { roleId: "architect" }, engine: "codex", model: "gpt-6.1-sol", effort: "high" }, "run", pipelineRoleLookup).role?.engine).toBe("codex");
+});
+
 test("the deployer role is refused in pipelines (no interactive confirm gate)", () => {
   expect(resolvePipelineRole({ role: { roleId: "deployer" } }, "run", pipelineRoleLookup).error)
     .toContain("not allowed in a pipeline");

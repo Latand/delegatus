@@ -11,6 +11,7 @@ import { ENGINE_MODELS } from "@/lib/agent/models";
 import { useLocale, type TFunction } from "@/lib/i18n";
 import { costClass, effortRank, tightestHeadroom, type CostClass } from "@/lib/roles/costHints";
 import { equivalentConfig } from "@/lib/roles/equivalents";
+import { lockedEngine } from "@/lib/roles/locks";
 import { mappingRowRefusal } from "@/lib/roles/sizing";
 import type { RoleConfig, RoleEngine, RoleId, RoleMappingReset, RoleVariantId } from "@/lib/roles/types";
 
@@ -194,12 +195,14 @@ function Headroom({ config, status, compact = false }: { config: RoleConfig; sta
     : <span data-mapping-headroom="" className={`text-label ${tone}`}>{full}</span>;
 }
 
-function EngineSegments({ value, label, statuses, onChange }: { value: RoleEngine; label: string; statuses: Record<RoleEngine, EngineStatus>; onChange: (engine: RoleEngine) => void }) {
+function EngineSegments({ value, label, locked, statuses, onChange }: { value: RoleEngine; label: string; locked: RoleEngine | null; statuses: Record<RoleEngine, EngineStatus>; onChange: (engine: RoleEngine) => void }) {
   const { t } = useLocale();
   return (
     <div role="radiogroup" aria-label={t("onboarding.agents.engineAria", { role: label })} className="inline-flex h-8 shrink-0 rounded-[8px] border border-border bg-sunken p-0.5 max-sm:h-auto">
       {(["claude", "codex"] as const).map((engine) => {
         const checked = value === engine;
+        /* A role locked to one engine (visual judgement runs on Claude) cannot be pointed at the other. */
+        const refused = !!locked && engine !== locked;
         return (
           <button
             key={engine}
@@ -209,9 +212,12 @@ function EngineSegments({ value, label, statuses, onChange }: { value: RoleEngin
             data-engine-segment={engine}
             /* A disconnected engine stays selectable: someone who connects Codex
                tomorrow may still point a role at it today. */
-            title={statuses[engine].connected ? ENGINE_NAME[engine] : blockedText(t, engine, statuses[engine])}
-            onClick={() => { if (!checked) onChange(engine); }}
-            className={`inline-flex min-w-0 items-center gap-1 rounded-[6px] px-1.5 text-ui font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:min-h-11 max-sm:flex-1 max-sm:justify-center ${checked ? "bg-card text-primary shadow-1 ring-1 ring-inset ring-strong" : "text-muted hover:text-primary"}`}
+            title={locked && refused
+              ? t("onboarding.agents.engineLocked", { role: label, engine: ENGINE_NAME[locked] })
+              : statuses[engine].connected ? ENGINE_NAME[engine] : blockedText(t, engine, statuses[engine])}
+            disabled={refused}
+            onClick={() => { if (!checked && !refused) onChange(engine); }}
+            className={`inline-flex min-w-0 items-center gap-1 rounded-[6px] px-1.5 text-ui font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:min-h-11 max-sm:flex-1 max-sm:justify-center ${checked ? "bg-card text-primary shadow-1 ring-1 ring-inset ring-strong" : refused ? "cursor-not-allowed text-muted opacity-50" : "text-muted hover:text-primary"}`}
           >
             <EngineMark engine={engine} size={12} />
             {ENGINE_NAME[engine]}
@@ -283,7 +289,7 @@ function RowControls({ row, config, shipped, reset, promptCustom, statuses, layo
       {scale.map((tier) => <option key={tier} value={tier}>{tier}</option>)}
     </select>
   );
-  const engineControl = <EngineSegments value={config.engine} label={label} statuses={statuses} onChange={(engine) => onChange(equivalentConfig(config, engine, row))} />;
+  const engineControl = <EngineSegments value={config.engine} label={label} locked={lockedEngine(row.roleId)} statuses={statuses} onChange={(engine) => onChange(equivalentConfig(config, engine, row))} />;
   /* The state sits on its own line under the name, so the longest Ukrainian
      names («Розробник, виправлення», «Аудитор продакшену») keep the whole
      column when a row is changed. */
@@ -440,7 +446,10 @@ export function AgentMappingTable({ statuses, layout, onConnect }: {
   const connectedEngines = (["claude", "codex"] as const).filter((engine) => statuses[engine].connected);
   const missing = connectedEngines.length === 1 ? (connectedEngines[0] === "claude" ? "codex" : "claude") : null;
   const connected = connectedEngines.length === 1 ? connectedEngines[0]! : null;
-  const blockedRows = missing ? ALL_ROWS.filter((row) => configOf(roles, row)?.engine === missing) : [];
+  /* A row locked to the missing engine has nowhere to move, so the banner neither counts nor moves it. */
+  const blockedRows = missing && connected
+    ? ALL_ROWS.filter((row) => configOf(roles, row)?.engine === missing && (lockedEngine(row.roleId) ?? connected) === connected)
+    : [];
 
   const moveAll = () => {
     if (!missing || !connected) return;

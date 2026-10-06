@@ -3867,6 +3867,34 @@ test("a visual-critic stage is accepted and launches read-only on the role's run
   expect(h.spawnInputs[0]).toMatchObject({ role: expected, runtimeProfile: { access: "read-only" } });
 });
 
+/* Visual judgement runs on Claude and the critic never writes, whoever asks:
+   creation refuses a Codex runtime and read-write access, and an override that
+   turns a writable builder stage into the critic launches it read-only. */
+test("a visual-critic stage refuses Codex and read-write on create and override", async () => {
+  const h = harness();
+  savePipelines([]);
+  const { pipelineRoleLookup } = await import("./roles");
+  h.ports.roleLookup = pipelineRoleLookup;
+  const critic = { id: "shots", kind: "run", role: { roleId: "visual-critic" }, prompt: "Judge the frames", next: null };
+  const refusal = async (stage: Record<string, unknown>) => JSON.stringify(await createPipelineFromRequest(
+    { task: "Ship pipelines", spec: "AC1", repoDir: "/repo", stages: [{ ...critic, ...stage }] as never, src: "/codex/creator.jsonl", publication: "internal" }, h.ports));
+  expect(await refusal({ engine: "codex", model: "gpt-6.1-sol", effort: "high" })).toContain("visual-critic runs on claude only");
+  expect(await refusal({ access: "read-write" })).toContain("role visual-critic is read-only; a stage cannot give it read-write access");
+  expect(loadPipelines()).toEqual([]);
+
+  const pipeline = await create(h.ports, [{ id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Build", next: null }] as never);
+  expect(pipeline.stages[0]!.effectiveRole.access).toBe("read-write");
+  const codex = await patchPipeline(pipeline.id, { action: "override-stage", stageId: "build", role: { roleId: "visual-critic" }, engine: "codex", model: "gpt-6.1-sol" }, h.ports);
+  expect(codex).toMatchObject({ status: 400, error: "visual-critic runs on claude only" });
+  const edited = await patchPipeline(pipeline.id, { action: "override-stage", stageId: "build", role: { roleId: "visual-critic" }, access: "read-write" }, h.ports);
+  expect(edited.error).toBeUndefined();
+  const expected = { roleId: "visual-critic", engine: "claude", model: "opus", effort: "high", access: "read-only" };
+  expect(loadPipelines()[0]!.stages[0]).toMatchObject({ access: "read-only", effectiveRole: expected });
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(h.spawnInputs[0]).toMatchObject({ role: expected, runtimeProfile: { access: "read-only" } });
+});
+
 test("review-loop onFail edges are rejected during creation and graph editing", async () => {
   const h = harness();
   savePipelines([]);

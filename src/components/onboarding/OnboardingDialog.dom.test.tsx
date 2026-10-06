@@ -151,6 +151,43 @@ test("the visual critic sits in the design and critique group on Opus high, and 
   }
 });
 
+/* Visual judgement runs on Claude, never Codex: its row offers no Codex segment
+   to click, and with Claude out the banner moves every other Claude row. */
+test("the visual critic's row cannot move to Codex, alone or with the banner's bulk move", async () => {
+  const { mergeRoleDefinitions } = await import("@/lib/roles/store");
+  const { AgentMappingTable } = await import("./AgentMappingTable");
+  const roles = mergeRoleDefinitions({}).map((role) => ({ ...role, promptPreview: role.promptScaffold, shipped: { config: role.config } }));
+  rolesBody = { roles };
+  requests.length = 0;
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  try {
+    const statuses = { claude: { connected: false, account: null }, codex: { connected: true, account: null } };
+    flushSync(() => root.render(<AgentMappingTable statuses={statuses} layout="table" onConnect={() => {}} />));
+    await until(() => Boolean(host.querySelector("[data-mapping-row='visual-critic']")));
+    const codex = host.querySelector("[data-mapping-row='visual-critic'] [data-engine-segment='codex']") as HTMLButtonElement;
+    expect(codex.disabled).toBe(true);
+    expect(codex.getAttribute("title")).toBe("Visual critic runs on Claude only");
+    expect((host.querySelector("[data-mapping-row='architect'] [data-engine-segment='codex']") as HTMLButtonElement).disabled).toBe(false);
+    codex.click();
+    expect(requests.some((request) => request.method === "PUT")).toBe(false);
+    /* Each Claude row but the critic's counts and moves. */
+    const claudeRows = roles.filter((role) => role.config.engine === "claude" && role.id !== "visual-critic").map((role) => role.id);
+    expect(claudeRows).toContain("orchestrator");
+    const move = host.querySelector("[data-mapping-move]") as HTMLButtonElement;
+    move.click();
+    await until(() => requests.some((request) => request.method === "PUT"));
+    const overrides = (requests.find((request) => request.method === "PUT")!.body as { overrides: Record<string, unknown> }).overrides;
+    expect(Object.keys(overrides)).not.toContain("visual-critic");
+    for (const roleId of claudeRows) expect(Object.keys(overrides)).toContain(roleId);
+  } finally {
+    flushSync(() => root.unmount());
+    host.remove();
+    rolesBody = { roles: [] };
+  }
+});
+
 function key(target: EventTarget, name: string, shiftKey = false): void {
   target.dispatchEvent(new dom.KeyboardEvent("keydown", { key: name, bubbles: true, cancelable: true, shiftKey }) as unknown as Event);
 }

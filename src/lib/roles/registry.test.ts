@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { BUILDER_FINISH_LINE, FIX_ROUND_FINISH_LINE, ISSUE_REPORT_SCRUB_RULE, PROCESS_CLEANUP_MARKER, VISUAL_CRITIC_CLASSES } from "./defaults";
+import { BUILDER_FINISH_LINE, FIX_ROUND_FINISH_LINE, ISSUE_REPORT_SCRUB_RULE, PROCESS_CLEANUP_MARKER, VISUAL_CRITIC_CLASSES, VISUAL_CRITIC_UNFRAMED } from "./defaults";
 import { defaultRoleParameterValue } from "./parameters";
 import { variantForParams } from "./paramConfig";
 import { ORCHESTRATOR_TASK_OWNERSHIP_HEADING } from "@/lib/orchestrator/prompt";
@@ -448,4 +448,32 @@ test("the visual-critic preset is read-only on Opus and judges only rendered fra
   expect(text).toContain("Verdict: pass when you find nothing");
   expect(text).toContain("Close every browser you start, by the PID you recorded");
   expect(text).toContain("Every finding names the frames it shows in");
+});
+
+/* A surface the critic cannot frame is the operator's call: a finding without a
+   frame would send the lane to driver work, outside both classes. */
+test("the visual critic ends needs_decision with no findings when a touched surface cannot be framed", () => {
+  const resolved = resolveRole("visual-critic", {});
+  if (!resolved.ok) throw new Error(resolved.error);
+  const text = resolved.value.prompt;
+  expect(text).toContain(`When you cannot frame a touched surface (no existing driver renders it, or a driver needs access you lack), the verdict is ${VISUAL_CRITIC_UNFRAMED}`);
+  expect(VISUAL_CRITIC_UNFRAMED).toStartWith("needs_decision with no findings");
+  expect(text).toContain("Report only what a frame you produced shows");
+  expect(text).toContain("needs_decision when a touched surface cannot be framed");
+  expect(text).not.toContain("is a finding that names it");
+});
+
+/* Visual judgement runs on Claude, never Codex: spawn_agent takes an edited
+   Claude runtime and refuses a Codex one. */
+test("spawning a visual critic takes a Claude runtime and refuses Codex", () => {
+  const plain = resolveSpawnRole({ role: "visual-critic" });
+  if (!plain.ok) throw new Error(plain.error);
+  expect(plain.value?.config).toEqual({ engine: "claude", model: "opus", effort: "high" });
+  const edited = resolveSpawnRole({ role: "visual-critic", model: "fable", effort: "max" });
+  if (!edited.ok) throw new Error(edited.error);
+  expect(edited.value?.config).toEqual({ engine: "claude", model: "fable", effort: "max" });
+  expect(resolveSpawnRole({ role: "visual-critic", engine: "codex", model: "gpt-6.1-sol", effort: "high" })).toEqual({ ok: false, error: "visual-critic runs on claude only" });
+  expect(resolveRole("visual-critic", {}, { engine: "codex", model: "gpt-6.1-sol" })).toEqual({ ok: false, error: "visual-critic runs on claude only" });
+  const architect = resolveSpawnRole({ role: "architect", engine: "codex", model: "gpt-6.1-sol" });
+  expect(architect.ok && architect.value?.config.engine).toBe("codex");
 });

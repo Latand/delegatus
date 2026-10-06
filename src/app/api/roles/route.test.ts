@@ -112,6 +112,15 @@ test("PUT refuses Sonnet on the reviewer, the architect and the orchestrator, an
   expect(fs.existsSync(file)).toBe(false);
 });
 
+/* Visual judgement runs on Claude, never Codex: the row keeps its editable Claude runtime. */
+test("PUT refuses a Codex row for the visual critic and saves an edited Claude one", async () => {
+  const refused = await put({ overrides: { "visual-critic": { config: { engine: "codex", model: "gpt-6.1-sol", effort: "high" } } } });
+  expect(refused.status).toBe(400);
+  expect((await refused.json() as { error: string }).error).toBe("visual-critic runs on claude only");
+  expect(fs.existsSync(file)).toBe(false);
+  expect((await put({ overrides: { "visual-critic": { config: { engine: "claude", model: "fable", effort: "max" } } } })).status).toBe(200);
+});
+
 test("PUT admits Sonnet 5.5 on the verifier and the size=trivial reviewer", async () => {
   const sonnet = { engine: "claude", model: "claude-sonnet-5-5", effort: "medium" };
   expect((await put({ overrides: { verifier: { config: sonnet } } })).status).toBe(200);

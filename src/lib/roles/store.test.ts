@@ -46,8 +46,9 @@ test("fresh installs and config:null resets restore every shipped role and varia
       expect(Object.fromEntries(roles.filter((role) => role.variants).map(({ id, variants }) => [id, variants]))).toEqual(expectedVariants);
     };
     check();
+    /* The visual critic runs on Claude only, so its edit stays there. */
     const edited = Object.fromEntries(Object.keys(expected).map((id) => [id, {
-      config: codex("gpt-6-astra", "max"),
+      config: id === "visual-critic" ? claude("fable", "max") : codex("gpt-6-astra", "max"),
       ...(id in expectedVariants ? { variants: Object.fromEntries(Object.keys(expectedVariants[id as keyof typeof expectedVariants]).map((variant) => [variant, codex("gpt-5.6-terra", "high")])) } : {}),
     }]));
     const write = parseRoleMappingPatch(edited);

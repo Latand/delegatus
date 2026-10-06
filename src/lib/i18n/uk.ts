@@ -4824,6 +4824,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "onboarding.agents.saveFailed": "Не вдалося зберегти призначення: {reason}. Нічого не змінено.",
   "onboarding.agents.neither": "Спершу підключіть рушій. У таблиці показано типові значення.",
   "onboarding.agents.engineAria": "Рушій для ролі «{role}»",
+  "onboarding.agents.engineLocked": "Роль «{role}» працює лише на {engine}",
   "onboarding.agents.modelAria": "Модель для ролі «{role}»",
   "onboarding.agents.effortAria": "Зусилля для ролі «{role}»",
   "onboarding.step.check": "Перевірка",

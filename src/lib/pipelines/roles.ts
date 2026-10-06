@@ -4,6 +4,7 @@ import { MAX_SCAFFOLD_LENGTH } from "@/lib/roles/store";
 import { codexLaunchTier } from "@/lib/accounts/codexServiceTiers";
 import { effortScale } from "@/lib/agent/efforts";
 import { validateLaunchModel } from "@/lib/agent/models";
+import { isReadOnlyLockedRole, roleEngineRefusal } from "@/lib/roles/locks";
 import { defaultRoleParameterValue } from "@/lib/roles/parameters";
 
 import { PIPELINE_DISALLOWED_ROLE_IDS, type EffectivePipelineRole, type PipelineRoleId, type PipelineStage, type PipelineStageKind } from "./types";
@@ -118,6 +119,9 @@ export function resolvePipelineRole(
   if (kind === "review-loop" && stage.access === "read-write") {
     return { error: "review-loop stages require read-only access" };
   }
+  if (isReadOnlyLockedRole(rawRoleId) && stage.access === "read-write") {
+    return { error: `role ${rawRoleId} is read-only; a stage cannot give it read-write access` };
+  }
   const registry = lookup === undefined ? installedLookup : lookup;
   const builder = registry?.("builder") ?? null;
   if (!builder) return { error: "Builder role is unavailable in the role registry" };
@@ -129,6 +133,8 @@ export function resolvePipelineRole(
     return fallback ?? null;
   };
   const engine = stage.engine ?? registered?.engine ?? builder.engine;
+  const engineRefusal = roleEngineRefusal(roleId, engine);
+  if (engineRefusal) return { error: engineRefusal };
   const model = value(stage.model, registered?.model ?? builder.model);
   const effort = value(stage.effort, registered?.effort ?? builder.effort);
   const row = registered ?? builder;
@@ -159,7 +165,7 @@ export function resolvePipelineRole(
       model,
       effort,
       ...(tier.tier ? { serviceTier: tier.tier, serviceTierSource: tier.required ? "explicit" as const : "role-default" as const } : {}),
-      access: kind === "review-loop" ? "read-only" : stage.access ?? registered?.access ?? builder.access ?? "read-write",
+      access: kind === "review-loop" || isReadOnlyLockedRole(roleId) ? "read-only" : stage.access ?? registered?.access ?? builder.access ?? "read-write",
       promptScaffold,
     },
   };

@@ -4914,6 +4914,7 @@ export const en = {
   "onboarding.agents.saveFailed": "Could not save the mapping: {reason}. Nothing changed.",
   "onboarding.agents.neither": "Connect an engine first. The table shows the shipped defaults.",
   "onboarding.agents.engineAria": "Engine for {role}",
+  "onboarding.agents.engineLocked": "{role} runs on {engine} only",
   "onboarding.agents.modelAria": "Model for {role}",
   "onboarding.agents.effortAria": "Effort for {role}",
   "onboarding.step.check": "Check",
