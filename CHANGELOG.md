@@ -120,6 +120,15 @@ guarantees for the 1.x series.
   autonomous work waits while the original cohort finishes. The hold survives
   recovery, both restart roles and rollback. After six hours the dialog names
   the blockers and offers **Deploy now** or **Keep waiting** ([#2430]).
+- **Step between your own messages.** A row between the conversation and
+  the composer has **Previous mine**, **Next mine** and a count such as
+  "Your message 3 of 12"; Alt+Up and Alt+Down do the same in the focused
+  pane. A step lands on a message you typed or dictated and passes over
+  wakes, agent notices, relays and attachment-only rows. The count shows a
+  + while older history is still unloaded, and a step back past the loaded
+  part loads it. The row takes 37 px of the feed on a desktop and 45 px on
+  a phone, where it also holds the way-back control. On a team installation
+  another member's message counts as yours ([#2524]).
 
 ### Changed
 - **A task card is dragged by any part of it, and the drag keeps up with the
@@ -223,6 +232,11 @@ guarantees for the 1.x series.
   history is now accepted when an owner-only parent folder keeps other users
   out; peer-accessible, foreign-owned, linked and world-writable history is
   still refused, and the copy is stored owner-only ([#2472]).
+- **An idle Codex conversation no longer waits forever for its account
+  switch.** When the transcript's modification time carried a fraction of a
+  millisecond, the recorded observation fell just short of the file, and
+  the switch stayed on "requested" although nothing had changed. The
+  observation now covers the file it read ([#2550]).
 - **A late delivery confirmation clears the "unknown outcome" notice.** A
   message confirmed after its delivery timeout left the composer on an
   unknown outcome, also after a restart. The status now reconciles against
@@ -234,6 +248,14 @@ guarantees for the 1.x series.
   that met another account write answered "the result of the last attempt
   is unknown" and could stay on "Creating the orchestrator…". It now waits
   up to ten seconds and settles on its own ([#2513]).
+- **Account operations wait out a short holder.** A launch refusal, a
+  deputy command, a Telegram withdrawal or an account selection that met
+  another account write failed at once with a busy error. Such a write now
+  waits up to 25 ms for a holder in another process and queues for up to
+  two seconds behind one in its own; seat creation and rotation replay the
+  same request. A refused launch answers only after its refusal is stored,
+  and contention that outlasts the wait returns a retryable error
+  ([#2535]).
 - **The linked-installations address check passes behind a correct proxy.**
   A proxy that drops the port from `Host`, or writes the default one, no
   longer fails **Check this address**, and a failed check lists the headers
@@ -317,6 +339,16 @@ guarantees for the 1.x series.
   restart, so **Deploy now** reaches it; a turn or a stage that starts during
   admission still refuses it. A refused admission keeps the cohort, the
   operator's decision and the cumulative wait ([#2495]).
+- **An automatic update waits only for turns that are really running.**
+  The drain counted turns whose host had died, conversations that were gone
+  and ones it could not resolve, 93 on one installation against 3 live
+  ones, and refused every new launch for hours. The drain and
+  `agent_activity` with `liveOnly` now share one reading of liveness, a
+  turn abandoned by a dead host is closed within about a minute, and an
+  owner that cannot be resolved stops blocking after five minutes. A
+  reviewer round, a launch that has no transcript yet and a fixing
+  implementer still hold the update, and a refused launch names the counts
+  of live turns and stages ([#2532]).
 
 ### Security
 - Two dependencies were updated for published security advisories:
@@ -341,13 +373,23 @@ guarantees for the 1.x series.
 - Test repairs: an inventory of every test file run in isolation, the
   races behind four intermittent files removed, a build break on main
   restored, and regression cases for Viewer hydration and for Claude
-  account switching through the MCP entry point. The orchestrator's
-  handoff directives fit their byte budget again ([#2435], [#2439],
-  [#2473], [#2480], [#2488], [#2489], [#2510]).
+  account switching through the MCP entry point. Two startup recovery
+  tests follow the delivery-queue retry deadline and the project recorded
+  on a continuation. The orchestrator's handoff directives fit their byte
+  budget again ([#2435], [#2439], [#2473], [#2480], [#2488], [#2489],
+  [#2510], [#2550]).
 - The landing copy says that Delegatus is free, open source and runs the
   official CLIs on your machine with your logins. The landing Worker serves
   a private page of install statistics behind Cloudflare Access ([#2389],
   [#2399], [#2413]).
+- A checkout deploy has a committed procedure. `scripts/deploy-checkout.py`
+  takes an explicit private plan, runs the approved switch in a separate
+  user unit and records its verdict from the final serving state: the
+  launcher, Viewer and runtime host releases, every health sample and what
+  became of each protected stage. An old process that disappears during the
+  restart no longer reads as a failed deploy. `docs/deploy-checkout.md`
+  describes the plan and where the verdicts are kept, and the deployer role
+  names the procedure ([#2546]).
 - The installed `braces` dependency carries the runtime mitigation from upstream
   tree `28d440b5dd449dbf1fe6f3506cf94ecca4d02660`, with nesting, AST and
   parent-cycle regressions in the release gates. The locally fixed advisory
@@ -2359,10 +2401,15 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#2513]: https://github.com/Latand/delegatus/pull/2513
 [#2520]: https://github.com/Latand/delegatus/pull/2520
 [#2522]: https://github.com/Latand/delegatus/pull/2522
+[#2524]: https://github.com/Latand/delegatus/pull/2524
 [#2526]: https://github.com/Latand/delegatus/pull/2526
 [#2527]: https://github.com/Latand/delegatus/pull/2527
 [#2528]: https://github.com/Latand/delegatus/pull/2528
 [#2531]: https://github.com/Latand/delegatus/pull/2531
+[#2532]: https://github.com/Latand/delegatus/pull/2532
 [#2533]: https://github.com/Latand/delegatus/pull/2533
 [#2534]: https://github.com/Latand/delegatus/pull/2534
+[#2535]: https://github.com/Latand/delegatus/pull/2535
 [#2536]: https://github.com/Latand/delegatus/pull/2536
+[#2546]: https://github.com/Latand/delegatus/pull/2546
+[#2550]: https://github.com/Latand/delegatus/pull/2550
