@@ -29,6 +29,8 @@ import { useIsMobile } from "@/hooks/useIsMobile";
 import { attachModeFor, capabilitiesFor } from "@/components/agentCapabilities";
 
 import { FeedItem } from "@/components/feed/FeedItem";
+import { ImageGalleryProvider, Lightbox, type GalleryImage } from "@/components/feed/Lightbox";
+import { ImagePane } from "@/components/preview/ImagePane";
 import { buildFeed, type Item } from "@/components/feed/parse";
 import { LogFeed } from "@/components/LogFeed";
 import { RuntimeComposerReceipts, TmuxComposer } from "@/components/TmuxComposer";
@@ -96,6 +98,7 @@ export type ConversationWindowCase =
   | "dead-host-delivered"
   | "dead-host-resume-failed"
   | "agent-images"
+  | "image-viewers"
   | "own-message-steps";
 
 /* #1846 recurrence: a first turn that died unauthorized produced no assistant
@@ -1068,6 +1071,70 @@ function AgentImagesFixture() {
   );
 }
 
+/* The two image viewers under real input: `?viewer=pane` mounts the file
+   preview's pane over one invented capture, anything else the fullscreen
+   viewer over three. The page below the viewer is taller than the window, so
+   a gesture that leaks to the page shows as a scroll or a page zoom. The
+   pane's bytes are answered in the page from the same canvas drawing, a
+   lettered grid, so a frame shows which part of the picture is on screen. */
+function inventedGrid(width: number, height: number, hue: number, label: string): string {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d")!;
+  context.font = "28px sans-serif";
+  for (let row = 0; row * 100 < height; row += 1) {
+    for (let column = 0; column * 100 < width; column += 1) {
+      context.fillStyle = `hsl(${hue} 45% ${(row + column) % 2 ? 30 : 38}%)`;
+      context.fillRect(column * 100, row * 100, 100, 100);
+      context.fillStyle = "rgba(255,255,255,0.9)";
+      context.fillText(`${String.fromCharCode(65 + column)}${row + 1}`, column * 100 + 28, row * 100 + 60);
+    }
+  }
+  context.fillStyle = "rgba(255,255,255,0.92)";
+  context.fillRect(width * 0.3, height * 0.42, width * 0.4, height * 0.16);
+  context.font = `${Math.round(height * 0.09)}px sans-serif`;
+  context.fillStyle = "#111";
+  context.fillText(label, width * 0.33, height * 0.535);
+  return canvas.toDataURL("image/png").slice("data:image/png;base64,".length);
+}
+
+const PANE_META = { name: "capture.png", kind: "image", mime: "image/png", size: 1, mtimeMs: 1, etag: '"capture"' } as const;
+
+function ImageViewersFixture() {
+  const pane = params.get("viewer") === "pane";
+  const phone = useIsMobile();
+  const [closed, setClosed] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const [images] = useState<GalleryImage[]>(() => [210, 140, 20].map((hue, at) => ({
+    src: `data:image/png;base64,${inventedGrid(1600, 1000, hue, `capture ${at + 1}`)}`, alt: `capture ${at + 1}`,
+  })));
+  const [gallery] = useState(() => () => images);
+  return (
+    <div data-evidence-case="image-viewers" data-viewer-closed={closed ? "" : undefined} data-pane-failure={failure ?? undefined} className="bg-canvas text-primary">
+      <div className="flex h-dvh flex-col">
+        {pane ? <ImagePane path="/w/capture.png" meta={PANE_META} mobile={phone} onFailure={setFailure} /> : null}
+      </div>
+      <div className="h-[60dvh]" />
+      {pane || closed ? null : (
+        <ImageGalleryProvider value={gallery}>
+          <Lightbox src={images[0]!.src} alt={images[0]!.alt} onClose={() => setClosed(true)} />
+        </ImageGalleryProvider>
+      )}
+    </div>
+  );
+}
+
+function installCaptureBytes(): void {
+  const transport = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    if (!url.startsWith("/api/artifact?")) return transport(input, init);
+    const bytes = Uint8Array.from(atob(inventedGrid(1600, 1000, 210, "capture")), (char) => char.charCodeAt(0));
+    return new Response(bytes, { headers: { "content-type": "image/png" } });
+  }) as typeof fetch;
+}
+
 function DeliverySettlementFixture() {
   const [status, setStatus] = useState<"checking" | "delivered" | "failed">("checking");
   const [sends, setSends] = useState(0);
@@ -1094,6 +1161,7 @@ function Fixture({ id }: { id: ConversationWindowCase }) {
   const { t } = useLocale();
   if (id === "delivery-settlement") return <DeliverySettlementFixture />;
   if (id === "agent-images") return <AgentImagesFixture />;
+  if (id === "image-viewers") return <ImageViewersFixture />;
   if (id === "auth-terminal" || id === "clean-terminal") return <TerminalFixture id={id} />;
   if (id === "dead-host-composer") return <DeadComposerFixture file={DEAD_FILE} id={id} />;
   if (id === "dead-host-not-resumable") return <DeadComposerFixture file={ORPHANED_FILE} id={id} />;
@@ -1403,4 +1471,7 @@ const requested = (params.get("case") as ConversationWindowCase | null) ?? "rece
 if (root && requested === "lifecycle") mountLifecycle(root);
 else if (root && requested === "long-history") mountLongHistory(root);
 else if (root && requested === "own-message-steps") mountOwnMessageSteps(root);
-else if (root) createRoot(root).render(<Fixture id={requested} />);
+else if (root) {
+  if (requested === "image-viewers") installCaptureBytes();
+  createRoot(root).render(<Fixture id={requested} />);
+}
