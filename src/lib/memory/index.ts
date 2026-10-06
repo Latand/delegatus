@@ -73,7 +73,7 @@ export class MemoryIndex {
     ).all();
   }
 
-  private rememberScope(project: string, keys: Set<string>) {
+  private rememberScope(project: string, keys: Set<string>, folderIdentities: Set<string>) {
     // No timeout claim survives an await: another hook can restore the shared
     // connection while this lookup is paused. Claim zero wait at the write.
     this.hookDatabase(db => {
@@ -83,8 +83,11 @@ export class MemoryIndex {
         if (key === project || canonicalProject(key) === project) continue;
         const expires = /^(?:dir|repo)-[0-9a-f]{32}$/.test(key) ? Number.MAX_SAFE_INTEGER : Date.now() + 10_000;
         claim.run(key, project, expires);
-        if (canonicalProject(owner.get(key)!.project) !== project) { keys.delete(key); continue; }
-        db.query("UPDATE memory_project_scopes SET expires = ? WHERE key = ?").run(expires, key);
+        const previous = canonicalProject(owner.get(key)!.project);
+        // Verified directory/local-path ownership can advance to the folder's
+        // first remote. A bound remote can move only through a trusted alias.
+        if (previous !== project && !folderIdentities.has(previous)) { keys.delete(key); continue; }
+        db.query("UPDATE memory_project_scopes SET project = ?, expires = ? WHERE key = ?").run(project, expires, key);
       }
     });
   }
@@ -349,6 +352,7 @@ export class MemoryIndex {
       // derivative independently. Only first verified scope ownership is saved.
       const canonical = canonicalProject(project);
       const keys = this.scopeKeys(canonical, false);
+      const folderIdentities = new Set<string>();
       check();
       // These earlier identities are provably the caller's exact folder,
       // including a deleted checkout recovered by the scanner's durable map.
@@ -371,12 +375,12 @@ export class MemoryIndex {
         for (const folder of folders) {
           check();
           const previous = [directoryProjectId(folder), localRepositoryProjectId(physicalFolders.get(folder) ?? folder, true)];
-          for (const key of previous) if (key && (canonicalProject(key) === key || canonicalProject(key) === canonical)) keys.add(key);
+          for (const key of previous) if (key && (canonicalProject(key) === key || canonicalProject(key) === canonical)) { keys.add(key); folderIdentities.add(key); }
           const slug = folder.replace(/[^a-zA-Z0-9]/g, "-");
           if (canonicalProject(slug) === canonical || canonicalProject(await unambiguousProjectForClaudeMemorySlug(slug, deadline, true) ?? "") === canonical) keys.add(slug);
         }
       }
-      check(); this.rememberScope(canonical, keys);
+      check(); this.rememberScope(canonical, keys, folderIdentities);
       const projectKeys = JSON.stringify([...keys]);
       const hits = db.query<MemoryItem, [string, string, string, number]>(`SELECT e.* FROM memory_fts JOIN memory_entries e ON e.id = memory_fts.id
         WHERE memory_fts MATCH ? AND (e.project IN (SELECT value FROM json_each(?)) OR e.scope = 'global')

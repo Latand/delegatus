@@ -815,7 +815,14 @@ export function projectInfoFromCwd(cwd: string, requestedState?: string): Projec
     projectInfoCwdCache.set(cwd, [Date.now() + PROJECT_INFO_CWD_TTL_MS, resolutionState, resolvedInfo]);
     return resolvedInfo;
   }
-  const identity = projectIdentityFromRepositoryRoot(root);
+  // Resolve the target before reading its metadata, so a linked root's verified
+  // physical identity is available to optional recall without another git read.
+  let physicalRoot = root;
+  try { physicalRoot = fs.realpathSync.native(root); } catch { /* Deleted: retain the recorded root. */ }
+  const identity = projectIdentityFromRepositoryRoot(physicalRoot);
+  if (identity && physicalRoot !== root) projectInfoCwdCache.set(physicalRoot, [Date.now() + PROJECT_INFO_CWD_TTL_MS, resolutionState, {
+    project: identity.project, displayName: identity.displayName, repo: physicalRoot,
+  }]);
   // A deleted parent's directory alias is durable succession evidence. Keep
   // its worktrees on that project even after the parent's git metadata is gone.
   const rootDirectory = directoryProjectId(root);

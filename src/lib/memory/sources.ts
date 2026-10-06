@@ -52,6 +52,7 @@ export async function discoverMemorySources(roots: MemoryRoots) {
       }
     } catch (error) { if (!missing(error)) complete = false; }
   }
+  const stores: { directory: string; project: string; resolved: boolean }[] = [];
   for (const home of roots.claudeHomes) {
     await add(path.join(home, "CLAUDE.md"), { engine: "claude", sourceKind: "instruction" });
     await walk(path.join(home, "rules"), filename => filename.endsWith(".md") ? { engine: "claude", sourceKind: "instruction" } : null);
@@ -60,15 +61,19 @@ export async function discoverMemorySources(roots: MemoryRoots) {
       for (const entry of (await fs.readdir(projects, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
         if (entry.name.startsWith(".") || (!entry.isDirectory() && !entry.isSymbolicLink())) continue;
         const project = await (roots.projectForSlug ?? projectForClaudeMemorySlug)(entry.name);
-        // A managed store can reuse a directory already visited as a nested
-        // archive. Its loaded root must still upgrade the shared provenance.
-        await add(path.join(projects, entry.name, "memory", "MEMORY.md"), { engine: "claude", project, sourceKind: "claude_index", loadedByDefault: true });
-        await walk(path.join(projects, entry.name, "memory"), (filename, depth) => filename.endsWith(".md") ? {
-          engine: "claude", project, sourceKind: path.basename(filename) === "MEMORY.md" ? "claude_index" : "claude_memory",
-          ...(path.basename(filename) === "MEMORY.md" ? { loadedByDefault: depth === 0 } : {}),
-        } : null);
+        stores.push({ directory: path.join(projects, entry.name, "memory"), project, resolved: project !== entry.name });
       }
     } catch (error) { if (!missing(error)) complete = false; }
+  }
+  // Resolve account namespaces before traversing shared physical stores. A
+  // verified project outranks an unresolved slug regardless of account order.
+  for (const { directory, project } of stores.sort((a, b) => Number(b.resolved) - Number(a.resolved))) {
+    // A loaded root upgrades an earlier nested occurrence of the same store.
+    await add(path.join(directory, "MEMORY.md"), { engine: "claude", project, sourceKind: "claude_index", loadedByDefault: true });
+    await walk(directory, (filename, depth) => filename.endsWith(".md") ? {
+      engine: "claude", project, sourceKind: path.basename(filename) === "MEMORY.md" ? "claude_index" : "claude_memory",
+      ...(path.basename(filename) === "MEMORY.md" ? { loadedByDefault: depth === 0 } : {}),
+    } : null);
   }
   for (const name of ["AGENTS.override.md", "AGENTS.md"]) {
     await add(path.join(roots.codexHome, name), { engine: "codex", sourceKind: "instruction" });

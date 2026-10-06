@@ -16,6 +16,70 @@ import { projectInfoFromCwd } from "@/lib/scanner/describe";
 
 const roots: string[] = [];
 const previousState = process.env.LLV_STATE_DIR;
+test("a resolved shared-store project wins over an earlier unresolved account slug", async () => {
+  const index = new MemoryIndex();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-shared-scope-")); roots.push(root);
+  const shared = path.join(root, "shared"); fs.mkdirSync(shared);
+  fs.writeFileSync(path.join(shared, "MEMORY.md"), "- [Widget](topic.md) — Widget delimiter rule.\n");
+  fs.writeFileSync(path.join(shared, "topic.md"), "---\nname: Widget rule\ndescription: Widget delimiter rule.\ntype: project\n---\nWidget delimiter rule.\n");
+  const homes = [path.join(root, "legacy-home"), path.join(root, "current-home")];
+  for (const [home, slug] of [[homes[0], "legacy"], [homes[1], "current"]]) {
+    fs.mkdirSync(path.join(home, "projects", slug), { recursive: true });
+    fs.symlinkSync(shared, path.join(home, "projects", slug, "memory"));
+  }
+  try {
+    for (const order of [homes, [...homes].reverse()]) {
+      const found = await discoverMemorySources({ claudeHomes: order, codexHome: path.join(root, "absent"), skillRoots: [], projectForSlug: slug => slug === "current" ? "project-a" : slug });
+      expect(found.complete).toBe(true); expect(found.sources).toHaveLength(2);
+      expect(found.sources.map(source => source.project)).toEqual(["project-a", "project-a"]);
+      await index.refresh(found.sources);
+      for (const engine of ["claude", "codex"] as const) {
+        const candidates = await index.injectionCandidates("widget", "project-a", engine, `shared-${engine}`);
+        expect(candidates).toHaveLength(1);
+        const topic = (await index.search({ query: "widget", project: "project-a" })).items.find(item => item.sourceKind === "claude_memory");
+        expect(topic).toBeDefined(); expect(candidates[0].id).toBe(topic!.id);
+      }
+    }
+  } finally { index.close(); }
+});
+
+test("one linked-root scan verifies physical predecessor identity before the first recall", async () => {
+  const index = new MemoryIndex();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-linked-first-")); roots.push(root);
+  const physical = path.join(root, "physical"), linked = path.join(root, "linked");
+  fs.mkdirSync(path.join(physical, ".git"), { recursive: true }); fs.writeFileSync(path.join(physical, ".git", "HEAD"), "ref: refs/heads/main\n");
+  fs.writeFileSync(path.join(physical, ".git", "config"), '[remote "origin"]\nurl = https://example.invalid/fixture/widgets.git\n'); fs.symlinkSync(physical, linked);
+  // Only the logical cwd has been scanned; recall must perform no git reads.
+  const project = projectInfoFromCwd(linked)!.project;
+  try {
+    await index.refresh([{ path: fixture("topic.md", "---\nname: Widget linked rule\ndescription: Widget linked delimiter rule.\ntype: project\n---\nWidget linked delimiter rule.\n"), engine: "claude", sourceKind: "claude_memory", project: localRepositoryProjectId(physical, true)! }]);
+    expect(await index.injectionCandidates("widget", project, "claude", "linked-first", Infinity, { cwd: linked })).toHaveLength(1);
+  } finally { index.close(); }
+});
+
+test("verified unbound folder identities advance to their first origin and reject a later unrelated origin", async () => {
+  const index = new MemoryIndex();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-first-origin-")); roots.push(root);
+  const cwd = path.join(root, "project"); fs.mkdirSync(cwd);
+  const source = { path: fixture("topic.md", "---\nname: Widget prior rule\ndescription: Widget prior delimiter rule.\ntype: project\n---\nWidget prior delimiter rule.\n"), engine: "claude" as const, sourceKind: "claude_memory" as const, project: directoryProjectId(cwd) };
+  const recall = async (phase: string) => {
+    const project = projectInfoFromCwd(cwd, phase)!.project;
+    return { project, candidates: await index.injectionCandidates("widget", project, "claude", phase, Infinity, { cwd }) };
+  };
+  try {
+    await index.refresh([source]); expect((await recall("directory")).candidates).toHaveLength(1);
+    fs.mkdirSync(path.join(cwd, ".git")); fs.writeFileSync(path.join(cwd, ".git", "HEAD"), "ref: refs/heads/main\n");
+    fs.writeFileSync(path.join(cwd, ".git", "config"), "[core]\nrepositoryformatversion = 0\n");
+    expect((await recall("local")).candidates).toHaveLength(1);
+    const remote = (name: string) => fs.writeFileSync(path.join(cwd, ".git", "config"), `[remote "origin"]\nurl = https://example.invalid/fixture/${name}.git\n`);
+    remote("first"); const first = await recall("first-origin"); expect(first.candidates).toHaveLength(1);
+    index.close(); expect((await index.search({ query: "widget", project: first.project })).items).toHaveLength(1);
+    remote("unrelated"); const other = await recall("unrelated-origin"); expect(other.project).not.toBe(first.project); expect(other.candidates).toEqual([]);
+    expect((await index.search({ query: "widget", project: other.project })).items).toEqual([]);
+    expect(await index.open(first.candidates[0].id, "unrelated-first", null, other.project)).toBeNull();
+  } finally { index.close(); }
+});
+
 test("retargeting a cached cwd symlink cannot confer foreign predecessor ownership", async () => {
   const index = new MemoryIndex();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-cwd-retarget-")); roots.push(root);

@@ -500,7 +500,9 @@ The recipient's always-loaded root `MEMORY.md` index (Claude),
 A Claude index routes to topics; its presence alone does not establish that a
 topic body was loaded. Discovery marks nested indexes as deferred; their references
 remain eligible for the receiving Claude engine. A loaded root retains its
-provenance when duplicate symlinks are discovered first. A matching index pointer resolves
+provenance when duplicate symlinks are discovered first. Verified project namespaces
+precede unresolved account slugs when traversing a shared physical store.
+A matching index pointer resolves
 to its topic when that topic is indexed in the eligible scope, even when only the
 pointer's wording matches the search. A retired target excludes the resolved
 candidate; an absent target leaves the pointer eligible. Exact factual bodies after Unicode
@@ -539,10 +541,13 @@ physical project supplies no predecessor keys from that target. Injection bounds
 by the turn deadline and rechecks the switch and traffic owner before reservation.
 Scope writes claim zero SQLite wait at the synchronous write itself, so another
 lookup finishing during an awaited read cannot restore a long writer wait.
-Git metadata stays outside the optional hook path; a cold identity cache supplies
-no new predecessor proof. The private derivative retains each key's first verified
-repository ownership across Viewer replacement. A conflicting origin cannot take
-that history; moving its owner requires trusted succession aliases. The same durable verified scope serves recall,
+Git metadata stays outside the optional hook path. Normal scanning records a
+linked repository's verified physical root together with its logical cwd, so
+its first recall needs no extra git read; a cold identity cache supplies no new
+predecessor proof. The private derivative retains each key's first verified
+repository ownership across Viewer replacement. Verified directory/local-path
+ownership can advance to the folder's first origin. A subsequent conflicting
+origin cannot take that history; moving its owner requires trusted succession aliases. The same durable verified scope serves recall,
 project-scoped search and opening an offer. Search/open recheck lossy slug proofs
 with bounded asynchronous reads, including when the feed is opened later.
 
