@@ -9497,7 +9497,9 @@ export class AgentRegistry {
 
   /** Terminalizes the reservation after the runtime journal has fenced its
       operation. This includes a never-actuated hold and an unverified failure
-      the operator explicitly chose to discard. */
+      the operator explicitly chose to discard. After reservation compaction,
+      writes the retained owner and returns null; callers verify the outcome
+      through deliverySnapshotForOperation. */
   discardDeliveryForOperation(
     conversationId: ViewerConversationId,
     operationId: string,
@@ -9512,15 +9514,33 @@ export class AgentRegistry {
         : Object.values(file.heldDeliveries).find((candidate) =>
           candidate.command.operationId === operationId
           && resolveConversationAlias(file, candidate.conversationId) === canonicalId);
-      if (!delivery
-        || delivery.command.operationId !== operationId
+      // A legacy failure with no disposition retains duplicate risk, exactly
+      // like an explicit unverified failure. The owner survives compaction and
+      // is the durable record in that case; there is no reservation to mutate.
+      // An explicit unverified disposition also covers account switches after
+      // an attempt; the migration reason alone cannot establish a known loss.
+      const discardableFailure = (error: string | null, terminalDisposition: DeliveryTerminalDisposition | null) =>
+        error === reason || terminalDisposition === "unverified" || (terminalDisposition === null
+          && !error?.startsWith(MIGRATION_DELIVERY_CANCELLATION_PREFIX));
+      if (!delivery) {
+        if (owner && resolveConversationAlias(file, owner.conversationId) === canonicalId
+          && owner.terminalState === "failed"
+          && discardableFailure(owner.terminalReason, owner.terminalDisposition)) {
+          owner.terminalReason = reason.slice(0, 240);
+          owner.terminalDisposition = disposition;
+          owner.settledAt = now();
+          owner.evidenceText = "";
+        }
+        return null;
+      }
+      if (delivery.command.operationId !== operationId
         || resolveConversationAlias(file, delivery.conversationId) !== canonicalId) return null;
       if (delivery.state === "delivered") return clone(delivery);
       const discardable = delivery.state === "held"
         || delivery.state === "assigned"
         || delivery.state === "delivery-uncertain"
         || (delivery.state === "failed"
-          && (delivery.error === reason || owner?.terminalDisposition === "unverified"));
+          && discardableFailure(delivery.error, owner?.terminalDisposition ?? null));
       if (!discardable) return null;
       const conversation = file.conversations[canonicalId];
       const paths = new Set([conversation?.generations.at(-1)?.path]
