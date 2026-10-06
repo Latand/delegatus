@@ -257,6 +257,8 @@ test("batch gate permits a nonzero native baseline and retains candidate-only re
       const native = readFileSync(join(cwd, file), "utf8") === "baseline test version";
       if (native) baselineRuns++;
       else if (!existsSync(join(cwd, "bad.txt"))) validatedRemainder = true;
+      // A later green main sample cannot erase its earlier failure evidence.
+      if (native && baselineRuns > 1) return testResult(file, [], ["pre-existing", "regression"]);
       return testResult(file, native || !existsSync(join(cwd, "bad.txt")) ? ["pre-existing"] : ["pre-existing", "regression"],
         native || !existsSync(join(cwd, "bad.txt")) ? ["regression"] : []);
     }
@@ -266,7 +268,7 @@ test("batch gate permits a nonzero native baseline and retains candidate-only re
   await batch.build(`12@${a},13@${b},14@${c}`);
   const state = await batch.gate();
   expect(state.rows.map(row => row.status)).toEqual(["clean", "culprit", "clean"]);
-  expect(baselineRuns).toBeGreaterThan(0);
+  expect(baselineRuns).toBe(1);
   expect(validatedRemainder).toBeTrue();
   expect(state.gated).toBe(state.tip);
   expect(state.rows[1]!.head).toBe(b);
@@ -771,6 +773,26 @@ test("BEHIND rebuilds at most three times", async () => {
   expect(f.batch.read().refreshes).toBe(3);
   expect(f.calls.filter((args) => args[1] === "merge")).toHaveLength(0);
 });
+
+test("main movement replaces the pinned test baseline before publication", async () => {
+  const baselines: string[] = [];
+  const f = landingFixture("behind", undefined, fixture => {
+    fixture.seed("refresh.test.ts", "native baseline");
+    return async (cwd, args) => {
+      if (args[1] === "bun" && args[2] === "test") {
+        if (readFileSync(join(cwd, "refresh.test.ts"), "utf8") === "native baseline") baselines.push(git(cwd, ["rev-parse", "HEAD"]));
+        return testResult("refresh.test.ts", ["pre-existing"], []);
+      }
+      return successfulCommand(args);
+    };
+  });
+  const head = f.addPr(12, "refresh.test.ts", "candidate test");
+  await f.batch.build(`12@${head}`);
+  await f.batch.gate();
+  await expect(f.batch.land()).rejects.toThrow("Main moved more than three times");
+  expect(baselines).toHaveLength(4);
+  expect(new Set(baselines).size).toBe(4);
+}, 20_000);
 
 test("a deferred conflict only fast-forwards its original branch after landing, then needs independent review", async () => {
   const resolutionCandidates: string[] = [];

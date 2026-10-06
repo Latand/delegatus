@@ -12,6 +12,7 @@ The launched agent must have the machine noreply author and committer identity
 described in [CONTRIBUTING](../CONTRIBUTING.md).
 
 ```sh
+bun install --frozen-lockfile
 bun scripts/merge-batch.ts build '12@abcdef1,13@1234567'
 bun scripts/merge-batch.ts gate
 bun scripts/merge-batch.ts land
@@ -36,7 +37,10 @@ Test files run one at a time with a JUnit report and an isolated home, config,
 state and temp root. The gate compares each assertion's file, suite, name and
 occurrence with the native tests on the pinned main baseline. A failure present
 on both is reported as pre-existing and permits the batch, regardless of the
-baseline exit code. Files and tests introduced by the candidate have no baseline
+baseline exit code. The first complete baseline sample is retained across batch
+rebuilds and gate retries; a later green sample cannot erase evidence of a
+pre-existing failure. Main movement invalidates that sample. Files and tests
+introduced by the candidate have no baseline
 observation; the gate judges them on the candidate alone. It never copies new
 candidate tests onto main for baseline evidence.
 

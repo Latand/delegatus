@@ -233,6 +233,7 @@ export type RunState = {
   resolving?: { number: number; work: string; main: string };
   mergeIntent?: string;
   testCorpus?: Record<string, string>;
+  testBaseline?: { base: string; run: TestRun };
   testDecisions?: BatchTestDecision[];
 };
 export type CommandResult = { code: number; output: string; report?: string };
@@ -546,7 +547,9 @@ export class MergeBatch {
   private async testGate(state: RunState): Promise<boolean> {
     const files = Object.keys(state.testCorpus ?? {});
     const candidate = await this.testSample(state.work, files, true);
-    const baseline = await this.testSubject(state, files);
+    const baseline = state.testBaseline?.base === state.base ? state.testBaseline.run : await this.testSubject(state, files);
+    state.testBaseline = { base: state.base, run: baseline };
+    this.save(state);
     const decision = await attributeBatchTests(baseline, candidate, state.rows.filter(row => row.status === "clean").map(row => row.number),
       files => this.testSample(state.work, files, true), (removed, files) => this.testSubject(state, files, removed));
     (state.testDecisions ??= []).push(decision);
@@ -674,6 +677,7 @@ export class MergeBatch {
     // Reclassify against the original reviewed patches, including clean rebases.
     await this.rebuild(state);
     delete state.testCorpus;
+    delete state.testBaseline;
     delete state.testDecisions;
     state.gates = [];
     this.save(state);
