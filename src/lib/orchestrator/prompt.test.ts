@@ -162,7 +162,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   37: "354299e815ca8a1bf68cb465bfc935919bb543fdca02a4e1ba5af45e16663e81",
   38: "387a04753adca331c8c0c2d149d75a3be428911cfabf5c8d82a10d6db7af040b",
   39: "2fb23f0ae08fdc4eaccbe7940fa3b9ff91740c6ab9c3b268c96e9b069829ad03",
-  40: "80c92b053252834f02259ec7da089518f05e2147562cfd332d73703a82d9fa8c",
+  40: "e049be1aacae8786b0d3cd4d4d36208b14c99087f7dabf69b4975ef24de77ae6",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -303,10 +303,10 @@ test("delivery upgrades the previous clock section with operator-wait shutdown e
   expect(delivered).toBe(orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT));
   expect(delivered).not.toContain(V39_CLOCK_SECTION);
   for (const clause of ORCHESTRATOR_SEAT_TICK_CONTRACT) expect(delivered.split(clause)).toHaveLength(2);
-  expect(delivered).toContain("Operator-only idle: report owed question;");
-  expect(delivered).toContain("seat_tick_settings enabled:false with wait reason this turn;");
-  expect(delivered).toContain("never reply to idle repeats.");
-  expect(delivered).toContain("Work in flight: enable or launch it.");
+  expect(delivered).toContain("Nothing in flight (lane, CI, merge, agent)");
+  expect(delivered).toContain("only an operator answer owed: file the question");
+  expect(delivered).toContain("seat_tick_settings enabled:false naming the wait;");
+  expect(delivered).toContain("re-enable when work moves.");
   expect(Buffer.byteLength(ORCHESTRATOR_SEAT_TICK_CONTRACT.at(-1)!)).toBeLessThanOrEqual(170);
   expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
 });
