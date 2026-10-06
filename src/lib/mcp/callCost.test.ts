@@ -478,15 +478,21 @@ test("cancelling agent_activity after its catalog budget releases the scan it wa
   }
 }, 15_000);
 
-test("resource summaries retain stale/freshness evidence; full rows remain available", async () => {
+test("resource summaries retain freshness and cleanup holds; full rows remain available", async () => {
   const sessions = [{ target: "fixture", panePid: 1, path: null, engine: "codex", title: "worker", project: "fixture", activity: null, lastActiveAt: null, cwd: null, rssBytes: 123, swapBytes: 45, procCount: 2 }];
+  const tempSweep = { at: "2026-10-01T00:00:00Z", removed: 0, removedBytes: 0,
+    kept: { young: 0, active: 0, unknown: 1 }, heldCounts: { "git-checkout": 1 },
+    heldBytes: { "git-checkout": 256 * 1024 }, errors: 0,
+    summary: "1 temporary checkout held for inspection" };
   const bindings = viewerMcpBindings(undefined, undefined, { readResourcesWithDiagnostic: undefined,
-    readResources: async () => ({ system: null, sessions, sessionsCapturedAt: "2026-10-01T00:00:00Z", sessionsStale: true, viewer: null, viewerUnavailable: "not-the-viewer" }) } as never);
+    readResources: async () => ({ system: null, sessions, sessionsCapturedAt: "2026-10-01T00:00:00Z", sessionsStale: true, viewer: null, viewerUnavailable: "not-the-viewer", tempSweep }) } as never);
   const compact = await bindings.resources({});
   expect(compact).not.toHaveProperty("sessions");
   expect(compact).toMatchObject({ sessionSummary: { count: 1, rssBytes: 123, swapBytes: 45, procCount: 2 }, freshness: { sessionsStale: true }, viewerUnavailable: "not-the-viewer" });
   const full = await bindings.resources({ full: true });
   expect(full).toMatchObject({ sessions: [{ ...sessions[0], stale: true, capturedAt: "2026-10-01T00:00:00Z" }] });
+  expect(compact.tempSweep).toEqual(tempSweep);
+  expect(full.tempSweep).toEqual(tempSweep);
   expect((await bindings.resources({ compact: false })).sessions).toEqual(full.sessions);
   const task = { id: "fixture", project: "fixture", text: "Task", status: "inbox", createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z", placement: "unplaced", assignments: [] };
   expect(taskAcknowledgement(task as never, {}, ["status"])).not.toHaveProperty("readMore");
