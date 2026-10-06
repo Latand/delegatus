@@ -87,6 +87,25 @@ async function closeAndDrain(id: string, req: Parameters<typeof patchPipeline>[1
   return { ...accepted, pipeline, close: pipeline.closeReport ?? accepted.close };
 }
 
+test("default pane liveness keeps failed or unreadable tmux observations alive", async () => {
+  const observations: Awaited<ReturnType<typeof import("@/lib/tmux").panePidMap>>[] = [
+    { kind: "failure", error: "tmux snapshot unavailable" },
+    { kind: "available", panes: new Map([[42, { target: "stage:0.0", paneId: "%42", windowName: "stage" }]]) },
+    { kind: "available", panes: new Map() },
+    { kind: "no-server" },
+  ];
+  const freshReads: boolean[] = [];
+  const ports = defaultPipelinePorts({ panes: {
+    snapshot: async () => null,
+    observation: async fresh => { freshReads.push(fresh!); return observations.shift()!; },
+  } });
+  expect(await ports.paneAgentAlive("%42")).toBe(true);
+  expect(await ports.paneAgentAlive("%42")).toBe(true);
+  expect(await ports.paneAgentAlive("%42")).toBe(false);
+  expect(await ports.paneAgentAlive("%42")).toBe(false);
+  expect(freshReads).toEqual([true, true, true, true]);
+});
+
 test("default pipeline projections reuse one registry parse across the historical backlog", () => {
   const registryPath = path.join(process.env.LLV_STATE_DIR!, "projection-cache-agent-registry.json");
   const registry = new AgentRegistry(registryPath);
@@ -5595,6 +5614,60 @@ test("a stage waiting on the controller does not spin the pipelines phase (#1191
   }
 });
 
+test.each([[400, 60], [60, 400]])("default scheduleTick preserves both deadlines: %s then %s", async (first, second) => {
+  const schedule = defaultPipelinePorts().scheduleTick!;
+  let ticks = 0;
+  const unregister = registerPipelineTick(async () => { ticks += 1; });
+  try {
+    schedule(first);
+    schedule(second);
+    await new Promise(resolve => setTimeout(resolve, 800));
+    expect(ticks).toBe(2);
+  } finally {
+    unregister();
+  }
+});
+
+test.each([[true], [false]])("another lane's earlier wake preserves the controller retry deadline (earlier first=%s)", async (earlierFirst) => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  const advance = frozenWallClock(h);
+  const schedule = defaultPipelinePorts().scheduleTick!;
+  const callbacks: ReturnType<typeof tickPipelines>[] = [];
+  let ticks = 0;
+  Object.assign(h.ports, {
+    structuredDeliveryPublication: () => "rebinding" as const,
+    scheduleTick: (delayMs: number) => schedule(delayMs / 10),
+    sleep: forbiddenSleep,
+  });
+  const unregister = registerPipelineTick(async () => {
+    ticks += 1;
+    const work = tickPipelines([], h.ports);
+    callbacks.push(work);
+    await work;
+    if (ticks === 1) {
+      // The unrelated wake observes this lane before its booked retryAfter.
+      // Publication and the fake wall clock become ready for the later wake.
+      advance(1_000);
+      h.ports.structuredDeliveryPublication = () => "ready";
+    }
+  });
+  try {
+    if (earlierFirst) schedule(20);
+    await tickPipelines([], h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.controllerWait?.rounds).toBe(1);
+    if (!earlierFirst) schedule(20);
+    await new Promise(resolve => setTimeout(resolve, 400));
+    await Promise.all(callbacks);
+    expect(h.spawnInputs).toHaveLength(1);
+    expect(loadPipelines()[0]!.cursor?.state).toBe("running");
+  } finally {
+    unregister();
+    await Promise.all(callbacks);
+  }
+});
+
 test("a controller that is between publications is never spawned into (#1191)", async () => {
   const h = harness();
   await create(h.ports);
@@ -10481,6 +10554,7 @@ test("a usage-limit terminal transcript waits for its source reset while checkin
 
 test("an unpinned usage-limited stage respawns on another allowed account (#1371)", async () => {
   const h = harness();
+  h.setStageHost("conversation_stage_1", { outcome: "stopped" });
   const resetsAt = Math.floor(Date.parse("2026-09-07T10:05:00.000Z") / 1_000);
   const pipeline = await create(h.ports, usageLimitStage() as never);
   await tickPipelines([], h.ports);
@@ -11028,6 +11102,7 @@ test("a delivered Claude limit continuation releases later dead-host recovery", 
 
 test("a failover attempt edited to another engine launches there with none of the old engine's limits (graph slice 1)", async () => {
   const h = harness();
+  h.setStageHost("conversation_stage_1", { outcome: "stopped" });
   const resetsAt = Math.floor(Date.parse("2026-09-07T10:05:00.000Z") / 1_000);
   const pipeline = await create(h.ports, usageLimitStage() as never);
   await tickPipelines([], h.ports);
@@ -11074,6 +11149,7 @@ test("a failover attempt edited to another engine launches there with none of th
 
 test("a usage limit hit after the stage moved to another engine retries there without checking the old engine (graph slice 1)", async () => {
   const h = harness();
+  h.setStageHost("conversation_stage_1", { outcome: "stopped" });
   const resetsAt = Math.floor(Date.parse("2026-09-07T10:05:00.000Z") / 1_000);
   const pipeline = await create(h.ports, usageLimitStage() as never);
   await tickPipelines([], h.ports);
@@ -11140,6 +11216,8 @@ test("a failover whose remaining capacity disappears waits with the limit detail
 
 test("successive usage limits wait on the current source reset across failed-over accounts (#1371)", async () => {
   const h = harness();
+  h.setStageHost("conversation_stage_1", { outcome: "stopped" });
+  h.setStageHost("conversation_stage_2", { outcome: "stopped" });
   const firstReset = Math.floor(Date.parse("2026-09-02T10:05:00.000Z") / 1_000);
   const secondReset = Math.floor(Date.parse("2026-09-07T10:05:00.000Z") / 1_000);
   const pipeline = await create(h.ports, usageLimitStage() as never);
@@ -18994,6 +19072,9 @@ for (const engine of ["claude", "codex"] as const) {
 async function providerRecoveryHarness(engine: "claude" | "codex", errorClass: string, text: string, resetDelay: number | null = null, pinned = false) {
   const h = harness();
   await runningStructuredStage(h);
+  // Recovery successors use the same structured hosting as the initial stage.
+  const baseSpawn = h.ports.spawnAgent;
+  h.ports.spawnAgent = async (input, reserved) => ({ ...await baseSpawn(input, reserved), paneId: null });
   h.setConversationActive(false);
   let now = Date.parse(h.ports.now());
   h.ports.now = () => new Date(now).toISOString();
@@ -21352,13 +21433,147 @@ test("a reply during fresh target termination cancels failover before replacemen
 });
 
 
+for (const engine of ["claude", "codex"] as const) {
+  for (const paneAlive of [false, null]) {
+    test(`${engine} idle-only provider failover observes pane liveness=${paneAlive} without killing it`, async () => {
+      const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded",
+        "You've hit your session limit", 120_000);
+      const lane = loadPipelines()[0]!;
+      lane.runs[0]!.attempts[0]!.paneId = "%recorded-stage";
+      savePipelines([lane]);
+      f.h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { engine, accountId: SPARE_ACCOUNT,
+        kind: "managed", home: "/account", transcriptRoot: "/account/sessions", env: { NODE_ENV: "test" } } });
+      let idleStopProbe = false;
+      f.h.ports.stopStageAgent = async (_target, options) => {
+        expect(options).toEqual({ onlyIfIdle: true });
+        idleStopProbe = true;
+        return { outcome: "not-running" };
+      };
+      f.h.ports.paneAgentAlive = async () => {
+        if (!idleStopProbe) return true;
+        idleStopProbe = false;
+        if (paneAlive === null) throw new Error("pane snapshot unavailable");
+        return paneAlive;
+      };
+      let paneStops = 0;
+      f.h.ports.stopStagePane = async () => { paneStops++; return { outcome: "stopped" }; };
+      await tickPipelines([], f.h.ports);
+      if (paneAlive === false) {
+        await tickPipelines([], f.h.ports);
+        expect(f.h.spawnInputs).toHaveLength(2);
+      } else {
+        expect(f.h.spawnInputs).toHaveLength(1);
+        expect(loadPipelines()[0]!.stateDetail).toContain("pane liveness could not be verified");
+        f.advance(11 * 60_000);
+        await tickPipelines([], f.h.ports);
+        expect(loadPipelines()[0]!.state).toBe("needs_decision");
+        expect(f.h.spawnInputs).toHaveLength(1);
+      }
+      expect(paneStops).toBe(0);
+    });
+  }
+  test(`${engine} provider failover preserves an answered pane after registry absence`, async () => {
+    const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded",
+      "You've hit your session limit", 120_000);
+    const lane = loadPipelines()[0]!;
+    lane.runs[0]!.attempts[0]!.paneId = "%recorded-stage";
+    savePipelines([lane]);
+    f.h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { engine, accountId: SPARE_ACCOUNT,
+      kind: "managed", home: "/account", transcriptRoot: "/account/sessions", env: { NODE_ENV: "test" } } });
+    f.h.ports.stopStageAgent = async (_target, options) => {
+      expect(options).toEqual({ onlyIfIdle: true });
+      // A reply starts while the host lookup finds no registry resident.
+      f.h.durableTurns.set("/codex/stage-1.jsonl", { turn: "busy", message: null, lastRecordAt: f.now() + 1 });
+      return { outcome: "not-running" };
+    };
+    let paneStops = 0;
+    f.h.ports.stopStagePane = async () => { paneStops++; return { outcome: "stopped" }; };
+    await tickPipelines([], f.h.ports);
+    expect(paneStops).toBe(0);
+    expect(f.h.spawnInputs).toHaveLength(1);
+    f.advance(1_000);
+    await tickPipelines([], f.h.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+    expect(f.sends).toHaveLength(0);
+    expect(paneStops).toBe(0);
+    expect(f.h.spawnInputs).toHaveLength(1);
+  });
+}
+
+for (const engine of ["claude", "codex"] as const) {
+  test(`${engine} account preflight fallback keeps the cut-chain budget with a large allowed pool`, async () => {
+    const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded",
+      "You've hit your session limit", 120_000);
+    const spares = Array.from({ length: 8 }, (_, index) => `test-spare-${index}`);
+    f.h.ports.allowedAccountIds = () => [LIMITED_ACCOUNT, ...spares];
+    f.h.ports.resolveProjectSpawn = (_engine, request) => {
+      const target = spares.find(id => !request.unavailableIds?.includes(id));
+      return target ? { kind: "available", account: { engine, accountId: target, kind: "managed",
+        home: "/account", transcriptRoot: "/account/sessions", env: { NODE_ENV: "test" } } }
+        : { kind: "exhausted", resetsAt: f.resetsAt, allowedAccountIds: [LIMITED_ACCOUNT, ...spares] };
+    };
+    const targets: (string | null | undefined)[] = [];
+    f.h.ports.spawnAgent = async input => {
+      targets.push(input.requestedAccountId);
+      throw new (await import("@/lib/accounts/manager")).AccountAuthenticationRequiredError(engine, input.requestedAccountId!);
+    };
+    for (let tick = 0; tick < 12; tick++) await tickPipelines([], f.h.ports);
+    expect(targets).toEqual(spares.slice(0, 3));
+    expect(loadPipelines()[0]!.state).toBe("needs_decision");
+    expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.providerWait?.stageRetry).toBeDefined();
+    expect(f.h.spawnInputs).toHaveLength(1);
+  });
+  test(`${engine} account-specific preflight failure tries a third allowed account before parking`, async () => {
+    const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded",
+      "You've hit your session limit", 120_000);
+    const third = "test-third-account";
+    f.h.ports.allowedAccountIds = () => [LIMITED_ACCOUNT, SPARE_ACCOUNT, third];
+    f.h.ports.resolveProjectSpawn = (_engine, request) => {
+      const target = [SPARE_ACCOUNT, third].find(id => !request.unavailableIds?.includes(id));
+      return target ? { kind: "available", account: { engine, accountId: target, kind: "managed",
+        home: "/account", transcriptRoot: "/account/sessions", env: { NODE_ENV: "test" } } }
+        : { kind: "exhausted", resetsAt: f.resetsAt, allowedAccountIds: [LIMITED_ACCOUNT, SPARE_ACCOUNT, third] };
+    };
+    const baseSpawn = f.h.ports.spawnAgent;
+    const targets: (string | null | undefined)[] = [];
+    f.h.ports.spawnAgent = async (input, reserved) => {
+      targets.push(input.requestedAccountId);
+      if (input.requestedAccountId === SPARE_ACCOUNT) {
+        throw new (await import("@/lib/accounts/manager")).AccountAuthenticationRequiredError(engine, SPARE_ACCOUNT);
+      }
+      return baseSpawn(input, reserved);
+    };
+    for (let tick = 0; tick < 3; tick++) await tickPipelines([], f.h.ports);
+    expect(targets).toEqual([SPARE_ACCOUNT, third]);
+    expect(loadPipelines()[0]!.cursor?.state).toBe("running");
+    expect(loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.accountId).toBe(third);
+    expect(f.h.spawnInputs).toHaveLength(2);
+  });
+}
+
+test("an unrelated failover preparation error parks without condemning its account", async () => {
+  const f = await providerRecoveryHarness("claude", "rate_limit", "You've hit your session limit", 120_000);
+  f.h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { engine: "claude", accountId: SPARE_ACCOUNT,
+    kind: "managed", home: "/account", transcriptRoot: "/account/sessions", env: { NODE_ENV: "test" } } });
+  f.h.ports.spawnAgent = async () => { throw new Error("stage prompt could not be prepared"); };
+  await tickPipelines([], f.h.ports);
+  await tickPipelines([], f.h.ports);
+  const lane = loadPipelines()[0]!;
+  expect(lane.stateDetail).toBe("stage prompt could not be prepared");
+  expect(lane.runs[0]!.attempts.at(-1)!.providerWait?.failedAccounts ?? []).toEqual([]);
+  expect(lane.runs[0]!.attempts.at(-1)!.providerWait?.stageRetry).toBeUndefined();
+  f.advance(180_000);
+  await tickPipelines([], f.h.ports);
+  expect(f.h.spawnInputs).toHaveLength(1);
+});
+
 test.each([false, true])("fresh quota target preflight failure retains reset retry only before reservation=%s", async reserved => {
   const f = await providerRecoveryHarness("claude", "rate_limit", "You've hit your session limit", 120_000);
   f.h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { engine: "claude", accountId: SPARE_ACCOUNT, kind: "managed", home: "/account-b", transcriptRoot: "/account-b/sessions", env: { NODE_ENV: "test" } } });
   const baseSpawn = f.h.ports.spawnAgent;
   f.h.ports.spawnAgent = async (input, onReserved) => {
     if (reserved) await baseSpawn(input, onReserved);
-    throw new Error("successor provider failed a recoverable preflight");
+    throw new (await import("@/lib/accounts/manager")).AccountAuthenticationRequiredError("claude", SPARE_ACCOUNT);
   };
   for (let n = 0; n < 3; n++) await tickPipelines([], f.h.ports);
   const lane = loadPipelines()[0]!;

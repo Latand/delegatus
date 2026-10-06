@@ -7,9 +7,9 @@ import { activeDrain, type DrainLease } from "@/lib/selfUpdate/drain";
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { tierOffers, CodexServiceTierUnavailableError } from "@/lib/accounts/codexServiceTiers";
 import { listCodexAccounts } from "@/lib/accounts/codex";
-import { accountManager, resolveProjectSpawnAfterLiveRead } from "@/lib/accounts/manager";
+import { accountManager, AccountAuthenticationRequiredError, ProjectAccountRefusedError, resolveProjectSpawnAfterLiveRead } from "@/lib/accounts/manager";
 import { selectHeadlessAccount } from "@/lib/accounts/headlessSelection";
-import { AccountProjectBindingsUnreadableError, allowedAccountIdsForProject, projectAccountRefusalDetail } from "@/lib/accounts/projectBindings";
+import { AccountProjectBindingsUnreadableError, allowedAccountIdsForProject } from "@/lib/accounts/projectBindings";
 import {
   ENGINE_NOT_CONNECTED,
   engineNotConnectedDetails,
@@ -62,7 +62,7 @@ import type { BoardTask } from "@/lib/tasks/types";
 import { claudeProjectRootFor, codexSessionRootFor } from "@/lib/scanner/roots";
 import { isShellCommand } from "@/lib/status";
 import { cleanTitle } from "@/lib/title";
-import { killTmuxHostIfMatches, paneInfo } from "@/lib/tmux";
+import { killTmuxHostIfMatches, paneInfo, panePidMap } from "@/lib/tmux";
 import type { FileEntry } from "@/lib/types";
 import { realExec, type ExecPort } from "@/lib/workflows/provision";
 
@@ -594,8 +594,8 @@ async function spawnPipelineAgent(
     resolution = await resolveProjectSpawnAfterLiveRead(input.role.engine, { ...request, unavailableIds: input.unavailableAccountIds ?? [] });
   }
   if (resolution.kind !== "available") {
-    throw new Error(projectAccountRefusalDetail(resolution, input.role.engine, input.project)
-      + (serviceTier ? `; serviceTier ${serviceTier} offered by: ${candidates.filter(account => offers?.offering.includes(account.id)).map(account => account.label).join(", ")}` : ""));
+    throw new ProjectAccountRefusedError(resolution, input.role.engine, input.project,
+      serviceTier ? `serviceTier ${serviceTier} offered by: ${candidates.filter(account => offers?.offering.includes(account.id)).map(account => account.label).join(", ")}` : undefined);
   }
   const account = resolution.account;
   const parent = parentIdentity(input.parentPath);
@@ -1175,25 +1175,17 @@ function pipelineSurvivorRefusal(pipeline: Pipeline): { error: string; status: n
   return null;
 }
 
-let pipelineWakeTimer: ReturnType<typeof setTimeout> | null = null;
-let pipelineWakeAt = 0;
-
-/** One process wake suffices for all lanes. An earlier deadline replaces it. */
+/** Each booked retry keeps its wake even when another lane wakes sooner. */
 function schedulePipelineTick(delayMs: number): void {
-  const due = Date.now() + Math.max(0, delayMs);
-  if (pipelineWakeTimer && pipelineWakeAt <= due) return;
-  if (pipelineWakeTimer) clearTimeout(pipelineWakeTimer);
-  pipelineWakeAt = due;
-  pipelineWakeTimer = setTimeout(() => {
-    pipelineWakeTimer = null;
-    providerWakeups.delete(schedulePipelineTick);
+  const timer = setTimeout(() => {
     requestPipelineTick();
   }, Math.max(0, delayMs));
-  pipelineWakeTimer.unref?.();
+  timer.unref?.();
 }
 
 export function defaultPipelinePorts(
-  dependencies: { liveness?: TurnLivenessDependencies; termination?: StructuredHostTerminationDependencies } = {},
+  dependencies: { liveness?: TurnLivenessDependencies; termination?: StructuredHostTerminationDependencies;
+    panes?: { snapshot?: typeof paneInfo; observation?: typeof panePidMap } } = {},
 ): PipelinePorts {
   let runtimeSnapshot: ReturnType<NonNullable<ReturnType<typeof runtimeHostClient>>["snapshot"]> | null = null;
   const registry = agentRegistry();
@@ -1350,8 +1342,14 @@ export function defaultPipelinePorts(
       return result;
     },
     paneAgentAlive: async (paneId) => {
-      const info = await paneInfo(paneId);
-      return info !== null && !isShellCommand(info.command);
+      const info = await (dependencies.panes?.snapshot ?? paneInfo)(paneId);
+      if (info) return !isShellCommand(info.command);
+      // display-message also returns null on a failed probe. Require positive
+      // absence evidence before letting automatic recovery replace the pane.
+      const observation = await (dependencies.panes?.observation ?? panePidMap)(true);
+      if (observation.kind === "no-server") return false;
+      if (observation.kind === "failure") return true;
+      return [...observation.panes.values()].some(pane => pane.paneId === paneId);
     },
     stopStageAgent: (target, options) => options?.onlyIfIdle
       ? retirePipelineStageAgent(target) : stopPipelineStageAgent(target),
@@ -2281,6 +2279,15 @@ async function recoverProviderCut(
 async function stopStageForRecovery(target: PipelineStageHostRef, ports: PipelinePorts, options?: { onlyIfIdle: true }): Promise<PipelineStageStopResult> {
   const stopped = await ports.stopStageAgent(target, options);
   if (stopped.outcome !== "not-running" || !target.paneId) return stopped;
+  if (options?.onlyIfIdle) {
+    // Pane identity proves ownership, but cannot fence a new operator turn.
+    // Automatic recovery leaves a live pane for the operator to retire.
+    try {
+      return await ports.paneAgentAlive(target.paneId) ? { outcome: "deferred" } : stopped;
+    } catch {
+      return { outcome: "failed", error: "recorded pane liveness could not be verified for idle-only recovery" };
+    }
+  }
   const pane = await ports.stopStagePane(target);
   return pane.outcome === "unknown" ? { outcome: "failed", error: pane.detail } : pane;
 }
@@ -4947,7 +4954,42 @@ async function spawnRunStage(
     // owes a retry; any reserved identity keeps the ordinary receipt/host gate.
     if (wait?.condition.kind === "usage_limit" && wait.turnTs === 0 && wait.switchedAccountId
       && !attempt.launchId && !attempt.conversationId && !attempt.agentPath && !attempt.paneId) {
+      const accountFailure = error instanceof ProjectAccountRefusedError
+        || error instanceof AccountAuthenticationRequiredError && error.accountId === wait.switchedAccountId
+        || classifyProviderCondition(attempt.effectiveRole.engine, null, detail).kind === "auth_required";
+      if (!accountFailure) {
+        park(pipeline, detail, attempt);
+        return;
+      }
       wait.failedAccounts = [...new Set([...(wait.failedAccounts ?? []), wait.switchedAccountId])];
+      const engine = attempt.effectiveRole.engine;
+      attempt.providerRecoveryBudget = { ...attempt.providerRecoveryBudget, tries: wait.tries,
+        startedAt: providerBackoffStartedAt(attempt, ports.now()), engine,
+        failedAccounts: [...new Set([...providerFailedAccountsOn(attempt, engine), ...wait.failedAccounts])] };
+      if (!attemptStage(stage, attempt).account && wait.tries < 3) {
+        const unavailableIds = usageLimitsOn(attempt, engine)
+          .filter(item => !providerAccountRecovered(pipeline, attempt, item.accountId, item.limitedAt ?? null, item.resetsAt, ports))
+          .map(item => item.accountId).concat(providerSpentAccountsOn(pipeline, attempt, engine, ports), wait.failedAccounts);
+        try {
+          const request = { project: pipeline.project, model: attempt.effectiveRole.model, unavailableIds };
+          const resolution = ports.resolveProjectSpawn?.(engine, request) ?? accountManager.resolveProjectSpawn(engine, request);
+          if (resolution.kind === "available" && !unavailableIds.includes(resolution.account.accountId)) {
+            const target = resolution.account.accountId;
+            wait.switchedAccountId = target;
+            wait.tries += 1;
+            wait.resumeAt = ports.now();
+            attempt.providerRecoveryBudget.tries = wait.tries;
+            attempt.providerRecoveryBudget.triedAccounts = [...new Set([...providerTriedAccountsOn(attempt, engine), target])];
+            attempt.accountId = target;
+            attempt.state = "pending";
+            setCursorState(pipeline, stage.id, "pending");
+            pipeline.stateDetail = `retrying ${engine} provider preflight on another allowed account`;
+            await persist();
+            ports.scheduleTick?.(0);
+            return;
+          }
+        } catch { /* Unavailable selection evidence keeps the durable reset obligation. */ }
+      }
       parkProviderUsageLimit(pipeline, attempt, `stage cut by ${wait.condition.label}; target preflight failed: ${detail}`, ports);
     } else park(pipeline, detail, attempt);
   } finally {
