@@ -992,11 +992,11 @@ export const uk: Record<keyof typeof en, Message> = {
   "draft.folderUnknown": "Тека цього проєкту ще не відома, тому агент тут не стартує. Надсилання запрацює, щойно дошка знайде теку.",
   "draft.sourceFolderPending": "Шукаю теку розмови, яку продовжує цей агент. Надсилання запрацює, щойно вона знайдеться.",
   "draft.sourceFolderUnknown": "Теку розмови, яку продовжує цей агент, не вдалося знайти, тому агент не може в ній стартувати.",
+  "draft.sourceFolderRemoved": "Робочу копію розмови, яку продовжує цей агент, видалено, тому агент не може в ній стартувати.",
   "draft.engineAria": "Двигун агента",
   "draft.accountAria": "Обліковий запис {engine} для цього запуску",
   "draft.accountDefault": "{label} · активний",
   "draft.accountNeedsLogin": "{label} · потрібен вхід",
-  "draft.dismiss": "Прибрати чернетку розмови",
 
   "dirPicker.empty": "директорію не вибрано",
   "dirPicker.searchAria": "Відфільтруй відомі директорії або впиши шлях",

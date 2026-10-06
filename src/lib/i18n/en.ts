@@ -1013,11 +1013,11 @@ export const en = {
   "draft.folderUnknown": "This project's folder is not known yet, so an agent cannot start here. Send works as soon as the board finds the folder.",
   "draft.sourceFolderPending": "Finding the folder of the conversation this agent continues. Send works as soon as it is found.",
   "draft.sourceFolderUnknown": "The folder of the conversation this agent continues could not be found, so the agent cannot start in it.",
+  "draft.sourceFolderRemoved": "The working copy of the conversation this agent continues has been deleted, so the agent cannot start in it.",
   "draft.engineAria": "Agent engine",
   "draft.accountAria": "{engine} account for this launch",
   "draft.accountDefault": "{label} · active",
   "draft.accountNeedsLogin": "{label} · needs sign-in",
-  "draft.dismiss": "Dismiss the draft conversation",
 
   "dirPicker.empty": "no directory chosen",
   "dirPicker.searchAria": "Filter the known directories, or type a path",

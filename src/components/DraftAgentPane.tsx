@@ -431,9 +431,11 @@ export function DraftAgentPane({
   const [cwd, setCwdState] = useState(() => initialCwd || draftWorkingDirectory(files, project, src));
   /* A handoff launches in its source's own checkout and nowhere else. The seed above is the board's guess
      for it, which nobody sees any more, so only a directory the source itself names counts: the one the
-     spawn route reads from the source transcript, or the one the files feed already carries for it. */
-  const [answeredSourceCwd, setAnsweredSourceCwd] = useState("");
-  const sourceCwd = src ? answeredSourceCwd || srcFile?.cwd?.trim() || "" : "";
+     spawn route reads from the source transcript, or, when the route could not read one, the one the files
+     feed carries for it. A directory the route says is gone (a worktree removed after its merge) is not
+     launched in, whatever the feed still remembers. */
+  const [answeredSource, setAnsweredSource] = useState<{ cwd: string; exists: boolean } | null>(null);
+  const sourceRemoved = Boolean(src && answeredSource && !answeredSource.exists);
   const isMobile = useIsMobile();
   /* The stored key is "" before the first negotiation and after an engine flip;
      the derived value below reads any mismatch as «loading», which is exactly
@@ -526,14 +528,15 @@ export function DraftAgentPane({
     fetch("/api/spawn?project=" + encodeURIComponent(project) + (src ? "&src=" + encodeURIComponent(src) : ""))
       .then(async (res) => {
         if (!res.ok) throw new Error("spawn capability request failed");
-        return await res.json() as { dirs?: string[]; cwd?: string | null; spawnTransport?: unknown; imageInput?: unknown };
+        return await res.json() as { dirs?: string[]; cwd?: string | null; cwdExists?: boolean; spawnTransport?: unknown; imageInput?: unknown };
       })
       .then((json) => {
         if (cancelled) return;
         const inherited = typeof json.cwd === "string" ? json.cwd.trim() : "";
         const shouldInherit = Boolean(awaitingInheritedCwdRef.current && inherited);
         if (shouldInherit) awaitingInheritedCwdRef.current = false;
-        if (src && inherited) setAnsweredSourceCwd(inherited);
+        /* An older route answers no `cwdExists`; only an explicit `false` reads as a removed checkout. */
+        if (src && inherited) setAnsweredSource({ cwd: inherited, exists: json.cwdExists !== false });
         setCwdState((prev) => {
           /* Only the source's own directory is inherited. The suggestions' other directories are guesses
              the operator used to see and correct; unseen, a guess is not launched in. */
@@ -734,6 +737,9 @@ export function DraftAgentPane({
      draft was opened, or a handoff's source directory. `/` is what the board seeds while the project's
      folder is still unresolved; it counts only when the project's own conversations say the root is `/`. */
   const seededCwd = cwd.trim();
+  const sourceCwd = !src || sourceRemoved
+    ? ""
+    : answeredSource?.cwd || (spawnImageNegotiation.status === "loading" ? "" : srcFile?.cwd?.trim() || "");
   const launchCwd = src
     ? sourceCwd
     : seededCwd && seededCwd !== "/" ? seededCwd : draftWorkingDirectory(files, project);
@@ -804,7 +810,9 @@ export function DraftAgentPane({
         ? undefined
         : !src
           ? t("draft.folderUnknown")
-          : spawnImageNegotiation.status === "loading" ? t("draft.sourceFolderPending") : t("draft.sourceFolderUnknown");
+          : sourceRemoved
+            ? t("draft.sourceFolderRemoved")
+            : spawnImageNegotiation.status === "loading" ? t("draft.sourceFolderPending") : t("draft.sourceFolderUnknown");
 
   /* The title the launched card will carry: the launch's own title without the engine it leads with. */
   const openingTitle = (attempt?.request?.title ?? "").replace(/^[^·]*·\s*/, "") || attempt?.prompt.split("\n")[0] || "";

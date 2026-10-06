@@ -403,6 +403,39 @@ test("a handoff whose source has no folder on record refuses the launch instead 
   expect(posts).toHaveLength(0);
 });
 
+test("a handoff from a deleted worktree refuses the launch in words, and the feed's memory of the folder does not override it", async () => {
+  const posts: Record<string, unknown>[] = [];
+  launchSeam(posts, { ...imageNegotiation("structured"), cwd: "/repo/worktrees/gone", cwdExists: false });
+  setDraftSrc("gone-handoff", implementer.path, implementer.conversationId);
+  setDraftBand("gone-handoff", "task:task-3");
+  setDraftCwd("gone-handoff", "/repos/project-root-guess");
+  const host = mount("gone-handoff", [{ ...implementer, cwd: "/repo/worktrees/gone" }]);
+  await settle();
+
+  expect(host.querySelector('[data-testid="composer-send-blocked"]')!.textContent).toContain("has been deleted");
+  submit(host);
+  await settle();
+  expect(posts).toHaveLength(0);
+  expect(host.textContent).not.toContain("/repo/worktrees/gone");
+  expect(host.querySelectorAll('select, input:not([type="file"])')).toHaveLength(0);
+});
+
+test("a handoff from a live worktree launches in it with its source, parent and task", async () => {
+  const posts: Record<string, unknown>[] = [];
+  launchSeam(posts, { ...imageNegotiation("structured"), cwd: "/repo/worktrees/live", cwdExists: true });
+  setDraftSrc("live-handoff", implementer.path, implementer.conversationId);
+  setDraftBand("live-handoff", "task:task-4");
+  setDraftCwd("live-handoff", "/repos/project-root-guess");
+  const host = mount("live-handoff", [{ ...implementer, cwd: "/repo/worktrees/live" }]);
+  await settle();
+
+  expect(host.querySelector('[data-testid="composer-send-blocked"]')).toBeNull();
+  submit(host);
+  await settle();
+  expect(posts).toHaveLength(1);
+  expect(posts[0]).toMatchObject({ cwd: "/repo/worktrees/live", src: implementer.path, parentConversationId: implementer.conversationId, taskId: "task-4" });
+});
+
 const pillOf = (host: HTMLElement) => host.querySelector("[data-runtime-pill]") as HTMLButtonElement;
 const row = (value: string) => document.querySelector(`[data-runtime-popover] [data-runtime-value="${value}"]`) as HTMLElement;
 function pickModel(host: HTMLElement, value: string) {
