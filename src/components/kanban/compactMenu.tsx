@@ -204,7 +204,7 @@ function MenuView({ layout, path, t, onPick, onClose, onPath }: ViewProps) {
   return <>{layout.nodes.map(node)}</>;
 }
 
-function CompactMenu({ layout: whole, anchor, label, onClose }: { layout: CompactLayout } & Pick<KanbanMenuProps, "anchor" | "label" | "onClose">) {
+function CompactMenu({ layout: whole, anchor, label, onClose, kind }: { layout: CompactLayout } & Pick<KanbanMenuProps, "anchor" | "label" | "onClose" | "kind">) {
   const { t } = useLocale();
   /* The pipelines of a card on each page of their list, once the list was
      measured too tall for one: the rest go behind the page's last row. */
@@ -239,12 +239,14 @@ function CompactMenu({ layout: whole, anchor, label, onClose }: { layout: Compac
     }
     const probes = [...menu.querySelectorAll<HTMLElement>("[data-cm-probe]")].map((probe) => probe.offsetHeight + chrome);
     const tallest = Math.min(cap, Math.max(rest, ...probes));
-    const spot = menuPlacement(anchor.getBoundingClientRect(), menu.offsetWidth, tallest, { width: window.innerWidth, height: window.innerHeight });
+    /* A column's menu starts inside its column: on an empty column opened to a shelf the menu is wider than the shelf. */
+    const column = kind === "column" ? anchor.closest<HTMLElement>(".column") : null;
+    const spot = menuPlacement(anchor.getBoundingClientRect(), menu.offsetWidth, tallest, { width: window.innerWidth, height: window.innerHeight }, column ? column.getBoundingClientRect().left : null);
     menu.style.left = `${Math.round(spot.left)}px`;
     menu.style.top = `${Math.round(spot.top)}px`;
     /* The unseen states are dropped before the first paint. */
     setPlaced(spot.side);
-  }, [anchor, lanes]);
+  }, [anchor, kind, lanes]);
   const go = (next: string[], swap?: React.MouseEvent) => {
     swapped(swap);
     setPath(next);
@@ -310,5 +312,5 @@ export function BoardMenu(props: KanbanMenuProps) {
     appearance: t("kanban.menu.appearance"), more: t("kanban.menu.more"), pipelines: t("kanban.menu.pipelines"), move: t("kanban.moveTo"), priority: t("kanban.priority"),
   });
   if (!layout) return <KanbanMenu {...props} />;
-  return <CompactMenu layout={layout} anchor={props.anchor} label={props.label} onClose={props.onClose} />;
+  return <CompactMenu layout={layout} anchor={props.anchor} label={props.label} onClose={props.onClose} kind={props.kind} />;
 }

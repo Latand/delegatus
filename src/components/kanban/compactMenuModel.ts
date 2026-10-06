@@ -203,9 +203,14 @@ export type MenuSide = "below" | "beside";
 /** Where a menu goes so that no state of it covers its own button and every
     state hangs from the same top edge: below the button while the tallest
     state fits there, else beside it. The top never moves, so a section always
-    opens under its own row, wherever on the screen the button is. */
-export function menuPlacement(anchor: { left: number; right: number; top: number; bottom: number }, width: number, tallest: number, view: { width: number; height: number }): { side: MenuSide; left: number; top: number } {
-  if (anchor.bottom + MENU_GAP + tallest <= view.height - 8) return { side: "below", left: popoverLeft(anchor, width, view.width), top: anchor.bottom + MENU_GAP };
+    opens under its own row, wherever on the screen the button is. Below a
+    button that sits in a narrower surface (a column folded open to a shelf),
+    `withinLeft` keeps the menu from starting left of that surface. */
+export function menuPlacement(anchor: { left: number; right: number; top: number; bottom: number }, width: number, tallest: number, view: { width: number; height: number }, withinLeft: number | null = null): { side: MenuSide; left: number; top: number } {
+  if (anchor.bottom + MENU_GAP + tallest <= view.height - 8) {
+    const left = popoverLeft(anchor, width, view.width);
+    return { side: "below", left: withinLeft !== null && left < withinLeft ? Math.max(8, Math.min(withinLeft, view.width - width - 8)) : left, top: anchor.bottom + MENU_GAP };
+  }
   const before = anchor.left - MENU_GAP - width;
   return { side: "beside", left: before >= 8 ? before : Math.min(anchor.right + MENU_GAP, view.width - width - 8), top: Math.max(8, Math.min(anchor.top, view.height - 8 - tallest)) };
 }

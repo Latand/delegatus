@@ -142,6 +142,18 @@ describe("where a compact menu stands", () => {
     expect(menuPlacement({ left: 20, right: 44, top: 640, bottom: 664 }, WIDTH, 342, { width: 1000, height: 700 })).toMatchObject({ side: "beside", left: 44 + MENU_GAP });
   });
 
+  test("a column's menu starts inside its column when the column is narrower than the menu", () => {
+    const view = { width: 1440, height: 900 };
+    /* The ⋯ of an empty Blocked opened to a 280 px shelf at 1048–1328: right-aligned the menu would start at 1015. */
+    const shelf = { left: 1291, right: 1315, top: 60, bottom: 84 };
+    expect(menuPlacement(shelf, WIDTH, 56, view)).toMatchObject({ side: "below", left: 1315 - WIDTH });
+    expect(menuPlacement(shelf, WIDTH, 56, view, 1048)).toEqual({ side: "below", left: 1048, top: 84 + MENU_GAP });
+    /* A column at least as wide as the menu keeps it right-aligned to its button. */
+    expect(menuPlacement(shelf, WIDTH, 56, view, 980)).toMatchObject({ left: 1315 - WIDTH });
+    /* Never past the window's right edge. */
+    expect(menuPlacement({ left: 1400, right: 1424, top: 60, bottom: 84 }, WIDTH, 56, view, 1300)).toMatchObject({ left: 1440 - 8 - WIDTH });
+  });
+
   test("no state covers the button or leaves the window, wherever the button is", () => {
     for (const view of [{ width: 1440, height: 900 }, { width: 1000, height: 700 }]) {
       for (let top = 0; top <= view.height - 24; top += 7) for (const left of [8, 300, view.width - 40]) for (const tallest of [69, 257, 276, 328, 342, 360]) {

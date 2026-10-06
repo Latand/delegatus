@@ -10387,13 +10387,17 @@ describe("#2187 a completed lane's automatic merge, and the project's merge sett
               for (const entry of [...got.clipped, ...got.overlaps]) fail(entry);
               for (const entry of got.escapes) fail(`paints outside its card: ${entry}`);
             }
-            /* The ⋯ menu: the setting row on, its switch, and the row off. */
+            /* The ⋯ menu: the setting row on, its switch, and the row off. The
+               row lives on the menu's "Merging and syncing" page (#2557, the
+               compact menus): at rest the ⋯ shows only its section rows. */
             const more = page.locator('[data-bar-group="more"] button').first();
             await more.click();
+            await page.locator('[data-bar-menu-head="merging"]').click();
+            await page.locator('[data-bar-more-menu][data-bar-menu-view="merging"] [data-bar-menu-back="merging"]').waitFor({ timeout: 10_000 });
             const row = page.locator("[data-merge-on-review]");
             await row.waitFor({ timeout: 10_000 });
             await page.waitForFunction(() => !document.querySelector("[data-merge-on-review-switch]")?.hasAttribute("disabled"), undefined, { timeout: 10_000 });
-            const menuBox = page.locator('[data-bar-menu-group="project"]').locator("xpath=..");
+            const menuBox = page.locator("[data-bar-more-menu]");
             await menuBox.screenshot({ path: path.join(OUT, `menu-setting-on-${label}.png`) });
             const readRow = () => page.evaluate(() => {
               const element = document.querySelector("[data-merge-on-review]")!;
@@ -11199,11 +11203,15 @@ describe("#2146 the orchestrator's report log beside its chat, and the Bridge re
             const older = await page.evaluate(READ_LOG);
             if (older?.entries !== 46 || older.older) fail(`after Show older: ${older?.entries} entries, older control ${older?.older}`);
 
-            /* The ⋯ menu: the Bridge reports row on, then off by its switch. */
+            /* The ⋯ menu: the Bridge reports row on, then off by its switch, on
+               the menu's "Orchestrator" page (#2557, the compact menus). */
             await page.locator('[data-bar-group="more"] button').first().click();
+            await page.locator('[data-bar-menu-head="seat"]').click();
+            await page.locator('[data-bar-more-menu][data-bar-menu-view="seat"] [data-bar-menu-back="seat"]').waitFor({ timeout: 10_000 });
             await page.locator("[data-bridge-reports]").waitFor({ timeout: 10_000 });
-            await page.waitForFunction(() => [...document.querySelectorAll("[data-bar-menu-group] [role=switch]")].every((toggle) => !toggle.hasAttribute("disabled")), undefined, { timeout: 10_000 });
-            const menuBox = page.locator('[data-bar-menu-group="project"]').locator("xpath=..");
+            /* Every switch of the page that is shown; the other pages' rows stay mounted, out of sight. */
+            await page.waitForFunction(() => [...document.querySelectorAll('[data-bar-menu-body="seat"] [role=switch]')].every((toggle) => !toggle.hasAttribute("disabled")), undefined, { timeout: 10_000 });
+            const menuBox = page.locator("[data-bar-more-menu]");
             await page.waitForTimeout(400);
             await menuBox.screenshot({ path: path.join(OUT, `menu-bridge-on-${label}.png`) });
             const readRow = () => page.evaluate(() => {
@@ -12981,12 +12989,15 @@ describe("asks you: an agent that asked the operator, on its card, in the report
           if (log.sideways > 0) fail(`the log scrolls sideways by ${log.sideways}px`);
           await seat.locator("[data-report-ask] a[data-report-link=conversation]").first().screenshot({ path: path.join(OUT, `log-link-${label}.png`) });
 
-          /* The ⋯ menu: the Asks you row, on, with the month's spend. */
+          /* The ⋯ menu: the Asks you row, on, with the month's spend, on the
+             menu's "Orchestrator" page (#2557, the compact menus). */
           await page.locator('[data-bar-group="more"] button').first().click();
+          await page.locator('[data-bar-menu-head="seat"]').click();
+          await page.locator('[data-bar-more-menu][data-bar-menu-view="seat"] [data-bar-menu-back="seat"]').waitFor({ timeout: 10_000 });
           await page.locator("[data-bar-menu-group] [data-asks-you]").waitFor({ timeout: 10_000 });
           await page.waitForFunction(() => document.querySelector("[data-bar-menu-group] [data-asks-you]")?.getAttribute("data-asks-you") === "on", undefined, { timeout: 10_000 });
           await page.waitForTimeout(400);
-          await page.locator('[data-bar-menu-group="project"]').locator("xpath=..").screenshot({ path: path.join(OUT, `menu-${label}.png`) });
+          await page.locator("[data-bar-more-menu]").screenshot({ path: path.join(OUT, `menu-${label}.png`) });
           const row = await page.evaluate(() => {
             const element = document.querySelector("[data-bar-menu-group] [data-asks-you]")!;
             const toggle = element.querySelector<HTMLElement>("[data-asks-you-switch]")!;
