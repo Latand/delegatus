@@ -444,13 +444,33 @@ for (const reason of [HOST_DOWN, "The connection to the structured recovery proc
 }
 
 for (const locale of ["uk", "en"] as const) {
+  test(`discard waits for an active handover and names when it becomes available (${locale})`, () => {
+    setLocale(locale);
+    const discards: string[] = [];
+    const unknown = receipt({ operationId: "handover-operation", status: "delivering", resend: "verify-first" });
+    const mounted = mount({ receipts: [unknown], onDiscard: r => discards.push(r.operationId) });
+    try {
+      const button = mounted.host.querySelector<HTMLButtonElement>("[data-receipt-discard]")!;
+      expect(button.disabled).toBe(true);
+      expect(button.title).toBe(translate(locale, "composer.deliveryDiscardHandover"));
+      expect(mounted.host.textContent).toContain(translate(locale, "composer.deliveryDiscardHandover"));
+      click(button);
+      expect(discards).toEqual([]);
+      rerender(mounted, { receipts: [{ ...unknown, status: "uncertain" }], onDiscard: r => discards.push(r.operationId) });
+      const available = mounted.host.querySelector<HTMLButtonElement>("[data-receipt-discard]")!;
+      expect(available.disabled).toBe(false);
+      click(available);
+      expect(discards).toEqual([unknown.operationId]);
+    } finally { mounted.cleanup(); }
+  });
+
   test(`delivery notice uses plain ${locale} copy and vanishes on confirmation`, () => {
     setLocale(locale);
     const unknown = receipt({ operationId: "late-delivery", resend: "verify-first",
       reason: "delivery was started by an earlier executor; whether it reached the recipient is unverified" });
     const mounted = mount({ receipts: [unknown] }, 390);
-    const checking = translate(locale, "composer.deliveryChecking");
-    expect(mounted.summary().querySelector("[data-delivery-notice-cause]")?.textContent).toBe(checking);
+    const ended = translate(locale, "composer.deliveryCheckEnded");
+    expect(mounted.summary().querySelector("[data-delivery-notice-cause]")?.textContent).toBe(ended);
     click(mounted.summary());
     expect(mounted.host.textContent).not.toContain("delivery was started");
     rerender(mounted, { receipts: [{ ...unknown, status: "delivered", reason: null, resend: "not-needed" }] });

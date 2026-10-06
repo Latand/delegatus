@@ -485,12 +485,18 @@ export function RuntimeComposerReceipts({
     admittedAt: group.current.admittedAt ?? group.current.at,
     nowMs: now,
   });
+  const unknownStatusText = (receipt: RuntimeReceipt): string => t(receipt.status === "failed"
+    ? "composer.deliveryCheckEnded" : "composer.deliveryChecking");
+  const handoverActive = (receipt: RuntimeReceipt): boolean => receipt.status === "delivering" || receipt.status === "applying";
+  const unknownDetail = (receipt: RuntimeReceipt): string => t(handoverActive(receipt)
+    ? "composer.deliveryDiscardHandover"
+    : receipt.status === "failed" ? "composer.deliveryCheckEndedDetail" : "composer.deliveryCheckingDetail");
   const receiptStatusText = (receipt: RuntimeReceipt): string => receiptHasUnknownFate(receipt)
-    ? t("composer.deliveryChecking")
+    ? unknownStatusText(receipt)
     : runtimeReceiptStatusText(t, receipt);
   const uncertainControls = (receipt: RuntimeReceipt) => (
     <span className="flex min-w-0 flex-wrap items-center justify-end gap-1.5" data-operation={receipt.operationId}>
-      <span role="status" className="text-caption text-warning">{t("composer.deliveryChecking")}</span>
+      <span role="status" className="text-caption text-warning">{unknownStatusText(receipt)}</span>
       {/* #1560: an injection gets the verdict and NO controls. Both of these
           re-arm or end the original operation, and the journal refuses either
           for this kind — the engine does not deduplicate a second insertion,
@@ -503,7 +509,7 @@ export function RuntimeComposerReceipts({
         {alternateRetry(receipt)
           ? <button type="button" data-receipt-uncertain-retry disabled={actionsDisabled} className="min-h-11 rounded-full border border-border px-3" onClick={() => onRetry(receipt, "uncertain")}>{t("runtime.receipt.retry")}</button>
           : <button type="button" disabled={actionsDisabled} className="min-h-11 rounded-full border border-border px-3" onClick={() => onRecheck?.(receipt)}>{t("composer.payloadRecheck")}</button>}
-        {onDiscard ? <button type="button" data-receipt-discard disabled={actionsDisabled} className="min-h-11 rounded-full border border-border px-3" onClick={() => onDiscard(receipt)}>{t("runtime.receipt.discard")}</button> : null}
+        {onDiscard ? <button type="button" data-receipt-discard disabled={actionsDisabled || handoverActive(receipt)} title={handoverActive(receipt) ? t("composer.deliveryDiscardHandover") : undefined} className="min-h-11 rounded-full border border-border px-3" onClick={() => onDiscard(receipt)}>{t("runtime.receipt.discard")}</button> : null}
       </> : null}
     </span>
   );
@@ -544,7 +550,7 @@ export function RuntimeComposerReceipts({
   const notice = deliveryNoticeRun(attemptGroups, textlessProblems);
   const noticeUnknown = notice ? receiptHasUnknownFate(notice.current) : false;
   const noticeFailure = notice && !noticeUnknown && notice.current.resend !== "safe" ? describeReceiptFailure(t, notice.current.reason) : null;
-  const noticeLabel = t(noticeUnknown ? "composer.deliveryChecking" : "composer.deliveryNotDelivered");
+  const noticeLabel = noticeUnknown ? unknownStatusText(notice!.current) : t("composer.deliveryNotDelivered");
   const noticeLine = notice
     ? noticeFailure?.cause
       ? `${noticeLabel} — ${noticeFailure.cause}`
@@ -869,7 +875,7 @@ export function RuntimeComposerReceipts({
                         className="min-w-0 max-w-full text-right text-caption text-muted"
                         data-receipt-uncertain-why
                       >
-                        {unknownFate ? t("composer.deliveryCheckingDetail") : deliveryUncertainWhy(t, wait!)}
+                        {unknownFate ? unknownDetail(receipt) : deliveryUncertainWhy(t, wait!)}
                       </span>
                     ) : null}
                     {history.length ? (
@@ -912,7 +918,7 @@ export function RuntimeComposerReceipts({
                       onRetry={isRetryableReceipt(receipt) && receipt.status === "failed" ? () => retryFailed(receipt) : undefined}
                     />}
                     {receiptHasUnknownFate(receipt) && receipt.reason ? (
-                      <span className="w-full break-words text-right text-caption text-muted" data-receipt-uncertain-why>{t("composer.deliveryCheckingDetail")}</span>
+                      <span className="w-full break-words text-right text-caption text-muted" data-receipt-uncertain-why>{unknownDetail(receipt)}</span>
                     ) : null}
                     {onDismiss && !receiptHasUnknownFate(receipt) && receiptIsTerminal(receipt.status) ? (
                       <button
@@ -4061,7 +4067,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       const body = (await response.json().catch(() => ({}))) as { operationId?: string; receipt?: RuntimeReceipt; error?: string };
       const accepted = body.receipt && rememberRuntimeReceipt(body.receipt, receipt, mode !== "uncertain", body.operationId);
       if (!response.ok || !accepted) {
-        setStatus({ kind: "err", text: body.error ?? t("common.failedSend") });
+        setStatus({ kind: "err", text: t("composer.deliveryRetryFailed") });
         return;
       }
     } catch {
@@ -4096,9 +4102,11 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       const body = (await response.json().catch(() => ({}))) as { operationId?: string; receipt?: RuntimeReceipt; error?: string };
       const accepted = body.receipt && rememberRuntimeReceipt(body.receipt, receipt, false, body.operationId);
       if (!response.ok || !accepted) {
-        setStatus({ kind: "err", text: body.error ?? t("common.failedSend") });
+        setStatus({ kind: "err", text: t(response.status === 409
+          ? "composer.deliveryDiscardBusy" : "composer.deliveryDiscardFailed") });
         return;
       }
+      if (body.receipt?.reason === "delivery-discarded") dismissReceipts([receipt.operationId]);
     } catch {
       setStatus({ kind: "err", text: t("common.serverUnavailable") });
     } finally {

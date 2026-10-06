@@ -21,6 +21,7 @@ import { StructuredDeliveryQueue } from "./structuredDeliveryQueue";
 import { resolveSendReceipt, sendIsSettled, sendReceiptFor } from "./sendSettlement";
 import { enqueueStructuredMessage } from "./structuredMessageDelivery";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
+import type { MessageOrigin } from "./messageOrigin";
 import { humanReceiptReasonKey } from "@/components/runtime/runtimeModel";
 import { translate } from "@/lib/i18n";
 
@@ -31,6 +32,86 @@ function request(body: unknown, headers: Record<string, string> = { host: "127.0
     headers: { ...headers, "content-type": "application/json" },
     body: JSON.stringify(body),
   });
+}
+
+for (const sqliteMode of ["off", "sqlite"] as const) {
+  for (const scenario of ["initial", "legacy-failure", "compacted-failure"] as const) {
+    for (const origin of [{ kind: "operator" }, {
+      kind: "agent", role: "orchestrator", project: "repo-source", conversationId: "conversation_source",
+    }] satisfies MessageOrigin[]) {
+      test(`checking delivery discard: ${sqliteMode}, ${scenario}, ${origin.kind}`, async () => {
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-checking-discard-"));
+        let clock = Date.now();
+        const registryFile = path.join(directory, "registry.json");
+        const registry = new AgentRegistry(registryFile, undefined, undefined, { sqliteMode, now: () => clock });
+        const conversation = registry.ensureConversation("codex", path.join(directory, "recipient.jsonl"), "default");
+        const operationId = "checking-operation";
+        const key = "checking-key";
+        const text = "handoff: investigate the pending delivery";
+        const held = registry.holdDelivery(conversation.id, text, key, "text", [], null,
+          { operationId, kind: "send", policy: "queue", origin });
+        registry.beginDeliveryAttempt(held.id, held.generationId!);
+        const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+        let reopened: AgentRegistry | undefined;
+        const client = {
+          operationStatus: async (id: string, options?: { currentRetryLeaf?: boolean }) => options?.currentRetryLeaf
+            ? journal.currentRetryResult(id) : journal.operationResult(id),
+          transitionOperation: async (...args: Parameters<RuntimeHostClient["transitionOperation"]>) => journal.transitionOperation(...args),
+          claimDeliveryAction: async (...args: Parameters<RuntimeHostClient["claimDeliveryAction"]>) => journal.claimDeliveryAction(...args),
+        } as RuntimeHostClient;
+        try {
+          journal.append({ scope: { type: "session", id: conversation.id }, kind: "session-status", payload: {
+            conversationId: conversation.id, sessionKey: { engine: "codex", sessionId: "checking-thread" },
+            hostKind: "codex-app-server", host: "hosted", turn: "idle", provenance: "structured",
+            capabilities: { steer: true, structuredAttention: true },
+          } });
+          journal.executeOperation({ kind: "send", operationId, idempotencyKey: key, conversationId: conversation.id, text, policy: "queue", origin });
+          if (scenario !== "initial") {
+            journal.transitionOperation(operationId, "delivering");
+            journal.transitionOperation(operationId, "uncertain", { reason: "confirmation lost" });
+            // Older writers recorded failure without the disposition. Current
+            // readers correctly preserve its duplicate risk.
+            registry.recordDeliveryOutcome(held.id, "failed", "confirmation lost",
+              scenario === "compacted-failure" ? "unverified" : undefined);
+          }
+          if (scenario === "compacted-failure") {
+            clock += 8 * 24 * 60 * 60_000;
+            registry.compactDeliveryReservations();
+            expect(registry.readOnlySnapshot().heldDeliveries[held.id]).toBeUndefined();
+          }
+          const discard = () => handleRuntimeDiscard(new NextRequest(
+            `http://127.0.0.1/api/runtime/operations/${operationId}`,
+            { method: "DELETE", headers: { host: "127.0.0.1" } },
+          ), operationId, { enabled: () => true, client: () => client, registry: () => registry,
+            kick: () => { throw new Error("discard must not wake delivery"); } });
+          const response = await discard();
+          expect(await response.json()).toMatchObject({ receipt: { status: "failed", reason: "delivery-discarded" } });
+          expect(response.status).toBe(200);
+          expect((await discard()).status).toBe(200);
+          const reopenedRegistry = new AgentRegistry(registryFile, undefined, undefined, { sqliteMode });
+          reopened = reopenedRegistry;
+          expect(sendReceiptFor(reopenedRegistry.deliverySnapshotForOperation(operationId), operationId))
+            .toMatchObject({ state: "failed", reason: "delivery-discarded", resend: "verify-first" });
+          // Both the late acknowledgement and a stale executor must respect it.
+          registry.recordDeliveryOutcomeForOperation(conversation.id, operationId, "delivered", null, "delivered");
+          expect(sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId)?.reason).toBe("delivery-discarded");
+          const ledger = createFakeDeliveryLedger();
+          await new StructuredDeliveryQueue({
+            effects: async (kinds, after) => journal.effectBatch(100, kinds, after),
+            status: async (id) => journal.operationResult(id)?.receipt ?? null,
+            transition: async (id, status, details) => { journal.transitionOperation(id, status, details); },
+            settled: (id) => sendIsSettled(reopenedRegistry.readOnlySnapshot(), id),
+          }, () => new FakeEngineHost(ledger)).drain();
+          expect(ledger.writes).toEqual([]);
+        } finally {
+          journal.close();
+          reopened?.close();
+          registry.close();
+          fs.rmSync(directory, { recursive: true, force: true });
+        }
+      });
+    }
+  }
 }
 
 test("runtime command HTTP handling preserves validation, CSRF, status, and conflict contracts", async () => {
