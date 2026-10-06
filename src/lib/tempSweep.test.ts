@@ -376,6 +376,24 @@ test.each(["gitdir", "unrecognized metadata", ""])("damaged Git metadata %j keep
   expect(fs.readFileSync(source, "utf8")).toBe("export const privateWork = 42;\n");
 });
 
+test("a bare repository missing HEAD retains its unpublished objects and ref", async () => {
+  const root = tempRoot();
+  const bare = path.join(root, "llv-bare-export");
+  fs.mkdirSync(bare);
+  const git = (args: string[], input?: string) => execFileSync("git", ["-c", "user.name=Sweep Test", "-c", "user.email=sweep@example.invalid", ...args], { cwd: bare, encoding: "utf8", input }).trim();
+  git(["init", "--bare", "-q"]);
+  const blob = git(["hash-object", "-w", "--stdin"], "unpublished source\n");
+  const tree = git(["mktree"], `100644 blob ${blob}\tunique-source.txt\n`);
+  const tip = git(["commit-tree", tree, "-m", "unpublished work"]);
+  git(["update-ref", "refs/heads/private", tip]);
+  fs.unlinkSync(path.join(bare, "HEAD"));
+  const report = await sweepStaleTempDirs({ roots: [{ path: root, via: "" }], scan: { ownNamespace: null, processes: [] }, maxAgeMs: DAY, now: () => Date.now() + 8 * DAY });
+  expect(report.removed).toEqual([]);
+  expect(report.held).toEqual([expect.objectContaining({ path: bare, reason: "git-checkout" })]);
+  expect(fs.existsSync(path.join(bare, "objects", blob.slice(0, 2), blob.slice(2)))).toBe(true);
+  expect(fs.readFileSync(path.join(bare, "refs/heads/private"), "utf8").trim()).toBe(tip);
+});
+
 test.skipIf(process.platform !== "linux")("temp holds count one physical checkout through namespace aliases once", async () => {
   const root = tempRoot();
   const directory = aged(root, "llv-aliased-export", 3 * DAY);

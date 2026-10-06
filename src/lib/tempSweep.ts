@@ -341,8 +341,12 @@ export function containsGitCheckout(directory: string): "git-checkout" | "unread
     if (!fs.lstatSync(directory).isDirectory()) return null;
     while (pending.length) {
       const current = pending.pop()!;
-      // A bare repository has its HEAD and object store at the root.
-      if (fs.existsSync(path.join(current, "HEAD")) && fs.existsSync(path.join(current, "objects"))
+      // A damaged bare repository can lose HEAD while its refs and objects
+      // still hold unpublished work.
+      const config = path.join(current, "config");
+      const bareMetadata = ["HEAD", "refs/heads", "refs/tags"].some(name => fs.existsSync(path.join(current, name)))
+        || (fs.existsSync(config) && fs.lstatSync(config).isFile());
+      if (bareMetadata && fs.existsSync(path.join(current, "objects"))
         && fs.statSync(path.join(current, "objects")).isDirectory()) return "git-checkout";
       for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
         if (++visited > MEASURE_ENTRY_LIMIT) return "entry-limit";
