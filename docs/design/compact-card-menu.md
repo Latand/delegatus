@@ -3,6 +3,10 @@
 Status: design only. Nothing here ships. The prototypes run in the evidence
 fixture under `?menus=1|2|3`; the product draws today's menus.
 
+Decided 2026-10-06: the card menu is variant 1 and a separate lane builds it;
+see "Operator decision 2026-10-06" and "The header's menu" at the end, which
+is the open question of this note now.
+
 ## The request
 
 The operator's verdict on the interface (2026-10-06) keeps the orchestrator
@@ -361,3 +365,230 @@ markup.
 What the product gains for this, inert outside the fixture: an `id`, a
 `group` and a `note` on the board's menu entries, the menu's `kind`, and
 `menuPresenter` in `kanbanMenus.tsx`, which nothing in the product sets.
+
+## Operator decision 2026-10-06
+
+The operator's words, verbatim (Ukrainian and Russian, a voice transcript):
+
+> Меню картки: варіант 1. Сайдбар: варіант 1. Будуй. Единственное, что я бы хотел добавить, это... значит, мне нравятся варианты там, где, да, там где иконки, там где оно так выпадает, и по header меню мне нужно переделать там немножко. Там, как бы, тоже нужна иконки, так. Группировка, и переделать название кнопок, потому что там, где налаштування сейчас, там вообще не налаштування. То есть надо подумать, как это переделать, чтобы было более продуктово, правильно.
+
+What follows from it:
+
+- **The card menu is variant 1.** A separate build lane turns it into the
+  product from commit `1890bdbb7` of this branch. This branch changes nothing
+  more in the card's, the board's, a conversation's, a pipeline's or a stage's
+  menu, and leaves variants 2 and 3 as they are; the build lane removes them.
+  The review finding about variant 3 hiding the explanations under the project
+  switches is moot with it and stays unfixed.
+- **The header's menu gets its own round**, below: icons, rows that open in
+  place, and a new grouping and naming, because the entry called Settings
+  holds no settings.
+
+## The header's menu
+
+The ⋯ in the app header (the project rail's header on the desktop). On the
+phone the same entries are rows of the board menu's sheet; the language, the
+QR code and the notification bell are three buttons in the header of the
+phone's project drawer (`src/components/ProjectRail.tsx:198`) and are in no
+menu there.
+
+### Inventory: what is in it today
+
+Desktop lines are in `src/components/ProjectRail.tsx`, phone lines in
+`src/components/ProjectDashboard.tsx`. Today the menu is 232×437 with 13
+controls and no icon; the phone's sheet is 390×743 and scrolls. "How often" is
+read from the code and the interface; there is no click telemetry.
+
+| # | Entry today (uk / en) | Desktop | Phone | What it really does | Kind, and how often |
+|---|---|---|---|---|---|
+| 1 | Мова: Українська / Language: English | 429 | drawer header | Switches the interface language of this browser | a browser preference; once |
+| 2 | Відкрити на телефоні (QR) / Open on phone (QR) | 435 | drawer header | Shows a QR code and a link that sign a phone in to this installation | access; rare, once per phone |
+| 3 | Сповіщення: вимкнені / Notifications: off | 439 | drawer header | Turns push notifications on or off for this browser | a browser preference; once |
+| 4 | Посібник із налаштування / Setup guide | 445 | 2112 | Reopens the first-run guide | help; rare |
+| 5 | Екскурсія інтерфейсом / Interface walk | 453 | 2112 | Starts the guided walk over the interface | help; rare |
+| 6 | Призначення агентів / Agent mapping | 461 | 2112 | The table "Who does what": engine, model and effort for each role, read by every pipeline and role-based spawn | an installation setting; weekly for an operator who tunes the engine mix |
+| 7 | Диктування / Dictation | 469 | 2112 | Chooses what transcribes dictated speech, a local model or a service | an installation setting; rare |
+| 8 | Налаштування / Settings | 477 | 2113 | A dialog titled Settings with two switches: "Anonymous install ping" (a daily ping to delegatus.org) and "Shared memory for this project" (`src/components/telemetry/TelemetrySettings.tsx:47`, `src/components/memory/MemorySetting.tsx:23`) | one installation privacy switch and one per-project rule; rare |
+| 9 | Пов’язані інсталяції / Linked installs | 479 | 2114 | Pairs this installation with another and chooses the shared projects | an installation setting; rare |
+| 10 | Зовнішній ретранслятор / External relay | 482 | 2115 | Lets a relay service bring questions from its chats, each answered by a one-shot agent | an installation setting; rare |
+| 11 | Оновлення / Update | 485 | 2116 | The update dialog: automatic updates on or off, check now, apply | an installation action; weekly, and after every merge for an operator who deploys by hand |
+| 12 | Активність / Activity | 494 | 2093 | A link to `/activity`: the operator's time and the agents' time per day and per project | a link to a report; weekly |
+| 13 | Команда / Team | 502 | 2094 | A link to `/team`: members, who did what, sessions, invitations | people and access; rare |
+| 14 | Вийти · name / Sign out · name | 509 | Team page | Ends this browser's member session; drawn only for a signed-in member | a session action that ends access; rare |
+
+The phone's board menu also holds two device rows the desktop keeps in the
+board's ⋯ and the header variants group with the rest: "Звукові сповіщення /
+Sound alerts" (2100) and "Не гасити екран / Keep screen awake" (2110).
+
+**What sits under "Settings" that is no setting, and where the settings
+are.** The entry called Settings opens two switches, and neither is what a
+person looks for under that word: one is a privacy choice about a daily ping,
+the other is a rule of one project that the header of the whole application
+has no reason to hold. The things a person does call settings stand elsewhere
+under other words: the table of roles and models and the choice of the
+dictation engine are listed among the guides, between "Setup guide" and
+"Interface walk", because the first-run guide happens to own their dialogs;
+the language and the notifications lead the menu with no name over them;
+linking installs, the relay and the update follow "Settings" as its equals.
+The menu has one rule in thirteen rows, and it separates the three controls
+that are buttons from the ten that are text.
+
+### Three variants of grouping and naming
+
+The look is the chosen card menu's and is the same in all three: every row
+leads with an icon, a group is a row with a count and an arrow, a group opens
+in place below its own row (the arrow down, turning up once open), and a group
+that would pass 360 px opens as a page with a back row (the arrow to the
+right). The panel keeps its 232 px. What differs is which group an entry sits
+in and what the group and the entry are called.
+
+**1. Whose it is / Чиє це.** A group is named after what a change in it
+touches: this browser, this installation, the people who can get in. What is
+opened to read (the time report, an update, help) stays outside the groups.
+
+**2. What I came to do / Що я хочу зробити.** The three places opened most
+are icon cells at the top; the rest is grouped by the job at hand: set up the
+agents, connect something, tune language and alerts, learn the product. The
+entry called Settings is named for the one thing its two switches share: what
+leaves this machine.
+
+**3. Settings that are settings / Справжні «Налаштування».** The word
+Settings stays and becomes true: one page holds every switch and table of
+this browser and this installation, each under a name that says what it sets.
+The first level is only places to go: the time report, the team, the phone,
+the update, help.
+
+Groups (uk / en) and what each holds:
+
+| Variant | At rest | Groups |
+|---|---|---|
+| 1 | Активність, Оновлення | **Цей браузер / This browser** (on the phone **Цей пристрій / This device**): language, notifications; on the phone sound alerts and keep awake. **Ця інсталяція / This installation**: roles table, dictation, linked installs, relay, the Settings dialog. **Люди й доступ / People and access**: team, open on phone, sign out. **Довідка / Help**: setup guide, interface walk |
+| 2 | cells Активність · Команда · Оновлення; the row "Що йде назовні"; Sign out | **Агенти й голос / Agents and voice**: roles table, dictation. **Підключення / Connections**: open on phone, linked installs, relay. **Мова й сповіщення / Language and alerts** (on the phone **Звук і екран / Sound and screen**). **Як користуватися / How to use it**: setup guide, interface walk |
+| 3 | Звіт про час, Команда й сеанси, Відкрити на телефоні, Оновлення; Sign out | **Налаштування / Settings** (a page): language, notifications, sound alerts and keep awake on the phone, roles table, dictation, linked installs, relay, ping and memory. **Довідка й навчання / Help and learning**: setup guide, interface walk |
+
+Renamed buttons, old name → new name:
+
+| Entry | 1 | 2 | 3 |
+|---|---|---|---|
+| Налаштування / Settings | Приватність і пам’ять / Privacy and memory | Що йде назовні / What leaves this machine | Анонімний пінг і пам’ять / Install ping and memory |
+| Призначення агентів / Agent mapping | Агенти для ролей / Agents by role | Хто що робить / Who does what (the dialog's own heading) | Ролі: рушій і модель / Roles: engine and model |
+| Диктування / Dictation | Розпізнавання мовлення / Speech recognition | Голосове введення / Voice input | unchanged |
+| Пов’язані інсталяції / Linked installs | Пов’язані комп’ютери / Linked machines | Інші інсталяції / Other installs | unchanged |
+| Зовнішній ретранслятор / External relay | Питання з чатів / Questions from chats | Зовнішні чати / Outside chats | Ретранслятор чатів / Chat relay |
+| Відкрити на телефоні (QR) / Open on phone (QR) | Відкрити на телефоні / Open on phone (the icon is the QR code) | the same | the same |
+| Активність / Activity | unchanged | unchanged | Звіт про час / Time report |
+| Команда / Team | unchanged | unchanged | Команда й сеанси / Team and sessions |
+
+A build renames the dialog with its entry: the dialog behind "Settings" is
+titled Settings today, and its notice says "Turn off in Settings"
+(`bin/telemetry-notice.mjs`).
+
+Where every entry is. "rest" is the first level; a name is the group that
+holds it. Nothing leaves the menu in any variant, no entry moves to another
+surface, and every entry opens the dialog, sheet or page it opens today.
+
+| Entry | Today | 1 | 2 | 3 |
+|---|---|---|---|---|
+| Language | rest | This browser | Language and alerts | Settings |
+| Open on phone | rest | People and access | Connections | rest |
+| Notifications | rest | This browser | Language and alerts | Settings |
+| Setup guide | rest | Help | How to use it | Help and learning |
+| Interface walk | rest | Help | How to use it | Help and learning |
+| Roles table (Agent mapping) | rest | This installation | Agents and voice | Settings |
+| Dictation | rest | This installation | Agents and voice | Settings |
+| The Settings dialog | rest | This installation | rest | Settings |
+| Linked installs | rest | This installation | Connections | Settings |
+| External relay | rest | This installation | Connections | Settings |
+| Update | rest | rest | rest, a cell | rest |
+| Activity | rest | rest | rest, a cell | rest |
+| Team | rest | People and access (on the phone a row at rest: the group holds one row there) | rest, a cell | rest |
+| Sign out | rest, for a member | People and access | rest, last | rest, last |
+| Phone: sound alerts, keep awake | rest | This device | Sound and screen | Settings |
+
+Taps from the closed menu: today every entry is two (the ⋯, the row) and the
+phone's rows are under a scroll. In each variant an entry at rest is two and
+an entry in a group is three.
+
+### Measured
+
+Identical at 1440×900 and 1000×700, in light and dark and in both languages
+unless a range is given. No state scrolls, leaves the window or cuts a label,
+and opening a group in place moves its own row by 0 px. "page" marks a state
+that replaces the list.
+
+Desktop, the header's ⋯ (232 px wide):
+
+| State | Today | 1 | 2 | 3 |
+|---|---|---|---|---|
+| At rest | 437, 13 controls | 190, 6 | 220, 8 | 202, 6 |
+| Tallest open state | | 340 (This installation) | 322 (Connections) | page 271 (Settings) |
+| Other groups open | | 250–266 | 280–296 | 262 |
+
+Phone, the board menu's sheet (390 px wide). Its board rows keep the chosen
+variant 1 layout; the header's rows take the header variant.
+
+| State | Today | 1 | 2 | 3 |
+|---|---|---|---|---|
+| At rest | 743, scrolls, 29 controls | 616, 15 | 632, 17 | 572, 14 |
+| Tallest open state | | 725 (This device) | 720 | 660 (Help and learning) |
+| Pages | | 340 (This installation) | 229 (Sound and screen) | 449 (Settings) |
+
+In each variant the driver also presses the entry today called Settings under
+its new name and checks that the product's own dialog opens.
+
+### Costs
+
+- **All three**: ten of thirteen entries go from two taps to three. The
+  shared-memory switch stays behind an installation-level entry in every
+  variant, because moving it to the project's rules in the board's ⋯ changes a
+  menu this round does not touch; it is the one entry whose honest home is
+  outside this menu, and a follow-up should move it. The phone's sheet is
+  taller at rest than the chosen variant 1 sheet (484 px) because the places
+  to go stand at the first level; it stays under today's 743 and never
+  scrolls. The prototype draws a renamed row itself and presses the product's
+  row under it; a build writes the names and icons into `ProjectRail.tsx` and
+  the phone's entries.
+- **1**: "This installation" is the largest group (five rows, 340 px open).
+  "Open on phone" sits under "People and access", which is true of what it
+  does and may be looked for under the browser.
+- **2**: the grouping follows today's habits of one operator; "What leaves
+  this machine" names the Settings dialog exactly and leaves out the "Asks
+  you" switch, which also sends text out and lives in the board's ⋯. Three
+  cells and a single ungrouped row make the first level less even.
+- **3**: the Settings page hides the first level while it is open, and its
+  seven rows mix a browser's preferences with the installation's. Three
+  entries are renamed beyond the complaint (Activity, Team, the relay).
+
+### Recommendation
+
+**Variant 1.** Its group names answer the question a person brings to this
+menu, "where does this change apply", it has the shortest first level (six
+rows, 190 px against 437), every group opens in place, and the entry called
+Settings gets a name that says what its two switches are. If the operator
+wants the word "Налаштування" kept in the menu, variant 3 is the one that
+makes it true.
+
+### Evidence
+
+`evidence/compact-card-menu/header-menu.json`: 188 states over today and the
+three variants at 1440×900, 1000×700 and 390×844, light and dark, en and uk,
+with the entries each state shows and the name each is drawn under. The
+driver is a second case of the same `describe` block:
+
+```
+CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 LLV_HEADER_MENU_OUT=<dir> \
+  bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "header's menu"
+```
+
+It writes the single frames, `sheet-compare-uk.png` and `sheet-compare-en.png`
+(today and 1, 2, 3 at rest) and one sheet per variant with its groups open;
+they are not committed. It fails when a desktop state is over 360 px, when a
+phone state is taller than today's sheet, when a state scrolls, leaves the
+window or cuts a label, when opening a group moves its own row, when an entry
+of today's menu is shown in no state, when a renamed entry reads otherwise
+than its variant names it, and when the renamed Settings entry does not open
+the product's dialog. `headerMenu.prototype.test.ts` holds that every entry
+has exactly one home in every variant, Sign out included, which the fixture
+cannot draw without a member session. The prototype is
+`headerMenu.prototype.ts` over the family prototype, mounted by the fixture
+under `?header=1|2|3`; the product is unchanged.

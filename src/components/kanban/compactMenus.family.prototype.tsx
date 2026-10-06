@@ -1,13 +1,15 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { createElement, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp } from "lucide-react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, type LucideIcon } from "lucide-react";
 
 import { useLocale } from "@/lib/i18n";
 
 import { useSwapGuard } from "./compactMenus.prototype";
 import type { MenuVariant } from "./compactMenus.prototype.model";
+import { headerFamilySpecs, type HeaderVariant } from "./headerMenu.prototype";
 
 /* Design prototype (docs/design/compact-card-menu.md): the grammar of each
    numbered card menu, carried to the menus the board's `KanbanMenu` does not
@@ -20,17 +22,23 @@ import type { MenuVariant } from "./compactMenus.prototype.model";
    phone) and as a page where it would not; variant 2 opens every one as a
    page. The evidence fixture mounts it under `?menus=1|2|3`. */
 
-type Words = { en: string; uk: string };
-interface Section {
+export type Words = { en: string; uk: string };
+export interface Section {
   id: string; title: Words; rows: readonly string[];
   /** Opens as a page with a back row: in place it would pass the menu's bound. */
   page?: boolean;
+  /** Leads the section's row, where the menu's rows lead with icons. */
+  icon?: LucideIcon;
+  /** A section that holds one row on this surface is drawn as that row. */
+  solo?: boolean;
 }
-type Placement =
+/** How a row is drawn over the product's own: an icon in front of it, another name on it. */
+export interface Dress { icon?: LucideIcon; name?: Words }
+export type Placement =
   | { rows: readonly string[]; cells?: boolean }
   | { section: Section };
 interface Removal { row: string; home: Words }
-interface FamilySpec {
+export interface FamilySpec {
   id: string;
   /** The element whose children are the rows. */
   container: string;
@@ -40,6 +48,10 @@ interface FamilySpec {
   leading?: readonly string[];
   /** A product row whose class a section row borrows. */
   sample: string;
+  /** Rows drawn with an icon or under another name; the product's row stays in the menu, pressed through. */
+  dress?: Readonly<Record<string, Dress>>;
+  /** Rows stand in the order a placement lists them; without it, in the product's own order. */
+  ordered?: boolean;
   layouts: Record<MenuVariant, { placements: readonly Placement[]; removed?: readonly Removal[] }>;
 }
 
@@ -167,9 +179,13 @@ export const FAMILY_CSS = `
 [data-cmf][data-cmf-cells] { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); }
 [data-cmf][data-cmf-cells] > *, [data-cmf][data-cmf-cells] > [data-cmf-chrome] > * { grid-column: 1 / -1; }
 [data-cmf] > [data-cmf-chrome], [data-cmf] [data-cmf-flat] { display: contents; }
-[data-cmf] [data-cmf-hidden] { display: none !important; }
-[data-cmf] [data-cmf-head] { display: flex; width: 100%; align-items: center; text-align: left; }
-[data-cmf] [data-cmf-head] > .cmf-title { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+[data-cmf] [data-cmf-hidden], [data-cmf] [data-cmf-proxied] { display: none !important; }
+[data-cmf] [data-cmf-head], [data-cmf] [data-cmf-proxy] { display: flex; width: 100%; align-items: center; text-align: left; }
+[data-cmf] .cmf-ico { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; opacity: 0.72; }
+[data-cmf] [data-cmf-mask]::before { content: ""; width: 16px; height: 16px; flex-shrink: 0; background: currentColor; opacity: 0.72; -webkit-mask: var(--cmf-mask) center / contain no-repeat; mask: var(--cmf-mask) center / contain no-repeat; }
+[data-cmf] [data-cmf-name] { font-size: 0; }
+[data-cmf] [data-cmf-name]::after { content: attr(data-cmf-name); font-size: 12px; }
+[data-cmf] [data-cmf-proxy] > .cmf-title, [data-cmf] [data-cmf-head] > .cmf-title { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 [data-cmf] [data-cmf-head] > svg { width: 16px; height: 16px; flex-shrink: 0; opacity: 0.55; }
 [data-cmf] [data-cmf-head] > .cmf-count { flex-shrink: 0; margin-right: 6px; font-size: 12px; font-weight: 500; opacity: 0.6; font-variant-numeric: tabular-nums; }
 [data-cmf] [data-cmf-head="back"] { font-weight: 700; border-bottom: 1px solid var(--border-default); border-radius: 0; margin-bottom: 4px; }
@@ -178,6 +194,7 @@ export const FAMILY_CSS = `
 [data-cmf][data-cmf-cells] [data-cmf-cell] > span { flex: none; max-width: 100%; white-space: normal; }
 [data-cmf][data-cmf-cells] [data-cmf-cell] > span > span { font-size: 11.5px; line-height: 1.2; }
 /* A cell carries its name; the second line a full row has is the row's title here. */
+[data-cmf][data-cmf-cells] [data-cmf-proxy][data-cmf-cell] > .cmf-ico { margin: 0; opacity: 1; }
 [data-cmf][data-cmf-cells] [data-cmf-cell] > span + span + span, [data-cmf][data-cmf-cells] [data-cmf-cell] > span > span + span { display: none; }
 [data-cmf][data-cmf-variant="3"] [data-merge-on-review] [role="status"]:not(.text-danger),
 [data-cmf][data-cmf-variant="3"] [data-share-project] [role="status"]:not(.text-danger),
@@ -241,6 +258,9 @@ function FamilyMenu({ container, spec, variant }: { container: HTMLElement; spec
     return first && (first.tagName.toLowerCase() === "svg" || first.querySelector("svg")) ? first.getBoundingClientRect().width : 0;
   }, [container, spec.sample]);
   const [heads, setHeads] = useState<{ id: string; title: string; order: number; count: number; page: boolean }[]>([]);
+  /* A dressed row: drawn here with its icon and name, pressing the product's own row, which stays in the menu unseen. */
+  const [proxies, setProxies] = useState<{ key: string; title: string; order: number; cell: number | null; within: boolean }[]>([]);
+  const pressed = useRef(new Map<string, HTMLElement>());
   const swapped = useSwapGuard();
   const swap = (next: string | null, event: React.MouseEvent) => {
     swapped(event);
@@ -257,10 +277,26 @@ function FamilyMenu({ container, spec, variant }: { container: HTMLElement; spec
     let order = 0;
     let cells = false;
     const next: typeof heads = [];
+    const drawn: typeof proxies = [];
+    pressed.current.clear();
     const sections = layout.placements.flatMap((placement) => ("section" in placement ? [placement.section] : []));
     const inside = open ? sections.find((section) => section.id === open && paged(variant, section)) ?? null : null;
     const put = (entry: Laid, shown: boolean, cell: number | null, within: boolean) => {
       taken.add(entry);
+      const dress = spec.dress?.[entry.key];
+      const proxied = Boolean(dress) && entry.row.matches("button, a");
+      entry.row.toggleAttribute("data-cmf-proxied", proxied);
+      if (proxied && shown) {
+        pressed.current.set(entry.key, entry.row);
+        drawn.push({ key: entry.key, title: dress!.name?.[lang] ?? (entry.row.textContent ?? "").trim(), order, cell, within: within && !inside });
+      }
+      /* A row that is a control of its own (a toggle, a popover) keeps its place and takes the icon in front. */
+      if (dress?.icon && !proxied && !entry.row.hasAttribute("data-cmf-mask")) {
+        entry.row.setAttribute("data-cmf-mask", "");
+        entry.row.style.setProperty("--cmf-mask", `url("data:image/svg+xml,${encodeURIComponent(renderToStaticMarkup(createElement(dress.icon, { size: 16 })))}")`);
+      }
+      /* Its own label is drawn under the variant's name, in the label's own box. */
+      if (dress?.name && !proxied) entry.row.querySelector<HTMLElement>(":scope > span")?.setAttribute("data-cmf-name", dress.name[lang]);
       entry.row.style.order = String(order++);
       entry.row.setAttribute("data-cmf-row", entry.key);
       entry.row.toggleAttribute("data-cmf-hidden", !shown);
@@ -271,14 +307,15 @@ function FamilyMenu({ container, spec, variant }: { container: HTMLElement; spec
     const place = (placement: Placement, last: boolean) => {
       const keys = "section" in placement ? placement.section.rows : placement.rows;
       const members = laid.filter((entry) => !taken.has(entry) && (keys.includes(entry.key) || (last && !removed.has(entry.key))));
-      if ("section" in placement) {
+      if (spec.ordered) members.sort((a, b) => keys.indexOf(a.key) - keys.indexOf(b.key));
+      if ("section" in placement && !(placement.section.solo && members.length === 1)) {
         if (!members.length) return;
         const section = placement.section;
         next.push({ id: section.id, title: section.title[lang], order: order++, count: members.length, page: paged(variant, section) });
         for (const entry of members) put(entry, open === section.id, null, true);
         return;
       }
-      const span = placement.cells && members.length ? Math.floor(12 / Math.min(members.length, 4)) : null;
+      const span = "rows" in placement && placement.cells && members.length ? Math.floor(12 / Math.min(members.length, 4)) : null;
       if (span) cells = true;
       for (const entry of members) put(entry, !inside, span, false);
     };
@@ -287,14 +324,34 @@ function FamilyMenu({ container, spec, variant }: { container: HTMLElement; spec
     for (const entry of laid) if (!taken.has(entry)) entry.row.setAttribute("data-cmf-hidden", "removed");
     container.toggleAttribute("data-cmf-cells", cells);
     /* The section rows are counted from the rows the product drew, which only the laid-out DOM knows. */
-    /* eslint-disable-next-line react-hooks/set-state-in-effect */
     setHeads((current) => (JSON.stringify(current) === JSON.stringify(next) ? current : next));
+    setProxies((current) => (JSON.stringify(current) === JSON.stringify(drawn) ? current : drawn));
   }, [chrome, container, spec, variant, layout, open, lang, tick]);
   useEffect(() => () => { chrome.remove(); }, [chrome]);
   const inside = open ? heads.find((head) => head.id === open && head.page) ?? null : null;
+  const iconOf = (id: string) => layout.placements.flatMap((placement) => ("section" in placement && placement.section.id === id ? [placement.section.icon] : []))[0];
+  /* In a menu whose rows lead with an icon the box is theirs; elsewhere it is 16 px and the gap the dressed rows share. */
+  const mark = (icon: LucideIcon | undefined) => (icon
+    ? <span className="cmf-ico" aria-hidden style={lead ? { width: lead } : { width: 16, marginRight: 8 }}>{createElement(icon, { size: lead ? 18 : 16 })}</span>
+    : lead ? <span aria-hidden style={{ width: lead, flexShrink: 0 }} /> : null);
   return createPortal(
     <>
       <style>{FAMILY_CSS}</style>
+      {proxies.map((proxy) => (
+        <button
+          key={proxy.key}
+          type="button"
+          className={sample}
+          data-cmf-proxy={proxy.key}
+          data-cmf-cell={proxy.cell ? "" : undefined}
+          data-cmf-in={proxy.within ? "" : undefined}
+          style={{ order: proxy.order, gridColumn: proxy.cell ? `span ${proxy.cell}` : undefined }}
+          onClick={() => pressed.current.get(proxy.key)?.click()}
+        >
+          {mark(spec.dress?.[proxy.key]?.icon)}
+          <span className="cmf-title">{proxy.title}</span>
+        </button>
+      ))}
       {inside ? (
         <button type="button" className={sample} data-cmf-head="back" data-cmf-section={inside.id} style={{ order: -1 }} onClick={(event) => swap(null, event)}>
           <ChevronLeft aria-hidden />
@@ -313,7 +370,7 @@ function FamilyMenu({ container, spec, variant }: { container: HTMLElement; spec
           style={{ order: head.order }}
           onClick={(event) => (head.page ? swap(head.id, event) : setOpen(open === head.id ? null : head.id))}
         >
-          {lead ? <span aria-hidden style={{ width: lead, flexShrink: 0 }} /> : null}
+          {mark(iconOf(head.id))}
           <span className="cmf-title">{head.title}</span>
           <span className="cmf-count">{head.count}</span>
           {/* A page is the arrow to the right; a section that opens in place points down, and up once it is open. */}
@@ -331,17 +388,22 @@ let mounted = 0;
 const mountOf = (container: HTMLElement) => mounts.get(container) ?? (mounts.set(container, ++mounted), mounted);
 
 /** Finds each family menu as the product opens it and lays it out. */
-export function MenuFamily({ variant }: { variant: MenuVariant }) {
+export function MenuFamily({ variant, header = null }: { variant: MenuVariant; header?: HeaderVariant | null }) {
+  /* A header grouping (docs/design/compact-card-menu.md) replaces the header's menu and its rows in the phone's board menu. */
+  const specs = useMemo(() => {
+    const own = header ? headerFamilySpecs(header) : [];
+    return [...FAMILY_SPECS.filter((spec) => !own.some((entry) => entry.id === spec.id)), ...own];
+  }, [header]);
   const [found, setFound] = useState<{ container: HTMLElement; spec: FamilySpec }[]>([]);
   useEffect(() => {
     const scan = () => {
-      const next = FAMILY_SPECS.flatMap((spec) => [...document.querySelectorAll<HTMLElement>(spec.container)].map((container) => ({ container, spec })));
+      const next = specs.flatMap((spec) => [...document.querySelectorAll<HTMLElement>(spec.container)].map((container) => ({ container, spec })));
       setFound((current) => (current.length === next.length && current.every((entry, index) => entry.container === next[index]!.container) ? current : next));
     };
     scan();
     const observer = new MutationObserver(scan);
     observer.observe(document.body, { childList: true, subtree: true });
     return () => observer.disconnect();
-  }, []);
+  }, [specs]);
   return <>{found.map(({ container, spec }) => <FamilyMenu key={`${spec.id}:${mountOf(container)}`} container={container} spec={spec} variant={variant} />)}</>;
 }

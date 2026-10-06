@@ -1,0 +1,5638 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "variants": [
+    "TODAY",
+    "VARIANT 1 · Whose it is",
+    "VARIANT 2 · What I came to do",
+    "VARIANT 3 · Settings that are settings"
+  ],
+  "opened": {
+    "v1": true,
+    "v2": true,
+    "v3": true
+  },
+  "reach": {
+    "v1/1440-light-en header": {
+      "language": "open device",
+      "qr": "open people",
+      "push": "open device",
+      "guide": "open help",
+      "walk": "open help",
+      "mapping": "open install",
+      "dictation": "open install",
+      "settings": "open install",
+      "linked": "open install",
+      "relay": "open install",
+      "update": "rest",
+      "activity": "rest",
+      "team": "open people"
+    },
+    "v1/1440-light-uk header": {
+      "language": "open device",
+      "qr": "open people",
+      "push": "open device",
+      "guide": "open help",
+      "walk": "open help",
+      "mapping": "open install",
+      "dictation": "open install",
+      "settings": "open install",
+      "linked": "open install",
+      "relay": "open install",
+      "update": "rest",
+      "activity": "rest",
+      "team": "open people"
+    },
+    "v1/1440-dark-en header": {
+      "language": "open device",
+      "qr": "open people",
+      "push": "open device",
+      "guide": "open help",
+      "walk": "open help",
+      "mapping": "open install",
+      "dictation": "open install",
+      "settings": "open install",
+      "linked": "open install",
+      "relay": "open install",
+      "update": "rest",
+      "activity": "rest",
+      "team": "open people"
+    },
+    "v1/1440-dark-uk header": {
+      "language": "open device",
+      "qr": "open people",
+      "push": "open device",
+      "guide": "open help",
+      "walk": "open help",
+      "mapping": "open install",
+      "dictation": "open install",
+      "settings": "open install",
+      "linked": "open install",
+      "relay": "open install",
+      "update": "rest",
+      "activity": "rest",
+      "team": "open people"
+    },
+    "v1/1000-light-en header": {
+      "language": "open device",
+      "qr": "open people",
+      "push": "open device",
+      "guide": "open help",
+      "walk": "open help",
+      "mapping": "open install",
+      "dictation": "open install",
+      "settings": "open install",
+      "linked": "open install",
+      "relay": "open install",
+      "update": "rest",
+      "activity": "rest",
+      "team": "open people"
+    },
+    "v1/1000-light-uk header": {
+      "language": "open device",
+      "qr": "open people",
+      "push": "open device",
+      "guide": "open help",
+      "walk": "open help",
+      "mapping": "open install",
+      "dictation": "open install",
+      "settings": "open install",
+      "linked": "open install",
+      "relay": "open install",
+      "update": "rest",
+      "activity": "rest",
+      "team": "open people"
+    },
+    "v1/1000-dark-en header": {
+      "language": "open device",
+      "qr": "open people",
+      "push": "open device",
+      "guide": "open help",
+      "walk": "open help",
+      "mapping": "open install",
+      "dictation": "open install",
+      "settings": "open install",
+      "linked": "open install",
+      "relay": "open install",
+      "update": "rest",
+      "activity": "rest",
+      "team": "open people"
+    },
+    "v1/1000-dark-uk header": {
+      "language": "open device",
+      "qr": "open people",
+      "push": "open device",
+      "guide": "open help",
+      "walk": "open help",
+      "mapping": "open install",
+      "dictation": "open install",
+      "settings": "open install",
+      "linked": "open install",
+      "relay": "open install",
+      "update": "rest",
+      "activity": "rest",
+      "team": "open people"
+    },
+    "v1/390-light-en phone": {
+      "guide": "open help",
+      "walk": "open help",
+      "mapping": "open install",
+      "dictation": "open install",
+      "settings": "open install",
+      "linked": "open install",
+      "relay": "open install",
+      "update": "rest",
+      "activity": "rest",
+      "team": "rest",
+      "sound": "open device",
+      "awake": "open device"
+    },
+    "v1/390-light-uk phone": {
+      "guide": "open help",
+      "walk": "open help",
+      "mapping": "open install",
+      "dictation": "open install",
+      "settings": "open install",
+      "linked": "open install",
+      "relay": "open install",
+      "update": "rest",
+      "activity": "rest",
+      "team": "rest",
+      "sound": "open device",
+      "awake": "open device"
+    },
+    "v1/390-dark-en phone": {
+      "guide": "open help",
+      "walk": "open help",
+      "mapping": "open install",
+      "dictation": "open install",
+      "settings": "open install",
+      "linked": "open install",
+      "relay": "open install",
+      "update": "rest",
+      "activity": "rest",
+      "team": "rest",
+      "sound": "open device",
+      "awake": "open device"
+    },
+    "v1/390-dark-uk phone": {
+      "guide": "open help",
+      "walk": "open help",
+      "mapping": "open install",
+      "dictation": "open install",
+      "settings": "open install",
+      "linked": "open install",
+      "relay": "open install",
+      "update": "rest",
+      "activity": "rest",
+      "team": "rest",
+      "sound": "open device",
+      "awake": "open device"
+    },
+    "v2/1440-light-en header": {
+      "language": "open alerts",
+      "qr": "open connect",
+      "push": "open alerts",
+      "guide": "open learn",
+      "walk": "open learn",
+      "mapping": "open agents",
+      "dictation": "open agents",
+      "settings": "rest",
+      "linked": "open connect",
+      "relay": "open connect",
+      "update": "rest",
+      "activity": "rest",
+      "team": "rest"
+    },
+    "v2/1440-light-uk header": {
+      "language": "open alerts",
+      "qr": "open connect",
+      "push": "open alerts",
+      "guide": "open learn",
+      "walk": "open learn",
+      "mapping": "open agents",
+      "dictation": "open agents",
+      "settings": "rest",
+      "linked": "open connect",
+      "relay": "open connect",
+      "update": "rest",
+      "activity": "rest",
+      "team": "rest"
+    },
+    "v2/1440-dark-en header": {
+      "language": "open alerts",
+      "qr": "open connect",
+      "push": "open alerts",
+      "guide": "open learn",
+      "walk": "open learn",
+      "mapping": "open agents",
+      "dictation": "open agents",
+      "settings": "rest",
+      "linked": "open connect",
+      "relay": "open connect",
+      "update": "rest",
+      "activity": "rest",
+      "team": "rest"
+    },
+    "v2/1440-dark-uk header": {
+      "language": "open alerts",
+      "qr": "open connect",
+      "push": "open alerts",
+      "guide": "open learn",
+      "walk": "open learn",
+      "mapping": "open agents",
+      "dictation": "open agents",
+      "settings": "rest",
+      "linked": "open connect",
+      "relay": "open connect",
+      "update": "rest",
+      "activity": "rest",
+      "team": "rest"
+    },
+    "v2/1000-light-en header": {
+      "language": "open alerts",
+      "qr": "open connect",
+      "push": "open alerts",
+      "guide": "open learn",
+      "walk": "open learn",
+      "mapping": "open agents",
+      "dictation": "open agents",
+      "settings": "rest",
+      "linked": "open connect",
+      "relay": "open connect",
+      "update": "rest",
+      "activity": "rest",
+      "team": "rest"
+    },
+    "v2/1000-light-uk header": {
+      "language": "open alerts",
+      "qr": "open connect",
+      "push": "open alerts",
+      "guide": "open learn",
+      "walk": "open learn",
+      "mapping": "open agents",
+      "dictation": "open agents",
+      "settings": "rest",
+      "linked": "open connect",
+      "relay": "open connect",
+      "update": "rest",
+      "activity": "rest",
+      "team": "rest"
+    },
+    "v2/1000-dark-en header": {
+      "language": "open alerts",
+      "qr": "open connect",
+      "push": "open alerts",
+      "guide": "open learn",
+      "walk": "open learn",
+      "mapping": "open agents",
+      "dictation": "open agents",
+      "settings": "rest",
+      "linked": "open connect",
+      "relay": "open connect",
+      "update": "rest",
+      "activity": "rest",
+      "team": "rest"
+    },
+    "v2/1000-dark-uk header": {
+      "language": "open alerts",
+      "qr": "open connect",
+      "push": "open alerts",
+      "guide": "open learn",
+      "walk": "open learn",
+      "mapping": "open agents",
+      "dictation": "open agents",
+      "settings": "rest",
+      "linked": "open connect",
+      "relay": "open connect",
+      "update": "rest",
+      "activity": "rest",
+      "team": "rest"
+    },
+    "v2/390-light-en phone": {
+      "guide": "open learn",
+      "walk": "open learn",
+      "mapping": "open agents",
+      "dictation": "open agents",
+      "settings": "rest",
+      "linked": "open connect",
+      "relay": "open connect",
+      "update": "rest",
+      "activity": "rest",
+      "team": "rest",
+      "sound": "open alerts",
+      "awake": "open alerts"
+    },
+    "v2/390-light-uk phone": {
+      "guide": "open learn",
+      "walk": "open learn",
+      "mapping": "open agents",
+      "dictation": "open agents",
+      "settings": "rest",
+      "linked": "open connect",
+      "relay": "open connect",
+      "update": "rest",
+      "activity": "rest",
+      "team": "rest",
+      "sound": "open alerts",
+      "awake": "open alerts"
+    },
+    "v2/390-dark-en phone": {
+      "guide": "open learn",
+      "walk": "open learn",
+      "mapping": "open agents",
+      "dictation": "open agents",
+      "settings": "rest",
+      "linked": "open connect",
+      "relay": "open connect",
+      "update": "rest",
+      "activity": "rest",
+      "team": "rest",
+      "sound": "open alerts",
+      "awake": "open alerts"
+    },
+    "v2/390-dark-uk phone": {
+      "guide": "open learn",
+      "walk": "open learn",
+      "mapping": "open agents",
+      "dictation": "open agents",
+      "settings": "rest",
+      "linked": "open connect",
+      "relay": "open connect",
+      "update": "rest",
+      "activity": "rest",
+      "team": "rest",
+      "sound": "open alerts",
+      "awake": "open alerts"
+    },
+    "v3/1440-light-en header": {
+      "language": "open settings",
+      "qr": "rest",
+      "push": "open settings",
+      "guide": "open help",
+      "walk": "open help",
+      "mapping": "open settings",
+      "dictation": "open settings",
+      "settings": "open settings",
+      "linked": "open settings",
+      "relay": "open settings",
+      "update": "rest",
+      "activity": "rest",
+      "team": "rest"
+    },
+    "v3/1440-light-uk header": {
+      "language": "open settings",
+      "qr": "rest",
+      "push": "open settings",
+      "guide": "open help",
+      "walk": "open help",
+      "mapping": "open settings",
+      "dictation": "open settings",
+      "settings": "open settings",
+      "linked": "open settings",
+      "relay": "open settings",
+      "update": "rest",
+      "activity": "rest",
+      "team": "rest"
+    },
+    "v3/1440-dark-en header": {
+      "language": "open settings",
+      "qr": "rest",
+      "push": "open settings",
+      "guide": "open help",
+      "walk": "open help",
+      "mapping": "open settings",
+      "dictation": "open settings",
+      "settings": "open settings",
+      "linked": "open settings",
+      "relay": "open settings",
+      "update": "rest",
+      "activity": "rest",
+      "team": "rest"
+    },
+    "v3/1440-dark-uk header": {
+      "language": "open settings",
+      "qr": "rest",
+      "push": "open settings",
+      "guide": "open help",
+      "walk": "open help",
+      "mapping": "open settings",
+      "dictation": "open settings",
+      "settings": "open settings",
+      "linked": "open settings",
+      "relay": "open settings",
+      "update": "rest",
+      "activity": "rest",
+      "team": "rest"
+    },
+    "v3/1000-light-en header": {
+      "language": "open settings",
+      "qr": "rest",
+      "push": "open settings",
+      "guide": "open help",
+      "walk": "open help",
+      "mapping": "open settings",
+      "dictation": "open settings",
+      "settings": "open settings",
+      "linked": "open settings",
+      "relay": "open settings",
+      "update": "rest",
+      "activity": "rest",
+      "team": "rest"
+    },
+    "v3/1000-light-uk header": {
+      "language": "open settings",
+      "qr": "rest",
+      "push": "open settings",
+      "guide": "open help",
+      "walk": "open help",
+      "mapping": "open settings",
+      "dictation": "open settings",
+      "settings": "open settings",
+      "linked": "open settings",
+      "relay": "open settings",
+      "update": "rest",
+      "activity": "rest",
+      "team": "rest"
+    },
+    "v3/1000-dark-en header": {
+      "language": "open settings",
+      "qr": "rest",
+      "push": "open settings",
+      "guide": "open help",
+      "walk": "open help",
+      "mapping": "open settings",
+      "dictation": "open settings",
+      "settings": "open settings",
+      "linked": "open settings",
+      "relay": "open settings",
+      "update": "rest",
+      "activity": "rest",
+      "team": "rest"
+    },
+    "v3/1000-dark-uk header": {
+      "language": "open settings",
+      "qr": "rest",
+      "push": "open settings",
+      "guide": "open help",
+      "walk": "open help",
+      "mapping": "open settings",
+      "dictation": "open settings",
+      "settings": "open settings",
+      "linked": "open settings",
+      "relay": "open settings",
+      "update": "rest",
+      "activity": "rest",
+      "team": "rest"
+    },
+    "v3/390-light-en phone": {
+      "guide": "open help",
+      "walk": "open help",
+      "mapping": "open settings",
+      "dictation": "open settings",
+      "settings": "open settings",
+      "linked": "open settings",
+      "relay": "open settings",
+      "update": "rest",
+      "activity": "rest",
+      "team": "rest",
+      "sound": "open settings",
+      "awake": "open settings"
+    },
+    "v3/390-light-uk phone": {
+      "guide": "open help",
+      "walk": "open help",
+      "mapping": "open settings",
+      "dictation": "open settings",
+      "settings": "open settings",
+      "linked": "open settings",
+      "relay": "open settings",
+      "update": "rest",
+      "activity": "rest",
+      "team": "rest",
+      "sound": "open settings",
+      "awake": "open settings"
+    },
+    "v3/390-dark-en phone": {
+      "guide": "open help",
+      "walk": "open help",
+      "mapping": "open settings",
+      "dictation": "open settings",
+      "settings": "open settings",
+      "linked": "open settings",
+      "relay": "open settings",
+      "update": "rest",
+      "activity": "rest",
+      "team": "rest",
+      "sound": "open settings",
+      "awake": "open settings"
+    },
+    "v3/390-dark-uk phone": {
+      "guide": "open help",
+      "walk": "open help",
+      "mapping": "open settings",
+      "dictation": "open settings",
+      "settings": "open settings",
+      "linked": "open settings",
+      "relay": "open settings",
+      "update": "rest",
+      "activity": "rest",
+      "team": "rest",
+      "sound": "open settings",
+      "awake": "open settings"
+    }
+  },
+  "sheets": [
+    "sheet-compare-en.png",
+    "sheet-compare-uk.png",
+    "sheet-variant-1.png",
+    "sheet-variant-2.png",
+    "sheet-variant-3.png"
+  ],
+  "failures": [],
+  "states": [
+    {
+      "variant": 0,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        437
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 13,
+      "cut": [],
+      "file": "today/1440-light-en-header-rest.png",
+      "shown": {}
+    },
+    {
+      "variant": 0,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        437
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 13,
+      "cut": [],
+      "file": "today/1440-light-uk-header-rest.png",
+      "shown": {}
+    },
+    {
+      "variant": 0,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        437
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 13,
+      "cut": [],
+      "file": "today/1440-dark-en-header-rest.png",
+      "shown": {}
+    },
+    {
+      "variant": 0,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        437
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 13,
+      "cut": [],
+      "file": "today/1440-dark-uk-header-rest.png",
+      "shown": {}
+    },
+    {
+      "variant": 0,
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        437
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 13,
+      "cut": [],
+      "file": "today/1000-light-en-header-rest.png",
+      "shown": {}
+    },
+    {
+      "variant": 0,
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        437
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 13,
+      "cut": [],
+      "file": "today/1000-light-uk-header-rest.png",
+      "shown": {}
+    },
+    {
+      "variant": 0,
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        437
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 13,
+      "cut": [],
+      "file": "today/1000-dark-en-header-rest.png",
+      "shown": {}
+    },
+    {
+      "variant": 0,
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        437
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 13,
+      "cut": [],
+      "file": "today/1000-dark-uk-header-rest.png",
+      "shown": {}
+    },
+    {
+      "variant": 0,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone",
+      "state": "rest",
+      "box": [
+        0,
+        101.3,
+        390,
+        742.7
+      ],
+      "scrolls": true,
+      "inside": true,
+      "controls": 29,
+      "cut": [],
+      "file": "today/390-light-en-phone-rest.png",
+      "shown": {}
+    },
+    {
+      "variant": 0,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "rest",
+      "box": [
+        0,
+        101.3,
+        390,
+        742.7
+      ],
+      "scrolls": true,
+      "inside": true,
+      "controls": 29,
+      "cut": [],
+      "file": "today/390-light-uk-phone-rest.png",
+      "shown": {}
+    },
+    {
+      "variant": 0,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone",
+      "state": "rest",
+      "box": [
+        0,
+        101.3,
+        390,
+        742.7
+      ],
+      "scrolls": true,
+      "inside": true,
+      "controls": 29,
+      "cut": [],
+      "file": "today/390-dark-en-phone-rest.png",
+      "shown": {}
+    },
+    {
+      "variant": 0,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "rest",
+      "box": [
+        0,
+        101.3,
+        390,
+        742.7
+      ],
+      "scrolls": true,
+      "inside": true,
+      "controls": 29,
+      "cut": [],
+      "file": "today/390-dark-uk-phone-rest.png",
+      "shown": {}
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        190
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "file": "v1/1440-light-en-header-rest.png",
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-update": "Update"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "open device",
+      "box": [
+        7,
+        36.5,
+        232,
+        266
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v1/1440-light-en-header-open_device.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-update": "Update",
+        "language": "Language: EnglishEN",
+        "push": "Notifications: off"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "open install",
+      "box": [
+        7,
+        36.5,
+        232,
+        340
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 11,
+      "cut": [],
+      "file": "v1/1440-light-en-header-open_install.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-update": "Update",
+        "rail-menu-agent-mapping": "Agents by role",
+        "rail-menu-dictation": "Speech recognition",
+        "rail-menu-linked-settings": "Linked machines",
+        "rail-menu-external-relay": "Questions from chats",
+        "rail-menu-settings": "Privacy and memory"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "open people",
+      "box": [
+        7,
+        36.5,
+        232,
+        262
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v1/1440-light-en-header-open_people.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-update": "Update",
+        "rail-menu-team": "Team",
+        "qr": "Open on phone"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "open help",
+      "box": [
+        7,
+        36.5,
+        232,
+        250
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v1/1440-light-en-header-open_help.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-update": "Update",
+        "rail-menu-setup-guide": "Setup guide",
+        "rail-menu-interface-walk": "Interface walk"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        190
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "file": "v1/1440-light-uk-header-rest.png",
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open device",
+      "box": [
+        7,
+        36.5,
+        232,
+        266
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v1/1440-light-uk-header-open_device.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-update": "Оновлення",
+        "language": "Мова: УкраїнськаUK",
+        "push": "Сповіщення: вимкнені"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open install",
+      "box": [
+        7,
+        36.5,
+        232,
+        340
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 11,
+      "cut": [],
+      "file": "v1/1440-light-uk-header-open_install.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-update": "Оновлення",
+        "rail-menu-agent-mapping": "Агенти для ролей",
+        "rail-menu-dictation": "Розпізнавання мовлення",
+        "rail-menu-linked-settings": "Пов’язані комп’ютери",
+        "rail-menu-external-relay": "Питання з чатів",
+        "rail-menu-settings": "Приватність і пам’ять"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open people",
+      "box": [
+        7,
+        36.5,
+        232,
+        262
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v1/1440-light-uk-header-open_people.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-update": "Оновлення",
+        "rail-menu-team": "Команда",
+        "qr": "Відкрити на телефоні"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open help",
+      "box": [
+        7,
+        36.5,
+        232,
+        250
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v1/1440-light-uk-header-open_help.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-update": "Оновлення",
+        "rail-menu-setup-guide": "Посібник із налаштування",
+        "rail-menu-interface-walk": "Екскурсія інтерфейсом"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        190
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "file": "v1/1440-dark-en-header-rest.png",
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-update": "Update"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "header",
+      "state": "open device",
+      "box": [
+        7,
+        36.5,
+        232,
+        266
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v1/1440-dark-en-header-open_device.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-update": "Update",
+        "language": "Language: EnglishEN",
+        "push": "Notifications: off"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "header",
+      "state": "open install",
+      "box": [
+        7,
+        36.5,
+        232,
+        340
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 11,
+      "cut": [],
+      "file": "v1/1440-dark-en-header-open_install.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-update": "Update",
+        "rail-menu-agent-mapping": "Agents by role",
+        "rail-menu-dictation": "Speech recognition",
+        "rail-menu-linked-settings": "Linked machines",
+        "rail-menu-external-relay": "Questions from chats",
+        "rail-menu-settings": "Privacy and memory"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "header",
+      "state": "open people",
+      "box": [
+        7,
+        36.5,
+        232,
+        262
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v1/1440-dark-en-header-open_people.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-update": "Update",
+        "rail-menu-team": "Team",
+        "qr": "Open on phone"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "header",
+      "state": "open help",
+      "box": [
+        7,
+        36.5,
+        232,
+        250
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v1/1440-dark-en-header-open_help.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-update": "Update",
+        "rail-menu-setup-guide": "Setup guide",
+        "rail-menu-interface-walk": "Interface walk"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        190
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "file": "v1/1440-dark-uk-header-rest.png",
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open device",
+      "box": [
+        7,
+        36.5,
+        232,
+        266
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v1/1440-dark-uk-header-open_device.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-update": "Оновлення",
+        "language": "Мова: УкраїнськаUK",
+        "push": "Сповіщення: вимкнені"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open install",
+      "box": [
+        7,
+        36.5,
+        232,
+        340
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 11,
+      "cut": [],
+      "file": "v1/1440-dark-uk-header-open_install.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-update": "Оновлення",
+        "rail-menu-agent-mapping": "Агенти для ролей",
+        "rail-menu-dictation": "Розпізнавання мовлення",
+        "rail-menu-linked-settings": "Пов’язані комп’ютери",
+        "rail-menu-external-relay": "Питання з чатів",
+        "rail-menu-settings": "Приватність і пам’ять"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open people",
+      "box": [
+        7,
+        36.5,
+        232,
+        262
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v1/1440-dark-uk-header-open_people.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-update": "Оновлення",
+        "rail-menu-team": "Команда",
+        "qr": "Відкрити на телефоні"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open help",
+      "box": [
+        7,
+        36.5,
+        232,
+        250
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v1/1440-dark-uk-header-open_help.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-update": "Оновлення",
+        "rail-menu-setup-guide": "Посібник із налаштування",
+        "rail-menu-interface-walk": "Екскурсія інтерфейсом"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        190
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "file": "v1/1000-light-en-header-rest.png",
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-update": "Update"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "open device",
+      "box": [
+        7,
+        36.5,
+        232,
+        266
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v1/1000-light-en-header-open_device.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-update": "Update",
+        "language": "Language: EnglishEN",
+        "push": "Notifications: off"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "open install",
+      "box": [
+        7,
+        36.5,
+        232,
+        340
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 11,
+      "cut": [],
+      "file": "v1/1000-light-en-header-open_install.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-update": "Update",
+        "rail-menu-agent-mapping": "Agents by role",
+        "rail-menu-dictation": "Speech recognition",
+        "rail-menu-linked-settings": "Linked machines",
+        "rail-menu-external-relay": "Questions from chats",
+        "rail-menu-settings": "Privacy and memory"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "open people",
+      "box": [
+        7,
+        36.5,
+        232,
+        262
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v1/1000-light-en-header-open_people.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-update": "Update",
+        "rail-menu-team": "Team",
+        "qr": "Open on phone"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "open help",
+      "box": [
+        7,
+        36.5,
+        232,
+        250
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v1/1000-light-en-header-open_help.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-update": "Update",
+        "rail-menu-setup-guide": "Setup guide",
+        "rail-menu-interface-walk": "Interface walk"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        190
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "file": "v1/1000-light-uk-header-rest.png",
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open device",
+      "box": [
+        7,
+        36.5,
+        232,
+        266
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v1/1000-light-uk-header-open_device.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-update": "Оновлення",
+        "language": "Мова: УкраїнськаUK",
+        "push": "Сповіщення: вимкнені"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open install",
+      "box": [
+        7,
+        36.5,
+        232,
+        340
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 11,
+      "cut": [],
+      "file": "v1/1000-light-uk-header-open_install.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-update": "Оновлення",
+        "rail-menu-agent-mapping": "Агенти для ролей",
+        "rail-menu-dictation": "Розпізнавання мовлення",
+        "rail-menu-linked-settings": "Пов’язані комп’ютери",
+        "rail-menu-external-relay": "Питання з чатів",
+        "rail-menu-settings": "Приватність і пам’ять"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open people",
+      "box": [
+        7,
+        36.5,
+        232,
+        262
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v1/1000-light-uk-header-open_people.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-update": "Оновлення",
+        "rail-menu-team": "Команда",
+        "qr": "Відкрити на телефоні"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open help",
+      "box": [
+        7,
+        36.5,
+        232,
+        250
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v1/1000-light-uk-header-open_help.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-update": "Оновлення",
+        "rail-menu-setup-guide": "Посібник із налаштування",
+        "rail-menu-interface-walk": "Екскурсія інтерфейсом"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        190
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "file": "v1/1000-dark-en-header-rest.png",
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-update": "Update"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "header",
+      "state": "open device",
+      "box": [
+        7,
+        36.5,
+        232,
+        266
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v1/1000-dark-en-header-open_device.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-update": "Update",
+        "language": "Language: EnglishEN",
+        "push": "Notifications: off"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "header",
+      "state": "open install",
+      "box": [
+        7,
+        36.5,
+        232,
+        340
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 11,
+      "cut": [],
+      "file": "v1/1000-dark-en-header-open_install.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-update": "Update",
+        "rail-menu-agent-mapping": "Agents by role",
+        "rail-menu-dictation": "Speech recognition",
+        "rail-menu-linked-settings": "Linked machines",
+        "rail-menu-external-relay": "Questions from chats",
+        "rail-menu-settings": "Privacy and memory"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "header",
+      "state": "open people",
+      "box": [
+        7,
+        36.5,
+        232,
+        262
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v1/1000-dark-en-header-open_people.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-update": "Update",
+        "rail-menu-team": "Team",
+        "qr": "Open on phone"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "header",
+      "state": "open help",
+      "box": [
+        7,
+        36.5,
+        232,
+        250
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v1/1000-dark-en-header-open_help.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-update": "Update",
+        "rail-menu-setup-guide": "Setup guide",
+        "rail-menu-interface-walk": "Interface walk"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        190
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "file": "v1/1000-dark-uk-header-rest.png",
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open device",
+      "box": [
+        7,
+        36.5,
+        232,
+        266
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v1/1000-dark-uk-header-open_device.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-update": "Оновлення",
+        "language": "Мова: УкраїнськаUK",
+        "push": "Сповіщення: вимкнені"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open install",
+      "box": [
+        7,
+        36.5,
+        232,
+        340
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 11,
+      "cut": [],
+      "file": "v1/1000-dark-uk-header-open_install.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-update": "Оновлення",
+        "rail-menu-agent-mapping": "Агенти для ролей",
+        "rail-menu-dictation": "Розпізнавання мовлення",
+        "rail-menu-linked-settings": "Пов’язані комп’ютери",
+        "rail-menu-external-relay": "Питання з чатів",
+        "rail-menu-settings": "Приватність і пам’ять"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open people",
+      "box": [
+        7,
+        36.5,
+        232,
+        262
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v1/1000-dark-uk-header-open_people.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-update": "Оновлення",
+        "rail-menu-team": "Команда",
+        "qr": "Відкрити на телефоні"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open help",
+      "box": [
+        7,
+        36.5,
+        232,
+        250
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v1/1000-dark-uk-header-open_help.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-update": "Оновлення",
+        "rail-menu-setup-guide": "Посібник із налаштування",
+        "rail-menu-interface-walk": "Екскурсія інтерфейсом"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone",
+      "state": "rest",
+      "box": [
+        0,
+        228,
+        390,
+        616
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 15,
+      "cut": [],
+      "file": "v1/390-light-en-phone-rest.png",
+      "shown": {
+        "new-agent": "New agent",
+        "new-task": "New task",
+        "new-pipeline": "New pipeline",
+        "tasks": "Tasks13 open",
+        "pipelines": "Pipelines",
+        "hidden": "Hidden tasks2",
+        "activity": "Activity",
+        "team": "Team",
+        "self-update": "Update"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone",
+      "state": "open view",
+      "box": [
+        0,
+        548,
+        390,
+        296
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "file": "v1/390-light-en-phone-open_view.png",
+      "shown": {
+        "view-board": "Board",
+        "view-catalog": "All conversations",
+        "accounts": "Accounts & limits",
+        "host": "Host details0 tasks"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone",
+      "state": "open device",
+      "box": [
+        0,
+        118.9,
+        390,
+        725.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 18,
+      "cut": [],
+      "file": "v1/390-light-en-phone-open_device.png",
+      "shown": {
+        "new-agent": "New agent",
+        "new-task": "New task",
+        "new-pipeline": "New pipeline",
+        "tasks": "Tasks13 open",
+        "pipelines": "Pipelines",
+        "hidden": "Hidden tasks2",
+        "activity": "Activity",
+        "team": "Team",
+        "sound-settings-trigger": "Sound alerts",
+        "keep-awake-row": "Keep screen awakeThe screen sleeps on this device's usual timer.",
+        "self-update": "Update"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone",
+      "state": "open install",
+      "box": [
+        0,
+        504,
+        390,
+        340
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 7,
+      "cut": [],
+      "file": "v1/390-light-en-phone-open_install.png",
+      "shown": {
+        "agent-mapping": "Agents by role",
+        "dictation": "Speech recognition",
+        "linked-settings": "Linked machines",
+        "external-relay": "Questions from chats",
+        "settings": "Privacy and memory"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone",
+      "state": "open help",
+      "box": [
+        0,
+        140,
+        390,
+        704
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 17,
+      "cut": [],
+      "file": "v1/390-light-en-phone-open_help.png",
+      "shown": {
+        "new-agent": "New agent",
+        "new-task": "New task",
+        "new-pipeline": "New pipeline",
+        "tasks": "Tasks13 open",
+        "pipelines": "Pipelines",
+        "hidden": "Hidden tasks2",
+        "activity": "Activity",
+        "team": "Team",
+        "setup-guide": "Setup guide",
+        "interface-walk": "Interface walk",
+        "self-update": "Update"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone",
+      "state": "open policy",
+      "box": [
+        0,
+        393.3,
+        390,
+        450.8
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 7,
+      "cut": [],
+      "file": "v1/390-light-en-phone-open_policy.png",
+      "shown": {
+        "merge-on-review": "Merge when the review passesGreen checks only; a conflict waits for you.",
+        "share-project": "Share with linked machinesCould not load or save sharing. Try again.Retry sharing settings",
+        "bridge-reports": "Bridge reportsThe orchestrator logs what it did; the voice relay reads it out.",
+        "asks-you": "Asks youOff, for all projects. When on, the last message of each agent's turn is sent to Jev on OpenRouter to spot a question for you. No other text leaves this machine."
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "rest",
+      "box": [
+        0,
+        228,
+        390,
+        616
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 15,
+      "cut": [],
+      "file": "v1/390-light-uk-phone-rest.png",
+      "shown": {
+        "new-agent": "Новий агент",
+        "new-task": "Нове завдання",
+        "new-pipeline": "Новий пайплайн",
+        "tasks": "Завдання13 відкритих",
+        "pipelines": "Пайплайни",
+        "hidden": "Приховані задачі2",
+        "activity": "Активність",
+        "team": "Команда",
+        "self-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open view",
+      "box": [
+        0,
+        548,
+        390,
+        296
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "file": "v1/390-light-uk-phone-open_view.png",
+      "shown": {
+        "view-board": "Дошка",
+        "view-catalog": "Усі розмови",
+        "accounts": "Акаунти й ліміти",
+        "host": "Деталі хоста0 задач"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open device",
+      "box": [
+        0,
+        118.9,
+        390,
+        725.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 18,
+      "cut": [],
+      "file": "v1/390-light-uk-phone-open_device.png",
+      "shown": {
+        "new-agent": "Новий агент",
+        "new-task": "Нове завдання",
+        "new-pipeline": "Новий пайплайн",
+        "tasks": "Завдання13 відкритих",
+        "pipelines": "Пайплайни",
+        "hidden": "Приховані задачі2",
+        "activity": "Активність",
+        "team": "Команда",
+        "sound-settings-trigger": "Звукові сповіщення",
+        "keep-awake-row": "Не гасити екранЕкран гасне за звичайним таймером цього пристрою.",
+        "self-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open install",
+      "box": [
+        0,
+        504,
+        390,
+        340
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 7,
+      "cut": [],
+      "file": "v1/390-light-uk-phone-open_install.png",
+      "shown": {
+        "agent-mapping": "Агенти для ролей",
+        "dictation": "Розпізнавання мовлення",
+        "linked-settings": "Пов’язані комп’ютери",
+        "external-relay": "Питання з чатів",
+        "settings": "Приватність і пам’ять"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open help",
+      "box": [
+        0,
+        140,
+        390,
+        704
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 17,
+      "cut": [],
+      "file": "v1/390-light-uk-phone-open_help.png",
+      "shown": {
+        "new-agent": "Новий агент",
+        "new-task": "Нове завдання",
+        "new-pipeline": "Новий пайплайн",
+        "tasks": "Завдання13 відкритих",
+        "pipelines": "Пайплайни",
+        "hidden": "Приховані задачі2",
+        "activity": "Активність",
+        "team": "Команда",
+        "setup-guide": "Посібник із налаштування",
+        "interface-walk": "Екскурсія інтерфейсом",
+        "self-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open policy",
+      "box": [
+        0,
+        378.1,
+        390,
+        465.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 7,
+      "cut": [],
+      "file": "v1/390-light-uk-phone-open_policy.png",
+      "shown": {
+        "merge-on-review": "Мерджити, коли ревʼю пройденоЛише із зеленими перевірками; конфлікт чекає на вас.",
+        "share-project": "Поділитися з пов’язаними машинамиНе вдалося завантажити або зберегти налаштування. Спробуйте ще раз.Повторити завантаження налаштувань",
+        "bridge-reports": "Звіти оркестратораОркестратор записує, що зробив; голосовий канал це озвучує.",
+        "asks-you": "Питає васВимкнено для всіх проєктів. Коли увімкнено, останнє повідомлення кожного ходу агента надсилається в Jev на OpenRouter, щоб помітити питання до вас. Інший текст не залишає цю машину."
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone",
+      "state": "rest",
+      "box": [
+        0,
+        228,
+        390,
+        616
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 15,
+      "cut": [],
+      "file": "v1/390-dark-en-phone-rest.png",
+      "shown": {
+        "new-agent": "New agent",
+        "new-task": "New task",
+        "new-pipeline": "New pipeline",
+        "tasks": "Tasks13 open",
+        "pipelines": "Pipelines",
+        "hidden": "Hidden tasks2",
+        "activity": "Activity",
+        "team": "Team",
+        "self-update": "Update"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone",
+      "state": "open view",
+      "box": [
+        0,
+        548,
+        390,
+        296
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "file": "v1/390-dark-en-phone-open_view.png",
+      "shown": {
+        "view-board": "Board",
+        "view-catalog": "All conversations",
+        "accounts": "Accounts & limits",
+        "host": "Host details0 tasks"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone",
+      "state": "open device",
+      "box": [
+        0,
+        118.9,
+        390,
+        725.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 18,
+      "cut": [],
+      "file": "v1/390-dark-en-phone-open_device.png",
+      "shown": {
+        "new-agent": "New agent",
+        "new-task": "New task",
+        "new-pipeline": "New pipeline",
+        "tasks": "Tasks13 open",
+        "pipelines": "Pipelines",
+        "hidden": "Hidden tasks2",
+        "activity": "Activity",
+        "team": "Team",
+        "sound-settings-trigger": "Sound alerts",
+        "keep-awake-row": "Keep screen awakeThe screen sleeps on this device's usual timer.",
+        "self-update": "Update"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone",
+      "state": "open install",
+      "box": [
+        0,
+        504,
+        390,
+        340
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 7,
+      "cut": [],
+      "file": "v1/390-dark-en-phone-open_install.png",
+      "shown": {
+        "agent-mapping": "Agents by role",
+        "dictation": "Speech recognition",
+        "linked-settings": "Linked machines",
+        "external-relay": "Questions from chats",
+        "settings": "Privacy and memory"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone",
+      "state": "open help",
+      "box": [
+        0,
+        140,
+        390,
+        704
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 17,
+      "cut": [],
+      "file": "v1/390-dark-en-phone-open_help.png",
+      "shown": {
+        "new-agent": "New agent",
+        "new-task": "New task",
+        "new-pipeline": "New pipeline",
+        "tasks": "Tasks13 open",
+        "pipelines": "Pipelines",
+        "hidden": "Hidden tasks2",
+        "activity": "Activity",
+        "team": "Team",
+        "setup-guide": "Setup guide",
+        "interface-walk": "Interface walk",
+        "self-update": "Update"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone",
+      "state": "open policy",
+      "box": [
+        0,
+        393.3,
+        390,
+        450.8
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 7,
+      "cut": [],
+      "file": "v1/390-dark-en-phone-open_policy.png",
+      "shown": {
+        "merge-on-review": "Merge when the review passesGreen checks only; a conflict waits for you.",
+        "share-project": "Share with linked machinesCould not load or save sharing. Try again.Retry sharing settings",
+        "bridge-reports": "Bridge reportsThe orchestrator logs what it did; the voice relay reads it out.",
+        "asks-you": "Asks youOff, for all projects. When on, the last message of each agent's turn is sent to Jev on OpenRouter to spot a question for you. No other text leaves this machine."
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "rest",
+      "box": [
+        0,
+        228,
+        390,
+        616
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 15,
+      "cut": [],
+      "file": "v1/390-dark-uk-phone-rest.png",
+      "shown": {
+        "new-agent": "Новий агент",
+        "new-task": "Нове завдання",
+        "new-pipeline": "Новий пайплайн",
+        "tasks": "Завдання13 відкритих",
+        "pipelines": "Пайплайни",
+        "hidden": "Приховані задачі2",
+        "activity": "Активність",
+        "team": "Команда",
+        "self-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open view",
+      "box": [
+        0,
+        548,
+        390,
+        296
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "file": "v1/390-dark-uk-phone-open_view.png",
+      "shown": {
+        "view-board": "Дошка",
+        "view-catalog": "Усі розмови",
+        "accounts": "Акаунти й ліміти",
+        "host": "Деталі хоста0 задач"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open device",
+      "box": [
+        0,
+        118.9,
+        390,
+        725.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 18,
+      "cut": [],
+      "file": "v1/390-dark-uk-phone-open_device.png",
+      "shown": {
+        "new-agent": "Новий агент",
+        "new-task": "Нове завдання",
+        "new-pipeline": "Новий пайплайн",
+        "tasks": "Завдання13 відкритих",
+        "pipelines": "Пайплайни",
+        "hidden": "Приховані задачі2",
+        "activity": "Активність",
+        "team": "Команда",
+        "sound-settings-trigger": "Звукові сповіщення",
+        "keep-awake-row": "Не гасити екранЕкран гасне за звичайним таймером цього пристрою.",
+        "self-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open install",
+      "box": [
+        0,
+        504,
+        390,
+        340
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 7,
+      "cut": [],
+      "file": "v1/390-dark-uk-phone-open_install.png",
+      "shown": {
+        "agent-mapping": "Агенти для ролей",
+        "dictation": "Розпізнавання мовлення",
+        "linked-settings": "Пов’язані комп’ютери",
+        "external-relay": "Питання з чатів",
+        "settings": "Приватність і пам’ять"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open help",
+      "box": [
+        0,
+        140,
+        390,
+        704
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 17,
+      "cut": [],
+      "file": "v1/390-dark-uk-phone-open_help.png",
+      "shown": {
+        "new-agent": "Новий агент",
+        "new-task": "Нове завдання",
+        "new-pipeline": "Новий пайплайн",
+        "tasks": "Завдання13 відкритих",
+        "pipelines": "Пайплайни",
+        "hidden": "Приховані задачі2",
+        "activity": "Активність",
+        "team": "Команда",
+        "setup-guide": "Посібник із налаштування",
+        "interface-walk": "Екскурсія інтерфейсом",
+        "self-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 1,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open policy",
+      "box": [
+        0,
+        378.1,
+        390,
+        465.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 7,
+      "cut": [],
+      "file": "v1/390-dark-uk-phone-open_policy.png",
+      "shown": {
+        "merge-on-review": "Мерджити, коли ревʼю пройденоЛише із зеленими перевірками; конфлікт чекає на вас.",
+        "share-project": "Поділитися з пов’язаними машинамиНе вдалося завантажити або зберегти налаштування. Спробуйте ще раз.Повторити завантаження налаштувань",
+        "bridge-reports": "Звіти оркестратораОркестратор записує, що зробив; голосовий канал це озвучує.",
+        "asks-you": "Питає васВимкнено для всіх проєктів. Коли увімкнено, останнє повідомлення кожного ходу агента надсилається в Jev на OpenRouter, щоб помітити питання до вас. Інший текст не залишає цю машину."
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        220
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v2/1440-light-en-header-rest.png",
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-team": "Team",
+        "rail-menu-update": "Update",
+        "rail-menu-settings": "What leaves this machine"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "open agents",
+      "box": [
+        7,
+        36.5,
+        232,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "file": "v2/1440-light-en-header-open_agents.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-team": "Team",
+        "rail-menu-update": "Update",
+        "rail-menu-agent-mapping": "Who does what",
+        "rail-menu-dictation": "Voice input",
+        "rail-menu-settings": "What leaves this machine"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "open connect",
+      "box": [
+        7,
+        36.5,
+        232,
+        322
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 11,
+      "cut": [],
+      "file": "v2/1440-light-en-header-open_connect.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-team": "Team",
+        "rail-menu-update": "Update",
+        "rail-menu-linked-settings": "Other installs",
+        "rail-menu-external-relay": "Outside chats",
+        "rail-menu-settings": "What leaves this machine",
+        "qr": "Open on phone"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "open alerts",
+      "box": [
+        7,
+        36.5,
+        232,
+        296
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "file": "v2/1440-light-en-header-open_alerts.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-team": "Team",
+        "rail-menu-update": "Update",
+        "rail-menu-settings": "What leaves this machine",
+        "language": "Language: EnglishEN",
+        "push": "Notifications: off"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "open learn",
+      "box": [
+        7,
+        36.5,
+        232,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "file": "v2/1440-light-en-header-open_learn.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-team": "Team",
+        "rail-menu-update": "Update",
+        "rail-menu-settings": "What leaves this machine",
+        "rail-menu-setup-guide": "Setup guide",
+        "rail-menu-interface-walk": "Interface walk"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        220
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v2/1440-light-uk-header-rest.png",
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-team": "Команда",
+        "rail-menu-update": "Оновлення",
+        "rail-menu-settings": "Що йде назовні"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open agents",
+      "box": [
+        7,
+        36.5,
+        232,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "file": "v2/1440-light-uk-header-open_agents.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-team": "Команда",
+        "rail-menu-update": "Оновлення",
+        "rail-menu-agent-mapping": "Хто що робить",
+        "rail-menu-dictation": "Голосове введення",
+        "rail-menu-settings": "Що йде назовні"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open connect",
+      "box": [
+        7,
+        36.5,
+        232,
+        322
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 11,
+      "cut": [],
+      "file": "v2/1440-light-uk-header-open_connect.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-team": "Команда",
+        "rail-menu-update": "Оновлення",
+        "rail-menu-linked-settings": "Інші інсталяції",
+        "rail-menu-external-relay": "Зовнішні чати",
+        "rail-menu-settings": "Що йде назовні",
+        "qr": "Відкрити на телефоні"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open alerts",
+      "box": [
+        7,
+        36.5,
+        232,
+        296
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "file": "v2/1440-light-uk-header-open_alerts.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-team": "Команда",
+        "rail-menu-update": "Оновлення",
+        "rail-menu-settings": "Що йде назовні",
+        "language": "Мова: УкраїнськаUK",
+        "push": "Сповіщення: вимкнені"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open learn",
+      "box": [
+        7,
+        36.5,
+        232,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "file": "v2/1440-light-uk-header-open_learn.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-team": "Команда",
+        "rail-menu-update": "Оновлення",
+        "rail-menu-settings": "Що йде назовні",
+        "rail-menu-setup-guide": "Посібник із налаштування",
+        "rail-menu-interface-walk": "Екскурсія інтерфейсом"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        220
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v2/1440-dark-en-header-rest.png",
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-team": "Team",
+        "rail-menu-update": "Update",
+        "rail-menu-settings": "What leaves this machine"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "header",
+      "state": "open agents",
+      "box": [
+        7,
+        36.5,
+        232,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "file": "v2/1440-dark-en-header-open_agents.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-team": "Team",
+        "rail-menu-update": "Update",
+        "rail-menu-agent-mapping": "Who does what",
+        "rail-menu-dictation": "Voice input",
+        "rail-menu-settings": "What leaves this machine"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "header",
+      "state": "open connect",
+      "box": [
+        7,
+        36.5,
+        232,
+        322
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 11,
+      "cut": [],
+      "file": "v2/1440-dark-en-header-open_connect.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-team": "Team",
+        "rail-menu-update": "Update",
+        "rail-menu-linked-settings": "Other installs",
+        "rail-menu-external-relay": "Outside chats",
+        "rail-menu-settings": "What leaves this machine",
+        "qr": "Open on phone"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "header",
+      "state": "open alerts",
+      "box": [
+        7,
+        36.5,
+        232,
+        296
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "file": "v2/1440-dark-en-header-open_alerts.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-team": "Team",
+        "rail-menu-update": "Update",
+        "rail-menu-settings": "What leaves this machine",
+        "language": "Language: EnglishEN",
+        "push": "Notifications: off"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "header",
+      "state": "open learn",
+      "box": [
+        7,
+        36.5,
+        232,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "file": "v2/1440-dark-en-header-open_learn.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-team": "Team",
+        "rail-menu-update": "Update",
+        "rail-menu-settings": "What leaves this machine",
+        "rail-menu-setup-guide": "Setup guide",
+        "rail-menu-interface-walk": "Interface walk"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        220
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v2/1440-dark-uk-header-rest.png",
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-team": "Команда",
+        "rail-menu-update": "Оновлення",
+        "rail-menu-settings": "Що йде назовні"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open agents",
+      "box": [
+        7,
+        36.5,
+        232,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "file": "v2/1440-dark-uk-header-open_agents.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-team": "Команда",
+        "rail-menu-update": "Оновлення",
+        "rail-menu-agent-mapping": "Хто що робить",
+        "rail-menu-dictation": "Голосове введення",
+        "rail-menu-settings": "Що йде назовні"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open connect",
+      "box": [
+        7,
+        36.5,
+        232,
+        322
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 11,
+      "cut": [],
+      "file": "v2/1440-dark-uk-header-open_connect.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-team": "Команда",
+        "rail-menu-update": "Оновлення",
+        "rail-menu-linked-settings": "Інші інсталяції",
+        "rail-menu-external-relay": "Зовнішні чати",
+        "rail-menu-settings": "Що йде назовні",
+        "qr": "Відкрити на телефоні"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open alerts",
+      "box": [
+        7,
+        36.5,
+        232,
+        296
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "file": "v2/1440-dark-uk-header-open_alerts.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-team": "Команда",
+        "rail-menu-update": "Оновлення",
+        "rail-menu-settings": "Що йде назовні",
+        "language": "Мова: УкраїнськаUK",
+        "push": "Сповіщення: вимкнені"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open learn",
+      "box": [
+        7,
+        36.5,
+        232,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "file": "v2/1440-dark-uk-header-open_learn.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-team": "Команда",
+        "rail-menu-update": "Оновлення",
+        "rail-menu-settings": "Що йде назовні",
+        "rail-menu-setup-guide": "Посібник із налаштування",
+        "rail-menu-interface-walk": "Екскурсія інтерфейсом"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        220
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v2/1000-light-en-header-rest.png",
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-team": "Team",
+        "rail-menu-update": "Update",
+        "rail-menu-settings": "What leaves this machine"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "open agents",
+      "box": [
+        7,
+        36.5,
+        232,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "file": "v2/1000-light-en-header-open_agents.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-team": "Team",
+        "rail-menu-update": "Update",
+        "rail-menu-agent-mapping": "Who does what",
+        "rail-menu-dictation": "Voice input",
+        "rail-menu-settings": "What leaves this machine"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "open connect",
+      "box": [
+        7,
+        36.5,
+        232,
+        322
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 11,
+      "cut": [],
+      "file": "v2/1000-light-en-header-open_connect.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-team": "Team",
+        "rail-menu-update": "Update",
+        "rail-menu-linked-settings": "Other installs",
+        "rail-menu-external-relay": "Outside chats",
+        "rail-menu-settings": "What leaves this machine",
+        "qr": "Open on phone"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "open alerts",
+      "box": [
+        7,
+        36.5,
+        232,
+        296
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "file": "v2/1000-light-en-header-open_alerts.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-team": "Team",
+        "rail-menu-update": "Update",
+        "rail-menu-settings": "What leaves this machine",
+        "language": "Language: EnglishEN",
+        "push": "Notifications: off"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "open learn",
+      "box": [
+        7,
+        36.5,
+        232,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "file": "v2/1000-light-en-header-open_learn.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-team": "Team",
+        "rail-menu-update": "Update",
+        "rail-menu-settings": "What leaves this machine",
+        "rail-menu-setup-guide": "Setup guide",
+        "rail-menu-interface-walk": "Interface walk"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        220
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v2/1000-light-uk-header-rest.png",
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-team": "Команда",
+        "rail-menu-update": "Оновлення",
+        "rail-menu-settings": "Що йде назовні"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open agents",
+      "box": [
+        7,
+        36.5,
+        232,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "file": "v2/1000-light-uk-header-open_agents.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-team": "Команда",
+        "rail-menu-update": "Оновлення",
+        "rail-menu-agent-mapping": "Хто що робить",
+        "rail-menu-dictation": "Голосове введення",
+        "rail-menu-settings": "Що йде назовні"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open connect",
+      "box": [
+        7,
+        36.5,
+        232,
+        322
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 11,
+      "cut": [],
+      "file": "v2/1000-light-uk-header-open_connect.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-team": "Команда",
+        "rail-menu-update": "Оновлення",
+        "rail-menu-linked-settings": "Інші інсталяції",
+        "rail-menu-external-relay": "Зовнішні чати",
+        "rail-menu-settings": "Що йде назовні",
+        "qr": "Відкрити на телефоні"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open alerts",
+      "box": [
+        7,
+        36.5,
+        232,
+        296
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "file": "v2/1000-light-uk-header-open_alerts.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-team": "Команда",
+        "rail-menu-update": "Оновлення",
+        "rail-menu-settings": "Що йде назовні",
+        "language": "Мова: УкраїнськаUK",
+        "push": "Сповіщення: вимкнені"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open learn",
+      "box": [
+        7,
+        36.5,
+        232,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "file": "v2/1000-light-uk-header-open_learn.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-team": "Команда",
+        "rail-menu-update": "Оновлення",
+        "rail-menu-settings": "Що йде назовні",
+        "rail-menu-setup-guide": "Посібник із налаштування",
+        "rail-menu-interface-walk": "Екскурсія інтерфейсом"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        220
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v2/1000-dark-en-header-rest.png",
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-team": "Team",
+        "rail-menu-update": "Update",
+        "rail-menu-settings": "What leaves this machine"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "header",
+      "state": "open agents",
+      "box": [
+        7,
+        36.5,
+        232,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "file": "v2/1000-dark-en-header-open_agents.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-team": "Team",
+        "rail-menu-update": "Update",
+        "rail-menu-agent-mapping": "Who does what",
+        "rail-menu-dictation": "Voice input",
+        "rail-menu-settings": "What leaves this machine"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "header",
+      "state": "open connect",
+      "box": [
+        7,
+        36.5,
+        232,
+        322
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 11,
+      "cut": [],
+      "file": "v2/1000-dark-en-header-open_connect.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-team": "Team",
+        "rail-menu-update": "Update",
+        "rail-menu-linked-settings": "Other installs",
+        "rail-menu-external-relay": "Outside chats",
+        "rail-menu-settings": "What leaves this machine",
+        "qr": "Open on phone"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "header",
+      "state": "open alerts",
+      "box": [
+        7,
+        36.5,
+        232,
+        296
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "file": "v2/1000-dark-en-header-open_alerts.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-team": "Team",
+        "rail-menu-update": "Update",
+        "rail-menu-settings": "What leaves this machine",
+        "language": "Language: EnglishEN",
+        "push": "Notifications: off"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "header",
+      "state": "open learn",
+      "box": [
+        7,
+        36.5,
+        232,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "file": "v2/1000-dark-en-header-open_learn.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Activity",
+        "rail-menu-team": "Team",
+        "rail-menu-update": "Update",
+        "rail-menu-settings": "What leaves this machine",
+        "rail-menu-setup-guide": "Setup guide",
+        "rail-menu-interface-walk": "Interface walk"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        220
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v2/1000-dark-uk-header-rest.png",
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-team": "Команда",
+        "rail-menu-update": "Оновлення",
+        "rail-menu-settings": "Що йде назовні"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open agents",
+      "box": [
+        7,
+        36.5,
+        232,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "file": "v2/1000-dark-uk-header-open_agents.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-team": "Команда",
+        "rail-menu-update": "Оновлення",
+        "rail-menu-agent-mapping": "Хто що робить",
+        "rail-menu-dictation": "Голосове введення",
+        "rail-menu-settings": "Що йде назовні"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open connect",
+      "box": [
+        7,
+        36.5,
+        232,
+        322
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 11,
+      "cut": [],
+      "file": "v2/1000-dark-uk-header-open_connect.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-team": "Команда",
+        "rail-menu-update": "Оновлення",
+        "rail-menu-linked-settings": "Інші інсталяції",
+        "rail-menu-external-relay": "Зовнішні чати",
+        "rail-menu-settings": "Що йде назовні",
+        "qr": "Відкрити на телефоні"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open alerts",
+      "box": [
+        7,
+        36.5,
+        232,
+        296
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "file": "v2/1000-dark-uk-header-open_alerts.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-team": "Команда",
+        "rail-menu-update": "Оновлення",
+        "rail-menu-settings": "Що йде назовні",
+        "language": "Мова: УкраїнськаUK",
+        "push": "Сповіщення: вимкнені"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open learn",
+      "box": [
+        7,
+        36.5,
+        232,
+        280
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "file": "v2/1000-dark-uk-header-open_learn.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Активність",
+        "rail-menu-team": "Команда",
+        "rail-menu-update": "Оновлення",
+        "rail-menu-settings": "Що йде назовні",
+        "rail-menu-setup-guide": "Посібник із налаштування",
+        "rail-menu-interface-walk": "Екскурсія інтерфейсом"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone",
+      "state": "rest",
+      "box": [
+        0,
+        212,
+        390,
+        632
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 17,
+      "cut": [],
+      "file": "v2/390-light-en-phone-rest.png",
+      "shown": {
+        "settings": "What leaves this machine",
+        "new-agent": "New agent",
+        "new-task": "New task",
+        "new-pipeline": "New pipeline",
+        "tasks": "Tasks13 open",
+        "pipelines": "Pipelines",
+        "hidden": "Hidden tasks2",
+        "activity": "Activity",
+        "team": "Team",
+        "self-update": "Update"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone",
+      "state": "open view",
+      "box": [
+        0,
+        548,
+        390,
+        296
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "file": "v2/390-light-en-phone-open_view.png",
+      "shown": {
+        "view-board": "Board",
+        "view-catalog": "All conversations",
+        "accounts": "Accounts & limits",
+        "host": "Host details0 tasks"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone",
+      "state": "open agents",
+      "box": [
+        0,
+        124,
+        390,
+        720
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 19,
+      "cut": [],
+      "file": "v2/390-light-en-phone-open_agents.png",
+      "shown": {
+        "agent-mapping": "Who does what",
+        "dictation": "Voice input",
+        "settings": "What leaves this machine",
+        "new-agent": "New agent",
+        "new-task": "New task",
+        "new-pipeline": "New pipeline",
+        "tasks": "Tasks13 open",
+        "pipelines": "Pipelines",
+        "hidden": "Hidden tasks2",
+        "activity": "Activity",
+        "team": "Team",
+        "self-update": "Update"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone",
+      "state": "open connect",
+      "box": [
+        0,
+        124,
+        390,
+        720
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 19,
+      "cut": [],
+      "file": "v2/390-light-en-phone-open_connect.png",
+      "shown": {
+        "linked-settings": "Other installs",
+        "external-relay": "Outside chats",
+        "settings": "What leaves this machine",
+        "new-agent": "New agent",
+        "new-task": "New task",
+        "new-pipeline": "New pipeline",
+        "tasks": "Tasks13 open",
+        "pipelines": "Pipelines",
+        "hidden": "Hidden tasks2",
+        "activity": "Activity",
+        "team": "Team",
+        "self-update": "Update"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone",
+      "state": "open alerts",
+      "box": [
+        0,
+        614.9,
+        390,
+        229.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 5,
+      "cut": [],
+      "file": "v2/390-light-en-phone-open_alerts.png",
+      "shown": {
+        "sound-settings-trigger": "Sound alerts",
+        "keep-awake-row": "Keep screen awakeThe screen sleeps on this device's usual timer."
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone",
+      "state": "open learn",
+      "box": [
+        0,
+        124,
+        390,
+        720
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 19,
+      "cut": [],
+      "file": "v2/390-light-en-phone-open_learn.png",
+      "shown": {
+        "settings": "What leaves this machine",
+        "new-agent": "New agent",
+        "new-task": "New task",
+        "new-pipeline": "New pipeline",
+        "tasks": "Tasks13 open",
+        "pipelines": "Pipelines",
+        "hidden": "Hidden tasks2",
+        "activity": "Activity",
+        "team": "Team",
+        "setup-guide": "Setup guide",
+        "interface-walk": "Interface walk",
+        "self-update": "Update"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone",
+      "state": "open policy",
+      "box": [
+        0,
+        393.3,
+        390,
+        450.8
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 7,
+      "cut": [],
+      "file": "v2/390-light-en-phone-open_policy.png",
+      "shown": {
+        "merge-on-review": "Merge when the review passesGreen checks only; a conflict waits for you.",
+        "share-project": "Share with linked machinesCould not load or save sharing. Try again.Retry sharing settings",
+        "bridge-reports": "Bridge reportsThe orchestrator logs what it did; the voice relay reads it out.",
+        "asks-you": "Asks youOff, for all projects. When on, the last message of each agent's turn is sent to Jev on OpenRouter to spot a question for you. No other text leaves this machine."
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "rest",
+      "box": [
+        0,
+        212,
+        390,
+        632
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 17,
+      "cut": [],
+      "file": "v2/390-light-uk-phone-rest.png",
+      "shown": {
+        "settings": "Що йде назовні",
+        "new-agent": "Новий агент",
+        "new-task": "Нове завдання",
+        "new-pipeline": "Новий пайплайн",
+        "tasks": "Завдання13 відкритих",
+        "pipelines": "Пайплайни",
+        "hidden": "Приховані задачі2",
+        "activity": "Активність",
+        "team": "Команда",
+        "self-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open view",
+      "box": [
+        0,
+        548,
+        390,
+        296
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "file": "v2/390-light-uk-phone-open_view.png",
+      "shown": {
+        "view-board": "Дошка",
+        "view-catalog": "Усі розмови",
+        "accounts": "Акаунти й ліміти",
+        "host": "Деталі хоста0 задач"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open agents",
+      "box": [
+        0,
+        124,
+        390,
+        720
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 19,
+      "cut": [],
+      "file": "v2/390-light-uk-phone-open_agents.png",
+      "shown": {
+        "agent-mapping": "Хто що робить",
+        "dictation": "Голосове введення",
+        "settings": "Що йде назовні",
+        "new-agent": "Новий агент",
+        "new-task": "Нове завдання",
+        "new-pipeline": "Новий пайплайн",
+        "tasks": "Завдання13 відкритих",
+        "pipelines": "Пайплайни",
+        "hidden": "Приховані задачі2",
+        "activity": "Активність",
+        "team": "Команда",
+        "self-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open connect",
+      "box": [
+        0,
+        124,
+        390,
+        720
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 19,
+      "cut": [],
+      "file": "v2/390-light-uk-phone-open_connect.png",
+      "shown": {
+        "linked-settings": "Інші інсталяції",
+        "external-relay": "Зовнішні чати",
+        "settings": "Що йде назовні",
+        "new-agent": "Новий агент",
+        "new-task": "Нове завдання",
+        "new-pipeline": "Новий пайплайн",
+        "tasks": "Завдання13 відкритих",
+        "pipelines": "Пайплайни",
+        "hidden": "Приховані задачі2",
+        "activity": "Активність",
+        "team": "Команда",
+        "self-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open alerts",
+      "box": [
+        0,
+        614.9,
+        390,
+        229.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 5,
+      "cut": [],
+      "file": "v2/390-light-uk-phone-open_alerts.png",
+      "shown": {
+        "sound-settings-trigger": "Звукові сповіщення",
+        "keep-awake-row": "Не гасити екранЕкран гасне за звичайним таймером цього пристрою."
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open learn",
+      "box": [
+        0,
+        124,
+        390,
+        720
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 19,
+      "cut": [],
+      "file": "v2/390-light-uk-phone-open_learn.png",
+      "shown": {
+        "settings": "Що йде назовні",
+        "new-agent": "Новий агент",
+        "new-task": "Нове завдання",
+        "new-pipeline": "Новий пайплайн",
+        "tasks": "Завдання13 відкритих",
+        "pipelines": "Пайплайни",
+        "hidden": "Приховані задачі2",
+        "activity": "Активність",
+        "team": "Команда",
+        "setup-guide": "Посібник із налаштування",
+        "interface-walk": "Екскурсія інтерфейсом",
+        "self-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open policy",
+      "box": [
+        0,
+        378.1,
+        390,
+        465.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 7,
+      "cut": [],
+      "file": "v2/390-light-uk-phone-open_policy.png",
+      "shown": {
+        "merge-on-review": "Мерджити, коли ревʼю пройденоЛише із зеленими перевірками; конфлікт чекає на вас.",
+        "share-project": "Поділитися з пов’язаними машинамиНе вдалося завантажити або зберегти налаштування. Спробуйте ще раз.Повторити завантаження налаштувань",
+        "bridge-reports": "Звіти оркестратораОркестратор записує, що зробив; голосовий канал це озвучує.",
+        "asks-you": "Питає васВимкнено для всіх проєктів. Коли увімкнено, останнє повідомлення кожного ходу агента надсилається в Jev на OpenRouter, щоб помітити питання до вас. Інший текст не залишає цю машину."
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone",
+      "state": "rest",
+      "box": [
+        0,
+        212,
+        390,
+        632
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 17,
+      "cut": [],
+      "file": "v2/390-dark-en-phone-rest.png",
+      "shown": {
+        "settings": "What leaves this machine",
+        "new-agent": "New agent",
+        "new-task": "New task",
+        "new-pipeline": "New pipeline",
+        "tasks": "Tasks13 open",
+        "pipelines": "Pipelines",
+        "hidden": "Hidden tasks2",
+        "activity": "Activity",
+        "team": "Team",
+        "self-update": "Update"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone",
+      "state": "open view",
+      "box": [
+        0,
+        548,
+        390,
+        296
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "file": "v2/390-dark-en-phone-open_view.png",
+      "shown": {
+        "view-board": "Board",
+        "view-catalog": "All conversations",
+        "accounts": "Accounts & limits",
+        "host": "Host details0 tasks"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone",
+      "state": "open agents",
+      "box": [
+        0,
+        124,
+        390,
+        720
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 19,
+      "cut": [],
+      "file": "v2/390-dark-en-phone-open_agents.png",
+      "shown": {
+        "agent-mapping": "Who does what",
+        "dictation": "Voice input",
+        "settings": "What leaves this machine",
+        "new-agent": "New agent",
+        "new-task": "New task",
+        "new-pipeline": "New pipeline",
+        "tasks": "Tasks13 open",
+        "pipelines": "Pipelines",
+        "hidden": "Hidden tasks2",
+        "activity": "Activity",
+        "team": "Team",
+        "self-update": "Update"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone",
+      "state": "open connect",
+      "box": [
+        0,
+        124,
+        390,
+        720
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 19,
+      "cut": [],
+      "file": "v2/390-dark-en-phone-open_connect.png",
+      "shown": {
+        "linked-settings": "Other installs",
+        "external-relay": "Outside chats",
+        "settings": "What leaves this machine",
+        "new-agent": "New agent",
+        "new-task": "New task",
+        "new-pipeline": "New pipeline",
+        "tasks": "Tasks13 open",
+        "pipelines": "Pipelines",
+        "hidden": "Hidden tasks2",
+        "activity": "Activity",
+        "team": "Team",
+        "self-update": "Update"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone",
+      "state": "open alerts",
+      "box": [
+        0,
+        614.9,
+        390,
+        229.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 5,
+      "cut": [],
+      "file": "v2/390-dark-en-phone-open_alerts.png",
+      "shown": {
+        "sound-settings-trigger": "Sound alerts",
+        "keep-awake-row": "Keep screen awakeThe screen sleeps on this device's usual timer."
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone",
+      "state": "open learn",
+      "box": [
+        0,
+        124,
+        390,
+        720
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 19,
+      "cut": [],
+      "file": "v2/390-dark-en-phone-open_learn.png",
+      "shown": {
+        "settings": "What leaves this machine",
+        "new-agent": "New agent",
+        "new-task": "New task",
+        "new-pipeline": "New pipeline",
+        "tasks": "Tasks13 open",
+        "pipelines": "Pipelines",
+        "hidden": "Hidden tasks2",
+        "activity": "Activity",
+        "team": "Team",
+        "setup-guide": "Setup guide",
+        "interface-walk": "Interface walk",
+        "self-update": "Update"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone",
+      "state": "open policy",
+      "box": [
+        0,
+        393.3,
+        390,
+        450.8
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 7,
+      "cut": [],
+      "file": "v2/390-dark-en-phone-open_policy.png",
+      "shown": {
+        "merge-on-review": "Merge when the review passesGreen checks only; a conflict waits for you.",
+        "share-project": "Share with linked machinesCould not load or save sharing. Try again.Retry sharing settings",
+        "bridge-reports": "Bridge reportsThe orchestrator logs what it did; the voice relay reads it out.",
+        "asks-you": "Asks youOff, for all projects. When on, the last message of each agent's turn is sent to Jev on OpenRouter to spot a question for you. No other text leaves this machine."
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "rest",
+      "box": [
+        0,
+        212,
+        390,
+        632
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 17,
+      "cut": [],
+      "file": "v2/390-dark-uk-phone-rest.png",
+      "shown": {
+        "settings": "Що йде назовні",
+        "new-agent": "Новий агент",
+        "new-task": "Нове завдання",
+        "new-pipeline": "Новий пайплайн",
+        "tasks": "Завдання13 відкритих",
+        "pipelines": "Пайплайни",
+        "hidden": "Приховані задачі2",
+        "activity": "Активність",
+        "team": "Команда",
+        "self-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open view",
+      "box": [
+        0,
+        548,
+        390,
+        296
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "file": "v2/390-dark-uk-phone-open_view.png",
+      "shown": {
+        "view-board": "Дошка",
+        "view-catalog": "Усі розмови",
+        "accounts": "Акаунти й ліміти",
+        "host": "Деталі хоста0 задач"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open agents",
+      "box": [
+        0,
+        124,
+        390,
+        720
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 19,
+      "cut": [],
+      "file": "v2/390-dark-uk-phone-open_agents.png",
+      "shown": {
+        "agent-mapping": "Хто що робить",
+        "dictation": "Голосове введення",
+        "settings": "Що йде назовні",
+        "new-agent": "Новий агент",
+        "new-task": "Нове завдання",
+        "new-pipeline": "Новий пайплайн",
+        "tasks": "Завдання13 відкритих",
+        "pipelines": "Пайплайни",
+        "hidden": "Приховані задачі2",
+        "activity": "Активність",
+        "team": "Команда",
+        "self-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open connect",
+      "box": [
+        0,
+        124,
+        390,
+        720
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 19,
+      "cut": [],
+      "file": "v2/390-dark-uk-phone-open_connect.png",
+      "shown": {
+        "linked-settings": "Інші інсталяції",
+        "external-relay": "Зовнішні чати",
+        "settings": "Що йде назовні",
+        "new-agent": "Новий агент",
+        "new-task": "Нове завдання",
+        "new-pipeline": "Новий пайплайн",
+        "tasks": "Завдання13 відкритих",
+        "pipelines": "Пайплайни",
+        "hidden": "Приховані задачі2",
+        "activity": "Активність",
+        "team": "Команда",
+        "self-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open alerts",
+      "box": [
+        0,
+        614.9,
+        390,
+        229.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 5,
+      "cut": [],
+      "file": "v2/390-dark-uk-phone-open_alerts.png",
+      "shown": {
+        "sound-settings-trigger": "Звукові сповіщення",
+        "keep-awake-row": "Не гасити екранЕкран гасне за звичайним таймером цього пристрою."
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open learn",
+      "box": [
+        0,
+        124,
+        390,
+        720
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 19,
+      "cut": [],
+      "file": "v2/390-dark-uk-phone-open_learn.png",
+      "shown": {
+        "settings": "Що йде назовні",
+        "new-agent": "Новий агент",
+        "new-task": "Нове завдання",
+        "new-pipeline": "Новий пайплайн",
+        "tasks": "Завдання13 відкритих",
+        "pipelines": "Пайплайни",
+        "hidden": "Приховані задачі2",
+        "activity": "Активність",
+        "team": "Команда",
+        "setup-guide": "Посібник із налаштування",
+        "interface-walk": "Екскурсія інтерфейсом",
+        "self-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 2,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open policy",
+      "box": [
+        0,
+        378.1,
+        390,
+        465.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 7,
+      "cut": [],
+      "file": "v2/390-dark-uk-phone-open_policy.png",
+      "shown": {
+        "merge-on-review": "Мерджити, коли ревʼю пройденоЛише із зеленими перевірками; конфлікт чекає на вас.",
+        "share-project": "Поділитися з пов’язаними машинамиНе вдалося завантажити або зберегти налаштування. Спробуйте ще раз.Повторити завантаження налаштувань",
+        "bridge-reports": "Звіти оркестратораОркестратор записує, що зробив; голосовий канал це озвучує.",
+        "asks-you": "Питає васВимкнено для всіх проєктів. Коли увімкнено, останнє повідомлення кожного ходу агента надсилається в Jev на OpenRouter, щоб помітити питання до вас. Інший текст не залишає цю машину."
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        202
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "file": "v3/1440-light-en-header-rest.png",
+      "shown": {
+        "rail-menu-activity": "Time report",
+        "rail-menu-team": "Team and sessions",
+        "rail-menu-update": "Update",
+        "qr": "Open on phone"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "open settings",
+      "box": [
+        7,
+        36.5,
+        232,
+        271
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v3/1440-light-en-header-open_settings.png",
+      "shown": {
+        "rail-menu-agent-mapping": "Roles: engine and model",
+        "rail-menu-dictation": "Dictation",
+        "rail-menu-linked-settings": "Linked installs",
+        "rail-menu-external-relay": "Chat relay",
+        "rail-menu-settings": "Install ping and memory",
+        "language": "Language: EnglishEN",
+        "push": "Notifications: off"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "open help",
+      "box": [
+        7,
+        36.5,
+        232,
+        262
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v3/1440-light-en-header-open_help.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Time report",
+        "rail-menu-team": "Team and sessions",
+        "rail-menu-update": "Update",
+        "rail-menu-setup-guide": "Setup guide",
+        "rail-menu-interface-walk": "Interface walk",
+        "qr": "Open on phone"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        202
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "file": "v3/1440-light-uk-header-rest.png",
+      "shown": {
+        "rail-menu-activity": "Звіт про час",
+        "rail-menu-team": "Команда й сеанси",
+        "rail-menu-update": "Оновлення",
+        "qr": "Відкрити на телефоні"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open settings",
+      "box": [
+        7,
+        36.5,
+        232,
+        271
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v3/1440-light-uk-header-open_settings.png",
+      "shown": {
+        "rail-menu-agent-mapping": "Ролі: рушій і модель",
+        "rail-menu-dictation": "Диктування",
+        "rail-menu-linked-settings": "Пов’язані інсталяції",
+        "rail-menu-external-relay": "Ретранслятор чатів",
+        "rail-menu-settings": "Анонімний пінг і пам’ять",
+        "language": "Мова: УкраїнськаUK",
+        "push": "Сповіщення: вимкнені"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open help",
+      "box": [
+        7,
+        36.5,
+        232,
+        262
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v3/1440-light-uk-header-open_help.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Звіт про час",
+        "rail-menu-team": "Команда й сеанси",
+        "rail-menu-update": "Оновлення",
+        "rail-menu-setup-guide": "Посібник із налаштування",
+        "rail-menu-interface-walk": "Екскурсія інтерфейсом",
+        "qr": "Відкрити на телефоні"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        202
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "file": "v3/1440-dark-en-header-rest.png",
+      "shown": {
+        "rail-menu-activity": "Time report",
+        "rail-menu-team": "Team and sessions",
+        "rail-menu-update": "Update",
+        "qr": "Open on phone"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "header",
+      "state": "open settings",
+      "box": [
+        7,
+        36.5,
+        232,
+        271
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v3/1440-dark-en-header-open_settings.png",
+      "shown": {
+        "rail-menu-agent-mapping": "Roles: engine and model",
+        "rail-menu-dictation": "Dictation",
+        "rail-menu-linked-settings": "Linked installs",
+        "rail-menu-external-relay": "Chat relay",
+        "rail-menu-settings": "Install ping and memory",
+        "language": "Language: EnglishEN",
+        "push": "Notifications: off"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "header",
+      "state": "open help",
+      "box": [
+        7,
+        36.5,
+        232,
+        262
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v3/1440-dark-en-header-open_help.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Time report",
+        "rail-menu-team": "Team and sessions",
+        "rail-menu-update": "Update",
+        "rail-menu-setup-guide": "Setup guide",
+        "rail-menu-interface-walk": "Interface walk",
+        "qr": "Open on phone"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        202
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "file": "v3/1440-dark-uk-header-rest.png",
+      "shown": {
+        "rail-menu-activity": "Звіт про час",
+        "rail-menu-team": "Команда й сеанси",
+        "rail-menu-update": "Оновлення",
+        "qr": "Відкрити на телефоні"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open settings",
+      "box": [
+        7,
+        36.5,
+        232,
+        271
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v3/1440-dark-uk-header-open_settings.png",
+      "shown": {
+        "rail-menu-agent-mapping": "Ролі: рушій і модель",
+        "rail-menu-dictation": "Диктування",
+        "rail-menu-linked-settings": "Пов’язані інсталяції",
+        "rail-menu-external-relay": "Ретранслятор чатів",
+        "rail-menu-settings": "Анонімний пінг і пам’ять",
+        "language": "Мова: УкраїнськаUK",
+        "push": "Сповіщення: вимкнені"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open help",
+      "box": [
+        7,
+        36.5,
+        232,
+        262
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v3/1440-dark-uk-header-open_help.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Звіт про час",
+        "rail-menu-team": "Команда й сеанси",
+        "rail-menu-update": "Оновлення",
+        "rail-menu-setup-guide": "Посібник із налаштування",
+        "rail-menu-interface-walk": "Екскурсія інтерфейсом",
+        "qr": "Відкрити на телефоні"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        202
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "file": "v3/1000-light-en-header-rest.png",
+      "shown": {
+        "rail-menu-activity": "Time report",
+        "rail-menu-team": "Team and sessions",
+        "rail-menu-update": "Update",
+        "qr": "Open on phone"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "open settings",
+      "box": [
+        7,
+        36.5,
+        232,
+        271
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v3/1000-light-en-header-open_settings.png",
+      "shown": {
+        "rail-menu-agent-mapping": "Roles: engine and model",
+        "rail-menu-dictation": "Dictation",
+        "rail-menu-linked-settings": "Linked installs",
+        "rail-menu-external-relay": "Chat relay",
+        "rail-menu-settings": "Install ping and memory",
+        "language": "Language: EnglishEN",
+        "push": "Notifications: off"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "header",
+      "state": "open help",
+      "box": [
+        7,
+        36.5,
+        232,
+        262
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v3/1000-light-en-header-open_help.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Time report",
+        "rail-menu-team": "Team and sessions",
+        "rail-menu-update": "Update",
+        "rail-menu-setup-guide": "Setup guide",
+        "rail-menu-interface-walk": "Interface walk",
+        "qr": "Open on phone"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        202
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "file": "v3/1000-light-uk-header-rest.png",
+      "shown": {
+        "rail-menu-activity": "Звіт про час",
+        "rail-menu-team": "Команда й сеанси",
+        "rail-menu-update": "Оновлення",
+        "qr": "Відкрити на телефоні"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open settings",
+      "box": [
+        7,
+        36.5,
+        232,
+        271
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v3/1000-light-uk-header-open_settings.png",
+      "shown": {
+        "rail-menu-agent-mapping": "Ролі: рушій і модель",
+        "rail-menu-dictation": "Диктування",
+        "rail-menu-linked-settings": "Пов’язані інсталяції",
+        "rail-menu-external-relay": "Ретранслятор чатів",
+        "rail-menu-settings": "Анонімний пінг і пам’ять",
+        "language": "Мова: УкраїнськаUK",
+        "push": "Сповіщення: вимкнені"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open help",
+      "box": [
+        7,
+        36.5,
+        232,
+        262
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v3/1000-light-uk-header-open_help.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Звіт про час",
+        "rail-menu-team": "Команда й сеанси",
+        "rail-menu-update": "Оновлення",
+        "rail-menu-setup-guide": "Посібник із налаштування",
+        "rail-menu-interface-walk": "Екскурсія інтерфейсом",
+        "qr": "Відкрити на телефоні"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        202
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "file": "v3/1000-dark-en-header-rest.png",
+      "shown": {
+        "rail-menu-activity": "Time report",
+        "rail-menu-team": "Team and sessions",
+        "rail-menu-update": "Update",
+        "qr": "Open on phone"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "header",
+      "state": "open settings",
+      "box": [
+        7,
+        36.5,
+        232,
+        271
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v3/1000-dark-en-header-open_settings.png",
+      "shown": {
+        "rail-menu-agent-mapping": "Roles: engine and model",
+        "rail-menu-dictation": "Dictation",
+        "rail-menu-linked-settings": "Linked installs",
+        "rail-menu-external-relay": "Chat relay",
+        "rail-menu-settings": "Install ping and memory",
+        "language": "Language: EnglishEN",
+        "push": "Notifications: off"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "header",
+      "state": "open help",
+      "box": [
+        7,
+        36.5,
+        232,
+        262
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v3/1000-dark-en-header-open_help.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Time report",
+        "rail-menu-team": "Team and sessions",
+        "rail-menu-update": "Update",
+        "rail-menu-setup-guide": "Setup guide",
+        "rail-menu-interface-walk": "Interface walk",
+        "qr": "Open on phone"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "rest",
+      "box": [
+        7,
+        36.5,
+        232,
+        202
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "file": "v3/1000-dark-uk-header-rest.png",
+      "shown": {
+        "rail-menu-activity": "Звіт про час",
+        "rail-menu-team": "Команда й сеанси",
+        "rail-menu-update": "Оновлення",
+        "qr": "Відкрити на телефоні"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open settings",
+      "box": [
+        7,
+        36.5,
+        232,
+        271
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v3/1000-dark-uk-header-open_settings.png",
+      "shown": {
+        "rail-menu-agent-mapping": "Ролі: рушій і модель",
+        "rail-menu-dictation": "Диктування",
+        "rail-menu-linked-settings": "Пов’язані інсталяції",
+        "rail-menu-external-relay": "Ретранслятор чатів",
+        "rail-menu-settings": "Анонімний пінг і пам’ять",
+        "language": "Мова: УкраїнськаUK",
+        "push": "Сповіщення: вимкнені"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "header",
+      "state": "open help",
+      "box": [
+        7,
+        36.5,
+        232,
+        262
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 8,
+      "cut": [],
+      "file": "v3/1000-dark-uk-header-open_help.png",
+      "shift": 0,
+      "shown": {
+        "rail-menu-activity": "Звіт про час",
+        "rail-menu-team": "Команда й сеанси",
+        "rail-menu-update": "Оновлення",
+        "rail-menu-setup-guide": "Посібник із налаштування",
+        "rail-menu-interface-walk": "Екскурсія інтерфейсом",
+        "qr": "Відкрити на телефоні"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone",
+      "state": "rest",
+      "box": [
+        0,
+        272,
+        390,
+        572
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "cut": [],
+      "file": "v3/390-light-en-phone-rest.png",
+      "shown": {
+        "activity": "Time report",
+        "team": "Team and sessions",
+        "new-agent": "New agent",
+        "new-task": "New task",
+        "new-pipeline": "New pipeline",
+        "tasks": "Tasks13 open",
+        "pipelines": "Pipelines",
+        "hidden": "Hidden tasks2",
+        "self-update": "Update"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone",
+      "state": "open view",
+      "box": [
+        0,
+        548,
+        390,
+        296
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "file": "v3/390-light-en-phone-open_view.png",
+      "shown": {
+        "view-board": "Board",
+        "view-catalog": "All conversations",
+        "accounts": "Accounts & limits",
+        "host": "Host details0 tasks"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone",
+      "state": "open settings",
+      "box": [
+        0,
+        394.9,
+        390,
+        449.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "file": "v3/390-light-en-phone-open_settings.png",
+      "shown": {
+        "agent-mapping": "Roles: engine and model",
+        "linked-settings": "Linked installs",
+        "external-relay": "Chat relay",
+        "settings": "Install ping and memory",
+        "sound-settings-trigger": "Sound alerts",
+        "keep-awake-row": "Keep screen awakeThe screen sleeps on this device's usual timer.",
+        "dictation": "Dictation"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone",
+      "state": "open help",
+      "box": [
+        0,
+        184,
+        390,
+        660
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "cut": [],
+      "file": "v3/390-light-en-phone-open_help.png",
+      "shown": {
+        "activity": "Time report",
+        "team": "Team and sessions",
+        "new-agent": "New agent",
+        "new-task": "New task",
+        "new-pipeline": "New pipeline",
+        "tasks": "Tasks13 open",
+        "pipelines": "Pipelines",
+        "hidden": "Hidden tasks2",
+        "setup-guide": "Setup guide",
+        "interface-walk": "Interface walk",
+        "self-update": "Update"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone",
+      "state": "open policy",
+      "box": [
+        0,
+        393.3,
+        390,
+        450.8
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 7,
+      "cut": [],
+      "file": "v3/390-light-en-phone-open_policy.png",
+      "shown": {
+        "merge-on-review": "Merge when the review passesGreen checks only; a conflict waits for you.",
+        "share-project": "Share with linked machinesCould not load or save sharing. Try again.Retry sharing settings",
+        "bridge-reports": "Bridge reportsThe orchestrator logs what it did; the voice relay reads it out.",
+        "asks-you": "Asks youOff, for all projects. When on, the last message of each agent's turn is sent to Jev on OpenRouter to spot a question for you. No other text leaves this machine."
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "rest",
+      "box": [
+        0,
+        272,
+        390,
+        572
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "cut": [],
+      "file": "v3/390-light-uk-phone-rest.png",
+      "shown": {
+        "activity": "Звіт про час",
+        "team": "Команда й сеанси",
+        "new-agent": "Новий агент",
+        "new-task": "Нове завдання",
+        "new-pipeline": "Новий пайплайн",
+        "tasks": "Завдання13 відкритих",
+        "pipelines": "Пайплайни",
+        "hidden": "Приховані задачі2",
+        "self-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open view",
+      "box": [
+        0,
+        548,
+        390,
+        296
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "file": "v3/390-light-uk-phone-open_view.png",
+      "shown": {
+        "view-board": "Дошка",
+        "view-catalog": "Усі розмови",
+        "accounts": "Акаунти й ліміти",
+        "host": "Деталі хоста0 задач"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open settings",
+      "box": [
+        0,
+        394.9,
+        390,
+        449.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "file": "v3/390-light-uk-phone-open_settings.png",
+      "shown": {
+        "agent-mapping": "Ролі: рушій і модель",
+        "linked-settings": "Пов’язані інсталяції",
+        "external-relay": "Ретранслятор чатів",
+        "settings": "Анонімний пінг і пам’ять",
+        "sound-settings-trigger": "Звукові сповіщення",
+        "keep-awake-row": "Не гасити екранЕкран гасне за звичайним таймером цього пристрою.",
+        "dictation": "Диктування"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open help",
+      "box": [
+        0,
+        184,
+        390,
+        660
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "cut": [],
+      "file": "v3/390-light-uk-phone-open_help.png",
+      "shown": {
+        "activity": "Звіт про час",
+        "team": "Команда й сеанси",
+        "new-agent": "Новий агент",
+        "new-task": "Нове завдання",
+        "new-pipeline": "Новий пайплайн",
+        "tasks": "Завдання13 відкритих",
+        "pipelines": "Пайплайни",
+        "hidden": "Приховані задачі2",
+        "setup-guide": "Посібник із налаштування",
+        "interface-walk": "Екскурсія інтерфейсом",
+        "self-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open policy",
+      "box": [
+        0,
+        378.1,
+        390,
+        465.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 7,
+      "cut": [],
+      "file": "v3/390-light-uk-phone-open_policy.png",
+      "shown": {
+        "merge-on-review": "Мерджити, коли ревʼю пройденоЛише із зеленими перевірками; конфлікт чекає на вас.",
+        "share-project": "Поділитися з пов’язаними машинамиНе вдалося завантажити або зберегти налаштування. Спробуйте ще раз.Повторити завантаження налаштувань",
+        "bridge-reports": "Звіти оркестратораОркестратор записує, що зробив; голосовий канал це озвучує.",
+        "asks-you": "Питає васВимкнено для всіх проєктів. Коли увімкнено, останнє повідомлення кожного ходу агента надсилається в Jev на OpenRouter, щоб помітити питання до вас. Інший текст не залишає цю машину."
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone",
+      "state": "rest",
+      "box": [
+        0,
+        272,
+        390,
+        572
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "cut": [],
+      "file": "v3/390-dark-en-phone-rest.png",
+      "shown": {
+        "activity": "Time report",
+        "team": "Team and sessions",
+        "new-agent": "New agent",
+        "new-task": "New task",
+        "new-pipeline": "New pipeline",
+        "tasks": "Tasks13 open",
+        "pipelines": "Pipelines",
+        "hidden": "Hidden tasks2",
+        "self-update": "Update"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone",
+      "state": "open view",
+      "box": [
+        0,
+        548,
+        390,
+        296
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "file": "v3/390-dark-en-phone-open_view.png",
+      "shown": {
+        "view-board": "Board",
+        "view-catalog": "All conversations",
+        "accounts": "Accounts & limits",
+        "host": "Host details0 tasks"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone",
+      "state": "open settings",
+      "box": [
+        0,
+        394.9,
+        390,
+        449.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "file": "v3/390-dark-en-phone-open_settings.png",
+      "shown": {
+        "agent-mapping": "Roles: engine and model",
+        "linked-settings": "Linked installs",
+        "external-relay": "Chat relay",
+        "settings": "Install ping and memory",
+        "sound-settings-trigger": "Sound alerts",
+        "keep-awake-row": "Keep screen awakeThe screen sleeps on this device's usual timer.",
+        "dictation": "Dictation"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone",
+      "state": "open help",
+      "box": [
+        0,
+        184,
+        390,
+        660
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "cut": [],
+      "file": "v3/390-dark-en-phone-open_help.png",
+      "shown": {
+        "activity": "Time report",
+        "team": "Team and sessions",
+        "new-agent": "New agent",
+        "new-task": "New task",
+        "new-pipeline": "New pipeline",
+        "tasks": "Tasks13 open",
+        "pipelines": "Pipelines",
+        "hidden": "Hidden tasks2",
+        "setup-guide": "Setup guide",
+        "interface-walk": "Interface walk",
+        "self-update": "Update"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "en",
+      "surface": "phone",
+      "state": "open policy",
+      "box": [
+        0,
+        393.3,
+        390,
+        450.8
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 7,
+      "cut": [],
+      "file": "v3/390-dark-en-phone-open_policy.png",
+      "shown": {
+        "merge-on-review": "Merge when the review passesGreen checks only; a conflict waits for you.",
+        "share-project": "Share with linked machinesCould not load or save sharing. Try again.Retry sharing settings",
+        "bridge-reports": "Bridge reportsThe orchestrator logs what it did; the voice relay reads it out.",
+        "asks-you": "Asks youOff, for all projects. When on, the last message of each agent's turn is sent to Jev on OpenRouter to spot a question for you. No other text leaves this machine."
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "rest",
+      "box": [
+        0,
+        272,
+        390,
+        572
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 14,
+      "cut": [],
+      "file": "v3/390-dark-uk-phone-rest.png",
+      "shown": {
+        "activity": "Звіт про час",
+        "team": "Команда й сеанси",
+        "new-agent": "Новий агент",
+        "new-task": "Нове завдання",
+        "new-pipeline": "Новий пайплайн",
+        "tasks": "Завдання13 відкритих",
+        "pipelines": "Пайплайни",
+        "hidden": "Приховані задачі2",
+        "self-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open view",
+      "box": [
+        0,
+        548,
+        390,
+        296
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 6,
+      "cut": [],
+      "file": "v3/390-dark-uk-phone-open_view.png",
+      "shown": {
+        "view-board": "Дошка",
+        "view-catalog": "Усі розмови",
+        "accounts": "Акаунти й ліміти",
+        "host": "Деталі хоста0 задач"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open settings",
+      "box": [
+        0,
+        394.9,
+        390,
+        449.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 10,
+      "cut": [],
+      "file": "v3/390-dark-uk-phone-open_settings.png",
+      "shown": {
+        "agent-mapping": "Ролі: рушій і модель",
+        "linked-settings": "Пов’язані інсталяції",
+        "external-relay": "Ретранслятор чатів",
+        "settings": "Анонімний пінг і пам’ять",
+        "sound-settings-trigger": "Звукові сповіщення",
+        "keep-awake-row": "Не гасити екранЕкран гасне за звичайним таймером цього пристрою.",
+        "dictation": "Диктування"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open help",
+      "box": [
+        0,
+        184,
+        390,
+        660
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 16,
+      "cut": [],
+      "file": "v3/390-dark-uk-phone-open_help.png",
+      "shown": {
+        "activity": "Звіт про час",
+        "team": "Команда й сеанси",
+        "new-agent": "Новий агент",
+        "new-task": "Нове завдання",
+        "new-pipeline": "Новий пайплайн",
+        "tasks": "Завдання13 відкритих",
+        "pipelines": "Пайплайни",
+        "hidden": "Приховані задачі2",
+        "setup-guide": "Посібник із налаштування",
+        "interface-walk": "Екскурсія інтерфейсом",
+        "self-update": "Оновлення"
+      }
+    },
+    {
+      "variant": 3,
+      "frame": "390",
+      "scheme": "dark",
+      "lang": "uk",
+      "surface": "phone",
+      "state": "open policy",
+      "box": [
+        0,
+        378.1,
+        390,
+        465.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 7,
+      "cut": [],
+      "file": "v3/390-dark-uk-phone-open_policy.png",
+      "shown": {
+        "merge-on-review": "Мерджити, коли ревʼю пройденоЛише із зеленими перевірками; конфлікт чекає на вас.",
+        "share-project": "Поділитися з пов’язаними машинамиНе вдалося завантажити або зберегти налаштування. Спробуйте ще раз.Повторити завантаження налаштувань",
+        "bridge-reports": "Звіти оркестратораОркестратор записує, що зробив; голосовий канал це озвучує.",
+        "asks-you": "Питає васВимкнено для всіх проєктів. Коли увімкнено, останнє повідомлення кожного ходу агента надсилається в Jev на OpenRouter, щоб помітити питання до вас. Інший текст не залишає цю машину."
+      }
+    }
+  ]
+}

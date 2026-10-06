@@ -15,6 +15,7 @@ import { REPORT_LOG_CHAT_MIN_WIDTH, REPORT_LOG_MAX_WIDTH, REPORT_LOG_MIN_WIDTH, 
 
 import { playPath, pointerPath, recordDrag } from "./dragFrameMeter";
 import { captureSeatMandateHandover, openFixture, serveEvidenceFixture } from "./issue1695BrowserHarness";
+import { HEADER_ITEMS, HEADER_LAYOUTS, headerHome, headerName, type HeaderItem, type HeaderVariant } from "./headerMenu.prototype";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { clipTitle } from "./taskText";
 import { maintenanceCardText } from "@/lib/boardMaintenance/text";
@@ -18808,6 +18809,284 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
     if (!NARROWED) {
       fs.mkdirSync(EVIDENCE, { recursive: true });
       fs.writeFileSync(path.join(EVIDENCE, "measurements.json"), `${JSON.stringify(summary, null, 2)}\n`);
+    }
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 3_600_000);
+
+  /*
+   * The app header's ⋯ (docs/design/compact-card-menu.md, "The header's
+   * menu"): today's menu and three groupings of it (`?header=1|2|3`), in the
+   * look of the chosen card menu. The menu at rest and with each group open,
+   * at 1440×900 and 1000×700, and the phone's board menu, which holds the same
+   * entries, at 390×844; light and dark, en and uk.
+   *
+   * A variant fails when a desktop state is taller than 360 px, when a phone
+   * state is taller than today's sheet, when any state scrolls, leaves the
+   * window or cuts a label, when opening a group in place moves the row that
+   * was pressed, when an entry of today's menu is shown in no state, when a
+   * renamed entry carries another name than the variant gives it, and when a
+   * press on the renamed Settings entry does not open the product's own
+   * dialog.
+   *
+   * Frames and sheets go to `LLV_HEADER_MENU_OUT` (default
+   * `.artifacts/header-menu/`, never committed); the measurements to
+   * `evidence/compact-card-menu/header-menu.json`. The `LLV_COMPACT_MENUS_*`
+   * narrowings apply, and a narrowed run writes no evidence.
+   *
+   *   CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 LLV_HEADER_MENU_OUT=… \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "header's menu"
+   */
+  browserTest("the header's menu: today and three groupings, measured and framed", async () => {
+    const out = path.resolve(process.env.LLV_HEADER_MENU_OUT ?? ".artifacts/header-menu");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(path.join(out, "bundle-root"));
+    let browser = await chromium.launch(LAUNCH);
+    const alive = async () => { if (!browser.isConnected()) browser = await chromium.launch(LAUNCH); };
+    const failures: string[] = [];
+    const COLOURS = ["#3a3a3a", "#1f4fb5", "#7a3fb0", "#17705a"];
+    const title = (variant: number, lang: "en" | "uk") => (variant
+      ? `${lang === "uk" ? "ВАРІАНТ" : "VARIANT"} ${variant} · ${HEADER_LAYOUTS[variant as HeaderVariant].name[lang]}`
+      : lang === "uk" ? "СЬОГОДНІ" : "TODAY");
+    interface State {
+      variant: number; frame: string; scheme: Scheme; lang: "en" | "uk"; surface: "header" | "phone"; state: string;
+      box: [x: number, y: number, width: number, height: number];
+      scrolls: boolean; inside: boolean; controls: number; cut: string[];
+      /** The entries a pointer meets in this state, by the product's own key, each with the name it is drawn under. */
+      shown: Record<string, string>;
+      /** How far opening this group moved its own row, in px. */
+      shift?: number;
+      file: string;
+    }
+    const states: State[] = [];
+    const opened: Record<string, boolean> = {};
+    const url = (variant: number) => `${server.base}?scenario=stages${variant ? `&header=${variant}` : ""}`;
+    type Where = { variant: number; frame: (typeof FRAMES)[number]; scheme: Scheme; lang: "en" | "uk" };
+    const keyOf = (where: Where) => `${where.variant ? `v${where.variant}` : "today"}/${where.frame.name}-${where.scheme}-${where.lang}`;
+
+    /** What the open surface shows of the header's entries, and the labels of theirs it cut. */
+    const entries = (page: Page, selector: string) => page.evaluate((surfaceSelector) => {
+      const surface = [...document.querySelectorAll<HTMLElement>(surfaceSelector)].find((element) => element.getBoundingClientRect().width > 0);
+      if (!surface) return { shown: {}, cut: [] };
+      const visible = (element: Element) => { const box = element.getBoundingClientRect(); return box.width > 0 && box.height > 0; };
+      const words = (element: Element) => (element.textContent ?? "").replace(/\s+/g, " ").trim();
+      const shown: Record<string, string> = {};
+      for (const proxy of surface.querySelectorAll<HTMLElement>("[data-cmf-proxy]")) if (visible(proxy)) shown[proxy.getAttribute("data-cmf-proxy")!] = words(proxy);
+      for (const row of surface.querySelectorAll<HTMLElement>("[data-cmf-row]:not([data-cmf-proxied])")) if (visible(row)) shown[row.getAttribute("data-cmf-row")!] ??= row.querySelector("[data-cmf-name]")?.getAttribute("data-cmf-name") ?? words(row);
+      const cut = [...surface.querySelectorAll<HTMLElement>(".cmf-title, [data-cmf-mask] .truncate, [data-cmf-name]")].filter(visible)
+        .filter((element) => element.scrollWidth > element.clientWidth + 1).map((element) => words(element).slice(0, 40));
+      return { shown, cut };
+    }, selector);
+
+    async function capture(page: Page, where: Where, selector: string, surface: State["surface"], state: string): Promise<State | null> {
+      const reading = await read(page, selector);
+      if (!reading) { failures.push(`${keyOf(where)} ${surface} ${state}: the menu did not open`); return null; }
+      const mine = await entries(page, selector);
+      const file = `${keyOf(where)}-${surface}-${state.replace(/[^a-z0-9]+/gi, "_")}.png`;
+      fs.mkdirSync(path.dirname(path.join(out, file)), { recursive: true });
+      const strip = `${title(where.variant, "en")}  ·  ${where.frame.width}×${where.frame.height} ${where.lang} ${where.scheme}  ·  ${surface} menu: ${state}  ·  ${Math.round(reading.box[2])}×${Math.round(reading.box[3])}${reading.scrolls ? " scrolls" : ""}`;
+      fs.writeFileSync(path.join(out, file), await frameWithStrip(await page.screenshot(), where.frame.width, strip, where.variant));
+      const entry: State = {
+        variant: where.variant, frame: where.frame.name, scheme: where.scheme, lang: where.lang, surface, state,
+        box: reading.box, scrolls: reading.scrolls, inside: reading.inside, controls: reading.controls, cut: [...reading.clipped, ...mine.cut], shown: mine.shown, file,
+      };
+      states.push(entry);
+      if (where.variant) {
+        const at = `${keyOf(where)} ${surface} ${state}`;
+        if (!entry.inside) failures.push(`${at}: leaves the window ${JSON.stringify(entry.box)}`);
+        if (entry.scrolls) failures.push(`${at}: scrolls`);
+        if (entry.cut.length) failures.push(`${at}: cut labels ${JSON.stringify(entry.cut)}`);
+        if (reading.arrows.length) failures.push(`${at}: a row that opens in place and a row that opens a page carry the same arrow ${JSON.stringify(reading.arrows)}`);
+        if (surface === "header" && entry.box[3] > 360.5) failures.push(`${at}: ${entry.box[3]} px is taller than 360`);
+      }
+      return entry;
+    }
+
+    /** Each group of the open menu in turn: opened, captured, closed. */
+    async function groups(page: Page, where: Where, selector: string, surface: State["surface"]) {
+      const head = `${selector} [data-cmf-head="section"]`;
+      const ids = await page.evaluate((target) => [...document.querySelectorAll<HTMLElement>(target)].map((element) => ({ id: element.getAttribute("data-cmf-section")!, page: element.getAttribute("data-cmf-opens") === "page" })), head);
+      for (const { id, page: paged } of ids) {
+        const opener = `${head}[data-cmf-section="${id}"]`;
+        const top = () => page.evaluate((target) => document.querySelector<HTMLElement>(target)?.getBoundingClientRect().top ?? null, opener);
+        const before = await top();
+        await jsClick(page, opener);
+        await page.waitForTimeout(120);
+        const entry = await capture(page, where, selector, surface, `open ${id}`);
+        /* The phone's sheet rises from the bottom edge, so only the desktop menu is held still. */
+        if (entry && !paged && surface === "header") {
+          const after = await top();
+          entry.shift = before === null || after === null ? Number.NaN : Math.round(Math.abs(after - before) * 10) / 10;
+          if (!(entry.shift <= 0.5)) failures.push(`${keyOf(where)} ${surface} open ${id}: opening it moved its own row by ${entry.shift} px`);
+        }
+        const back = `${selector} [data-cmf-head="back"]`;
+        if (await page.locator(back).count()) await jsClick(page, back); else await jsClick(page, opener);
+        await page.waitForTimeout(80);
+      }
+    }
+
+    async function desktop(where: Where) {
+      const { context, page, pageErrors } = await openFixture(browser, url(where.variant), where.frame, where.scheme, where.lang, "reduce");
+      try {
+        await page.locator("[data-kanban-board] .card[data-id]").locator("visible=true").first().waitFor({ timeout: 30_000 });
+        await page.waitForTimeout(500);
+        await page.evaluate(() => { for (const button of document.querySelectorAll<HTMLElement>("[data-attention-toast] button")) button.click(); });
+        await page.mouse.move(2, 2);
+        await page.locator("[data-rail-menu]").first().click();
+        await page.waitForSelector(RAIL, { timeout: 10_000 });
+        await page.waitForTimeout(200);
+        await capture(page, where, RAIL, "header", "rest");
+        if (where.variant) await groups(page, where, RAIL, "header");
+        /* One frame per variant: the entry today called Settings, under its new name, opens the product's own dialog. */
+        if (where.variant && where.scheme === "light" && where.lang === "en" && where.frame.name === FRAMES.find((frame) => !frame.phone)?.name) {
+          const home = headerHome(where.variant as HeaderVariant, "settings");
+          if (home?.group) { await jsClick(page, `${RAIL} [data-cmf-head="section"][data-cmf-section="${home.group.id}"]`); await page.waitForTimeout(120); }
+          await page.locator(`${RAIL} [data-cmf-proxy="rail-menu-settings"]`).click();
+          opened[`v${where.variant}`] = await page.waitForSelector("[data-telemetry-settings]", { timeout: 5_000 }).then(() => true, () => false);
+          if (!opened[`v${where.variant}`]) failures.push(`${keyOf(where)}: «${headerName(where.variant as HeaderVariant, "settings").en}» did not open the product's dialog`);
+        }
+        if (pageErrors.length) failures.push(`${keyOf(where)}: page errors ${pageErrors.join(" | ")}`);
+      } catch (error) {
+        failures.push(`${keyOf(where)}: ${brief(error)}`);
+        fs.mkdirSync(path.join(out, "failed"), { recursive: true });
+        await page.screenshot({ path: path.join(out, "failed", `${keyOf(where).replace("/", "-")}.png`) }).catch(() => {});
+      } finally {
+        await context.close();
+      }
+    }
+
+    async function phone(where: Where) {
+      const { context, page, pageErrors } = await openFixture(browser, url(where.variant), where.frame, where.scheme, where.lang, "reduce", true);
+      try {
+        await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
+        await page.waitForTimeout(600);
+        await page.locator('[data-mobile2-open="menu"]').first().click();
+        await page.waitForSelector(`${SHEET} [data-mobile2-menu-row="tasks"]`, { timeout: 10_000 });
+        await page.waitForTimeout(300);
+        await capture(page, where, SHEET, "phone", "rest");
+        if (where.variant) await groups(page, where, SHEET, "phone");
+        if (pageErrors.length) failures.push(`${keyOf(where)}: page errors ${pageErrors.join(" | ")}`);
+      } catch (error) {
+        failures.push(`${keyOf(where)} phone: ${brief(error)}`);
+        fs.mkdirSync(path.join(out, "failed"), { recursive: true });
+        await page.screenshot({ path: path.join(out, "failed", `${keyOf(where).replace("/", "-")}.png`) }).catch(() => {});
+      } finally {
+        await context.close();
+      }
+    }
+
+    try {
+      for (const variant of VARIANTS) for (const frame of FRAMES) for (const scheme of SCHEMES) for (const lang of LANGS) {
+        await alive();
+        const where: Where = { variant, frame, scheme, lang };
+        if (frame.phone) await phone(where); else await desktop(where);
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+
+    const of = (variant: number, frame: string, scheme: Scheme, lang: string, surface: State["surface"]) =>
+      states.filter((entry) => entry.variant === variant && entry.frame === frame && entry.scheme === scheme && entry.lang === lang && entry.surface === surface);
+    /* Every entry the fixture draws today is shown in some state of every variant, under the name the variant gives it. No member session runs here, so Sign out is held by the model's own test. */
+    const reach: Record<string, Record<string, string>> = {};
+    for (const variant of VARIANTS.filter((entry) => entry > 0) as HeaderVariant[]) for (const frame of FRAMES) for (const scheme of SCHEMES) for (const lang of LANGS) {
+      const surface = frame.phone ? "phone" : "header";
+      const mine = of(variant, frame.name, scheme, lang, surface);
+      if (!mine.length) continue;
+      const where = `v${variant}/${frame.name}-${scheme}-${lang} ${surface}`;
+      const homes: Record<string, string> = {};
+      for (const [item, entry] of Object.entries(HEADER_ITEMS) as [HeaderItem, (typeof HEADER_ITEMS)[HeaderItem]][]) {
+        const key = frame.phone ? entry.phone : entry.rail;
+        if (!key || item === "signOut") continue;
+        const state = mine.find((candidate) => key in candidate.shown);
+        if (!state) { failures.push(`${where}: «${entry.today[lang]}» (${key}) is shown in no state`); continue; }
+        homes[item] = state.state;
+        const renamed = HEADER_LAYOUTS[variant].names[item]?.[lang];
+        if (renamed && state.shown[key] !== renamed) failures.push(`${where}: ${key} reads ${JSON.stringify(state.shown[key])}, the variant names it ${JSON.stringify(renamed)}`);
+      }
+      reach[where] = homes;
+      /* On the phone no state is taller than today's sheet. */
+      if (frame.phone) {
+        const today = of(0, frame.name, scheme, lang, "phone")[0]?.box[3] ?? 742.7;
+        for (const entry of mine) if (entry.box[3] > today + 0.5) failures.push(`${where} ${entry.state}: ${entry.box[3]} px is taller than today's ${today}`);
+      }
+    }
+
+    /* ── Sheets ─────────────────────────────────────────────────────────── */
+    const svgText = (value: string, width: number, size: number, fill: string, weight: number, background: string | null = null) => Buffer.from(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${size + 12}">${background ? `<rect width="100%" height="100%" rx="4" fill="${background}"/>` : ""}<text x="${background ? 8 : 2}" y="${size + 3}" font-family="DejaVu Sans, Arial, sans-serif" font-size="${size}" font-weight="${weight}" fill="${fill}">${value.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</text></svg>`);
+    /** The menu cut out of its frame, under a band that carries the variant's number. */
+    async function tile(entry: State | null | undefined, lang: "en" | "uk", scale = 1, compared = false): Promise<{ image: Buffer; width: number; height: number } | null> {
+      if (!entry) return null;
+      const source = sharp(path.join(out, entry.file));
+      const meta = await source.metadata();
+      const margin = 12;
+      const left = Math.max(0, Math.floor(entry.box[0] - margin));
+      const top = Math.max(0, Math.floor(entry.box[1] + STRIP - margin));
+      const cut = source.extract({ left, top, width: Math.min(meta.width! - left, Math.ceil(entry.box[2] + margin * 2)), height: Math.min(meta.height! - top, Math.ceil(entry.box[3] + margin * 2)) });
+      const picture = await (scale === 1 ? cut : cut.resize({ width: Math.round(Math.min(meta.width! - left, Math.ceil(entry.box[2] + margin * 2)) * scale) })).png().toBuffer();
+      const size = await sharp(picture).metadata();
+      const width = Math.max(size.width!, compared ? 310 : 250);
+      const named = entry.variant ? HEADER_LAYOUTS[entry.variant as HeaderVariant] : null;
+      const groupName = (id: string) => named?.slots.flatMap((slot) => ("group" in slot && slot.group.id === id ? [(entry.surface === "phone" ? slot.group.phoneTitle ?? slot.group.title : slot.group.title)[lang]] : []))[0] ?? id;
+      const note = `${named && compared ? `${named.name[lang]} · ` : ""}${entry.state === "rest" ? (lang === "uk" ? "у спокої" : "at rest") : `${lang === "uk" ? "відкрито" : "open"}: ${groupName(entry.state.slice(5))}`} · ${Math.round(entry.box[2])}×${Math.round(entry.box[3])}${entry.scrolls ? (lang === "uk" ? " · прокручується" : " · scrolls") : ""}`;
+      const image = await sharp({ create: { width, height: size.height! + 54, channels: 3, background: "#f1efe9" } })
+        .composite([{ input: svgText(entry.variant ? `${lang === "uk" ? "ВАРІАНТ" : "VARIANT"} ${entry.variant}` : title(0, lang), width, 14, "#fff", 700, COLOURS[entry.variant]!), left: 0, top: 0 }, { input: svgText(note, width, 11, "#555", 400), left: 0, top: 28 }, { input: picture, left: 0, top: 54 }]).png().toBuffer();
+      return { image, width, height: size.height! + 54 };
+    }
+    type Tile = Awaited<ReturnType<typeof tile>>;
+    async function sheet(file: string, heading: string, colour: string, rows: { name: string; tiles: Tile[] }[]) {
+      const gap = 16;
+      const kept = rows.map((row) => ({ name: row.name, tiles: row.tiles.filter((entry): entry is NonNullable<Tile> => entry !== null) })).filter((row) => row.tiles.length);
+      if (!kept.length) return;
+      const width = Math.max(900, ...kept.map((row) => row.tiles.reduce((sum, entry) => sum + entry.width + gap, gap)));
+      const heights = kept.map((row) => Math.max(...row.tiles.map((entry) => entry.height)) + 30);
+      const layers: import("sharp").OverlayOptions[] = [{ input: Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="48"><rect width="100%" height="100%" fill="${colour}"/><text x="16" y="32" font-family="DejaVu Sans, Arial, sans-serif" font-size="21" font-weight="700" fill="#fff">${heading.replace(/&/g, "&amp;")}</text></svg>`), left: 0, top: 0 }];
+      let y = 58;
+      kept.forEach((row, index) => {
+        layers.push({ input: svgText(row.name, width - gap, 14, "#111", 700), left: gap, top: y });
+        let x = gap;
+        for (const entry of row.tiles) { layers.push({ input: entry.image, left: x, top: y + 28 }); x += entry.width + gap; }
+        y += heights[index]! + gap;
+      });
+      await sharp({ create: { width, height: y, channels: 3, background: "#f1efe9" } }).composite(layers).png().toFile(path.join(out, file));
+      sheets.push(file);
+    }
+    const sheets: string[] = [];
+    const rest = (variant: number, frame: string, scheme: Scheme, lang: "en" | "uk", surface: State["surface"]) => of(variant, frame, scheme, lang, surface).find((entry) => entry.state === "rest");
+    const all = (variant: number, frame: string, scheme: Scheme, lang: "en" | "uk", surface: State["surface"], scale = 1) => Promise.all(of(variant, frame, scheme, lang, surface).filter((entry) => !/open (view|policy)$/.test(entry.state)).map((entry) => tile(entry, lang, scale)));
+    for (const lang of LANGS) {
+      const uk = lang === "uk";
+      /* One screen: today and the three at rest, the desktop menu and the phone's sheet. */
+      await sheet(`sheet-compare-${lang}.png`, uk ? "Меню заголовка: сьогодні та варіанти 1 · 2 · 3, у спокої" : "The header's menu: today and variants 1 · 2 · 3, at rest", "#222", [{
+        name: uk ? "Десктоп 1440×900, світла тема (у розмір) · телефон 390×844 (аркуш меню, ×0.5)" : "Desktop 1440×900, light (actual size) · phone 390×844 (the menu sheet, ×0.5)",
+        tiles: [...await Promise.all(VARIANTS.map((variant) => tile(rest(variant, "1440", "light", lang, "header"), lang, 1, true))), ...await Promise.all(VARIANTS.map((variant) => tile(rest(variant, "390", "light", lang, "phone"), lang, 0.5, true)))],
+      }]);
+    }
+    for (const variant of VARIANTS.filter((entry) => entry > 0)) {
+      const rows: { name: string; tiles: Tile[] }[] = [];
+      for (const lang of LANGS) {
+        rows.push({ name: `1440×900 · ${lang} · light: at rest, then each group open`, tiles: await all(variant, "1440", "light", lang, "header") });
+        rows.push({ name: `1440×900 · ${lang} · dark`, tiles: await all(variant, "1440", "dark", lang, "header") });
+      }
+      rows.push({ name: "1000×700 · uk · light", tiles: await all(variant, "1000", "light", "uk", "header") });
+      rows.push({ name: "1000×700 · en · dark", tiles: await all(variant, "1000", "dark", "en", "header") });
+      for (const lang of LANGS) rows.push({ name: `Phone 390×844 · ${lang} · light: the board menu at rest, then each of the header's groups open (×0.6)`, tiles: await all(variant, "390", "light", lang, "phone", 0.6) });
+      rows.push({ name: "Phone 390×844 · uk · dark (×0.6)", tiles: await all(variant, "390", "dark", "uk", "phone", 0.6) });
+      await sheet(`sheet-variant-${variant}.png`, `${title(variant, "en")} · ${title(variant, "uk")}`, COLOURS[variant]!, rows);
+    }
+
+    const summary = {
+      driver: "src/components/kanban/kanbanBoard.browser.test.tsx",
+      variants: VARIANTS.map((variant) => title(variant, "en")),
+      opened, reach, sheets, failures,
+      states: states.map(({ shown, ...entry }) => (entry.state === "rest" || entry.variant ? { ...entry, shown } : entry)),
+    };
+    fs.writeFileSync(path.join(out, "measurements.json"), `${JSON.stringify(summary, null, 2)}\n`);
+    if (!NARROWED) {
+      fs.mkdirSync(EVIDENCE, { recursive: true });
+      fs.writeFileSync(path.join(EVIDENCE, "header-menu.json"), `${JSON.stringify(summary, null, 2)}\n`);
     }
     if (failures.length) throw new Error(failures.join("\n"));
     expect(failures).toEqual([]);
