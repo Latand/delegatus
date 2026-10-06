@@ -46,7 +46,7 @@ import { enqueueStructuredMessage } from "./structuredMessageDelivery";
 import { runtimeImageCapability, runtimeImageStore } from "./runtimeImageStore";
 import { publishFilesRevision } from "./filesRevision";
 import { parseStructuredImageRefs, structuredContent, type StructuredImageRef } from "./structuredContent";
-import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH } from "./telegramConnectorEnv";
+import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH, TELEGRAM_SEAT_INACTIVE_BEFORE_LAUNCH } from "./telegramConnectorEnv";
 import { STAGED_RECOVERY_PREFIX, stagedLaunchRecovery, type StagedLaunchRecovery } from "./stagedRecovery";
 
 export type SpawnedStructuredHost = EngineHost & {
@@ -1045,7 +1045,7 @@ function admittedStructuredLaunchInput(input: StructuredSpawnInput): StructuredS
   }
   if (receipt.launchProfile.mcpServers.includes("telegram") && receipt.telegramSeatGrant
     && !isCurrentOperatorSeat(receipt.parentConversationId ?? "", input.registry)) {
-    throw new Error("telegram MCP orchestrator seat is no longer active");
+    throw new Error(TELEGRAM_SEAT_INACTIVE_BEFORE_LAUNCH);
   }
   return { ...input, receipt, spec: { ...input.spec, launchProfile: receipt.launchProfile } };
 }

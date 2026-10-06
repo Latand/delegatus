@@ -143,6 +143,15 @@ function railRows(container: HTMLElement): HTMLElement[] {
     .filter((button) => Boolean(button.textContent?.trim()));
 }
 
+/** Each labelled section: its word, its count, and whether it carries the crown. */
+function sections(container: HTMLElement): [string, string, boolean][] {
+  return ([...container.querySelectorAll("[data-rail-section]")] as HTMLElement[]).map((section) => [
+    section.querySelector("[data-rail-label]")?.textContent ?? "",
+    section.querySelector("[data-rail-count]")?.textContent ?? "",
+    section.querySelector('[data-testid="crown-marker"]') !== null,
+  ]);
+}
+
 const click = () => new dom.MouseEvent("click", { bubbles: true }) as unknown as Event;
 
 test("desktop rail shows the display name, never the leading-dash key, and selects by canonical key", () => {
@@ -207,8 +216,10 @@ test("crowned projects pin to the top section with a crown marker and a working 
      bucket, lexicographic tie-break); the crown must float it above. */
   expect(pinnedIndex).toBeGreaterThan(-1);
   expect(pinnedIndex).toBeLessThan(regularIndex);
-  expect(rows[pinnedIndex]!.querySelector('[data-testid="crown-marker"]')).not.toBeNull();
-  expect(rows[regularIndex]!.querySelector('[data-testid="crown-marker"]')).toBeNull();
+  /* The crown stands on the section's label, with the section's count, so no name starts after an icon. */
+  expect(container.querySelectorAll('[data-testid="crown-marker"]')).toHaveLength(1);
+  expect(rows[pinnedIndex]!.querySelector('[data-testid="crown-marker"]')).toBeNull();
+  expect(sections(container)).toEqual([["Pinned", "1", true], ["Projects", "1", false]]);
 
   const uncrown = container.querySelector('button[aria-label="Remove crown"]');
   const crown = container.querySelector('button[aria-label="Crown — pin to top"]');
@@ -220,6 +231,62 @@ test("crowned projects pin to the top section with a crown marker and a working 
     ["CelestiaCompose", false],
     ["-agents-tools-live-log-viewer-next", true],
   ]);
+});
+
+test("a row is one line: the name, a column for each mark, a short age; the conversation count is in its tooltip", () => {
+  const container = renderRail(() => {}, {
+    files: [
+      fileEntry({ path: "/sessions/quiet.jsonl", project: "harbor", mtime: 100_000 - 3 * 3_600 }),
+      fileEntry({ path: "/sessions/busy-1.jsonl", project: "ledger", mtime: 99_970, activity: "live" }),
+      fileEntry({ path: "/sessions/busy-2.jsonl", project: "ledger", mtime: 99_900 }),
+    ],
+    now: 100_000,
+    needsYouCounts: new Map([["ledger", 2]]),
+    selected: "ledger",
+  });
+  const row = (project: string) => container.querySelector(`[data-rail-project="${project}"]`) as HTMLElement;
+  const slots = (project: string) => ([...row(project).querySelectorAll("[data-rail-slot]")] as HTMLElement[]).map((slot) => `${slot.getAttribute("data-rail-slot")}:${slot.textContent}`);
+
+  /* A project with both marks carries both columns; a quiet one gives its name their room. */
+  expect(slots("ledger")).toEqual(["needs:2", "live:1", "age:30s"]);
+  expect(slots("harbor")).toEqual(["age:3h"]);
+  /* Overview carries the totals in the same columns. */
+  const overview = container.querySelector("[data-rail-overview]") as HTMLElement;
+  expect(([...overview.querySelectorAll("[data-rail-slot]")] as HTMLElement[]).map((slot) => `${slot.getAttribute("data-rail-slot")}:${slot.textContent}`)).toEqual(["needs:2", "live:1"]);
+
+  expect(row("ledger").getAttribute("title")).toBe("ledger · 2 need you · 1 working · 2 conversations · updated 30s");
+  expect(row("harbor").getAttribute("title")).toBe("harbor · 1 conversation · updated 3h");
+  expect(row("ledger").getAttribute("aria-current")).toBe("page");
+  expect(sections(container)).toEqual([["Projects", "2", false]]);
+
+  flushSync(() => setLocale("uk"));
+  expect(slots("harbor")).toEqual(["age:3 год"]);
+  expect(row("ledger").getAttribute("title")).toBe("ledger · 2 чекають на вас · 1 працює · 2 розмови · оновлено 30 с");
+  expect(sections(container)).toEqual([["Проєкти", "2", false]]);
+});
+
+test("the archive is a labelled fold with its count; unfolded, its rows select and carry no crown control", () => {
+  const selected: string[] = [];
+  const container = renderRail((project) => selected.push(project), {
+    archivedProjects: new Set(["CelestiaCompose"]),
+    onToggleCrown: () => {},
+  });
+  const fold = container.querySelector("[data-rail-archive]") as HTMLElement;
+  expect(fold.querySelector("[data-rail-label]")?.textContent).toBe("Archive");
+  expect(fold.querySelector("[data-rail-count]")?.textContent).toBe("1");
+  expect(fold.getAttribute("aria-expanded")).toBe("false");
+  /* Folded, the archived project is not in the list at all, and "Projects" counts the rest. */
+  expect(container.querySelector('[data-rail-project="CelestiaCompose"]')).toBeNull();
+  expect(sections(container)).toEqual([["Projects", "1", false]]);
+
+  flushSync(() => fold.dispatchEvent(click()));
+  expect(fold.getAttribute("aria-expanded")).toBe("true");
+  const archived = container.querySelector('[data-rail-archived] [data-rail-project="CelestiaCompose"]') as HTMLElement;
+  expect(archived).not.toBeNull();
+  expect(container.querySelectorAll("[data-rail-archived] [data-rail-crown]")).toHaveLength(0);
+  expect(container.querySelectorAll("[data-rail-crown]")).toHaveLength(1);
+  flushSync(() => archived.dispatchEvent(click()));
+  expect(selected).toEqual(["CelestiaCompose"]);
 });
 
 /* Create-project shares one shape across the tests below: a rail with the

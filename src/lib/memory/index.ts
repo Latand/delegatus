@@ -105,6 +105,7 @@ export class MemoryIndex {
           month TEXT NOT NULL, event TEXT NOT NULL, count INTEGER NOT NULL, PRIMARY KEY(month, event)
         );
         CREATE TABLE IF NOT EXISTS memory_hook_attempts (conversation TEXT, request TEXT, PRIMARY KEY(conversation, request));
+        CREATE TABLE IF NOT EXISTS memory_unmatched_turns (conversation TEXT, request TEXT, at TEXT NOT NULL, PRIMARY KEY(conversation, request));
       `);
       if (!this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_injection_names'").get()) {
         // Migrate once, atomically, without waiting behind a live writer. A hook
@@ -645,6 +646,23 @@ export class MemoryIndex {
       FROM memory_offers o LEFT JOIN memory_injection_names n ON n.memory_id = o.memory_id AND n.request_id = o.request_id
       LEFT JOIN memory_entries e ON e.id = o.memory_id WHERE o.conversation_id = ? AND o.channel = 'inject'
       ORDER BY o.at DESC, o.request_id DESC, o.memory_id DESC LIMIT 1000`).all(conversation).reverse();
+  }
+
+  /** The file each memory a conversation received was read from, for the operator's own reader. */
+  offerSources(conversation: string) {
+    return new Map(this.database().query<{ id: string; sourcePath: string }, [string]>(`SELECT DISTINCT e.id, e.sourcePath
+      FROM memory_offers o JOIN memory_entries e ON e.id = o.memory_id WHERE o.conversation_id = ? AND o.channel = 'inject'`)
+      .all(conversation).map(row => [row.id, row.sourcePath]));
+  }
+
+  /** A turn whose candidates were judged and none was chosen. Only the request id is kept. */
+  recordUnmatchedTurn(conversation: string, request: string, at = new Date().toISOString()) {
+    this.hookDatabase(db => db.query("INSERT OR IGNORE INTO memory_unmatched_turns VALUES (?, ?, ?)").run(conversation, request, at));
+  }
+
+  unmatchedTurns(conversation: string) {
+    return this.database().query<{ request: string }, [string]>("SELECT request FROM memory_unmatched_turns WHERE conversation = ? ORDER BY at DESC, request DESC LIMIT 1000")
+      .all(conversation).map(row => row.request);
   }
 
   recordCitations(conversation: string, assistantText: string) {

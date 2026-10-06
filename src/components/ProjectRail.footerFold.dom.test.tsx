@@ -83,7 +83,7 @@ globalThis.fetch = (async (input: RequestInfo | URL) => {
   return { ok: false, status: 404, json: async () => ({}) } as Response;
 }) as unknown as typeof fetch;
 
-const { ProjectRail, RAIL_FOOTER_STORAGE_KEY } = await import("./ProjectRail");
+const { ProjectRail, RAIL_FOOTER_DETAIL_STORAGE_KEY, RAIL_FOOTER_STORAGE_KEY } = await import("./ProjectRail");
 
 const files = [{
   path: "/sessions/a.jsonl",
@@ -172,7 +172,8 @@ test("the folded rail footer shows no resource or limit reading, and unfolding b
 
   await click(toggleIn(host));
 
-  const folded = host.textContent ?? "";
+  /* The footer's own text: the list above it has a "Projects" label of its own. */
+  const folded = footerIn(host).textContent ?? "";
   expect(footerIn(host).getAttribute("data-rail-footer")).toBe("folded");
   /* A label and the control, and nothing that reads as a number or a plan. */
   expect(folded).toContain(translate("en", "rail.footerLabel"));
@@ -182,6 +183,11 @@ test("the folded rail footer shows no resource or limit reading, and unfolding b
   expect(folded.toLowerCase()).not.toContain("pro");
   /* Unmounted, not hidden: no footer subtree is left in the document to tick. */
   expect(host.querySelector("[data-rail-footer] > div")).toBeNull();
+  expect(host.querySelector("[data-rail-footer-body]")).toBeNull();
+  expect(host.querySelector("[data-resources-footer]")).toBeNull();
+  expect(host.querySelector("[data-engine-limits]")).toBeNull();
+  /* The switch to every window goes with the readings it switches. */
+  expect(host.querySelector("[data-rail-footer-detail]")).toBeNull();
 
   await click(toggleIn(host));
   await waitForText(host, translate("en", "resources.ram"));
@@ -203,6 +209,44 @@ test("the fold is remembered for this browser", async () => {
   const again = await renderRail();
   expect(footerIn(again).getAttribute("data-rail-footer")).toBe("folded");
   expect(again.textContent ?? "").not.toContain(translate("en", "resources.ram"));
+});
+
+test("one line per reading, and «All windows» puts every window with its reset under its account", async () => {
+  const host = await renderRail();
+  await waitForText(host, translate("en", "resources.ram"));
+  const detail = () => host.querySelector("[data-rail-footer-detail]") as HTMLButtonElement;
+
+  /* One line: what is left of the tightest window, and no reset on the screen. */
+  expect(host.querySelector("[data-rail-footer-body]")?.getAttribute("data-rail-footer-body")).toBe("line");
+  expect(footerIn(host).textContent ?? "").toContain(`${translate("en", "limits.left")} 60%`);
+  expect(host.querySelectorAll("[data-meter-window]")).toHaveLength(0);
+  expect(detail().textContent).toBe(translate("en", "rail.footerDetail"));
+  expect(detail().getAttribute("aria-pressed")).toBe("false");
+
+  await click(detail());
+  expect(host.querySelector("[data-rail-footer-body]")?.getAttribute("data-rail-footer-body")).toBe("detail");
+  const windows = [...host.querySelectorAll("[data-meter-window]")].map((line) => line.textContent ?? "");
+  expect(windows).toHaveLength(2);
+  expect(windows[0]).toContain("60%");
+  expect(windows[1]).toContain("90%");
+  /* Each window says when it resets, and the bar beside it draws what is left. */
+  for (const line of host.querySelectorAll("[data-meter-window]")) expect(line.querySelector("[data-meter-note]")?.textContent ?? "").not.toBe("");
+  expect([...host.querySelectorAll("[data-meter-window] [data-meter-bar]")].map((bar) => bar.getAttribute("data-meter-bar"))).toEqual(["60", "90"]);
+  expect(footerIn(host).textContent ?? "").toContain("pro");
+  expect(detail().textContent).toBe(translate("en", "rail.footerCompact"));
+  expect(detail().getAttribute("aria-pressed")).toBe("true");
+  expect(dom.localStorage.getItem(RAIL_FOOTER_DETAIL_STORAGE_KEY)).toBe("full");
+
+  /* Remembered for this browser, and one press goes back. */
+  await act(async () => { root?.unmount(); });
+  root = null;
+  dom.document.body.replaceChildren();
+  const again = await renderRail();
+  await waitForText(again, translate("en", "resources.ram"));
+  expect(again.querySelector("[data-rail-footer-body]")?.getAttribute("data-rail-footer-body")).toBe("detail");
+  await click(again.querySelector("[data-rail-footer-detail]") as HTMLElement);
+  expect(again.querySelectorAll("[data-meter-window]")).toHaveLength(0);
+  expect(dom.localStorage.getItem(RAIL_FOOTER_DETAIL_STORAGE_KEY)).toBe("line");
 });
 
 test("the control is there before any poll answers, in either language", async () => {
