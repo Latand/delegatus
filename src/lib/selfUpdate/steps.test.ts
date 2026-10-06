@@ -1,7 +1,8 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { UpdateRunner, type StepPorts } from "./steps";
+import { builtRevision, realPorts, releaseBuilt, UpdateRunner, type StepPorts } from "./steps";
+import { releaseDirFor } from "./release";
 import { CHECKOUT_STEPS as STEP_NAMES, type CheckoutStepName as StepName } from "./types";
 
 const TARGET = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
@@ -273,5 +274,81 @@ describe("UpdateRunner", () => {
     priorities.length = 0;
     await harness({}, port).runner.start(TARGET, { trigger: "auto" });
     expect(priorities).toEqual([true, true, true, true]);
+  });
+});
+
+
+/* A refused admission puts the previous pointer back and leaves the built
+   directory. The same target then costs a pointer, never another build. */
+describe("a release directory that already passed its ready check", () => {
+  function built(overrides: Partial<StepPorts> = {}) {
+    const base = mkdtempSync("/var/tmp/self-update-built-"); roots.push(base);
+    const releasesDir = join(base, "releases"); const dir = releaseDirFor(releasesDir, TARGET);
+    const calls: string[][] = []; const published: { sha: string; dir: string }[] = [];
+    const real = realPorts(() => {});
+    let head = TARGET; let memory = 8_192;
+    const ports: StepPorts = {
+      async run(command) {
+        calls.push(command);
+        // The build writes what the ready step reads.
+        if (command.includes("worktree")) mkdirSync(dir, { recursive: true });
+        if (command.includes("build")) { mkdirSync(join(dir, ".next"), { recursive: true }); writeFileSync(join(dir, ".next", "BUILD_ID"), "fixture"); }
+        return 0;
+      },
+      memAvailableMb: () => memory, revParse: async (ref) => ref === "HEAD" ? head : TARGET,
+      exists: existsSync, buildIdReadable: real.buildIdReadable, builtRevision: real.builtRevision, markBuilt: real.markBuilt,
+      publish: (release) => { published.push(release); }, now: () => 1_000, ...overrides,
+    };
+    const runner = () => new UpdateRunner({ checkout: CHECKOUT, remote: "/var/tmp/remote.git", branch: "main", bun: "/opt/bun", logDir: join(base, "logs"), releasesDir, env: { PATH: "/usr/bin" } }, ports, () => {});
+    return { dir, calls, published, runner, setHead: (sha: string) => { head = sha; }, setMemory: (mb: number) => { memory = mb; } };
+  }
+  const commands = (calls: string[][]) => calls.map(stepOf);
+
+  test("is published again without an install or a build, and without waiting for build memory", async () => {
+    const h = built();
+    await h.runner().start(TARGET);
+    expect(commands(h.calls)).toEqual(["fetch", "checkout", "install", "build"]);
+    expect(builtRevision(h.dir)).toBe(TARGET); expect(releaseBuilt(h.dir, TARGET)).toBe(true);
+    h.calls.length = 0; h.setMemory(64);
+    const again = h.runner(); await again.start(TARGET, { trigger: "auto" });
+    expect(again.state.state).toBe("done");
+    expect(commands(h.calls)).toEqual(["fetch", "checkout"]);
+    expect(h.calls[1]).toEqual(["git", "checkout", "--detach", TARGET]);
+    expect(again.state.steps.map((step) => [step.name, step.state])).toEqual(STEP_NAMES.map((name) => [name, "done"]));
+    expect(h.published).toEqual([{ sha: TARGET, dir: h.dir }, { sha: TARGET, dir: h.dir }]);
+    expect(readFileSync(again.logPath("build"), "utf8")).toContain("the build is reused");
+  });
+
+  test("is built again when its record names another commit, its HEAD moved or its build is gone", async () => {
+    for (const change of ["other-commit", "head-moved", "build-gone"] as const) {
+      const h = built();
+      await h.runner().start(TARGET);
+      h.calls.length = 0;
+      if (change === "other-commit") writeFileSync(join(h.dir, ".next", "DELEGATUS_RELEASE_READY"), `${"b".repeat(40)}\n`);
+      if (change === "build-gone") rmSync(join(h.dir, ".next", "BUILD_ID"));
+      if (change === "head-moved") h.setHead("b".repeat(40));
+      expect(releaseBuilt(h.dir, TARGET)).toBe(change === "head-moved");
+      const again = h.runner(); await again.start(TARGET);
+      expect(commands(h.calls)).toEqual(["fetch", "checkout", "install", "build"]);
+      // The ready check still decides: a moved HEAD is refused after the build.
+      expect(again.state.state).toBe(change === "head-moved" ? "failed" : "done");
+    }
+  });
+
+  test("a build that starts withdraws the record of the earlier one", async () => {
+    const h = built();
+    await h.runner().start(TARGET);
+    // The directory is no longer the build its record names, so it is built
+    // again; that build fails and must leave no record behind.
+    h.setHead("b".repeat(40));
+    let failBuild = true;
+    const failing = built({ run: async (command) => (command.includes("build") && failBuild ? 1 : 0), revParse: async () => TARGET });
+    mkdirSync(join(failing.dir, ".next"), { recursive: true }); writeFileSync(join(failing.dir, ".next", "BUILD_ID"), "fixture");
+    writeFileSync(join(failing.dir, ".next", "DELEGATUS_RELEASE_READY"), `${"b".repeat(40)}\n`);
+    const runner = failing.runner(); await runner.start(TARGET);
+    expect(runner.state.state).toBe("failed");
+    expect(builtRevision(failing.dir)).toBeNull(); expect(releaseBuilt(failing.dir, TARGET)).toBe(false);
+    failBuild = false; await runner.retry();
+    expect(runner.state.state).toBe("done"); expect(builtRevision(failing.dir)).toBe(TARGET);
   });
 });

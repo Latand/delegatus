@@ -27,6 +27,7 @@ import type { EngineHost, HostState } from "./engineHost";
 import { StructuredDeliveryQueue } from "./structuredDeliveryQueue";
 import { applyStructuredReconfigure, type StructuredReconfigureDependencies } from "./structuredReconfigure";
 import { projectEngineHostEvent } from "./engineHostEvents";
+import { observeCodexSubagentEvent } from "./codexSubagentDetection";
 import { PermissionRequestGuard } from "./permissionGuard";
 import { permissionDenialRecorder, resolvePermissionAttendance } from "./permissionDenials";
 import { conversationTurnLiveness, readTranscriptEvidence, type TurnLivenessDependencies } from "./liveness";
@@ -1380,12 +1381,23 @@ export async function bindStructuredDeliveryQueue(
            host is away: a request nobody can answer is answered now. */
         permissionGuard.observe(key, item.host, conversationId, next.value);
         const projected = projectEngineHostEvent(conversationId, key, next.value);
-        if (!projected) continue;
+        let policyObserved = false;
+        let policyErrorReported = false;
         while (!eventsStopped) {
           try {
-            await client.append(projected);
+            // A busy lifecycle journal must retry with this durable item;
+            // losing its alert must never advance the producer cursor.
+            if (!policyObserved && entry?.key.engine === "codex" && entry.artifactPath) {
+              observeCodexSubagentEvent(registry, entry.artifactPath, next.value);
+            }
+            policyObserved = true;
+            if (projected) await client.append(projected);
             break;
           } catch {
+            if (!policyObserved && !policyErrorReported) {
+              console.error("[structured delivery] native sub-agent policy observation could not be recorded; retrying");
+              policyErrorReported = true;
+            }
             await new Promise<void>((resolve) => setTimeout(resolve, 100));
           }
         }

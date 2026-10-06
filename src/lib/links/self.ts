@@ -12,7 +12,12 @@ import { publicEntry } from "@/lib/links/publicEntry";
 import { LOOPBACK_PROBE_HOSTS } from "@/runtime-host/deploymentProxy";
 
 export type CheckCode = "ok" | "needs-access-key" | "needs-remote-entry" | "http-public" | "open-to-internet" | "host-rewritten" | "tls-failure" | "unverified";
-export type SelfCheck = { code: CheckCode; at: string };
+/** The request line a self-check probe arrived with, as this server's own route read it. */
+/** `unknown` names the headers the route could not tell from the ones Next
+ * writes itself when a proxy sends none; their value is kept as null. */
+export type SeenRequest = { host: string | null; forwardedHost: string | null; forwardedProto: string | null; forwarded: string | null; unknown: ("forwardedHost" | "forwardedProto")[] };
+/** `expected` and `seen` accompany `host-rewritten`: the address's own host beside what arrived. */
+export type SelfCheck = { code: CheckCode; at: string; expected?: string; seen?: SeenRequest };
 export type LinkSelf = { v: 1; installId: string; label: string; publicUrl: string | null; check: SelfCheck | null; revision?: string; saveRevision?: string };
 export type SaveRefusal = "needs-access-key" | "needs-remote-entry" | "http-public" | "invalid-address" | "save-conflict";
 
@@ -162,25 +167,47 @@ export async function saveAddress(input: string, label?: string): Promise<{ self
   return { self };
 }
 
-const shared = globalThis as typeof globalThis & { __delegatusSelfNonces?: Map<string, number> };
-const pending = shared.__delegatusSelfNonces ??= new Map<string, number>();
-export function consumeSelfNonce(nonce: string): boolean {
-  const expiry = pending.get(nonce);
-  pending.delete(nonce);
-  return expiry !== undefined && expiry >= Date.now();
+type PendingProbe = { expiry: number; seen: SeenRequest | null; arrivedHost: string | null };
+const shared = globalThis as typeof globalThis & { __delegatusSelfProbes?: Map<string, PendingProbe> };
+const pending = shared.__delegatusSelfProbes ??= new Map<string, PendingProbe>();
+/** The longest Host that can name an address: 253 characters of name, a
+ * trailing dot, a colon and five digits of port. */
+const HOST_LIMIT = 260;
+/** The self-check route admits a nonce once and leaves here what it read. The
+ * check rules on this record, which only a request that reached this process
+ * can write. The answer's body proves nothing: anything at the address can
+ * write it. `seen` is cut for display; `host` is the Host header whole, and
+ * one longer than any address is kept as absent, which names no address. */
+export function consumeSelfNonce(nonce: string, seen: SeenRequest, host: string | null): boolean {
+  const probe = pending.get(nonce);
+  if (!probe || probe.seen || probe.expiry < Date.now()) return false;
+  probe.seen = seen;
+  probe.arrivedHost = host !== null && host.length <= HOST_LIMIT ? host : null;
+  return true;
+}
+
+/** Whether a Host header names the address: the same name in any case, with the
+ * port left out or equal to the address's own. A proxy may drop the port (nginx
+ * `$host`) or write the default one; the Host pin reads the name alone. A
+ * different port is the upstream's, as is a different name. */
+export function hostNamesAddress(host: string | null, url: URL): boolean {
+  const match = /^(\[[^\]]+\]|[^:[\]]+)(?::(\d{1,5}))?$/.exec(host?.trim() ?? "");
+  if (!match || match[1]!.toLowerCase() !== url.hostname.toLowerCase()) return false;
+  return match[2] === undefined || Number(match[2]) === Number(url.port || (url.protocol === "https:" ? 443 : 80));
 }
 
 function newNonce(): string {
   if (pending.size >= 32) {
-    for (const [key, expiry] of pending) if (expiry < Date.now()) pending.delete(key);
+    for (const [key, probe] of pending) if (probe.expiry < Date.now()) pending.delete(key);
     if (pending.size >= 32) pending.delete(pending.keys().next().value!);
   }
   const nonce = randomBytes(32).toString("base64url");
-  pending.set(nonce, Date.now() + 30_000);
+  pending.set(nonce, { expiry: Date.now() + 30_000, seen: null, arrivedHost: null });
   return nonce;
 }
 
-export type Probe = { status: number; host?: string; vouched?: boolean };
+/** `seen` and `arrivedHost` are read from this process's own record of the probe. */
+export type Probe = { status: number; host?: string; vouched?: boolean; seen: SeenRequest | null; arrivedHost: string | null };
 export function probeSelfAddress(url: URL, host: string, options: { certificateAuthority?: string; connectionHost?: string } = {}): Promise<Probe> {
   const nonce = newNonce();
   const name = url.hostname.replace(/^\[|\]$/g, "");
@@ -188,7 +215,7 @@ export function probeSelfAddress(url: URL, host: string, options: { certificateA
     let timer: ReturnType<typeof setTimeout>;
     let settled = false;
     const fail = (error: Error) => { if (settled) return; settled = true; clearTimeout(timer); reject(error); };
-    const finish = (probe: Probe) => { if (settled) return; settled = true; clearTimeout(timer); resolve(probe); };
+    const finish = (answer: Omit<Probe, "seen" | "arrivedHost">) => { if (settled) return; settled = true; clearTimeout(timer); const record = pending.get(nonce); resolve({ ...answer, seen: record?.seen ?? null, arrivedHost: record?.arrivedHost ?? null }); };
     const request = (url.protocol === "https:" ? https : http).request({
       hostname: options.connectionHost ?? name, port: url.port || (url.protocol === "https:" ? 443 : 80),
       // SNI carries names only; Bun refuses an IP literal as the servername.
@@ -233,8 +260,9 @@ export async function checkAddress(url: URL): Promise<SelfCheck> {
       ? "tls-failure" : "unverified");
   }
   if (reach.status === 200 && reach.vouched === true) return result("open-to-internet");
-  if (reach.status !== 200 || typeof reach.host !== "string" || reach.vouched !== false) return result("unverified");
-  if (reach.host.toLowerCase() !== url.host.toLowerCase()) return result("host-rewritten");
+  // Without this server's own record the answer came from something else at the address.
+  if (reach.status !== 200 || reach.vouched !== false || !reach.seen) return result("unverified");
+  if (!hostNamesAddress(reach.arrivedHost, url)) return { ...result("host-rewritten"), expected: url.host, seen: reach.seen };
   const port = url.port || (url.protocol === "https:" ? "443" : "80");
   for (const host of LOOPBACK_PROBE_HOSTS(port)) {
     try {

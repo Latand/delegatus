@@ -367,6 +367,10 @@ let board = {
   schemaVersion: 1, revision: 1, updatedAt: new Date(0).toISOString(), pathAliases: {},
   prefs: { manual: [], hidden: [], expanded: [], favorites: [], foldedEngineChildIds: [], expandedEngineTrayParentIds: [], viewMode: null, taskPanelOpen: false },
 } as unknown as BoardProjectStateV1;
+/* Close-card receipt coverage can begin with an explicitly placed manual card. */
+if (new URLSearchParams(location.search).get("reopen") === "manual") {
+  board = { ...board, explicitManual: ["/repo/done-0.jsonl"], prefs: { ...board.prefs, manual: ["/repo/done-0.jsonl"] } };
+}
 
 const evidence = {
   presenceReplies: 0,
@@ -391,6 +395,10 @@ const evidence = {
   closesAnswered: [] as string[],
   hidesAnswered: [] as Array<{ id: string; action: string; dismissedAt: string | null }>,
   boardMutations: [] as BoardMutationV1[],
+  boardReads: 0,
+  boardSnapshot: () => board,
+  /* Make the next ordinary board poll adopt a newer authoritative snapshot. */
+  advanceBoardRevision() { board = { ...board, revision: board.revision + 1 }; },
   /* Case iv: the Codex seat's operator-chosen profile is stored, then the seat rotates to a Claude seat launched opus/high.
      The runtime stream is silent here, so the rotation asks the bus for the snapshot that carries the new seat's session. */
   storeSeatProfile() { writeProfile(files[0]!, { model: "gpt-5.6", effort: "low" }); },
@@ -1460,6 +1468,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       board = { ...reduced, schemaVersion: 1, revision: board.revision + 1, pathAliases: reduced.pathAliases ?? {} };
       return json({ ok: true, applied: true, board });
     }
+    evidence.boardReads++;
     return json({ ok: true, board });
   }
   if (url.pathname === "/api/conversations") {

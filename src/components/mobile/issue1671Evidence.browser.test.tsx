@@ -56,11 +56,16 @@ describe("shared memory settings", () => {
     const server = await serveEvidenceFixture(out, "src/components/memory/memoryEvidence.fixture.tsx", {
       "/api/memory/settings": async (request: Request) => {
         if (request.method === "PUT") enabled = (await request.json()).enabled;
-        return Response.json({ enabled, capUsd: 1, spentUsd: .002 });
+        return Response.json({ enabled, reasons: enabled ? [] : ["projectOff"], keySource: "file", capUsd: 1, spentUsd: .002, month: "2026-10",
+          counts: { decisions: 2, delivered: 1, prepared: 1, noCandidates: 0, noMatches: 1, skipped: 3, failed: 0 } });
       },
+      "/api/asks-you/key": { present: true, source: "file" },
       "/api/telemetry": { enabled: false, locked: false, noticeDismissed: true },
     });
-    const browser = await launchChromium();
+    const launched = await chromium.launchServer({ executablePath: process.env.CHROME_BIN, headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    const pid = launched.process().pid;
+    fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid, closed: false }));
+    const browser = await chromium.connect(launched.wsEndpoint());
     const evidence = [];
     try {
       for (const locale of ["en", "uk"] as const) for (const width of [1440, 390]) {
@@ -106,13 +111,242 @@ describe("shared memory settings", () => {
           expect(geometry.scroll).toBeLessThanOrEqual(geometry.client + 1);
           expect(pageErrors).toEqual([]);
           await page.screenshot({ path: path.join(out, `${locale}-${width}.png`) });
-          evidence.push({ locale, width, fits: geometry.scroll <= geometry.client + 1, toggled: !enabled });
+          evidence.push({ locale, width, fits: geometry.scroll <= geometry.client + 1, toggled: !enabled, pageErrors });
         } finally { await context.close(); }
       }
       fs.mkdirSync("evidence/shared-memory", { recursive: true });
       fs.writeFileSync("evidence/shared-memory/settings.json", JSON.stringify(evidence, null, 2) + "\n");
-    } finally { await browser.close(); server.stop(); }
+    } finally {
+      await browser.close(); await launched.close(); server.stop();
+      fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid, closed: true }));
+    }
   }, 90000);
+
+  browserTest("status, shared key and ledger stay readable in en and uk at 1440 and 390", async () => {
+    const { NextRequest } = await import("next/server");
+    const memory = await import("@/app/api/memory/settings/route");
+    const keyRoute = await import("@/app/api/asks-you/key/route");
+    const { setSharedMemoryEnabled } = await import("@/lib/memory/settings");
+    const { memoryIndex } = await import("@/lib/memory/service");
+    const { writeAsksYouSettings } = await import("@/lib/asks/settings");
+    const { mutateOperatorAsks } = await import("@/lib/asks/store");
+    const { asksYouSettingView } = await import("@/lib/asks/view");
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-memory-browser-"));
+    const previous = { ...process.env };
+    process.env.LLV_STATE_DIR = path.join(root, "state");
+    process.env.XDG_CONFIG_HOME = path.join(root, "config");
+    delete process.env.OPENROUTER_API_KEY;
+    delete process.env.PORT;
+    delete process.env.LLV_STAGING;
+    const out = path.resolve(".artifacts/shared-memory-settings"); fs.mkdirSync(out, { recursive: true });
+    let failKeyWrite = false;
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/telemetry": { enabled: false, locked: false, noticeDismissed: true },
+      "/api/memory/settings": (request: Request) => request.method === "PUT" ? memory.PUT(new NextRequest(request)) : memory.GET(new NextRequest(request)),
+      "/api/asks-you/key": (request: Request) => request.method === "PUT"
+        ? failKeyWrite ? Response.json({ error: "write_failed" }, { status: 500 }) : keyRoute.PUT(new NextRequest(request))
+        : keyRoute.GET(),
+      "/api/asks-you": () => Response.json(asksYouSettingView()),
+    });
+    // Record the owned browser PID and close precisely this launch through its server.
+    let launched: Awaited<ReturnType<typeof chromium.launchServer>> | undefined;
+    let browser: Awaited<ReturnType<typeof chromium.connect>> | undefined;
+    let browserPid: number | undefined;
+    const cases: unknown[] = [];
+    try {
+      launched = await chromium.launchServer({ executablePath: process.env.CHROME_BIN, headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+      browserPid = launched.process().pid;
+      fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid: browserPid, closed: false }));
+      browser = await chromium.connect(launched.wsEndpoint());
+      for (const lang of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        setSharedMemoryEnabled("atlas", true);
+        writeAsksYouSettings({ capUsd: 1 });
+        delete process.env.OPENROUTER_API_KEY;
+        process.env.PORT = "9876";
+        fs.mkdirSync(process.env.LLV_STATE_DIR!, { recursive: true });
+        fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "viewer-release.json"), JSON.stringify({ endpoint: "http://127.0.0.1:9875" }));
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-settings`, { width, height: 900 }, "light", lang, "reduce", width === 390);
+        try {
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-settings")));
+          const dialog = page.locator("[data-telemetry-settings]");
+          await dialog.waitFor();
+          await page.locator("[data-memory-status]").waitFor();
+          await page.locator("[data-provider-key] input").waitFor();
+          const measure = async (state: string) => {
+            await dialog.evaluate(node => { node.scrollTop = 0; });
+            const geometry = await dialog.evaluate(node => {
+              const box = node.getBoundingClientRect();
+              const rows = [...node.querySelectorAll<HTMLElement>("[data-memory-setting], [data-provider-key]")].map(row => {
+                const r = row.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, height: r.height, overflow: row.scrollWidth - row.clientWidth };
+              });
+              const controls = [...node.querySelectorAll<HTMLElement>("input, button")].map(control => {
+                const r = control.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+              });
+              const elements = [...node.querySelectorAll<HTMLElement>("[data-memory-setting] p, [data-memory-setting] label, [data-memory-setting] input, [data-provider-key] p, [data-provider-key] label, [data-provider-key] input, [data-provider-key] button")];
+              const overlaps = elements.flatMap((a, i) => elements.slice(i + 1).filter(b => {
+                if (a.contains(b) || b.contains(a)) return false;
+                const ar = a.getBoundingClientRect(), br = b.getBoundingClientRect();
+                return Math.min(ar.right, br.right) - Math.max(ar.left, br.left) > 1
+                  && Math.min(ar.bottom, br.bottom) - Math.max(ar.top, br.top) > 1;
+              }).map(b => ({ first: a.tagName, second: b.tagName })));
+              const memoryError = node.querySelector<HTMLElement>("[data-memory-setting] [role=alert]");
+              const errorStyle = memoryError ? getComputedStyle(memoryError) : null;
+              return { left: box.left, right: box.right, top: box.top, bottom: box.bottom,
+                overflow: node.scrollWidth - node.clientWidth, scrollHeight: node.scrollHeight, height: node.clientHeight, rows, controls,
+                status: node.querySelector("[data-memory-status]")?.textContent,
+                counts: node.querySelector("[data-memory-counts]")?.textContent,
+                overlaps,
+                memoryError: memoryError ? { text: memoryError.textContent, fontSize: errorStyle!.fontSize, lineHeight: errorStyle!.lineHeight,
+                  gap: memoryError.getBoundingClientRect().top - memoryError.previousElementSibling!.getBoundingClientRect().bottom } : null,
+                keyError: node.querySelector("[data-provider-key] [role=alert]")?.textContent };
+            });
+            expect(geometry.left).toBeGreaterThanOrEqual(0); expect(geometry.right).toBeLessThanOrEqual(width);
+            expect(geometry.top).toBeGreaterThanOrEqual(0); expect(geometry.bottom).toBeLessThanOrEqual(900);
+            expect(geometry.overflow).toBeLessThanOrEqual(1);
+            expect(geometry.rows[0].bottom).toBeLessThanOrEqual(geometry.rows[1].top);
+            expect(geometry.rows.every(row => row.overflow <= 1)).toBe(true);
+            expect(geometry.controls.every(control => control.left >= geometry.left && control.right <= geometry.right)).toBe(true);
+            expect(geometry.overlaps).toEqual([]);
+            if (geometry.memoryError) {
+              expect(geometry.memoryError.fontSize).toBe("13px");
+              expect(geometry.memoryError.gap).toBe(8);
+            }
+            cases.push({ lang, width, state, ...geometry, pageErrors });
+            await page.screenshot({ path: path.join(out, `${lang}-${width}-${state}.png`) });
+            await page.locator("[data-provider-key]").scrollIntoViewIfNeeded();
+            await page.screenshot({ path: path.join(out, `${lang}-${width}-${state}-key.png`) });
+          };
+          expect(await page.locator("[data-memory-status]").textContent()).toContain(translate(lang, "memory.status.notOwner"));
+          expect(await page.locator("[data-memory-status]").textContent()).toContain(translate(lang, "memory.status.noKey"));
+          await measure("missing-key");
+          const invalid = "fixture\u200Bkey";
+          await page.locator("[data-provider-key] input").fill(invalid);
+          await page.locator("[data-provider-key] button").click();
+          await page.getByText(translate(lang, "providerKey.invalid"), { exact: true }).waitFor();
+          expect(await page.locator("[data-provider-key] input").inputValue()).toBe("");
+          expect(await dialog.textContent()).not.toContain(invalid);
+          await measure("invalid-key");
+          failKeyWrite = true;
+          await page.locator("[data-provider-key] input").fill("fixture-browser-key");
+          await page.locator("[data-provider-key] button").click();
+          await page.getByText(translate(lang, "providerKey.failed"), { exact: true }).waitFor();
+          expect(await page.locator("[data-provider-key] input").inputValue()).toBe("");
+          expect(await dialog.textContent()).not.toContain("fixture-browser-key");
+          await measure("write-failed");
+          failKeyWrite = false;
+          // No file key is seeded; the only secret sent is this fake fixture.
+          await page.locator("[data-provider-key] input").fill("fixture-browser-key");
+          await page.locator("[data-provider-key] button").click();
+          await page.getByText(translate(lang, "providerKey.saved"), { exact: true }).waitFor();
+          expect(await page.locator("[data-provider-key] input").inputValue()).toBe("");
+          await measure("inactive");
+          delete process.env.PORT;
+          memoryIndex().recordInjectionActivity("decisions");
+          memoryIndex().recordInjectionActivity("noMatches");
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:provider-key-changed")));
+          await page.waitForFunction(text => document.querySelector("[data-memory-status]")?.textContent === text, translate(lang, "memory.status.ready"));
+          await measure("ready");
+          mutateOperatorAsks(file => { file.spend.usd = 1; });
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:provider-key-changed")));
+          await page.waitForFunction(text => document.querySelector("[data-memory-status]")?.textContent === text, translate(lang, "memory.status.capped"));
+          await measure("capped");
+          await page.locator("[data-memory-setting] [role=switch]").click();
+          await page.waitForFunction(text => document.querySelector("[data-memory-status]")?.textContent?.includes(text), translate(lang, "memory.status.projectOff"));
+          await measure("off");
+          process.env.OPENROUTER_API_KEY = "test-env";
+          await page.reload();
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-settings")));
+          await page.getByText(translate(lang, "providerKey.env"), { exact: true }).waitFor();
+          expect(await page.locator("[data-provider-key] input").count()).toBe(0);
+          expect(await page.locator("[data-provider-key]").textContent()).not.toContain(translate(lang, "providerKey.shared"));
+          await measure("environment");
+          process.env.LLV_STAGING = "1";
+          for (const source of ["env", "file"] as const) {
+            if (source === "file") delete process.env.OPENROUTER_API_KEY;
+            await page.reload();
+            await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-settings")));
+            await page.getByText(translate(lang, "providerKey.staging"), { exact: true }).waitFor();
+            expect(await page.locator("[data-provider-key] form").count()).toBe(0);
+            expect(await page.locator("[data-provider-key] input").count()).toBe(0);
+            expect(await page.locator("[data-provider-key]").textContent()).not.toContain(translate(lang, "providerKey.shared"));
+            await measure(`staging-${source}`);
+          }
+          const { openRouterKeyPath } = await import("@/lib/asks/settings");
+          fs.rmSync(openRouterKeyPath(), { force: true });
+          await page.reload();
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-settings")));
+          await page.getByText(translate(lang, "providerKey.staging"), { exact: true }).waitFor();
+          await page.waitForFunction(text => document.querySelector("[data-memory-status]")?.textContent?.includes(text), translate(lang, "memory.status.noKeyStaging"));
+          expect(await page.locator("[data-memory-status]").textContent()).not.toContain(translate(lang, "memory.status.noKey"));
+          expect(await page.locator("[data-provider-key] input").count()).toBe(0);
+          expect(await page.locator("[data-provider-key]").textContent()).not.toContain(translate(lang, "providerKey.shared"));
+          await measure("staging-missing-key");
+          delete process.env.LLV_STAGING;
+          await page.reload();
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-settings")));
+          await page.locator("[data-provider-key] input").waitFor();
+          const stateRoot = process.env.LLV_STATE_DIR!;
+          const spendFile = path.join(stateRoot, "operator-asks.json");
+          const spendBefore = fs.readFileSync(spendFile, "utf8");
+          const pendingDirectory = path.join(stateRoot, "memory-injection-pending");
+          for (const broken of ["spend", "pending"] as const) {
+            if (broken === "spend") fs.writeFileSync(spendFile, "broken");
+            else {
+              fs.mkdirSync(pendingDirectory, { recursive: true });
+              fs.writeFileSync(path.join(pendingDirectory, "a".repeat(64) + ".json"), "{}");
+            }
+            await page.evaluate(() => window.dispatchEvent(new Event("delegatus:provider-key-changed")));
+            await page.waitForFunction(text => document.querySelector("[data-memory-status]")?.textContent === text, translate(lang, "memory.status.failed"));
+            const control = page.locator("[data-memory-setting] [role=switch]");
+            expect(await control.isEnabled()).toBe(true);
+            const wasEnabled = await control.isChecked();
+            await control.click();
+            await page.waitForFunction(enabled => {
+              const input = document.querySelector<HTMLInputElement>("[data-memory-setting] input");
+              return input && !input.disabled && input.checked === enabled;
+            }, !wasEnabled);
+            expect(await control.isChecked()).toBe(!wasEnabled);
+            expect(await page.locator("[data-memory-counts]").count()).toBe(0);
+            expect(await page.locator("[data-memory-setting]").textContent()).not.toContain("$");
+            await measure(`unavailable-${broken}`);
+            if (broken === "spend") fs.writeFileSync(spendFile, spendBefore);
+            else fs.rmSync(pendingDirectory, { recursive: true });
+          }
+          const settingFile = path.join(stateRoot, "shared-memory-settings.json");
+          const settingBefore = fs.readFileSync(settingFile, "utf8");
+          // Refresh the restored ledger before exercising a failed setting write.
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:provider-key-changed")));
+          await page.locator("[data-memory-counts]").waitFor();
+          const statusBefore = await page.locator("[data-memory-status]").textContent();
+          const countsBefore = await page.locator("[data-memory-counts]").textContent();
+          fs.writeFileSync(settingFile, "broken");
+          await page.locator("[data-memory-setting] [role=switch]").click();
+          await page.getByText(translate(lang, "memory.save.failed"), { exact: true }).waitFor();
+          expect(await page.locator("[data-memory-setting] [role=switch]").isEnabled()).toBe(true);
+          expect(await page.locator("[data-memory-status]").textContent()).toBe(statusBefore);
+          expect(await page.locator("[data-memory-counts]").textContent()).toBe(countsBefore);
+          await measure("memory-write-failed");
+          fs.writeFileSync(settingFile, settingBefore);
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+        // The next language/viewport starts with no file key.
+        const { openRouterKeyPath } = await import("@/lib/asks/settings");
+        fs.rmSync(openRouterKeyPath(), { force: true });
+        mutateOperatorAsks(file => { file.spend.usd = 0; });
+      }
+      fs.mkdirSync("evidence/shared-memory-settings", { recursive: true });
+      fs.writeFileSync("evidence/shared-memory-settings/geometry.json", JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", cases }, null, 2) + "\n");
+    } finally {
+      await browser?.close(); await launched?.close(); server.stop();
+      fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid: browserPid, closed: true }));
+      memoryIndex().close();
+      for (const name of ["LLV_STATE_DIR", "XDG_CONFIG_HOME", "OPENROUTER_API_KEY", "PORT", "LLV_STAGING"]) {
+        if (previous[name] === undefined) delete process.env[name]; else process.env[name] = previous[name];
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }, 120_000);
+
 });
 
 describe("runtime idle performance", () => {
@@ -561,6 +795,79 @@ async function admittedAgentEvidence(): Promise<{ feed: string; provenance: unkn
 }
 
 const launchChromium = () => chromium.launch({ headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+
+describe("close-card receipt Reopen", () => {
+  browserTest("restores root and manual cards at 390 in en and uk across the next board refresh", async () => {
+    const out = path.resolve(".artifacts/phone-reopen");
+    fs.mkdirSync(out, { recursive: true });
+    const { base, stop } = await serveFixture();
+    /* Own the browser server and retain its PID; closing this handle stops only
+       the process this case launched, even if another browser is on the host. */
+    const browserServer = await chromium.launchServer({ headless: true, args: ["--no-sandbox"], executablePath: process.env.CHROME_BIN });
+    fs.writeFileSync(path.join(out, "browser.pid"), `${browserServer.process().pid}\n`);
+    const browser = await chromium.connect(browserServer.wsEndpoint());
+    const readings = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const kind of ["root", "manual"] as const) {
+        const target = kind === "root" ? RUNNING_PATH : "/repo/done-0.jsonl";
+        const id = kind === "root" ? "conversation_running" : "conversation_done-0";
+        const key = `${locale}-${kind}-390`;
+        const { page, context, pageErrors } = await openFixture(browser, `${base}?reopen=${kind}#c=${id}`, { width: 390, height: 844 }, "dark", locale, "reduce", true);
+        try {
+          await page.locator('[data-testid="mobile-chat-shell"]').waitFor();
+          const beforeWrites = await page.evaluate(() => (window as unknown as { evidence: { boardMutations: unknown[] } }).evidence.boardMutations.length);
+          await page.locator('[data-mobile2-open="menu"]').first().click();
+          await page.locator('[data-mobile2-menu-row="close"]').click();
+          await page.waitForFunction((path) => {
+            const e = (window as unknown as { evidence: { boardSnapshot(): { prefs: { hidden: string[] } }; boardMutations: Array<{ kind: string; path?: string }> } }).evidence;
+            return e.boardSnapshot().prefs.hidden.includes(path) && e.boardMutations.some(m => m.kind === "close" && m.path === path);
+          }, target);
+          const reopen = page.locator('[data-mobile2-receipt-undo="reopen"]');
+          const receipt = await reopen.evaluate(el => {
+            const r = el.getBoundingClientRect();
+            return { text: el.textContent?.trim(), x: r.x, right: r.right, width: r.width, height: r.height };
+          });
+          expect(receipt.text).toBe(translate(locale, "mobile2.receipt.reopen"));
+          expect(receipt.x).toBeGreaterThanOrEqual(0);
+          expect(receipt.right).toBeLessThanOrEqual(390);
+          expect(receipt.width).toBeGreaterThanOrEqual(44);
+          expect(receipt.height).toBeGreaterThanOrEqual(44);
+          await page.screenshot({ path: path.join(out, `${key}-closed.png`) });
+          await reopen.click();
+          await page.waitForFunction((path) => {
+            const e = (window as unknown as { evidence: { boardSnapshot(): { prefs: { hidden: string[] } }; boardMutations: Array<{ kind: string; path?: string }> } }).evidence;
+            return !e.boardSnapshot().prefs.hidden.includes(path) && e.boardMutations.some(m => m.kind === "restore" && m.path === path);
+          }, target);
+          /* Closing the focused card returns the phone to its board. */
+          await page.locator('[data-phone-kanban-tab="inbox"]').click();
+          const row = page.locator(`[data-phone-card-agent="${target}"]`);
+          await row.waitFor();
+          await row.scrollIntoViewIfNeeded();
+          await page.screenshot({ path: path.join(out, `${key}-restored.png`) });
+          const beforeReads = await page.evaluate(() => {
+            const e = (window as unknown as { evidence: { boardReads: number; advanceBoardRevision(): void } }).evidence;
+            e.advanceBoardRevision();
+            return e.boardReads;
+          });
+          await page.waitForFunction((before) => (window as unknown as { evidence: { boardReads: number } }).evidence.boardReads > before, beforeReads, { timeout: 15000 });
+          /* Give the fetched snapshot its render before judging membership. */
+          await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+          expect(await row.isVisible()).toBe(true);
+          await row.scrollIntoViewIfNeeded();
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${key}-refreshed.png`) });
+          const writes = await page.evaluate(({ path, start }) => (window as unknown as { evidence: { boardMutations: Array<{ kind: string; path?: string; placement?: string }> } }).evidence.boardMutations.slice(start).filter(m => m.path === path && (m.kind === "close" || m.kind === "restore")), { path: target, start: beforeWrites });
+          expect(writes.map(m => m.kind)).toEqual(["close", "restore"]);
+          if (kind === "manual") expect(writes[1]?.placement).toBe("manual");
+          readings.push({ locale, kind, viewport: { width: 390, height: 844 }, receipt, writes, restoredAfterRefresh: true, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/phone-reopen", { recursive: true });
+      fs.writeFileSync("evidence/phone-reopen/receipt.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); await browserServer.close(); stop(); }
+  }, 90000);
+});
 
 browserTest("agent-delivered seat message keeps its author at desktop and phone widths in both languages", async () => {
   const evidence = await admittedAgentEvidence();

@@ -16,6 +16,7 @@ import {
   orchestratorSeatFor,
 } from "@/lib/orchestrator/seats";
 import { beginDeputy, DEPUTY_HISTORY_CAP, endDeputy, recordDeputyFork } from "@/lib/orchestrator/deputies";
+import { productionSeatCommandDependencies, setSeatCommandDependenciesForTests, type SeatCommandDependencies } from "@/lib/orchestrator/seatCommand";
 import * as taskStore from "@/lib/tasks/store";
 
 import { POST as rotatePost } from "../rotate/route";
@@ -55,6 +56,7 @@ beforeEach(() => {
 
 afterEach(() => {
   setCallerConversationResolverForTests(null);
+  setSeatCommandDependenciesForTests(null);
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousStateDir;
   if (previousHome === undefined) delete process.env.HOME;
@@ -279,4 +281,86 @@ test("the seat read still refuses a request that names neither a project nor the
   const answer = await seatGet(new NextRequest("http://127.0.0.1/api/orchestrator/seat"));
   expect(answer.status).toBe(400);
   expect(await answer.json()).toMatchObject({ error: "project is required" });
+});
+
+/* The pane polls this read, and it is the only thing that comes round on its
+   own while a designation waits on a launch. The request that began these
+   intents never got its answer; nothing posts again. */
+function launchSettles(settlement: ReturnType<SeatCommandDependencies["launchSettlement"]>): void {
+  setSeatCommandDependenciesForTests({
+    ...productionSeatCommandDependencies,
+    launchSettlement: () => settlement,
+    resolvedConversation: () => null,
+    runtimeIdentity: () => ({ engine: null, model: null }),
+    stampRegistryIdentity: () => {},
+    startBoardReport: () => {},
+    now: () => "2026-10-05T09:00:40.000Z",
+  });
+}
+
+function pendingCreation(clientRequestId: string): void {
+  beginOrchestratorSeatIntent({
+    project: "proj-a",
+    mandate: "own the board",
+    clientRequestId,
+    mode: "spawn",
+    engine: "claude",
+    model: "opus",
+    now: "2026-10-05T09:00:00.000Z",
+  });
+}
+
+const seatRead = async () => (await seatGet(new NextRequest("http://127.0.0.1/api/orchestrator/seat?project=proj-a"))).json();
+
+test("lost response, then the launch settles: the read answers a seated orchestrator, and so does the next one", async () => {
+  pendingCreation("req_lost_00001");
+  launchSettles({ kind: "settled", conversationId: "conversation_lost_1", path: null, launchId: "launch_lost_1" });
+
+  const first = await seatRead();
+
+  expect(first).toMatchObject({ pending: null, lastFailure: null, seat: { conversationId: "conversation_lost_1", state: "active", intent: { clientRequestId: "req_lost_00001" } } });
+  /* A reload reads the same record. */
+  expect(await seatRead()).toMatchObject({ pending: null, seat: { conversationId: "conversation_lost_1" } });
+});
+
+test("lost response, then the launch fails: the read answers the failure and no pending designation", async () => {
+  pendingCreation("req_lost_00002");
+  launchSettles({ kind: "failed", error: "launch exited before a transcript materialized" });
+
+  const first = await seatRead();
+
+  expect(first).toMatchObject({
+    seat: null,
+    pending: null,
+    lastFailure: { clientRequestId: "req_lost_00002", error: "launch exited before a transcript materialized" },
+  });
+  expect(await seatRead()).toMatchObject({ seat: null, pending: null, lastFailure: { clientRequestId: "req_lost_00002" } });
+});
+
+test("launch timeout: the read stops answering «pending» once the launch's receipt says it timed out", async () => {
+  pendingCreation("req_lost_00003");
+  launchSettles({ kind: "unknown" });
+  expect(await seatRead()).toMatchObject({ pending: { intent: { clientRequestId: "req_lost_00003", error: null } }, lastFailure: null });
+
+  launchSettles({ kind: "failed", error: "structured spawn transport failed: runtime host request timed out" });
+
+  expect(await seatRead()).toMatchObject({
+    seat: null,
+    pending: null,
+    lastFailure: { clientRequestId: "req_lost_00003", error: "structured spawn transport failed: runtime host request timed out" },
+  });
+});
+
+test("a read whose reconciliation throws still answers the record as it stands", async () => {
+  pendingCreation("req_lost_00004");
+  setSeatCommandDependenciesForTests({
+    ...productionSeatCommandDependencies,
+    launchSettlement: () => { throw new Error("registry unreadable"); },
+  });
+  const warned = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    expect(await seatRead()).toMatchObject({ pending: { intent: { clientRequestId: "req_lost_00004" } } });
+  } finally {
+    warned.mockRestore();
+  }
 });

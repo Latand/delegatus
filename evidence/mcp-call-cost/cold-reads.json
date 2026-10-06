@@ -1,0 +1,1046 @@
+{
+  "base": "4fbb7b56ad04e58c40482b49b6cf6180c0f2e8ee",
+  "head": "69a71b2bc62b21fada9adce62c69065b51538dd1",
+  "healthyCallsPerSide": 303,
+  "scenarios": 23,
+  "profiles": {
+    "base": [
+      {
+        "key": "get_pipeline/stage",
+        "n": 20,
+        "ok": 20,
+        "inputKeys": [
+          "pipelineId",
+          "stageId"
+        ],
+        "p50ms": 2.06,
+        "p95ms": 5.64,
+        "maxMs": 13.91,
+        "inTokP50": 10.75,
+        "outTokP50": 202.75
+      },
+      {
+        "key": "get_pipeline/compact",
+        "n": 20,
+        "ok": 20,
+        "inputKeys": [
+          "compact",
+          "pipelineId"
+        ],
+        "p50ms": 1.74,
+        "p95ms": 8.36,
+        "maxMs": 8.56,
+        "inTokP50": 10,
+        "outTokP50": 179
+      },
+      {
+        "key": "get_pipeline/full",
+        "n": 3,
+        "ok": 3,
+        "inputKeys": [
+          "full",
+          "pipelineId"
+        ],
+        "p50ms": 9.71,
+        "p95ms": 14.87,
+        "maxMs": 14.87,
+        "inTokP50": 9.25,
+        "outTokP50": 93689.5
+      },
+      {
+        "key": "get_pipeline/default",
+        "n": 20,
+        "ok": 20,
+        "inputKeys": [
+          "pipelineId"
+        ],
+        "p50ms": 1.51,
+        "p95ms": 5.19,
+        "maxMs": 44.77,
+        "inTokP50": 6.25,
+        "outTokP50": 179
+      },
+      {
+        "key": "list_tasks/limit200",
+        "n": 20,
+        "ok": 20,
+        "inputKeys": [
+          "limit",
+          "project"
+        ],
+        "p50ms": 36.35,
+        "p95ms": 103.26,
+        "maxMs": 146.5,
+        "inTokP50": 9.75,
+        "outTokP50": 6031.75
+      },
+      {
+        "key": "list_tasks/limit5",
+        "n": 20,
+        "ok": 20,
+        "inputKeys": [
+          "limit",
+          "project"
+        ],
+        "p50ms": 2.85,
+        "p95ms": 12.61,
+        "maxMs": 12.87,
+        "inTokP50": 9.25,
+        "outTokP50": 508
+      },
+      {
+        "key": "list_pipelines/open",
+        "n": 20,
+        "ok": 20,
+        "inputKeys": [
+          "limit",
+          "project",
+          "state"
+        ],
+        "p50ms": 13.84,
+        "p95ms": 79.1,
+        "maxMs": 98.69,
+        "inTokP50": 13.5,
+        "outTokP50": 1444.5
+      },
+      {
+        "key": "list_pipelines/status-only",
+        "n": 20,
+        "ok": 20,
+        "inputKeys": [
+          "limit",
+          "project",
+          "state",
+          "statusOnly"
+        ],
+        "p50ms": 13.72,
+        "p95ms": 57.59,
+        "maxMs": 62.36,
+        "inTokP50": 18,
+        "outTokP50": 654.25
+      },
+      {
+        "key": "search_transcripts/indexed3",
+        "n": 20,
+        "ok": 20,
+        "inputKeys": [
+          "limit",
+          "project",
+          "query"
+        ],
+        "p50ms": 11.9,
+        "p95ms": 35.65,
+        "maxMs": 48.23,
+        "inTokP50": 13.25,
+        "outTokP50": 212.5
+      },
+      {
+        "key": "conversation_messages/page10",
+        "n": 20,
+        "ok": 20,
+        "inputKeys": [
+          "limit",
+          "maxChars",
+          "transcriptPath"
+        ],
+        "p50ms": 28.74,
+        "p95ms": 87.01,
+        "maxMs": 141.27,
+        "inTokP50": 39.75,
+        "outTokP50": 3123.75
+      },
+      {
+        "key": "resources/system-summary",
+        "n": 20,
+        "ok": 20,
+        "inputKeys": [],
+        "p50ms": 0.5,
+        "p95ms": 1.09,
+        "maxMs": 1.27,
+        "inTokP50": 0.5,
+        "outTokP50": 144
+      },
+      {
+        "key": "agent_activity/compact",
+        "n": 20,
+        "ok": 20,
+        "inputKeys": [
+          "clientRequestId",
+          "project"
+        ],
+        "p50ms": 5.02,
+        "p95ms": 10.6,
+        "maxMs": 12.86,
+        "inTokP50": 14.25,
+        "outTokP50": 523.75
+      },
+      {
+        "key": "update_task/status",
+        "n": 20,
+        "ok": 20,
+        "inputKeys": [
+          "clientRequestId",
+          "status",
+          "taskId"
+        ],
+        "p50ms": 13.25,
+        "p95ms": 41.52,
+        "maxMs": 52.23,
+        "inTokP50": 24,
+        "outTokP50": 148.5
+      },
+      {
+        "key": "pipeline_action/routine",
+        "n": 20,
+        "ok": 20,
+        "inputKeys": [
+          "action",
+          "clientRequestId",
+          "pipelineId"
+        ],
+        "p50ms": 8.77,
+        "p95ms": 18.26,
+        "maxMs": 31.71,
+        "inTokP50": 18,
+        "outTokP50": 78.25
+      },
+      {
+        "key": "stage_report/forge-fast",
+        "n": 20,
+        "ok": 20,
+        "inputKeys": [
+          "clientRequestId",
+          "summary",
+          "verdict"
+        ],
+        "p50ms": 28.94,
+        "p95ms": 57.42,
+        "maxMs": 95.32,
+        "inTokP50": 18.5,
+        "outTokP50": 116
+      },
+      {
+        "key": "list_conversations/isolated-scan",
+        "n": 1,
+        "ok": 1,
+        "inputKeys": [
+          "limit",
+          "query"
+        ],
+        "p50ms": 79.12,
+        "p95ms": 79.12,
+        "maxMs": 79.12,
+        "inTokP50": 6.75,
+        "outTokP50": 195.75
+      },
+      {
+        "key": "stage_report/forge-delay1200",
+        "n": 3,
+        "ok": 3,
+        "inputKeys": [
+          "clientRequestId",
+          "summary",
+          "verdict"
+        ],
+        "p50ms": 25.86,
+        "p95ms": 29.52,
+        "maxMs": 29.52,
+        "inTokP50": 18.5,
+        "outTokP50": 116
+      },
+      {
+        "key": "get_pipeline/concurrent-forge1200",
+        "n": 3,
+        "ok": 3,
+        "inputKeys": [
+          "pipelineId",
+          "stageId"
+        ],
+        "p50ms": 36.21,
+        "p95ms": 38.59,
+        "maxMs": 38.59,
+        "inTokP50": 10.75,
+        "outTokP50": 202.75
+      },
+      {
+        "key": "stage_report/concurrent-forge1200",
+        "n": 3,
+        "ok": 3,
+        "inputKeys": [
+          "clientRequestId",
+          "summary",
+          "verdict"
+        ],
+        "p50ms": 36.84,
+        "p95ms": 42.7,
+        "maxMs": 42.7,
+        "inTokP50": 18.5,
+        "outTokP50": 116
+      },
+      {
+        "key": "pipeline_action/retry-remote-fast",
+        "n": 1,
+        "ok": 1,
+        "inputKeys": [
+          "action",
+          "clientRequestId",
+          "pipelineId"
+        ],
+        "p50ms": 31.92,
+        "p95ms": 31.92,
+        "maxMs": 31.92,
+        "inTokP50": 19.5,
+        "outTokP50": 168.75
+      },
+      {
+        "key": "pipeline_action/retry-remote1200",
+        "n": 2,
+        "ok": 2,
+        "inputKeys": [
+          "action",
+          "clientRequestId",
+          "pipelineId"
+        ],
+        "p50ms": 7.24,
+        "p95ms": 9.81,
+        "maxMs": 9.81,
+        "inTokP50": 19.5,
+        "outTokP50": 159
+      },
+      {
+        "key": "create_pipeline/draft-admission",
+        "n": 5,
+        "ok": 5,
+        "inputKeys": [
+          "autoStart",
+          "clientRequestId",
+          "repoDir",
+          "spec",
+          "stages",
+          "task"
+        ],
+        "p50ms": 20.86,
+        "p95ms": 59.44,
+        "maxMs": 59.44,
+        "inTokP50": 608.5,
+        "outTokP50": 280.75
+      },
+      {
+        "key": "request_attention/browser-arrival1200",
+        "n": 2,
+        "ok": 2,
+        "inputKeys": [
+          "clientRequestId",
+          "reason",
+          "target"
+        ],
+        "p50ms": 1267.84,
+        "p95ms": 1268.63,
+        "maxMs": 1268.63,
+        "inTokP50": 30,
+        "outTokP50": 326.5
+      }
+    ],
+    "head": [
+      {
+        "key": "get_pipeline/stage",
+        "n": 20,
+        "ok": 20,
+        "inputKeys": [
+          "pipelineId",
+          "stageId"
+        ],
+        "p50ms": 2.39,
+        "p95ms": 7.63,
+        "maxMs": 8.57,
+        "inTokP50": 10.75,
+        "outTokP50": 202.75
+      },
+      {
+        "key": "get_pipeline/compact",
+        "n": 20,
+        "ok": 20,
+        "inputKeys": [
+          "compact",
+          "pipelineId"
+        ],
+        "p50ms": 2.07,
+        "p95ms": 5.84,
+        "maxMs": 13.74,
+        "inTokP50": 10,
+        "outTokP50": 179
+      },
+      {
+        "key": "get_pipeline/full",
+        "n": 3,
+        "ok": 3,
+        "inputKeys": [
+          "full",
+          "pipelineId"
+        ],
+        "p50ms": 9.21,
+        "p95ms": 50.86,
+        "maxMs": 50.86,
+        "inTokP50": 9.25,
+        "outTokP50": 93689.5
+      },
+      {
+        "key": "get_pipeline/default",
+        "n": 20,
+        "ok": 20,
+        "inputKeys": [
+          "pipelineId"
+        ],
+        "p50ms": 2.06,
+        "p95ms": 3.49,
+        "maxMs": 6.43,
+        "inTokP50": 6.25,
+        "outTokP50": 179
+      },
+      {
+        "key": "list_tasks/limit200",
+        "n": 20,
+        "ok": 20,
+        "inputKeys": [
+          "limit",
+          "project"
+        ],
+        "p50ms": 31.88,
+        "p95ms": 99,
+        "maxMs": 135.26,
+        "inTokP50": 9.75,
+        "outTokP50": 6031.75
+      },
+      {
+        "key": "list_tasks/limit5",
+        "n": 20,
+        "ok": 20,
+        "inputKeys": [
+          "limit",
+          "project"
+        ],
+        "p50ms": 3.35,
+        "p95ms": 8.12,
+        "maxMs": 8.55,
+        "inTokP50": 9.25,
+        "outTokP50": 508
+      },
+      {
+        "key": "list_pipelines/open",
+        "n": 20,
+        "ok": 20,
+        "inputKeys": [
+          "limit",
+          "project",
+          "state"
+        ],
+        "p50ms": 16.77,
+        "p95ms": 41.8,
+        "maxMs": 50.56,
+        "inTokP50": 13.5,
+        "outTokP50": 1444.5
+      },
+      {
+        "key": "list_pipelines/status-only",
+        "n": 20,
+        "ok": 20,
+        "inputKeys": [
+          "limit",
+          "project",
+          "state",
+          "statusOnly"
+        ],
+        "p50ms": 15.24,
+        "p95ms": 20.47,
+        "maxMs": 27.29,
+        "inTokP50": 18,
+        "outTokP50": 654.25
+      },
+      {
+        "key": "search_transcripts/indexed3",
+        "n": 20,
+        "ok": 20,
+        "inputKeys": [
+          "limit",
+          "project",
+          "query"
+        ],
+        "p50ms": 12.08,
+        "p95ms": 22.85,
+        "maxMs": 40.87,
+        "inTokP50": 13.25,
+        "outTokP50": 212.5
+      },
+      {
+        "key": "conversation_messages/page10",
+        "n": 20,
+        "ok": 20,
+        "inputKeys": [
+          "limit",
+          "maxChars",
+          "transcriptPath"
+        ],
+        "p50ms": 38.42,
+        "p95ms": 59.74,
+        "maxMs": 79.15,
+        "inTokP50": 39.75,
+        "outTokP50": 3123.75
+      },
+      {
+        "key": "resources/system-summary",
+        "n": 20,
+        "ok": 20,
+        "inputKeys": [],
+        "p50ms": 0.65,
+        "p95ms": 0.79,
+        "maxMs": 1.17,
+        "inTokP50": 0.5,
+        "outTokP50": 144
+      },
+      {
+        "key": "agent_activity/compact",
+        "n": 20,
+        "ok": 20,
+        "inputKeys": [
+          "clientRequestId",
+          "project"
+        ],
+        "p50ms": 4.49,
+        "p95ms": 10.71,
+        "maxMs": 14.38,
+        "inTokP50": 14.25,
+        "outTokP50": 523.75
+      },
+      {
+        "key": "update_task/status",
+        "n": 20,
+        "ok": 20,
+        "inputKeys": [
+          "clientRequestId",
+          "status",
+          "taskId"
+        ],
+        "p50ms": 15.12,
+        "p95ms": 23.38,
+        "maxMs": 45.49,
+        "inTokP50": 24,
+        "outTokP50": 148.5
+      },
+      {
+        "key": "pipeline_action/routine",
+        "n": 20,
+        "ok": 20,
+        "inputKeys": [
+          "action",
+          "clientRequestId",
+          "pipelineId"
+        ],
+        "p50ms": 7.56,
+        "p95ms": 15.94,
+        "maxMs": 16.29,
+        "inTokP50": 18,
+        "outTokP50": 78.25
+      },
+      {
+        "key": "stage_report/forge-fast",
+        "n": 20,
+        "ok": 20,
+        "inputKeys": [
+          "clientRequestId",
+          "summary",
+          "verdict"
+        ],
+        "p50ms": 35.16,
+        "p95ms": 47.04,
+        "maxMs": 58.56,
+        "inTokP50": 18.5,
+        "outTokP50": 116
+      },
+      {
+        "key": "list_conversations/isolated-scan",
+        "n": 1,
+        "ok": 1,
+        "inputKeys": [
+          "limit",
+          "query"
+        ],
+        "p50ms": 63.58,
+        "p95ms": 63.58,
+        "maxMs": 63.58,
+        "inTokP50": 6.75,
+        "outTokP50": 195.75
+      },
+      {
+        "key": "stage_report/forge-delay1200",
+        "n": 3,
+        "ok": 3,
+        "inputKeys": [
+          "clientRequestId",
+          "summary",
+          "verdict"
+        ],
+        "p50ms": 37.46,
+        "p95ms": 50.26,
+        "maxMs": 50.26,
+        "inTokP50": 18.5,
+        "outTokP50": 116
+      },
+      {
+        "key": "get_pipeline/concurrent-forge1200",
+        "n": 3,
+        "ok": 3,
+        "inputKeys": [
+          "pipelineId",
+          "stageId"
+        ],
+        "p50ms": 38.68,
+        "p95ms": 50.87,
+        "maxMs": 50.87,
+        "inTokP50": 10.75,
+        "outTokP50": 202.75
+      },
+      {
+        "key": "stage_report/concurrent-forge1200",
+        "n": 3,
+        "ok": 3,
+        "inputKeys": [
+          "clientRequestId",
+          "summary",
+          "verdict"
+        ],
+        "p50ms": 39.31,
+        "p95ms": 51.71,
+        "maxMs": 51.71,
+        "inTokP50": 18.5,
+        "outTokP50": 116
+      },
+      {
+        "key": "pipeline_action/retry-remote-fast",
+        "n": 1,
+        "ok": 1,
+        "inputKeys": [
+          "action",
+          "clientRequestId",
+          "pipelineId"
+        ],
+        "p50ms": 27.44,
+        "p95ms": 27.44,
+        "maxMs": 27.44,
+        "inTokP50": 19.5,
+        "outTokP50": 168.75
+      },
+      {
+        "key": "pipeline_action/retry-remote1200",
+        "n": 2,
+        "ok": 2,
+        "inputKeys": [
+          "action",
+          "clientRequestId",
+          "pipelineId"
+        ],
+        "p50ms": 5.88,
+        "p95ms": 6.12,
+        "maxMs": 6.12,
+        "inTokP50": 19.5,
+        "outTokP50": 159
+      },
+      {
+        "key": "create_pipeline/draft-admission",
+        "n": 5,
+        "ok": 5,
+        "inputKeys": [
+          "autoStart",
+          "clientRequestId",
+          "repoDir",
+          "spec",
+          "stages",
+          "task"
+        ],
+        "p50ms": 29.39,
+        "p95ms": 74.87,
+        "maxMs": 74.87,
+        "inTokP50": 608.5,
+        "outTokP50": 280.75
+      },
+      {
+        "key": "request_attention/browser-arrival1200",
+        "n": 2,
+        "ok": 2,
+        "inputKeys": [
+          "clientRequestId",
+          "reason",
+          "target"
+        ],
+        "p50ms": 1262.76,
+        "p95ms": 1289.72,
+        "maxMs": 1289.72,
+        "inTokP50": 30,
+        "outTokP50": 326.5
+      }
+    ]
+  },
+  "faultRows": [
+    {
+      "side": "base",
+      "scenario": "memory-search",
+      "ms": 12.98,
+      "attempts": 1,
+      "ok": false,
+      "outputTokens": 89
+    },
+    {
+      "side": "base",
+      "scenario": "memory-search",
+      "ms": 4.83,
+      "attempts": 1,
+      "ok": false,
+      "outputTokens": 89
+    },
+    {
+      "side": "base",
+      "scenario": "memory-search",
+      "ms": 5.34,
+      "attempts": 1,
+      "ok": false,
+      "outputTokens": 89
+    },
+    {
+      "side": "base",
+      "scenario": "memory-open",
+      "ms": 2.8,
+      "attempts": 1,
+      "ok": false,
+      "outputTokens": 53.5
+    },
+    {
+      "side": "base",
+      "scenario": "memory-open",
+      "ms": 1.89,
+      "attempts": 1,
+      "ok": false,
+      "outputTokens": 53.5
+    },
+    {
+      "side": "base",
+      "scenario": "memory-open",
+      "ms": 1.33,
+      "attempts": 1,
+      "ok": false,
+      "outputTokens": 53.5
+    },
+    {
+      "side": "base",
+      "scenario": "transcript-search",
+      "ms": 2.23,
+      "attempts": 1,
+      "ok": false,
+      "outputTokens": 94.25
+    },
+    {
+      "side": "base",
+      "scenario": "transcript-search",
+      "ms": 1.32,
+      "attempts": 1,
+      "ok": false,
+      "outputTokens": 94.25
+    },
+    {
+      "side": "base",
+      "scenario": "transcript-search",
+      "ms": 1.7,
+      "attempts": 1,
+      "ok": false,
+      "outputTokens": 94.25
+    },
+    {
+      "side": "head",
+      "scenario": "memory-search",
+      "ms": 3.89,
+      "attempts": 1,
+      "ok": false,
+      "outputTokens": 89
+    },
+    {
+      "side": "head",
+      "scenario": "memory-search",
+      "ms": 5.25,
+      "attempts": 1,
+      "ok": false,
+      "outputTokens": 89
+    },
+    {
+      "side": "head",
+      "scenario": "memory-search",
+      "ms": 4.32,
+      "attempts": 1,
+      "ok": false,
+      "outputTokens": 89
+    },
+    {
+      "side": "head",
+      "scenario": "memory-open",
+      "ms": 3.2,
+      "attempts": 1,
+      "ok": false,
+      "outputTokens": 53.5
+    },
+    {
+      "side": "head",
+      "scenario": "memory-open",
+      "ms": 1.9,
+      "attempts": 1,
+      "ok": false,
+      "outputTokens": 53.5
+    },
+    {
+      "side": "head",
+      "scenario": "memory-open",
+      "ms": 1.65,
+      "attempts": 1,
+      "ok": false,
+      "outputTokens": 53.5
+    },
+    {
+      "side": "head",
+      "scenario": "transcript-search",
+      "ms": 3.62,
+      "attempts": 1,
+      "ok": false,
+      "outputTokens": 94.25
+    },
+    {
+      "side": "head",
+      "scenario": "transcript-search",
+      "ms": 14.2,
+      "attempts": 1,
+      "ok": false,
+      "outputTokens": 94.25
+    },
+    {
+      "side": "head",
+      "scenario": "transcript-search",
+      "ms": 3.73,
+      "attempts": 1,
+      "ok": false,
+      "outputTokens": 94.25
+    }
+  ],
+  "coldSeed": {
+    "transcripts": 2502,
+    "codexLongBytes": 104966491,
+    "claudeLongBytes": 31995879,
+    "samplesPerScenario": 5
+  },
+  "cold": {
+    "base": [
+      {
+        "key": "resources/no-observation",
+        "n": 5,
+        "ok": 5,
+        "pending": 0,
+        "p50ms": 3554.54,
+        "maxMs": 3682.24,
+        "outTokP50": 177.75
+      },
+      {
+        "key": "agent_activity/no-catalog",
+        "n": 5,
+        "ok": 5,
+        "pending": 0,
+        "p50ms": 3771.73,
+        "maxMs": 3866.66,
+        "outTokP50": 5711.5,
+        "rowsMin": 100
+      },
+      {
+        "key": "agent_activity/no-catalog-slow-hosts",
+        "n": 5,
+        "ok": 5,
+        "pending": 0,
+        "p50ms": 4379.77,
+        "maxMs": 5075.68,
+        "outTokP50": 5713.75,
+        "rowsMin": 100
+      },
+      {
+        "key": "get_conversation/claude-long",
+        "n": 5,
+        "ok": 5,
+        "pending": 0,
+        "p50ms": 351.48,
+        "maxMs": 381.59,
+        "outTokP50": 504007
+      },
+      {
+        "key": "get_conversation/codex-long",
+        "n": 5,
+        "ok": 5,
+        "pending": 0,
+        "p50ms": 327.43,
+        "maxMs": 352.59,
+        "outTokP50": 238564
+      },
+      {
+        "key": "get_conversation/claude-long-tail40",
+        "n": 5,
+        "ok": 5,
+        "pending": 0,
+        "p50ms": 21.03,
+        "maxMs": 25.1,
+        "outTokP50": 6590.25
+      },
+      {
+        "key": "get_conversation/codex-long-tail40",
+        "n": 5,
+        "ok": 5,
+        "pending": 0,
+        "p50ms": 28.46,
+        "maxMs": 43.87,
+        "outTokP50": 49428.25
+      },
+      {
+        "key": "get_conversation/claude-long-full",
+        "n": 5,
+        "ok": 5,
+        "pending": 0,
+        "p50ms": 337.04,
+        "maxMs": 405.24,
+        "outTokP50": 504007
+      },
+      {
+        "key": "conversation_messages/claude-long",
+        "n": 5,
+        "ok": 5,
+        "pending": 0,
+        "p50ms": 145.65,
+        "maxMs": 181.6,
+        "outTokP50": 1525.25
+      },
+      {
+        "key": "conversation_messages/codex-long",
+        "n": 5,
+        "ok": 5,
+        "pending": 0,
+        "p50ms": 148.13,
+        "maxMs": 153.76,
+        "outTokP50": 1697.75
+      },
+      {
+        "key": "conversation_messages/codex-long-capped-scan",
+        "n": 5,
+        "ok": 5,
+        "pending": 0,
+        "p50ms": 221.88,
+        "maxMs": 303.38,
+        "outTokP50": 3948.25
+      }
+    ],
+    "head": [
+      {
+        "key": "resources/no-observation",
+        "n": 5,
+        "ok": 5,
+        "pending": 0,
+        "p50ms": 352.51,
+        "maxMs": 475.23,
+        "outTokP50": 177.5
+      },
+      {
+        "key": "agent_activity/no-catalog",
+        "n": 5,
+        "ok": 5,
+        "pending": 5,
+        "p50ms": 683.38,
+        "maxMs": 686.08,
+        "outTokP50": 115.25,
+        "rowsMin": 0,
+        "worstFollowUpMs": 703.18,
+        "completeAfterP50ms": 3711.27
+      },
+      {
+        "key": "agent_activity/no-catalog-slow-hosts",
+        "n": 5,
+        "ok": 5,
+        "pending": 5,
+        "p50ms": 824.18,
+        "maxMs": 835.62,
+        "outTokP50": 297,
+        "rowsMin": 3,
+        "worstFollowUpMs": 843.2,
+        "completeAfterP50ms": 3415.25
+      },
+      {
+        "key": "get_conversation/claude-long",
+        "n": 5,
+        "ok": 5,
+        "pending": 0,
+        "p50ms": 320.42,
+        "maxMs": 385.19,
+        "outTokP50": 9847.5
+      },
+      {
+        "key": "get_conversation/codex-long",
+        "n": 5,
+        "ok": 5,
+        "pending": 0,
+        "p50ms": 317.11,
+        "maxMs": 332.1,
+        "outTokP50": 14448.5
+      },
+      {
+        "key": "get_conversation/claude-long-tail40",
+        "n": 5,
+        "ok": 5,
+        "pending": 0,
+        "p50ms": 31.46,
+        "maxMs": 46.19,
+        "outTokP50": 2817
+      },
+      {
+        "key": "get_conversation/codex-long-tail40",
+        "n": 5,
+        "ok": 5,
+        "pending": 0,
+        "p50ms": 23.71,
+        "maxMs": 31.64,
+        "outTokP50": 11220.5
+      },
+      {
+        "key": "get_conversation/claude-long-full",
+        "n": 5,
+        "ok": 5,
+        "pending": 0,
+        "p50ms": 326.4,
+        "maxMs": 371.59,
+        "outTokP50": 504007
+      },
+      {
+        "key": "conversation_messages/claude-long",
+        "n": 5,
+        "ok": 5,
+        "pending": 0,
+        "p50ms": 106.25,
+        "maxMs": 148.83,
+        "outTokP50": 1525.25
+      },
+      {
+        "key": "conversation_messages/codex-long",
+        "n": 5,
+        "ok": 5,
+        "pending": 0,
+        "p50ms": 99.28,
+        "maxMs": 150.68,
+        "outTokP50": 1697.75
+      },
+      {
+        "key": "conversation_messages/codex-long-capped-scan",
+        "n": 5,
+        "ok": 5,
+        "pending": 0,
+        "p50ms": 190.79,
+        "maxMs": 331.25,
+        "outTokP50": 3948.25
+      }
+    ]
+  }
+}

@@ -152,3 +152,9 @@ export function getStepLog(step: string): Response {
   const text = selfUpdateService().stepLog(step as CheckoutStepName);
   return new Response(text ?? "", { headers: { "content-type": "text/plain; charset=utf-8", ...noStore } });
 }
+
+export async function postInstallAction(request: NextRequest): Promise<NextResponse> {
+  const refused = operatorGate(request);
+  if (refused) return refused;
+  return answer(await selfUpdateService().performInstallAction());
+}

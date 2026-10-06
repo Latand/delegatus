@@ -29,13 +29,15 @@ function newKey(): string {
     : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function useClock(offset: number): number {
+function useClock(serverTime?: string): number {
   const [now, setNow] = useState(() => Date.now());
+  const [calibration, setCalibration] = useState({ serverTime, offset: 0 });
+  if (serverTime !== calibration.serverTime) setCalibration({ serverTime, offset: serverTime ? Date.parse(serverTime) - now : 0 });
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1_000);
     return () => clearInterval(id);
   }, []);
-  return now + offset;
+  return now + calibration.offset;
 }
 
 export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
@@ -48,20 +50,17 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
   const [pending, setPending] = useState<Set<string>>(() => new Set());
   const [error, setError] = useState<ActionError | null>(null);
   const [webRestart, setWebRestart] = useState<{ pid: number | null } | null>(null);
-  const firstWebPid = useRef<number | null | undefined>(undefined);
+  const [firstWebPid, setFirstWebPid] = useState<number | null | undefined>(undefined);
   const panelRef = useRef<HTMLDivElement>(null);
-  const offset = s ? Date.parse(s.meta.serverTime) - Date.now() : 0;
-  const now = useClock(Number.isFinite(offset) ? offset : 0);
+  const now = useClock(s?.meta.serverTime);
 
-  if (s && firstWebPid.current === undefined) firstWebPid.current = s.processes.web.pid;
+  if (s && firstWebPid === undefined) setFirstWebPid(s.processes.web.pid);
   if (s?.busy === "restart-runtime-host" && armed) setArmed(false);
 
   /* A web restart is over once a different web process answers healthy. */
   const web = s?.processes.web;
-  const replaced = Boolean(web && web.pid !== null && web.state === "healthy" && firstWebPid.current !== undefined && web.pid !== firstWebPid.current);
-  useEffect(() => {
-    if (webRestart && web && web.pid !== webRestart.pid && web.state === "healthy") setWebRestart(null);
-  }, [webRestart, web]);
+  const replaced = Boolean(web && web.pid !== null && web.state === "healthy" && firstWebPid !== undefined && web.pid !== firstWebPid);
+
 
   const act = useCallback(async (key: string, path: string, body?: unknown) => {
     setPending((value) => new Set(value).add(key));
@@ -89,11 +88,24 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
     }
   }, [feed]);
 
+  const confirmApply = () => {
+    const work = s?.resumeWork;
+    const lines = [t("selfUpdate.applyConfirm")];
+    if (work) {
+      lines.push(t("selfUpdate.auto.block.turns", { count: work.turns }), t("selfUpdate.auto.block.stages", { count: work.stages }));
+      lines.push(...(work.stageList ?? []).map(stage => `${stage.stageId} · ${stage.task}`));
+      lines.push(...(work.turnList ?? []).filter(turn => !turn.stage).map(turn => `${turn.engine} · ${turn.project ?? turn.conversationId.replace(/^conversation_/, "").slice(0, 12)}`));
+      if (work.unreadable) lines.push(t("selfUpdate.auto.block.unreadable", { detail: work.unreadable }));
+    }
+    return window.confirm(lines.join("\n"));
+  };
+
   const actions: ViewActions = {
+    installAction: () => { if (confirmApply()) void act("install-action", "/api/self-update/action"); },
     toggleAuto: () => { if (s?.auto) void act("auto", "/api/self-update/auto", { enabled: !s.auto.enabled }); },
     check: () => { void act("check", "/api/self-update/check"); },
-    update: () => { void act("update", "/api/self-update/update", { key: newKey() }); },
-    retry: () => { void act("update", "/api/self-update/update", { key: newKey(), retry: true }); },
+    update: () => { if (confirmApply()) void act("update", "/api/self-update/update", { key: newKey() }); },
+    retry: () => { if (confirmApply()) void act("update", "/api/self-update/update", { key: newKey(), retry: true }); },
     restartWeb: () => {
       const pid = s?.processes.web.pid ?? null;
       void act("restart-web", "/api/self-update/restart", { role: "web" }).then((ok) => { if (ok) setWebRestart({ pid }); });
