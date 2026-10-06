@@ -87,7 +87,7 @@
   "collapsedProposal": {
     "flagged": {
       "x": 836,
-      "y": 494,
+      "y": 492,
       "width": 56,
       "height": 56
     },
@@ -97,7 +97,7 @@
     "ended": {
       "block": {
         "x": 836,
-        "y": 494,
+        "y": 492,
         "width": 56,
         "height": 56
       },
@@ -105,7 +105,7 @@
     }
   },
   "withdrawn": {
-    "v1-en-light": {
+    "en-light": {
       "note": "left with its element",
       "dispatches": 0,
       "block": {
@@ -115,24 +115,24 @@
         "height": 148
       }
     },
-    "v2-uk-light": {
-      "note": "left with its element",
-      "dispatches": 0,
-      "block": {
-        "x": 760,
-        "y": 416,
-        "width": 132,
-        "height": 134
-      }
-    },
-    "v3-en-dark": {
+    "uk-light": {
       "note": "left with its element",
       "dispatches": 0,
       "block": {
         "x": 760,
         "y": 400,
         "width": 132,
-        "height": 150
+        "height": 148
+      }
+    },
+    "en-dark": {
+      "note": "left with its element",
+      "dispatches": 0,
+      "block": {
+        "x": 760,
+        "y": 400,
+        "width": 132,
+        "height": 148
       }
     }
   },
@@ -141,10 +141,10 @@
     "layout": "collapsed",
     "yielded": true,
     "block": {
-      "x": 1372,
-      "y": 832,
-      "width": 52,
-      "height": 52
+      "x": 1368,
+      "y": 828,
+      "width": 56,
+      "height": 56
     },
     "askedToOpen": "collapsed"
   }

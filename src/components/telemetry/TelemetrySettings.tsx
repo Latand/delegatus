@@ -4,11 +4,15 @@ import { Z } from "@/components/layers";
 import { useEffect, useState } from "react";
 import { useLocale } from "@/lib/i18n";
 import { MemorySetting } from "@/components/memory/MemorySetting";
+import { VoiceCompanionSetting } from "@/components/voiceCompanion/VoiceCompanionSetting";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import { telemetryNotice } from "../../../bin/telemetry-notice.mjs";
 export const openTelemetrySettings = () => window.dispatchEvent(new Event("delegatus:open-settings"));
 type Status = { enabled: boolean; locked: boolean; noticeDismissed: boolean };
 export function TelemetrySettingsHost({ project }: { project?: string }) {
   const { t, locale } = useLocale();
+  /* The voice companion is a desktop surface, so its rows are too. */
+  const phone = useIsMobile();
   const [status, setStatus] = useState<Status | null>(null);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -53,6 +57,7 @@ export function TelemetrySettingsHost({ project }: { project?: string }) {
         </label>}
         {status?.locked && <p className="mt-3 text-[13px] text-muted">{t("telemetry.locked")}</p>}
         {project && <MemorySetting project={project} />}
+        {phone ? null : <VoiceCompanionSetting />}
         {error && <p role="alert" className="mt-3 text-sm">{t("telemetry.error")}</p>}
       </section>
     </div>}

@@ -1,0 +1,208 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "fixture": "?scenario=voice-companion&mount=product",
+  "rule": "nothing is mounted until the switch in the settings dialog is on; the key is typed masked, sent once, cleared, and never present in the page afterwards; a key from the environment takes precedence and closes the field; the cap is kept with the month's usage beside it; the demo choice plays the simulator through the shell's own mount",
+  "note": "the settings routes are answered by the fixture from memory and the key is a made-up string; no provider, microphone or orchestrator is reached",
+  "cases": [
+    {
+      "viewport": "1440x900",
+      "lang": "en",
+      "scheme": "light",
+      "mountedBeforeEnable": 0,
+      "settingsWrites": [
+        {
+          "enabled": true
+        },
+        {
+          "monthlyCapUsd": 35
+        },
+        {
+          "backend": "demo"
+        },
+        {
+          "enabled": false
+        }
+      ],
+      "keyWrites": 1,
+      "keyEchoed": false,
+      "keyFieldAfterSave": "",
+      "keyStatus": "Key saved. It is written to a file only your account can read, never shown again, and sent only to OpenAI when a call starts.",
+      "dialog": {
+        "insideViewport": true,
+        "sectionWidth": 470,
+        "overflowsDialog": false,
+        "cut": []
+      },
+      "shellMount": {
+        "block": {
+          "x": 760,
+          "y": 400,
+          "width": 132,
+          "height": 148
+        },
+        "lane": {
+          "x": 470,
+          "y": 188,
+          "width": 280,
+          "height": 360
+        },
+        "overlapArea": 0,
+        "textUnderCharacter": 0
+      }
+    },
+    {
+      "viewport": "1000x800",
+      "lang": "uk",
+      "scheme": "dark",
+      "mountedBeforeEnable": 0,
+      "settingsWrites": [
+        {
+          "enabled": true
+        },
+        {
+          "monthlyCapUsd": 35
+        },
+        {
+          "backend": "demo"
+        },
+        {
+          "enabled": false
+        }
+      ],
+      "keyWrites": 1,
+      "keyEchoed": false,
+      "keyFieldAfterSave": "",
+      "keyStatus": "Ключ збережено. Він записується у файл, який читає лише ваш обліковий запис, більше ніде не показується й надсилається тільки в OpenAI на початку розмови.",
+      "dialog": {
+        "insideViewport": true,
+        "sectionWidth": 470,
+        "overflowsDialog": false,
+        "cut": []
+      },
+      "shellMount": {
+        "block": {
+          "x": 576,
+          "y": 400,
+          "width": 132,
+          "height": 148
+        },
+        "lane": {
+          "x": 286,
+          "y": 188,
+          "width": 280,
+          "height": 360
+        },
+        "overlapArea": 0,
+        "textUnderCharacter": 0
+      }
+    },
+    {
+      "viewport": "1440x900",
+      "lang": "uk",
+      "scheme": "light",
+      "mountedBeforeEnable": 0,
+      "settingsWrites": [
+        {
+          "enabled": true
+        },
+        {
+          "monthlyCapUsd": 35
+        },
+        {
+          "backend": "demo"
+        },
+        {
+          "enabled": false
+        }
+      ],
+      "keyWrites": 1,
+      "keyEchoed": false,
+      "keyFieldAfterSave": "",
+      "keyStatus": "Ключ збережено. Він записується у файл, який читає лише ваш обліковий запис, більше ніде не показується й надсилається тільки в OpenAI на початку розмови.",
+      "dialog": {
+        "insideViewport": true,
+        "sectionWidth": 470,
+        "overflowsDialog": false,
+        "cut": []
+      },
+      "shellMount": {
+        "block": {
+          "x": 760,
+          "y": 400,
+          "width": 132,
+          "height": 148
+        },
+        "lane": {
+          "x": 470,
+          "y": 188,
+          "width": 280,
+          "height": 360
+        },
+        "overlapArea": 0,
+        "textUnderCharacter": 0
+      }
+    },
+    {
+      "viewport": "1000x800",
+      "lang": "en",
+      "scheme": "dark",
+      "mountedBeforeEnable": 0,
+      "settingsWrites": [
+        {
+          "enabled": true
+        },
+        {
+          "monthlyCapUsd": 35
+        },
+        {
+          "backend": "demo"
+        },
+        {
+          "enabled": false
+        }
+      ],
+      "keyWrites": 1,
+      "keyEchoed": false,
+      "keyFieldAfterSave": "",
+      "keyStatus": "Key saved. It is written to a file only your account can read, never shown again, and sent only to OpenAI when a call starts.",
+      "dialog": {
+        "insideViewport": true,
+        "sectionWidth": 470,
+        "overflowsDialog": false,
+        "cut": []
+      },
+      "shellMount": {
+        "block": {
+          "x": 632,
+          "y": 400,
+          "width": 132,
+          "height": 148
+        },
+        "lane": {
+          "x": 342,
+          "y": 188,
+          "width": 280,
+          "height": 360
+        },
+        "overlapArea": 0,
+        "textUnderCharacter": 0
+      }
+    },
+    {
+      "lang": "en",
+      "realBackendWithoutKey": "refused in the lane with the way to the settings; no start attempted"
+    },
+    {
+      "lang": "en",
+      "environmentKey": "said to take precedence; the field and Save are disabled"
+    },
+    {
+      "lang": "uk",
+      "realBackendWithoutKey": "refused in the lane with the way to the settings; no start attempted"
+    },
+    {
+      "lang": "uk",
+      "environmentKey": "said to take precedence; the field and Save are disabled"
+    }
+  ]
+}

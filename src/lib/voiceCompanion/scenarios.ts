@@ -4,13 +4,17 @@ import type { ScriptStep } from "./simulator";
 /**
  * The scripted scenarios of the simulated companion (#2519, design note §9).
  * Each is one selectable script on the same event contract; the fixture picks
- * one with `&script=<name>`. The first eight are the operator's list; the last
- * two exist for the browser driver (a quick way to the proposal, and a fill of
- * speech and calls for the edge readings).
+ * one with `&script=<name>`. The first eight are the operator's list. The next
+ * three came with the read-only board tools (operator amendment 2026-10-06): a
+ * question about the board answered from one read call, from several, and a
+ * long spoken answer after one, none of which delegates. Every call carries a
+ * name from the tool registry (`tools.ts`). `demo` is what the product's demo
+ * choice plays; the rest exist for the browser driver (a quick way to the
+ * proposal, a fill of speech and calls for the edge readings, a withdrawal).
  */
 
-export const SCENARIOS = ["short", "three", "paragraph", "long", "many", "burst", "delegation", "interrupt"] as const;
-export const DRIVER_SCENARIOS = ["proposal", "edge", "withdraw"] as const;
+export const SCENARIOS = ["short", "three", "paragraph", "long", "many", "burst", "delegation", "interrupt", "read", "reads", "readLong"] as const;
+export const DRIVER_SCENARIOS = ["proposal", "edge", "withdraw", "demo", "demoNoSeat", "readThenAsk", "unconfirmed"] as const;
 export type ScenarioName = (typeof SCENARIOS)[number] | (typeof DRIVER_SCENARIOS)[number];
 
 export const isScenario = (value: unknown): value is ScenarioName =>
@@ -26,12 +30,25 @@ const TEXT = {
     burstAsk: "What's on the board right now?",
     burstLook: "Let me look.",
     burstCalls: [
-      ["board_snapshot", "Open tasks on the board", "14 open tasks, 3 lanes running"],
-      ["list_pipelines", "Open pipelines", "3 open: search, billing, export"],
-      ["deployment_status", "This machine's deploy", "main deployed at 12:04"],
-      ["account_limits", "Account usage windows", "rate limited, retry in a minute"],
+      ["list_tasks", "Tasks on the board", "14 tasks: 3 in the inbox, 7 in progress, 4 done"],
+      ["list_pipelines", "Pipelines and their stages", "3 open: search, billing, export"],
+      ["agent_activity", "Who is running now", "4 agents working, 1 waiting for you"],
+      ["conversation_messages", "The reviewer's recent messages", "that conversation could not be read"],
     ],
-    burstSummary: "Fourteen open tasks and three lanes running. Main went out at noon. I couldn't read the account limits; I'll try again in a minute.",
+    burstSummary: "Fourteen tasks and three pipelines open, with four agents working. I couldn't read the reviewer's conversation; I'll try again in a minute.",
+    readAsk: "How many tasks are in progress?",
+    readCall: ["list_tasks", "Tasks on the board", "14 tasks: 3 in the inbox, 7 in progress, 4 done"],
+    readAnswer: "Seven are in progress, three wait in the inbox and four are done.",
+    readsAsk: "Where does the search lane stand, and what did the reviewer say?",
+    readsCalls: [
+      ["list_pipelines", "Pipelines and their stages", "3 open: search, billing, export"],
+      ["get_pipeline", "The search pipeline", "review passed on round two; waiting for the merge"],
+      ["conversation_messages", "The reviewer's recent messages", "approved, with one note about the retry test"],
+    ],
+    readsAnswer: "Search passed its review on the second round and is waiting for the merge. The reviewer approved it with one note: the retry test should cover a timeout.",
+    readLongAsk: "Walk me through everything that's running.",
+    readLongCall: ["agent_activity", "Who is running now", "4 agents working, 1 waiting for you"],
+    readLongAnswer: "Four agents are working, and one is waiting for you. First, the search builder is on its second fix round and has two findings left, both about the retry test. Second, the export reviewer is reading the presets change and has asked nothing so far. Third, the billing migration is paused until the outside audit confirms the reconciliation, so nothing moves there today. Fourth, the release notes agent is collecting the merged changes since this morning. The one waiting for you is the account lock fix: it asks which of two anchors should win. That is the short version. Tell me which one you want in detail.",
     hello: "Hi Delegatus. Are you there?",
     here: "I'm here. What's on your mind?",
     idea: "I'm thinking about folding the export toggles into three presets. Does that sound sane?",
@@ -59,12 +76,25 @@ const TEXT = {
     burstAsk: "Що зараз на дошці?",
     burstLook: "Зараз подивлюся.",
     burstCalls: [
-      ["board_snapshot", "Відкриті задачі на дошці", "14 відкритих задач, 3 смуги в роботі"],
-      ["list_pipelines", "Відкриті пайплайни", "3 відкриті: пошук, платежі, експорт"],
-      ["deployment_status", "Деплой цієї машини", "main розгорнуто о 12:04"],
-      ["account_limits", "Вікна використання акаунтів", "ліміт запитів, повтор за хвилину"],
+      ["list_tasks", "Задачі на дошці", "14 задач: 3 у вхідних, 7 у роботі, 4 готові"],
+      ["list_pipelines", "Пайплайни та їхні етапи", "3 відкриті: пошук, платежі, експорт"],
+      ["agent_activity", "Хто зараз працює", "4 агенти працюють, 1 чекає на вас"],
+      ["conversation_messages", "Останні повідомлення рев’юера", "цю розмову не вдалося прочитати"],
     ],
-    burstSummary: "Чотирнадцять відкритих задач і три смуги в роботі. Main вийшов опівдні. Ліміти акаунтів прочитати не вдалося; спробую ще раз за хвилину.",
+    burstSummary: "Відкрито чотирнадцять задач і три пайплайни, працюють чотири агенти. Розмову рев’юера прочитати не вдалося; спробую ще раз за хвилину.",
+    readAsk: "Скільки задач зараз у роботі?",
+    readCall: ["list_tasks", "Задачі на дошці", "14 задач: 3 у вхідних, 7 у роботі, 4 готові"],
+    readAnswer: "У роботі сім, три чекають у вхідних і чотири готові.",
+    readsAsk: "Що зі смугою пошуку і що сказав рев’юер?",
+    readsCalls: [
+      ["list_pipelines", "Пайплайни та їхні етапи", "3 відкриті: пошук, платежі, експорт"],
+      ["get_pipeline", "Пайплайн пошуку", "рев’ю пройдено з другого кола; чекає на злиття"],
+      ["conversation_messages", "Останні повідомлення рев’юера", "схвалено, з однією приміткою про тест повтору"],
+    ],
+    readsAnswer: "Пошук пройшов рев’ю з другого кола й чекає на злиття. Рев’юер схвалив його з однією приміткою: тест повтору має покривати тайм-аут.",
+    readLongAsk: "Розкажи про все, що зараз працює.",
+    readLongCall: ["agent_activity", "Хто зараз працює", "4 агенти працюють, 1 чекає на вас"],
+    readLongAnswer: "Працюють чотири агенти, і один чекає на вас. Перше: будівник пошуку на другому колі виправлень, лишилося два зауваження, обидва про тест повтору. Друге: рев’юер експорту читає зміну пресетів і поки нічого не питав. Третє: міграція платежів стоїть, доки зовнішній аудит не підтвердить звірку, тож сьогодні там нічого не зрушить. Четверте: агент нотаток релізу збирає злиті від ранку зміни. На вас чекає виправлення блокування акаунта: воно питає, який із двох якорів має перемогти. Це коротка версія. Скажіть, про що розповісти докладніше.",
     hello: "Привіт, Делегатусе. Ти тут?",
     here: "Я тут. Що в тебе на думці?",
     idea: "Думаю згорнути перемикачі експорту в три пресети. Звучить розумно?",
@@ -107,6 +137,15 @@ const companion = (n: number | string, text: string, extra: Partial<Extract<Scri
   ({ kind: "companion", itemId: `item_co_${n}`, responseId: `resp_${n}`, text, ...extra });
 const operator = (n: number | string, text: string): ScriptStep => ({ kind: "operator", itemId: `item_op_${n}`, text });
 const pause = (ms: number): ScriptStep => ({ kind: "pause", ms });
+type CallText = readonly [name: string, summary: string, result: string];
+/** Read-only calls started together; each finishes on its own time. */
+const reads = (prefix: string, calls: readonly CallText[], durations: readonly number[], failing = -1): ScriptStep => ({
+  kind: "tools",
+  calls: calls.map(([name, summary, result], index) => ({
+    callId: `call_${prefix}_${index + 1}`, name, summary, result,
+    durationMs: durations[index] ?? durations.at(-1)!, outcome: index === failing ? "failed" as const : "done" as const,
+  })),
+});
 
 function delegationSteps(locale: Locale): ScriptStep[] {
   const t = TEXT[locale];
@@ -142,11 +181,31 @@ export function scenarioScript(name: ScenarioName, locale: Locale): ScriptStep[]
     case "burst":
       return [
         pause(400), operator(1, t.burstAsk), companion(1, t.burstLook),
-        { kind: "tools", calls: t.burstCalls.map(([name, summary, result], index) => ({
-          callId: `call_read_${index + 1}`, name, summary, result,
-          durationMs: [900, 1300, 700, 1600][index]!, outcome: index === 3 ? "failed" as const : "done" as const,
-        })) },
+        reads("read", t.burstCalls, [900, 1300, 700, 1600], 3),
         companion(2, t.burstSummary),
+      ];
+    /* A question about the board, answered from one read call. Nothing is delegated. */
+    case "read":
+      return [pause(400), operator(1, t.readAsk), reads("one", [t.readCall], [1100]), companion(1, t.readAnswer)];
+    /* The same from several read calls. */
+    case "reads":
+      return [pause(400), operator(1, t.readsAsk), reads("some", t.readsCalls, [800, 1500, 1900]), companion(1, t.readsAnswer)];
+    /* A long spoken answer after one read call: the pace and the split into bubbles can be watched. */
+    case "readLong":
+      return [pause(400), operator(1, t.readLongAsk), reads("long", [t.readLongCall], [1200]), companion(1, t.readLongAnswer)];
+    /* The product's demo choice: a greeting, a board question answered from a read call, then a delegation
+       the operator confirms. With no orchestrator seat the demo stops before the delegation. */
+    case "demo":
+      return [
+        pause(500), operator(1, t.hello), companion(1, t.here), pause(400),
+        operator("read", t.readAsk), reads("demo", [t.readCall], [1100]), companion("read", t.readAnswer), pause(500),
+        ...delegationSteps(locale),
+      ];
+    case "demoNoSeat":
+      return [
+        pause(500), operator(1, t.hello), companion(1, t.here), pause(400),
+        operator("read", t.readAsk), reads("demo", [t.readCall], [1100]), companion("read", t.readAnswer), pause(500),
+        operator("long", t.readLongAsk), reads("demolong", [t.readLongCall], [1200]), companion("long", t.readLongAnswer),
       ];
     case "delegation":
       return [
@@ -173,10 +232,28 @@ export function scenarioScript(name: ScenarioName, locale: Locale): ScriptStep[]
         { kind: "confirm", clientMessageId: DEMO_IDS.clientMessageId, operationId: DEMO_IDS.operationId, settleAfterMs: 1100, cancelled: [] },
         companion("dropped", t.dropped),
       ];
+    /* A read call and the proposal in the lane together, so the two kinds of card can be compared side by side. */
+    case "readThenAsk":
+      return [
+        pause(300),
+        { kind: "operator", itemId: DEMO_IDS.askItem, text: t.ask },
+        reads("ask", [t.readCall], [700]),
+        { kind: "propose", callId: DEMO_IDS.callId, proposalId: DEMO_IDS.proposalId, sourceItemId: DEMO_IDS.askItem, instruction: t.instruction },
+        { kind: "confirm", clientMessageId: DEMO_IDS.clientMessageId, operationId: DEMO_IDS.operationId, settleAfterMs: 1100, cancelled: [] },
+      ];
+    /* The send's outcome stays unknown: the card says the delivery is not confirmed, and no answer is claimed. */
+    case "unconfirmed":
+      return [
+        pause(300),
+        { kind: "operator", itemId: DEMO_IDS.askItem, text: t.ask },
+        { kind: "propose", callId: DEMO_IDS.callId, proposalId: DEMO_IDS.proposalId, sourceItemId: DEMO_IDS.askItem, instruction: t.instruction },
+        { kind: "confirm", clientMessageId: DEMO_IDS.clientMessageId, operationId: DEMO_IDS.operationId, settleAfterMs: 1100, cancelled: [], unconfirmed: true },
+        { kind: "answer", reportId: DEMO_IDS.reportId, status: "result", text: t.answer, afterMs: 600 },
+      ];
     case "edge":
       return [
         pause(300), companion(1, t.three[0]), companion(2, t.three[1]),
-        { kind: "tools", calls: t.burstCalls.slice(0, 2).map(([name, summary, result], index) => ({ callId: `call_edge_${index + 1}`, name, summary, result, durationMs: 1_400 + index * 300, outcome: "done" as const })) },
+        reads("edge", t.burstCalls.slice(0, 2), [1_400, 1_700]),
         companion(3, t.three[2]), companion(4, t.short),
       ];
   }

@@ -12,6 +12,9 @@ const messages = {
   DELIVERY_UNCONFIRMED: ["Delivery is unconfirmed. Recover the original send before retrying.", "Доставку не підтверджено. Перевірте початкове надсилання перед повтором."],
   REPLY_PENDING: ["Waiting for an orchestrator reply tied to this request.", "Чекаємо на відповідь оркестратора, пов’язану з цим запитом."],
   INPUT_UNPROVEN: ["Finish the request before confirming a delegation.", "Завершіть запит, перш ніж підтверджувати делегацію."],
+  INVALID_KEY: ["That does not look like an API key. Paste it again.", "Це не схоже на ключ API. Вставте його ще раз."],
+  INVALID_SETTINGS: ["That value cannot be saved.", "Це значення не вдається зберегти."],
+  NO_PROJECT: ["Open a project to talk about its work.", "Відкрийте проєкт, щоб говорити про його роботу."],
   COMPANION_UNAVAILABLE: ["Voice Delegatus is unavailable. Try again.", "Голосовий Делегатус недоступний. Спробуйте ще раз."],
 } as const;
 export function companionErrorMessage(code: string, locale: Locale): string {

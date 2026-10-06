@@ -52,6 +52,7 @@ import { ExternalRelaySettingsHost } from "./externalRelay/ExternalRelaySettings
 import { VoiceBridgeRelayHost } from "./voice/VoiceBridgeRelayHost";
 import { VoiceComposerHost } from "./voice/VoiceComposerHost";
 import { VoicePipHost } from "./voice/VoicePipHost";
+import { VoiceCompanionHost } from "./voiceCompanion/VoiceCompanionHost";
 import { focusHandoffBus } from "./attention/focusHandoffBus";
 import { expandKanbanSeat } from "./kanban/kanbanSeatStore";
 import { ConnectionPill } from "./ConnectionPill";
@@ -1837,6 +1838,10 @@ function ViewerApp() {
           Cards publish a place; the composer's lifetimes (dictation, attachment
           object URLs, outbox) live here and survive the card unmounting mid-call. */}
       <VoiceComposerHost files={allFiles} />
+      {/* #2519: the floating voice companion. Desktop only, and nothing is mounted
+          until the operator turns it on in the settings. It talks about the project
+          in view; a tap on Talk is the only thing that starts a conversation. */}
+      <VoiceCompanionHost project={project === OVERVIEW ? null : project} mobile={isMobile} />
       {/* Staging instances (#659) announce themselves on every device; prod
           renders nothing. Top-center, clear of both corner anchors. */}
       <StagingBadge />

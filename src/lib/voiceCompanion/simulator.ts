@@ -54,7 +54,9 @@ export type ScriptStep =
   | { kind: "propose"; callId: Id; proposalId: Id; sourceItemId: Id; instruction: string }
   /** Waits for the `confirmation` command. Send continues the script; cancel
       plays `cancelled` and ends it. A refused proposal skips this step. */
-  | { kind: "confirm"; clientMessageId: Id; operationId: Id; settleAfterMs: number; cancelled: ScriptStep[] }
+  | { kind: "confirm"; clientMessageId: Id; operationId: Id; settleAfterMs: number; cancelled: ScriptStep[];
+      /** The send's outcome stays unknown: no receipt names its operation, nothing settles and no answer can join it. */
+      unconfirmed?: boolean }
   | { kind: "answer"; reportId: Id; status: "progress" | "result" | "question" | "blocked"; text: string; afterMs: number };
 
 export interface SimulatorOptions {
@@ -283,9 +285,14 @@ export function createSimulatedCompanion(options: SimulatorOptions): SimulatedCo
           emit({ type: "delegation.tool.result", callId: proposal.callId, proposalId: proposal.proposalId, result: { status: "cancelled", code: admission.reason } });
           continue;
         }
-        delivery = { proposalId: proposal.proposalId, callId: proposal.callId, clientMessageId: step.clientMessageId, operationId: step.operationId, recipient: proposal.recipient };
+        delivery = { proposalId: proposal.proposalId, callId: proposal.callId, clientMessageId: step.clientMessageId, operationId: step.unconfirmed ? null : step.operationId, recipient: proposal.recipient };
         /* The single send, after the confirmation and nowhere else. */
         options.dispatch?.(delivery, proposal.instruction);
+        if (step.unconfirmed) {
+          emit({ type: "delegation.tool.result", callId: proposal.callId, proposalId: proposal.proposalId, result: { status: "unknown", delivery } });
+          delivery = null;
+          continue;
+        }
         emit({ type: "delegation.tool.result", callId: proposal.callId, proposalId: proposal.proposalId, result: { status: "queued", delivery } });
         await clock.sleep(step.settleAfterMs);
         if (gone(mine)) return;

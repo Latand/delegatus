@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
+import { READ_TOOL_NAMES } from "./boardReads";
 import type { CompanionEvent, Delivery, Payload, Recipient } from "./contract";
 import { admitDelegationProposal, explicitDelegationRequest } from "./gate";
 import { bezierProgress, bezierSlope, maxFrameShare, riseCurve, RISE_FRAME_SHARE, RISE_FROM_REST, RISE_IN_FLIGHT, RISE_MS } from "./motion";
@@ -468,11 +469,22 @@ describe("every scenario plays out on the contract", () => {
       expect(run.state().phase).toBe("idle");
       for (const event of run.events) if (event.type === "playback.level") { expect(event.rms).toBeGreaterThanOrEqual(0); expect(event.rms).toBeLessThanOrEqual(1); }
       if (name === "burst") {
-        expect(run.state().calls.map((call) => [call.name, call.status])).toEqual([["board_snapshot", "done"], ["list_pipelines", "done"], ["deployment_status", "done"], ["account_limits", "failed"]]);
+        for (const call of run.state().calls) expect(READ_TOOL_NAMES as readonly string[]).toContain(call.name);
+        expect(run.state().calls.map((call) => [call.name, call.status])).toEqual([["list_tasks", "done"], ["list_pipelines", "done"], ["agent_activity", "done"], ["conversation_messages", "failed"]]);
         /* All four are running at once before the first one finishes. */
         const firstResult = run.events.findIndex((event) => event.type === "tool.result");
         expect(run.events.slice(0, firstResult).filter((event) => event.type === "tool.called").length).toBe(4);
       }
+      /* A question about the board is answered from read calls with real registry names, and never delegates. */
+      if (name === "read" || name === "reads" || name === "readLong") {
+        const calls = run.state().calls;
+        expect(calls.length).toBe(name === "reads" ? 3 : 1);
+        for (const call of calls) { expect(READ_TOOL_NAMES as readonly string[]).toContain(call.name); expect(call.status).toBe("done"); }
+        expect(run.events.some((event) => event.type.startsWith("delegation."))).toBe(false);
+        const answered = run.events.findIndex((event) => event.type === "response.started");
+        expect(run.events.findLastIndex((event) => event.type === "tool.result")).toBeLessThan(answered);
+      }
+      if (name === "readLong") expect(splitSpeech(run.state().lines.at(-1)!.text).length).toBeGreaterThan(4);
       if (name === "many") expect(run.state().lines.length).toBe(10);
       /* The very long answer needs more bubbles than the four shown at once, so older ones must leave. */
       if (name === "long") expect(splitSpeech(run.state().lines[0]!.text).length).toBeGreaterThan(4);
@@ -795,7 +807,7 @@ describe("geometry", () => {
       "Смуга пошуку пройшла рев’ю з другого кола й чекає пакетного злиття, яке запускається що двадцять хвилин,",
     ]);
     const closers = /(?:^|\s)(?:a|an|the|of|to|in|on|and|or|but|that|which|nothing|і|й|та|а|але|що|яке|який|в|у|на|з|до|не)$/iu;
-    for (const locale of ["en", "uk"] as const) for (const key of ["long", "paragraph", "longPlan", "opinion", "burstSummary", "explain"] as const) {
+    for (const locale of ["en", "uk"] as const) for (const key of ["long", "paragraph", "longPlan", "opinion", "burstSummary", "explain", "readsAnswer", "readLongAnswer"] as const) {
       const text = scenarioText(locale)[key];
       const chunks = splitSpeech(text);
       expect(chunks.join(" "), `${locale} ${key}`).toBe(text);
@@ -814,7 +826,7 @@ describe("geometry", () => {
   });
 
   test("a streaming line's bubbles only ever gain words: none gives a word back, and the finished line is split as before", () => {
-    for (const locale of ["en", "uk"] as const) for (const key of ["long", "paragraph", "longPlan", "opinion", "burstSummary", "explain"] as const) {
+    for (const locale of ["en", "uk"] as const) for (const key of ["long", "paragraph", "longPlan", "opinion", "burstSummary", "explain", "readsAnswer", "readLongAnswer"] as const) {
       const text = scenarioText(locale)[key];
       const words = text.match(/\S+\s*/gu)!;
       let shown: string[] = [];

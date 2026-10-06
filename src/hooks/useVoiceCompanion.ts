@@ -28,6 +28,57 @@ function receive(previous: Snapshot, action: Action): Snapshot {
     retired: new Set([...previous.retired, ...(previous.sessionId ? [previous.sessionId] : [])]), state: reduceCompanion(INITIAL_COMPANION_STATE, event) };
 }
 
+export interface CompanionStore {
+  get(): CompanionState;
+  /** A start was asked for and its session is not ready yet: what the state still holds belongs to the one before. */
+  awaiting(): boolean;
+  /** Called when anything but a level sample changed. */
+  subscribe(listener: () => void): () => void;
+  /** Called for every change of the mouth level or the played time: one transform per sample, no render. */
+  onLevel(listener: (state: CompanionState) => void): () => void;
+  /** Subscribes to the adapter; the returned function releases its microphone, transport and delivery observer. */
+  connect(): () => void;
+  start(options: { locale: Locale; project: string }): Promise<void>;
+  command(command: CompanionCommand): Promise<void>;
+  stop(): Promise<void>;
+  refresh(): Promise<void>;
+}
+
+/** The same session rules as the hook below, outside React: the floating companion reads this, so a
+ * played-audio level sample moves the mouth without rendering the component sixty times a second. */
+export function createCompanionStore(adapter: VoiceCompanionAdapter): CompanionStore {
+  let snapshot = initial;
+  const views = new Set<() => void>();
+  const levels = new Set<(state: CompanionState) => void>();
+  const apply = (action: Action) => {
+    const before = snapshot.state;
+    snapshot = receive(snapshot, action);
+    const state = snapshot.state;
+    if (state === before) return;
+    if (state.mouth !== before.mouth || state.playedMs !== before.playedMs) for (const listener of [...levels]) listener(state);
+    if (state.revision !== before.revision || state.generation !== before.generation) for (const listener of [...views]) listener();
+  };
+  return {
+    get: () => snapshot.state,
+    awaiting: () => snapshot.awaitingReady,
+    subscribe: (listener) => { views.add(listener); return () => { views.delete(listener); }; },
+    onLevel: (listener) => { levels.add(listener); return () => { levels.delete(listener); }; },
+    connect: () => {
+      let active = true;
+      const unsubscribe = adapter.subscribe((event) => { if (active) apply({ type: "event", adapter, event }); });
+      return () => { active = false; unsubscribe(); void (adapter.dispose?.() ?? adapter.close()).catch(() => undefined); };
+    },
+    start: async (options) => {
+      apply({ type: "start", adapter });
+      try { await adapter.start(options); }
+      catch (error) { apply({ type: "failed-start", adapter }); throw error; }
+    },
+    command: (value) => adapter.command(value),
+    stop: () => adapter.close(),
+    refresh: () => adapter.refresh?.() ?? Promise.resolve(),
+  };
+}
+
 /** The view supplies a stable adapter. Only an explicit start action opens
  * a session; closing the view releases the adapter's microphone and transport. */
 export function useVoiceCompanion(adapter: VoiceCompanionAdapter): VoiceCompanionHook {

@@ -11,7 +11,8 @@ import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
 import { ROLE_VARIANT_DEFAULTS } from "@/lib/roles/paramConfig";
 import { RuntimePill } from "@/components/RuntimePill";
 import { createRoot } from "react-dom/client";
-import { VoiceCompanion, type CompanionVariant } from "@/components/voiceCompanion/VoiceCompanion";
+import { COMPANION_PROTECT, COMPANION_ROWS, companionReserved } from "@/components/voiceCompanion/hostSurfaces";
+import { VoiceCompanion } from "@/components/voiceCompanion/VoiceCompanion";
 import type { CompanionEvent } from "@/lib/voiceCompanion/contract";
 import { DEMO_IDS, demoAnswer, demoInstruction, isScenario, scenarioScript } from "@/lib/voiceCompanion/scenarios";
 import { createSimulatedCompanion } from "@/lib/voiceCompanion/simulator";
@@ -106,15 +107,27 @@ const STREAMING = new URLSearchParams(location.search).get("streaming") === "1";
 /* The first-message scenario: a new agent's or seat's first message from the first paint to the transcript. */
 const FIRST_MESSAGE = SCENARIO === "first-message";
 const FEED_CONTINUITY = SCENARIO === "feed-continuity";
-/* The floating voice companion (#2519, docs/design/voice-companion-research.md §9): the default board with the
-   character over it, driven by the simulator on the shared event contract. `&script=<scenario>` picks the scripted
-   scenario (delegation by default), `&variant=1|2|3` the numbered variant, `&collapsed=1` starts it as its small
-   shape, `&delivered=1` opens with the delegated message and the orchestrator's answer already in the seat's
+/* The floating voice companion (#2519, docs/design/voice-companion-research.md §9, §10): the default board with the
+   character over it in its one final look, driven by the simulator on the shared event contract.
+   `&script=<scenario>` picks the scripted scenario (delegation by default), `&collapsed=1` starts it as its small
+   tile, `&delivered=1` opens with the delegated message and the orchestrator's answer already in the seat's
    conversation, `&engine=codex` seats a Codex orchestrator, `&surface=underlay` replaces the board with a field of
    plain click-counting cells (no controls), where the character can be taken to any edge, and `&surface=buttons`
-   with small real buttons every 100 px, where no lane fits. Desktop only. */
+   with small real buttons every 100 px, where no lane fits. `&failure=<code>` makes Talk refuse with that failure,
+   as the product does for a missing key or a reached cap, and `&seat=none` says the project has no orchestrator.
+   `&mount=product` leaves the companion to the shell's own mount: the fixture answers the settings routes from
+   memory (off by default; `&usage=<usd>` and `&keysource=env|file|missing` set what they report) and the
+   driver turns the companion on through the settings dialog. Desktop only. */
 const VOICE = SCENARIO === "voice-companion";
-const voice = { delivered: new URLSearchParams(location.search).get("delivered") === "1", answered: new URLSearchParams(location.search).get("delivered") === "1", dispatches: 0, finished: false, events: [] as CompanionEvent[] };
+const VOICE_PRODUCT = VOICE && new URLSearchParams(location.search).get("mount") === "product";
+const voice = { delivered: new URLSearchParams(location.search).get("delivered") === "1", answered: new URLSearchParams(location.search).get("delivered") === "1", dispatches: 0, finished: false, events: [] as CompanionEvent[],
+  /* What the settings routes were asked to write. The key itself is never kept: its length is all the driver needs. */
+  settingsWrites: [] as Array<Record<string, unknown>>, keyWrites: [] as number[], settingsOpened: 0 };
+const voiceSettings = {
+  enabled: false, backend: "official-realtime" as "official-realtime" | "demo", monthlyCapUsd: 20,
+  keySource: (new URLSearchParams(location.search).get("keysource") ?? "missing") as "env" | "file" | "missing", keyEnvironment: "OPENAI_API_KEY" as const,
+  month: "2026-10", usageUsd: Number(new URLSearchParams(location.search).get("usage") ?? 0), reservedUsd: 0, incomplete: false,
+};
 const VOICE_RELAY_UUID = "engine_message_voice_delegation";
 const VOICE_INTERNAL_UUID = "engine_message_reviewer_relay";
 const voiceInternalText = () => L("Review of the retry banner is done: approved on the fifth pass.", "Рев’ю банера повтору завершено: схвалено з п’ятого проходу.");
@@ -3039,6 +3052,20 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
      delivery's owner when it admits the send. The feed reads provenance only once a row it cannot name is
      shown, and until that read answers it draws such a record as a system fold across the whole row: answered
      late, the delegated row flashed as a fold before it took its tint. */
+  if (VOICE && url.pathname === "/api/voice-companion/settings") {
+    if (method === "PUT") { const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>; voice.settingsWrites.push(body); Object.assign(voiceSettings, body); }
+    return json(voiceSettings);
+  }
+  if (VOICE && url.pathname === "/api/voice-companion/key" && method === "PUT") {
+    if (voiceSettings.keySource === "env") return json({ code: "KEY_FROM_ENV" }, 409);
+    const key = String((JSON.parse(String(init?.body ?? "{}")) as { key?: unknown }).key ?? "");
+    if (!key.trim() || /\s/u.test(key.trim())) return json({ code: "INVALID_KEY" }, 400);
+    voice.keyWrites.push(key.length);
+    voiceSettings.keySource = "file";
+    return json(voiceSettings);
+  }
+  if (VOICE && url.pathname === "/api/telemetry") return json({ enabled: false, locked: false, noticeDismissed: true });
+  if (VOICE && url.pathname === "/api/memory/settings") return json({ enabled: false, capUsd: 5, spentUsd: 0 });
   if (url.pathname === "/api/log/provenance" && VOICE) {
     const relay = { origin: "operator", channel: "voice-delegatus", submissionId: DEMO_IDS.clientMessageId };
     const internal = { origin: "agent", senderRole: "reviewer", senderProject: PROJECT };
@@ -3144,19 +3171,10 @@ const queueTaskPreview = <div className="p-3"><NativeQueuePanel
 /* The companion over the real Viewer. The simulator's one effect is `dispatch`, which here makes the delegated
    message appear in the seat's transcript; the orchestrator's answer joins it when the simulator reports one.
    The page gives up the strip the companion docks into, as a host surface is asked to. */
-/* What the host knows about its own conversation pane and the companion cannot read from the page: while the
-   reader is away from the feed's end, the feed shows a 44 px strip under itself with the way back. That room is
-   kept for it before the strip exists; once it is there, it is protected as the control it is. */
-const VOICE_FEED_STRIP = 44;
-const voiceReserved = () => [...document.querySelectorAll<HTMLElement>("[data-log-feed-scroller]")].flatMap((feed) => {
-  const box = feed.getBoundingClientRect();
-  const shown = [...document.querySelectorAll<HTMLElement>("[data-feed-jump-strip]")].some((strip) => Math.abs(strip.getBoundingClientRect().top - box.bottom) < 2);
-  return shown || box.height <= VOICE_FEED_STRIP ? [] : [{ x: box.x, y: box.bottom - VOICE_FEED_STRIP, width: box.width, height: VOICE_FEED_STRIP }];
-});
 function voiceCompanionScene() {
   const params = new URLSearchParams(location.search);
-  const variant = (Number(params.get("variant")) || 1) as CompanionVariant;
   const script = params.get("script");
+  const failure = params.get("failure");
   const adapter = createSimulatedCompanion({
     script: scenarioScript(isScenario(script) ? script : "delegation", UK ? "uk" : "en"),
     recipient: { project: PROJECT, conversationId: orchestrator.conversationId ?? "conversation_orchestrator", seatEpoch: 1, engine: orchestrator.engine === "codex" ? "codex" : "claude" },
@@ -3189,7 +3207,7 @@ function voiceCompanionScene() {
           ))}
         </div>
       ) : <Viewer />}
-      <VoiceCompanion adapter={adapter} variant={variant} project={PROJECT} defaultCollapsed={params.get("collapsed") === "1"} showVariantNumber protect=".kb .card,[data-feed-jump-strip]" rows="[data-log-feed-scroller]" reserve={voiceReserved} />
+      {VOICE_PRODUCT ? null : <VoiceCompanion adapter={adapter} project={PROJECT} defaultCollapsed={params.get("collapsed") === "1"} seat={params.get("seat") === "none" ? false : undefined} preflight={failure ? () => failure : undefined} onOpenSettings={() => { voice.settingsOpened += 1; }} protect={COMPANION_PROTECT} rows={COMPANION_ROWS} reserve={companionReserved} />}
     </>
   );
 }

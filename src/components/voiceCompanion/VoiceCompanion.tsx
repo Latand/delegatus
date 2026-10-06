@@ -1,25 +1,31 @@
 "use client";
 
-import { Check, CircleAlert, LoaderCircle, Mic, MicOff, Minimize2, PhoneOff, SendHorizontal, X } from "lucide-react";
+import { Check, CircleAlert, LoaderCircle, Mic, MicOff, Minimize2, PhoneOff, SendHorizontal, Settings, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { EngineMark } from "@/components/EngineMark";
 import { useLocale } from "@/lib/i18n";
+import { createCompanionStore } from "@/hooks/useVoiceCompanion";
 import type { Locale, VoiceCompanionAdapter } from "@/lib/voiceCompanion/contract";
+import { companionErrorMessage } from "@/lib/voiceCompanion/errors";
 import {
   BUBBLE_MAX_CHARS, BUBBLE_MAX_WIDTH, clampToViewport, CONTROL_SELECTOR, isFree, isPassiveCursor, laneLayout, placeCollapsed, placeExpanded, splitSpeech,
   type LaneLayout, type Point, type Rect, type Size,
 } from "@/lib/voiceCompanion/placement";
 import { bezierSlope, cssBezier, riseCurve, RISE_MS, type Bezier } from "@/lib/voiceCompanion/motion";
-import { INITIAL_COMPANION_STATE, reduceCompanion, type CompanionState, type DelegationView, type SpeechLine, type ToolCallView } from "@/lib/voiceCompanion/reducer";
+import type { DelegationView, SpeechLine, ToolCallView } from "@/lib/voiceCompanion/reducer";
 
 import { CompanionCharacter, type CharacterHandle } from "./CompanionCharacter";
 import { VOICE_COMPANION_CSS } from "./voiceCompanionStyles";
 
 /**
- * The floating voice companion (#2519, docs/design/voice-companion-research.md §9).
- * A prototype surface: no production view mounts it. It reads one adapter
- * through one reducer and knows nothing about where the events come from.
+ * The floating voice companion (#2519, docs/design/voice-companion-research.md §9, §10).
+ * The desktop shell mounts it through `VoiceCompanionHost` when the operator
+ * turned it on; the evidence fixture mounts it over the simulator. It reads one
+ * adapter through one reducer and knows nothing about where the events come from.
+ * It has one look: the character in a lit halo whose ring takes the state's
+ * colour, glass speech bubbles, call cards with an icon tile, the delegation as
+ * a rounded teal card, and a small rounded tile when collapsed.
  *
  * The character is the floating object, with no frame around it. What it says
  * appears as separate speech bubbles beside it that rise, older ones drifting
@@ -44,13 +50,11 @@ import { VOICE_COMPANION_CSS } from "./voiceCompanionStyles";
  * dismissed.
  */
 
-export type CompanionVariant = 1 | 2 | 3;
-
-/* The character with its controls under it, and the collapsed shape, per variant. */
-const BLOCK: Record<CompanionVariant, Size> = { 1: { width: 132, height: 148 }, 2: { width: 132, height: 134 }, 3: { width: 132, height: 150 } };
-const CHARACTER: Record<CompanionVariant, number> = { 1: 76, 2: 62, 3: 70 };
-const SHAPE: Record<CompanionVariant, Size> = { 1: { width: 52, height: 52 }, 2: { width: 140, height: 44 }, 3: { width: 56, height: 56 } };
-const SHAPE_CHARACTER: Record<CompanionVariant, number> = { 1: 40, 2: 30, 3: 40 };
+/* The character with its state and its controls under it, and the collapsed tile. */
+const BLOCK: Size = { width: 132, height: 148 };
+const CHARACTER = 68;
+const SHAPE: Size = { width: 56, height: 56 };
+const SHAPE_CHARACTER = 40;
 /** The most speech bubbles shown at once; a newer one sends the oldest away, with everything older than it. */
 export const SPEECH_CAP = 4;
 /** The most call elements shown at once; the calls still at work beyond them are counted on one more element. */
@@ -61,6 +65,18 @@ export const SPEECH_LINGER_MS = 9_000;
 export const CALL_LINGER_MS = 5_000;
 /** A settled delegation (answered, refused, cancelled, failed) leaves this long after it settled. */
 export const DELEGATION_LINGER_MS = 14_000;
+/** A failure said in plain words leaves this long after it appeared. */
+export const NOTICE_LINGER_MS = 12_000;
+/** The delegation proposal's tool. Its lifecycle is the delegation card, so it gets no call card of its own. */
+const DELEGATION_TOOL = "request_orchestrator_delegation";
+/** The registry's tools, for the line a call card shows when the backend summarised a call by its bare name. */
+const TOOL_LINE = {
+  list_tasks: "voiceCompanion.tool.list_tasks", get_task: "voiceCompanion.tool.get_task", list_pipelines: "voiceCompanion.tool.list_pipelines",
+  get_pipeline: "voiceCompanion.tool.get_pipeline", agent_activity: "voiceCompanion.tool.agent_activity",
+  conversation_messages: "voiceCompanion.tool.conversation_messages", end_conversation: "voiceCompanion.tool.end_conversation",
+} as const;
+/** Failures whose remedy is in the settings. */
+const SETTINGS_FAILURES = new Set(["NO_KEY", "CAP_REACHED", "KEY_FROM_ENV"]);
 /** The nominal speaking rate the bubbles of a playing line are paced by. A
     presentation pace only: no word is claimed to have been heard by it. */
 export const NOMINAL_MS_PER_CHAR = 58;
@@ -77,27 +93,6 @@ const EXIT_MS = 420;
 const QUICK_EXIT_MS = 140;
 
 const ENGINE_NAME = { claude: "Claude", codex: "Codex" } as const;
-
-function createStore(adapter: VoiceCompanionAdapter) {
-  let state: CompanionState = INITIAL_COMPANION_STATE;
-  const views = new Set<() => void>();
-  const levels = new Set<(state: CompanionState) => void>();
-  const stop = adapter.subscribe((event) => {
-    const next = reduceCompanion(state, event);
-    if (next === state) return;
-    const visible = next.revision !== state.revision;
-    const level = next.mouth !== state.mouth || next.playedMs !== state.playedMs;
-    state = next;
-    if (level) for (const listener of levels) listener(state);
-    if (visible) for (const listener of views) listener();
-  });
-  return {
-    get: () => state,
-    subscribe: (listener: () => void) => { views.add(listener); return () => { views.delete(listener); }; },
-    onLevel: (listener: (state: CompanionState) => void) => { levels.add(listener); return () => { levels.delete(listener); }; },
-    stop,
-  };
-}
 
 /** The part of a box a pointer can reach: cut to the viewport and to every clipping element from `within` up. */
 function reachable(within: Element | null, box: { left: number; top: number; right: number; bottom: number }, clips: Map<Element, DOMRect | null>): Rect | null {
@@ -199,9 +194,11 @@ type Floater =
   | { kind: "call"; key: string; call: ToolCallView; settled: boolean }
   | { kind: "delegation"; key: string; delegation: DelegationView; settled: boolean }
   | { kind: "answer"; key: string; delegation: DelegationView; settled: true }
+  /* A failure, or a fact the operator needs before asking (no orchestrator here), in plain words. */
+  | { kind: "notice"; key: string; code: string; tone: "failure" | "note"; settled: true }
   | { kind: "more"; key: string; count: number; settled: false };
 
-const LINGER_MS: Record<Exclude<Floater["kind"], "more">, number> = { speech: SPEECH_LINGER_MS, call: CALL_LINGER_MS, delegation: DELEGATION_LINGER_MS, answer: DELEGATION_LINGER_MS };
+const LINGER_MS: Record<Exclude<Floater["kind"], "more">, number> = { speech: SPEECH_LINGER_MS, call: CALL_LINGER_MS, delegation: DELEGATION_LINGER_MS, answer: DELEGATION_LINGER_MS, notice: NOTICE_LINGER_MS };
 /* `far`: how far the element's far edge stands from the lane's end at the character. */
 type Place = { top: number; height: number; width: number; left: number; far: number; arrival: number | null };
 
@@ -258,13 +255,22 @@ function startNow(animation: Animation) {
 const tied = (text: string) => (text.trim().split(/\s+/u).length > 2 ? text.replace(/\s+(\S+)$/u, "\u00a0$1") : text);
 
 const DELEGATION_SETTLED = new Set(["answered", "refused", "cancelled", "failed"]);
+const speechLocaleOf = (locale: string): Locale => (locale === "uk" ? "uk" : "en");
 
-export function VoiceCompanion({ adapter, variant, project, locale: sessionLocale, protect, rows, reserve, defaultCollapsed = false, showVariantNumber = false }: {
+export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, preflight, onOpenSettings, protect, rows, reserve, defaultCollapsed = false }: {
   adapter: VoiceCompanionAdapter;
-  variant: CompanionVariant;
-  project: string;
+  /** The project in view; null on a view that shows none, where a conversation cannot start. */
+  project: string | null;
   /** The language the session is started in; defaults to the interface language. */
   locale?: Locale;
+  /** Whether the project has a designated orchestrator. `false` is said when a conversation starts;
+      unknown (undefined) says nothing, and the server refuses a proposal either way. */
+  seat?: boolean;
+  /** Read when the operator asks to talk: a failure code that is already known (no key, the cap reached)
+      is said without opening the microphone. */
+  preflight?: () => string | null;
+  /** Opens the settings surface; offered beside a failure whose remedy is there. */
+  onOpenSettings?: () => void;
   /** Extra selector for surfaces the host treats as controls (a draggable card). */
   protect?: string;
   /** Selector for surfaces that fill with rows carrying their own controls (a conversation's feed).
@@ -276,13 +282,17 @@ export function VoiceCompanion({ adapter, variant, project, locale: sessionLocal
       the page; the function itself must stay the same between renders. */
   reserve?: () => Rect[];
   defaultCollapsed?: boolean;
-  /** Prints the variant number beside the character, for comparison captures. */
-  showVariantNumber?: boolean;
 }) {
   const { t, locale } = useLocale();
-  const [store] = useState(() => createStore(adapter));
-  useEffect(() => store.stop, [store]);
+  const [store] = useState(() => createCompanionStore(adapter));
+  useEffect(() => store.connect(), [store]);
   const state = useSyncExternalStore(store.subscribe, store.get, store.get);
+  /* Between the tap on Talk and the session being ready (the microphone prompt, the mint): the end control is already there. */
+  const [starting, setStarting] = useState(false);
+  /* A failure known before any session exists, with a count so the same one can be said again. */
+  const [refusedStart, setRefusedStart] = useState<{ code: string; n: number } | null>(null);
+  /* Each conversation's notices are its own: one that left the lane may be said again in the next. */
+  const [talks, setTalks] = useState(0);
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const [layout, setLayout] = useState<Layout | null>(null);
   /* While held: where the character is and the lane it would have there. */
@@ -308,8 +318,8 @@ export function VoiceCompanion({ adapter, variant, project, locale: sessionLocal
   const settledFor = useRef<string | null>(null);
   const swallowClick = useRef(false);
 
-  const shape = SHAPE[variant];
-  const block = BLOCK[variant];
+  const shape = SHAPE;
+  const block = BLOCK;
 
   /** Open at the free place nearest the anchor; with none, collapse there instead.
       The answer depends on the page, the viewport and the anchor alone. */
@@ -368,7 +378,8 @@ export function VoiceCompanion({ adapter, variant, project, locale: sessionLocal
   const speaking = state.phase === "speaking";
   useEffect(() => { if (!speaking) character.current?.setLevel(0); }, [speaking, collapsed]);
 
-  /* What may be in the lane: speech, the calls, the delegation and the answer to it. */
+  const awaiting = store.awaiting();
+  /* What may be in the lane: speech, the calls, each delegation with the answer to it, and what went wrong. */
   const candidates = useMemo((): Floater[] => {
     const speech: Floater[] = [];
     for (const line of state.lines.filter((entry) => entry.text.trim())) {
@@ -383,16 +394,26 @@ export function VoiceCompanion({ adapter, variant, project, locale: sessionLocal
         });
       }
     }
-    const calls: Floater[] = state.calls.map((call) => ({ kind: "call", key: `call:${call.callId}`, call, settled: call.status !== "running" }));
-    const delegation = state.delegation;
-    /* Delivered work stays in view after the conversation ends; a proposal does not. */
-    const deleg: Floater[] = delegation && (state.phase !== "offline" || ["queued", "delivered", "answered"].includes(delegation.stage))
-      ? [{ kind: "delegation", key: `delegation:${delegation.callId}`, delegation, settled: DELEGATION_SETTLED.has(delegation.stage) }]
-      : [];
-    /* The answer is news of its own: it arrives beside the character, wherever the request has risen to. */
-    const answer: Floater[] = delegation?.answer ? [{ kind: "answer", key: `answer:${delegation.callId}:${delegation.answer.reportId}`, delegation, settled: true }] : [];
-    return [...speech, ...calls, ...deleg, ...answer];
-  }, [state.lines, state.calls, state.delegation, state.phase, paced]);
+    const calls: Floater[] = state.calls.filter((call) => call.name !== DELEGATION_TOOL).map((call) => ({ kind: "call", key: `call:${call.callId}`, call, settled: call.status !== "running" }));
+    /* Every confirmed request keeps its own card and its own answer while a newer proposal is shown. */
+    const current = state.delegation;
+    const delegations = [...state.deliveryCards.filter((card) => card.callId !== current?.callId), ...(current ? [current] : [])];
+    const deleg: Floater[] = [];
+    for (const delegation of delegations) {
+      /* Delivered work stays in view after the conversation ends; a proposal does not. */
+      if (state.phase !== "offline" || ["queued", "delivered", "answered"].includes(delegation.stage)) deleg.push({ kind: "delegation", key: `delegation:${delegation.callId}`, delegation, settled: DELEGATION_SETTLED.has(delegation.stage) });
+      /* The answer is news of its own: it arrives beside the character, wherever the request has risen to. */
+      if (delegation.answer) deleg.push({ kind: "answer", key: `answer:${delegation.callId}:${delegation.answer.reportId}`, delegation, settled: true });
+    }
+    const notices: Floater[] = [];
+    const say = (source: string, code: string, tone: "failure" | "note" = "failure") => notices.push({ kind: "notice", key: `notice:${talks}:${source}:${code}`, code, tone, settled: true });
+    if (refusedStart) say(`start${refusedStart.n}`, refusedStart.code);
+    /* Until the session asked for is ready, an error the state still holds is the previous conversation's. */
+    if (state.error && !awaiting) say("error", state.error);
+    if (state.closure?.incomplete && !awaiting && state.error !== "FINALIZATION_INCOMPLETE") say("closure", "FINALIZATION_INCOMPLETE");
+    if (seat === false && state.phase !== "offline") say("seat", "no_orchestrator", "note");
+    return [...speech, ...calls, ...deleg, ...notices];
+  }, [state.lines, state.calls, state.delegation, state.deliveryCards, state.phase, state.error, state.closure, paced, refusedStart, seat, talks, awaiting]);
 
   /* When each element arrived and when it settled. The lane is ordered by arrival,
      and one not stamped yet is the newest there is. */
@@ -506,7 +527,7 @@ export function VoiceCompanion({ adapter, variant, project, locale: sessionLocal
   const stackFacing = useRef<string | null>(null);
   /* The rise the lane is on: how fast it moves now decides the curve of the one that takes over. */
   const sheetFlight = useRef<{ animation: Animation; travel: number; curve: Bezier } | null>(null);
-  const floaterKeys = floaters.map((floater) => `${floater.key}:${floater.kind === "speech" ? `${floater.text.length}${floater.cut === null ? "" : "c"}` : floater.kind === "call" ? `${floater.call.status}${(floater.call.result ?? floater.call.summary).length}` : floater.kind === "more" ? floater.count : floater.delegation.stage}:${arrival.get(floater.key) ?? ""}`).join("|");
+  const floaterKeys = floaters.map((floater) => `${floater.key}:${floater.kind === "speech" ? `${floater.text.length}${floater.cut === null ? "" : "c"}` : floater.kind === "call" ? `${floater.call.status}${(floater.call.result ?? floater.call.summary).length}` : floater.kind === "more" ? floater.count : floater.kind === "notice" ? floater.code : `${floater.delegation.stage}${floater.delegation.notice ?? ""}`}:${arrival.get(floater.key) ?? ""}`).join("|");
   useLayoutEffect(() => {
     const stack = stackEl.current;
     if (!stack || !shownLane) { positions.current.clear(); stackFacing.current = null; return; }
@@ -728,19 +749,32 @@ export function VoiceCompanion({ adapter, variant, project, locale: sessionLocal
     /* Reopening a companion that collapsed for want of room asks for room again. */
     if (!next && !collapsed) settle(false);
   };
-  const talk = () => { void adapter.start({ locale: sessionLocale ?? (locale === "uk" ? "uk" : "en"), project }); };
-  const end = () => { void adapter.close(); };
-  const toggleMute = () => { const next = !muted; setMuted(next); void adapter.command({ type: "mute", muted: next }); };
+  const speechLocale: Locale = sessionLocale ?? (locale === "uk" ? "uk" : "en");
+  const talk = () => {
+    if (starting) return;
+    /* What is already known to refuse the conversation is said at once, with the microphone left alone. */
+    const refusal = project === null ? "NO_PROJECT" : preflight?.() ?? null;
+    setTalks((count) => count + 1);
+    setRefusedStart(refusal ? { code: refusal, n: (refusedStart?.n ?? 0) + 1 } : null);
+    if (refusal || project === null) return;
+    setMuted(false);
+    setStarting(true);
+    /* A failed start is told by the adapter as an error event; the lane says it. */
+    void store.start({ locale: speechLocale, project }).catch(() => undefined).finally(() => setStarting(false));
+  };
+  const end = () => { void store.stop().catch(() => undefined); };
+  const toggleMute = () => { const next = !muted; setMuted(next); void store.command({ type: "mute", muted: next }).catch(() => undefined); };
   const decide = (decision: "send" | "cancel") => {
     const proposal = state.delegation?.proposal;
     if (!proposal || decidedFor === proposal.proposalId) return;
     setDecidedFor(proposal.proposalId);
-    void adapter.command({ type: "confirmation", proposalId: proposal.proposalId, decision, via: "tap" });
+    void store.command({ type: "confirmation", proposalId: proposal.proposalId, decision, via: "tap" }).catch(() => undefined);
   };
 
   const connected = state.phase !== "offline";
-  const phaseLabel = t(`voiceCompanion.phase.${state.phase}`);
-  const attention = stage === "awaiting-confirmation" || stage === "answered";
+  const phaseLabel = starting && !connected ? t("voiceCompanion.phase.connecting") : t(`voiceCompanion.phase.${state.phase}`);
+  const failing = floaters.some((floater) => floater.kind === "notice" && floater.tone === "failure");
+  const attention = stage === "awaiting-confirmation" || stage === "answered" || failing;
   const seconds = (value: number) => new Intl.NumberFormat(locale === "uk" ? "uk" : "en", { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(value / 1000);
 
   /* `nearest`: the element standing next to the character, which a comic bubble's tail points from. */
@@ -755,14 +789,29 @@ export function VoiceCompanion({ adapter, variant, project, locale: sessionLocal
       );
     }
     if (floater.kind === "more") return <div className="vc-call vc-more" data-companion-more>{t("voiceCompanion.moreCalls", { n: floater.count })}</div>;
+    if (floater.kind === "notice") {
+      return (
+        <div className="vc-notice" role={floater.tone === "failure" ? "alert" : "status"} data-tone={floater.tone} data-code={floater.code} data-companion-notice>
+          <span className="vc-notice-icon" aria-hidden><CircleAlert size={14} /></span>
+          <span className="vc-notice-text">{companionErrorMessage(floater.code, speechLocaleOf(locale))}</span>
+          {onOpenSettings && SETTINGS_FAILURES.has(floater.code) ? <button type="button" className="vc-act" data-companion-open-settings onClick={onOpenSettings}><Settings size={13} aria-hidden />{t("voiceCompanion.openSettings")}</button> : null}
+        </div>
+      );
+    }
     if (floater.kind === "call") {
       const { call } = floater;
+      /* A backend that summarised the call by its bare name gets the tool's own line in the interface language,
+         and a failure that is only a code is said in words. */
+      const known = Object.hasOwn(TOOL_LINE, call.name) ? TOOL_LINE[call.name as keyof typeof TOOL_LINE] : null;
+      const summary = known && call.summary === call.name.replaceAll("_", " ") ? t(known) : call.summary;
+      const result = call.status === "failed" && /^[A-Z_]+$/u.test(call.result ?? "") ? t("voiceCompanion.tool.failed") : call.result;
+      const line = call.status === "running" ? summary : result ?? summary;
       return (
-        <div className="vc-call" data-status={call.status} data-companion-call>
+        <div className="vc-call" data-status={call.status} data-tool={call.name} data-companion-call>
           <span className="vc-call-icon" aria-hidden>{call.status === "running" ? <LoaderCircle size={14} className="vc-spin" /> : call.status === "done" ? <Check size={14} /> : <X size={14} />}</span>
           <span className="vc-call-body">
             <span className="vc-call-name">{call.name}</span>
-            <span className="vc-call-line">{call.status === "running" ? call.summary : call.result ?? call.summary}</span>
+            <span className="vc-call-line" title={line}>{line}</span>
           </span>
           <span className="vc-call-state">{t(`voiceCompanion.call.${call.status}`)}</span>
         </div>
@@ -782,7 +831,8 @@ export function VoiceCompanion({ adapter, variant, project, locale: sessionLocal
         </div>
       );
     }
-    const target = recipient?.project ?? project;
+    const target = recipient?.project ?? project ?? "";
+    const isCurrent = delegation.callId === state.delegation?.callId;
     /* Once answered, the request reads as delivered; the answer stands beside the character as its own element. */
     const head = delegation.stage === "awaiting-confirmation" ? t("voiceCompanion.proposal", { project: target }) : t(`voiceCompanion.stage.${delegation.stage === "answered" ? "delivered" : delegation.stage}`);
     const running = delegation.stage === "proposed" || delegation.stage === "sending";
@@ -794,8 +844,8 @@ export function VoiceCompanion({ adapter, variant, project, locale: sessionLocal
           <span className="vc-deleg-title">{head}</span>
           {recipient ? <span className="vc-deleg-engine"><EngineMark engine={recipient.engine} size={14} />{ENGINE_NAME[recipient.engine]}</span> : null}
         </div>
-        <span className="vc-call-name">request_orchestrator_delegation</span>
-        {delegation.stage === "refused" ? <p className="vc-deleg-note">{t("voiceCompanion.refused")}</p> : null}
+        <span className="vc-call-name">{DELEGATION_TOOL}</span>
+        {delegation.stage === "refused" ? <p className="vc-deleg-note" data-companion-refused={delegation.refusal ?? ""}>{delegation.refusal === "no_orchestrator" ? companionErrorMessage("no_orchestrator", speechLocaleOf(locale)) : t("voiceCompanion.refused")}</p> : null}
         {delegation.stage === "cancelled" && delegation.refusal ? <p className="vc-deleg-note" data-companion-withdrawn>{t("voiceCompanion.withdrawn")}</p> : null}
         {delegation.stage === "awaiting-confirmation" || delegation.stage === "sending" || delegation.stage === "queued" || delegation.stage === "delivered" || delegation.stage === "unknown" || delegation.stage === "answered" ? (
           <p className="vc-instruction" tabIndex={0} data-companion-instruction>{delegation.instruction}</p>
@@ -809,10 +859,12 @@ export function VoiceCompanion({ adapter, variant, project, locale: sessionLocal
         {delegation.stage === "sending" || delegation.stage === "queued" || delegation.stage === "delivered" || delegation.stage === "answered" ? (
           <div className="vc-track" aria-hidden data-companion-track>
             <span className="vc-end"><CompanionMini /></span>
-            <span className="vc-rail" ref={rail}><span className="vc-pellet" ref={pellet} /></span>
+            <span className="vc-rail" ref={isCurrent ? rail : undefined}><span className="vc-pellet" ref={isCurrent ? pellet : undefined} /></span>
             <span className="vc-end" data-done={delegation.stage !== "sending" ? "" : undefined}>{recipient ? <EngineMark engine={recipient.engine} size={14} /> : null}</span>
           </div>
         ) : null}
+        {/* What is still owed after the send: the reply tied to this request, or the proof that it arrived. */}
+        {delegation.notice && delegation.stage !== "answered" ? <p className="vc-deleg-note vc-deleg-wait" data-companion-delegation-notice={delegation.notice}>{companionErrorMessage(delegation.notice, speechLocaleOf(locale))}</p> : null}
       </div>
     );
   };
@@ -833,7 +885,8 @@ export function VoiceCompanion({ adapter, variant, project, locale: sessionLocal
       role="complementary"
       aria-label="Delegatus"
       data-voice-companion
-      data-variant={variant}
+      data-mode={adapter.mode}
+      data-starting={starting ? "" : undefined}
       data-layout={layout?.mode ?? "expanded"}
       data-yielded={layout?.mode === "collapsed" && layout.yielded ? "" : undefined}
       data-phase={state.phase}
@@ -874,14 +927,13 @@ export function VoiceCompanion({ adapter, variant, project, locale: sessionLocal
             onPointerCancel={onPointerUp}
             onKeyDown={onKeyMove}
           >
-            <CompanionCharacter ref={character} size={CHARACTER[variant]} />
-            {showVariantNumber ? <span className="vc-badge" data-companion-variant-number aria-label={t("voiceCompanion.variant", { n: variant })}>{variant}</span> : null}
+            <CompanionCharacter ref={character} size={CHARACTER} />
           </button>
-          <span className="vc-state" data-companion-phase aria-hidden><span className="vc-phase"><span className="vc-dot" />{phaseLabel}</span>{state.mode === "simulated" || !connected ? <span className="vc-sim">{t("voiceCompanion.simulated")}</span> : null}</span>
+          <span className="vc-state" data-companion-phase aria-hidden><span className="vc-phase"><span className="vc-dot" />{phaseLabel}</span>{adapter.mode === "simulated" ? <span className="vc-sim">{t("voiceCompanion.simulated")}</span> : null}</span>
           <div className="vc-controls">
-            {connected ? (
+            {connected || starting ? (
               <>
-                <button type="button" className="vc-btn" data-on={muted ? "" : undefined} aria-pressed={muted} aria-label={t(muted ? "voiceCompanion.unmute" : "voiceCompanion.mute")} title={t(muted ? "voiceCompanion.unmute" : "voiceCompanion.mute")} onClick={toggleMute}>
+                <button type="button" className="vc-btn" data-on={muted ? "" : undefined} aria-pressed={muted} disabled={!connected} aria-label={t(muted ? "voiceCompanion.unmute" : "voiceCompanion.mute")} title={t(muted ? "voiceCompanion.unmute" : "voiceCompanion.mute")} onClick={toggleMute}>
                   {muted ? <MicOff size={15} aria-hidden /> : <Mic size={15} aria-hidden />}
                 </button>
                 <button type="button" className="vc-btn" data-companion-end aria-label={t("voiceCompanion.end")} title={t("voiceCompanion.end")} onClick={end}><PhoneOff size={15} aria-hidden /></button>
@@ -906,19 +958,19 @@ export function VoiceCompanion({ adapter, variant, project, locale: sessionLocal
           onPointerCancel={onPointerUp}
           onKeyDown={onKeyMove}
         >
-          <CompanionCharacter ref={character} size={SHAPE_CHARACTER[variant]} />
-          {variant === 2 ? <span className="vc-shape-label"><span className="vc-dot" />{phaseLabel}</span> : null}
-          {attention ? <span className="vc-flag" data-companion-flag aria-hidden /> : null}
-          {showVariantNumber ? <span className="vc-badge" data-companion-variant-number aria-label={t("voiceCompanion.variant", { n: variant })}>{variant}</span> : null}
+          <CompanionCharacter ref={character} size={SHAPE_CHARACTER} />
+          {attention ? <span className="vc-flag" data-companion-flag data-tone={failing ? "failure" : undefined} aria-hidden /> : null}
         </button>
       )}
       {/* The whole conversation, for a screen reader and for anyone who missed a bubble. */}
       <ol className="vc-sr" aria-live="polite" aria-label={t("voiceCompanion.transcript")} data-companion-transcript>
         {state.lines.filter((line) => line.final || line.playback === "cut").map((line) => <li key={line.key}>{transcriptLine(line)}</li>)}
-        {state.delegation?.answer ? <li>{t("voiceCompanion.orchestrator")}: {state.delegation.answer.text}</li> : null}
+        {[...state.deliveryCards.filter((card) => card.callId !== state.delegation?.callId), ...(state.delegation ? [state.delegation] : [])].map((card) => (card.answer ? <li key={card.answer.reportId}>{t("voiceCompanion.orchestrator")}: {card.answer.text}</li> : null))}
       </ol>
       {/* The proposal is a decision the operator must be able to reach without the lane being on screen. */}
-      {!expanded && stage === "awaiting-confirmation" ? <span className="vc-sr" role="status">{t("voiceCompanion.proposal", { project: state.delegation?.proposal?.recipient.project ?? project })}</span> : null}
+      {!expanded && stage === "awaiting-confirmation" ? <span className="vc-sr" role="status">{t("voiceCompanion.proposal", { project: state.delegation?.proposal?.recipient.project ?? project ?? "" })}</span> : null}
+      {/* A failure is said even when the lane is not on screen to show it. */}
+      {!expanded ? floaters.filter((floater) => floater.kind === "notice").map((floater) => <span key={floater.key} className="vc-sr" role="alert">{floater.kind === "notice" ? companionErrorMessage(floater.code, speechLocaleOf(locale)) : null}</span>) : null}
     </section>
   );
 }
