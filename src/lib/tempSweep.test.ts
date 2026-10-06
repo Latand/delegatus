@@ -152,6 +152,49 @@ test("a directory that is old but had a new entry written into it is still young
   expect(report.kept.young).toBe(1);
 });
 
+test.each(["young", "inUse", "deferred"] as const)("temp summaries measure %s holds once across root aliases", async reason => {
+  const root = tempRoot();
+  const directory = aged(root, "llv-accounted-hold", reason === "young" ? 2 * HOUR : 2 * DAY);
+  const payload = path.join(directory, "file.txt");
+  fs.writeFileSync(payload, Buffer.alloc(256 * 1024, 1));
+  const when = new Date(Date.now() - (reason === "young" ? 2 * HOUR : 2 * DAY));
+  fs.utimesSync(payload, when, when);
+  const report = await sweepStaleTempDirs({ maxAgeMs: DAY, roots: [{ path: root, via: "" }, { path: root, via: "" }],
+    scan: { ownNamespace: null, processes: reason === "inUse" ? [{ pid: 1, namespace: null, stamped: true, paths: [directory] }] : [] },
+    maxRemovals: reason === "deferred" ? 0 : undefined });
+  expect(report.kept[reason]).toBe(1);
+  expect(report.removed).toEqual([]);
+  expect(tempSweepStatus(report)).toHaveProperty(`keptBytes.${reason}`, expect.any(Number));
+  expect(tempSweepStatus(report)?.keptBytes?.[reason]).toBeGreaterThanOrEqual(fs.statSync(payload).blocks * 512);
+  const single = await sweepStaleTempDirs({ maxAgeMs: DAY, roots: [{ path: root, via: "" }],
+    scan: { ownNamespace: null, processes: reason === "inUse" ? [{ pid: 1, namespace: null, stamped: true, paths: [directory] }] : [] },
+    maxRemovals: reason === "deferred" ? 0 : undefined });
+  expect(tempSweepStatus(report)).toHaveProperty("keptBytes", tempSweepStatus(single)?.keptBytes);
+  expect(fs.readFileSync(payload)).toEqual(Buffer.alloc(256 * 1024, 1));
+});
+
+test("young nested temp allocations belong to their retention reason", async () => {
+  const root = tempRoot();
+  const parent = aged(root, "llv-outer-export", 3 * DAY);
+  const jobs = path.join(parent, "jobs");
+  fs.mkdirSync(jobs);
+  const child = aged(jobs, "llv-inner-export", 2 * HOUR);
+  const payload = path.join(child, "file.txt");
+  fs.writeFileSync(payload, Buffer.alloc(256 * 1024, 1));
+  fs.writeFileSync(path.join(parent, ".git"), "gitdir: retained metadata");
+  const old = new Date(Date.now() - 3 * DAY);
+  for (const entry of [jobs, path.join(parent, ".git"), parent]) fs.utimesSync(entry, old, old);
+  const options = { scan: { ownNamespace: null, processes: [] }, maxAgeMs: DAY };
+  const single = await sweepStaleTempDirs({ ...options, roots: [{ path: root, via: "" }] });
+  const report = await sweepStaleTempDirs({ ...options, roots: [{ path: root, via: "" }, { path: jobs, via: "" }, { path: root, via: "" }] });
+  expect(report.kept).toEqual({ young: 1, inUse: 0, worktree: 1, deferred: 0 });
+  expect(report.keptBytes?.young).toBeGreaterThanOrEqual(fs.statSync(payload).blocks * 512);
+  expect(report.keptBytes?.worktree).toBeGreaterThan(0);
+  expect(Object.values(report.keptBytes!).reduce((sum, bytes) => sum + bytes, 0)).toBe(single.keptBytes?.worktree);
+  expect(report.held?.[0]?.bytes).toBe(report.keptBytes?.worktree);
+  expect(fs.readFileSync(payload)).toEqual(Buffer.alloc(256 * 1024, 1));
+});
+
 test("a sweep stops at its removal budget and a directory another user owns is never a candidate", async () => {
   const root = tempRoot();
   for (const name of ["llv-a", "llv-b", "llv-c"]) aged(root, name, 2 * DAY);

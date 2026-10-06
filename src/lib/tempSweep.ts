@@ -258,6 +258,8 @@ export type TempSweepReport = {
   removed: TempSweepRemoval[];
   removedBytes: number;
   kept: { young: number; inUse: number; worktree: number; deferred: number };
+  /** Allocations retained under each guard; absent in older report versions. */
+  keptBytes?: TempSweepReport["kept"];
   /** Git or inspection holds beyond the pipeline worktree list. */
   held?: { path: string; via: string; reason: "git-checkout" | "unreadable-tree" | "entry-limit"; bytes: number }[];
   errors: string[];
@@ -418,6 +420,7 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
     removed: [],
     removedBytes: 0,
     kept: { young: 0, inUse: 0, worktree: 0, deferred: 0 },
+    keptBytes: { young: 0, inUse: 0, worktree: 0, deferred: 0 },
     held: [],
     errors: [],
   };
@@ -460,15 +463,27 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
     const identity = `${stat.dev}:${stat.ino}`;
     if (seenCandidates.has(identity)) continue;
     seenCandidates.add(identity);
+    const excluded = accounted.flatMap(checkout => root.via ? [checkout, root.via + checkout] : [checkout]);
+    const includeRoot = candidates.some(other => other.candidate !== candidate && inside(candidate, other.candidate));
+    const keep = async (reason: keyof TempSweepReport["kept"], measured?: number): Promise<boolean> => {
+      const bytes = measured ?? await measureBytes(reachable, seenAllocations, includeRoot, excluded);
+      if (!namespaceStill(root.anchor, procRoot)) {
+        report.errors.push(`${root.path} (via ${root.via}): namespace changed during measurement; skipped`);
+        return false;
+      }
+      report.kept[reason] += 1;
+      report.keptBytes![reason] += bytes;
+      return true;
+    };
     const newest = newestMtimeMs(reachable, stat);
     if (now - newest < options.maxAgeMs) {
-      report.kept.young += 1;
+      await keep("young");
       continue;
     }
     const processHolds = (entry: string) => inside(entry, candidate)
       || inside(resolvePhysicalPath(root.via + entry), originalPath);
     if (inUse.some(processHolds)) {
-      report.kept.inUse += 1;
+      await keep("inUse");
       continue;
     }
     const physicallyOverlaps = (entries: readonly string[]) => entries.some(entry => (root.via ? [entry, root.via + entry] : [entry]).some(accessible => {
@@ -481,20 +496,13 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
     const checkoutHold = (entries: readonly string[]) => protectedBy(entries) ? "git-checkout" : containsGitCheckout(reachable)
       ?? (physicallyOverlaps(accounted) ? "git-checkout" : null);
     const hold = checkoutHold(worktrees);
-    const excluded = accounted.flatMap(checkout => root.via ? [checkout, root.via + checkout] : [checkout]);
-    const includeRoot = candidates.some(other => other.candidate !== candidate && inside(candidate, other.candidate));
     if (hold) {
-      report.kept.worktree += 1;
       const bytes = await measureBytes(reachable, seenAllocations, includeRoot, excluded);
-      if (!namespaceStill(root.anchor, procRoot)) {
-        report.errors.push(`${root.path} (via ${root.via}): namespace changed during measurement; skipped`);
-        continue;
-      }
-      report.held!.push({ path: candidate, via: root.via, reason: hold, bytes });
+      if (await keep("worktree", bytes)) report.held!.push({ path: candidate, via: root.via, reason: hold, bytes });
       continue;
     }
     if (report.removed.length >= maxRemovals) {
-      report.kept.deferred += 1;
+      await keep("deferred");
       continue;
     }
     if (!namespaceStill(root.anchor, procRoot)) {
@@ -504,7 +512,7 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
     try {
       const bytes = await measureBytes(reachable, seenAllocations, includeRoot, excluded);
       if (readScan().processes.some(process => process.paths.some(entry => processHolds(path.resolve(entry))))) {
-        report.kept.inUse += 1;
+        await keep("inUse", bytes);
         continue;
       }
       // Measurement yields to new owners and filesystem activity. Date and
@@ -516,14 +524,13 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
         continue;
       }
       if ((options.now?.() ?? Date.now()) - newestMtimeMs(reachable, current) < options.maxAgeMs) {
-        report.kept.young += 1;
+        await keep("young", bytes);
         continue;
       }
       /* A checkout made meanwhile still keeps the measured tree. */
       const finalHold = checkoutHold(readWorktrees());
       if (finalHold) {
-        report.kept.worktree += 1;
-        report.held!.push({ path: candidate, via: root.via, reason: finalHold, bytes });
+        if (await keep("worktree", bytes)) report.held!.push({ path: candidate, via: root.via, reason: finalHold, bytes });
         continue;
       }
       if (!namespaceStill(root.anchor, procRoot)) {
@@ -560,7 +567,7 @@ export function tempSweepStatus(report: TempSweepReport | null = readTempSweepRe
   }
   return {
     at: report.at, removed: report.removed.length, removedBytes: report.removedBytes,
-    kept: { ...report.kept }, heldCounts, heldBytes, errors: report.errors.length,
+    kept: { ...report.kept }, keptBytes: report.keptBytes ? { ...report.keptBytes } : null, heldCounts, heldBytes, errors: report.errors.length,
     summary: `[temp sweep] removed ${report.removed.length} directories (${megabytes(report.removedBytes)}); held ${(report.held ?? []).length} for Git preservation or tree inspection; ${report.errors.length} error(s)`,
   };
 }

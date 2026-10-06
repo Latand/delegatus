@@ -481,7 +481,8 @@ test("cancelling agent_activity after its catalog budget releases the scan it wa
 test("resource summaries retain freshness and cleanup holds; full rows remain available", async () => {
   const sessions = [{ target: "fixture", panePid: 1, path: null, engine: "codex", title: "worker", project: "fixture", activity: null, lastActiveAt: null, cwd: null, rssBytes: 123, swapBytes: 45, procCount: 2 }];
   const tempSweep = { at: "2026-10-01T00:00:00Z", removed: 0, removedBytes: 0,
-    kept: { young: 0, inUse: 0, worktree: 1, deferred: 0 }, heldCounts: { "git-checkout": 1 },
+    kept: { young: 1, inUse: 1, worktree: 1, deferred: 1 },
+    keptBytes: { young: 128 * 1024, inUse: 64 * 1024, worktree: 256 * 1024, deferred: 32 * 1024 }, heldCounts: { "git-checkout": 1 },
     heldBytes: { "git-checkout": 256 * 1024 }, errors: 0,
     summary: "1 temporary checkout held for inspection" };
   const bindings = viewerMcpBindings(undefined, undefined, { readResourcesWithDiagnostic: undefined,
