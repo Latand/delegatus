@@ -5,9 +5,13 @@ import type { ReactNode } from "react";
  * `line` is the desktop sidebar's system block: one row per reading in a
  * shared three-column grid. `detail` is the same block after "All windows":
  * the same rows, and under each account every limit window with its reset.
- * `full` is the phone's drawing, which the sidebar does not use.
+ * `full` is the phone's drawing of the memory and Telegram blocks, which the
+ * sidebar does not use.
  */
 export type RailFooterDensity = "full" | "line" | "detail";
+
+/** The drawings of a block only the desktop sidebar mounts: the limits and Copilot lines. */
+export type SidebarFooterDensity = Exclude<RailFooterDensity, "full">;
 
 /** Where a footer line starts: the left edge the rail's project names and section labels share. */
 export const LINE_EDGE = "pl-[19px] pr-3";

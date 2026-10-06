@@ -13,12 +13,12 @@ import { AccountsPanel } from "./AccountsPanel";
 import { CopilotFooterRow } from "./CopilotFooterRow";
 import { BurndownPanel } from "./BurndownPanel";
 import { TelegramFooterRow } from "./TelegramConnect";
-import { ChevronDown, Loader2 } from "./icons";
+import { Loader2 } from "./icons";
 import { formatQuotaAsOf, localeBcp47 as bcp47, windowLabel } from "./rateLimit";
 import { engineTintOf, fmtAge } from "./utils";
-import { barColor, LimitRow, LimitWindowLine } from "./LimitRow";
+import { barColor, LimitWindowLine } from "./LimitRow";
 import { EngineMark } from "./EngineMark";
-import { LINE_EDGE, ReserveBar, type RailFooterDensity } from "./railFooterDensity";
+import { LINE_EDGE, ReserveBar, type SidebarFooterDensity } from "./railFooterDensity";
 
 const POLL_MS = 60_000;
 
@@ -144,10 +144,9 @@ function EngineLimitsBlock({
   receivedAt,
   provenance,
   onSwitched,
-  density = "full",
+  density,
 }: {
-  /** `line` and `detail` are the desktop sidebar's drawings; `full` is the phone's. */
-  density?: RailFooterDensity;
+  density: SidebarFooterDensity;
   engine: Engine;
   label: string;
   limits: EngineLimits | null;
@@ -264,139 +263,58 @@ function EngineLimitsBlock({
   const failureReason = fmtLimitsFailureReason(provenance, locale);
   const visibleFailureReason = accounts.status === "loading" || identityPending ? null : failureReason;
 
-  if (density !== "full") {
-    const windows = accountLimits ? [
-      accountLimits.session ? `${windowLabel(t, "session", accountLimits.session.windowMinutes)} ${t("limits.left")} ${Math.round(100 - accountLimits.session.usedPercent)}%` : null,
-      accountLimits.weekly ? `${windowLabel(t, "weekly", accountLimits.weekly.windowMinutes)} ${t("limits.left")} ${Math.round(100 - accountLimits.weekly.usedPercent)}%` : null,
-      ...quota.tiers.map((tier) => `${t("limits.tierWeek", { tier: claudeTierDisplayName(tier.value.tier, tier.value.label) })} ${t("limits.left")} ${Math.round(100 - tier.value.usedPercent)}%`),
-    ].filter(Boolean).join(" · ") : "";
-    /* Why the line is dimmed or carries the amber dot: an old reading, or a read that failed. */
-    const staleReason = [effectiveStaleHint, stale ? t("limits.stale", { stale }) : null, visibleFailureReason].filter(Boolean).join(" · ");
-    const summary = [label, activeLabel, accountLimits?.plan, windows || (visibleFailureReason ? null : accounts.status === "loading" || identityPending ? t("limits.accountLoading") : t("limits.noDataYet")), staleReason].filter(Boolean).join(" · ");
-    /* The line says what is left of the tightest window, and the bar draws that same share. */
-    const left = effective ? effective.percent : null;
-    const color = effective ? barColor(effective.percent, tint.color) : tint.color;
-    return (
-      <div ref={containerRef} className="relative" data-engine-limits={engine}>
-        <div data-meter-line="" className={`flex h-[26px] items-center pl-[13px] pr-1.5 ${anyStale ? "opacity-60" : ""}`}>
-          <button ref={triggerRef} type="button" aria-expanded={open} aria-haspopup="dialog" aria-label={t("accounts.triggerAria", { engine: label })} title={summary} className={`flex h-[22px] min-w-0 items-center gap-1.5 rounded-[7px] px-1.5 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${hasWindows && effective ? "flex-1" : "flex-initial"}`} onClick={() => { setChartOpen(false); setOpen((value) => !value); }}>
-            {/* The account starts on the edge every name in the sidebar starts on, and the mark that names
-                the engine follows it, as an icon follows its word in the list above. The amber dot
-                stands on the mark's corner, where it takes no width from the name. */}
-            <span data-meter-name="" className="min-w-0 truncate text-[11.5px] font-semibold text-primary">{activeLabel}</span>
-            <span className="relative flex shrink-0">
-              <EngineMark engine={engine} size={12} label={label} />
-              {staleReason ? <span data-limits-stale-dot="" title={staleReason} className="absolute -right-[3px] -top-[3px] h-1.5 w-1.5 rounded-full bg-warning ring-1 ring-card" /> : null}
-            </span>
-            {draining ? <Loader2 className="h-3 w-3 shrink-0 animate-spin text-accent motion-reduce:animate-none" aria-hidden /> : null}
-          </button>
-          {hasWindows && effective ? (
-            <button ref={chartTriggerRef} type="button" aria-expanded={chartOpen} aria-haspopup="dialog" aria-label={t("burndown.openAria", { engine: label })} title={windows} className="flex h-[22px] shrink-0 items-center gap-1.5 rounded-[7px] px-1.5 hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" onClick={() => { setOpen(false); setChartOpen((value) => !value); }}>
-              <span data-meter-value="" className="text-[11px] tabular-nums text-muted">{t("limits.left")} <span className="font-bold" style={{ color: effective.percent <= 30 ? color : "var(--color-primary)" }}>{Math.round(effective.percent)}%</span></span>
-              <ReserveBar percent={left} color={color} />
-            </button>
-          ) : (
-            /* The reason takes what the account's name leaves: the name is never cut to make room for it. */
-            <span data-limits-reason="" title={staleReason || undefined} className="min-w-0 flex-1 truncate px-1.5 text-right text-[10px] text-muted">{visibleFailureReason ?? (accounts.status === "loading" || identityPending ? "…" : t("limits.noDataYet"))}</span>
-          )}
-        </div>
-        {/* Behind "All windows" a failed read says why in full, under its account. */}
-        {density === "detail" && visibleFailureReason ? (
-          <div className={`${LINE_EDGE} -mt-0.5 pb-1 ${anyStale ? "opacity-60" : ""}`}>
-            <span data-meter-note="" className="block break-words text-[10px] leading-[13px] text-muted">{visibleFailureReason}</span>
-          </div>
-        ) : null}
-        {density === "detail" && hasWindows ? (
-          /* Behind "All windows": the plan, then every window with its reset, on the edge the account starts on. */
-          <div data-limits-windows="" className={`${LINE_EDGE} pb-1 ${anyStale ? "opacity-60" : ""}`}>
-            {accountLimits?.plan ? <span data-meter-note="" className="-mt-0.5 block truncate pb-0.5 text-[10px] leading-[13px] text-muted">{label} · {accountLimits.plan}</span> : null}
-            <LimitWindowLine label={windowLabel(t, "session", accountLimits!.session?.windowMinutes)} window={accountLimits!.session} engineColor={tint.color} now={now} staleHint={fmtQuotaStaleHint(Boolean(quota.session?.stale), quota.session?.observedAt ?? null, locale)} />
-            <LimitWindowLine label={windowLabel(t, "weekly", accountLimits!.weekly?.windowMinutes)} window={accountLimits!.weekly} engineColor={tint.color} now={now} staleHint={fmtQuotaStaleHint(Boolean(quota.weekly?.stale), quota.weekly?.observedAt ?? null, locale)} />
-            {quota.tiers.map((tier) => (
-              <LimitWindowLine key={tier.value.tier} label={t("limits.tierWeek", { tier: claudeTierDisplayName(tier.value.tier, tier.value.label) })} window={tier.value} engineColor={tint.color} now={now} staleHint={fmtQuotaStaleHint(tier.stale, tier.observedAt, locale)} />
-            ))}
-          </div>
-        ) : null}
-        {open ? <AccountsPanel state={accounts} onClose={close} focusAccountId={focusAccountId} quotaOverride={{ accountId: accounts.active, quota, now }} /> : null}
-        {chartOpen ? <BurndownPanel key={accounts.active} engine={engine} label={label} plan={accountLimits?.plan ?? null} activeAccountId={accounts.active} onClose={closeChart} /> : null}
-      </div>
-    );
-  }
-
+  const windows = accountLimits ? [
+    accountLimits.session ? `${windowLabel(t, "session", accountLimits.session.windowMinutes)} ${t("limits.left")} ${Math.round(100 - accountLimits.session.usedPercent)}%` : null,
+    accountLimits.weekly ? `${windowLabel(t, "weekly", accountLimits.weekly.windowMinutes)} ${t("limits.left")} ${Math.round(100 - accountLimits.weekly.usedPercent)}%` : null,
+    ...quota.tiers.map((tier) => `${t("limits.tierWeek", { tier: claudeTierDisplayName(tier.value.tier, tier.value.label) })} ${t("limits.left")} ${Math.round(100 - tier.value.usedPercent)}%`),
+  ].filter(Boolean).join(" · ") : "";
+  /* Why the line is dimmed or carries the amber dot: an old reading, or a read that failed. */
+  const staleReason = [effectiveStaleHint, stale ? t("limits.stale", { stale }) : null, visibleFailureReason].filter(Boolean).join(" · ");
+  const summary = [label, activeLabel, accountLimits?.plan, windows || (visibleFailureReason ? null : accounts.status === "loading" || identityPending ? t("limits.accountLoading") : t("limits.noDataYet")), staleReason].filter(Boolean).join(" · ");
+  /* The line says what is left of the tightest window, and the bar draws that same share. */
+  const left = effective ? effective.percent : null;
+  const color = effective ? barColor(effective.percent, tint.color) : tint.color;
   return (
-    <div ref={containerRef} className="relative">
-      <div className={anyStale ? "opacity-60" : ""}>
-        <button
-          ref={triggerRef}
-          type="button"
-          aria-expanded={open}
-          aria-haspopup="dialog"
-          aria-label={t("accounts.triggerAria", { engine: label })}
-          onClick={() => {
-            setChartOpen(false);
-            setOpen((value) => !value);
-          }}
-          className="block w-full px-3.5 pb-1.5 pt-2.5 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-        >
-          <div className="flex items-center gap-1.5">
-            <span className="text-[11.5px] font-bold" style={{ color: tint.color }}>{label}</span>
-            {accountLimits?.plan ? <span className="truncate text-[10px] text-muted">{accountLimits.plan}</span> : null}
-            {effectiveStaleHint ? <span className="truncate text-[10px] text-muted">{effectiveStaleHint}</span> : null}
-            {stale ? <span className="h-1.5 w-1.5 shrink-0 self-center rounded-full bg-warning" title={t("limits.stale", { stale })} /> : null}
-            <span className="ml-auto flex shrink-0 items-center gap-1">
-              {effective ? (
-                <span
-                  className={`rounded-full border border-border bg-canvas px-1.5 py-0.5 text-[9.5px] font-bold tabular-nums ${effective.stale ? "opacity-55" : ""}`}
-                  style={{ color: barColor(effective.percent, tint.color) }}
-                >
-                  {t("accounts.effective", { pct: Math.round(effective.percent) })}
-                </span>
-              ) : null}
-              <span className="flex items-center gap-0.5 rounded-full border border-border bg-canvas px-1.5 py-0.5 text-[10px] font-semibold text-primary">
-                <span className="max-w-24 truncate">{activeLabel}</span>
-                {draining ? (
-                  <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none text-accent" aria-hidden />
-                ) : (
-                  <ChevronDown className="h-3 w-3 text-muted" aria-hidden />
-                )}
-              </span>
-            </span>
-          </div>
+    <div ref={containerRef} className="relative" data-engine-limits={engine}>
+      <div data-meter-line="" className={`flex h-[26px] items-center pl-[13px] pr-1.5 ${anyStale ? "opacity-60" : ""}`}>
+        <button ref={triggerRef} type="button" aria-expanded={open} aria-haspopup="dialog" aria-label={t("accounts.triggerAria", { engine: label })} title={summary} className={`flex h-[22px] min-w-0 items-center gap-1.5 rounded-[7px] px-1.5 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${hasWindows && effective ? "flex-1" : "flex-initial"}`} onClick={() => { setChartOpen(false); setOpen((value) => !value); }}>
+          {/* The account starts on the edge every name in the sidebar starts on, and the mark that names
+              the engine follows it, as an icon follows its word in the list above. The amber dot
+              stands on the mark's corner, where it takes no width from the name. */}
+          <span data-meter-name="" className="min-w-0 truncate text-[11.5px] font-semibold text-primary">{activeLabel}</span>
+          <span className="relative flex shrink-0">
+            <EngineMark engine={engine} size={12} label={label} />
+            {staleReason ? <span data-limits-stale-dot="" title={staleReason} className="absolute -right-[3px] -top-[3px] h-1.5 w-1.5 rounded-full bg-warning ring-1 ring-card" /> : null}
+          </span>
+          {draining ? <Loader2 className="h-3 w-3 shrink-0 animate-spin text-accent motion-reduce:animate-none" aria-hidden /> : null}
         </button>
-        {hasWindows ? (
-          <button
-            ref={chartTriggerRef}
-            type="button"
-            aria-expanded={chartOpen}
-            aria-haspopup="dialog"
-            aria-label={t("burndown.openAria", { engine: label })}
-            onClick={() => {
-              setOpen(false);
-              setChartOpen((value) => !value);
-            }}
-            className={`block w-full px-3.5 pt-0.5 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${visibleFailureReason ? "pb-1.5" : "pb-3"}`}
-          >
-            <LimitRow label={windowLabel(t, "session", accountLimits!.session?.windowMinutes)} window={accountLimits!.session} engineColor={tint.color} now={now} staleHint={fmtQuotaStaleHint(Boolean(quota.session?.stale), quota.session?.observedAt ?? null, locale)} />
-            <LimitRow label={windowLabel(t, "weekly", accountLimits!.weekly?.windowMinutes)} window={accountLimits!.weekly} engineColor={tint.color} now={now} staleHint={fmtQuotaStaleHint(Boolean(quota.weekly?.stale), quota.weekly?.observedAt ?? null, locale)} />
-            {/* One line per model tier the provider meters for this account
-                (#1358, #1796), named by the provider's own tier — a tier it
-                never reported simply has no line. */}
-            {quota.tiers.map((tier) => (
-              <LimitRow
-                key={tier.value.tier}
-                label={t("limits.tierWeek", { tier: claudeTierDisplayName(tier.value.tier, tier.value.label) })}
-                window={tier.value}
-                engineColor={tint.color}
-                now={now}
-                staleHint={fmtQuotaStaleHint(tier.stale, tier.observedAt, locale)}
-              />
-            ))}
+        {hasWindows && effective ? (
+          <button ref={chartTriggerRef} type="button" aria-expanded={chartOpen} aria-haspopup="dialog" aria-label={t("burndown.openAria", { engine: label })} title={windows} className="flex h-[22px] shrink-0 items-center gap-1.5 rounded-[7px] px-1.5 hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" onClick={() => { setOpen(false); setChartOpen((value) => !value); }}>
+            <span data-meter-value="" className="text-[11px] tabular-nums text-muted">{t("limits.left")} <span className="font-bold" style={{ color: effective.percent <= 30 ? color : "var(--color-primary)" }}>{Math.round(effective.percent)}%</span></span>
+            <ReserveBar percent={left} color={color} />
           </button>
-        ) : visibleFailureReason ? null : (
-          <div className="px-3.5 pb-3 pt-0.5 text-[10px] text-muted">{accounts.status === "loading" || identityPending ? t("limits.accountLoading") : t("limits.noDataYet")}</div>
+        ) : (
+          /* The reason takes what the account's name leaves: the name is never cut to make room for it. */
+          <span data-limits-reason="" title={staleReason || undefined} className="min-w-0 flex-1 truncate px-1.5 text-right text-[10px] text-muted">{visibleFailureReason ?? (accounts.status === "loading" || identityPending ? "…" : t("limits.noDataYet"))}</span>
         )}
-        {visibleFailureReason ? <div className="px-3.5 pb-3 pt-0.5 text-[10px] text-muted">{visibleFailureReason}</div> : null}
       </div>
+      {/* Behind "All windows" a failed read says why in full, under its account. */}
+      {density === "detail" && visibleFailureReason ? (
+        <div className={`${LINE_EDGE} -mt-0.5 pb-1 ${anyStale ? "opacity-60" : ""}`}>
+          <span data-meter-note="" className="block break-words text-[10px] leading-[13px] text-muted">{visibleFailureReason}</span>
+        </div>
+      ) : null}
+      {density === "detail" && hasWindows ? (
+        /* Behind "All windows": the plan, then every window with its reset, on the edge the account starts on. */
+        <div data-limits-windows="" className={`${LINE_EDGE} pb-1 ${anyStale ? "opacity-60" : ""}`}>
+          {accountLimits?.plan ? <span data-meter-note="" className="-mt-0.5 block truncate pb-0.5 text-[10px] leading-[13px] text-muted">{label} · {accountLimits.plan}</span> : null}
+          <LimitWindowLine label={windowLabel(t, "session", accountLimits!.session?.windowMinutes)} window={accountLimits!.session} engineColor={tint.color} now={now} staleHint={fmtQuotaStaleHint(Boolean(quota.session?.stale), quota.session?.observedAt ?? null, locale)} />
+          <LimitWindowLine label={windowLabel(t, "weekly", accountLimits!.weekly?.windowMinutes)} window={accountLimits!.weekly} engineColor={tint.color} now={now} staleHint={fmtQuotaStaleHint(Boolean(quota.weekly?.stale), quota.weekly?.observedAt ?? null, locale)} />
+          {quota.tiers.map((tier) => (
+            <LimitWindowLine key={tier.value.tier} label={t("limits.tierWeek", { tier: claudeTierDisplayName(tier.value.tier, tier.value.label) })} window={tier.value} engineColor={tint.color} now={now} staleHint={fmtQuotaStaleHint(tier.stale, tier.observedAt, locale)} />
+          ))}
+        </div>
+      ) : null}
       {open ? <AccountsPanel state={accounts} onClose={close} focusAccountId={focusAccountId} quotaOverride={{ accountId: accounts.active, quota, now }} /> : null}
       {chartOpen ? <BurndownPanel key={accounts.active} engine={engine} label={label} plan={accountLimits?.plan ?? null} activeAccountId={accounts.active} onClose={closeChart} /> : null}
     </div>
@@ -405,7 +323,7 @@ function EngineLimitsBlock({
 
 /** Sidebar footer: Claude and Codex plan limits (5h session + weekly). Each
     block is also that engine's account switcher (see {@link EngineLimitsBlock}). */
-export function LimitsFooter({ density = "full" }: { density?: RailFooterDensity } = {}) {
+export function LimitsFooter({ density }: { density: SidebarFooterDensity }) {
   const [snap, setSnap] = useState<{ data: LimitsPayload; at: number } | null>(null);
   const [now, setNow] = useState(() => Date.now() / 1000);
   /* A switch busts the account-keyed server cache and immediately schedules a
@@ -436,7 +354,7 @@ export function LimitsFooter({ density = "full" }: { density?: RailFooterDensity
   // Each engine's account list governs its switcher visibility. Both remain
   // mounted through empty limits, initial loading, and account refresh failures.
   return (
-    <div className={`shrink-0 border-t border-border empty:hidden ${density === "full" ? "" : "py-0.5"}`}>
+    <div className="shrink-0 border-t border-border py-0.5 empty:hidden">
       <EngineLimitsBlock engine="claude" label="Claude" limits={snap?.data.claude ?? null} payloadAccountId={snap?.data.claudeAccountId ?? null} now={now} receivedAt={snap?.at ?? now} provenance={snap?.data.provenance.claude ?? { source: "unavailable", reason: null, staleSince: null }} onSwitched={invalidateLimits} density={density} />
       <EngineLimitsBlock engine="codex" label="Codex" limits={snap?.data.codex ?? null} payloadAccountId={snap?.data.codexAccountId ?? null} now={now} receivedAt={snap?.at ?? now} provenance={snap?.data.provenance.codex ?? { source: "unavailable", reason: null, staleSince: null }} onSwitched={invalidateLimits} density={density} />
       {/* GitHub Copilot accounts and their monthly transcript quota. */}
@@ -444,7 +362,6 @@ export function LimitsFooter({ density = "full" }: { density?: RailFooterDensity
         limits={snap?.data.copilot ?? null}
         limitsAccountId={snap?.data.copilotAccountId ?? null}
         now={now}
-        provenance={snap?.data.provenance.copilot ?? { source: "unavailable", reason: null, staleSince: null }}
         onChanged={invalidateLimits}
         density={density}
       />

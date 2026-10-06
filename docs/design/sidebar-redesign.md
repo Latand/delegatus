@@ -168,7 +168,7 @@ The readings each frame is judged by are committed in `evidence/sidebar-redesign
 
 ## 8. What was built
 
-`ProjectRail` in `src/components/ProjectRail.tsx` is variant 1 for every user of the desktop layout. Variants 2 and 3, the question line, `sidebarVariants.prototype.tsx`, the context that let the fixture swap the drawing, and the gauge drawing of the footer blocks are gone. The phone is unchanged: it draws its project picker with `MobileProjectSheet`, and the footer blocks keep their `full` drawing for it.
+`ProjectRail` in `src/components/ProjectRail.tsx` is variant 1 for every user of the desktop layout. Variants 2 and 3, the question line, `sidebarVariants.prototype.tsx`, the context that let the fixture swap the drawing, and the gauge drawing of the footer blocks are gone. The phone is unchanged: it draws its project picker with `MobileProjectSheet`, and the memory and Telegram blocks keep their `full` drawing for it. The limits and Copilot blocks are mounted by the sidebar alone, so they have its two drawings and no other.
 
 Built as drawn in section 3: one left edge at 19 px for every name and label; a column for each mark that exists only while some project carries the mark; a short age in the last column; "Pinned" and "Projects" sections with their counts, the crown on the label of the first; the archive as a labelled fold with its count, its rows without the crown control; Overview with the totals of both marks; the filter with its glyph and, on a first run, the labelled "Create project" button across the row; the system block of one line per reading behind the same fold and the same stored key as before.
 

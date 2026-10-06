@@ -25,7 +25,7 @@ function fmtBytes(n: number): string {
   return Math.max(0, Math.round(n / MIB)) + " MiB";
 }
 
-/** Bar color mirrors the LimitRow thresholds: amber under 30% headroom, red under 10%. */
+/** Bar color mirrors the limit window thresholds: amber under 30% headroom, red under 10%. */
 function ramColor(availablePercent: number): string {
   if (availablePercent < 10) return "var(--color-danger)";
   if (availablePercent < 30) return "var(--color-warning)";

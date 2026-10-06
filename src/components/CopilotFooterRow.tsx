@@ -4,11 +4,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { consumePendingAccountPanel, onAccountPanelRequest } from "@/lib/accounts/openPanel";
 import { useLocale } from "@/lib/i18n";
-import type { EngineLimits, LimitsProvenance } from "@/lib/types";
+import type { EngineLimits } from "@/lib/types";
 
 import { engineTintOf } from "./utils";
-import { barColor, LimitRow, LimitWindowLine, quotaAsOfHint } from "./LimitRow";
-import { LINE_EDGE, ReserveBar, type RailFooterDensity } from "./railFooterDensity";
+import { barColor, LimitWindowLine, quotaAsOfHint } from "./LimitRow";
+import { LINE_EDGE, ReserveBar, type SidebarFooterDensity } from "./railFooterDensity";
 import { windowLabel } from "./rateLimit";
 
 /** GitHub Copilot account switcher and monthly allowance in the footer. */
@@ -191,13 +191,11 @@ export function CopilotAccountList({ accounts }: { accounts: CopilotAccounts }) 
   );
 }
 
-export function CopilotFooterRow({ limits, limitsAccountId, now, provenance, onChanged, density = "full" }: {
-  /** `line` and `detail` are the desktop sidebar's drawings; `full` is the phone's. */
-  density?: RailFooterDensity;
+export function CopilotFooterRow({ limits, limitsAccountId, now, onChanged, density }: {
+  density: SidebarFooterDensity;
   limits: EngineLimits | null;
   limitsAccountId: string | null;
   now: number;
-  provenance: LimitsProvenance;
   onChanged: () => void;
 }) {
   const { t, locale } = useLocale();
@@ -230,69 +228,31 @@ export function CopilotFooterRow({ limits, limitsAccountId, now, provenance, onC
   if (!body || (!body.cli.present && body.accounts.length === 0)) return null;
   const active = body.accounts.find((account) => account.active) ?? null;
 
-  if (density !== "full") {
-    const weekly = active?.id === limitsAccountId ? limits?.weekly ?? null : null;
-    const left = weekly ? Math.max(0, Math.min(100, 100 - weekly.usedPercent)) : null;
-    const color = left === null ? tint.color : barColor(left, tint.color);
-    const summary = ["Copilot", active ? active.label : t("copilot.accounts.none"), left === null ? null : `${windowLabel(t, "weekly", weekly?.windowMinutes)} ${t("limits.left")} ${Math.round(left)}%`].filter(Boolean).join(" · ");
-    return (
-      <div ref={containerRef} className="relative" data-engine-limits="copilot">
-        <button type="button" data-meter-line="" aria-expanded={open} aria-label={t("copilot.accounts.rowAria")} title={summary} onClick={() => setOpen((value) => !value)} className={`flex h-[26px] w-full items-center gap-1.5 ${LINE_EDGE} text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40`}>
-          {/* Built as the Claude and Codex lines are: the account in words, a mark in a 12 px box after it,
-              what is left, its bar. Copilot has no mark of its own, so its tint dot stands in the box. */}
-          <span className="flex min-w-0 flex-1 items-center gap-1.5">
-            <span data-meter-name="" className="min-w-0 truncate text-[11.5px] font-semibold text-primary">{active ? active.label : "Copilot"}</span>
-            <span role="img" aria-label="Copilot" title="Copilot" className="grid h-3 w-3 shrink-0 place-items-center"><span className="h-2 w-2 rounded-full" style={{ backgroundColor: tint.color }} /></span>
-          </span>
-          {active ? null : <span className="shrink-0 text-[10px] text-muted">{t("copilot.accounts.none")}</span>}
-          {left === null ? null : <span data-meter-value="" className="shrink-0 text-[11px] tabular-nums text-muted">{t("limits.left")} <span className="font-bold text-primary">{Math.round(left)}%</span></span>}
-          {left === null ? null : <ReserveBar percent={left} color={color} />}
-        </button>
-        {density === "detail" && weekly ? (
-          <div data-limits-windows="" className={`${LINE_EDGE} pb-1`}>
-            <LimitWindowLine
-              label={windowLabel(t, "weekly", weekly.windowMinutes)}
-              window={weekly}
-              engineColor={tint.color}
-              now={now}
-              staleHint={weekly.observedAt != null && now - weekly.observedAt > 300 ? quotaAsOfHint(weekly.observedAt, locale) : null}
-            />
-          </div>
-        ) : null}
-        {open ? (
-          <div role="dialog" aria-label={t("copilot.accounts.title")} className="flex flex-col gap-2 border-t border-border bg-sunken px-3.5 py-2.5 text-[11.5px]">
-            <CopilotAccountList accounts={accounts} />
-          </div>
-        ) : null}
-      </div>
-    );
-  }
-
+  const weekly = active?.id === limitsAccountId ? limits?.weekly ?? null : null;
+  const left = weekly ? Math.max(0, Math.min(100, 100 - weekly.usedPercent)) : null;
+  const color = left === null ? tint.color : barColor(left, tint.color);
+  const summary = ["Copilot", active ? active.label : t("copilot.accounts.none"), left === null ? null : `${windowLabel(t, "weekly", weekly?.windowMinutes)} ${t("limits.left")} ${Math.round(left)}%`].filter(Boolean).join(" · ");
   return (
-    <div ref={containerRef} className="relative">
-      <button
-        type="button"
-        aria-expanded={open}
-        aria-label={t("copilot.accounts.rowAria")}
-        onClick={() => setOpen((value) => !value)}
-        className="flex min-h-[44px] w-full items-center gap-2 px-3.5 py-1.5 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-[36px]"
-      >
-        <span aria-hidden className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: tint.color }} />
-        <span className="text-[11.5px] font-bold text-primary">Copilot</span>
-        <span className="ml-auto truncate text-[10px] font-semibold text-muted">
-          {active ? active.label : t("copilot.accounts.none")}
+    <div ref={containerRef} className="relative" data-engine-limits="copilot">
+      <button type="button" data-meter-line="" aria-expanded={open} aria-label={t("copilot.accounts.rowAria")} title={summary} onClick={() => setOpen((value) => !value)} className={`flex h-[26px] w-full items-center gap-1.5 ${LINE_EDGE} text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40`}>
+        {/* Built as the Claude and Codex lines are: the account in words, a mark in a 12 px box after it,
+            what is left, its bar. Copilot has no mark of its own, so its tint dot stands in the box. */}
+        <span className="flex min-w-0 flex-1 items-center gap-1.5">
+          <span data-meter-name="" className="min-w-0 truncate text-[11.5px] font-semibold text-primary">{active ? active.label : "Copilot"}</span>
+          <span role="img" aria-label="Copilot" title="Copilot" className="grid h-3 w-3 shrink-0 place-items-center"><span className="h-2 w-2 rounded-full" style={{ backgroundColor: tint.color }} /></span>
         </span>
+        {active ? null : <span className="shrink-0 text-[10px] text-muted">{t("copilot.accounts.none")}</span>}
+        {left === null ? null : <span data-meter-value="" className="shrink-0 text-[11px] tabular-nums text-muted">{t("limits.left")} <span className="font-bold text-primary">{Math.round(left)}%</span></span>}
+        {left === null ? null : <ReserveBar percent={left} color={color} />}
       </button>
-      {active?.id === limitsAccountId ? (
-        <div className="px-3.5 pb-2">
-          <LimitRow
-            label={windowLabel(t, "weekly", limits?.weekly?.windowMinutes)}
-            window={limits?.weekly ?? null}
+      {density === "detail" && weekly ? (
+        <div data-limits-windows="" className={`${LINE_EDGE} pb-1`}>
+          <LimitWindowLine
+            label={windowLabel(t, "weekly", weekly.windowMinutes)}
+            window={weekly}
             engineColor={tint.color}
             now={now}
-            staleHint={limits?.weekly?.observedAt != null && now - limits.weekly.observedAt > 300
-              ? quotaAsOfHint(limits.weekly.observedAt, locale)
-              : provenance.source === "unavailable" ? t("limits.noDataYet") : null}
+            staleHint={weekly.observedAt != null && now - weekly.observedAt > 300 ? quotaAsOfHint(weekly.observedAt, locale) : null}
           />
         </div>
       ) : null}
