@@ -663,3 +663,16 @@ test("a real Claude continuation cut is newer than an earlier provider failure",
   expect(await durableStageTurnEvidence("claude", file)).toMatchObject({ turn: "terminal",
     terminalProviderMessage: { errorClass: "turn_aborted", ts: Date.parse("2026-07-24T08:01:00Z") } });
 });
+
+
+test("quota prompt provenance keeps human overrides and excludes tool results", async () => {
+  const file = writeTranscript("quota-prompt-provenance.jsonl", [
+    { type: "user", timestamp: "2026-10-05T16:56:00Z", origin: { kind: "task-notification" }, promptSource: "system", message: { content: "<task-notification>done</task-notification>" } },
+    { type: "user", timestamp: "2026-10-05T16:56:01Z", origin: { kind: "human" }, turnOrigin: "task_notification", promptSource: "typed", message: { content: "<task-notification>human words</task-notification>" } },
+    { type: "user", timestamp: "2026-10-05T16:56:02Z", message: { content: [{ type: "tool_result", content: "Tool finished" }] } },
+  ]);
+  expect((await durableStageTurnEvidence("claude", file))?.prompts).toEqual([
+    { ts: Date.parse("2026-10-05T16:56:00Z"), origin: "harness" },
+    { ts: Date.parse("2026-10-05T16:56:01Z"), origin: "external" },
+  ]);
+});

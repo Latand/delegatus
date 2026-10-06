@@ -1,5 +1,10 @@
 import fs from "node:fs";
 
+import { claudeUserText, isClaudeTurnWindowMeta } from "@/lib/claudeProtocolUser";
+import { claudeMessageProvenance } from "@/lib/runtime/claudeMessageProvenance";
+import { decodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText";
+import { readStructuredUserMetadata } from "@/lib/selection/structuredUserMetadata";
+
 import { turnStateFromRecords } from "@/lib/accounts/migration/turnState";
 import type { RuntimeEngine as FlowEngine } from "@/lib/agent/runtimeConfig";
 import { lastAssistantMessageFromRecords } from "@/lib/scanner/lastAssistantMessage";
@@ -26,6 +31,11 @@ export type StageTurnEvidence = {
   /** Prose written before this attempt's stage_report call, when the agent
       followed its detailed answer with a shorter closing message. */
   reportProse?: string | null;
+  /** Delivered prompts in this verified tail. Harness wakes and controller
+      continuations retain quota recovery; external prompts withdraw it. */
+  prompts?: Array<{ ts: number; origin: "external" | "harness" | "pipeline" }>;
+  /** False if the bounded verified read could not cover the requested cut. */
+  promptHistoryComplete?: boolean;
   /** The verified read covers the complete artifact and contains only Codex's
       launch metadata record. */
   launchOnly?: boolean;
@@ -265,9 +275,43 @@ function terminalProviderMessageFromRecords(
   return null;
 }
 
-/** The widest verified read spent looking for a reported attempt's prose. A
-    brief is relayed at 60 KiB at most, so a window this size holds it with
-    room for the tool output written after the report. */
+/** Tool results and metadata never stand in for a delivered prompt. SDK
+    envelopes need the broker's authorship join: human and controller sends
+    share that envelope in production. Missing provenance stays external. */
+function stagePrompts(records: RecordLike[], codex: boolean, transcriptPath: string): NonNullable<StageTurnEvidence["prompts"]> {
+  const provenance = codex ? {} : claudeMessageProvenance(transcriptPath);
+  return records.flatMap<NonNullable<StageTurnEvidence["prompts"]>[number]>(record => {
+    const ts = recordTs(record, 0);
+    if (!ts) return [];
+    if (codex) {
+      const payload = recordValue(record.payload) ?? {};
+      if (payload.type !== "user_message" && !(payload.type === "message" && payload.role === "user")) return [];
+      const text = stringValue(payload.message) ?? recordsValue(payload.content).map(part => stringValue(part.text) ?? "").join("\n");
+      const decoded = decodeCodexStructuredUserText(text);
+      let origin = decoded.origin;
+      if (decoded.metadataRef) {
+        try { origin = readStructuredUserMetadata(decoded.metadataRef).origin; }
+        catch { origin = null; }
+      }
+      return [{ ts, origin: origin?.kind === "agent" && origin.role === "pipeline" ? "pipeline" as const : "external" as const }];
+    }
+    if (record.type !== "user") return [];
+    const text = claudeUserText(recordValue(record.message)?.content).trim();
+    if (!text && !recordsValue(recordValue(record.message)?.content).some(part => part.type === "image")) return [];
+    const kind = stringValue(record.origin) ?? stringValue(recordValue(record.origin)?.kind);
+    const human = kind === "human" || kind === "operator" || record.promptSource === "typed";
+    if (!human && (kind === "task-notification" || kind === "task" || kind === "wakeup"
+      || record.turnOrigin === "task_notification" || record.turnOrigin === "wakeup"
+      || record.promptSource !== "sdk" && /^<(?:task-notification|wakeup)\b/.test(text))) return [{ ts, origin: "harness" as const }];
+    if (!human && isClaudeTurnWindowMeta(record)) return [];
+    const author = provenance[stringValue(record.uuid) ?? ""];
+    return [{ ts, origin: author?.origin === "agent" && author.senderRole === "pipeline" ? "pipeline" as const : "external" as const }];
+  });
+}
+
+/** Bound for verified reads of report prose and prompts since a provider cut.
+    A brief is relayed at 60 KiB at most; oversized history remains unknown
+    when this window cannot cover the requested boundary. */
 export const MAX_REPORT_EVIDENCE_BYTES = 8 * 1024 * 1024;
 
 export async function durableStageTurnEvidence(
@@ -276,6 +320,7 @@ export async function durableStageTurnEvidence(
   reportAt?: string | null,
   attemptStartedAt?: string | null,
   readTail: typeof readStableTailRecords = readStableTailRecords,
+  afterCutAt?: number,
 ): Promise<StageTurnEvidence | null> {
   const read = await readTail(transcriptPath);
   if (read.integrity !== "complete") return null;
@@ -289,6 +334,7 @@ export async function durableStageTurnEvidence(
   }
   const reportTime = reportAt ? Date.parse(reportAt) : NaN;
   const startedTime = attemptStartedAt ? Date.parse(attemptStartedAt) : NaN;
+  const cutTime = afterCutAt && afterCutAt > 0 ? afterCutAt : NaN;
   let evidenceRead = read;
   let evidenceBytes = 131_072;
   let reportProse: string | null = null;
@@ -309,13 +355,13 @@ export async function durableStageTurnEvidence(
         fallbackTs,
       )?.text ?? null;
     }
-    if (!Number.isFinite(reportTime) || !evidenceRead.prefixTruncated
-      || (reportProse !== null && message !== null && turn.state !== "unknown")) break;
-    /* Once the window reaches back to the attempt's start, an older record
-       cannot belong to this attempt: an agent that wrote no prose before its
-       report is answered here, without reading the whole transcript. */
-    const oldestAt = evidenceRead.records.map((record) => recordTs(record, 0)).find((ts) => ts > 0);
-    if (Number.isFinite(startedTime) && oldestAt !== undefined && oldestAt <= startedTime) break;
+    const oldestAt = evidenceRead.records.map(record => recordTs(record, 0)).find(ts => ts > 0);
+    const reportCovered = !Number.isFinite(reportTime) || !evidenceRead.prefixTruncated
+      || reportProse !== null && message !== null && turn.state !== "unknown"
+      || Number.isFinite(startedTime) && oldestAt !== undefined && oldestAt <= startedTime;
+    const promptsCovered = !Number.isFinite(cutTime) || !evidenceRead.prefixTruncated
+      || oldestAt !== undefined && oldestAt <= cutTime;
+    if (reportCovered && promptsCovered) break;
     if (evidenceBytes >= MAX_REPORT_EVIDENCE_BYTES) break;
     // A JSONL line crossing the tail boundary is discarded. Grow the
     // verified window until both the final and pre-report messages are read.
@@ -334,6 +380,9 @@ export async function durableStageTurnEvidence(
   return {
     turn: nativeCut || turn.state === "terminal" ? "terminal" : turn.state === "busy" ? "busy" : "unknown",
     message: nativeCut ? null : message,
+    prompts: stagePrompts(turnRecords, codex, transcriptPath),
+    promptHistoryComplete: !evidenceRead.prefixTruncated || Number.isFinite(cutTime)
+      && (recordTs(evidenceRead.records[0] ?? {}, 0) || Infinity) <= cutTime,
     ...(reportAt ? { reportProse } : {}),
     lastRecordAt: newest ? recordTs(newest, fallbackTs) || null : null,
     launchOnly: codex

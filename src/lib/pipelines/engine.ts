@@ -343,7 +343,7 @@ export interface PipelinePorts {
   /** Confirmed reset of the source account's governing exhausted quota window. */
   claudeAccountReset?(accountId: string, model: string | null): number | null;
   sleep?(milliseconds: number): Promise<void>;
-  durableTurnEvidence(engine: EffectivePipelineRole["engine"], transcriptPath: string, reportAt?: string | null, attemptStartedAt?: string | null): Promise<StageTurnEvidence | null>;
+  durableTurnEvidence(engine: EffectivePipelineRole["engine"], transcriptPath: string, reportAt?: string | null, attemptStartedAt?: string | null, readTail?: Parameters<typeof durableStageTurnEvidence>[4], afterCutAt?: number): Promise<StageTurnEvidence | null>;
   headCwd(transcriptPath: string): string | null;
   lastMessage(entry: FileEntry): { text: string; ts: number } | null;
   pathForConversation(conversationId: string): string | null;
@@ -2314,7 +2314,7 @@ async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attemp
       persist();
       return false;
     }
-    const activity = await providerCutActivity(attempt, ports);
+    const activity = await providerCutActivity(pipeline, attempt, ports, persist);
     if (activity === "unchanged") return true;
     if (activity === "newer") {
       park(pipeline, "provider account recovery cancelled after newer stage activity; waiting for operator decision", attempt);
@@ -4957,8 +4957,8 @@ async function spawnRunStage(
       const accountFailure = error instanceof ProjectAccountRefusedError
         || error instanceof AccountAuthenticationRequiredError && error.accountId === wait.switchedAccountId
         || classifyProviderCondition(attempt.effectiveRole.engine, null, detail).kind === "auth_required";
-      if (!accountFailure) {
-        park(pipeline, detail, attempt);
+      if (!accountFailure && !(error instanceof CodexServiceTierUnavailableError)) {
+        parkProviderUsageLimit(pipeline, attempt, `stage cut by ${wait.condition.label}; target preflight failed: ${detail}`, ports);
         return;
       }
       wait.failedAccounts = [...new Set([...(wait.failedAccounts ?? []), wait.switchedAccountId])];
@@ -5356,7 +5356,7 @@ async function tickRunStage(
      verdict settles once — even when the runtime ledger is stale `running`, the
      scan projection transiently lost the transcript, or the host is already
      gone. A busy turn is mid-work: its messages are never verdict candidates. */
-  const durable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, attempt.report?.at, attempt.startedAt);
+  const durable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, attempt.report?.at, attempt.startedAt, undefined, attempt.providerWait?.turnTs);
   const unregisteredHostDeath = structuredActive === true
     ? null
     : await unregisteredStageHostDeathEvidence(attempt, {
@@ -5378,6 +5378,33 @@ async function tickRunStage(
         text: terminalProviderMessage.text, ts: terminalProviderMessage.ts, resetsAt: terminalProviderMessage.usageLimit?.resetsAt ?? null }
     : null;
   if (!oomDeath && !heldForDeployCut && (notice || attempt.providerWait)) {
+    if (attempt.providerWait && attempt.providerWait.turnTs > 0 && durable?.promptHistoryComplete === false) {
+      waitForProviderTransport(pipeline, attempt, attempt.providerWait.condition, "delivered prompt history is incomplete", ports, persist);
+      return;
+    }
+    if (newerExternalProviderPrompt(attempt, durable)) {
+      if (attempt.providerWait) {
+        delete attempt.providerWait.stageRetry;
+        attempt.providerWait.retryCancelled = true;
+      }
+      delete attempt.controllerWait;
+      if (notice) {
+        park(pipeline, "provider recovery cancelled after newer stage activity; waiting for operator decision", attempt);
+        persist();
+        return;
+      }
+      pipeline.stateDetail = null;
+      if (durable?.turn !== "terminal") {
+        // Let the operator's own work finish, retaining the cancellation
+        // witness in case its turn subsequently ends on another limit.
+        persist();
+        return;
+      }
+      delete attempt.providerWait;
+    }
+    // Native journaling can expose the wake's prompt before its limit notice.
+    // Keep its recovery witness and let that turn finish before any delivery.
+    if (durable?.turn === "busy" && newerAutomaticProviderPrompt(attempt, durable)) return;
     const newerNormalTurn = !notice && attempt.providerWait && durable?.turn === "terminal"
       && (durable.lastRecordAt ?? durable.message?.ts ?? 0) > attempt.providerWait.turnTs;
     const newerStageOutput = !notice && attempt.providerWait && durable?.message
@@ -6548,11 +6575,52 @@ async function reconcileParkedDelivery(pipeline: Pipeline, ports: PipelinePorts)
   return true;
 }
 
-async function providerCutActivity(attempt: PipelineStageAttempt, ports: PipelinePorts): Promise<"newer" | "unchanged" | "unknown"> {
+function newerExternalProviderPrompt(attempt: PipelineStageAttempt, durable: StageTurnEvidence | null | undefined): boolean {
+  const wait = attempt.providerWait;
+  return !!wait && wait.turnTs > 0 && !!durable?.prompts?.some(prompt => prompt.ts > wait.turnTs && prompt.origin === "external");
+}
+
+function newerAutomaticProviderPrompt(attempt: PipelineStageAttempt, durable: StageTurnEvidence | null | undefined): boolean {
+  const wait = attempt.providerWait;
+  return !!wait && !newerExternalProviderPrompt(attempt, durable)
+    && !!durable?.prompts?.some(prompt => prompt.ts > wait.turnTs && prompt.origin !== "external");
+}
+
+/** A harness wake can hit the same limit without an operator answering. It
+    advances the cut witness while retaining the already promised stage retry. */
+function refreshHarnessProviderCut(pipeline: Pipeline, attempt: PipelineStageAttempt, durable: StageTurnEvidence | null, ports: PipelinePorts): boolean {
+  const wait = attempt.providerWait;
+  const notice = durable?.turn === "terminal" ? durable.terminalProviderMessage : null;
+  if (!wait || wait.condition.kind !== "usage_limit" || !notice || notice.ts <= wait.turnTs
+    || newerExternalProviderPrompt(attempt, durable)
+    || durable?.message && durable.message.ts > wait.turnTs && durable.message.ts !== notice.ts
+    || !durable?.prompts?.some(prompt => prompt.ts > wait.turnTs && prompt.ts <= notice.ts && prompt.origin === "harness")
+    || classifyProviderCondition(attempt.effectiveRole.engine, notice.errorClass ?? null, notice.text).kind !== "usage_limit") return false;
+  wait.turnTs = notice.ts;
+  wait.text = redactBounded(notice.text, 300);
+  const reset = knownReset(notice.usageLimit?.resetsAt);
+  const limited = usageLimitsOn(attempt, attempt.effectiveRole.engine).find(item => item.accountId === wait.accountId);
+  if (limited) { limited.limitedAt = notice.ts; limited.turnId = String(notice.ts); if (reset !== null) limited.resetsAt = reset; }
+  if (reset !== null) {
+    wait.resetsAt = reset;
+    if (wait.stageRetry && wait.resumeAt !== new Date(reset * 1_000 + 60_000).toISOString()) {
+      const reason = pipeline.stateDetail?.split("\n").slice(1).join("\n") || "stage cut by provider usage limit";
+      parkProviderUsageLimit(pipeline, attempt, reason, ports);
+    }
+  }
+  if (wait.stageRetry) scheduleProviderWake(ports, wait.resumeAt);
+  return true;
+}
+
+async function providerCutActivity(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts, persist: () => void): Promise<"newer" | "unchanged" | "unknown"> {
     const wait = attempt.providerWait;
     if (!wait) return "unknown";
     const durable = attempt.agentPath
-      ? await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, undefined, attempt.startedAt) : null;
+      ? await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, undefined, attempt.startedAt, undefined, wait.turnTs) : null;
+    if (durable?.promptHistoryComplete === false && wait.turnTs > 0) return "unknown";
+    if (newerExternalProviderPrompt(attempt, durable)) return "newer";
+    if (refreshHarnessProviderCut(pipeline, attempt, durable, ports)) persist();
+    if (!attempt.report && !attempt.verdict && durable?.turn === "busy" && newerAutomaticProviderPrompt(attempt, durable)) return "unknown";
     if (attempt.report || attempt.verdict || durable?.message && durable.message.ts > wait.turnTs
       || durable?.terminalProviderMessage && durable.terminalProviderMessage.ts > wait.turnTs
       || durable && (durable.turn === "busy" || durable.turn === "terminal" && !durable.terminalProviderMessage)
@@ -6611,7 +6679,7 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
     return true;
   }
   const confirmUnchangedCut = async () => {
-    const state = await providerCutActivity(attempt, ports);
+    const state = await providerCutActivity(pipeline, attempt, ports, persist);
     if (state === "unchanged") return true;
     if (state === "newer") {
       cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled after newer stage activity; waiting for operator decision");
@@ -6624,10 +6692,11 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
     }
     return false;
   };
-  if (await providerCutActivity(attempt, ports) === "newer") {
+  if (await providerCutActivity(pipeline, attempt, ports, persist) === "newer") {
     cancelProviderStageRetry(pipeline, attempt, "automatic provider retry cancelled after newer stage activity; waiting for operator decision");
     return true;
   }
+  if (!wait.stageRetry) return true;
   const remaining = unixMs(wait.resumeAt) - unixMs(ports.now());
   if (remaining > 0) { scheduleProviderWake(ports, wait.resumeAt); return false; }
   const elsewhere = pipelineTasksRunElsewhere(pipeline.taskIds, loadTasks());
@@ -6652,6 +6721,8 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
   }
   // Termination yields to the native host; a reply can become durable there.
   if (!await confirmUnchangedCut()) return true;
+  // A harness turn delivered during termination may name a later reset.
+  if (unixMs(wait.resumeAt) > unixMs(ports.now())) return true;
   delete wait.stageRetry;
   delete attempt.controllerWait;
   resetStageForRetry(pipeline, stage);
