@@ -2557,6 +2557,132 @@ test("with nobody draining, the bound controller's watchdog delivers an admitted
   }
 });
 
+test("an accepted send whose queue cannot list the journal records why it waits within ten seconds, and is handed over once when the listing returns", async () => {
+  /* Review of incident 2026-10-06: the queue reads every effect page before it
+     starts a lane, so a listing that throws reached no message and the
+     accepted send waited with no record at all. Its record now exists from
+     admission, and every failed listing says what it waits on and when the
+     next pass tries. The browser stays closed: only the watchdog runs. */
+  const sessionId = "deadbeef-3333-\x34333-8333-333333333333";
+  const directory = path.join(sandbox, "controller-unlistable-journal");
+  const artifactPath = path.join(directory, `${sessionId}.jsonl`);
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
+  const profile = emptyLaunchProfile({ cwd: directory });
+  registry.reconcileConversations([{
+    engine: "codex",
+    path: artifactPath,
+    accountId: "unlistable-account",
+    launchProfile: profile,
+    turn: { state: "idle", source: "empty", terminalAt: null },
+    observedAt: "2026-10-06T12:00:00.000Z",
+  }]);
+  const conversation = registry.conversationForPath(artifactPath)!;
+  const key = { engine: "codex" as const, sessionId };
+  registry.upsert({
+    key,
+    artifactPath,
+    cwd: directory,
+    accountId: "unlistable-account",
+    launchProfile: profile,
+    status: "idle",
+    host: null,
+    structuredHost: {
+      kind: "codex-app-server",
+      endpoint: "fake:unlistable-host",
+      process: null,
+      eventCursor: 0,
+      protocolVersion: "fake-v1",
+      writerClaimEpoch: 0,
+      activeTurnRef: null,
+      pendingAttention: [],
+      activeFlags: [],
+    },
+    claimEpoch: 0,
+    claimOwner: null,
+    pendingAction: null,
+  });
+  const journal = new RuntimeJournal(path.join(directory, "events.sqlite"), { structuredHosts: true });
+  journal.append({
+    scope: { type: "session", id: conversation.id },
+    kind: "session-status",
+    payload: {
+      conversationId: conversation.id,
+      sessionKey: key,
+      hostKind: "codex-app-server",
+      host: "hosted",
+      turn: "idle",
+      provenance: "structured",
+      artifactPath,
+      capabilities: { steer: true, structuredAttention: true },
+    },
+  });
+  let unlistable = false;
+  let refusedListings = 0;
+  const client = {
+    ...runtimeJournalClient(journal),
+    effectBatch: async (kinds, afterEventSeq) => {
+      if (unlistable) {
+        refusedListings += 1;
+        throw new Error("effect listing refused");
+      }
+      return journal.effectBatch(100, kinds, afterEventSeq);
+    },
+  } as RuntimeHostClient;
+  const taken: string[] = [];
+  const host = new FakeEngineHost();
+  const originalSend = host.send.bind(host);
+  host.send = async (entry: QueueEntry) => {
+    taken.push(entry.id);
+    return originalSend(entry);
+  };
+  const progress = new DeliveryProgressStore(null);
+  try {
+    await bindStructuredDeliveryQueue([{ key, host: observableFakeHost(host) }], {
+      registry,
+      client,
+      progress,
+      watchdogIntervalMs: 100,
+      settlementSweepMs: 200,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    unlistable = true;
+    const admittedAt = performance.now();
+    const admitted = await enqueueStructuredMessage({
+      path: artifactPath,
+      conversationId: conversation.id,
+      clientMessageId: "unlistable-key",
+      text: "ship it after the listing comes back",
+      policy: "queue",
+    }, { enabled: () => true, client: () => client, registry: () => registry, progress });
+    expect(admitted).toMatchObject({ ok: true, outcome: "queued" });
+    const operationId = (admitted as { operationId: string }).operationId;
+    /* Recorded from admission, under the key the operator holds. */
+    expect(progress.get(operationId)).toMatchObject({ originalKey: "unlistable-key", kind: "send", terminal: null });
+    expect(progress.get(operationId)!.nextWakeAt).not.toBeNull();
+    await waitForCondition(() => progress.get(operationId)?.stalledSince != null, 10_000);
+    expect(performance.now() - admittedAt).toBeLessThan(10_000);
+    const stalled = progress.get(operationId)!;
+    expect(refusedListings).toBeGreaterThan(0);
+    expect(stalled).toMatchObject({ waitReason: "evidence-unreadable", originalKey: "unlistable-key", terminal: null });
+    expect(stalled.detail).toContain("could not be listed: effect listing refused");
+    expect(stalled.lastProgressAt).toBeTruthy();
+    expect(stalled.deadlineAt).not.toBeNull();
+    /* The next wake is the pass the backoff actually allows. */
+    expect(Date.parse(stalled.nextWakeAt!)).toBeGreaterThan(Date.parse(stalled.updatedAt));
+    expect(journal.operationResult(operationId)?.receipt.status).toBe("queued");
+    expect(taken).toEqual([]);
+
+    unlistable = false;
+    await waitForCondition(() => progress.get(operationId)?.terminal?.state === "delivered", 35_000);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(taken).toEqual([operationId]);
+    expect(["delivered", "turn-started"]).toContain(journal.operationResult(operationId)!.receipt.status);
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close();
+  }
+}, 60_000);
+
 test("a send its host could not answer for settles the reservation without waiting for a sweep", async () => {
   /* #1131: the queue writes `uncertain` for a send that was handed to the
      engine and never answered for. The reservation has to settle on that write

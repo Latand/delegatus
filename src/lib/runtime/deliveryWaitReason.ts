@@ -9,6 +9,8 @@
  * turn are told apart by one field.
  */
 export const DELIVERY_WAIT_REASONS = [
+  /** Accepted into the delivery journal; the queue takes it on its next pass. */
+  "queued",
   /** No drain pass reached it when one was due; the watchdog started one. */
   "wake-lost",
   /** An earlier delivery step on the same conversation is still running. */
@@ -59,9 +61,13 @@ export function isDeliveryWaitReason(value: unknown): value is DeliveryWaitReaso
   return typeof value === "string" && REASONS.has(value);
 }
 
-/** Reasons where the queue is actively doing something, so a long stay in one
-    is recorded as a stall. */
+/** Reasons a message leaves within moments when delivery is healthy, so a
+    long stay in one is recorded as a stall. */
 export const ACTIVE_DELIVERY_PHASES: ReadonlySet<DeliveryWaitReason> = new Set<DeliveryWaitReason>([
+  /* Accepted and never reached by a pass, or reached by passes that could
+     not read what they need: either one lasting is a stall. */
+  "queued",
+  "evidence-unreadable",
   "checking",
   "dispatching",
   "interrupting",

@@ -39,6 +39,7 @@ const {
   sendIsSettled,
   sendReceiptFor,
   settleDueSends,
+  mirrorLateAcknowledgements,
 } = await import("./sendSettlement");
 const { handleRuntimeOperationQuery, handleRuntimeRetry } = await import("./http");
 const { NextRequest } = await import("next/server");
@@ -2261,6 +2262,71 @@ test("an explicit status recovery with late canonical delivery never rearms the 
     expect(active.journal.effectBatch(100)).toEqual([]);
     expect(active.journal.operationResult(operationId)?.receipt.status).toBe("uncertain");
   } finally { active.close(); }
+});
+
+test("a late canonical acknowledgement corrects the progress record that ended uncertain, kept across reopen, and sends nothing", async () => {
+  /* Review of incident 2026-10-06: the receipt read corrected the delivery
+     record and left the progress record saying `uncertain` beside it, and
+     nothing could correct it afterwards. */
+  const { DeliveryProgressStore, deliveryProgressPath, readDeliveryProgress, setDeliveryProgressStoreForTests } = await import("./deliveryProgress");
+  const active = fixture("late-ack-progress", { engine: "claude", sqlite: true });
+  let progress = new DeliveryProgressStore(deliveryProgressPath());
+  setDeliveryProgressStoreForTests(progress);
+  try {
+    const text = "check the release";
+    const { operationId, deliveryId } = acceptSend(active, { text, clientMessageId: "late-ack-key" });
+    progress.note(operationId, active.conversationId, { waitReason: "dispatching", originalKey: "late-ack-key", attempted: true });
+    const ledger = new FileClaudeDeliveryLedger();
+    ledger.recordQueued(active.generationId, { id: operationId, text }, "turn-started");
+    active.journal.transitionOperation(operationId, "delivering");
+    active.journal.transitionOperation(operationId, "uncertain", { reason: SEND_UNVERIFIED_REASON });
+    active.registry.recordDeliveryOutcome(deliveryId, "failed", SEND_UNVERIFIED_REASON, "unverified");
+    progress.settle(operationId, "uncertain", SEND_UNVERIFIED_REASON);
+    expect(progress.get(operationId)?.terminal?.state).toBe("uncertain");
+    const effectsBefore = active.journal.effectBatch(100);
+    const queuedBefore = ledger.load(active.generationId).length;
+
+    /* The recipient's own acknowledgement, bound to this operation, arrives late. */
+    const uuid = "late-canonical-user-turn";
+    ledger.confirmDelivered(active.generationId, operationId, uuid);
+    fs.writeFileSync(active.transcriptPath, JSON.stringify({ type: "user", uuid, timestamp: new Date().toISOString(), message: { role: "user", content: text } }) + "\n");
+    const response = await handleRuntimeOperationQuery(operationId, {
+      client: () => active.client,
+      rolledBack: () => false,
+      settle: (id, client) => resolveSendReceipt(id, { registry: active.registry, client }),
+    });
+    const body = await response.json() as { receipt: { status: string }; progress?: { terminal: { state: string } | null } };
+    expect(body.receipt.status).toBe("delivered");
+    expect(body.progress?.terminal?.state).toBe("delivered");
+
+    /* Nothing was rearmed or sent again. */
+    expect(active.journal.effectBatch(100)).toEqual(effectsBefore);
+    expect(active.journal.operationResult(operationId)?.receipt.status).toBe("uncertain");
+    expect(ledger.load(active.generationId)).toHaveLength(queuedBefore);
+
+    progress.close();
+    setDeliveryProgressStoreForTests(null);
+    expect(readDeliveryProgress([operationId]).get(operationId)?.terminal?.state).toBe("delivered");
+    progress = new DeliveryProgressStore(deliveryProgressPath());
+    expect(progress.get(operationId)).toMatchObject({ originalKey: "late-ack-key", terminal: { state: "delivered" } });
+    /* An acknowledgement another process read reaches the record through
+       the sweep, which reads the delivery record only. */
+    const later = acceptSend(active, { text: "second check", clientMessageId: "late-ack-elsewhere" });
+    progress.note(later.operationId, active.conversationId, { waitReason: "dispatching", originalKey: "late-ack-elsewhere" });
+    progress.settle(later.operationId, "uncertain", SEND_UNVERIFIED_REASON);
+    active.registry.recordDeliveryOutcome(later.deliveryId, "delivered");
+    mirrorLateAcknowledgements(active.registry, progress);
+    expect(progress.get(later.operationId)?.terminal?.state).toBe("delivered");
+    /* A proven ending is never promoted. */
+    progress.note("operation-lost", active.conversationId, { waitReason: "queued" });
+    progress.settle("operation-lost", "failed", SEND_LOST_REASON);
+    progress.settle("operation-lost", "delivered", null);
+    expect(progress.get("operation-lost")?.terminal?.state).toBe("failed");
+  } finally {
+    setDeliveryProgressStoreForTests(null);
+    progress.close();
+    active.close();
+  }
 });
 
 test("a compacted unknown Claude attempt retains its late delivered settlement", async () => {

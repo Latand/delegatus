@@ -6,7 +6,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { Database as BunDatabase } from "bun:sqlite";
 
 import { openCurrentDatabase } from "@/lib/state/currentDatabase";
-import { recordBlockingWait } from "@/lib/blockingWaits";
+import { recordBlockingWait, type BlockingWaitCorrelation } from "@/lib/blockingWaits";
 
 import { reboundAssembledMcpGrants, rowClaimsBeyondBaselineGrant, type McpGrantPolicy } from "./mcpAllowlist";
 import { identityMaterializationFence } from "./identityMaterialization";
@@ -1088,7 +1088,13 @@ export class SqliteAgentRegistryStore {
    */
   async withWriter<T>(
     operation: () => T,
-    options: { deadlineMs?: number; probeMs?: number } = {},
+    options: {
+      deadlineMs?: number;
+      probeMs?: number;
+      /** The correlation of a wait whose operation is only known once the
+          write has made it (an admission mints its operation id inside). */
+      correlate?: (value: T) => BlockingWaitCorrelation | null;
+    } = {},
   ): Promise<{ acquired: true; value: T } | { acquired: false }> {
     const startedAt = performance.now();
     const deadline = this.writerClock() + (options.deadlineMs ?? 5_000);
@@ -1102,12 +1108,17 @@ export class SqliteAgentRegistryStore {
       attempts += 1;
       await new Promise<void>((resolve) => setTimeout(resolve, probeMs));
     }
-    if (attempts > 1) {
-      recordBlockingWait({ site: "registry-lock-async", durationMs: performance.now() - startedAt, synchronous: false, subject: "agent-registry" });
-    }
+    const waitedMs = performance.now() - startedAt;
+    const noteWait = (correlation?: BlockingWaitCorrelation | null) => {
+      if (attempts > 1) recordBlockingWait({ site: "registry-lock-async", durationMs: waitedMs, synchronous: false, subject: "agent-registry", correlation });
+    };
     this.writerHeld = true;
+    let value: T;
     try {
-      return { acquired: true, value: operation() };
+      value = operation();
+    } catch (error) {
+      noteWait();
+      throw error;
     } finally {
       /* An operation that made no mutation leaves the transaction open. */
       if (this.writerHeld) {
@@ -1115,6 +1126,8 @@ export class SqliteAgentRegistryStore {
         try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
       }
     }
+    noteWait(options.correlate?.(value));
+    return { acquired: true, value };
   }
 
   /** One request for the write lock that never waits. */

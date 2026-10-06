@@ -240,7 +240,10 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
   settle(operationId: string, state: DeliveryProgressTerminalState, reason: string | null): void {
     this.load();
     const current = this.records.get(operationId);
-    if (!current || current.terminal) return;
+    /* An ending stands, with one exception: a message recorded as possibly
+       delivered that later evidence shows arrived. A discard and a proven loss
+       end `failed` and are never promoted. */
+    if (!current || (current.terminal && !(state === "delivered" && current.terminal.state === "uncertain"))) return;
     const at = new Date(this.now()).toISOString();
     this.put({
       ...current,
@@ -260,6 +263,12 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
   open(): DeliveryProgressRecord[] {
     this.load();
     return [...this.records.values()].filter((record) => !record.terminal);
+  }
+
+  /** Records that ended `uncertain`: the ones a later acknowledgement can still correct. */
+  uncertain(): DeliveryProgressRecord[] {
+    this.load();
+    return [...this.records.values()].filter((record) => record.terminal?.state === "uncertain");
   }
 
   forConversation(conversationIds: readonly string[]): DeliveryProgressRecord[] {
@@ -422,6 +431,14 @@ export function deliveryProgressStore(): DeliveryProgressStore {
     processStore.__llvDeliveryProgressPath = filename;
   }
   return processStore.__llvDeliveryProgressStore;
+}
+
+/** The Viewer's store when this process already holds it for the current state
+    directory, and null in a process that holds none (an MCP server): a
+    process that does not own the records never writes them. */
+export function ownedDeliveryProgressStore(): DeliveryProgressStore | null {
+  const owned = processStore.__llvDeliveryProgressStore;
+  return owned && processStore.__llvDeliveryProgressPath === deliveryProgressPath() ? owned : null;
 }
 
 /** Tests only. */

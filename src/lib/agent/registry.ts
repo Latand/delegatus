@@ -4291,6 +4291,10 @@ function journalStructuredTermination(registryFilename: string, record: Record<s
   }
 }
 
+/** A delivery write found the registry's write lock held by another writer
+    past its asynchronous deadline, and wrote nothing. */
+export const REGISTRY_WRITER_BUSY = "the delivery record's write lock is held by another writer";
+
 export class AgentRegistry {
   private readonly sqliteMode: AgentRegistrySqliteMode;
   private readonly mcpGrantPolicy: McpGrantPolicy | undefined;
@@ -5188,11 +5192,12 @@ export class AgentRegistry {
   private async whenWriterHeld<T>(
     correlation: { label: string; operationId?: string | null },
     operation: () => T,
+    correlate?: (value: T) => { label: string; operationId?: string | null } | null,
   ): Promise<{ acquired: true; value: T } | { acquired: false }> {
     if (this.sqliteMode !== "read" && this.sqliteMode !== "sqlite") {
       return { acquired: true, value: withWaitCorrelation(correlation, operation) };
     }
-    return withWaitCorrelation(correlation, () => this.sqliteStore!.withWriter(operation));
+    return withWaitCorrelation(correlation, () => this.sqliteStore!.withWriter(operation, correlate ? { correlate } : {}));
   }
 
   /** Shared process-local snapshot for projections that never mutate registry
@@ -9004,6 +9009,18 @@ export class AgentRegistry {
     }, { deliveryOnly: true });
   }
 
+  /** {@link holdDelivery} with the write lock waited for off the event loop
+      and kept for the write, correlated with the operation it admits. Null
+      when the lock stayed held past its deadline: nothing was reserved. */
+  async holdDeliveryOffLoop(...admission: Parameters<AgentRegistry["holdDelivery"]>): Promise<HeldDelivery | null> {
+    const write = await this.whenWriterHeld(
+      { label: "delivery.admit", operationId: admission[6]?.operationId ?? null },
+      () => this.holdDelivery(...admission),
+      (held) => ({ label: "delivery.admit", operationId: held.command.operationId }),
+    );
+    return write.acquired ? write.value : null;
+  }
+
   /** Resolves conflicts and terminal replays without mutating the registry.
       Callers can complete admission before publishing blobs or changing
       account-migration ownership. */
@@ -9217,6 +9234,18 @@ export class AgentRegistry {
       if (conversation) advanceMigrationScopeRevision(file, conversation.engine, signature, paths);
       return clone(delivery);
     }, { deliveryOnly: true });
+  }
+
+  /** {@link beginDeliveryAttempt} with the write lock waited for off the event
+      loop and kept for the claim, correlated with the operation it claims.
+      `acquired: false` when the lock stayed held past its deadline: nothing
+      was claimed and the reservation is as it was. */
+  async beginDeliveryAttemptOffLoop(
+    operationId: string,
+    id: string,
+    generationId: string,
+  ): Promise<{ acquired: true; value: HeldDelivery | null } | { acquired: false }> {
+    return this.whenWriterHeld({ label: "delivery.claim", operationId }, () => this.beginDeliveryAttempt(id, generationId));
   }
 
   recordDeliveryArtifacts(id: string, artifactPaths: string[]): HeldDelivery {

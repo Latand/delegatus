@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import {
   agentRegistry,
   DeliveryReservationConflictError,
+  REGISTRY_WRITER_BUSY,
   type AgentRegistry,
   type RegistryConversation,
 } from "@/lib/agent/registry";
@@ -43,6 +44,8 @@ import {
   type StructuredImageRef,
 } from "./structuredContent";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
+import { ownedDeliveryProgressStore, type DeliveryProgressSink } from "./deliveryProgress";
+import { STRUCTURED_DELIVERY_TIMING } from "./structuredDeliveryQueue";
 import { markStructuredRuntimeSessionRecovered } from "./startupStatus";
 import { isInterruptionObligationId } from "./interruptionObligations";
 import { RECOVERY_NOTICE_ORIGIN } from "./recoveryNotices";
@@ -119,6 +122,30 @@ export interface StructuredMessageDependencies {
       a request body carries can set it. It admits that continuation to a
       seat's live deputy, whose one job the release cut. */
   interruptionContinuation?: boolean;
+  /** Where the admitted operation's first wait is recorded; the Viewer's own
+      store by default, and nothing in a process that holds none. */
+  progress?: Pick<DeliveryProgressSink, "get" | "note"> | null;
+}
+
+/** The first progress record of an operation the journal just admitted. One
+    already there was written by the queue, which is further along. */
+function noteAdmitted(
+  progress: Pick<DeliveryProgressSink, "get" | "note"> | null,
+  admitted: { operationId: string; conversationId: string; kind: string; originalKey: string; admittedAt: string },
+): void {
+  if (!progress) return;
+  try {
+    if (progress.get(admitted.operationId)) return;
+    progress.note(admitted.operationId, admitted.conversationId, {
+      waitReason: "queued",
+      kind: admitted.kind,
+      originalKey: admitted.originalKey,
+      admittedAt: admitted.admittedAt,
+      nextWakeMs: STRUCTURED_DELIVERY_TIMING.retryMs,
+    });
+  } catch (error) {
+    console.error("[structured delivery] progress record failed", { error: error instanceof Error ? error.message : String(error) });
+  }
 }
 
 /** Serializes preflight → publication → reservation per (conversation,
@@ -475,16 +502,22 @@ async function holdDuringRuntimeSynchronization(
     if (activeAccountId && generation?.accountId && generation.accountId !== activeAccountId) {
       conversation = registry.requestConversationMigrationToActiveAccount(conversation.id, { launchId: request.launchId });
     }
-    const place = () => registry.holdDelivery(
-      conversation.id,
-      deliveryText,
-      idempotencyKey,
-      payloadKind,
-      refs,
-      contentDigest,
-      commandInput(request),
-      { recoveryIntent: allowReclaimed ? "reclaimed-host" : null },
-    );
+    /* The write lock is waited for off the event loop and kept for the write;
+       one another writer keeps past its deadline reserves nothing. */
+    const place = async (): Promise<HeldDelivery> => {
+      const held = await registry.holdDeliveryOffLoop(
+        conversation.id,
+        deliveryText,
+        idempotencyKey,
+        payloadKind,
+        refs,
+        contentDigest,
+        commandInput(request),
+        { recoveryIntent: allowReclaimed ? "reclaimed-host" : null },
+      );
+      if (!held) throw new Error(REGISTRY_WRITER_BUSY);
+      return held;
+    };
     /* Publication and reservation are one section per key, as on the live
        path: two racing attempts under the same client message id see a durable
        winner, and the bytes are published once, before the row that names
@@ -1135,7 +1168,7 @@ export async function enqueueStructuredMessage(
      under the same content address. */
   let publishedImages = false;
   const admitDurably = () => withAdmissionSection(admissionKey, async () => {
-    const admit = () => {
+    const admit = async (): Promise<HeldDelivery> => {
       const replay = registry.preflightDeliveryReservation(
         conversation.id,
         content.content.text,
@@ -1154,8 +1187,12 @@ export async function enqueueStructuredMessage(
          older code or when a structured spawn published the same digest.
          The grace-period collector owns orphan cleanup. Synchronous removal
          cannot distinguish this admission's blob from a deduplicated blob
-         whose durable reservation is still pending. */
-      return registry.holdDelivery(
+         whose durable reservation is still pending.
+
+         The write lock is waited for off the event loop and kept for the
+         write (incident 2026-10-06); one another writer keeps past its
+         deadline reserves nothing and refuses the send. */
+      const held = await registry.holdDeliveryOffLoop(
         conversation.id,
         content.content.text,
         idempotencyKey,
@@ -1164,10 +1201,12 @@ export async function enqueueStructuredMessage(
         content.contentDigest,
         commandInput(request),
       );
+      if (!held) throw new Error(REGISTRY_WRITER_BUSY);
+      return held;
     };
     if (rawImages.length === 0) return withAccountMutationLockAsync(admit, { holder: "send admission", caller: "send admission" });
     return (dependencies.withImageAdmissionLock
-      ?? ((operation) => withAccountMutationLockAsync(operation, { holder: "image send admission", caller: "send" })))(async () => admit());
+      ?? ((operation) => withAccountMutationLockAsync(operation, { holder: "image send admission", caller: "send" })))(admit);
   });
   let recoveryReservation: HeldDelivery | null = null;
   if (recoveryRequired) {
@@ -1351,8 +1390,13 @@ export async function enqueueStructuredMessage(
     const assigned = { id: reservation.id, generationId: reservation.generationId, command: reservation.command, runtimeConversationId: reservation.runtimeConversationId };
     /* #1709: the claim and the command's admission to the journal run in the conversation's actuation section,
        so a send claimed after another reaches the journal after it. */
+    /* A claim whose write lock another writer kept past its deadline changed
+       nothing: the reservation stays assigned for the drain. */
+    let claimDeferred = false;
     const admitted = await withConversationActuation(conversation.id, async () => {
-      const claimed = registry.beginDeliveryAttempt(assigned.id, assigned.generationId);
+      const claim = await registry.beginDeliveryAttemptOffLoop(assigned.command.operationId, assigned.id, assigned.generationId);
+      if (!claim.acquired) claimDeferred = true;
+      const claimed = claim.acquired ? claim.value : null;
       if (!claimed) return null;
       claimedReservationId = claimed.id;
       claimedOperationId = claimed.command.operationId;
@@ -1379,7 +1423,7 @@ export async function enqueueStructuredMessage(
     }, dependencies.actuationLease ?? null);
     if (!admitted) {
       /* A migration took the conversation, or an earlier admission still waits: the drain delivers this one in order. */
-      registry.requeueHeldDelivery(reservation.id);
+      if (!claimDeferred) registry.requeueHeldDelivery(reservation.id);
       (dependencies.requestMigrationTick ?? requestAccountMigrationTick)();
       return {
         ok: true,
@@ -1410,6 +1454,18 @@ export async function enqueueStructuredMessage(
     if (claimedReservationId && ["delivered", "turn-started", "steered"].includes(receipt.status)) {
       registry.recordDeliveryOutcome(claimedReservationId, "delivered");
       requestMigrationProgress(registry, conversation.id, dependencies.requestMigrationTick ?? requestAccountMigrationTick);
+    }
+    /* The journal holds it now: its record exists from this moment, so a
+       queue that never reaches it still leaves a reason and a wake that the
+       watchdog finds overdue (incident 2026-10-06). */
+    if (receipt.status === "queued" || receipt.status === "pending") {
+      noteAdmitted(dependencies.progress === undefined ? ownedDeliveryProgressStore() : dependencies.progress, {
+        operationId: result.operationId,
+        conversationId: assigned.runtimeConversationId,
+        kind: assigned.command.kind,
+        originalKey: idempotencyKey,
+        admittedAt: reservation.createdAt,
+      });
     }
     (dependencies.kick ?? kickStructuredDeliveryQueue)();
     const outcome = receipt.status === "delivering" || receipt.status === "delivered" ? receipt.status : "queued";

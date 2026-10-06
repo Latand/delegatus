@@ -3158,6 +3158,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "runtime.receipt.waitedHour": "{n} год",
   /* Інцидент 2026-10-06: на що, за записом черги доставки, чекає затримане
      повідомлення, яка це спроба і коли наступна перевірка. */
+  "delivery.wait.queued": "прийнято; чекає наступного проходу черги доставки",
   "delivery.wait.wake-lost": "черга пропустила свій сигнал; новий прохід уже перевіряє",
   "delivery.wait.conversation-busy": "чекає за попереднім кроком у цій розмові",
   "delivery.wait.awaiting-turn": "чекає, поки агент завершить хід",

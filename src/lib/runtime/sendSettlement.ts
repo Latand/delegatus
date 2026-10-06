@@ -22,6 +22,7 @@ import {
   type RuntimeOperationReceipt,
   type RuntimeReceiptStatus,
 } from "./contracts";
+import { ownedDeliveryProgressStore, type DeliveryProgressRecord, type DeliveryProgressSink } from "./deliveryProgress";
 import { readEvidence, readEvidenceSync, readEvidenceWithin, unreadableEvidence, type Evidence } from "./evidence";
 
 /**
@@ -233,6 +234,9 @@ export interface SendSettlementPorts {
   inTurnCeilingMs?: number;
   /** The bound on each evidence read; tests shorten it. */
   readMs?: number;
+  /** The progress records a settled receipt is mirrored into; the Viewer's
+      own store by default, and none in a process that holds none. */
+  progress?: Pick<DeliveryProgressSink, "settle"> | null;
 }
 
 function parseTime(value: string | null | undefined): number | null {
@@ -729,6 +733,54 @@ export function sendSettlementDue(operationId: string, ports: SendSettlementPort
 export async function resolveSendReceipt(
   operationId: string,
   ports: SendSettlementPorts = {},
+): Promise<SendReceipt | null> {
+  const receipt = await settleSendReceipt(operationId, ports);
+  if (receipt) mirrorReceiptProgress(receipt, ports.progress === undefined ? ownedDeliveryProgressStore() : ports.progress);
+  return receipt;
+}
+
+/**
+ * Carries a settled receipt into the delivery's progress record, so the two
+ * answers one query returns never disagree (incident 2026-10-06). The receipt
+ * is the authority: a late acknowledgement that turned an unknown fate into
+ * `delivered` corrects a record that ended `uncertain`, and nothing here sends,
+ * rearms or reopens anything.
+ */
+export function mirrorReceiptProgress(receipt: SendReceipt, progress: Pick<DeliveryProgressSink, "settle"> | null): void {
+  if (!progress || receipt.state === "in-flight") return;
+  const state = receipt.state === "delivered" ? "delivered" : receipt.duplicateRisk ? "uncertain" : "failed";
+  try { progress.settle(receipt.operationId, state, receipt.reason ?? null); }
+  catch (error) {
+    console.error("[send settlement] progress record failed", { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+/** How long after a send ended `uncertain` its progress record still looks
+    for the acknowledgement that proves it arrived. */
+const LATE_ACKNOWLEDGEMENT_MIRROR_MS = 24 * 60 * 60_000;
+
+/**
+ * Carries a late acknowledgement read in another process (the MCP receipt
+ * tool, which never writes the progress records) into the record that ended
+ * `uncertain`. Reads the delivery record only; the background settlement runs
+ * it on every sweep.
+ */
+export function mirrorLateAcknowledgements(
+  registry: AgentRegistry,
+  progress: Pick<DeliveryProgressSink, "settle"> & { uncertain(): DeliveryProgressRecord[] },
+  now = Date.now(),
+): void {
+  const file = registry.readOnlySnapshot();
+  for (const record of progress.uncertain()) {
+    if (Date.parse(record.updatedAt) < now - LATE_ACKNOWLEDGEMENT_MIRROR_MS) continue;
+    const receipt = sendReceiptFor(file, record.operationId);
+    if (receipt?.state === "delivered") mirrorReceiptProgress(receipt, progress);
+  }
+}
+
+async function settleSendReceipt(
+  operationId: string,
+  ports: SendSettlementPorts,
 ): Promise<SendReceipt | null> {
   const registry = ports.registry ?? agentRegistry();
   const snapshot = registry.readOnlySnapshot();

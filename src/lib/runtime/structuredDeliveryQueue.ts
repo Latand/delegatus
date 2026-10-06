@@ -899,25 +899,16 @@ export class StructuredDeliveryQueue {
 
   private async drainPass(safety = false): Promise<void> {
     this.lastPassStartedAt = this.timing.now();
-    /* A watchdog pass reads only the journal: native queue reconciliation reads
-       every Codex thread, and that stays with the regular drain. */
-    if (!safety) await this.port.nativeQueueReconcile?.();
-    this.projectOwedTerminals();
-    const rawEffects: StructuredDeliveryEffect[] = [];
-    let afterEventSeq = 0;
-    while (true) {
-      const page = await this.port.effects(
-        ["runtime.native-queue", "runtime.send", "runtime.steer", "runtime.inject", "runtime.answer", "runtime.interrupt", "runtime.kill", "runtime.kill-boundary", "runtime.reconfigure", "runtime.compact"],
-        afterEventSeq,
-      );
-      if (page.length === 0) break;
-      rawEffects.push(...page);
-      const nextCursor = Math.max(...page.map((effect) => effect.eventSeq));
-      if (!Number.isSafeInteger(nextCursor) || nextCursor <= afterEventSeq) {
-        throw new Error("structured delivery effect page did not advance");
-      }
-      if (page.length < STRUCTURED_DELIVERY_BATCH_SIZE) break;
-      afterEventSeq = nextCursor;
+    let rawEffects: StructuredDeliveryEffect[];
+    try {
+      /* A watchdog pass reads only the journal: native queue reconciliation reads
+         every Codex thread, and that stays with the regular drain. */
+      if (!safety) await this.port.nativeQueueReconcile?.();
+      this.projectOwedTerminals();
+      rawEffects = await this.listEffects();
+    } catch (error) {
+      this.noteUnlisted(error);
+      throw error;
     }
     /* #1716: contention history lasts as long as its operation is pending. One
        the journal no longer lists has settled, whether through recovery or
@@ -1050,6 +1041,53 @@ export class StructuredDeliveryQueue {
       );
     }
     if (failures.length > 0) this.retrySoon();
+  }
+
+  private async listEffects(): Promise<StructuredDeliveryEffect[]> {
+    const rawEffects: StructuredDeliveryEffect[] = [];
+    let afterEventSeq = 0;
+    while (true) {
+      const page = await this.port.effects(
+        ["runtime.native-queue", "runtime.send", "runtime.steer", "runtime.inject", "runtime.answer", "runtime.interrupt", "runtime.kill", "runtime.kill-boundary", "runtime.reconfigure", "runtime.compact"],
+        afterEventSeq,
+      );
+      if (page.length === 0) break;
+      rawEffects.push(...page);
+      const nextCursor = Math.max(...page.map((effect) => effect.eventSeq));
+      if (!Number.isSafeInteger(nextCursor) || nextCursor <= afterEventSeq) {
+        throw new Error("structured delivery effect page did not advance");
+      }
+      if (page.length < STRUCTURED_DELIVERY_BATCH_SIZE) break;
+      afterEventSeq = nextCursor;
+    }
+    return rawEffects;
+  }
+
+  /**
+   * A pass that could not list the journal reached no message, so every open
+   * record says so, with the moment the next pass will try (incident
+   * 2026-10-06: an accepted send must never wait without a reason). A lane
+   * still running from an earlier pass keeps its own phase.
+   */
+  private noteUnlisted(error: unknown): void {
+    const progress = this.port.progress;
+    if (!progress) return;
+    const held = new Set([...this.lanes.values()].filter((lane) => !lane.released).map((lane) => lane.current?.operationId));
+    const note: DeliveryProgressNote = {
+      waitReason: "evidence-unreadable",
+      detail: `the delivery journal could not be listed: ${failureReason(error)}`,
+      nextWakeMs: this.passRetry.nextDelayMs(),
+      executorId: this.executorId,
+    };
+    try {
+      for (const record of progress.open()) {
+        if (held.has(record.operationId) || this.activeSteers.has(record.operationId)
+          || this.activeInjections.has(record.operationId)) continue;
+        progress.note(record.operationId, record.conversationId, note);
+      }
+    } catch (noteError) {
+      console.error("[structured delivery] progress record failed", { error: failureReason(noteError) });
+    }
   }
 
   /** Starts one conversation's lane; it leaves the lane map when it ends. */

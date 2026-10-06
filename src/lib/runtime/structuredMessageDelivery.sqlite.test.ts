@@ -6,6 +6,7 @@ import { afterAll, expect, spyOn, test } from "bun:test";
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry } from "@/lib/agent/registry";
+import { blockingWaitDiagnostics, resetBlockingWaitsForTests } from "@/lib/blockingWaits";
 import type { RuntimeHostClient } from "./client";
 import { enqueueStructuredMessage } from "./structuredMessageDelivery";
 
@@ -113,4 +114,83 @@ test("synchronization owner lookup reuses the SQLite read-only snapshot", async 
 
   expect(result).toMatchObject({ ok: true, structured: true, outcome: "held" });
   expect(snapshotLoads).toBe(baseline);
+});
+
+test("a send admitted while another process holds the registry write lock waits off the event loop, correlated with its operation, and is commanded once", async () => {
+  /* Review of incident 2026-10-06: the reservation and the claim of an
+     ordinary send still spun for the registry lock on the Viewer's loop, so
+     every other conversation and the watchdog waited with it, and the wait
+     was recorded with no operation. */
+  const filename = path.join(sandbox, "admission-lock.json");
+  const sqliteFilename = path.join(sandbox, "admission-lock.sqlite");
+  const artifactPath = "/sessions/admission-lock.jsonl";
+  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite", sqliteFilename });
+  const conversation = registry.ensureConversation("codex", artifactPath, "default");
+  const generation = conversation.generations.at(-1)!;
+  const commands: string[] = [];
+  const client = {
+    readSession: async () => ({ conversationId: conversation.id, artifactPath,
+      sessionKey: { engine: "codex", sessionId: generation.id },
+      hostKind: "codex-app-server", host: "hosted", turn: "idle",
+      capabilities: { steer: true, structuredAttention: true } }),
+    command: async (command: { operationId: string; idempotencyKey: string }) => {
+      commands.push(command.operationId);
+      return { operationId: command.operationId, replayed: false,
+        receipt: { operationId: command.operationId, idempotencyKey: command.idempotencyKey, status: "queued", reason: null } };
+    },
+  } as unknown as RuntimeHostClient;
+  resetBlockingWaitsForTests(() => {});
+  /* Another process, as in the incident: nothing in this one can release it. */
+  const child = Bun.spawn([process.execPath, "-e", `
+    const { Database } = require("bun:sqlite");
+    const db = new Database(${JSON.stringify(sqliteFilename)});
+    db.exec("PRAGMA busy_timeout = 5000");
+    db.exec("BEGIN IMMEDIATE");
+    process.stdout.write("locked\\n");
+    setTimeout(() => { db.exec("ROLLBACK"); db.close(); }, 500);
+  `], { stdout: "pipe", stderr: "inherit" });
+  try {
+    const reader = child.stdout.getReader();
+    expect(new TextDecoder().decode((await reader.read()).value)).toContain("locked");
+    reader.releaseLock();
+    let last = performance.now();
+    let gapMs = 0;
+    const heartbeat = setInterval(() => {
+      const now = performance.now();
+      gapMs = Math.max(gapMs, now - last);
+      last = now;
+    }, 5);
+    const startedAt = performance.now();
+    let result;
+    try {
+      result = await enqueueStructuredMessage({
+        path: artifactPath, conversationId: conversation.id,
+        text: "admitted behind another writer", clientMessageId: "admission-lock-key", policy: "queue",
+      }, { enabled: () => true, client: () => client, registry: () => registry, kick: () => {}, requestMigrationTick: () => {}, progress: null });
+      /* A loop held from the first tick on shows only once a tick runs again. */
+      await Bun.sleep(20);
+    } finally {
+      clearInterval(heartbeat);
+    }
+    expect(performance.now() - startedAt).toBeGreaterThanOrEqual(300);
+    expect(gapMs).toBeLessThan(150);
+    expect(result).toMatchObject({ ok: true, outcome: "queued" });
+    const operationId = (result as { operationId: string }).operationId;
+    expect(commands).toEqual([operationId]);
+    const reservations = Object.values(registry.snapshot().heldDeliveries).filter((delivery) => delivery.clientMessageId === "admission-lock-key");
+    expect(reservations).toHaveLength(1);
+    expect(reservations[0]).toMatchObject({ state: "delivery-uncertain", attempts: 1, command: { operationId } });
+    const diagnostics = blockingWaitDiagnostics();
+    const waited = diagnostics.longest.filter((sample) => sample.site === "registry-lock-async");
+    expect(waited.length).toBeGreaterThan(0);
+    for (const sample of waited) {
+      expect(sample).toMatchObject({ synchronous: false, operationId });
+      expect(["delivery.admit", "delivery.claim"]).toContain(sample.label!);
+    }
+    expect(Math.max(...waited.map((sample) => sample.durationMs))).toBeGreaterThanOrEqual(300);
+    expect(diagnostics.longest.filter((sample) => sample.synchronous && sample.durationMs >= 100)).toEqual([]);
+  } finally {
+    await child.exited;
+    registry.close();
+  }
 });

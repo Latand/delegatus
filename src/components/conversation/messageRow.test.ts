@@ -329,3 +329,36 @@ test("incident 2026-10-06: the row's transport says what the queue recorded, whi
     progress: { ...record, terminal: { state: "delivered", at: new Date(AT + 20_000).toISOString(), reason: null } },
   }).transport).not.toContain("attempt");
 });
+
+test("review of incident 2026-10-06: an accepted send no pass could reach shows its stall at rest, in both languages", () => {
+  const record = {
+    operationId: "operation-unlisted",
+    conversationId: "conversation_unlisted",
+    originalKey: "key",
+    kind: "send",
+    waitReason: "evidence-unreadable" as const,
+    detail: "the delivery journal could not be listed: effect listing refused",
+    attempt: 0,
+    admittedAt: new Date(AT).toISOString(),
+    phaseSince: new Date(AT + 1_000).toISOString(),
+    lastProgressAt: new Date(AT + 1_000).toISOString(),
+    deadlineAt: new Date(AT + 600_000).toISOString(),
+    deadlinePolicy: "settlement-window" as const,
+    nextWakeAt: new Date(AT + 12_000).toISOString(),
+    stalledSince: new Date(AT + 5_000).toISOString(),
+    wakeLostAt: null,
+    executorId: "executor",
+    terminal: null,
+    updatedAt: new Date(AT + 5_000).toISOString(),
+  };
+  const queued = entry({ state: "queued", operationId: "operation-unlisted" });
+  expect(messageRowModel(t("en"), queued, { nowMs: AT + 9_000, progress: record }).stalled)
+    .toBe("No progress for 8s: the delivery state could not be read; trying again");
+  expect(messageRowModel(t("uk"), queued, { nowMs: AT + 9_000, progress: record }).stalled)
+    .toBe("Без руху вже 8 с: стан доставки не вдалося прочитати; пробуємо ще раз");
+  const admitted = { ...record, waitReason: "queued" as const, detail: null, stalledSince: null, nextWakeAt: new Date(AT + 1_000).toISOString() };
+  expect(messageRowModel(t("en"), queued, { nowMs: AT + 500, progress: admitted }).transport)
+    .toContain("accepted; waiting for the delivery queue’s next pass");
+  expect(messageRowModel(t("uk"), queued, { nowMs: AT + 500, progress: admitted }).transport)
+    .toContain("прийнято; чекає наступного проходу черги доставки");
+});

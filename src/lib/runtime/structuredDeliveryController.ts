@@ -12,7 +12,7 @@ import { activeDrain } from "@/lib/selfUpdate/drain";
 
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
-import { agentRegistry, resolveConversationAlias, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile } from "@/lib/agent/registry";
+import { agentRegistry, REGISTRY_WRITER_BUSY, resolveConversationAlias, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile } from "@/lib/agent/registry";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { forEachStartupBatch } from "./startupWork";
 import { BRANCH_SHARED_HOST_ERROR, branchSharesRootHost } from "@/lib/conversation/branchControl";
@@ -40,7 +40,7 @@ import {
 import { structuredHostKillRefFromRegistry, terminateStructuredHostTree } from "./structuredHostControl";
 import { publishFilesRevision } from "./filesRevision";
 import { setStructuredDeliveryKick } from "./structuredDeliverySignal";
-import { deliveryRouteOf, journalVerdict, sendIsSettled, settleDueSends } from "./sendSettlement";
+import { deliveryRouteOf, journalVerdict, mirrorLateAcknowledgements, sendIsSettled, settleDueSends } from "./sendSettlement";
 import { runtimeImageCapability } from "./runtimeImageStore";
 import { noteVoiceWorkBoundary } from "./voiceViewBinding";
 import { STRUCTURED_IMAGE_CAPABILITY } from "./structuredContent";
@@ -362,9 +362,6 @@ async function acknowledgeTerminalProjection(
     });
   }
 }
-
-/** The registry write lock stayed held past the asynchronous deadline. */
-const REGISTRY_WRITER_BUSY = "the delivery record's write lock is held by another writer";
 
 /**
  * Carries the outcome of ONE operation whose transition acknowledgement was
@@ -1891,18 +1888,16 @@ export async function bindStructuredDeliveryQueue(
     const settling = new Set<string>();
     settlementSweepTimer = setInterval(() => {
       if (stopped || state.activeQueue !== queue) return;
+      mirrorLateAcknowledgements(registry, progressStore);
       void settleDueSends({
         registry,
         client,
+        progress: progressStore,
         running: settling,
         onDeadline: (operationId, _conversationId, deadline) => {
           progressStore.deadline(operationId, deadline?.deadlineAt ?? null, deadline?.policy ?? null);
         },
-        onSettled: ({ operationId, state: settled, duplicateRisk }) => {
-          progressStore.settle(operationId, settled === "delivered" ? "delivered" : duplicateRisk ? "uncertain" : "failed",
-            "settled by the background deadline");
-          requestDrain();
-        },
+        onSettled: () => requestDrain(),
       }).catch((error) => {
         console.error("[structured delivery] background settlement failed", { error: error instanceof Error ? error.message : String(error) });
       });
