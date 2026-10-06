@@ -732,12 +732,13 @@ export class MergeBatch {
     if (stem.startsWith("../") || stem.startsWith("/")) return false;
     const paths = [stem, ...[".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", "/index.ts", "/index.js"].map(suffix => stem + suffix)];
     if (paths.some(path => existsSync(join(state.work, path)))) return false;
-    const head = state.rows.find(row => row.number === detector.pr)!.head;
+    const { head, reviewBase } = state.rows.find(row => row.number === detector.pr)!;
     const contains = (revision: string, path: string) => {
       try { git(state.work, ["cat-file", "-e", `${revision}:${path}`]); return true; }
       catch { return false; }
     };
-    return !paths.some(path => contains(state.base, path)) && paths.some(path => contains(head, path));
+    return !paths.some(path => contains(state.base, path) || contains(reviewBase, path))
+      && paths.some(path => contains(head, path));
   }
 
   private async validateTests(state: RunState, validation: Validation): Promise<boolean> {

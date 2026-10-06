@@ -1604,6 +1604,31 @@ test("a retained PR deleting a main module cannot make a withheld detector not a
 }, 30_000);
 
 
+test("main deletion of an inherited module remains a hard selected-detector error", async () => {
+  const f = landingFixture("green", realTests);
+  f.seed("feature.js", "exports.value = 1;\n");
+  const reviewed = f.addPr(12, "feature.test.ts", "const { test, expect } = require('bun:test');\n"
+    + "const feature = require('./feature.js');\ntest('feature', () => expect(feature.value).toBe(1));\n");
+  const healthy = f.addPr(13, "healthy.txt", "healthy");
+  let refreshed = false;
+  const gh = async (args: string[]): Promise<string> => {
+    if (args[0] === "pr" && args[1] === "view" && args[2] === "99" && !refreshed) {
+      refreshed = true;
+      rmSync(join(f.repo, "feature.js"));
+      f.seed("advance.txt", "main advanced");
+      f.views.get(12)!.isDraft = true;
+      return JSON.stringify({ state: "OPEN", headRefOid: batch.read().tip, mergeStateStatus: "BEHIND" });
+    }
+    return f.batch.gh(args);
+  };
+  const batch = new MergeBatch(f.repo, f.batch.stateFile, realTests, gh, async () => {});
+  await batch.build(`12@${reviewed},13@${healthy}`);
+  await batch.gate();
+  await expect(batch.land()).rejects.toThrow("between-test error");
+  expect(batch.read().gated).toBeNull();
+  expect(f.calls.some(args => args[0] === "pr" && args[1] === "merge")).toBeFalse();
+}, 30_000);
+
 test("a scoped batch lands in order despite an unrelated test load error on main", async () => {
   const sampled: string[] = [];
   const f = landingFixture("green", async (cwd, args, env) => {

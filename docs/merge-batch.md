@@ -43,7 +43,7 @@ unrelated repository tests are outside this gate. Identical file versions
 are sampled once within that validation. Different versions run separately;
 removing a PR cannot hide a detector or a restored native assertion. Relative
 module load failures for withheld detectors are reported as not applicable only
-when the missing module was introduced at that reviewed head, is absent from
+when the missing module was introduced by that reviewed patch, is absent from
 main and is absent from the candidate. Runtime exceptions, missing packages and
 incomplete runs stay hard failures.
 
