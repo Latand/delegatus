@@ -41,6 +41,8 @@ class Switch:
         self.process_error = None
         self.mcp_errors = 0
         self.outcome = "recovered"
+        self.cut = []
+        self.cut_error = None
 
     def preflight(self):
         return self.old, self.hosts
@@ -70,6 +72,11 @@ class Switch:
 
     def emit(self, event):
         self.events.append(event)
+
+    def interrupted(self, since, hosts):
+        if self.cut_error:
+            raise self.cut_error
+        return self.cut
 
 
 class LoggedFailures(unittest.TestCase):
@@ -106,6 +113,22 @@ class LoggedFailures(unittest.TestCase):
                 result = deploy.run_switch(switch, TARGET, samples=3, interval=2, timeout=5)
                 self.assertEqual(result["verdict"], expected)
                 self.assertEqual(len(switch.samples), 3)
+
+    def test_verdict_lists_the_conversations_the_restart_cut(self):
+        switch = Switch()
+        switch.cut = [{"conversationId": "conversation_synthetic", "stage": None}]
+        result = deploy.run_switch(switch, TARGET, samples=3, interval=2, timeout=5)
+        self.assertEqual(result["verdict"], "pass")
+        self.assertEqual(result["interrupted"], switch.cut)
+        self.assertEqual(result["diagnostics"], [])
+
+    def test_unreadable_cut_records_are_a_diagnostic_and_decide_nothing(self):
+        switch = Switch()
+        switch.cut_error = PermissionError("records unreadable")
+        result = deploy.run_switch(switch, TARGET, samples=3, interval=2, timeout=5)
+        self.assertEqual(result["verdict"], "pass")
+        self.assertEqual(result["interrupted"], [])
+        self.assertEqual(result["diagnostics"], ["interrupted:PermissionError"])
 
     def test_old_or_mixed_serving_releases_retry_and_are_named_in_verdict(self):
         switch = Switch()
@@ -210,6 +233,55 @@ class AdapterContracts(unittest.TestCase):
                                 capture_output=True, timeout=5, env={**os.environ, "LLV_STATE_DIR": ""})
         self.assertEqual(result.returncode, 0)
         self.assertIn(b"--preflight", result.stdout)
+
+
+def obligation(identifier, conversation, recorded, **extra):
+    return {"version": 1, "id": "interruption-continuation-" + identifier, "conversationId": conversation,
+            "engine": "claude", "hostKey": "claude:synthetic", "path": "/synthetic.jsonl", "reason": "viewer-restart",
+            "recordedAt": recorded, "checkpoint": {"lastEventKind": "tool-result", "lastEventAt": 0},
+            "seat": None, "state": "owed", "resolution": None, **extra}
+
+
+class InterruptedConversations(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="delegatus-interrupted-test-")
+        self.addCleanup(self.temp.cleanup)
+        self.state = pathlib.Path(self.temp.name)
+        self.directory = self.state / "interruption-obligations"
+        self.directory.mkdir()
+
+    def write(self, record):
+        deploy.write_json(self.directory / (record["id"] + ".json"), record)
+
+    def test_lists_cuts_recorded_since_the_switch_with_their_stage(self):
+        self.write(obligation("old", "conversation_before", "2026-10-06T14:00:00.000Z"))
+        self.write(obligation("agent", "conversation_agent", "2026-10-06T14:25:30.000Z",
+                              checkpoint={"lastEventKind": "assistant-message", "lastEventAt": 0,
+                                          "backgroundTasks": ["background task b1"]}))
+        self.write(obligation("stage", "conversation_stage", "2026-10-06T14:25:31.000Z", state="discharged",
+                              resolution="a pipeline stage: its controller retries the attempt",
+                              stage={"pipelineId": "lane", "stageId": "build", "attempt": 1}))
+        self.write(obligation("protected", "conversation_protected", "2026-10-06T14:25:32.000Z"))
+        hosts = [{"conversationId": "conversation_protected", "pipelineId": "other", "stageId": "fix", "attempt": 4}]
+        listed = deploy.interrupted_conversations(self.state, "2026-10-06T14:25:15.000000+00:00", hosts)
+        self.assertEqual([entry["conversationId"] for entry in listed],
+                         ["conversation_agent", "conversation_stage", "conversation_protected"])
+        self.assertIsNone(listed[0]["stage"])
+        self.assertEqual(listed[0]["backgroundTasks"], ["background task b1"])
+        self.assertEqual(listed[1]["stage"], {"pipelineId": "lane", "stageId": "build", "attempt": 1})
+        self.assertEqual(listed[1]["state"], "discharged")
+        self.assertEqual(listed[2]["stage"], {"pipelineId": "other", "stageId": "fix", "attempt": 4})
+
+    def test_reads_the_pending_journal_and_skips_unreadable_records(self):
+        (self.directory / "interruption-continuation-broken.json").write_text("{")
+        pending = self.state / "interruption-obligations.pending.jsonl"
+        pending.write_text(json.dumps(obligation("journal", "conversation_journal", "2026-10-06T14:26:00.000Z")) + "\n{\n")
+        listed = deploy.interrupted_conversations(self.state, "2026-10-06T14:25:15+00:00")
+        self.assertEqual([entry["conversationId"] for entry in listed], ["conversation_journal"])
+
+    def test_a_state_without_records_lists_nothing(self):
+        self.directory.rmdir()
+        self.assertEqual(deploy.interrupted_conversations(self.state, "2026-10-06T14:25:15+00:00"), [])
 
 
 class CheckoutIntegration(unittest.TestCase):
@@ -342,8 +414,14 @@ class CheckoutIntegration(unittest.TestCase):
         raise AssertionError("unplanned HTTP read")
 
     def test_real_adapter_replays_both_restart_failures_with_private_registry(self):
+        directory = self.state / "interruption-obligations"
+        directory.mkdir()
+        cut = obligation("cut", "synthetic-stage", "2999-01-01T00:00:00.000Z")
+        deploy.write_json(directory / (cut["id"] + ".json"), cut)
         result = deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
         self.assertEqual(result["verdict"], "pass")
+        self.assertEqual([(entry["conversationId"], entry["stage"]) for entry in result["interrupted"]],
+                         [("synthetic-stage", {"pipelineId": "synthetic-lane", "stageId": "build", "attempt": 1})])
         self.assertEqual(result["protected"][0]["outcome"], "recovered")
         self.assertEqual(json.loads(self.pointer.read_text())["sha"], TARGET)
         self.assertTrue(all(result["serving"][r]["sha"] == TARGET for r in ["launcher", "viewer", "runtimeHost"]))

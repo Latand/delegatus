@@ -46,10 +46,15 @@ export interface InterruptionObligation {
   boundary: string;
   reason: InterruptionReason;
   recordedAt: string;
-  /** The transcript as the cut left it, for the message and the log. */
-  checkpoint: { lastEventKind: string | null; lastEventAt: number | null };
+  /** The transcript as the cut left it, for the message and the log.
+      `backgroundTasks` names the harness background work a Claude turn was
+      waiting on when a restart took it down with its process. */
+  checkpoint: { lastEventKind: string | null; lastEventAt: number | null; backgroundTasks?: string[] };
   /** The orchestrator seat the conversation held when it was cut. */
   seat: { project: string; seatEpoch: number } | null;
+  /** The pipeline stage attempt the conversation ran, when it ran one. Its
+      controller retries the attempt, so such a record is never delivered. */
+  stage?: InterruptionStage | null;
   state: InterruptionObligationState;
   operationId: string | null;
   attempts: number;
@@ -57,9 +62,18 @@ export interface InterruptionObligation {
   resolution: string | null;
 }
 
+export interface InterruptionStage {
+  pipelineId: string;
+  stageId: string | null;
+  attempt: number | null;
+}
+
 export type InterruptionObligationInput = Omit<InterruptionObligation,
   "version" | "id" | "recordedAt" | "state" | "operationId" | "attempts" | "resolvedAt" | "resolution"> & {
   recordedAt?: string;
+  /** A cut somebody else answers: recorded already discharged, with the reason,
+      so the record names the cut and owes no continuation. */
+  answeredBy?: string;
 };
 
 export interface InterruptionObligationStore {
@@ -348,12 +362,14 @@ export function interruptionObligationStore(
         recordedAt: input.recordedAt ?? new Date().toISOString(),
         checkpoint: input.checkpoint,
         seat: input.seat,
-        state: "owed",
+        ...(input.stage ? { stage: input.stage } : {}),
+        state: input.answeredBy ? "discharged" : "owed",
         operationId: null,
         attempts: 0,
         resolvedAt: null,
-        resolution: null,
+        resolution: input.answeredBy ?? null,
       };
+      if (input.answeredBy) obligation.resolvedAt = obligation.recordedAt;
       try {
         writeJsonDurably(fileFor(id), obligation);
       } catch (first) {
@@ -407,8 +423,15 @@ export function interruptionContinuationText(obligation: InterruptionObligation)
       turn,
       "You were re-hosted automatically; resume that turn.",
     ];
+  const background = obligation.checkpoint.backgroundTasks ?? [];
+  const waiting = background.length === 0 ? [] : [
+    `Your turn had ended while background work you started was still running (${background.join(", ")}).`
+      + " The restart stopped it with your previous process, so its completion notice will not arrive:"
+      + " read its output, and re-run it if it did not finish.",
+  ];
   return [
     ...opening,
+    ...waiting,
     "Inspect your transcript and your preserved work (files, worktree status, commits) to find where the turn stopped.",
     "Re-run any interrupted operation whose result you do not have; background or external work may or may not have survived, so check it before relying on it.",
     "Run long commands in the foreground.",

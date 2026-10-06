@@ -11,6 +11,7 @@ import { captureProcessIdentity, processIdentityMayOwn, processIdentityStatus } 
 import { assertDarwinStructuredRuntime } from "@/lib/proc/darwinIdentity";
 import { readStableTailRecords } from "@/lib/scanner/activity";
 import { loadPipelinesForStartup, pipelineRegistryHealth, withPipelineStartupAdmission } from "@/lib/pipelines/store";
+import { BACKGROUND_TASK_WAIT_LIMIT_MS, pendingBackgroundTasks, readBackgroundTaskLedger } from "@/lib/pipelines/backgroundTasks";
 
 import {
   adoptClaudeRegistryHosts,
@@ -60,6 +61,8 @@ let retryAdoptedHosts: AdoptedStructuredHost[] = [];
 let deferredAdoptionLogged = false;
 const STARTUP_READ_TIMEOUT_MS = 30_000;
 type StartupPassState = {
+  /** The turns this process's restart cut have been recorded (once per boot). */
+  restartCutsRecorded?: boolean;
   generation?: string | null;
   retained?: AdoptedStructuredHost[];
   recoveries?: OrchestratorRestartRecoveryTarget[];
@@ -368,6 +371,146 @@ function recordOrchestratorRestartObligations(
 }
 
 /**
+ * A turn this boot's restart cut in a conversation that is no orchestrator
+ * seat (seats have their own capture above).
+ *
+ * A restart of the service (a deploy, a self-update, a crash) ends every
+ * engine process the previous Viewer hosted: the claim below re-hosts the row
+ * on a resumed, idle process, or the process dies with its stdin. Whatever
+ * the conversation was doing goes with it. Two shapes are in flight:
+ *
+ *  - a turn still open in the transcript (a tool call, a reply being written);
+ *  - a Claude turn that had ended on harness background work still running
+ *    (`run_in_background`, a Monitor, a wakeup). The work was a child of the
+ *    old process, so its completion notice, which is what would have woken the
+ *    agent, never arrives.
+ *
+ * The capture runs once per boot, before any claim can replace the process, and
+ * reads the transcript only: the registry row may still name the old process,
+ * alive for a few seconds more, which says nothing about whether it survives.
+ */
+interface RestartCutTarget {
+  conversationId: ViewerConversationId;
+  engine: "claude" | "codex";
+  hostKey: string;
+  path: string;
+  claimEpoch: number;
+  lastEvent: { kind: TranscriptEventKind | null; at: number };
+  backgroundTasks: string[];
+  stage: { pipelineId: string; stageId: string | null; attempt: number | null } | null;
+  flow: boolean;
+}
+
+async function restartCutTargets(
+  registry: AgentRegistry,
+  seats: readonly OrchestratorSeat[],
+  unresolved: readonly InterruptionObligation[],
+  snapshot: RegistryFile = registry.readOnlySnapshot(),
+  now = Date.now(),
+): Promise<RestartCutTarget[]> {
+  /* A seat has its own capture, and a conversation whose continuation is
+     already owed or on its way is covered by it: whatever its transcript
+     gained since is the provider's bookkeeping or that continuation's turn. */
+  const covered = new Set([
+    ...seats.flatMap((seat) => seat.conversationId?.startsWith("conversation_")
+      ? [registry.canonicalConversationId(seat.conversationId as ViewerConversationId)]
+      : []),
+    ...unresolved.map((obligation) => registry.canonicalConversationId(obligation.conversationId)),
+  ]);
+  const targets: RestartCutTarget[] = [];
+  for (const conversation of Object.values(snapshot.conversations)) {
+    const generation = conversation.generations.at(-1);
+    if ((conversation.engine !== "claude" && conversation.engine !== "codex") || !generation || conversation.supersededBy) continue;
+    const conversationId = registry.canonicalConversationId(conversation.id);
+    if (covered.has(conversationId)) continue;
+    const hostKey = sessionKeyId({ engine: conversation.engine, sessionId: generation.id });
+    const entry = snapshot.entries[hostKey];
+    /* Only a live structured row a previous Viewer hosted: a pane belongs to
+       its terminal, an idle row had no process for the restart to end, and a
+       row this process already claimed is its own work. */
+    if (!entry?.structuredHost || entry.host !== null || entry.status !== "live") continue;
+    if (entry.claimOwner?.pid === process.pid) continue;
+    let evidence;
+    try {
+      evidence = await readTranscriptEvidence(conversation.engine, generation.path);
+    } catch {
+      continue;
+    }
+    const at = evidence.lastEventAt;
+    /* The same window bounds every adoption a turn claim alone asks for. */
+    if (at === null || now - at > startupTurnMaxAgeMs()) continue;
+    let backgroundTasks: string[] = [];
+    if (evidence.turn === "terminal" && conversation.engine === "claude" && now - at <= BACKGROUND_TASK_WAIT_LIMIT_MS) {
+      const ledger = await readBackgroundTaskLedger(generation.path).catch(() => null);
+      backgroundTasks = ledger ? pendingBackgroundTasks(ledger, now).map((task) => task.kind === "wakeup"
+        ? "a scheduled wakeup"
+        : `${task.kind === "monitor" ? "monitor" : "background task"} ${task.id}`) : [];
+    }
+    if (evidence.turn !== "busy" && backgroundTasks.length === 0) continue;
+    const memberships = snapshot.memberships[conversationId] ?? [];
+    const pipeline = memberships.find((membership) => membership.kind === "pipeline");
+    targets.push({
+      conversationId,
+      engine: conversation.engine,
+      hostKey,
+      path: generation.path,
+      claimEpoch: entry.claimEpoch,
+      lastEvent: { kind: evidence.kind, at },
+      backgroundTasks,
+      stage: pipeline ? { pipelineId: pipeline.containerId, stageId: pipeline.stageId, attempt: pipeline.round } : null,
+      flow: memberships.some((membership) => membership.kind === "flow"),
+    });
+  }
+  return targets;
+}
+
+/** Who answers a cut other than its own continuation, or null when the
+    continuation is what resumes it. A pipeline stage is retried by its
+    controller and a review round by its flow; a live Codex row with an open
+    turn is adopted and gets the standing Codex continuation below. */
+function restartCutAnsweredBy(target: RestartCutTarget): string | null {
+  if (target.stage) return "a pipeline stage: its controller retries the attempt";
+  if (target.flow) return "a review flow round: the flow recovers it";
+  if (target.engine === "codex") return "a Codex turn: the standing restart continuation resumes it";
+  return null;
+}
+
+/** Records each cut once. The boundary is the cut itself, the transcript's
+    last event, so a later boot that finds the same silent turn lands on the
+    record this boot wrote, and one the agent resumed and was cut again in gets
+    its own. */
+function recordRestartCuts(store: InterruptionObligationStore, targets: readonly RestartCutTarget[]): void {
+  for (const target of targets) {
+    const answeredBy = restartCutAnsweredBy(target);
+    const { obligation, created } = store.record({
+      conversationId: target.conversationId,
+      engine: target.engine,
+      hostKey: target.hostKey,
+      path: target.path,
+      owner: null,
+      claimEpoch: target.claimEpoch,
+      turnRef: null,
+      boundary: `viewer-restart:${target.lastEvent.at}`,
+      reason: "viewer-restart",
+      checkpoint: {
+        lastEventKind: target.lastEvent.kind,
+        lastEventAt: target.lastEvent.at,
+        ...(target.backgroundTasks.length > 0 ? { backgroundTasks: target.backgroundTasks } : {}),
+      },
+      seat: null,
+      stage: target.stage,
+      ...(answeredBy ? { answeredBy } : {}),
+    });
+    if (created) {
+      console.error("[structured hosts] recorded a turn the restart cut", {
+        conversationId: target.conversationId, obligation: obligation.id, state: obligation.state,
+        ...(target.stage ? { stage: target.stage } : {}),
+      });
+    }
+  }
+}
+
+/**
  * Why an unresolved obligation is no longer owed, or null while it still is.
  *
  * Identity first: the conversation, its generation's host row and — for a
@@ -461,10 +604,19 @@ function dischargeInterruptionObligations(
 ): InterruptionObligation[] {
   const snapshot = registry.readOnlySnapshot();
   const owed: InterruptionObligation[] = [];
+  /* One conversation is resumed once, by its newest cut: a restart that found
+     the turn in flight and a release that cut it again before the first
+     continuation went out describe one interrupted turn. The list is oldest
+     first, so the last record per conversation wins. */
+  const newest = new Map(obligations.map((obligation) =>
+    [registry.canonicalConversationId(obligation.conversationId), obligation.id] as const));
   for (const obligation of obligations) {
-    const reason = interruptionObligationDischarge(
-      registry, obligation, snapshot, seats, admittedMessages, settledStageConversationIds,
-    );
+    const reason = obligation.state === "owed"
+      && newest.get(registry.canonicalConversationId(obligation.conversationId)) !== obligation.id
+      ? "a newer cut of this conversation owes its one continuation"
+      : interruptionObligationDischarge(
+        registry, obligation, snapshot, seats, admittedMessages, settledStageConversationIds,
+      );
     if (reason === null) {
       owed.push(obligation);
       continue;
@@ -1265,6 +1417,12 @@ async function adoptStructuredHostsPass(
   const interruptions = dependencies.interruptions
     ?? interruptionObligationStore(interruptionObligationDirectory(registry.filename));
   recordOrchestratorRestartObligations(interruptions, orchestratorRecoveries);
+  const passState = startupPasses.get(registry);
+  if (passState && !passState.restartCutsRecorded && !resumeDeferred) {
+    recordRestartCuts(interruptions, await restartCutTargets(registry, orchestratorSeats(),
+      interruptions.list().filter(interruptionObligationUnresolved)));
+    passState.restartCutsRecorded = true;
+  }
   const controllerBoundEarly = client !== null;
   if (client && !hasStructuredDeliveryController(registry)) {
     await bindStructuredDeliveryQueue([], {

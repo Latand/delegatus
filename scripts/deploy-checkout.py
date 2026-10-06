@@ -54,6 +54,7 @@ def ready(serving, target):
 
 def run_switch(adapter, target, samples=21, interval=15, timeout=180):
     old, hosts = adapter.preflight()
+    started = utc()
     diagnostics = []
     serving = {}
     protected = []
@@ -102,11 +103,18 @@ def run_switch(adapter, target, samples=21, interval=15, timeout=180):
                 adapter.emit({"sample": index + 1, "serving": serving, "protected": protected})
             except Exception as error:
                 diagnostics.append("sample-log:" + type(error).__name__)
+    # Read once the samples are over: the booting Viewer records its cuts
+    # before it re-hosts anything, long before the last sample.
+    interrupted = []
+    try:
+        interrupted = adapter.interrupted(started, hosts)
+    except Exception as error:
+        diagnostics.append("interrupted:" + type(error).__name__)
     healthy = ready(serving, target)
     outcomes = {entry["outcome"] for entry in protected}
     verdict = "fail" if not healthy or "lost" in outcomes else "needs_decision" if "unknown" in outcomes else "pass"
     result = {"verdict": verdict, "target": target, "serving": serving,
-              "protected": protected, "diagnostics": diagnostics}
+              "protected": protected, "interrupted": interrupted, "diagnostics": diagnostics}
     adapter.last_result = result
     adapter.emit(result)
     return result
@@ -114,6 +122,56 @@ def run_switch(adapter, target, samples=21, interval=15, timeout=180):
 
 def utc():
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
+def parse_time(value):
+    return datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def interrupted_conversations(state, since, hosts=()):
+    """The conversations whose turn this switch cut, as the Viewers recorded
+    them: an incumbent at release, the booting successor at restart. Each names
+    its pipeline stage when it ran one; a stage the preflight protected names it
+    from that capture when the record does not."""
+    directory = pathlib.Path(state) / "interruption-obligations"
+    records = {}
+    sources = sorted(directory.glob("interruption-continuation-*.json")) if directory.is_dir() else []
+    for source in sources:
+        try:
+            record = json.loads(source.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(record, dict) and isinstance(record.get("id"), str):
+            records[record["id"]] = record
+    pending = directory.with_name(directory.name + ".pending.jsonl")
+    if pending.is_file():
+        for line in pending.read_text().splitlines():
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(record, dict) and isinstance(record.get("id"), str):
+                records.setdefault(record["id"], record)
+    boundary = parse_time(since)
+    protected = {host.get("conversationId"): host for host in hosts if host.get("conversationId")}
+    listed = []
+    for record in records.values():
+        try:
+            if parse_time(record["recordedAt"]) < boundary:
+                continue
+        except (KeyError, TypeError, ValueError):
+            continue
+        conversation = record.get("conversationId")
+        stage = record.get("stage")
+        host = protected.get(conversation)
+        if not stage and host:
+            stage = {"pipelineId": host.get("pipelineId"), "stageId": host.get("stageId"), "attempt": host.get("attempt")}
+        checkpoint = record.get("checkpoint") or {}
+        listed.append({"conversationId": conversation, "recordedAt": record["recordedAt"],
+                       "reason": record.get("reason"), "state": record.get("state"),
+                       "resolution": record.get("resolution"), "stage": stage or None,
+                       "backgroundTasks": checkpoint.get("backgroundTasks") or []})
+    return sorted(listed, key=lambda entry: (entry["recordedAt"], entry["conversationId"] or ""))
 
 
 def write_json(destination, body):
@@ -385,6 +443,9 @@ class Checkout:
 
     def process(self, entry):
         return read_process(entry, self.process_read)
+
+    def interrupted(self, since, hosts):
+        return interrupted_conversations(self.state, since, hosts)
 
     def head(self, directory):
         sha = self.command(["git", "rev-parse", "HEAD"], cwd=directory)

@@ -299,6 +299,10 @@ export interface PipelinePorts {
       its interruption obligation records it (#1835). Null when none was
       recorded, which is the answer for every conversation no deploy cut. */
   conversationInterruption?(conversationId: string): StageInterruption | null;
+  /** When a service restart last found this conversation's turn in flight
+      and cut it, as the boot that cut it recorded it. Null when no restart
+      did, which is the answer for every conversation no restart cut. */
+  conversationRestartCut?(conversationId: string): { recordedAt: string } | null;
   /** The runtime host generation currently serving this process (#1747). It
       advances on every release succession, which replaces every engine process
       the previous generation hosted, so a change is the controller's only
@@ -1509,6 +1513,21 @@ export function defaultPipelinePorts(
       return outcome && !outcome.compacted
         ? { state: outcome.state, recordedAt: cut.recordedAt, resolvedAt: outcome.at }
         : { state: cut.state, recordedAt: cut.recordedAt, resolvedAt: cut.resolvedAt };
+    },
+    conversationRestartCut: (conversationId) => {
+      if (!conversationId.startsWith("conversation_")) return null;
+      if (!interruptions) {
+        try {
+          interruptions = interruptionObligationStore(interruptionObligationDirectory(registry.filename)).list();
+        } catch (error) {
+          console.error("[pipelines] interruption obligations are unreadable", error);
+          interruptions = [];
+        }
+      }
+      const canonical = registry.canonicalConversationId(conversationId as ViewerConversationId);
+      const cut = interruptions.filter((obligation) => obligation.reason === "viewer-restart"
+        && registry.canonicalConversationId(obligation.conversationId) === canonical).at(-1);
+      return cut ? { recordedAt: cut.recordedAt } : null;
     },
     runtimeHostEpoch: async () => {
       const client = runtimeHostClient();
@@ -3959,6 +3978,7 @@ function secondInterruptionParkDetail(replacedCause: PipelineStageInterruptionCa
     : `the automatic replacement attempt ${ownCause === "host-lost" ? "lost its host" : "went silent"}${same ? " too" : ""}`;
   return `${what}; retry-stage to start another attempt`;
 }
+const RESTART_REPLACEMENT_CUT_AGAIN = "the automatic restart attempt was interrupted by another Delegatus restart; retry-stage to start another attempt";
 const recoveryHost = globalThis as typeof globalThis & {
   __llvPipelineRecoveryBootId?: string;
   __llvPipelineRecoveryBootStartedAt?: number;
@@ -4002,6 +4022,14 @@ async function replaceInterruptedStageAttempt(
   // (or one was recorded while the host-stop operation was awaiting).
   if (attempt.report) return false;
   const previous = attempt.restartRecovery;
+  /* A restart replacement that a restart cuts again parks, in this boot or a
+     later one: one automatic attempt per cut stage. */
+  if (previous?.replacedAttempt !== undefined && previous.bootId !== bootId
+    && interruption.restarted && attempt.restartContext?.cause === "restart") {
+    park(pipeline, RESTART_REPLACEMENT_CUT_AGAIN, attempt);
+    persist();
+    return true;
+  }
   if (previous?.bootId === bootId) {
     if (previous.replacedAttempt !== undefined) {
       park(pipeline, secondInterruptionParkDetail(attempt.restartContext?.cause, interruption), attempt);
@@ -4072,26 +4100,91 @@ async function replaceInterruptedStageAttempt(
      gone by the time the stop looked, was lost. */
   const cause: PipelineStageInterruptionCause = restarted ? "restart"
     : ended && ended.kind !== "dead" ? "engine-stop" : "host-lost";
+  startReplacementAttempt(pipeline, stage, attempt, cause, { bootId, requestedAt, lastRecordAt }, latest, ports);
+  persist();
+  return true;
+}
+
+/** What the cut attempt last said, for the replacement's first message: its
+    newest assistant message, bounded. A turn that never wrote one has none. */
+function cutAttemptReport(durable: StageTurnEvidence | null | undefined): string | undefined {
+  const text = (durable?.reportProse ?? durable?.message?.text ?? "").trim();
+  return text ? redactBounded(text, CUT_ATTEMPT_REPORT_CHARS) : undefined;
+}
+const CUT_ATTEMPT_REPORT_CHARS = 1_500;
+
+/** Ends an interrupted attempt and reserves the one fresh attempt that
+    replaces it: the same bound definition, activation input and checkout, so
+    the worktree and its uncommitted work carry over. */
+function startReplacementAttempt(
+  pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
+  cause: PipelineStageInterruptionCause,
+  recovery: { bootId: string; requestedAt: string; lastRecordAt: number | null },
+  durable: StageTurnEvidence | null | undefined,
+  ports: PipelinePorts,
+): void {
   attempt.state = "failed";
   attempt.completedAt = ports.now();
   attempt.error = `${INTERRUPTION_WORDS[cause].error}; replaced by a fresh stage attempt`;
+  attempt.restartRecovery ??= { ...recovery };
   const replacement = newAttempt(pipeline, stage);
   if (!runFor(pipeline, stage.id) || !replacement) {
-    park(pipeline, interruptedTurnRecoveryParkDetail("reservation", restarted), attempt);
-    persist();
-    return true;
+    park(pipeline, interruptedTurnRecoveryParkDetail("reservation", cause === "restart"), attempt);
+    return;
   }
   replacement.effectiveRole = structuredClone(attempt.effectiveRole);
   replacement.definition = attempt.definition ? structuredClone(attempt.definition) : attempt.definition;
   replacement.input = attempt.input;
   replacement.activatedBy = attempt.activatedBy ? { ...attempt.activatedBy } : null;
-  replacement.restartContext = { previousAttempt: attempt.n, transcriptPath: attempt.agentPath!, cause };
-  replacement.restartRecovery = { bootId, requestedAt, lastRecordAt, replacedAttempt: attempt.n };
+  const lastReport = cutAttemptReport(durable);
+  replacement.restartContext = { previousAttempt: attempt.n, transcriptPath: attempt.agentPath!, cause, ...(lastReport ? { lastReport } : {}) };
+  replacement.restartRecovery = { ...recovery, replacedAttempt: attempt.n };
   attempt.restartRecovery.replacementAttempt = replacement.n;
   setCursorState(pipeline, stage.id, "pending");
   pipeline.state = "running";
   pipeline.stateDetail = `stage attempt ${attempt.n} ${INTERRUPTION_WORDS[cause].detail}; fresh attempt ${replacement.n} is starting`;
-  persist();
+}
+
+/**
+ * The service restart that cut this attempt's turn, when one did.
+ *
+ * The boot that restarted the service records every turn it found in flight
+ * before it re-hosts anything (`recordRestartCuts` in runtime/startup). That
+ * record is this attempt's when it came after the attempt started and the
+ * transcript has not moved since, past the few records a dying CLI writes on
+ * its way down: an agent that worked on after the restart was resumed by it,
+ * and whatever ends it later is not the restart.
+ */
+const RESTART_CUT_SETTLE_MS = 5 * 60_000;
+function restartCutOf(attempt: PipelineStageAttempt, durable: StageTurnEvidence | null | undefined, ports: PipelinePorts): boolean {
+  if (attempt.paneId || !attempt.conversationId || !attempt.startedAt) return false;
+  const cut = ports.conversationRestartCut?.(attempt.conversationId);
+  if (!cut || unixMs(cut.recordedAt) < unixMs(attempt.startedAt)) return false;
+  const newest = durable?.lastRecordAt ?? durable?.message?.ts ?? null;
+  return newest === null || newest <= unixMs(cut.recordedAt) + RESTART_CUT_SETTLE_MS;
+}
+
+/**
+ * A stage whose host a service restart took down is retried once.
+ *
+ * Before this, such an attempt sat until its host had been gone for the
+ * ordinary grace and then failed as "completed without a valid final JSON
+ * verdict", parking the lane for a person to press retry: a deploy on
+ * 2026-10-06 did that to two builders minutes from the end of their work. The
+ * restart is the cause and the work is in the worktree, so one fresh attempt
+ * picks it up there. A replacement that is itself cut by a restart is not
+ * replaced again; it fails the way it always did, and the lane parks.
+ */
+async function retryRestartCutStage(
+  pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
+  durable: StageTurnEvidence | null | undefined, ports: PipelinePorts,
+): Promise<boolean> {
+  if (attempt.report || attempt.restartContext?.cause === "restart" || !attempt.agentPath) return false;
+  if (!restartCutOf(attempt, durable, ports)) return false;
+  const epoch = await ports.runtimeHostEpoch?.() ?? "unknown";
+  const bootId = `${ports.restartRecoveryBootId?.() ?? PIPELINE_RECOVERY_BOOT_ID}:${epoch}`;
+  startReplacementAttempt(pipeline, stage, attempt, "restart",
+    { bootId, requestedAt: ports.now(), lastRecordAt: durable?.lastRecordAt ?? null }, durable, ports);
   return true;
 }
 
@@ -4148,7 +4241,8 @@ async function recoverInterruptedStageTurn(
      transcript proves no work after the boot. */
   const newestRecordAt = recoveryEvidence.lastRecordAt ?? recoveryEvidence.message?.ts ?? null;
   const restarted = (bootStartedAt > unixMs(attempt.startedAt) && (newestRecordAt === null || newestRecordAt <= bootStartedAt))
-    || (typeof epoch === "number" && attempt.hostEpoch !== undefined && attempt.hostEpoch !== epoch);
+    || (typeof epoch === "number" && attempt.hostEpoch !== undefined && attempt.hostEpoch !== epoch)
+    || restartCutOf(attempt, recoveryEvidence, ports);
   return replaceInterruptedStageAttempt(pipeline, stage, attempt, ports, persist, bootId, recoveryEvidence.lastRecordAt ?? null,
     { kind: latestInterrupted, restarted });
 }
@@ -4547,9 +4641,12 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
 }
 
 function restartStagePrompt(prompt: string, attempt: PipelineStageAttempt): string {
-  return attempt.restartContext
-    ? `${prompt}\n\nThis is a fresh attempt because stage attempt ${attempt.restartContext.previousAttempt} ${attempt.restartContext.cause ? INTERRUPTION_WORDS[attempt.restartContext.cause].handover : "was interrupted"}. Continue the same stage input and use its transcript for reference: ${attempt.restartContext.transcriptPath}.`
-    : prompt;
+  const context = attempt.restartContext;
+  if (!context) return prompt;
+  const report = context.lastReport
+    ? ` Its last message before it was cut said:\n\n> ${context.lastReport.replace(/\n/g, "\n> ")}\n\nIts changes remain in this worktree; check its status and keep the uncommitted work.`
+    : "";
+  return `${prompt}\n\nThis is a fresh attempt because stage attempt ${context.previousAttempt} ${context.cause ? INTERRUPTION_WORDS[context.cause].handover : "was interrupted"}.${report} Continue the same stage input and use its transcript for reference: ${context.transcriptPath}.`;
 }
 
 async function spawnRunStage(
@@ -5239,6 +5336,7 @@ async function tickRunStage(
     }
     pipeline.stateDetail = null;
     if (oomDeath) { retryOutOfMemoryStage(pipeline, stage, attempt, oomDeath, ports); return; }
+    if (await retryRestartCutStage(pipeline, stage, attempt, durable, ports)) return;
     if (rerunHostLostReadOnlyStage(pipeline, stage, attempt, ports)) return;
     attempt.state = "failed";
     attempt.completedAt = ports.now();

@@ -866,8 +866,10 @@ test("an unpublished host the release cannot hand over still lets the published 
     }
     expect(exitCodes).toEqual([1]);
     expect(released).toEqual([published.hostKey]);
-    expect(obligationsFor(published.registryFile).map((obligation) => obligation.conversationId))
-      .toEqual([published.conversationId]);
+    /* The retrying boot was itself a restart and recorded the cuts it found;
+       the release records its own for the host it handed over. */
+    expect(obligationsFor(published.registryFile).filter((obligation) => obligation.reason === "viewer-release")
+      .map((obligation) => obligation.conversationId)).toEqual([published.conversationId]);
     await bindStructuredDeliveryQueue([], { registry, client: null });
     /* The successor boots in this same test process, where the unpublished
        handle is still retained; the probe answers again so it only sees it as
@@ -1116,4 +1118,119 @@ test("a pending spawn's first prompt retains its original cohort admission time"
   expect(Date.parse(message.createdAt)).toBeGreaterThan(Date.parse(launch.receipt.createdAt));
   const normal = registry.holdDelivery(launch.receipt.conversationId, "New work", "ordinary-message", "text", [], null, { operationId: "ordinary-operation" });
   expect(registry.deliveryAdmissionAtForOperation("ordinary-operation")).toBe(normal.createdAt);
+});
+
+/*
+ * A service restart (a deploy, a self-update, a crash) with no release before
+ * it: the old Viewer recorded nothing, its engines die with it or are replaced
+ * by the claim, and the booting successor is the only one left to notice what
+ * it cut. It records every turn it finds in flight, once.
+ */
+
+/** A Claude turn that ended on background work it was still waiting for. */
+function waitingOnBackgroundTranscript(): Record<string, unknown>[] {
+  const at = (offset: number) => new Date(Date.now() - 60_000 + offset * 1_000).toISOString();
+  return [
+    { type: "user", timestamp: at(0), message: { content: "run the merge gate" } },
+    { type: "assistant", timestamp: at(1), message: { content: [{ type: "tool_use", id: "tool-gate", name: "Bash", input: { run_in_background: true } }] } },
+    { type: "user", timestamp: at(2), message: { content: [{ type: "tool_result", tool_use_id: "tool-gate", content: "Command running in background with ID: gatetask1." }] },
+      toolUseResult: { backgroundTaskId: "gatetask1" } },
+    { type: "assistant", timestamp: at(3), message: { stop_reason: "end_turn", content: [{ type: "text", text: "Waiting for the gate to finish." }] } },
+  ];
+}
+
+test("a spawned agent whose turn a service restart cut is resumed once, and a second restart sends nothing more", async () => {
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  try {
+    const cut = incumbentConversation("claude", cutSessionId(31), deadEngine(2_000_001_131));
+    const ledger = createFakeDeliveryLedger();
+    const first = await successorBoot(cut.registryFile, journal, ledger, { viewer: { pid: 2_000_001_003, startIdentity: "first-successor" } });
+    expect(first.error).toBeNull();
+    expect(first.adopted).toEqual([cut.hostKey]);
+    await settle(() => ledger.writes.length > 0);
+    const writes = continuationsIn(ledger);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toStartWith("Viewer restarted and severed your structured host mid-turn.");
+    expect(writes[0]).toContain("The interrupted turn's last transcript event is tool-call");
+    expect(writes[0]).toContain("Re-run any interrupted operation");
+
+    const second = await successorBoot(cut.registryFile, journal, ledger);
+    expect(second.error).toBeNull();
+    await settle(() => ledger.writes.length > 1);
+    expect(continuationsIn(ledger)).toHaveLength(1);
+    expect(obligationsFor(cut.registryFile).map(({ conversationId, reason }) => ({ conversationId, reason })))
+      .toEqual([{ conversationId: cut.conversationId, reason: "viewer-restart" }]);
+  } finally {
+    journal.close();
+  }
+});
+
+test("a spawned agent waiting on background work the restart killed is told so once", async () => {
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  try {
+    const cut = incumbentConversation("claude", cutSessionId(32), deadEngine(2_000_001_132), waitingOnBackgroundTranscript());
+    const ledger = createFakeDeliveryLedger();
+    const boot = await successorBoot(cut.registryFile, journal, ledger);
+    expect(boot.error).toBeNull();
+    expect(boot.adopted).toEqual([cut.hostKey]);
+    await settle(() => ledger.writes.length > 0);
+    const writes = continuationsIn(ledger);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toContain("background work you started was still running (background task gatetask1)");
+    expect(writes[0]).toContain("its completion notice will not arrive");
+    expect(obligationsFor(cut.registryFile)[0]!.checkpoint.backgroundTasks).toEqual(["background task gatetask1"]);
+  } finally {
+    journal.close();
+  }
+});
+
+test("a pipeline stage a restart cut gets no continuation: its cut is recorded for the controller that retries it", async () => {
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  try {
+    const cut = incumbentConversation("claude", cutSessionId(33), deadEngine(2_000_001_133));
+    new AgentRegistry(cut.registryFile).rememberMembership(cut.conversationId, {
+      kind: "pipeline", containerId: "lane-fixture", role: "builder", slot: "build:1",
+      stageId: "build", stageOrder: 0, round: 1, parentConversationId: null,
+    });
+    const ledger = createFakeDeliveryLedger();
+    const boot = await successorBoot(cut.registryFile, journal, ledger);
+    expect(boot.error).toBeNull();
+    await settle(() => ledger.writes.length > 0, 150);
+    expect(continuationsIn(ledger)).toEqual([]);
+    const [record] = obligationsFor(cut.registryFile);
+    expect(record).toMatchObject({
+      conversationId: cut.conversationId, reason: "viewer-restart", state: "discharged",
+      resolution: "a pipeline stage: its controller retries the attempt",
+      stage: { pipelineId: "lane-fixture", stageId: "build", attempt: 1 },
+    });
+    const registry = new AgentRegistry(cut.registryFile);
+    setAgentRegistryForTests(registry);
+    try {
+      expect(defaultPipelinePorts().conversationRestartCut!(cut.conversationId)).toEqual({ recordedAt: record!.recordedAt });
+      expect(defaultPipelinePorts().conversationInterruption!(cut.conversationId)?.state).toBe("discharged");
+    } finally {
+      setAgentRegistryForTests(null);
+    }
+  } finally {
+    journal.close();
+  }
+});
+
+test("a restart that finds an agent's turn already settled records nothing and sends nothing", async () => {
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  try {
+    const settled = waitingOnBackgroundTranscript();
+    const at = new Date(Date.now() - 10_000).toISOString();
+    settled.push({ type: "user", timestamp: at, message: { content: "<task-notification>\n<task-id>gatetask1</task-id>\n<status>completed</status>\n</task-notification>" } });
+    settled.push({ type: "assistant", timestamp: at, message: { stop_reason: "end_turn", content: [{ type: "text", text: "The gate passed." }] } });
+    const cut = incumbentConversation("claude", cutSessionId(34), deadEngine(2_000_001_134), settled);
+    const ledger = createFakeDeliveryLedger();
+    const boot = await successorBoot(cut.registryFile, journal, ledger);
+    expect(boot.error).toBeNull();
+    await settle(() => ledger.writes.length > 0, 150);
+    expect(continuationsIn(ledger)).toEqual([]);
+    expect(obligationsFor(cut.registryFile)).toEqual([]);
+  } finally {
+    journal.close();
+  }
 });
