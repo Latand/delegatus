@@ -15,7 +15,11 @@ import {
 } from "./provider";
 import { CodexAppServerError, type CodexAppServerClient } from "@/lib/accounts/codexAppServer";
 import { AgentRegistry, type ConversationObservation, type TmuxHostEvidence } from "@/lib/agent/registry";
+import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { ClaudeStreamBrokerHost } from "@/lib/runtime/claudeStreamBrokerHost";
+import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH, TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE } from "@/lib/runtime/telegramConnectorEnv";
+import { setTelegramLaunchRepairForTests } from "@/lib/telegram/launchReadiness";
+import { clearTelegramConnection, deleteTelegramSession, saveTelegramSession, writeTelegramConnection, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
 import * as structuredSpawn from "@/lib/runtime/structuredSpawn";
 import type { EngineHost, HostState } from "@/lib/runtime/engineHost";
 import { StructuredDeliveryControllerUnavailableError } from "@/lib/runtime/structuredDeliveryController";
@@ -332,6 +336,148 @@ test("Claude publication waits for controller startup before replacing its verif
     if (structuredFlag === undefined) delete process.env.LLV_STRUCTURED_HOSTS;
     else process.env.LLV_STRUCTURED_HOSTS = structuredFlag;
   }
+});
+
+/** A conversation that holds the Telegram tool, and the migrated successor of
+    it, driven to the engine through the real host builder. Only the engine
+    process is synthetic: it records what it was started with and stops. */
+async function publishTelegramSuccessor(base: string, grant: "held" | "withdrawn" | "withdrawn while reconnecting") {
+  const source = accountRoot("claude", base, "source");
+  const target = accountRoot("claude", base, "target");
+  const registryPath = path.join(base, "provider-registry.json");
+  const seeded = new AgentRegistry(registryPath, undefined, undefined, { sqliteMode: "off" });
+  const begun = beginLegacySpawnFixture(seeded, { engine: "claude", cwd: base, role: "orchestrator",
+    origin: { kind: "operator" }, launchProfile: { mcpServers: ["viewer", "telegram"] } });
+  if (begun.kind !== "created") throw new Error("conversation reservation failed");
+  const sourceId = crypto.randomUUID();
+  const sourceTranscript = path.join(source.transcriptRoot, `${sourceId}.jsonl`);
+  fs.writeFileSync(sourceTranscript, JSON.stringify({ sessionId: sourceId }) + "\n", { mode: 0o600 });
+  const settled = seeded.settleSpawn(begun.receipt.launchId, { key: { engine: "claude", sessionId: sourceId },
+    artifactPath: sourceTranscript, cwd: base, accountId: "source", status: "idle", host: null,
+    claimEpoch: 0, claimOwner: null, pendingAction: null });
+  if (settled.kind !== "settled") throw new Error("conversation settlement failed");
+  const conversationId = settled.conversation.id;
+  /* The profile the migration recorded for its successor while the grant stood. */
+  const successorProfile = migrationSuccessorLaunchProfile(seeded.conversation(conversationId)!.generations.at(-1)!.launchProfile);
+  expect(successorProfile.mcpServers).toEqual(["viewer", "telegram"]);
+  seeded.close();
+  const withdraw = () => {
+    const file = JSON.parse(fs.readFileSync(registryPath, "utf8")) as {
+      conversations: Record<string, { generations: { launchProfile: { mcpServers: string[] } }[] }> };
+    file.conversations[conversationId]!.generations.at(-1)!.launchProfile.mcpServers = ["viewer"];
+    fs.writeFileSync(registryPath, JSON.stringify(file));
+  };
+  if (grant === "withdrawn") withdraw();
+  const registry = new AgentRegistry(registryPath, undefined, undefined, { sqliteMode: "off" });
+  const nativeId = crypto.randomUUID();
+  const transcript = path.join(target.transcriptRoot, `${nativeId}.jsonl`);
+  fs.writeFileSync(transcript, JSON.stringify({ sessionId: nativeId }) + "\n", { mode: 0o600 });
+  const engine = { reached: false, tokenPresent: true, telegramDefinition: null as unknown, notice: null as string | null };
+  const adoptHost = ClaudeStreamBrokerHost.adopt.bind(ClaudeStreamBrokerHost);
+  const adopt = spyOn(ClaudeStreamBrokerHost, "adopt").mockImplementation((sessionId, options) => adoptHost(sessionId, {
+    ...options,
+    readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+    spawnProcess: (_binary, args, spawnOptions) => {
+      engine.reached = true;
+      engine.tokenPresent = Boolean(spawnOptions.env?.[TELEGRAM_CONNECTOR_TOKEN_ENV]);
+      const noticeAt = args.indexOf("--append-system-prompt");
+      engine.notice = noticeAt >= 0 ? args[noticeAt + 1] ?? null : null;
+      const configAt = args.indexOf("--mcp-config");
+      engine.telegramDefinition = configAt >= 0
+        ? (JSON.parse(fs.readFileSync(args[configAt + 1]!, "utf8")) as { mcpServers: Record<string, unknown> }).mcpServers.telegram ?? null
+        : null;
+      throw new Error("synthetic Claude protocol stopped after launch capture");
+    },
+  }));
+  const provider = new RegisteredSuccessorProvider({
+    accounts: { resolveSpawn: () => target, resolveTranscriptOwner: () => source },
+    startCodex: async () => { throw new Error("unexpected Codex client"); },
+    claudeStatus: async () => ({ loggedIn: true }),
+    verifyClaudeHost: async () => true,
+    cancelClaude: async () => "absent",
+    registry,
+    now: () => "2026-07-22T09:00:00.000Z",
+  });
+  const receipt = {
+    operationId: `claude-telegram-successor-${grant}`,
+    nativeId,
+    path: transcript,
+    continuityPaths: [transcript],
+    historyHash: "claude-telegram-successor-history",
+    host: { kind: "claude-fork", identity: nativeId, epoch: 1, verifiedAt: "2026-07-22T09:00:00.000Z" },
+  } as ProviderReceipt;
+  const structuredFlag = process.env.LLV_STRUCTURED_HOSTS;
+  process.env.LLV_STRUCTURED_HOSTS = "1";
+  const controller = (process as typeof process & {
+    __llvStructuredDeliveryController?: { registerActiveHost: ((item: unknown) => Promise<() => Promise<void>>) | null };
+  }).__llvStructuredDeliveryController!;
+  const originalRegister = controller.registerActiveHost;
+  controller.registerActiveHost = async () => async () => {};
+  clearTelegramConnection();
+  const repair = { checks: 0 };
+  if (grant === "withdrawn while reconnecting") {
+    /* A credential is stored and the last health check failed. The check the
+       launch waits for brings the connection back, and the grant is withdrawn
+       while it runs. */
+    const session = saveTelegramSession("placeholder-session-for-telegram-successor-test");
+    const record = (status: "connected" | "error") => writeTelegramConnection({ version: 1, status,
+      credentialRef: session.credentialRef, identity: null, lastHealthCheckAt: null,
+      errorCode: status === "error" ? "connector_failed" : null, identityIdUpgradedAt: null });
+    record("error");
+    setTelegramLaunchRepairForTests({
+      healthCheck: async () => { repair.checks += 1; withdraw(); record("connected"); },
+      waitMs: 2_000,
+      cooldownMs: 0,
+    });
+  }
+  let refusal = "";
+  try {
+    await provider.publishHost(receipt, { engine: "claude", conversationId, targetAccountId: "target", launchProfile: successorProfile });
+  } catch (error) {
+    refusal = error instanceof Error ? error.message : String(error);
+  } finally {
+    if (grant === "withdrawn while reconnecting") {
+      setTelegramLaunchRepairForTests(null);
+      deleteTelegramSession();
+      clearTelegramConnection();
+    }
+    controller.registerActiveHost = originalRegister;
+    adopt.mockRestore();
+    if (structuredFlag === undefined) delete process.env.LLV_STRUCTURED_HOSTS;
+    else process.env.LLV_STRUCTURED_HOSTS = structuredFlag;
+  }
+  const stored = registry.conversation(conversationId)!.generations.at(-1)!.launchProfile.mcpServers;
+  registry.close();
+  return { engine, refusal, stored, repair };
+}
+
+test("a migrated Claude successor of a conversation that holds Telegram starts without the tool while Telegram is disconnected", async () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provider-telegram-successor-"));
+  roots.push(base);
+  const { engine, refusal, stored } = await publishTelegramSuccessor(base, "held");
+  /* The launch reaches the engine; the synthetic protocol is what stops it. */
+  expect(refusal).toBe("synthetic Claude protocol stopped after launch capture");
+  expect(engine).toEqual({ reached: true, tokenPresent: false, telegramDefinition: null, notice: TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE });
+  /* This run went without the tool; the conversation's record still holds it. */
+  expect(stored).toEqual(["viewer", "telegram"]);
+});
+
+test("a migrated Claude successor whose Telegram grant was withdrawn is refused before the engine starts", async () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provider-telegram-successor-withdrawn-"));
+  roots.push(base);
+  const { engine, refusal } = await publishTelegramSuccessor(base, "withdrawn");
+  expect(refusal).toBe(TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH);
+  expect(engine.reached).toBe(false);
+});
+
+test("a migrated Claude successor whose Telegram grant is withdrawn while Telegram reconnects is refused before the engine starts", async () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provider-telegram-successor-reconnecting-"));
+  roots.push(base);
+  const { engine, refusal, repair } = await publishTelegramSuccessor(base, "withdrawn while reconnecting");
+  expect(repair.checks).toBe(1);
+  expect(refusal).toBe(TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH);
+  expect(engine.reached).toBe(false);
+  expect(engine.telegramDefinition).toBeNull();
 });
 
 test("a migrated Claude successor names itself by a fresh capability that resolves to the migrated conversation", async () => {

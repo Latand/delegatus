@@ -122,7 +122,7 @@ import {
   withDismissedReceipts,
   writeDismissedReceipts,
 } from "./runtime/deliveryState";
-import { deliveryNoticeRun, describeReceiptFailure, failureCauseKey } from "./runtime/deliveryNotice";
+import { deliveryNoticeRun, describeReceiptFailure, failureCauseKey, sentenceCauseKey } from "./runtime/deliveryNotice";
 import { mintIdempotencyKey, receiptIsAdmitted, receiptIsTerminal, type HostAxis, type TurnAxis } from "./runtime/runtimeModel";
 import { tmuxComposerRuntimeDependencies } from "./tmuxComposerRuntime";
 import { VoiceConversationButton } from "./VoiceConversation";
@@ -515,10 +515,14 @@ export function RuntimeComposerReceipts({
       {onDiscard ? <button type="button" data-receipt-discard disabled={actionsDisabled || handoverActive(receipt)} title={handoverActive(receipt) ? t("composer.deliveryDiscardHandover") : undefined} className={`${uncertainButtonClass} hover:text-danger`} onClick={() => onDiscard(receipt)}>{t("runtime.receipt.discard")}</button> : null}
     </> : null
   );
+  /* A cause with its own wording is said once: an earlier attempt refused for
+     it is in the row's counter, and its line would be the chip's line again. */
   const supersededStatusLabels = (attempts: RuntimeReceipt[]): string[] => {
     const counts = new Map<string, number>();
+    const current = attempts[0] && sentenceCauseKey(attempts[0].reason) ? receiptStatusText(attempts[0]) : null;
     for (const attempt of attempts.slice(1)) {
       const label = receiptStatusText(attempt);
+      if (label === current) continue;
       counts.set(label, (counts.get(label) ?? 0) + 1);
     }
     return [...counts].map(([label, count]) => (count > 1 ? `${label} ×${count}` : label));
@@ -552,7 +556,12 @@ export function RuntimeComposerReceipts({
   const notice = deliveryNoticeRun(attemptGroups, textlessProblems);
   const noticeUnknown = notice ? receiptHasUnknownFate(notice.current) : false;
   const noticeFailure = notice && !noticeUnknown && notice.current.resend !== "safe" ? describeReceiptFailure(t, notice.current.reason) : null;
-  const noticeLabel = noticeUnknown ? unknownStatusText(notice!.current) : t("composer.deliveryNotDelivered");
+  /* A cause that says what to do in its own detail leaves the row to the cause:
+     "send again" beside it was the action said twice, and on a phone it took
+     the width the cause needed. */
+  const noticeLabel = noticeUnknown
+    ? unknownStatusText(notice!.current)
+    : t(noticeFailure?.saysWhatToDo ? "composer.deliveryFailed" : "composer.deliveryNotDelivered");
   const noticeLine = notice
     ? noticeFailure?.cause
       ? `${noticeLabel} — ${noticeFailure.cause}`

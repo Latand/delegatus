@@ -133,7 +133,7 @@ export async function offerForHook(request: Request, input: Record<string, unkno
     counted = true;
     return await injectMemory({ prompt, origin, engine: engine, project, conversation: conversationId, requestId, context }, {
       deadline, signal: request.signal,
-      activity: event => { try { index.recordInjectionActivity(event); } catch { /* optional ledger */ } },
+      activity: event => { try { index.recordInjectionActivity(event); if (event === "noMatches") index.recordUnmatchedTurn(conversationId, requestId); } catch { /* optional ledger */ } },
       enabled: () => sharedMemoryEnabled(project), ownsTraffic: () => viewerReleaseOwnsTraffic(),
       candidates: deadline => index.injectionCandidates(recallQuery, project, engine, conversationId, deadline),
       reserve: ceiling => {

@@ -99,6 +99,8 @@ export type ConversationWindowCase =
   | "dead-host-delivering"
   | "dead-host-delivered"
   | "dead-host-resume-failed"
+  | "dead-host-telegram-refused"
+  | "telegram-refused-composer"
   | "agent-images"
   | "image-viewers"
   | "own-message-steps";
@@ -342,9 +344,20 @@ const DEAD_SESSION: Record<string, { host: string; turn: string }> = {
   "dead-host-delivering": { host: "hosted", turn: "idle" },
   "dead-host-delivered": { host: "hosted", turn: "idle" },
   "dead-host-resume-failed": { host: "unhosted", turn: "unknown" },
+  "dead-host-telegram-refused": { host: "unhosted", turn: "unknown" },
 };
 
 const RESUME_FAILURE = "structured host recovery failed after 12 contended attempts: account is busy";
+const TELEGRAM_REFUSAL = "structured host recovery failed: telegram MCP connector is not connected at launch";
+const TELEGRAM_WITHDRAWN = "structured host recovery failed: telegram MCP grant was revoked before launch";
+const TELEGRAM_CONFLICT = "structured host recovery failed: telegram MCP account definition conflicts with operator connector";
+
+/** `?cause=withdrawn` is the refusal that stays a refusal; `?cause=conflict`
+    is the account's own entry that blocks the tool. */
+function telegramRefusal(): string {
+  const cause = params.get("cause");
+  return cause === "withdrawn" ? TELEGRAM_WITHDRAWN : cause === "conflict" ? TELEGRAM_CONFLICT : TELEGRAM_REFUSAL;
+}
 
 function deadEntry(id: ConversationWindowCase): OutboxEntry {
   const base = { id: "evidence-dead-key", text: DEAD_SENT, images: 1, at: ADMITTED_AT } as const;
@@ -354,7 +367,41 @@ function deadEntry(id: ConversationWindowCase): OutboxEntry {
      over, which is what separates this chip from the resuming one above. */
   if (id === "dead-host-delivering") return { ...base, state: "delivering", dispatchedAt: ADMITTED_AT } as OutboxEntry;
   if (id === "dead-host-delivered") return { ...base, state: "delivered", settledAt: DELIVERED_AT } as OutboxEntry;
+  /* The sentence the queue recorded when a restart was refused for Telegram. */
+  if (id === "dead-host-telegram-refused") return { ...base, state: "failed", error: telegramRefusal() } as OutboxEntry;
   return { ...base, state: "failed", error: RESUME_FAILURE } as OutboxEntry;
+}
+
+/**
+ * The composer's own notice for the same refusal: one message that failed
+ * twice, each attempt carrying the sentence behind a different wrapper, as the
+ * send route and the queue's drain record it.
+ */
+function TelegramComposerNoticeFixture() {
+  const refusal = telegramRefusal();
+  const attempt = (n: number, reason: string): RuntimeReceipt => ({
+    operationId: `telegram-refused-${n}`, idempotencyKey: `telegram-refused-key-${n}`,
+    conversationId: DEAD_CARD, kind: "send", status: "failed", text: DEAD_SENT,
+    at: new Date(ADMITTED_AT + n * 1_000).toISOString(), revision: 1, reason,
+  });
+  return (
+    <div data-evidence-case="telegram-refused-composer" className="min-h-dvh bg-canvas px-4 py-6 text-primary">
+      <div data-evidence-transcript className="my-3 flex justify-end">
+        <div className="max-w-[75%] whitespace-pre-wrap break-words rounded-surface bg-user px-4 py-2.5">{DEAD_SENT}</div>
+      </div>
+      <RuntimeComposerReceipts
+        receipts={[
+          attempt(2, refusal),
+          attempt(1, `conversation host was reclaimed; automatic resume did not establish a deliverable host: ${refusal.split(": ")[1]}`),
+        ]}
+        nowMs={ADMITTED_AT + 60_000}
+        session={{ host: "unhosted", turn: "unknown" }}
+        onRetry={() => undefined}
+        onEdit={() => undefined}
+        onDismiss={() => undefined}
+      />
+    </div>
+  );
 }
 
 function DeadQueueFixture({ id }: { id: ConversationWindowCase }) {
@@ -1229,6 +1276,7 @@ function Fixture({ id }: { id: ConversationWindowCase }) {
   if (id === "auth-terminal" || id === "clean-terminal") return <TerminalFixture id={id} />;
   if (id === "dead-host-composer") return <DeadComposerFixture file={DEAD_FILE} id={id} />;
   if (id === "dead-host-not-resumable") return <DeadComposerFixture file={ORPHANED_FILE} id={id} />;
+  if (id === "telegram-refused-composer") return <TelegramComposerNoticeFixture />;
   if (id.startsWith("dead-host-")) return <DeadQueueFixture id={id} />;
   const entries = visibleEntries(id);
   return (

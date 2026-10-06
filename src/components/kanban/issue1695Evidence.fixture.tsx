@@ -280,6 +280,13 @@ const ASKS_YOU_SETTING = { enabled: ASKS_YOU };
    a context past the rotation line, twenty previous seats and a running host
    with its Stop host control — every element the row has to keep readable. */
 const SEAT_HEAD = SCENARIO === "seat-head";
+/* The same seat with its agent not running and its context past the rotation
+   line: the status read reports both causes, as data, beside the sentences it
+   writes for an agent. */
+const SEAT_GONE = SEAT_HEAD && new URLSearchParams(location.search).get("seat") === "gone";
+/* The seat holds the Telegram tool and Telegram waits on the operator: the
+   status read names the action: `sign_in`, `check` or `restart`. */
+const SEAT_TELEGRAM = SEAT_HEAD ? new URLSearchParams(location.search).get("telegram") : null;
 /* Ghost cards: placeholder tasks no agent will name. A conversation the
    backfill adopted months after it ended, a launch that never produced a
    transcript (the leaked fixture's), a young task whose agent is still at
@@ -547,6 +554,48 @@ const ledgerBuild = OVERVIEW_SCOPE ? add(conversation("ledger-build", "Reconcili
 const ledgerQuiet = OVERVIEW_SCOPE ? add(conversation("ledger-quiet", "Archived last quarter", { project: LEDGER, mtime: now - 4 * 60 * MIN, lastTurn: { startedAt: (now - 5 * 60 * MIN) * 1_000, endedAt: (now - 4 * 60 * MIN) * 1_000 } })) : null;
 const meshAsk = OVERVIEW_SCOPE ? add(conversation("mesh-ask", "Which of the two meshes keeps the old ids?", { project: MESH, engine: "codex", model: "gpt-5.6", mtime: now - 11 * MIN, waitingInput: { since: now - 11 * MIN } })) : null;
 const meshQuiet = OVERVIEW_SCOPE ? add(conversation("mesh-quiet", "Wrote the migration notes", { project: MESH, mtime: now - 6 * 60 * MIN })) : null;
+/* The left sidebar (docs/design/sidebar-redesign.md): `?rail=few|many` fills the project list with invented
+   projects in every state a row has (waiting on the operator, working, quiet, known to the catalog only, crowned,
+   archived, a name longer than the row). */
+const RAIL = new URLSearchParams(location.search).get("rail");
+/* The states a frame of the default list cannot show: `copilot` signs a Copilot account in, `stale` ages the memory
+   and Claude readings and fails the Codex read, `empty`, `loading` and `unreachable` are the list's own three notices. */
+const RAIL_STATE = RAIL ? new URLSearchParams(location.search).get("railstate") : null;
+const railCatalog: { project: string; displayName: string; conversations: number; smt: number }[] = [];
+const RAIL_LONG = "northwind-customer-data-platform-migration";
+if (RAIL) {
+  const named = (project: string, displayName: string, conversations: number, age: number) => railCatalog.push({ project, displayName, conversations, smt: now - age });
+  const talk = (id: string, project: string, title: string, over: Record<string, unknown> = {}) => add(conversation(`rail-${id}`, title, { project, projectName: railCatalog.find((entry) => entry.project === project)?.displayName, ...over }));
+  named(MESH, "River Mesh", 9, 11 * MIN);
+  named(LEDGER, "Acme Ledger", 31, 30);
+  named("harbor-docs", "Harbor Docs", 14, 3 * 60 * MIN);
+  named(RAIL_LONG, L("Northwind customer data platform migration", "Міграція платформи клієнтських даних Northwind"), 58, 2 * MIN);
+  named("paper-kite", "Paper Kite", 12, 6 * 24 * 60 * MIN);
+  talk("mesh-ask", MESH, L("Which of the two meshes keeps the old ids?", "Яка з двох сіток зберігає старі ідентифікатори?"), { engine: "codex", model: "gpt-5.6", mtime: now - 11 * MIN, waitingInput: { since: now - 11 * MIN } });
+  talk("mesh-quiet", MESH, "Wrote the migration notes", { mtime: now - 6 * 60 * MIN });
+  talk("ledger-build", LEDGER, "Reconciling the ledger export", working({ pid: 4_511 }));
+  talk("ledger-review", LEDGER, "Reviewing the bank file parser", working({ pid: 4_512, engine: "codex", model: "gpt-5.6" }));
+  talk("ledger-ask", LEDGER, L("Ship the export with the rounding fix or without it?", "Випускати експорт з виправленням округлення чи без нього?"), { mtime: now - 4 * MIN, waitingInput: { since: now - 4 * MIN } });
+  talk("harbor-quiet", "harbor-docs", "Indexed the handbook", { mtime: now - 3 * 60 * MIN });
+  talk("northwind-build", RAIL_LONG, "Copying the customer tables", working({ pid: 4_513, mtime: now - 2 * MIN }));
+  if (RAIL === "many") {
+    const quiet: [string, string, number, number][] = [
+      ["tidal-forecast", "Tidal Forecast", 22, 40 * MIN], ["lantern-api", "Lantern API", 47, 95 * MIN], ["copper-relay", "Copper Relay", 6, 5 * 60 * MIN],
+      ["marble-index", "Marble Index", 19, 9 * 60 * MIN], ["delta-sync", "Delta Sync", 103, 26 * 60 * MIN], ["ember-cli", "Ember CLI", 8, 2 * 24 * 60 * MIN],
+      ["juniper-mail", "Juniper Mail", 15, 3 * 24 * 60 * MIN], ["slate-board", "Slate Board", 4, 5 * 24 * 60 * MIN], ["willow-auth", "Willow Auth", 27, 8 * 24 * 60 * MIN],
+      ["onyx-queue", "Onyx Queue", 11, 12 * 24 * 60 * MIN], ["quiet-orchard", "Quiet Orchard", 3, 20 * 24 * 60 * MIN], ["birch-notes", "Birch Notes", 7, 31 * 24 * 60 * MIN],
+    ];
+    for (const [project, displayName, conversations, age] of quiet) named(project, displayName, conversations, age);
+    talk("tidal-build", "tidal-forecast", "Fitting the harbour gauge model", working({ pid: 4_514, mtime: now - 40 }));
+    talk("lantern-ask", "lantern-api", L("Keep the v1 routes for another release?", "Залишити маршрути v1 ще на один випуск?"), { engine: "codex", model: "gpt-5.6", mtime: now - 95 * MIN, waitingInput: { since: now - 95 * MIN } });
+    localStorage.setItem("llvArchivedProjects", JSON.stringify(["quiet-orchard", "birch-notes"]));
+  } else if (new URLSearchParams(location.search).has("railarchive")) {
+    /* `&railarchive`: the short list with two archived projects under it, so the archive fold is inside the frame. */
+    named("quiet-orchard", "Quiet Orchard", 3, 20 * 24 * 60 * MIN);
+    named("birch-notes", "Birch Notes", 7, 31 * 24 * 60 * MIN);
+    localStorage.setItem("llvArchivedProjects", JSON.stringify(["quiet-orchard", "birch-notes"]));
+  } else localStorage.removeItem("llvArchivedProjects");
+}
 
 const searchHelper = PIPELINES ? add(conversation("search-helper", "Helper: profile the index warm-up", { mtime: now - 50 * MIN })) : null;
 const roundsBuild = PIPELINES ? add(conversation("rounds-build", "Builder: rework the retry banner", { mtime: now - 3 * 60 * MIN })) : null;
@@ -2596,7 +2645,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       authoritativeTurn: { state: "idle", source: "lifecycle", terminalAt: iso(MIN) },
       lastTurn: { startedAt: (now - 2 * MIN) * 1_000, endedAt: (now - MIN) * 1_000 },
     } as unknown as FileEntry)) : [];
-    const scoped = OVERVIEW_EMPTY
+    if (RAIL_STATE === "unreachable") return json({ error: "the catalog is unreachable in the evidence fixture" }, 503);
+    if (RAIL_STATE === "loading") await new Promise(() => {});
+    const scoped = OVERVIEW_EMPTY || RAIL_STATE === "empty"
       ? { files: [], projectCatalog: [], flows: [], pipelines: [], tasks: [] }
       : ORCH_WALK
       ? { files: seatOnly, projectCatalog: [{ project: PROJECT, conversations: 1, smt: now }], projectCwds: { [PROJECT]: "/repo/atlas" }, flows: [], pipelines: [], tasks: [] }
@@ -2606,10 +2657,11 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       ? { files: SEAT_CLS ? files : [], projectCatalog: [{ project: PROJECT, conversations: SEAT_CLS ? files.length : 0, smt: now }], projectCwds: { [PROJECT]: "/repo/atlas" }, flows: [], pipelines: [], tasks: [] }
       : {
         files: shown,
-        projectCatalog: [...new Set(shown.map((file) => file.project))].map((project) => {
+        projectCatalog: [...new Set(shown.map((file) => file.project))].filter((project) => !railCatalog.some((entry) => entry.project === project)).map((project) => {
           const own = shown.filter((file) => file.project === project);
           return { project, conversations: own.length, smt: Math.max(...own.map((file) => file.mtime)) };
-        }),
+        }).concat(railCatalog),
+        ...(RAIL ? { crownedProjects: [LEDGER, "harbor-docs"] } : {}),
         flows: OVERVIEW_QUIET ? [] : flows,
         pipelines: OVERVIEW_QUIET ? [] : pipelines,
         tasks,
@@ -2928,6 +2980,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       return json({ pipeline: record });
     }
   }
+  /* An account's own reading would stand in for the aged one, so the stale state has none. */
+  if (ACCOUNTS && RAIL_STATE === "stale" && url.pathname === "/api/accounts" && method === "GET") {
+    return json({ ...accountsBody, claude: { ...accountsBody.claude, accounts: accountsBody.claude.accounts.map((row) => ({ ...row, limits: null })) }, codex: { ...accountsBody.codex, accounts: accountsBody.codex.accounts.map((row) => ({ ...row, limits: null })) } });
+  }
   if (ACCOUNTS && url.pathname === "/api/accounts" && method === "GET") return json(TIER_LIMITS ? {
     ...accountsBody,
     claude: { ...accountsBody.claude, accounts: accountsBody.claude.accounts.map((row, index) => index === 0
@@ -3043,15 +3099,59 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       transcriptFacts: null,
       rotation: FM_SEAT
         ? { recommended: false, level: "none", reasons: [], thresholdUnknown: false }
+        : SEAT_GONE
+        ? {
+          recommended: true, level: "strongly_recommend", thresholdUnknown: false,
+          reasons: [
+            "context usage 520,825 tokens has reached the rotation threshold of 500,000 tokens (claude-opus-1m: 50% of a 1,000,000-token window)",
+            "the designated conversation's host is gone; rotate, or resume it with send_message_to_orchestrator",
+          ],
+          causes: [
+            { kind: "context", tokens: 520_825, estimated: false, thresholdTokens: 500_000, windowTokens: 1_000_000 },
+            { kind: "host_gone" },
+          ],
+        }
         : { recommended: true, level: "strongly_recommend", reasons: ["context usage has reached the rotation threshold"], thresholdUnknown: false },
+      ...(SEAT_TELEGRAM ? { telegram: SEAT_TELEGRAM } : {}),
     });
   }
   /* The rail's footer, so the frames that fold it away (#1802) have something
      to fold: invented machine figures and one invented limit window. */
   if (url.pathname.startsWith("/api/resources")) {
+    const host = (target: string, title: string, over: Record<string, unknown>) => ({
+      target, panePid: 4_100, kind: "structured", path: null, engine: "claude", title, project: LEDGER, activity: "idle", lastActiveAt: iso(6 * 60 * MIN), cwd: "/repo/ledger",
+      rssBytes: 600 * 1024 ** 2, swapBytes: 0, procCount: 3, model: "opus", role: "builder", conversationId: null, stage: "implement", ownership: "owned", seat: false, turnBusy: false, ...over,
+    });
     return json({
       system: { ramTotal: 32 * 1024 ** 3, ramAvailable: 9 * 1024 ** 3, swapTotal: 8 * 1024 ** 3, swapUsed: 1024 ** 3, capturedAt: iso(30) },
-      sessions: [],
+      sessions: RAIL ? [
+        host("host-ledger-build", "Reconciling the ledger export", { activity: "live", lastActiveAt: iso(20), rssBytes: 1_400 * 1024 ** 2, turnBusy: true }),
+        host("host-harbor-index", "Indexed the handbook", { project: "harbor-docs", cwd: "/repo/harbor", engine: "codex", model: "gpt-5.6", role: "reviewer", stage: "review" }),
+      ] : [],
+      ...(RAIL_STATE === "stale" ? { sessionsStale: true, sessionsCapturedAt: iso(40 * MIN) } : {}),
+    });
+  }
+  if (RAIL_STATE === "copilot" && url.pathname === "/api/accounts/copilot") {
+    return json({ cli: { present: true, reason: null }, active: "copilot-main", accounts: [{ id: "copilot-main", label: "Account H", kind: "managed", active: true, auth: "signed_in", user: null, loginCommand: null, login: null }] });
+  }
+  if (RAIL && url.pathname === "/api/limits/history") {
+    const series = (windowSeconds: number, spentShare: number, left: number) => {
+      const windowStart = now - Math.round(windowSeconds * spentShare);
+      return { windowStart, resetsAt: windowStart + windowSeconds, windowSeconds, samples: Array.from({ length: 12 }, (_, index) => ({ t: windowStart + Math.round(((now - windowStart) * index) / 11), remaining: Math.round(100 - ((100 - left) * index) / 11) })) };
+    };
+    return json({ claude: { session: series(18_000, 0.6, 88), weekly: series(604_800, 0.45, 70) }, codex: { session: series(18_000, 0.8, 60), weekly: series(604_800, 0.7, 90) }, claudeAccountId: "default", codexAccountId: null, historySince: iso(3 * 24 * 60 * MIN) });
+  }
+  if (RAIL_STATE === "stale" && url.pathname === "/api/limits") {
+    return json({
+      claude: { ...tierLimits, capturedAt: now - 45 * MIN },
+      codex: null,
+      claudeAccountId: "default",
+      codexAccountId: null,
+      provenance: {
+        claude: { source: "cache", reason: null, staleSince: iso(45 * MIN) },
+        codex: { source: "unavailable", reason: "oauth-rate-limited", staleSince: iso(10 * MIN), retryAt: new Date((now + 20 * MIN) * 1_000).toISOString() },
+      },
+      staleSince: iso(45 * MIN),
     });
   }
   if (url.pathname === "/api/limits") {
@@ -3060,7 +3160,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       codex: { session: { usedPercent: 40, resetsAt: now + 3_600, windowMinutes: 300 }, weekly: { usedPercent: 10, resetsAt: now + 172_800, windowMinutes: 10_080 }, plan: "pro", capturedAt: now },
       claudeAccountId: TIER_LIMITS ? "default" : null,
       codexAccountId: null,
-      provenance: { claude: { source: TIER_LIMITS ? "live" : "unavailable", reason: null, staleSince: null }, codex: { source: "live", reason: null, staleSince: null } },
+      ...(RAIL_STATE === "copilot" ? { copilot: { session: null, weekly: { usedPercent: 35, resetsAt: now + 12 * 86_400, windowMinutes: 43_200 }, plan: "pro", capturedAt: now }, copilotAccountId: "copilot-main" } : {}),
+      provenance: { claude: { source: TIER_LIMITS ? "live" : "unavailable", reason: null, staleSince: null }, codex: { source: "live", reason: null, staleSince: null }, ...(RAIL_STATE === "copilot" ? { copilot: { source: "live", reason: null, staleSince: null } } : {}) },
       staleSince: null,
     });
   }
@@ -3069,7 +3170,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 
 /* #1820's scenarios ARE the Overview, which is the view with no project
    selected; every other scenario opens on `atlas`'s own board. */
-const OVERVIEW_VIEW = OVERVIEW_SCOPE || OVERVIEW_EMPTY;
+const OVERVIEW_VIEW = OVERVIEW_SCOPE || OVERVIEW_EMPTY || new URLSearchParams(location.search).get("railview") === "overview";
 if (OVERVIEW_VIEW) localStorage.removeItem("llvProject");
 else localStorage.setItem("llvProject", PROJECT);
 /* The harness may seed a language before this module runs (`openFixture`), so
