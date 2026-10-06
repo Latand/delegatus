@@ -17953,3 +17953,584 @@ describe("parallel ask idle fallback", () => {
     } finally { await browser.close(); server.stop(); }
   }, 120_000);
 });
+
+describe("compact card menu and overflow menus, numbered design variants", () => {
+  /*
+   * A design lane's frames and measurements (docs/design/compact-card-menu.md).
+   * Today's menus and three numbered layouts of them (`?menus=1|2|3`) are
+   * opened on the real Viewer over this fixture: the card's ⋯ at rest, with
+   * each section opened, from a card at the bottom and at the right edge of
+   * the window; a column's ⋯, a conversation's ⋯, the board's ⋯ and the rail
+   * header's ⋯; on the phone the card's long-press sheet, the task's ⋯, the
+   * board menu and a conversation's menu. Desktop at 1440×900 and 1000×700,
+   * the phone at 390×844, light and dark, en and uk.
+   *
+   * Each state reports its box, whether it scrolls, whether it stays inside
+   * the window and every label it had to cut. A variant fails when its card
+   * menu rests wider than 300 px or taller than 360 px, when a state leaves
+   * the window, when a label is cut, or when an entry of today's menu is
+   * neither in the variant nor on its named list of removals. The taps to
+   * eight frequent actions are counted by walking the menu, and on one frame
+   * per variant four of them are carried out and read back from the board.
+   *
+   * Frames carry their variant number in a strip above the application
+   * frame. They and the contact sheets go to `LLV_COMPACT_MENUS_OUT` (default
+   * `.artifacts/compact-menus/`, never committed); the measurements to
+   * `evidence/compact-card-menu/measurements.json`.
+   * `LLV_COMPACT_MENUS_ONLY=0,2`, `..._FRAMES=390`, `..._LANGS=uk` and
+   * `..._SCHEMES=light` narrow a run, and a narrowed run writes no evidence.
+   *
+   *   CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 LLV_COMPACT_MENUS_OUT=… \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "compact card menu"
+   */
+  const OUT = path.resolve(process.env.LLV_COMPACT_MENUS_OUT ?? ".artifacts/compact-menus");
+  const EVIDENCE = path.resolve("evidence/compact-card-menu");
+  const pick = (name: string) => process.env[name]?.split(",") ?? null;
+  const ONLY = pick("LLV_COMPACT_MENUS_ONLY")?.map(Number) ?? null;
+  const ONLY_FRAMES = pick("LLV_COMPACT_MENUS_FRAMES");
+  const ONLY_LANGS = pick("LLV_COMPACT_MENUS_LANGS");
+  const ONLY_SCHEMES = pick("LLV_COMPACT_MENUS_SCHEMES");
+  const NARROWED = Boolean(ONLY || ONLY_FRAMES || ONLY_LANGS || ONLY_SCHEMES);
+  const VARIANTS = [0, 1, 2, 3].filter((variant) => !ONLY || ONLY.includes(variant));
+  const NAMES = ["TODAY", "VARIANT 1 · quick row + sections that open in place", "VARIANT 2 · one level of drill-in", "VARIANT 3 · pruned, inline pickers"];
+  const FRAMES = ([
+    { name: "1440", width: 1440, height: 900, phone: false },
+    { name: "1000", width: 1000, height: 700, phone: false },
+    { name: "390", width: 390, height: 844, phone: true },
+  ] as const).filter((frame) => !ONLY_FRAMES || ONLY_FRAMES.includes(frame.name));
+  const LANGS = (["en", "uk"] as const).filter((lang) => !ONLY_LANGS || ONLY_LANGS.includes(lang));
+  const SCHEMES = (["light", "dark"] as const).filter((scheme) => !ONLY_SCHEMES || ONLY_SCHEMES.includes(scheme));
+  const STRIP = 40;
+  const MENU = ".kb .menu";
+  const BAR = "[data-bar-more-menu]";
+  const RAIL = "[data-rail-menu-panel]";
+  const SHEET = "[data-mobile2-sheet]";
+
+  interface Reading {
+    variant: number; frame: string; scheme: Scheme; lang: string; surface: string; state: string;
+    box: [x: number, y: number, width: number, height: number];
+    scrolls: boolean; inside: boolean; controls: number; clipped: string[]; labels: string[];
+    /** A family menu's rows by the product's own key: `key`, `key@section` behind a section, `key!` left out. */
+    rows: string[];
+    /** Each row of the surface as it is drawn: its label and its box. */
+    items: [label: string, width: number, height: number][];
+    file: string;
+  }
+
+  /** The open surface: its box, whether anything in it scrolls, the controls a pointer meets and the labels it cut. */
+  const read = (page: Page, selector: string) => page.evaluate((surfaceSelector) => {
+    const surface = [...document.querySelectorAll<HTMLElement>(surfaceSelector)].find((element) => element.getBoundingClientRect().width > 0);
+    if (!surface) return null;
+    const rect = surface.getBoundingClientRect();
+    const round = (value: number) => Math.round(value * 10) / 10;
+    const shown = (element: Element) => { const box = element.getBoundingClientRect(); return box.width > 0 && box.height > 0 && getComputedStyle(element).visibility !== "hidden"; };
+    const scrolls = [surface, ...surface.querySelectorAll<HTMLElement>("*")].some((element) => element.scrollHeight > element.clientHeight + 1 && /auto|scroll/.test(getComputedStyle(element).overflowY));
+    const controls = [...surface.querySelectorAll<HTMLElement>('button, a[href], [role^="menuitem"], [role="switch"]')].filter(shown);
+    const clipped = [...surface.querySelectorAll<HTMLElement>(".cm-cap, .cm-val, .cm-title, .cmf-title, .lbl")].filter(shown)
+      .filter((element) => element.scrollWidth > element.clientWidth + 1).map((element) => (element.textContent ?? "").trim().slice(0, 40));
+    const label = (element: HTMLElement) => (element.querySelector(".lbl")?.firstChild?.textContent ?? element.getAttribute("aria-label") ?? element.textContent ?? "").trim();
+    return {
+      box: [round(rect.left), round(rect.top), round(rect.width), round(rect.height)] as [number, number, number, number],
+      scrolls,
+      inside: rect.left >= -0.5 && rect.top >= -0.5 && rect.right <= innerWidth + 0.5 && rect.bottom <= innerHeight + 0.5,
+      controls: controls.length,
+      clipped,
+      labels: [...surface.querySelectorAll<HTMLElement>('[role^="menuitem"]:not([data-cm-section]):not([data-cm-back])')].filter(shown).map(label),
+      rows: [...surface.querySelectorAll<HTMLElement>("[data-cmf-row]")].map((row) => `${row.getAttribute("data-cmf-row")}${row.getAttribute("data-cmf-hidden") === "removed" ? "!" : row.hasAttribute("data-cmf-hidden") ? "@" : ""}`),
+      items: [...surface.querySelectorAll<HTMLElement>('[role^="menuitem"], .head, .swatches, [data-phone-card-action], [data-phone-task-menu], [data-mobile2-menu-row], [data-cmf-head]')].filter(shown)
+        .filter((element) => !element.closest(".swatches") || element.classList.contains("swatches"))
+        .map((element): [string, number, number] => [element.classList.contains("swatches") ? "(swatches)" : label(element).slice(0, 60), round(element.getBoundingClientRect().width), round(element.getBoundingClientRect().height)]),
+    };
+  }, selector);
+
+  /** A frame under a strip that names the variant, outside the application frame. */
+  async function frameWithStrip(shot: Buffer, width: number, text: string, variant: number): Promise<Buffer> {
+    const escaped = text.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+    const fill = ["#3a3a3a", "#1f4fb5", "#7a3fb0", "#17705a"][variant]!;
+    const strip = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${STRIP}"><rect width="100%" height="100%" fill="${fill}"/><text x="12" y="26" font-family="DejaVu Sans, Arial, sans-serif" font-size="${width < 500 ? 12 : 16}" font-weight="700" fill="#fff">${escaped}</text></svg>`);
+    return sharp(shot).extend({ top: STRIP, background: fill }).composite([{ input: strip, left: 0, top: 0 }]).png().toBuffer();
+  }
+
+  /** What failed and what it was waiting for. */
+  const brief = (error: unknown) => (error as Error).message.split("\n").filter((line) => !/^Call log:/.test(line.trim())).slice(0, 2).map((line) => line.trim()).join(" · ");
+  const jsClick = (page: Page, selector: string) => page.evaluate((target) => { document.querySelector<HTMLElement>(target)?.click(); }, selector);
+
+  browserTest("today's menus and the three variants, measured and framed", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const server = await serveEvidenceFixture(path.join(OUT, "bundle-root"));
+    let browser = await chromium.launch(LAUNCH);
+    /* A long run outlives a browser now and then; the next frame starts a new one. */
+    const alive = async () => { if (!browser.isConnected()) browser = await chromium.launch(LAUNCH); };
+    const readings: Reading[] = [];
+    const failures: string[] = [];
+    const taps: Record<string, Record<string, number | string>> = {};
+    const acted: Record<string, Record<string, boolean>> = {};
+    const url = (variant: number, scenario = "stages") => `${server.base}?scenario=${scenario}${variant ? `&menus=${variant}` : ""}`;
+
+    type Where = { variant: number; frame: (typeof FRAMES)[number]; scheme: Scheme; lang: "en" | "uk" };
+    const keyOf = (where: Where) => `${where.variant === 0 ? "today" : `v${where.variant}`}/${where.frame.name}-${where.scheme}-${where.lang}`;
+    async function capture(page: Page, where: Where, selector: string, surface: string, state: string): Promise<Reading | null> {
+      const reading = await read(page, selector);
+      if (!reading) { failures.push(`${keyOf(where)} ${surface} ${state}: the surface did not open`); return null; }
+      const file = `${keyOf(where)}-${surface}-${state.replace(/[^a-z0-9]+/gi, "_")}.png`;
+      fs.mkdirSync(path.dirname(path.join(OUT, file)), { recursive: true });
+      const text = `${NAMES[where.variant]}  ·  ${where.frame.width}×${where.frame.height} ${where.lang} ${where.scheme}  ·  ${surface}: ${state}  ·  ${Math.round(reading.box[2])}×${Math.round(reading.box[3])}${reading.scrolls ? " scrolls" : ""}`;
+      fs.writeFileSync(path.join(OUT, file), await frameWithStrip(await page.screenshot(), where.frame.width, text, where.variant));
+      const entry: Reading = { variant: where.variant, frame: where.frame.name, scheme: where.scheme, lang: where.lang, surface, state, ...reading, file };
+      readings.push(entry);
+      if (where.variant) {
+        if (!reading.inside) failures.push(`${keyOf(where)} ${surface} ${state}: leaves the window ${JSON.stringify(reading.box)}`);
+        if (reading.clipped.length) failures.push(`${keyOf(where)} ${surface} ${state}: cut labels ${JSON.stringify(reading.clipped)}`);
+      }
+      return entry;
+    }
+
+    /** Opens each section of an open surface in turn, captures it and closes it again. */
+    async function walk(page: Page, where: Where, selector: string, surface: string, sectionAttr: "data-cm-section" | "data-cmf-section"): Promise<Reading[]> {
+      const head = sectionAttr === "data-cm-section" ? `${selector} [data-cm-section]` : `${selector} [data-cmf-head="section"]`;
+      const ids = await page.evaluate(([target, attr]) => [...document.querySelectorAll<HTMLElement>(target!)].map((element) => element.getAttribute(attr!)!), [head, sectionAttr]);
+      const out: Reading[] = [];
+      for (const id of ids) {
+        const opener = `${head}[${sectionAttr}="${id}"]`;
+        await jsClick(page, opener);
+        await page.waitForTimeout(120);
+        const reading = await capture(page, where, selector, surface, `open ${id.replace(/^lane:.*/, "pipeline")}`);
+        if (reading) out.push(reading);
+        const back = sectionAttr === "data-cm-section" ? `${selector} [data-cm-back]` : `${selector} [data-cmf-head="back"]`;
+        if (await page.locator(back).count()) await jsClick(page, back); else await jsClick(page, opener);
+        await page.waitForTimeout(80);
+      }
+      return out;
+    }
+
+    async function settleBoard(page: Page) {
+      /* A narrow board shows one column behind tabs: the first card in the document may be in a closed one. */
+      await page.locator("[data-kanban-board] .card[data-id]").locator("visible=true").first().waitFor({ timeout: 30_000 });
+      await page.waitForTimeout(500);
+      /* The attention notice lies over the board header's right end; it is answered away as an operator would. */
+      await page.evaluate(() => { for (const button of document.querySelectorAll<HTMLElement>("[data-attention-toast] button")) button.click(); });
+      await jsClick(page, "[data-seat-collapse]");
+      await page.waitForTimeout(500);
+      await page.mouse.move(2, 2);
+    }
+    /** On a board of tabs, the tab of this column. */
+    const showColumn = async (page: Page, status: string) => {
+      const tab = page.locator(`[data-kanban-board] .tabs-nav [data-tab="${status}"]`);
+      if (await tab.count() && await tab.getAttribute("aria-selected") !== "true") { await tab.click(); await page.waitForTimeout(250); }
+    };
+    const showCard = async (page: Page, id: string) => {
+      const status = await page.evaluate((selector) => document.querySelector(selector)?.closest(".column")?.getAttribute("data-status") ?? null, card(id));
+      if (status) await showColumn(page, status);
+    };
+    const openCardMenu = async (page: Page, id: string) => {
+      await showCard(page, id);
+      await page.locator(`${card(id)} [data-menu]`).click();
+      await page.waitForSelector(MENU, { timeout: 10_000 });
+      await page.waitForTimeout(120);
+    };
+    const closeMenu = async (page: Page) => { await page.keyboard.press("Escape"); await page.waitForTimeout(80); };
+
+    /** Where an entry with this label sits in the open card menu: 2 taps at rest, 3 behind a section. */
+    const findEntry = (page: Page, label: string) => page.evaluate((wanted) => {
+      const menu = document.querySelector<HTMLElement>(".kb .menu");
+      if (!menu) return null;
+      const name = (element: HTMLElement) => (element.querySelector(".lbl")?.firstChild?.textContent ?? element.querySelector(".cm-cap")?.textContent ?? "").trim();
+      const hit = [...menu.querySelectorAll<HTMLElement>('[role^="menuitem"]')].find((element) => element.getBoundingClientRect().height > 0 && (element.getAttribute("aria-label") === wanted || name(element) === wanted));
+      if (!hit) return null;
+      const box = hit.getBoundingClientRect();
+      const frame = menu.getBoundingClientRect();
+      hit.setAttribute("data-compact-target", "");
+      return { needsScroll: box.bottom > frame.bottom + 0.5 || box.top < frame.top - 0.5 || box.bottom > innerHeight };
+    }, label);
+    async function tapsTo(page: Page, label: string): Promise<{ taps: number | string; path: "rest" | string } | null> {
+      const rest = await findEntry(page, label);
+      if (rest) return { taps: rest.needsScroll ? "2 + scroll" : 2, path: "rest" };
+      const ids = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>(".kb .menu [data-cm-section]")].map((element) => element.dataset.cmSection!));
+      for (const id of ids) {
+        await jsClick(page, `${MENU} [data-cm-section="${id}"]`);
+        await page.waitForTimeout(80);
+        const inside = await findEntry(page, label);
+        if (inside) return { taps: inside.needsScroll ? "3 + scroll" : 3, path: id };
+        if (await page.locator(`${MENU} [data-cm-back]`).count()) await jsClick(page, `${MENU} [data-cm-back]`); else await jsClick(page, `${MENU} [data-cm-section="${id}"]`);
+        await page.waitForTimeout(60);
+      }
+      return null;
+    }
+
+    async function desktop(where: Where) {
+      const { variant, frame, scheme, lang } = where;
+      const t = (key: string, params?: Record<string, string | number>) => translate(lang, key as never, params);
+      const { context, page, pageErrors } = await openFixture(browser, url(variant), frame, scheme, lang, "reduce");
+      try {
+        await settleBoard(page);
+        /* The card's ⋯, on a card that holds one pipeline. */
+        await openCardMenu(page, "t-links");
+        const rest = await capture(page, where, MENU, "card", "rest");
+        const opened = variant ? await walk(page, where, MENU, "card", "data-cm-section") : [];
+        if (variant && rest) {
+          if (rest.box[2] > 300.5 || rest.box[3] > 360.5) failures.push(`${keyOf(where)} card rest: ${rest.box[2]}×${rest.box[3]} is over 300×360`);
+          if (rest.scrolls) failures.push(`${keyOf(where)} card rest: scrolls`);
+          if (variant === 2) for (const state of opened) if (state.box[3] > 360.5 || state.scrolls) failures.push(`${keyOf(where)} card ${state.state}: ${state.box[3]} px${state.scrolls ? ", scrolls" : ""}`);
+        }
+        /* Taps to eight frequent actions, counted from the closed menu. */
+        const targets: [string, string][] = [
+          ["move to Done", t("kanban.status.done")], ["move to Waiting", t("kanban.status.blocked")], ["hide from board", t("kanban.hideFromBoard")],
+          ["rename", t("kanban.rename")], ["description", t("kanban.addDescription")], ["priority High", t("kanban.priority.high")],
+          ["colour", t("kanban.color.coral")], ["pause the pipeline", t("kanban.pipelineAct.label.pause")],
+        ];
+        const counted: Record<string, number | string> = {};
+        for (const [name, label] of targets) {
+          await closeMenu(page);
+          await openCardMenu(page, "t-links");
+          const found = await tapsTo(page, label);
+          counted[name] = found ? found.taps : "unreachable";
+          if (!found) failures.push(`${keyOf(where)}: «${label}» is not reachable from the card's ⋯`);
+        }
+        taps[keyOf(where)] = counted;
+        await closeMenu(page);
+        /* Every entry of today's menu is in the variant or on its named removals: read in `reach` below. */
+        /* A column's ⋯. */
+        for (const status of ["assigned", "done"]) {
+          await showColumn(page, status);
+          await page.locator(`[data-colmenu="${status}"]`).scrollIntoViewIfNeeded();
+          await page.locator(`[data-colmenu="${status}"]`).click();
+          await page.waitForSelector(MENU, { timeout: 10_000 });
+          await page.waitForTimeout(100);
+          await capture(page, where, MENU, "column", status);
+          await closeMenu(page);
+        }
+        await page.evaluate(() => document.querySelector(".kb .columns, [data-kanban-board]")?.scrollTo?.({ left: 0 }));
+        /* The board's menu and the rail header's ⋯. */
+        for (const [trigger, panel, surface] of [["[data-bar-more]", BAR, "board"], ["[data-rail-menu]", RAIL, "header"]] as const) {
+          if (!(await page.locator(trigger).count()) || !(await page.locator(trigger).first().isVisible())) continue;
+          await page.locator(trigger).first().click();
+          await page.waitForSelector(panel, { timeout: 10_000 });
+          await page.waitForTimeout(150);
+          await capture(page, where, panel, surface, "rest");
+          if (variant && scheme === "light") await walk(page, where, panel, surface, "data-cmf-section");
+          await page.locator(trigger).first().click();
+          await page.waitForTimeout(80);
+        }
+        /* A card at the bottom of the window, then one at its right edge. */
+        for (const [id, state, options] of [["t-upload", "bottom card", { block: "end" }], ["t-attach", "right-edge card", { block: "center", inline: "end" }]] as const) {
+          await showCard(page, id);
+          await page.evaluate(([selector, how]) => document.querySelector(selector as string)?.scrollIntoView(how as ScrollIntoViewOptions), [`${card(id)} [data-menu]`, options] as const);
+          await page.waitForTimeout(250);
+          await openCardMenu(page, id);
+          await capture(page, where, MENU, "card", state);
+          if (variant) {
+            /* And with its tallest section open, where a menu that grows has to move. */
+            const lane = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>(".kb .menu [data-cm-section]")].map((element) => element.dataset.cmSection!).find((id) => id.startsWith("lane:")) ?? null);
+            if (lane) {
+              await jsClick(page, `${MENU} [data-cm-section="${lane}"]`);
+              await page.waitForTimeout(120);
+              await capture(page, where, MENU, "card", `${state}, pipeline open`);
+            }
+          }
+          await closeMenu(page);
+        }
+        /* A conversation's ⋯: the reader a card's agent row opens. */
+        await showCard(page, "t-export");
+        await page.evaluate((selector) => document.querySelector(selector)?.scrollIntoView({ block: "center", inline: "center" }), `${card("t-export")} [data-member]`);
+        await page.locator(`${card("t-export")} [data-member]`).first().click();
+        await page.waitForSelector("[data-reader-menu]", { timeout: 15_000 });
+        await page.waitForTimeout(400);
+        await page.locator("[data-reader-menu]").first().click();
+        await page.waitForSelector(MENU, { timeout: 10_000 });
+        await page.waitForTimeout(120);
+        await capture(page, where, MENU, "conversation", "rest");
+        if (variant) await walk(page, where, MENU, "conversation", "data-cm-section");
+        await closeMenu(page);
+        if (pageErrors.length) failures.push(`${keyOf(where)}: page errors ${pageErrors.join(" | ")}`);
+      } catch (error) {
+        failures.push(`${keyOf(where)}: ${brief(error)}`);
+        /* What the window showed when the walk stopped. */
+        fs.mkdirSync(path.join(OUT, "failed"), { recursive: true });
+        await page.screenshot({ path: path.join(OUT, "failed", `${keyOf(where).replace("/", "-")}.png`) }).catch(() => {});
+      } finally {
+        await context.close();
+      }
+    }
+
+    /** One frame per variant: four frequent actions carried out through the menu and read back from the board. */
+    async function act(variant: number) {
+      const frame = FRAMES.find((entry) => !entry.phone);
+      if (!frame) return;
+      const where: Where = { variant, frame, scheme: "light", lang: "en" };
+      const t = (key: string) => translate("en", key as never);
+      const { context, page } = await openFixture(browser, url(variant), frame, "light", "en", "reduce");
+      const done: Record<string, boolean> = {};
+      try {
+        await settleBoard(page);
+        const through = async (id: string, label: string) => {
+          await openCardMenu(page, id);
+          const found = await tapsTo(page, label);
+          if (!found) return false;
+          await page.locator(`${MENU} [data-compact-target]`).first().click();
+          await page.waitForTimeout(700);
+          return true;
+        };
+        const state = (id: string) => page.evaluate((selector) => {
+          const element = document.querySelector<HTMLElement>(selector);
+          return element ? { status: element.closest(".column")?.getAttribute("data-status") ?? null, color: element.getAttribute("data-color"), priority: element.querySelector(".prio-mark")?.getAttribute("data-priority") ?? null } : null;
+        }, card(id));
+        done.colour = await through("t-export", t("kanban.color.coral")) && (await state("t-export"))?.color === "coral";
+        done.priority = await through("t-onboarding", t("kanban.priority.high")) && (await state("t-onboarding"))?.priority === "high";
+        done.move = await through("t-onboarding", t("kanban.status.blocked")) && (await state("t-onboarding"))?.status === "blocked";
+        done.hide = await through("t-longtitle", t("kanban.hideFromBoard")) && (await state("t-longtitle")) === null;
+        /* Keys: the arrows walk the menu and Escape hands focus back to the ⋯. */
+        await openCardMenu(page, "t-export");
+        await page.keyboard.press("ArrowDown");
+        await page.keyboard.press("ArrowDown");
+        const walked = await page.evaluate(() => Boolean(document.activeElement?.closest(".kb .menu")));
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(150);
+        done.keys = walked && await page.evaluate((selector) => document.activeElement === document.querySelector(selector), `${card("t-export")} [data-menu]`);
+      } catch (error) {
+        failures.push(`${keyOf(where)} actions: ${brief(error)}`);
+      } finally {
+        await context.close();
+      }
+      acted[variant === 0 ? "today" : `v${variant}`] = done;
+      for (const [name, ok] of Object.entries(done)) if (!ok) failures.push(`${keyOf(where)}: «${name}» through the menu did not reach the board`);
+    }
+
+    /** A card that holds two pipelines: what the menu does as lanes accumulate. */
+    async function manyLanes(variant: number) {
+      const frame = FRAMES.find((entry) => entry.name === "1440");
+      if (!frame || !LANGS.includes("uk") || !SCHEMES.includes("light")) return;
+      const where: Where = { variant, frame, scheme: "light", lang: "uk" };
+      const { context, page } = await openFixture(browser, url(variant, "work-links"), frame, "light", "uk", "reduce");
+      try {
+        await settleBoard(page);
+        await openCardMenu(page, "t-many");
+        await capture(page, where, MENU, "card-two-pipelines", "rest");
+      } catch (error) {
+        failures.push(`${keyOf(where)} two pipelines: ${brief(error)}`);
+      } finally {
+        await context.close();
+      }
+    }
+
+    async function phone(where: Where) {
+      const { variant, frame, scheme, lang } = where;
+      const fresh = async () => {
+        const opened = await openFixture(browser, url(variant), frame, scheme, lang, "reduce", true);
+        await opened.page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
+        await opened.page.waitForTimeout(600);
+        return opened;
+      };
+      const sections = variant > 0 && scheme === "light";
+      const shut = async (page: Page) => { await jsClick(page, "[data-mobile2-close]"); await page.waitForTimeout(250); };
+      {
+        const { context, page, pageErrors } = await fresh();
+        try {
+          /* The card's long-press sheet. */
+          await page.locator('[data-phone-kanban-tab="assigned"]').first().click();
+          await page.waitForTimeout(300);
+          await page.evaluate(() => document.querySelector('[data-phone-card="task:t-links"]')?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+          await page.waitForSelector("[data-phone-card-sheet]", { timeout: 10_000 });
+          await page.waitForTimeout(300);
+          await capture(page, where, SHEET, "phone-card", "rest");
+          if (sections) await walk(page, where, SHEET, "phone-card", "data-cmf-section");
+          await shut(page);
+          /* The board menu. */
+          await page.locator('[data-mobile2-open="menu"]').first().click();
+          await page.waitForSelector(`${SHEET} [data-mobile2-menu-row="tasks"]`, { timeout: 10_000 });
+          await page.waitForTimeout(300);
+          await capture(page, where, SHEET, "phone-board", "rest");
+          if (sections) await walk(page, where, SHEET, "phone-board", "data-cmf-section");
+          await shut(page);
+          /* The task's ⋯. */
+          await page.locator('[data-phone-card="task:t-links"]').click();
+          await page.waitForTimeout(500);
+          await page.locator('[data-mobile2-open="menu"]').first().click();
+          await page.waitForSelector("[data-phone-task-menu-sheet]", { timeout: 10_000 });
+          await page.waitForTimeout(300);
+          await capture(page, where, SHEET, "phone-task", "rest");
+          if (pageErrors.length) failures.push(`${keyOf(where)}: page errors ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          failures.push(`${keyOf(where)} phone: ${brief(error)}`);
+        } finally {
+          await context.close();
+        }
+      }
+      {
+        const { context, page, pageErrors } = await fresh();
+        try {
+          /* A conversation's menu. */
+          await page.locator('[data-phone-kanban-tab="inbox"]').first().click();
+          await page.waitForTimeout(300);
+          await page.locator('[data-phone-card-kind="conversation"]').first().click();
+          await page.waitForTimeout(700);
+          await page.locator('[data-mobile2-open="menu"]').first().click();
+          await page.waitForSelector("[data-mobile2-chat-identity]", { timeout: 10_000 });
+          await page.waitForTimeout(300);
+          await capture(page, where, SHEET, "phone-conversation", "rest");
+          if (sections) await walk(page, where, SHEET, "phone-conversation", "data-cmf-section");
+          if (pageErrors.length) failures.push(`${keyOf(where)}: page errors ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          failures.push(`${keyOf(where)} phone conversation: ${brief(error)}`);
+        } finally {
+          await context.close();
+        }
+      }
+    }
+
+    try {
+      for (const variant of VARIANTS) {
+        for (const frame of FRAMES) for (const scheme of SCHEMES) for (const lang of LANGS) {
+          const where: Where = { variant, frame, scheme, lang };
+          await alive();
+          if (frame.phone) await phone(where); else await desktop(where);
+        }
+        await alive();
+        await act(variant);
+        await alive();
+        await manyLanes(variant);
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+
+    /* Every entry today's card, column and conversation menus show is in the variant, or on its named removals. */
+    const removable = new Set((["en", "uk"] as const).flatMap((lang) => ["kanban.collapseCardShort", "kanban.expandCardShort", "kanban.hold.edit", "kanban.unlink"].map((key) => translate(lang, key as never))));
+    const labelsOf = (variant: number, where: Pick<Reading, "frame" | "scheme" | "lang">, surface: string) => new Set(readings
+      .filter((entry) => entry.variant === variant && entry.frame === where.frame && entry.scheme === where.scheme && entry.lang === where.lang && entry.surface === surface)
+      .flatMap((entry) => entry.labels));
+    const reach: Record<string, string[]> = {};
+    for (const base of readings.filter((entry) => entry.variant === 0 && entry.state === "rest" && ["card", "conversation"].includes(entry.surface))) {
+      for (const variant of VARIANTS.filter((entry) => entry > 0)) {
+        const have = labelsOf(variant, base, base.surface);
+        if (!have.size) continue;
+        const lost = base.labels.filter((label) => !have.has(label));
+        const unnamed = lost.filter((label) => !removable.has(label));
+        reach[`v${variant}/${base.frame}-${base.scheme}-${base.lang} ${base.surface}`] = lost;
+        if (unnamed.length) failures.push(`v${variant} ${base.frame}-${base.scheme}-${base.lang} ${base.surface}: lost without a named home ${JSON.stringify(unnamed)}`);
+      }
+    }
+
+    /* ── Contact sheets ─────────────────────────────────────────────────── */
+    const find = (variant: number, frame: string, scheme: Scheme, lang: string, surface: string, state: string) =>
+      readings.find((entry) => entry.variant === variant && entry.frame === frame && entry.scheme === scheme && entry.lang === lang && entry.surface === surface && entry.state === state) ?? null;
+    const text = (value: string, width: number, size = 13, fill = "#222", weight = 600) => Buffer.from(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${size + 10}"><text x="2" y="${size + 2}" font-family="DejaVu Sans, Arial, sans-serif" font-size="${size}" font-weight="${weight}" fill="${fill}">${value.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</text></svg>`);
+    /** One tile: the surface cut out of its frame with a margin (or the whole frame, scaled), under a caption. */
+    async function tile(entry: Reading | null, caption: string, whole: number | null = null): Promise<{ image: Buffer; width: number; height: number } | null> {
+      if (!entry) return null;
+      const source = sharp(path.join(OUT, entry.file));
+      const meta = await source.metadata();
+      let picture: Buffer;
+      if (whole !== null) picture = await source.resize({ width: Math.round(meta.width! * whole) }).png().toBuffer();
+      else {
+        const margin = 14;
+        const left = Math.max(0, Math.floor(entry.box[0] - margin));
+        const top = Math.max(0, Math.floor(entry.box[1] + STRIP - margin));
+        picture = await source.extract({ left, top, width: Math.min(meta.width! - left, Math.ceil(entry.box[2] + margin * 2)), height: Math.min(meta.height! - top, Math.ceil(entry.box[3] + margin * 2)) }).png().toBuffer();
+      }
+      const size = await sharp(picture).metadata();
+      const width = Math.max(size.width!, 190);
+      const note = `${Math.round(entry.box[2])}×${Math.round(entry.box[3])}${entry.scrolls ? " · scrolls" : ""}`;
+      const image = await sharp({ create: { width, height: size.height! + 44, channels: 3, background: "#f1efe9" } })
+        .composite([{ input: text(caption, width), left: 0, top: 0 }, { input: text(note, width, 11, "#666", 400), left: 0, top: 21 }, { input: picture, left: 0, top: 44 }]).png().toBuffer();
+      return { image, width, height: size.height! + 44 };
+    }
+    type Tile = Awaited<ReturnType<typeof tile>>;
+    async function sheet(file: string, title: string, colour: string, rows: { name: string; tiles: Tile[] }[]) {
+      const gap = 18;
+      const kept = rows.map((row) => ({ name: row.name, tiles: row.tiles.filter((entry): entry is NonNullable<Tile> => entry !== null) })).filter((row) => row.tiles.length);
+      if (!kept.length) return;
+      const widths = kept.map((row) => row.tiles.reduce((sum, entry) => sum + entry.width + gap, gap));
+      const width = Math.max(900, ...widths);
+      const heights = kept.map((row) => Math.max(...row.tiles.map((entry) => entry.height)) + 34);
+      const height = 64 + heights.reduce((sum, value) => sum + value + gap, 0);
+      const layers: import("sharp").OverlayOptions[] = [
+        { input: Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="56"><rect width="100%" height="100%" fill="${colour}"/><text x="18" y="37" font-family="DejaVu Sans, Arial, sans-serif" font-size="24" font-weight="700" fill="#fff">${title.replace(/&/g, "&amp;")}</text></svg>`), left: 0, top: 0 },
+      ];
+      let y = 64;
+      kept.forEach((row, index) => {
+        layers.push({ input: text(row.name, width - gap, 15, "#111", 700), left: gap, top: y });
+        let x = gap;
+        for (const entry of row.tiles) { layers.push({ input: entry.image, left: x, top: y + 30 }); x += entry.width + gap; }
+        y += heights[index]! + gap;
+      });
+      await sharp({ create: { width, height, channels: 3, background: "#f1efe9" } }).composite(layers).png().toFile(path.join(OUT, file));
+    }
+    const COLOURS = ["#3a3a3a", "#1f4fb5", "#7a3fb0", "#17705a"];
+    const statesOf = (variant: number, frame: string, scheme: Scheme, lang: string, surface: string) =>
+      readings.filter((entry) => entry.variant === variant && entry.frame === frame && entry.scheme === scheme && entry.lang === lang && entry.surface === surface);
+    const sheets: string[] = [];
+    for (const variant of VARIANTS.filter((entry) => entry > 0)) {
+      const pair = async (frame: string, scheme: Scheme, lang: string, surface: string, states: string[] | null, whole: number | null = null) => {
+        const mine = statesOf(variant, frame, scheme, lang, surface).filter((entry) => !states || states.includes(entry.state));
+        const todays = statesOf(0, frame, scheme, lang, surface).filter((entry) => !states || states.includes(entry.state));
+        return [
+          ...await Promise.all(todays.map((entry) => tile(entry, `today · ${entry.state}`, whole))),
+          ...await Promise.all(mine.map((entry) => tile(entry, `${variant} · ${entry.state}`, whole))),
+        ];
+      };
+      const walkStates = (surface: string, frame = "1440", scheme: Scheme = "light", lang = "uk") => statesOf(variant, frame, scheme, lang, surface).filter((entry) => entry.state === "rest" || entry.state.startsWith("open ")).map((entry) => entry.state);
+      const edges = ["bottom card", "bottom card, pipeline open", "right-edge card", "right-edge card, pipeline open"];
+      const file = `sheet-variant-${variant}.png`;
+      await sheet(file, NAMES[variant]!, COLOURS[variant]!, [
+        { name: "Card menu · 1440×900 · uk · light: today, then the variant at rest and with each section open", tiles: await pair("1440", "light", "uk", "card", walkStates("card")) },
+        { name: "Card menu · 1440×900 · en · dark", tiles: await pair("1440", "dark", "en", "card", walkStates("card", "1440", "dark", "en")) },
+        { name: "Card menu · 1000×700 · uk · dark", tiles: await pair("1000", "dark", "uk", "card", walkStates("card", "1000", "dark", "uk")) },
+        { name: "A card holding two pipelines · 1440×900 · uk · light", tiles: await pair("1440", "light", "uk", "card-two-pipelines", null) },
+        { name: "A card at the bottom and at the right edge of the window · 1440×900 · uk · light (whole frames)", tiles: await pair("1440", "light", "uk", "card", edges, 0.42) },
+        { name: "The same at 1000×700 · en · light (whole frames)", tiles: await pair("1000", "light", "en", "card", edges, 0.42) },
+        { name: "A column's menu and a conversation's menu · 1440×900 · uk · light", tiles: [...await pair("1440", "light", "uk", "column", null), ...await pair("1440", "light", "uk", "conversation", null)] },
+        { name: "The board's menu · 1440×900 · uk · light", tiles: await pair("1440", "light", "uk", "board", null) },
+        { name: "The header's menu · 1440×900 · uk · light", tiles: await pair("1440", "light", "uk", "header", null) },
+        { name: "Phone 390×844 · uk · light: the card's long-press sheet and the task's menu (whole frames)", tiles: [...await pair("390", "light", "uk", "phone-card", null, 0.6), ...await pair("390", "light", "uk", "phone-task", null, 0.6)] },
+        { name: "Phone 390×844 · uk · light: the board menu (whole frames)", tiles: await pair("390", "light", "uk", "phone-board", null, 0.6) },
+        { name: "Phone 390×844 · uk · light: a conversation's menu (whole frames)", tiles: await pair("390", "light", "uk", "phone-conversation", null, 0.6) },
+        { name: "Phone 390×844 · en · dark: at rest (whole frames)", tiles: [...await pair("390", "dark", "en", "phone-card", ["rest"], 0.6), ...await pair("390", "dark", "en", "phone-task", ["rest"], 0.6), ...await pair("390", "dark", "en", "phone-board", ["rest"], 0.6), ...await pair("390", "dark", "en", "phone-conversation", ["rest"], 0.6)] },
+      ]);
+      if (fs.existsSync(path.join(OUT, file))) sheets.push(file);
+    }
+    {
+      /* Today beside all three, surface by surface. */
+      const across = async (name: string, frame: string, scheme: Scheme, lang: string, surface: string, state: string, whole: number | null = null) => ({
+        name,
+        tiles: await Promise.all(VARIANTS.map((variant) => tile(find(variant, frame, scheme, lang, surface, state), variant ? `variant ${variant}` : "today", whole))),
+      });
+      /* The tallest state of each: today's is its only one. */
+      const tallest = { name: "Card menu at its tallest state · 1440×900 · uk · light", tiles: await Promise.all(VARIANTS.map((variant) => {
+        const states = statesOf(variant, "1440", "light", "uk", "card").filter((entry) => entry.state === "rest" || entry.state.startsWith("open "));
+        const top = states.sort((a, b) => b.box[3] - a.box[3])[0] ?? null;
+        return tile(top, `${variant ? `variant ${variant}` : "today"} · ${top?.state ?? ""}`);
+      })) };
+      const file = "sheet-compare.png";
+      await sheet(file, "TODAY and VARIANTS 1 · 2 · 3", "#222", [
+        await across("Card menu at rest · 1440×900 · uk · light", "1440", "light", "uk", "card", "rest"),
+        tallest,
+        await across("Card menu at rest · 1440×900 · en · dark", "1440", "dark", "en", "card", "rest"),
+        await across("Card menu at rest · 1000×700 · uk · light", "1000", "light", "uk", "card", "rest"),
+        await across("A card holding two pipelines · 1440×900 · uk · light", "1440", "light", "uk", "card-two-pipelines", "rest"),
+        await across("A card at the bottom of the window · 1440×900 · uk · light (whole frames)", "1440", "light", "uk", "card", "bottom card", 0.4),
+        await across("A card at the right edge · 1440×900 · uk · light (whole frames)", "1440", "light", "uk", "card", "right-edge card", 0.4),
+        await across("A column's menu (In progress) · 1440×900 · uk · light", "1440", "light", "uk", "column", "assigned"),
+        await across("A conversation's menu · 1440×900 · uk · light", "1440", "light", "uk", "conversation", "rest"),
+        await across("The board's menu · 1440×900 · uk · light", "1440", "light", "uk", "board", "rest"),
+        await across("The header's menu · 1440×900 · uk · light", "1440", "light", "uk", "header", "rest"),
+        await across("Phone: the card's long-press sheet · 390×844 · uk · light (whole frames)", "390", "light", "uk", "phone-card", "rest", 0.6),
+        await across("Phone: the task's menu · 390×844 · uk · light (whole frames)", "390", "light", "uk", "phone-task", "rest", 0.6),
+        await across("Phone: the board menu · 390×844 · uk · light (whole frames)", "390", "light", "uk", "phone-board", "rest", 0.6),
+        await across("Phone: a conversation's menu · 390×844 · uk · light (whole frames)", "390", "light", "uk", "phone-conversation", "rest", 0.6),
+        await across("Phone: the board menu · 390×844 · en · dark (whole frames)", "390", "dark", "en", "phone-board", "rest", 0.6),
+      ]);
+      if (fs.existsSync(path.join(OUT, file))) sheets.push(file);
+    }
+
+    const summary = { driver: "src/components/kanban/kanbanBoard.browser.test.tsx", variants: NAMES, taps, acted, reach, sheets, failures, readings: readings.map(({ labels, items, ...entry }) => { void labels; return entry.variant === 0 && entry.state === "rest" ? { ...entry, items } : entry; }) };
+    fs.writeFileSync(path.join(OUT, "measurements.json"), `${JSON.stringify(summary, null, 2)}\n`);
+    if (!NARROWED) {
+      fs.mkdirSync(EVIDENCE, { recursive: true });
+      fs.writeFileSync(path.join(EVIDENCE, "measurements.json"), `${JSON.stringify(summary, null, 2)}\n`);
+    }
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 3_600_000);
+});

@@ -9,12 +9,17 @@ import { TASK_COLORS, type TaskColor, type TaskStatus } from "@/lib/tasks/types"
    beside their anchor, focus moves in on open and back to the anchor on close,
    arrows walk the items, Tab and Escape close. */
 
+/* What an entry is and which group it belongs to, for a presenter that lays
+   the same entries out another way (`menuPresenter`); the menu itself reads
+   neither. */
+interface KanbanMenuMark { id?: string; group?: string }
+
 export type KanbanMenuItem =
-  | { type: "head"; label: string }
-  | { type: "sep" }
+  | KanbanMenuMark & { type: "head"; label: string }
+  | KanbanMenuMark & { type: "sep" }
   /* The colour labels as a row of swatches, each a radio item; `null` is none. */
-  | { type: "swatches"; label: string; value: TaskColor | null; names: (color: TaskColor | null) => string; hex: Record<TaskColor, string>; onPick: (color: TaskColor | null) => void }
-  | {
+  | KanbanMenuMark & { type: "swatches"; label: string; value: TaskColor | null; names: (color: TaskColor | null) => string; hex: Record<TaskColor, string>; onPick: (color: TaskColor | null) => void }
+  | KanbanMenuMark & {
     /* `check` is a toggle (menuitemcheckbox), drawn with the radio's tick. */
     type: "item" | "radio" | "check";
     label: string;
@@ -42,7 +47,7 @@ export function popoverLeft(anchor: { left: number; right: number }, width: numb
   return Math.max(8, Math.min(left, viewportWidth - width - 8));
 }
 
-function place(element: HTMLElement, anchor: HTMLElement, within?: HTMLElement | null): void {
+export function placeMenu(element: HTMLElement, anchor: HTMLElement, within?: HTMLElement | null): void {
   const rect = anchor.getBoundingClientRect();
   const width = element.offsetWidth;
   const height = element.offsetHeight;
@@ -54,7 +59,7 @@ function place(element: HTMLElement, anchor: HTMLElement, within?: HTMLElement |
   element.style.top = `${Math.round(top)}px`;
 }
 
-function useDismiss(ref: React.RefObject<HTMLElement | null>, anchor: HTMLElement, onClose: (refocus: boolean) => void) {
+export function useMenuDismiss(ref: React.RefObject<HTMLElement | null>, anchor: HTMLElement, onClose: (refocus: boolean) => void) {
   useEffect(() => {
     const down = (event: PointerEvent) => {
       const target = event.target as Node;
@@ -75,21 +80,35 @@ function useDismiss(ref: React.RefObject<HTMLElement | null>, anchor: HTMLElemen
   }, [ref, anchor, onClose]);
 }
 
-const CheckGlyph = () => (
+export const CheckGlyph = () => (
   <svg className="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m5 12 5 5L20 7" /></svg>
 );
 
-export function KanbanMenu({ anchor, label, items, onClose }: {
+export interface KanbanMenuProps {
   anchor: HTMLElement;
   label: string;
   items: readonly KanbanMenuItem[];
   onClose: (refocus: boolean) => void;
-}) {
+  /** Which menu of the board this is (`card`, `column`, `reader`, …). */
+  kind?: string;
+}
+
+/* A design prototype lays the board's menus out another way over the same
+   entries (docs/design/compact-card-menu.md). Only the evidence fixture sets
+   it; the product leaves it empty and draws the menu below. */
+export const menuPresenter: { current: ((props: KanbanMenuProps) => ReactNode | undefined) | null } = { current: null };
+
+export function KanbanMenu(props: KanbanMenuProps) {
+  const presented = menuPresenter.current?.(props);
+  return presented === undefined ? <KanbanMenuList {...props} /> : presented;
+}
+
+export function KanbanMenuList({ anchor, label, items, onClose }: KanbanMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
-  useDismiss(ref, anchor, onClose);
+  useMenuDismiss(ref, anchor, onClose);
   useLayoutEffect(() => {
     if (!ref.current) return;
-    place(ref.current, anchor);
+    placeMenu(ref.current, anchor);
     ref.current.querySelector<HTMLElement>('[role^="menuitem"]:not([aria-disabled="true"])')?.focus();
   }, [anchor]);
   const focusables = () => [...(ref.current?.querySelectorAll<HTMLElement>('[role^="menuitem"]') ?? [])]
@@ -175,10 +194,10 @@ export function KanbanPopover({ anchor, label, onClose, children, initialFocus =
   className?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  useDismiss(ref, anchor, onClose);
+  useMenuDismiss(ref, anchor, onClose);
   useLayoutEffect(() => {
     if (!ref.current) return;
-    place(ref.current, anchor, within);
+    placeMenu(ref.current, anchor, within);
     ref.current.querySelector<HTMLElement>(initialFocus)?.focus();
   }, [anchor, initialFocus, within]);
   return (
