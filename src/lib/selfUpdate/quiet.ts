@@ -1,6 +1,6 @@
 /* Restart admission is read afresh for each role, including after web swaps. */
 import { projectInfoFromCwd } from "@/lib/scanner/describe";
-import { STARTING_GRACE_MS, livenessRecordIsLive, type ConversationRegistryHost, type LivenessVerdict } from "@/lib/lifecycle/liveness";
+import { STARTING_GRACE_MS, livenessRecordIsLive, type ConversationRegistryHost, type LivenessVerdict, type RegistryRowKey } from "@/lib/lifecycle/liveness";
 import type { HostState } from "@/lib/runtime/engineHost";
 import type { RuntimeSession, RuntimeSnapshot } from "@/lib/runtime/contracts";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -76,6 +76,9 @@ export interface TurnEvidence {
   headlessReviewerProcess?: "alive" | "gone" | "unproven" | null;
   currentTurnIdle?: boolean;
 }
+/** What one owner is asked by: its conversation, transcript and, for a
+    journal row or registry row, the session key of the row that records it. */
+export type TurnOwnerRef = Pick<RuntimeSession, "conversationId" | "artifactPath"> & { sessionKey?: RegistryRowKey | null };
 export type QuietTurn = Pick<RuntimeSession, "conversationId" | "artifactPath" | "cwd" | "sessionKey" | "host" | "turn" | "activeTurnId">;
 export interface QuietPorts {
   /** Synchronous durable admission/start evidence; changing it invalidates an awaited probe. */
@@ -93,7 +96,7 @@ export interface QuietPorts {
   controllerBusyReason?(): Promise<BusyReason | null>;
   /** `probe` is one object for every row a single probe asks about, so a
       reader can share what it loads across them and no further. */
-  turnLiveness?(session: Pick<RuntimeSession, "conversationId" | "artifactPath">, probe: object): Promise<TurnEvidence>;
+  turnLiveness?(session: TurnOwnerRef, probe: object): Promise<TurnEvidence>;
   /** The process a headless review round records, for a round that names no
       conversation: `gone` only on proof, as `headlessRoundProcess` gives it. */
   reviewerProcess?(round: Pick<Round, "reviewerPid" | "reviewerIdentity">): "alive" | "gone" | "unproven";
@@ -244,11 +247,12 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
   const readings = new Map<string, Promise<TurnEvidence | null>>();
   const journalPaths = new Map<string, string>();
   const probe = {};
-  const evidence = (session: Pick<RuntimeSession, "conversationId" | "artifactPath">): Promise<TurnEvidence | null> => {
+  const evidence = (session: TurnOwnerRef): Promise<TurnEvidence | null> => {
     const artifactPath = session.artifactPath ?? journalPaths.get(session.conversationId) ?? null;
-    const key = JSON.stringify([session.conversationId, artifactPath]);
+    const sessionKey = session.sessionKey ?? null;
+    const key = JSON.stringify([session.conversationId, artifactPath, sessionKey && `${sessionKey.engine}:${sessionKey.sessionId}`]);
     if (!readings.has(key)) readings.set(key, (async () => {
-      try { return await ports.turnLiveness?.({ ...session, artifactPath }, probe) ?? null; }
+      try { return await ports.turnLiveness?.({ conversationId: session.conversationId, artifactPath, sessionKey }, probe) ?? null; }
       catch { return null; } // Evidence that could not be read always blocks admission.
     })());
     return readings.get(key)!;
@@ -266,8 +270,10 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
     // probe; an earlier pathless reading must not hide that evidence.
     const runtime = await ports.runtimeSnapshot();
     const sessions = ports.turnOwners ? await ports.turnOwners(runtime.sessions) : runtime.sessions;
+    // Journal rows come first. An earlier generation's owner listed after them
+    // under the same id must not hand its path to a pathless stage owner.
     for (const session of sessions) {
-      if (session.artifactPath) journalPaths.set(session.conversationId, session.artifactPath);
+      if (session.artifactPath && !journalPaths.has(session.conversationId)) journalPaths.set(session.conversationId, session.artifactPath);
     }
     const stages: BlockingStage[] = [];
     const checkedFlows = new Set<string>();

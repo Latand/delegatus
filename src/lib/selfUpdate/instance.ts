@@ -6,8 +6,9 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 
 import { agentRegistry } from "@/lib/agent/registry";
+import { sessionKeyId } from "@/lib/agent/sessionKey";
 import { livenessProbe } from "@/lib/agent/accountLiveness";
-import { agentLivenessSnapshot, canonicalConversationId, conversationIdForPath, conversationRegistryHost, headlessReviewerProcess, headlessRoundProcess, productionLivenessSources, type AgentLivenessSources } from "@/lib/lifecycle/liveness";
+import { agentLivenessSnapshot, canonicalConversationId, conversationIdForPath, conversationRegistryHost, headlessReviewerProcess, headlessRoundProcess, productionLivenessSources, type AgentLivenessRecord, type AgentLivenessSources } from "@/lib/lifecycle/liveness";
 import { structuredDeliveryHostForConversation } from "@/lib/runtime/structuredDeliveryController";
 import { activeOrchestratorSeats } from "@/lib/orchestrator/seats";
 import { viewerOwnProjectKeys } from "@/lib/monitor/seatTickSources";
@@ -93,30 +94,42 @@ export function turnEvidenceReader(
   sources: () => AgentLivenessSources = productionLivenessSources,
 ): NonNullable<QuietPorts["turnLiveness"]> {
   let base: AgentLivenessSources | null = null;
-  const perProbe = new WeakMap<object, AgentLivenessSources>();
-  return async ({ conversationId, artifactPath }, probe) => {
+  const perProbe = new WeakMap<object, { liveness: AgentLivenessSources; records: Map<string, Promise<AgentLivenessRecord | null>> }>();
+  return async ({ conversationId, artifactPath, sessionKey }, probe) => {
     base ??= sources();
-    const liveness = perProbe.get(probe) ?? probeSources(base);
-    perProbe.set(probe, liveness);
-    const read = async (request: { conversationId: string } | { transcriptPath: string }) =>
-      (await agentLivenessSnapshot({ ...request, limit: 1 }, liveness)).conversations[0] ?? null;
-    /* By id first. The transcript the journal row itself names is the second
-       reading, for an id the registry no longer resolves. */
-    const record = await read({ conversationId }) ?? (artifactPath ? await read({ transcriptPath: artifactPath }) : null);
+    const held = perProbe.get(probe) ?? { liveness: probeSources(base), records: new Map() };
+    perProbe.set(probe, held);
+    const { liveness, records } = held;
+    // Every registry row is an owner, and the rows of one conversation often
+    // share a reading; each distinct reading runs once per probe.
+    const read = (request: { conversationId: string } | { transcriptPath: string }) => {
+      const key = JSON.stringify(request);
+      if (!records.has(key)) records.set(key, agentLivenessSnapshot({ ...request, limit: 1 }, liveness).then((answer) => answer.conversations[0] ?? null));
+      return records.get(key)!;
+    };
     const registry = liveness.registrySnapshot();
     const requestedId = canonicalConversationId(registry, conversationId);
     // A legacy flow may name only a path. The registry keeps that ownership
     // even after the transcript disappears, including past generations and
-    // continuity paths. Ask the canonical owner's current host in every case.
-    const ownerId = registry.conversations[requestedId] ? requestedId
-      : canonicalConversationId(registry, (artifactPath ? conversationIdForPath(registry, artifactPath) : null)
-        ?? record?.conversationId ?? requestedId);
-    const host = structuredDeliveryHostForConversation(ownerId);
+    // continuity paths. Ask the canonical owner's registry row in every case.
+    const boundId = registry.conversations[requestedId] ? requestedId
+      : artifactPath ? conversationIdForPath(registry, artifactPath) : null;
+    const boundHost = boundId ? conversationRegistryHost(registry, canonicalConversationId(registry, boundId), liveness.probe, artifactPath, sessionKey) : null;
+    /* A live separate row (an earlier generation, or the row the journal key
+       names) owns its own transcript, so that is the reading. Otherwise by id
+       first; the transcript the row names is the second reading, for an id
+       the registry no longer resolves. */
+    const separatePath = boundHost?.separateRowPath ?? null;
+    const record = separatePath ? await read({ transcriptPath: separatePath })
+      : await read({ conversationId }) ?? (artifactPath ? await read({ transcriptPath: artifactPath }) : null);
+    const ownerId = canonicalConversationId(registry, boundId ?? record?.conversationId ?? requestedId);
+    // The current host speaks for its own generation only.
+    const host = separatePath ? null : structuredDeliveryHostForConversation(ownerId);
     return {
       record,
-      registryHost: conversationRegistryHost(registry, ownerId, liveness.probe, artifactPath),
+      registryHost: boundId ? boundHost : conversationRegistryHost(registry, ownerId, liveness.probe, artifactPath, sessionKey),
       headlessReviewerProcess: headlessReviewerProcess(liveness.flows?.() ?? [], ownerId, artifactPath ?? null, liveness.probe, registry),
-      currentTurnIdle: currentHostTurnIdle(await host?.health()),
+      ...(separatePath ? {} : { currentTurnIdle: currentHostTurnIdle(await host?.health()) }),
     };
   };
 }
@@ -144,7 +157,10 @@ function probeSources(base: AgentLivenessSources): AgentLivenessSources {
 /** The snapshot's inactive history is bounded for display. Registry identities
     remain admission input even when a lagging fallback put their journal row
     outside that bound. Keyed reads preserve any journal turn/setup hints; a
-    registered owner without a journal row still asks the common verdict. */
+    registered owner without a journal row still asks the common verdict.
+    Owners are kept by registry row, the unit that records a process: an
+    earlier generation can keep its process after a resume settles the next
+    one under the same id, so turns are deduplicated only after each is read. */
 export function registeredTurnOwnerReader(
   client: () => RuntimeHostClient | null = runtimeHostClient,
 ): NonNullable<QuietPorts["turnOwners"]> {
@@ -152,41 +168,59 @@ export function registeredTurnOwnerReader(
     const registry = agentRegistry().readOnlySnapshot();
     const owners = new Map<string, QuietTurn>();
     const paths = new Map<string, string>();
+    // A row is known by its session key; an owner without one by its path or id.
+    const ownerKey = (owner: Pick<QuietTurn, "conversationId" | "artifactPath"> & { sessionKey?: QuietTurn["sessionKey"] | null }) =>
+      owner.sessionKey ? `key:${owner.sessionKey.engine}:${owner.sessionKey.sessionId}`
+        : owner.artifactPath ? `path:${owner.artifactPath}` : `id:${canonicalConversationId(registry, owner.conversationId)}`;
+    const add = (owner: QuietTurn) => {
+      const key = ownerKey(owner);
+      if (!owners.has(key)) owners.set(key, owner);
+    };
     for (const conversation of Object.values(registry.conversations)) {
       const id = canonicalConversationId(registry, conversation.id);
       for (const generation of conversation.generations) paths.set(generation.path, id);
       for (const path of conversation.continuityPaths) paths.set(path, id);
       const generation = registry.conversations[id]?.generations.at(-1) ?? conversation.generations.at(-1);
-      owners.set(id, { conversationId: id, artifactPath: generation?.path ?? null,
+      add({ conversationId: id, artifactPath: generation?.path ?? null,
         cwd: generation?.launchProfile.cwd ?? null,
         sessionKey: { engine: conversation.engine, sessionId: generation?.id ?? id },
         host: "unhosted", turn: "unknown", activeTurnId: null });
     }
-    // Entries may precede their conversation binding. Keep their path readable
-    // rather than treating that missing binding as proof that no owner exists.
+    // Every entry, including an earlier generation's and one that precedes its
+    // conversation binding, is an owner of its own.
     for (const entry of Object.values(registry.entries)) {
-      const id = paths.get(entry.artifactPath) ?? `${entry.key.engine}:${entry.key.sessionId}`;
-      owners.set(id, { conversationId: id, artifactPath: entry.artifactPath, cwd: entry.cwd,
+      add({ conversationId: paths.get(entry.artifactPath) ?? sessionKeyId(entry.key),
+        artifactPath: entry.artifactPath, cwd: entry.cwd,
         sessionKey: entry.key, host: "unhosted", turn: "unknown", activeTurnId: null });
     }
     // A launch receipt owns setup before its conversation/entry materializes.
     // Ended receipts are also read; their status is the shared verdict's concern.
+    const ids = new Set([...owners.values()].map((owner) => owner.conversationId));
     for (const receipt of Object.values(registry.receipts)) {
       const id = canonicalConversationId(registry, receipt.conversationId);
-      if (owners.has(id)) continue;
-      owners.set(id, { conversationId: id, artifactPath: receipt.artifactPath, cwd: receipt.cwd,
+      if (ids.has(id)) continue;
+      ids.add(id);
+      add({ conversationId: id, artifactPath: receipt.artifactPath, cwd: receipt.cwd,
         sessionKey: receipt.key ?? { engine: receipt.engine, sessionId: id },
         host: "unhosted", turn: "unknown", activeTurnId: null });
     }
     const turns: QuietTurn[] = [...sessions];
-    const included = new Set(sessions.map(session => canonicalConversationId(registry, session.conversationId)));
+    const covered = new Set(sessions.map(ownerKey));
+    const included = new Set(sessions.map((session) => canonicalConversationId(registry, session.conversationId)));
     let connection: RuntimeHostClient | null = null;
-    for (const [id, owner] of owners) {
-      if (included.has(id)) continue;
+    // One keyed journal read per conversation the snapshot left out, for its hints.
+    for (const owner of owners.values()) {
+      if (included.has(owner.conversationId)) continue;
+      included.add(owner.conversationId);
       connection ??= client();
       if (!connection) throw new Error("runtime host is unavailable for registered turn evidence");
-      turns.push(await readRuntimeSession(connection, { conversationId: id, artifactPath: owner.artifactPath ?? undefined }) ?? owner);
+      const row = await readRuntimeSession(connection, { conversationId: owner.conversationId, artifactPath: owner.artifactPath ?? undefined });
+      if (!row || covered.has(ownerKey(row))) continue;
+      turns.push(row);
+      covered.add(ownerKey(row));
     }
+    // Each row no journal row names is still asked as its own owner.
+    for (const [key, owner] of owners) if (!covered.has(key)) turns.push(owner);
     return turns;
   };
 }

@@ -438,6 +438,165 @@ test("current writer setup retains custody after fallback without a host process
   expect(await probeQuiet(snapshot, ports(f.journal), Date.now(), true)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
 });
 
+/* claimStructuredHost lets setup claim a dead/unhosted row that still records
+   the previous wrapper. That wrapper answering idle cannot settle the setup. */
+async function claimOverLivingPreviousHost(status: "dead" | "unhosted", setup: ReturnType<typeof Bun.spawn>, reused = false) {
+  settleTranscript();
+  await fallback(status);
+  const identity = captureProcessIdentity(setup.pid)!;
+  const claim = f.registry.claimStructuredHost(f.key, reused ? { ...identity, startIdentity: "different-start" } : identity, { allowUnhosted: true });
+  expect(claim).toMatchObject({ status, structuredHost: { process: { pid: child.pid } } });
+  await bindStructuredDeliveryQueue([], { registry: f.registry, client: f.client, hostlessSettleIntervalMs: 0 });
+}
+
+for (const status of ["dead", "unhosted"] as const) {
+  test(`admitted writer setup holds while the previous idle host of a ${status} row still lives`, async () => {
+    const setup = Bun.spawn(["sleep", "60"]);
+    try {
+      await claimOverLivingPreviousHost(status, setup);
+      // agent_activity names the host; setup custody stays inside the registry verdict.
+      expect((await activity())[0]!.host).toEqual({ state: "alive", kind: "structured", pid: child.pid });
+      const p = ports(f.journal), now = Date.now();
+      for (const at of [now, now + 300_000]) {
+        expect(await probeQuiet(snapshot, p, at, true)).toMatchObject({ quiet: false, blockers: { turns: 1, stages: 0, unresolved: 0 } });
+      }
+      setup.kill();
+      await setup.exited;
+      expect(await probeQuiet(snapshot, p, now, true)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
+    } finally { setup.kill(); await setup.exited; }
+  });
+  for (const control of ["dead", "reused"] as const) {
+    test(`a ${control} setup owner over the living previous idle host of a ${status} row releases`, async () => {
+      const setup = Bun.spawn(["sleep", "60"]);
+      try {
+        await claimOverLivingPreviousHost(status, setup, control === "reused");
+        if (control === "dead") { setup.kill(); await setup.exited; }
+        expect(await probeQuiet(snapshot, ports(f.journal), Date.now(), true)).toMatchObject({ quiet: true, blockers: { turns: 0, stages: 0 } });
+      } finally { setup.kill(); await setup.exited; }
+    });
+  }
+}
+
+test("a settled idle hosted turn keeps no custody for its running host's live writer claim", async () => {
+  settleTranscript();
+  const entry = f.registry.readOnlySnapshot().entries[`codex:${f.key.sessionId}`]!;
+  const writer = captureProcessIdentity(process.pid)!;
+  f.registry.upsert({ ...entry, claimEpoch: 1, claimOwner: `structured-host:${JSON.stringify(writer)}`,
+    structuredHost: { ...entry.structuredHost!, writerClaimEpoch: 1 } });
+  await fallback("idle");
+  expect(await probeQuiet(snapshot, ports(f.journal), Date.now(), true)).toMatchObject({ quiet: true, blockers: { turns: 0, stages: 0 } });
+});
+
+/** A real resume-successor settlement: the conversation's current generation
+    moves to a finished transcript while the earlier entry keeps its process. */
+function settleSuccessor() {
+  const id = randomUUID();
+  const path = join(process.env.LLV_CODEX_HOME!, "sessions", "2026", "01", "01", `rollout-2026-01-01T00-00-00-${id}.jsonl`);
+  const at = new Date().toISOString();
+  writeFileSync(path, [{ timestamp: at, type: "session_meta", payload: { id, cwd: f.dir } },
+    { timestamp: at, type: "event_msg", payload: { type: "task_complete" } }].map(record => JSON.stringify(record)).join("\n") + "\n");
+  const begun = beginLegacySpawnFixture(f.registry, { engine: "codex", cwd: f.dir, transport: "structured", accountId: "fixture",
+    purpose: "resume-successor", conversationId: f.conversation.id });
+  if (begun.kind !== "created") throw new Error("successor receipt was not created");
+  expect(f.registry.settleSpawn(begun.receipt.launchId, { key: { engine: "codex", sessionId: id }, artifactPath: path, cwd: f.dir,
+    accountId: "fixture", status: "dead", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null, structuredHost: null }).kind).toBe("settled");
+  expect(f.registry.readOnlySnapshot().conversations[f.conversation.id]!.generations.map(generation => generation.path)).toEqual([f.file, path]);
+  return path;
+}
+
+for (const hidden of [false, true]) {
+  test(`an earlier generation's live busy turn holds after a successor settles (${hidden ? "behind the history cap" : "visible"})`, async () => {
+    journalRow();
+    await fallback("idle");
+    const current = settleSuccessor();
+    await bindStructuredDeliveryQueue([], { registry: f.registry, client: f.client, hostlessSettleIntervalMs: 0 });
+    if (hidden) { inactiveHistory(); snapshotSelection(true); }
+    const byPath = (await agentLivenessSnapshot({ transcriptPath: f.file }, productionLivenessSources())).conversations[0]!;
+    expect(byPath).toMatchObject({ host: { state: "alive" }, turnState: "busy" });
+    const p = ports(f.journal);
+    const asked: (string | null)[] = [];
+    const read = p.turnLiveness!;
+    p.turnLiveness = async (row, probe) => {
+      if (row.conversationId === f.conversation.id) asked.push(row.artifactPath);
+      return read(row, probe);
+    };
+    const now = Date.now();
+    for (const at of [now, now + 300_000]) {
+      expect(await probeQuiet(snapshot, p, at, true)).toMatchObject({ quiet: false, blockers: { turns: 1, stages: 0, unresolved: 0 } });
+    }
+    expect(asked).toContain(f.file);
+    expect(asked).toContain(current);
+    child.kill();
+    await child.exited;
+    expect(await probeQuiet(snapshot, p, now, true)).toMatchObject({ quiet: true, blockers: { turns: 0, stages: 0 } });
+  });
+}
+
+for (const kind of ["dead", "reused", "idle"] as const) {
+  test(`an earlier ${kind} generation releases at once after a successor settles`, async () => {
+    if (kind === "idle") settleTranscript();
+    if (kind === "dead") { child.kill(); await child.exited; }
+    if (kind === "reused") {
+      const entry = f.registry.readOnlySnapshot().entries[`codex:${f.key.sessionId}`]!;
+      f.registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!,
+        process: { ...entry.structuredHost!.process!, startIdentity: "different-start" } } });
+    }
+    await fallback("idle");
+    settleSuccessor();
+    await bindStructuredDeliveryQueue([], { registry: f.registry, client: f.client, hostlessSettleIntervalMs: 0 });
+    inactiveHistory();
+    snapshotSelection(true);
+    expect(await probeQuiet(snapshot, ports(f.journal), Date.now(), true)).toMatchObject({ quiet: true, blockers: { turns: 0, stages: 0, unresolved: 0 } });
+  });
+}
+
+test("a second live row recorded at the current transcript holds under its own session key", async () => {
+  const sibling = Bun.spawn(["sleep", "60"]);
+  try {
+    const key = { engine: "codex" as const, sessionId: randomUUID() };
+    f.registry.upsert({ key, artifactPath: f.file, cwd: f.dir, accountId: "fixture", status: "live", host: null,
+      claimEpoch: 0, claimOwner: null, pendingAction: null,
+      structuredHost: { kind: "codex-app-server", endpoint: "stdio:sibling", process: captureProcessIdentity(sibling.pid)!,
+        eventCursor: 0, protocolVersion: null, writerClaimEpoch: 0, activeTurnRef: "sibling-turn", pendingAttention: [], activeFlags: [] } });
+    child.kill();
+    await child.exited;
+    await fallback("dead");
+    inactiveHistory();
+    snapshotSelection(true);
+    const p = ports(f.journal);
+    expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: false, blockers: { turns: 1, stages: 0, unresolved: 0 } });
+    sibling.kill();
+    await sibling.exited;
+    expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: true, blockers: { turns: 0, stages: 0 } });
+  } finally { sibling.kill(); await sibling.exited; }
+});
+
+test("a live row of a conversation aliased into this one holds under its own session key", async () => {
+  const merged = Bun.spawn(["sleep", "60"]);
+  try {
+    const id = randomUUID(), at = new Date().toISOString();
+    const path = join(process.env.LLV_CODEX_HOME!, "sessions", "2026", "01", "01", `rollout-2026-01-01T00-00-00-${id}.jsonl`);
+    writeFileSync(path, [{ timestamp: at, type: "session_meta", payload: { id, cwd: f.dir } },
+      { timestamp: at, type: "event_msg", payload: { type: "task_started" } }].map(record => JSON.stringify(record)).join("\n") + "\n");
+    const before = f.registry.ensureConversation("codex", path, "fixture");
+    f.registry.upsert({ key: { engine: "codex", sessionId: before.generations[0]!.id }, artifactPath: path, cwd: f.dir, accountId: "fixture",
+      status: "live", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
+      structuredHost: { kind: "codex-app-server", endpoint: "stdio:merged", process: captureProcessIdentity(merged.pid)!,
+        eventCursor: 0, protocolVersion: null, writerClaimEpoch: 0, activeTurnRef: "merged-turn", pendingAttention: [], activeFlags: [] } });
+    child.kill();
+    await child.exited;
+    await fallback("dead");
+    const disk = f.registry.snapshot();
+    disk.conversationAliases[before.id] = f.conversation.id;
+    writeFileSync(f.registry.filename, JSON.stringify(disk));
+    const p = ports(f.journal);
+    expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: false, blockers: { turns: 1, stages: 0, unresolved: 0 } });
+    merged.kill();
+    await merged.exited;
+    expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: true, blockers: { turns: 0, stages: 0 } });
+  } finally { merged.kill(); await merged.exited; }
+});
+
 test("current host work overrides idle journal labels and a settled transcript", async () => {
   settleTranscript();
   const host = Object.assign(new FakeEngineHost(), { onStateChange: () => () => {} });

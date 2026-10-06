@@ -381,22 +381,27 @@ function hostEvidence(
       }
     : null;
 
-  // Status can lag host admission or termination. Recorded live ownership is
-  // the same evidence for liveOnly and restart admission, including a child
-  // that survived termination and is still fenced by its saved identity.
-  if (tmux?.state === "alive") return tmux;
-  if (structuredEvidence?.state === "alive") return structuredEvidence;
-  const survivor = entry.structuredTerminationSurvivors?.find((identity) => identityAlive(identity, probe));
-  if (survivor) return { state: "alive", kind: "structured", pid: survivor.pid };
   // An admitted resume claims the old row before awaiting host setup. Its
   // controller owns that setup even while the row still says dead and has
   // no host process. The matching writer epoch makes this a current claim.
-  if (entry.claimOwner && entry.claimEpoch > 0 && entry.structuredHost?.writerClaimEpoch === entry.claimEpoch) {
-    const owner = structuredClaimIdentity(entry.claimOwner);
-    if (owner) return identityAlive(owner, probe)
-      ? { state: "alive", kind: "structured", pid: owner.pid, turnPending: true }
-      : { state: "gone", kind: "structured", pid: owner.pid };
-  }
+  const claim = entry.claimOwner && entry.claimEpoch > 0 && entry.structuredHost?.writerClaimEpoch === entry.claimEpoch
+    ? structuredClaimIdentity(entry.claimOwner) : null;
+  const claimAlive = claim ? identityAlive(claim, probe) : false;
+
+  // Status can lag host admission or termination. Recorded live ownership is
+  // the same evidence for liveOnly and restart admission, including a child
+  // that survived termination and is still fenced by its saved identity.
+  // A terminal row may be claimed while it still records the previous host
+  // (claimStructuredHost adopts an orphan), so that host answering cannot
+  // settle the setup. On a hosted row the claim is the running host's writer.
+  const setup = !hosted && claimAlive ? { turnPending: true as const } : {};
+  if (tmux?.state === "alive") return { ...tmux, ...setup };
+  if (structuredEvidence?.state === "alive") return { ...structuredEvidence, ...setup };
+  const survivor = entry.structuredTerminationSurvivors?.find((identity) => identityAlive(identity, probe));
+  if (survivor) return { state: "alive", kind: "structured", pid: survivor.pid };
+  if (claim) return claimAlive
+    ? { state: "alive", kind: "structured", pid: claim.pid, turnPending: true }
+    : { state: "gone", kind: "structured", pid: claim.pid };
   if (!hosted) {
     const recorded = tmux ?? structuredEvidence;
     return recorded ? { ...recorded, state: "gone" } : { state: "gone", kind: "none", pid: null };
@@ -613,6 +618,10 @@ export interface ConversationRegistryHost {
   /** An active turn reference, writer setup or open launch receipt owns work, even
       when the transcript contains only the previous turn's completion. */
   turnPending?: "turn" | "setup";
+  /** The transcript of a live row other than the current generation's (an
+      earlier generation, or the row a journal key names) that answered in
+      place of the conversation's current one. */
+  separateRowPath?: string;
 }
 
 /** Setup owns a conversation before its first transcript or host entry exists. */
@@ -638,8 +647,45 @@ function receiptHostEvidence(registry: LivenessRegistrySnapshot, conversationId:
   return alive ?? (gone && !unresolved ? { state: "gone" as const, kind: "none" as const, pid: null } : null);
 }
 
+/** A registry row of this conversation other than its current generation's,
+    named by its own session key or as the earlier generation at
+    `artifactPath`. Each such row records a process of its own, including a
+    row of a conversation the registry has since aliased into this one. */
+function separateEntry(
+  registry: LivenessRegistrySnapshot,
+  conversation: LivenessRegistrySnapshot["conversations"][string],
+  artifactPath: string | null | undefined,
+  sessionKey: RegistryRowKey | null | undefined,
+): AgentRegistryEntry | null {
+  const current = conversation.generations.at(-1);
+  if (!current) return null;
+  const currentKey = sessionKeyId({ engine: conversation.engine, sessionId: current.id });
+  const members = [conversation, ...Object.keys(registry.conversationAliases ?? {})
+    .filter((from) => from !== conversation.id && registry.conversations[from] && canonicalConversationId(registry, from) === conversation.id)
+    .map((from) => registry.conversations[from]!)];
+  const separate = (entry: AgentRegistryEntry | null | undefined): entry is AgentRegistryEntry => !!entry
+    && sessionKeyId(entry.key) !== currentKey
+    && members.some((member) => member.engine === entry.key.engine
+      && (member.generations.some((generation) => generation.id === entry.key.sessionId || generation.path === entry.artifactPath)
+        || !!member.continuityPaths?.includes(entry.artifactPath)));
+  const keyed = sessionKey ? registry.entries[`${sessionKey.engine}:${sessionKey.sessionId}`] : undefined;
+  if (separate(keyed)) return keyed;
+  if (!artifactPath || current.path === artifactPath) return null;
+  for (const member of members) {
+    const generation = member.generations.find((candidate) => candidate.path === artifactPath);
+    const entry = generation ? registry.entries[sessionKeyId({ engine: member.engine, sessionId: generation.id })] : undefined;
+    if (separate(entry)) return entry;
+  }
+  const entry = entryForPath(registry, artifactPath);
+  return separate(entry) ? entry : null;
+}
+
+/** The session key a journal row or a registry inventory names its row by. */
+export type RegistryRowKey = { engine: string; sessionId: string };
+
 /**
- * Host evidence for a conversation's current generation, or an entry whose
+ * Host evidence for a conversation's current generation, a live row of the
+ * same conversation the request names separately, or an entry whose
  * conversation binding has not materialized, read off the same registry row
  * and launch receipt (#2515).
  *
@@ -654,16 +700,24 @@ export function conversationRegistryHost(
   conversationId: string,
   probe: LivenessProbe,
   artifactPath?: string | null,
+  sessionKey?: RegistryRowKey | null,
 ): ConversationRegistryHost | null {
   const conversation = canonicalConversation(registry, conversationId);
   const generation = conversation?.generations.at(-1);
-  const entry = conversation && generation
+  // A resume settles the next generation without stopping the previous host.
+  // While a separately named row's process still answers, it owns the turn;
+  // once it does not, ownership follows the conversation to its current row.
+  const separate = conversation ? separateEntry(registry, conversation, artifactPath, sessionKey) : null;
+  const separateHost = separate ? hostEvidence(separate, probe) : null;
+  const own = separateHost?.state === "alive" ? separate : null;
+  const entry = own ?? (conversation && generation
     ? registry.entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })] ?? entryForPath(registry, generation.path)
     // An entry can precede its conversation/generation. The drain inventory
-    // names it by path or by its engine:sessionId key until binding catches up.
-    // A bound generation stays authoritative even if its entry is missing.
-    : (artifactPath ? entryForPath(registry, artifactPath) : null) ?? registry.entries[conversationId] ?? null;
-  const registered = entry ? hostEvidence(entry, probe) : null;
+    // names it by key or path until binding catches up. A bound generation
+    // stays authoritative even if its entry is missing.
+    : (sessionKey ? registry.entries[`${sessionKey.engine}:${sessionKey.sessionId}`] : null)
+      ?? (artifactPath ? entryForPath(registry, artifactPath) : null) ?? registry.entries[conversationId] ?? null);
+  const registered = own ? separateHost : entry ? hostEvidence(entry, probe) : null;
   const receipt = receiptHostEvidence(registry, conversationId, probe);
   const host = registered?.state === "alive" ? registered
     : receipt ?? registered;
@@ -674,6 +728,7 @@ export function conversationRegistryHost(
     state: host.state,
     processAlive: host.state === "alive",
     ...(host.state === "alive" && pending ? { turnPending: pending } : {}),
+    ...(own ? { separateRowPath: own.artifactPath } : {}),
   };
 }
 
@@ -1232,7 +1287,8 @@ async function livenessSnapshotWithin(
     title: row.entry.title,
     lastRecordAt: isoOrNull(row.lastRecordMs),
     turnState: row.turnState,
-    host: row.host,
+    // Setup evidence stays inside the registry verdict; the record names the host.
+    host: { state: row.host.state, kind: row.host.kind, pid: row.host.pid },
     lifecycle: row.lifecycle,
     reason: row.reason,
     retryAt: row.retryAt ?? null,
