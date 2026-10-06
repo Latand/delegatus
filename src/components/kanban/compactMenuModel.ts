@@ -165,6 +165,38 @@ export function sectionAt(layout: CompactLayout, path: readonly string[]): MenuS
   return found;
 }
 
+/** The row at the foot of a page of pipelines that opens the page of those that did not fit. */
+export const MORE_LANES = "pipelines-more";
+
+/** How many rows of a list go on each of its pages so that no page is taller
+    than `room`. Every page but the last ends in the row that opens the next,
+    `more` tall; a list that fits is one page. */
+export function pageSizes(heights: readonly number[], room: number, more: number): number[] {
+  const sizes: number[] = [];
+  for (let at = 0; at < heights.length;) {
+    const rest = heights.slice(at);
+    if (rest.reduce((sum, height) => sum + height, 0) <= room) { sizes.push(rest.length); break; }
+    let used = more;
+    let count = 0;
+    while (count < rest.length && used + rest[count]! <= room) used += rest[count++]!;
+    sizes.push(Math.max(1, count));
+    at += Math.max(1, count);
+  }
+  return sizes;
+}
+
+/** The same layout with the list of a card's pipelines cut into pages of these
+    sizes: each page keeps its rows and hands the rest to one more page behind
+    its last row. One size, or none, leaves the list whole. */
+export function pagedLanes(layout: CompactLayout, sizes: readonly number[], title: string): CompactLayout {
+  if (sizes.length < 2) return layout;
+  const pages = (entries: MenuEntry[], [size, ...rest]: readonly number[]): MenuEntry[] => (size === undefined || rest.length === 0 || entries.length <= size ? entries : [
+    ...entries.slice(0, size),
+    { type: "section", section: { id: MORE_LANES, title, value: String(entries.length - size), entries: pages(entries.slice(size), rest), hints: false } },
+  ]);
+  return { ...layout, nodes: layout.nodes.map((node) => (node.node === "section" && node.section.id === "pipelines" ? { ...node, section: { ...node.section, entries: pages(node.section.entries, sizes) } } : node)) };
+}
+
 export const MENU_GAP = 6;
 export type MenuSide = "below" | "beside";
 

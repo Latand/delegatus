@@ -721,6 +721,8 @@
 .kb .menu.cm .cm-page [role^="menuitem"].cm-tall { padding-top: 2px; padding-bottom: 2px; }
 .kb .menu.cm .cm-page .sep { margin: 2px 4px; }
 .kb .menu.cm .cm-page .why { line-height: 1.25; }
+/* In the list of a card's pipelines the state follows the title on its line and goes to the next one whole: seven pipelines are one page. */
+.kb .menu.cm .cm-page [data-cm-section] .why { display: inline-block; }
 /* Under a pointer no state is taller than 360 px; under a finger the rows are 44 px and the window is the bound. */
 @media (pointer: fine) {
   .kb .menu.cm { max-height: min(360px, calc(100vh - 16px)); }

@@ -21,7 +21,7 @@ drawn as it was.
 | Phone: a conversation's menu | variant 1 | `src/components/mobile/MobileConversationMenu.tsx`, its sections drawn by `MobileSheetFold` |
 | Phone: the board menu | as it was | it holds the header's entries, so it follows the header's design |
 
-Five things differ from variant 1 as it was drawn, each to close a note a
+Six things differ from variant 1 as it was drawn, each to close a note a
 critic left open on it:
 
 - **A section always opens under its own row.** A menu with no room below its
@@ -47,13 +47,24 @@ critic left open on it:
   under the cells. So that Appearance still opens inside 360 px there, the
   rows of a section opened in place are 28 px, as a page's are, and a swatch
   is a 22 px circle; it used to be drawn as tall as a row.
+- **The list of a card's pipelines never scrolls.** A pipeline's state stands
+  after its title on the same line and goes to the next line whole, so seven
+  pipelines with titles of two lines are one page, 300×319–336; with the
+  state on a line of its own that list passed 360 px and scrolled. The
+  product sets no limit on a card's pipelines, so a list measured taller than
+  360 px is cut into pages when the menu opens (`pageSizes`, `pagedLanes`):
+  each page keeps the rows that fit, and its last row, "More pipelines" with
+  the count behind it, opens the next. Twelve pipelines are seven and five:
+  300×347 and 300×241. A pipeline on the first page is four presses from the
+  card, as before; one behind "More pipelines" is five.
 
 The two lines of words make the card's menu 300×280 at rest, against 300×257
 as drawn; the separator between the cells and the priority row was taken out
 to stay inside 360 px. With Appearance open it is 300×342 and with More open
 300×340. On the card that holds the orchestrator's conversation, where the
 reason takes a second line, it is 300×293 at rest and 300×355 at its tallest
-(Appearance open). A pipeline's page is 300×290–342. The board's ⋯ rests at
+(Appearance open). A pipeline's page is 300×290–342, and the list of five
+pipelines is 300×241. The board's ⋯ rests at
 256×192 against 256×491, and its two pages are 256×218 and 256×238. On the
 phone the card's sheet is 390×376 against 390×445, the task's ⋯ is 390×270
 against 390×401, and a conversation's menu rests at 390×372 against 390×706:
@@ -260,7 +271,9 @@ Counted from the closed menu, the ⋯ included.
 | Pause the pipeline | 2 (2 + scroll at 1000×700) | 3 | 3 | 3 |
 
 On a card with several pipelines, Pause is four taps in every variant: the ⋯,
-the pipelines row, the pipeline, Pause. The pipeline's own ⋯ on the card is
+the pipelines row, the pipeline, Pause. As built, a pipeline that did not fit
+on the first page of the list (the eighth and later, with titles of two lines)
+is five. The pipeline's own ⋯ on the card is
 unchanged and stays at two.
 
 On one frame per variant the driver also carries out a colour, a priority, a
@@ -414,7 +427,10 @@ export of the merge base with `LLV_COMPACT_MENUS_SIDE=today` and the same
 `<dir>`; the built run then compares against those readings and lays both on
 the sheets.
 
-It fails when any state of a card's menu is over 300×360 or scrolls; when any
+It fails when any state of a card's menu is over 300×360 or scrolls, on cards
+holding one, five, seven and twelve pipelines; when seven pipelines are cut
+into pages or twelve are not, or a pipeline of either card has no page with
+its actions; when any
 state of a column's, a conversation's or the board's menu is over 360 px tall
 or scrolls; when the card's sheet or the task's menu on the phone is taller
 than it was or scrolls; when opening a section moves the pressed row or the

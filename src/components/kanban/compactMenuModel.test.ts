@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { compactLayout, layoutActions, layoutStates, MENU_GAP, menuPlacement, sectionAt, type MenuAction, type MenuWords } from "./compactMenuModel";
+import { compactLayout, layoutActions, layoutStates, MENU_GAP, menuPlacement, MORE_LANES, pagedLanes, pageSizes, sectionAt, type MenuAction, type MenuWords } from "./compactMenuModel";
 import type { KanbanMenuItem } from "./kanbanMenus";
 
 const WORDS: MenuWords = { appearance: "Appearance", more: "More", move: "Move to", priority: "Priority", pipelines: "Pipelines" };
@@ -93,6 +93,38 @@ describe("compact menu layouts", () => {
     expect([page.title, page.value, page.hints]).toEqual(["Lane 3", "Running", true]);
     /* A pipeline's actions are a page, where each keeps its second line. */
     expect(one.nodes.find((node) => node.node === "section" && node.section.lane)).toMatchObject({ open: "drill", section: { hints: true } });
+  });
+
+  test("a list of pipelines too tall for one page keeps what fits and hands the rest to the next page", () => {
+    /* Seven rows of 39 px in the 313 px a page leaves under its back row: one page. */
+    expect(pageSizes(Array(7).fill(39), 313, 28)).toEqual([7]);
+    /* Twelve do not fit: each page but the last gives 28 px to the row that opens the next. */
+    expect(pageSizes(Array(12).fill(39), 313, 28)).toEqual([7, 5]);
+    expect(pageSizes(Array(20).fill(39), 313, 28)).toEqual([7, 7, 6]);
+    /* Rows of their own heights fill a page in order, and a row taller than the page still gets one. */
+    expect(pageSizes([55, 39, 39, 55, 55, 39, 55, 39, 39], 313, 28)).toEqual([6, 3]);
+    expect(pageSizes([400, 39], 313, 28)).toEqual([1, 1]);
+    expect(pageSizes([], 313, 28)).toEqual([]);
+  });
+
+  test("the pages of a long list lose no pipeline and no action, and a list that fits is left as it was", () => {
+    const twelve = compactLayout("card", cardItems("assigned", 12), WORDS)!;
+    expect(pagedLanes(twelve, [12], "More pipelines")).toBe(twelve);
+    expect(pagedLanes(twelve, [], "More pipelines")).toBe(twelve);
+    const paged = pagedLanes(twelve, [5, 5, 2], "More pipelines");
+    expect(paged.nodes.length).toBe(twelve.nodes.length);
+    expect(layoutActions(paged)).toEqual(layoutActions(twelve));
+    const ids = (path: string[]) => sectionAt(paged, path)!.entries.map((entry) => (entry.type === "section" ? entry.section.id : entry.type));
+    expect(ids(["pipelines"])).toEqual([...[0, 1, 2, 3, 4].map((lane) => `lane:${lane}`), MORE_LANES]);
+    expect(ids(["pipelines", MORE_LANES])).toEqual([...[5, 6, 7, 8, 9].map((lane) => `lane:${lane}`), MORE_LANES]);
+    expect(ids(["pipelines", MORE_LANES, MORE_LANES])).toEqual(["lane:10", "lane:11"]);
+    /* The row to the next page says how many are behind it. */
+    expect(sectionAt(paged, ["pipelines", MORE_LANES])).toMatchObject({ title: "More pipelines", value: "7", hints: false });
+    expect(sectionAt(paged, ["pipelines", MORE_LANES, MORE_LANES])).toMatchObject({ value: "2" });
+    expect(sectionAt(paged, ["pipelines", MORE_LANES, "lane:7"])).toMatchObject({ title: "Lane 7", hints: true });
+    /* A card with one pipeline has no list to cut. */
+    const one = compactLayout("card", cardItems("assigned", 1), WORDS)!;
+    expect(layoutStates(pagedLanes(one, [1, 1], "More pipelines"))).toEqual(layoutStates(one));
   });
 });
 

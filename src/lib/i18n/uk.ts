@@ -4015,6 +4015,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "kanban.menu.appearance": "Вигляд",
   "kanban.menu.more": "Ще",
   "kanban.menu.pipelines": "Конвеєри",
+  "kanban.menu.morePipelines": "Ще конвеєри",
   "kanban.menu.back": "Назад",
   "kanban.menu.cell.rename": "Назва",
   "kanban.menu.cell.describe": "Опис",

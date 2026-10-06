@@ -79,3 +79,12 @@ test("a pipeline's and a stage's menu are the plain list they were", () => {
     expect(markup).toBe('<div class="menu" role="menu" aria-label="menu"><button type="button" role="menuitem"><span class="lbl">Pause<span class="why">The pipeline does not move on.</span></span></button></div>');
   }
 });
+
+test("a pipeline in the list of a card's pipelines carries its state after its title, inside the same label", () => {
+  const lane = (group: string, label: string): KanbanMenuItem => ({ type: "item", label, group, onSelect: () => {} });
+  const head = (group: string, label: string, note: string): KanbanMenuItem => ({ type: "head", label, group, note });
+  const markup = renderToStaticMarkup(<BoardMenu anchor={null as never} label="menu" items={[head("lane:a", "Fold the finished pipelines", "completed"), lane("lane:a", "Close"), head("lane:b", "Name every row", "stages running"), lane("lane:b", "Pause")]} onClose={() => {}} kind="card" />);
+  const list = markup.slice(markup.indexOf('data-cm-probe="pipelines"'), markup.indexOf('data-cm-probe="pipelines/lane:a"'));
+  expect(list).toContain('<span class="lbl">Fold the finished pipelines <span class="why">completed</span></span>');
+  expect(list).toContain('<span class="lbl">Name every row <span class="why">stages running</span></span>');
+});

@@ -4101,6 +4101,7 @@ export const en = {
   "kanban.menu.appearance": "Appearance",
   "kanban.menu.more": "More",
   "kanban.menu.pipelines": "Pipelines",
+  "kanban.menu.morePipelines": "More pipelines",
   "kanban.menu.back": "Back",
   "kanban.menu.cell.rename": "Rename",
   "kanban.menu.cell.describe": "Describe",

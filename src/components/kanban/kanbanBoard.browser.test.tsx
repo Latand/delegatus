@@ -18546,20 +18546,30 @@ describe("compact card menu and overflow menus: today and built", () => {
       }
     }
 
-    /** Every state of the menu on the cards that stretch it: a waiting card with a pipeline and a card holding five pipelines. */
+    /** Every state of the menu on the cards that stretch it: a waiting card with a pipeline, and cards holding five, seven and twelve pipelines. */
     async function stretched() {
-      const cases = [["stages", "t-limits", "card-waiting"], ["work-links", "t-many", "card-many"]] as const;
-      for (const frame of FRAMES.filter((entry) => !entry.phone)) for (const lang of LANGS) {
-        if (!SCHEMES.includes("light")) continue;
-        const where: Where = { frame, scheme: "light", lang };
-        for (const [scenario, id, surface] of cases) {
+      /* Seven pipelines are still one page, read in both schemes; twelve go on to a second page behind the last row of the first. */
+      const cases = [["stages", "t-limits", "card-waiting", 1], ["work-links", "t-many", "card-many", 5], ["pipeline-block", "t-many", "card-seven", 7], ["work-links&lanes=7", "t-many", "card-twelve", 12]] as const;
+      for (const frame of FRAMES.filter((entry) => !entry.phone)) for (const lang of LANGS) for (const scheme of SCHEMES) {
+        const where: Where = { frame, scheme, lang };
+        for (const [scenario, id, surface, lanes] of cases) {
+          if (scheme !== "light" && surface !== "card-seven") continue;
           await alive();
-          const { context, page } = await openFixture(browser, url(scenario), frame, "light", lang, "reduce");
+          const { context, page } = await openFixture(browser, url(scenario), frame, scheme, lang, "reduce");
           try {
             await settleBoard(page);
             await openCardMenu(page, id);
             const rest = await capture(page, where, MENU, surface, "rest");
-            if (BUILT) bounded(where, [rest, ...await walk(page, where, surface)]);
+            if (!BUILT) continue;
+            const states = await walk(page, where, surface);
+            bounded(where, [rest, ...states]);
+            if (lanes < 2) continue;
+            /* Each pipeline of the card has its own page with its actions, and only a list too long for one page has a second. */
+            const pages = states.filter((state) => /pipeline \d+$/.test(state.state));
+            const second = states.some((state) => state.state.endsWith("pipelines-more"));
+            if (pages.length !== lanes) failures.push(`${keyOf(where)} ${surface}: ${pages.length} of its ${lanes} pipelines open a page`);
+            if (pages.some((state) => state.labels.length < 2)) failures.push(`${keyOf(where)} ${surface}: a pipeline's page has no actions`);
+            if (second !== lanes > 7) failures.push(`${keyOf(where)} ${surface}: ${lanes} pipelines ${second ? "are cut into pages" : "stay on one page"}`);
           } catch (error) {
             failures.push(`${keyOf(where)} ${surface}: ${brief(error)}`);
             fs.mkdirSync(path.join(OUT, "failed"), { recursive: true });
@@ -18921,6 +18931,7 @@ describe("compact card menu and overflow menus: today and built", () => {
       { name: "The card's ⋯ · 1440×900 · uk · light: today, then built at rest and with each section open", tiles: [...await tiles([old("1440", "light", "uk", "card")], false, 0.5), ...await tiles(built("1440", "light", "uk", "card", ["rest", "open appearance", "open pipeline", "open more"]))] },
       { name: "The same · 1440×900 · en · dark", tiles: [...await tiles([old("1440", "dark", "en", "card")], false, 0.5), ...await tiles(built("1440", "dark", "en", "card", ["rest", "open appearance", "open pipeline", "open more"]))] },
       { name: "A card holding five pipelines · 1440×900 · uk · light: at rest, the list, one pipeline", tiles: [...await tiles([old("1440", "light", "uk", "card-many")], false, 0.5), ...await tiles(built("1440", "light", "uk", "card-many", ["rest", "open pipelines", "open pipelines, pipeline 1"]))] },
+      { name: "Seven pipelines on one card · 1000×700 · uk · light, then en · dark: the list is one page. Twelve · 1440×900 · uk · light: the list and the page behind its last row", tiles: [...await tiles(built("1000", "light", "uk", "card-seven", ["open pipelines"])), ...await tiles(built("1000", "dark", "en", "card-seven", ["open pipelines"])), ...await tiles(built("1440", "light", "uk", "card-twelve", ["open pipelines", "open pipelines, pipelines-more"]))] },
       { name: "The card that holds the orchestrator's conversation · 1440×900 · uk · light, then 1000×700 · en · dark: why Hide is refused, at rest and with each section open", tiles: [...await tiles(built("1440", "light", "uk", "card-seat")), ...await tiles(built("1000", "dark", "en", "card-seat", ["rest", "open appearance"]))] },
       { name: "A card at the bottom of the window · 1000×700 · uk · light (whole frames): a section opens under its own row", tiles: [...await tiles([old("1000", "light", "uk", "card", "bottom card")], true, 0.45), ...await tiles(built("1000", "light", "uk", "card", ["bottom card", "bottom card, open appearance", "bottom card, open more"]), true, 0.45)] },
       { name: "A card at the right edge · 1440×900 · uk · light (whole frames)", tiles: [...await tiles([old("1440", "light", "uk", "card", "right-edge card")], true, 0.42), ...await tiles(built("1440", "light", "uk", "card", ["right-edge card", "right-edge card, open pipeline"]), true, 0.42)] },

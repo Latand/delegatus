@@ -7,7 +7,7 @@ import { useSwapGuard } from "@/components/menuSwapGuard";
 import { useLocale } from "@/lib/i18n";
 import { TASK_COLORS } from "@/lib/tasks/types";
 
-import { compactLayout, layoutStates, menuPlacement, sectionAt, type CompactLayout, type MenuAction, type MenuEntry, type MenuNode, type MenuSection, type MenuSide } from "./compactMenuModel";
+import { compactLayout, layoutStates, menuPlacement, pagedLanes, pageSizes, sectionAt, type CompactLayout, type MenuAction, type MenuEntry, type MenuNode, type MenuSection, type MenuSide } from "./compactMenuModel";
 import { CheckGlyph, KanbanMenu, useMenuDismiss, type KanbanMenuProps } from "./kanbanMenus";
 
 /* The card's, a column's and a conversation's ⋯ (docs/design/compact-card-menu.md):
@@ -83,7 +83,7 @@ function Swatches({ entry, onClose }: { entry: Extract<MenuEntry, { type: "swatc
   );
 }
 
-/** The row that opens a section. A pipeline's carries the pipeline mark, its whole title and its state. */
+/** The row that opens a section. A pipeline's carries the pipeline mark, its whole title and, after it, its state. */
 function SectionRow({ section, opens, expanded, value, onOpen }: { section: MenuSection; opens: "expand" | "drill"; expanded: boolean; value: ReactNode; onOpen: (event: React.MouseEvent) => void }) {
   const lane = section.lane && section.value;
   return (
@@ -100,7 +100,7 @@ function SectionRow({ section, opens, expanded, value, onOpen }: { section: Menu
       {lane ? <Workflow className="cm-lane" aria-hidden /> : null}
       <span className="lbl">
         {section.title}
-        {lane ? <span className="why">{section.value}</span> : null}
+        {lane ? <>{" "}<span className="why">{section.value}</span></> : null}
       </span>
       {lane ? null : value}
       {/* A page is the arrow to the right. A section that opens in place puts its rows under its own row: the arrow points down, and up only once they are there. */}
@@ -123,7 +123,7 @@ function MenuView({ layout, path, t, onPick, onClose, onPath }: ViewProps) {
   const entries = (list: MenuEntry[], hints: boolean, at: readonly string[]) => list.map((entry, index) => {
     if (entry.type === "sep") return <div key={`sep-${index}`} className="sep" role="separator" />;
     if (entry.type === "swatches") return <Swatches key="swatches" entry={entry} onClose={onClose} />;
-    if (entry.type === "section") return <SectionRow key={entry.section.id} section={entry.section} opens="drill" expanded={false} value={null} onOpen={(event) => onPath([...at, entry.section.id], event)} />;
+    if (entry.type === "section") return <SectionRow key={entry.section.id} section={entry.section} opens="drill" expanded={false} value={entry.section.value && !entry.section.lane ? <span className="cm-val">{entry.section.value}</span> : null} onOpen={(event) => onPath([...at, entry.section.id], event)} />;
     return <Row key={`${index}-${entry.label}`} action={entry} hint={hints} onPick={onPick} />;
   });
   if (page) {
@@ -204,8 +204,12 @@ function MenuView({ layout, path, t, onPick, onClose, onPath }: ViewProps) {
   return <>{layout.nodes.map(node)}</>;
 }
 
-function CompactMenu({ layout, anchor, label, onClose }: { layout: CompactLayout } & Pick<KanbanMenuProps, "anchor" | "label" | "onClose">) {
+function CompactMenu({ layout: whole, anchor, label, onClose }: { layout: CompactLayout } & Pick<KanbanMenuProps, "anchor" | "label" | "onClose">) {
   const { t } = useLocale();
+  /* The pipelines of a card on each page of their list, once the list was
+     measured too tall for one: the rest go behind the page's last row. */
+  const [lanes, setLanes] = useState<number[]>([]);
+  const layout = pagedLanes(whole, lanes, t("kanban.menu.morePipelines"));
   const ref = useRef<HTMLDivElement>(null);
   /* The sections opened to reach what is shown; empty at rest. */
   const [path, setPath] = useState<string[]>([]);
@@ -225,6 +229,14 @@ function CompactMenu({ layout, anchor, label, onClose }: { layout: CompactLayout
     const rest = menu.offsetHeight;
     const chrome = rest - (view?.offsetHeight ?? rest);
     const cap = parseFloat(menu.ownerDocument.defaultView?.getComputedStyle?.(menu).maxHeight ?? "") || window.innerHeight - 16;
+    const list = lanes.length ? null : menu.querySelector<HTMLElement>('[data-cm-probe="pipelines"]');
+    if (list) {
+      const rows = [...list.querySelectorAll<HTMLElement>("[data-cm-section]")].map((row) => row.offsetHeight);
+      const around = chrome + list.offsetHeight - rows.reduce((sum, height) => sum + height, 0);
+      const sizes = rows.length ? pageSizes(rows, cap - around, Math.min(...rows)) : [];
+      /* Laid out again as pages, and placed on that pass. */
+      if (sizes.length > 1) { setLanes(sizes); return; }
+    }
     const probes = [...menu.querySelectorAll<HTMLElement>("[data-cm-probe]")].map((probe) => probe.offsetHeight + chrome);
     const tallest = Math.min(cap, Math.max(rest, ...probes));
     const spot = menuPlacement(anchor.getBoundingClientRect(), menu.offsetWidth, tallest, { width: window.innerWidth, height: window.innerHeight });
@@ -232,7 +244,7 @@ function CompactMenu({ layout, anchor, label, onClose }: { layout: CompactLayout
     menu.style.top = `${Math.round(spot.top)}px`;
     /* The unseen states are dropped before the first paint. */
     setPlaced(spot.side);
-  }, [anchor]);
+  }, [anchor, lanes]);
   const go = (next: string[], swap?: React.MouseEvent) => {
     swapped(swap);
     setPath(next);
