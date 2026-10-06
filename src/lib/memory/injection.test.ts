@@ -37,6 +37,24 @@ test("the deadline includes synchronous candidate work before Jev", async () => 
   expect(calls).toBe(0);
 });
 
+test("asynchronous candidate work shares the turn deadline and cannot reserve after cancellation or gate closure", async () => {
+  let reserves = 0, calls = 0, records = 0, reason = "";
+  const p = { ...ports(), reserve: () => { reserves++; return true; }, decide: async () => { calls++; return { scores: { m_fixture: .8 }, cost: .001 }; }, record: () => { records++; }, reason: (value: string) => { reason = value; } };
+  const start = performance.now();
+  expect(await injectMemory(input, { ...p, candidates: () => new Promise(() => {}) })).toBe("");
+  expect(performance.now() - start).toBeLessThan(100); expect(reason).toBe("timeout");
+  const cancel = new AbortController();
+  expect(await injectMemory(input, { ...p, signal: cancel.signal, candidates: async () => { cancel.abort(); return [entry]; } })).toBe("");
+  expect(reason).toBe("cancelled");
+  let enabled = true;
+  expect(await injectMemory(input, { ...p, enabled: () => enabled, candidates: async () => { enabled = false; return [entry]; } })).toBe("");
+  expect(reason).toBe("projectOff");
+  let owned = true;
+  expect(await injectMemory(input, { ...p, ownsTraffic: () => owned, candidates: async () => { owned = false; return [entry]; } })).toBe("");
+  expect(reason).toBe("notOwner");
+  expect([reserves, calls, records]).toEqual([0, 0, 0]);
+});
+
 for (const status of [401, 429, 503]) test(`HTTP ${status} releases the shared spending reservation`, async () => {
   const original = globalThis.fetch;
   const settled: number[] = [];

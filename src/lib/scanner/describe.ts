@@ -194,13 +194,62 @@ export function projectFromSlug(slug: string): string {
   return canonicalProject(slug);
 }
 
-/** Memory uses the same encoded project directories as Claude transcripts. */
-export function projectForClaudeMemorySlug(slug: string): string {
-  const cwd = repoPathFromSlug(slug);
-  return (cwd ? projectInfoFromCwd(cwd)?.project : null)
-    ?? projectInfoFromSlug(slug)?.project
-    ?? worktreeFromSlug(slug)?.project
-    ?? projectFromSlug(slug);
+/** Memory resolves lossy directory encodings asynchronously, outside synchronous recall. */
+export async function projectForClaudeMemorySlug(slug: string): Promise<string> {
+  const proof = await uniqueClaudeMemoryPath(slug);
+  if (proof.cwd) return projectInfoFromCwd(proof.cwd)?.project ?? projectFromSlug(slug);
+  const parentSlug = proof.absent ? worktreeFromSlug(slug)?.parentSlug : undefined;
+  if (parentSlug) {
+    const trusted = canonicalProject(parentSlug);
+    if (trusted !== parentSlug) return trusted;
+    const parent = await unambiguousProjectForClaudeMemorySlug(parentSlug);
+    if (parent) return parent;
+  }
+  return projectFromSlug(slug);
+}
+
+/** No preferred repository, partial walk or expired proof can admit a raw slug. */
+export async function unambiguousProjectForClaudeMemorySlug(slug: string, deadline = Infinity, cachedOnly = false): Promise<string | null> {
+  const proof = await uniqueClaudeMemoryPath(slug, deadline);
+  return proof.cwd ? (cachedOnly ? cachedProjectInfoFromCwd(proof.cwd) : projectInfoFromCwd(proof.cwd))?.project ?? null : null;
+}
+
+async function uniqueClaudeMemoryPath(slug: string, deadline = Infinity): Promise<{ cwd: string | null; absent: boolean }> {
+  const unresolved = { cwd: null, absent: false };
+  const drive = process.platform === "win32" ? /^([A-Za-z])--/.exec(slug)?.[1] : undefined;
+  if (!slug.startsWith("-") && !drive) return unresolved;
+  async function read<T>(operation: Promise<T>): Promise<T> {
+    if (!Number.isFinite(deadline)) return operation;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([operation, new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(Error("slug identity deadline")), Math.max(0, Math.ceil(deadline - performance.now())));
+      })]);
+    } finally { clearTimeout(timer); }
+  }
+  const matches: string[] = [];
+  let frontier = [{ pathname: drive ? `${drive}:${path.sep}` : path.parse(path.resolve(path.sep)).root, encoded: drive ? `${drive}-` : "" }];
+  try {
+    for (let depth = 0; depth < 32 && frontier.length && matches.length < 16; depth++) {
+      const next: typeof frontier = [];
+      for (const parent of frontier) {
+        if (performance.now() >= deadline) return unresolved;
+        for (const entry of await read(fs.promises.readdir(parent.pathname, { withFileTypes: true }))) {
+          if (performance.now() >= deadline) throw Error("slug identity deadline");
+          const encoded = parent.encoded + "-" + entry.name.replace(/[^a-zA-Z0-9]/g, "-");
+          if (encoded !== slug && !slug.startsWith(encoded + "-")) continue;
+          const pathname = path.join(parent.pathname, entry.name);
+          const directory = entry.isDirectory() || (entry.isSymbolicLink() && (await read(fs.promises.stat(pathname))).isDirectory());
+          if (!directory) continue;
+          if (encoded === slug) matches.push(pathname); else next.push({ pathname, encoded });
+        }
+      }
+      if (next.length > 64) return unresolved;
+      frontier = next;
+    }
+    if (performance.now() >= deadline || frontier.length) return unresolved;
+    return { cwd: matches.length === 1 ? matches[0]! : null, absent: matches.length === 0 };
+  } catch (error) { if (error instanceof Error && error.message === "slug identity deadline") throw error; return unresolved; }
 }
 
 /** Rejoins a `path.sep`-split absolute path into one.
@@ -347,6 +396,11 @@ type ProjectInfo = {
   repo?: string;
 };
 const projectInfoCwdCache = globalCache<[number, string, ProjectInfo | null]>("project-info-cwd-v2");
+/** Optional recall uses the scanner's last verified identity, with no disk reads.
+ * A cold cache supplies no predecessor proof; normal scans populate it. */
+export function cachedProjectInfoFromCwd(cwd: string): ProjectInfo | null {
+  return projectInfoCwdCache.get(cwd)?.[2] ?? null;
+}
 const PROJECT_INFO_CWD_TTL_MS = 10_000;
 const persistedProjectCache = globalCache<[number, string, string, {
   byCwd: Map<string, { project: string; worktree?: string; repo?: string }>;
@@ -762,9 +816,15 @@ export function projectInfoFromCwd(cwd: string, requestedState?: string): Projec
     return resolvedInfo;
   }
   const identity = projectIdentityFromRepositoryRoot(root);
+  // A deleted parent's directory alias is durable succession evidence. Keep
+  // its worktrees on that project even after the parent's git metadata is gone.
+  const rootDirectory = directoryProjectId(root);
+  const trustedRoot = canonicalProject(rootDirectory);
   const resolved = identity
     ? { project: identity.project, displayName: identity.displayName, worktree: worktree?.worktree, repo: root }
-    : directoryProjectInfo();
+    : trustedRoot !== rootDirectory
+      ? aliasedProjectInfo(trustedRoot, worktree?.worktree, root)
+      : directoryProjectInfo();
   projectInfoCwdCache.set(cwd, [Date.now() + PROJECT_INFO_CWD_TTL_MS, resolutionState, resolved]);
   return resolved;
 }
@@ -793,7 +853,7 @@ export function projectRootForCwd(cwd: string): string | undefined {
   return worktree?.repo || repositoryRootForPath(cwd) || undefined;
 }
 
-function worktreeFromSlug(slug: string): { project: string; worktree: string; repo?: string } | null {
+function worktreeFromSlug(slug: string): { project: string; worktree: string; repo?: string; parentSlug?: string } | null {
   const codexMarker = "--codex-worktrees-";
   const markers = ["--claude-worktrees-", codexMarker, "--worktrees-"];
   let marker: string | null = null;
@@ -829,7 +889,7 @@ function worktreeFromSlug(slug: string): { project: string; worktree: string; re
   const repoSlug = slug.slice(0, index);
   const project = projectFromSlug(repoSlug);
   if (!project) return null;
-  return { project, worktree, repo: repoPathFromSlug(repoSlug) ?? undefined };
+  return { project, worktree, repo: repoPathFromSlug(repoSlug) ?? undefined, parentSlug: repoSlug };
 }
 
 /** Claude places nested scratchpad agents under

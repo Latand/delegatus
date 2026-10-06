@@ -9,7 +9,8 @@ import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import { statePath } from "@/lib/configDir";
 import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
 import { directoryProjectId, localRepositoryProjectId } from "@/lib/projects/identity";
-import { projectInfoFromCwd, projectRootForCwd } from "@/lib/scanner/describe";
+import { cachedProjectInfoFromCwd, unambiguousProjectForClaudeMemorySlug } from "@/lib/scanner/describe";
+import { projectResolutionStateKey } from "@/lib/scanner/projectState";
 import type { MemoryTurnReason } from "./viewTypes";
 import { hardenedRedact } from "@/lib/view/compactText";
 import { parseMemory, type MemoryKind, type MemorySource } from "./parsers";
@@ -52,6 +53,54 @@ export class MemoryIndex {
   private db?: BunDatabase;
   private pendingActivity = new Map<string, { month: string; event: string; count: number }>();
 
+  private scopeKeys(project: string, includeSlugProofs = true): Set<string> {
+    const canonical = canonicalProject(project), keys = new Set([canonical]);
+    for (const key of Object.keys(projectAliasSnapshot().aliases)) if (canonicalProject(key) === canonical) keys.add(key);
+    // First verified ownership survives Viewer replacement. A changed origin
+    // cannot take another repository's predecessor; only trusted aliases move it.
+    for (const proof of this.scopeProofs()) {
+      if (canonicalProject(proof.project) !== canonical || proof.expires < Date.now()) continue;
+      if (!includeSlugProofs && !/^(?:dir|repo)-[0-9a-f]{32}$/.test(proof.key)) continue;
+      const aliased = canonicalProject(proof.key);
+      if (aliased === proof.key || aliased === canonical) keys.add(proof.key);
+    }
+    return keys;
+  }
+
+  private scopeProofs() {
+    return this.database().query<{ key: string; project: string; expires: number }, []>(
+      "SELECT key, project, expires FROM memory_project_scopes",
+    ).all();
+  }
+
+  private rememberScope(project: string, keys: Set<string>) {
+    // No timeout claim survives an await: another hook can restore the shared
+    // connection while this lookup is paused. Claim zero wait at the write.
+    this.hookDatabase(db => {
+      const claim = db.query("INSERT OR IGNORE INTO memory_project_scopes (key, project, expires) VALUES (?, ?, ?)");
+      const owner = db.query<{ project: string }, [string]>("SELECT project FROM memory_project_scopes WHERE key = ?");
+      for (const key of keys) {
+        if (key === project || canonicalProject(key) === project) continue;
+        const expires = /^(?:dir|repo)-[0-9a-f]{32}$/.test(key) ? Number.MAX_SAFE_INTEGER : Date.now() + 10_000;
+        claim.run(key, project, expires);
+        if (canonicalProject(owner.get(key)!.project) !== project) { keys.delete(key); continue; }
+        db.query("UPDATE memory_project_scopes SET expires = ? WHERE key = ?").run(expires, key);
+      }
+    });
+  }
+
+  private async refreshScopeProofs(project: string, sourceProject?: string | null) {
+    const canonical = canonicalProject(project), deadline = performance.now() + 100;
+    for (const proof of this.scopeProofs()) {
+      if (canonicalProject(proof.project) !== canonical) continue;
+      if (/^(?:dir|repo)-[0-9a-f]{32}$/.test(proof.key) || (sourceProject && sourceProject !== proof.key)) continue;
+      if (canonicalProject(proof.key) === canonical) continue;
+      const verified = await unambiguousProjectForClaudeMemorySlug(proof.key, deadline, true);
+      const expires = canonicalProject(verified ?? "") === canonical ? Date.now() + 10_000 : 0;
+      this.hookDatabase(db => db.query("UPDATE memory_project_scopes SET expires = ? WHERE key = ?").run(expires, proof.key));
+    }
+  }
+
   private normalizeProjects(db: BunDatabase) {
     // Project succession can change independently of the source file's timestamp.
     const projects = db.query<{ project: string }, []>("SELECT DISTINCT project FROM memory_entries WHERE project IS NOT NULL").all();
@@ -81,12 +130,15 @@ export class MemoryIndex {
       this.db.exec(`
         PRAGMA busy_timeout = 0;
         PRAGMA journal_mode = WAL;
+        CREATE TABLE IF NOT EXISTS memory_project_scopes (key TEXT PRIMARY KEY, project TEXT NOT NULL, expires REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS memory_files (path TEXT PRIMARY KEY, identity TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS memory_entries (
           id TEXT PRIMARY KEY, engine TEXT, kind TEXT, scope TEXT, project TEXT,
           sourcePath TEXT, sourceKind TEXT, title TEXT, summary TEXT, body TEXT, writtenAt TEXT, flags TEXT
         );
         CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(id UNINDEXED, title, summary, body);
+        CREATE INDEX IF NOT EXISTS memory_entries_source ON memory_entries(engine, sourceKind, sourcePath);
+        CREATE INDEX IF NOT EXISTS memory_entries_kind ON memory_entries(engine, kind);
         CREATE TABLE IF NOT EXISTS memory_offers (
           memory_id TEXT NOT NULL, request_id TEXT NOT NULL, conversation_id TEXT,
           at TEXT NOT NULL, channel TEXT NOT NULL, score REAL, outcome TEXT, outcome_at TEXT,
@@ -137,6 +189,7 @@ export class MemoryIndex {
     const db = this.database();
     this.normalizeProjects(db);
     const result = { filesRead: 0, filesSkipped: 0, entriesIndexed: 0, filesFailed: 0 };
+    const nativeResolution = sources.some(source => ["codex_memory", "codex_summary", "rollout_summary"].includes(source.sourceKind)) ? projectResolutionStateKey() : null;
     for (const source of sources) {
       try {
         const stat = await fs.stat(source.path);
@@ -144,7 +197,8 @@ export class MemoryIndex {
           db.transaction(() => this.removeSource(source.path))();
           result.filesSkipped++; continue;
         }
-        const identity = JSON.stringify([stat.size, stat.mtimeMs, stat.ctimeMs, source.project, source.sourceKind, source.engine]);
+        const identity = JSON.stringify([stat.size, stat.mtimeMs, stat.ctimeMs, source.project, source.sourceKind, source.engine, source.loadedByDefault,
+          ["codex_memory", "codex_summary", "rollout_summary"].includes(source.sourceKind) ? nativeResolution : null]);
         const previous = db.query<{ identity: string }, [string]>("SELECT identity FROM memory_files WHERE path = ?").get(source.path);
         if (previous?.identity === identity) { result.filesSkipped++; continue; }
         const content = await fs.readFile(source.path, "utf8");
@@ -158,10 +212,13 @@ export class MemoryIndex {
             const id = "m_" + crypto.createHash("sha256").update(`${source.engine}\0${source.path}\0${entry.anchor}`).digest("hex").slice(0, 24);
             const clean = (text: string, limit: number) => byteBound(hardenedRedact(text), limit);
             const title = clean(entry.title, 160), summary = clean(entry.summary, 400), body = clean(entry.body, 2048);
-            const redacted = [entry.title, entry.summary, entry.body].some(text => hardenedRedact(text) !== text);
+            const redacted = [entry.title, entry.summary, entry.body, entry.keywords ?? ""].some(text => hardenedRedact(text) !== text);
+            const flags = redacted ? ["redacted_secret"] : [];
+            if (source.sourceKind === "claude_index" && source.loadedByDefault === false) flags.push("deferred_index");
             const date = entry.writtenAt ? Date.parse(entry.writtenAt) : NaN;
-            db.query("INSERT INTO memory_entries VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(id, source.engine, entry.kind, entry.project ? "project" : "global", entry.project ? canonicalProject(entry.project) : null, source.path, source.sourceKind, title, summary, body, Number.isFinite(date) ? new Date(date).toISOString() : stat.mtime.toISOString(), JSON.stringify(redacted ? ["redacted_secret"] : []));
-            db.query("INSERT INTO memory_fts VALUES (?, ?, ?, ?)").run(id, title, summary, body);
+            db.query("INSERT INTO memory_entries VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(id, source.engine, entry.kind, entry.project ? "project" : "global", entry.project ? canonicalProject(entry.project) : null, source.path, source.sourceKind, title, summary, body, Number.isFinite(date) ? new Date(date).toISOString() : stat.mtime.toISOString(), JSON.stringify(flags));
+            const searchableBody = entry.keywords ? clean(entry.body + "\n" + entry.keywords, 2048) : body;
+            db.query("INSERT INTO memory_fts VALUES (?, ?, ?, ?)").run(id, title, summary, searchableBody);
           }
           db.query("INSERT OR REPLACE INTO memory_files VALUES (?, ?)").run(source.path, identity);
         })();
@@ -182,17 +239,19 @@ export class MemoryIndex {
     return result;
   }
 
-  search(input: { query: string; project?: string; kind?: MemoryKind; limit?: number; maxBytes?: number }) {
+  async search(input: { query: string; project?: string; kind?: MemoryKind; limit?: number; maxBytes?: number }) {
     const terms = input.query.match(/[\p{L}\p{N}_]+/gu)?.slice(0, 16) ?? [];
     if (!terms.length) return { items: [], truncated: false };
     const db = this.database();
     this.normalizeProjects(db);
+    if (input.project) await this.refreshScopeProofs(input.project);
+    const scope = input.project ? JSON.stringify([...this.scopeKeys(input.project)]) : null;
     const items = db.query<MemoryItem, [string, string | null, string | null, string | null, string | null, number]>(`
       SELECT e.*, bm25(memory_fts, 0, 5, 2, 1) AS score FROM memory_fts JOIN memory_entries e ON e.id = memory_fts.id
-      WHERE memory_fts MATCH ? AND (? IS NULL OR e.project = ? OR e.scope = 'global')
+      WHERE memory_fts MATCH ? AND (? IS NULL OR e.project IN (SELECT value FROM json_each(?)) OR e.scope = 'global')
         AND (? IS NULL OR e.kind = ?)
       ORDER BY bm25(memory_fts, 0, 5, 2, 1), e.writtenAt DESC, e.id LIMIT ?
-    `).all(terms.map(term => `"${term}"`).join(" AND "), input.project ? canonicalProject(input.project) : null, input.project ? canonicalProject(input.project) : null, input.kind ?? null, input.kind ?? null, Math.max(1, Math.min(20, input.limit ?? 10)));
+    `).all(terms.map(term => `"${term}"`).join(" AND "), scope, scope, input.kind ?? null, input.kind ?? null, Math.max(1, Math.min(20, input.limit ?? 10)));
     const page = { items: [] as Array<Omit<MemoryItem, "body" | "flags"> & { flags: string[] }>, truncated: false };
     for (const item of items) {
       const hit = {
@@ -209,11 +268,15 @@ export class MemoryIndex {
     return page;
   }
 
-  open(id: string, requestId: string, conversationId: string | null, project?: string, maxBytes = MEMORY_RESPONSE_BYTES) {
+  async open(id: string, requestId: string, conversationId: string | null, project?: string, maxBytes = MEMORY_RESPONSE_BYTES) {
     const db = this.database();
     this.normalizeProjects(db);
-    const canonical = project ? canonicalProject(project) : null;
-    const item = db.query<MemoryItem, [string, string | null, string | null]>("SELECT * FROM memory_entries WHERE id = ? AND (? IS NULL OR project = ? OR scope = 'global')").get(id, canonical, canonical);
+    if (project) {
+      const source = db.query<{ project: string | null }, [string]>("SELECT project FROM memory_entries WHERE id = ?").get(id);
+      await this.refreshScopeProofs(project, source?.project);
+    }
+    const scope = project ? JSON.stringify([...this.scopeKeys(project)]) : null;
+    const item = db.query<MemoryItem, [string, string | null, string | null]>("SELECT * FROM memory_entries WHERE id = ? AND (? IS NULL OR project IN (SELECT value FROM json_each(?)) OR scope = 'global')").get(id, scope, scope);
     if (!item) return null;
     const ledgerKey = crypto.createHash("sha256").update(`${conversationId ?? ""}\0${requestId}`).digest("hex");
     const recordOpened = () => {
@@ -262,11 +325,17 @@ export class MemoryIndex {
     return this.database().query<{ channel: string; outcome: string; score: number | null; conversationId: string | null }, [string]>("SELECT channel, outcome, score, conversation_id AS conversationId FROM memory_offers WHERE memory_id = ? ORDER BY at").all(id);
   }
 
-  injectionCandidates(prompt: string, project: string, engine: string, conversation: string, requestDeadline = Infinity, options: { cwd?: string; reason?: (reason: MemoryTurnReason) => void } = {}): Candidate[] {
+  async injectionCandidates(prompt: string, project: string, engine: string, conversation: string, requestDeadline = Infinity, options: { cwd?: string; reason?: (reason: MemoryTurnReason) => void } = {}): Promise<Candidate[]> {
     // A native store can contain thousands of near matches. Optional retrieval
-    // has its own short CPU budget and abandons incomplete filtering entirely.
+    // has its own short total budget and abandons incomplete filtering entirely.
     const deadline = Math.min(requestDeadline, performance.now() + 100);
     const check = () => { if (performance.now() >= deadline) throw Error("memory candidate budget"); };
+    const read = async <T>(operation: Promise<T>): Promise<T> => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try { return await Promise.race([operation, new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(Error("memory candidate budget")), Math.max(0, Math.ceil(deadline - performance.now())));
+      })]); } finally { clearTimeout(timer); }
+    };
     // A pending confirmation may exclude an otherwise eligible candidate.
     // Drain bounded batches and abstain until that ledger is complete.
     if (!this.replayConfirmedInjections()) { options.reason?.("ledgerPending"); return []; }
@@ -276,48 +345,93 @@ export class MemoryIndex {
     db.exec("PRAGMA busy_timeout = 50");
     try {
       check();
-      // Retrieval is read-only: a writer must not turn alias recovery into
-      // an empty result. Refresh normalizes the derivative independently.
+      // Alias resolution never rewrites project rows; refresh normalizes the
+      // derivative independently. Only first verified scope ownership is saved.
       const canonical = canonicalProject(project);
-      const keys = new Set([canonical]);
-      for (const key of Object.keys(projectAliasSnapshot().aliases)) {
-        check(); if (canonicalProject(key) === canonical) keys.add(key);
-      }
+      const keys = this.scopeKeys(canonical, false);
+      check();
       // These earlier identities are provably the caller's exact folder,
       // including a deleted checkout recovered by the scanner's durable map.
       // A previous folder at a different path needs a trusted alias; name
       // similarity alone cannot establish that its memories belong here.
-      if (options.cwd && canonicalProject(projectInfoFromCwd(options.cwd)?.project ?? "") === canonical) {
-        const folders = new Set([options.cwd, projectRootForCwd(options.cwd)].filter((folder): folder is string => Boolean(folder)));
+      const info = options.cwd ? cachedProjectInfoFromCwd(options.cwd) : null;
+      if (options.cwd && canonicalProject(info?.project ?? "") === canonical) {
+        const folders = new Set([options.cwd, info?.repo].filter((folder): folder is string => Boolean(folder)));
+        const physicalFolders = new Map<string, string>();
+        for (const folder of [...folders]) {
+          try {
+            const physical = await read(fs.realpath(folder)); check();
+            if (physical !== folder && canonicalProject(cachedProjectInfoFromCwd(physical)?.project ?? "") !== canonical) {
+              folders.delete(folder); continue;
+            }
+            physicalFolders.set(folder, physical);
+            folders.add(physical);
+          } catch (error) { check(); if (!["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error; }
+        }
         for (const folder of folders) {
-          const previous = [directoryProjectId(folder), localRepositoryProjectId(folder), folder.replace(/[^a-zA-Z0-9]/g, "-")];
+          check();
+          const previous = [directoryProjectId(folder), localRepositoryProjectId(physicalFolders.get(folder) ?? folder, true)];
           for (const key of previous) if (key && (canonicalProject(key) === key || canonicalProject(key) === canonical)) keys.add(key);
+          const slug = folder.replace(/[^a-zA-Z0-9]/g, "-");
+          if (canonicalProject(slug) === canonical || canonicalProject(await unambiguousProjectForClaudeMemorySlug(slug, deadline, true) ?? "") === canonical) keys.add(slug);
         }
       }
+      check(); this.rememberScope(canonical, keys);
       const projectKeys = JSON.stringify([...keys]);
-      const hits = db.query<MemoryItem, [string, string, number]>(`SELECT e.* FROM memory_fts JOIN memory_entries e ON e.id = memory_fts.id
+      const hits = db.query<MemoryItem, [string, string, string, number]>(`SELECT e.* FROM memory_fts JOIN memory_entries e ON e.id = memory_fts.id
         WHERE memory_fts MATCH ? AND (e.project IN (SELECT value FROM json_each(?)) OR e.scope = 'global')
           AND e.engine != 'shared' AND e.kind != 'instruction'
+          AND NOT (e.engine = ? AND e.sourceKind = 'codex_summary')
         ORDER BY bm25(memory_fts, 0, 5, 2, 1), e.writtenAt DESC, e.id LIMIT 128 OFFSET ?`);
-      // Being present in an engine's private store does not prove a topic
-      // reached this turn. The decision model judges both engines' offers.
-      // Only instructions are known to be loaded independently of recall.
-      const native = db.query<MemoryItem, [string, string]>("SELECT * FROM memory_entries WHERE kind = 'instruction' AND engine = ? AND (scope = 'global' OR project IN (SELECT value FROM json_each(?)))").all(engine, projectKeys);
+      // Both engines' topics compete for recall. The recipient already loads
+      // its root index/summary and instructions. A Claude index is a routing
+      // list; its presence does not establish that the topic body was loaded.
+      const native = db.query<MemoryItem, [string, string, string, string]>(`SELECT * FROM memory_entries WHERE kind = 'instruction' AND engine = ? AND (scope = 'global' OR project IN (SELECT value FROM json_each(?)))
+        UNION SELECT * FROM memory_entries WHERE sourceKind = 'codex_summary' AND engine = ? AND (scope = 'global' OR project IN (SELECT value FROM json_each(?)))`).all(engine, projectKeys, engine, projectKeys);
+      // Resolve a matching pointer to its indexed topic, including when only
+      // the pointer's wording matches. Scope and retirement still apply to the
+      // resolved topic. An absent target leaves the reference eligible.
+      const topicByPath = db.query<MemoryItem, [string, string, string]>("SELECT * FROM memory_entries WHERE engine = ? AND sourceKind = 'claude_memory' AND sourcePath = ? AND (scope = 'global' OR project IN (SELECT value FROM json_each(?))) LIMIT 1");
       check();
+      const resolvePointer = async (hit: MemoryItem): Promise<MemoryItem> => {
+        if (hit.sourceKind !== "claude_index") return hit;
+        const target = /\[[^\]]+\]\(([^)]+\.md)\)/.exec(hit.body)?.[1];
+        if (!target) return hit;
+        const filename = path.resolve(path.dirname(hit.sourcePath), target);
+        let topic = topicByPath.get(hit.engine, filename, projectKeys);
+        if (!topic) {
+          try { const physical = await read(fs.realpath(filename)); check(); topic = topicByPath.get(hit.engine, physical, projectKeys); }
+          catch (error) { if (!["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error; }
+          check();
+        }
+        return topic ?? hit;
+      };
       const offered = new Set(db.query<{ memory_id: string }, [string]>("SELECT memory_id FROM memory_offers WHERE conversation_id = ? AND channel = 'inject'").all(conversation).map(r => r.memory_id));
       const earlier = db.query<MemoryItem, [string]>(`SELECT DISTINCT e.* FROM memory_entries e JOIN memory_offers o ON o.memory_id = e.id
         WHERE o.conversation_id = ? AND o.channel = 'inject'`).all(conversation);
       native.push(...earlier);
+      for (const prior of earlier) {
+        check();
+        const topic = await resolvePointer(prior);
+        if (topic !== prior) { offered.add(topic.id); native.push(topic); }
+      }
       check();
       const kept: MemoryItem[] = [];
       for (let offset = 0; ; offset += 128) {
         check();
-        const page = hits.all(query, projectKeys, offset);
-        for (const hit of page) {
+        const page = hits.all(query, projectKeys, engine, offset);
+        for (const found of page) {
           check();
+          const foundFlags = JSON.parse(found.flags) as string[];
+          if (foundFlags.includes("retired")) continue;
+          const hit = await resolvePointer(found);
+          const flags = hit === found ? foundFlags : JSON.parse(hit.flags) as string[];
+          // The root index can supply search terms for a topic, while its own
+          // text is already loaded. Unloaded nested references remain offers.
+          if (hit.sourceKind === "claude_index" && hit.engine === engine && !flags.includes("deferred_index")) continue;
           if (offered.has(hit.id)
-            || JSON.parse(hit.flags).includes("retired") || native.some(own => { check(); return nativeMatch(hit, own); })
-            || kept.some(own => nativeMatch(hit, own))) continue;
+            || flags.includes("retired") || native.some(own => { check(); return nativeMatch(hit, own); })
+            || kept.some(own => own.id === hit.id || nativeMatch(hit, own))) continue;
           kept.push(hit);
           if (kept.length === 30) return kept;
         }
@@ -325,7 +439,7 @@ export class MemoryIndex {
       }
       check();
       return kept;
-    } catch { options.reason?.(performance.now() >= deadline ? "candidateTimeout" : "failed"); return []; }
+    } catch (error) { options.reason?.(performance.now() >= deadline || (error instanceof Error && ["memory candidate budget", "slug identity deadline"].includes(error.message)) ? "candidateTimeout" : "failed"); return []; }
     finally { db.exec("PRAGMA busy_timeout = 5000"); }
   }
 

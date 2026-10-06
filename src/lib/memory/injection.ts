@@ -9,7 +9,7 @@ export interface InjectionInput extends Omit<SelectionInput, "candidates"> {
 export interface InjectionPorts {
   enabled(): boolean;
   ownsTraffic(): boolean;
-  candidates(deadline: number): Candidate[];
+  candidates(deadline: number): Candidate[] | Promise<Candidate[]>;
   reserve(ceiling: number): boolean;
   decide(body: ReturnType<typeof groundedRequest>, signal: AbortSignal): Promise<{ scores: Record<string, number>; cost: number }>;
   settle(cost: number): void;
@@ -37,7 +37,16 @@ export async function injectMemory(input: InjectionInput, ports: InjectionPorts)
     if (!memoryGate({ ...input, enabled: true })) return "";
     if (!ports.ownsTraffic()) { reason = "notOwner"; return ""; }
     if (performance.now() >= deadline) { reason = "timeout"; return ""; }
-    const candidates = ports.candidates(deadline);
+    const candidates = await Promise.race([
+      ports.candidates(deadline),
+      new Promise<never>((_, reject) => abort.signal.addEventListener("abort", () => reject(new JevError("timeout", "memory candidates cancelled")), { once: true })),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => { abort.abort(); reject(new JevError("timeout", "memory candidates expired")); }, Math.max(0, deadline - performance.now())); }),
+    ]);
+    clearTimeout(timer);
+    if (abort.signal.aborted) { reason = ports.signal?.aborted ? "cancelled" : "timeout"; return ""; }
+    if (performance.now() >= deadline) { reason = "timeout"; return ""; }
+    if (!ports.enabled()) { reason = "projectOff"; return ""; }
+    if (!ports.ownsTraffic()) { reason = "notOwner"; return ""; }
     if (!candidates.length) { outcome = reason = "noCandidates"; return ""; }
     const body = groundedRequest({ ...input, candidates });
     if (performance.now() >= deadline) { reason = "timeout"; return ""; }

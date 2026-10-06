@@ -494,27 +494,73 @@ Why the hook and why the delivery path was set aside:
 
 The operator-turn correction supersedes the candidate exclusion in step 2:
 index presence alone gives no evidence that a topic was loaded into this
-conversation. Candidates from both engines now reach the decision model.
-Loaded instructions, retired entries, previous offers and their near matches
-remain excluded. Retrieval reads the canonical alias family and, after verifying
-the caller's project, the directory, local-repository and Claude slug keys derived
+conversation. Topic candidates from both engines now reach the decision model.
+The recipient's always-loaded root `MEMORY.md` index (Claude),
+`memory_summary.md` (Codex) and instructions remain outside the candidate pool.
+A Claude index routes to topics; its presence alone does not establish that a
+topic body was loaded. Discovery marks nested indexes as deferred; their references
+remain eligible for the receiving Claude engine. A loaded root retains its
+provenance when duplicate symlinks are discovered first. A matching index pointer resolves
+to its topic when that topic is indexed in the eligible scope, even when only the
+pointer's wording matches the search. A retired target excludes the resolved
+candidate; an absent target leaves the pointer eligible. Exact factual bodies after Unicode
+and whitespace normalization share one place across descriptions when they contain
+at least three distinct words. Shorter generic bodies need matching summaries;
+the near-match threshold still protects distinct short rules. Loaded instructions and Codex
+summary content, retired entries, previous offers and their near matches remain excluded.
+Previously offered pointers resolve through the same topic identity, so a later
+indexed topic and its cross-engine copies cannot repeat that offer.
+Registry keywords remain in FTS search content, separately from the factual body,
+so metadata cannot split a note from its rollout copy. Pointer resolution uses an
+indexed source-path lookup for each match and never materializes the topic inventory.
+Linked topic paths use discovery's canonical filesystem identity; scope and
+retirement still apply after resolution.
+Retrieval reads the canonical alias family and the scanner's cached, verified
+project identity. It considers the directory, local-repository and Claude slug keys derived
 from its exact cwd and recovered repository root. A deleted worktree whose root
 is known to the scanner's durable map uses that root. A key derived from a
 different, absent checkout path needs a trusted alias into this family; similar
-folder names supply no link. The hook never rewrites project rows. Refresh still
-normalizes the derivative separately.
+folder names supply no link. A lossy Claude slug needs a trusted alias or a fresh,
+unique existing-folder resolution, with no preferred-repository guess. The same
+check applies during memory discovery; ambiguous or absent slugs stay unresolved
+until trusted identity data links them. A recognized deleted worktree can use
+its parent's trusted alias or uniquely resolved live folder after a complete
+resolution proves the checkout absent. Ambiguous or unverifiable slugs never
+inherit a parent's identity. The hook never rewrites project rows. Refresh still
+normalizes the derivative separately. Native Codex file fingerprints include the
+scanner's identity revision, so an unchanged source is reattributed after trusted
+alias or worktree evidence changes. A deleted worktree retains an aliased parent
+even when the parent checkout is also gone, through the existing path recognizers
+or recorded sibling-worktree map.
+Filesystem identity proofs and linked-topic resolution use asynchronous reads
+bounded by the same retrieval deadline. A symlinked cwd also considers verified
+physical-folder predecessor keys. A symlink retargeted to a foreign or unverified
+physical project supplies no predecessor keys from that target. Injection bounds asynchronous candidate work
+by the turn deadline and rechecks the switch and traffic owner before reservation.
+Scope writes claim zero SQLite wait at the synchronous write itself, so another
+lookup finishing during an awaited read cannot restore a long writer wait.
+Git metadata stays outside the optional hook path; a cold identity cache supplies
+no new predecessor proof. The private derivative retains each key's first verified
+repository ownership across Viewer replacement. A conflicting origin cannot take
+that history; moving its owner requires trusted succession aliases. The same durable verified scope serves recall,
+project-scoped search and opening an offer. Search/open recheck lossy slug proofs
+with bounded asynchronous reads, including when the feed is opened later.
 
 Read-only review of the installation's 7,701-row snapshot found 438 Claude
 entries and zero Codex entries under the current key. The three earlier keys
 derived from the seat's current path held zero entries, and its alias family
-was empty. A previous, absent checkout path held 3,685 Codex entries under 99
-`dir-` keys and 387 Claude entries under the old folder slug; 385 of those Claude
-entries had exact copies under the current key. Those unlinked old-path keys
+was empty. The 3,685 older Codex entries span 99 `dir-` keys: the previous
+repository root (1 key, 59 entries), 94 deleted sibling pipeline worktrees
+(94 keys, 3,571 entries), and 4 nested worktrees (4 keys, 55 entries).
+Thus 98 of the 99 keys identify deleted worktrees. The old folder slug held
+387 Claude entries; 385 of those Claude entries had exact copies under the
+current key. Those unlinked old-path keys
 remain outside retrieval. The five older-key Codex FTS matches observed in the
 initial investigation also remain outside retrieval. Recovering that history
-requires separately establishing the relationship through trusted project
-identity data. The seat regression covers both unlinked deleted directory/slug
-keys (only the current entry is offered) and explicitly aliased ones (both are
+requires linking the previous repository root to the current project through
+trusted identity data and recognizing that root's worktrees, so every one of
+the 99 keys resolves to the parent project. The seat regression covers both
+unlinked deleted directory/slug keys (only the current entry is offered) and explicitly aliased ones (both are
 offered), with a similarly named foreign folder excluded in every case.
 
 The confirmed injection blocker was the receiving-engine exclusion. On that

@@ -58,7 +58,7 @@ for (const mode of ["delayed input", "delayed body", "delayed confirmation", "co
   globalThis.fetch = (async () => {
     if (mode === "delayed input") await Bun.sleep(1100);
     if (mode === "delayed confirmation") await Bun.sleep(1050);
-    const id = memoryIndex().injectionCandidates("widget parser", project, "codex", receipt.conversationId)[0].id;
+    const id = (await memoryIndex().injectionCandidates("widget parser", project, "codex", receipt.conversationId))[0].id;
     return Response.json({ answers: { [id]: { noul: .8 } }, usage: { cost: .0001 } });
   }) as unknown as typeof fetch;
   let finished: Promise<string> = Promise.resolve("");
@@ -124,7 +124,7 @@ for (const mode of ["delayed input", "delayed body", "delayed confirmation", "co
       const lookup = provenanceLookupFor({ memoryOffers: offers }, entries.map(entry => entry.item));
       expect(lookup.memoryFor!(entries.find(entry => entry.item.kind === "user")!.item)).toEqual(["Widget parser"]);
     }
-    expect(memoryIndex().injectionCandidates("widget parser", project, "codex", receipt.conversationId).length).toBe((mode === "successful" || mode === "delayed confirmation" || mode === "contended confirmation" || mode === "restarted confirmation") ? 0 : 1);
+    expect((await memoryIndex().injectionCandidates("widget parser", project, "codex", receipt.conversationId)).length).toBe((mode === "successful" || mode === "delayed confirmation" || mode === "contended confirmation" || mode === "restarted confirmation") ? 0 : 1);
   } finally { confirmationLock.db?.exec("ROLLBACK"); confirmationLock.db?.close(); server.stop(true); }
 }, 5000);
 
