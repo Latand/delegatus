@@ -3111,7 +3111,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   create_task: [
     "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record.",
     "Create a durable board task.",
-    "When work stops, set hold with its kind and one-line reason, plus a reference or until date when relevant. Stop work while waiting, then clear or update the hold when work resumes. A bare blocked status remains accepted and reads as no reason given.",
+    "When work stops, set hold with its kind and one-line reason, plus a reference or until date when relevant. A wait for a free worker slot is kind worker; resource means the machine is short of memory, disk or similar, named in note. Stop work while waiting, then clear or update the hold when work resumes. A bare blocked status remains accepted and reads as no reason given.",
     "Use steps for partial outcomes: each step has a stable id, human text, declared state, and optional pipeline, issue or PR reference; attach hold to an open step when it waits.",
     "`text` is written for the HUMAN who reviews the board: a title of 3 to 10 words on the first line, then at most a few plain sentences saying what the work has to achieve. A role name, a stage id, a prompt excerpt or a state dump is not a title.",
     "Everything an AGENT needs and the operator does not (the prompt, the working context, the rules, the ids, the file fences, a state card) goes in `details`, condensed. The card and the task's opened view show it behind one collapsed Details row, so long agent text costs the operator one line instead of the whole description.",
@@ -3123,7 +3123,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   update_task: [
     "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record.",
     "Update a durable board task. Orchestrators and stage agents: set note whenever the situation changes — why it is parked, what or whom it waits for, or what runs now. Keep it current in one or two short plain sentences in the operator's language (at most 280 characters). A write replaces it; null clears it.",
-    "When work stops, set hold with its kind and one-line reason, plus a reference or until date when relevant. Stop work while waiting, then clear or update the hold when work resumes. A bare blocked status remains accepted and reads as no reason given.",
+    "When work stops, set hold with its kind and one-line reason, plus a reference or until date when relevant. A wait for a free worker slot is kind worker; resource means the machine is short of memory, disk or similar, named in note. Stop work while waiting, then clear or update the hold when work resumes. A bare blocked status remains accepted and reads as no reason given.",
     "Use steps for partial outcomes: each step has a stable id, human text, declared state, and optional pipeline, issue or PR reference; attach hold to an open step when it waits.",
     "`text` and `details` are separate fields: an update carrying only `details` leaves `text` untouched, and the reverse. `text` stays the human title and description; agent context goes in `details`, and null or an empty string clears it.",
     "`refine` writes only the human part, as it always has. `text` and `refine.text` are written in the operator's interface language; another language is stored with a warning.",
@@ -3443,7 +3443,7 @@ function boundedNumericInput(toolName: McpToolName, fieldPath: string): z.ZodTyp
 }
 
 const taskHoldInputSchema = z.object({
-  kind: z.string().describe("Why work is waiting: operator, task, PR, issue, worker, resource, limit, postponed, external, or unstated. Unknown kinds normalize to unstated."),
+  kind: z.string().describe("Why work is waiting: operator, task, PR, issue, worker, resource, limit, postponed, external, or unstated. worker is a wait for a free worker slot: a worker cap, a launch not admitted yet, or capacity another lane will free; use it for every slot wait. resource is a shortage on the machine such as memory or disk; say which one in note, since the card shows it. limit is an account usage limit, with until. Unknown kinds normalize to unstated."),
   ref: z.union([z.string(), z.number().int().positive()]).optional().describe("Task id, PR or issue number, or external URL when the kind uses a reference."),
   note: z.string().optional().describe("One short sentence saying what ends the wait; whitespace is normalized and text clamps to 200 characters. Omitted when no reason is known."),
   until: z.string().optional().describe("ISO date for limit or postponed waits."),
