@@ -1614,6 +1614,7 @@ export const en = {
   "proto.round": "Round {n}",
   "proto.round.decided": "decided",
   "proto.round.waiting": "waits for a choice",
+  "proto.round.speaking": "Another round opens once the dictation has landed in this one",
   "proto.choose": "Choose variant {variant}",
   "proto.unchoose": "Take variant {variant} out of the choice",
   "proto.chooseHint": "Choose or take out: key {n}",

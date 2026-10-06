@@ -17963,7 +17963,8 @@ describe("prototype review on a task: the card's button, the review and the orch
    * four, an original beside its change, a video, forty pictures in one
    * variant, a combination chosen with a dictated comment, the saved decision
    * and the earlier round; a name of 60 characters with a caption of 200 read
-   * in full, and a close while speech is still transcribed asks first. Measured at 1440, 1000 and 390, in English and
+   * in full, and a close while speech is still transcribed asks first; speech
+   * started in one round stays in it while another round is pressed. Measured at 1440, 1000 and 390, in English and
    * Ukrainian, light and dark: nothing overlaps and nothing leaves its frame.
    * A card that waits on its prototype says so in drawn words at every desktop
    * width and on the phone's board, the line over the picture parts the variant's name from the caption,
@@ -18652,7 +18653,56 @@ describe("prototype review on a task: the card's button, the review and the orch
           const earlier = await stageState();
           record("rounds", { newer: newer.round, earlier: earlier.round, earlierChosen: earlier.chosen });
           if (newer.round !== "r-links-2" || earlier.round !== "r-links-1" || JSON.stringify(earlier.chosen) !== JSON.stringify(["1"])) failures.push(`${label}: the rounds read ${JSON.stringify({ newer: newer.round, earlier: earlier.round, chosen: earlier.chosen })}`);
-          await closeReview();
+
+          /* 12a. Speech belongs to the round it was started in: while it is
+             recorded and transcribed the other round does not open, and the
+             words land in the waiting round only. */
+          await page.locator('[data-prototype-round="r-links-2"]').click();
+          await page.waitForSelector(`${scope} [data-prototype-decide="r-links-2"]`, { timeout: 5_000 });
+          await page.evaluate(() => { (window as unknown as { protoTranscribeDelay: number }).protoTranscribeDelay = 2_000; });
+          await page.locator(`${scope} button[aria-label="${tr("mic.dictate")}"]`).click();
+          const stopPinned = page.locator(`${scope} button[aria-label="${tr("mic.stopRecognize")}"]`);
+          await stopPinned.waitFor({ timeout: 10_000 });
+          await page.waitForTimeout(1_200);
+          /* A press the way the operator makes it: a click on the tab's middle, through anything drawn over it. */
+          const tryEarlier = () => page.evaluate(() => {
+            const tab = document.querySelector<HTMLButtonElement>('[data-prototype-round="r-links-1"]')!;
+            const box = tab.getBoundingClientRect();
+            const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+            (hit instanceof HTMLElement ? hit : tab).click();
+            return { disabled: tab.disabled, title: tab.title };
+          });
+          const duringRecording = await tryEarlier();
+          await settle();
+          const shownRecording = (await stageState()).round;
+          await shot("dictating-round-pinned");
+          await frameCheck("dictating-round-pinned");
+          if (shownRecording !== "r-links-2") {
+            failures.push(`${label}: pressing the earlier round while speech was recorded showed ${shownRecording}`);
+            await page.locator('[data-prototype-round="r-links-2"]').click();
+          }
+          await stopPinned.click();
+          await stopPinned.waitFor({ state: "detached", timeout: 5_000 });
+          const duringTranscription = await tryEarlier();
+          await settle();
+          const shownTranscribing = (await stageState()).round;
+          const pinnedWords = lang === "en" ? "Take the header from the two columns and keep the dense rows of the table." : "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.";
+          const landed = await page.waitForFunction((text) => document.querySelector<HTMLTextAreaElement>("[data-prototype-comment-field]")?.value === text, pinnedWords, { timeout: 10_000 }).then(() => true, () => false);
+          await page.evaluate(() => { (window as unknown as { protoTranscribeDelay: number }).protoTranscribeDelay = 0; });
+          await page.locator('[data-prototype-round="r-links-1"]').click();
+          await page.waitForSelector(`${scope} [data-prototype-decision="r-links-1"]`, { timeout: 5_000 });
+          const earlierComment = await page.locator(`${scope} [data-prototype-decision] [data-prototype-comment]`).textContent().catch(() => null);
+          await page.locator('[data-prototype-round="r-links-2"]').click();
+          await page.waitForSelector(`${scope} [data-prototype-decide="r-links-2"]`, { timeout: 5_000 });
+          const keptInWaiting = await page.locator("[data-prototype-comment-field]").inputValue();
+          const pinned = { duringRecording, shownRecording, duringTranscription, shownTranscribing, landed, earlierComment, keptInWaiting, linksPosts: (await posts()).filter((post) => post.taskId === "t-links").length };
+          record("dictation-round-pinned", pinned);
+          if (!duringRecording.disabled || !duringTranscription.disabled || duringRecording.title !== tr("proto.round.speaking") || shownRecording !== "r-links-2" || shownTranscribing !== "r-links-2" || !landed || earlierComment?.includes(pinnedWords) || keptInWaiting !== pinnedWords || pinned.linksPosts !== 0) failures.push(`${label}: speech left the round it was started in: ${JSON.stringify(pinned)}`);
+          /* The dictated comment is unsaved: closing asks, and discarding closes. */
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("[data-prototype-guard]", { timeout: 5_000 });
+          await page.locator("[data-prototype-guard-discard]").click();
+          await page.waitForSelector(REVIEW, { state: "detached", timeout: 5_000 });
           if (size.phone) { await page.goBack(); await page.waitForTimeout(400); }
 
           /* 13. Files no longer readable: the variants and the decision stay. */

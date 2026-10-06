@@ -257,3 +257,75 @@ for (const state of ["no-orchestrator", "failed", "uncertain"] as const) {
     expect(said.contains(line.querySelector("[data-prototype-retry]"))).toBe(false);
   });
 }
+
+/* Two rounds of one task that both wait, the older first. */
+function twoRounds(): PrototypeReviewRead {
+  const read = reviewRead();
+  const older = { ...read.rounds[0]!, id: `pr_${"b".repeat(32)}`, title: "Older layout", createdAt: "2026-10-06T09:00:00.000Z" };
+  return { ...read, rounds: [older, read.rounds[0]!] };
+}
+const commentField = () => document.querySelector<HTMLTextAreaElement>("[data-prototype-comment-field]")!;
+const shownRound = () => document.querySelector<HTMLElement>("[data-prototype-round][aria-pressed=true]")?.dataset.prototypeRound ?? null;
+
+test("speech belongs to the round it was started in: another round cannot be opened until the words land, and they land in that round only", async () => {
+  const [older, newer] = twoRounds().rounds.map((entry) => entry.id) as [string, string];
+  const posted: Array<{ reviewId: string; chosen: number[]; comment: string }> = [];
+  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+    if (init?.method === "POST") posted.push(JSON.parse(String(init.body)));
+    return new Response(JSON.stringify(twoRounds()), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  const host = dom.document.createElement("div") as unknown as HTMLElement;
+  dom.document.body.appendChild(host as never);
+  root = createRoot(host);
+  await act(async () => { root!.render(<PrototypeReview taskId="task-1" reviewId={null} taskTitle="Layout task" onClose={() => {}} />); });
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+  await act(async () => { document.querySelector<HTMLElement>(`[data-prototype-round="${older}"]`)!.click(); });
+  expect(shownRound()).toBe(older);
+  for (const phase of ["starting", "rec", "busy"] as const) {
+    heldPhase = phase;
+    await act(async () => { root!.render(<PrototypeReview taskId="task-1" reviewId={null} taskTitle={`Layout task ${phase}`} onClose={() => {}} />); });
+    const other = document.querySelector<HTMLButtonElement>(`[data-prototype-round="${newer}"]`)!;
+    await act(async () => { other.click(); });
+    expect([phase, shownRound(), other.disabled]).toEqual([phase, older, true]);
+  }
+  /* The recording ends and its words come back. */
+  heldPhase = null;
+  await act(async () => { dictationOptions!.onUnclaimedText("Keep the older header."); await new Promise((resolve) => setTimeout(resolve, 20)); });
+  expect(shownRound()).toBe(older);
+  expect(commentField().value).toBe("Keep the older header.");
+  await act(async () => { document.querySelector<HTMLElement>(`[data-prototype-round="${newer}"]`)!.click(); });
+  expect(shownRound()).toBe(newer);
+  expect(commentField().value).toBe("");
+  await act(async () => { document.querySelector<HTMLElement>('[data-prototype-choose="2"]')!.click(); });
+  await act(async () => { document.querySelector<HTMLElement>("[data-prototype-save]")!.click(); await new Promise((resolve) => setTimeout(resolve, 20)); });
+  expect(posted).toEqual([{ reviewId: newer, chosen: [2], comment: "" }]);
+  await act(async () => { document.querySelector<HTMLElement>(`[data-prototype-round="${older}"]`)!.click(); });
+  expect(commentField().value).toBe("Keep the older header.");
+});
+
+test("a round published while speech is recorded leaves the speech, and the stage, in the round where it started", async () => {
+  const read = twoRounds();
+  const [older, newer] = read.rounds.map((entry) => entry.id) as [string, string];
+  let answer: PrototypeReviewRead = { ...read, rounds: [read.rounds[0]!], waitingReviewId: older };
+  globalThis.fetch = (async () => new Response(JSON.stringify(answer), { status: 200, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
+  const host = dom.document.createElement("div") as unknown as HTMLElement;
+  dom.document.body.appendChild(host as never);
+  root = createRoot(host);
+  await act(async () => { root!.render(<PrototypeReview taskId="task-1" reviewId={null} taskTitle="Layout task" onClose={() => {}} />); });
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+  /* The press on the microphone: this DOM has no microphone, so the phase is held from here. */
+  await act(async () => { document.querySelector<HTMLElement>('[aria-label="Dictate"]')!.click(); await new Promise((resolve) => setTimeout(resolve, 20)); });
+  heldPhase = "rec";
+  await act(async () => { root!.render(<PrototypeReview taskId="task-1" reviewId={null} taskTitle="Layout task rec" onClose={() => {}} />); });
+  answer = read;
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 2_200)); });
+  expect(document.querySelector(`[data-prototype-round="${newer}"]`)).not.toBeNull();
+  expect(shownRound()).toBe(older);
+  await act(async () => { dictationOptions!.onLiveCommit("Older words."); await new Promise((resolve) => setTimeout(resolve, 20)); });
+  heldPhase = null;
+  await act(async () => { root!.render(<PrototypeReview taskId="task-1" reviewId={null} taskTitle="Layout task idle" onClose={() => {}} />); });
+  expect(shownRound()).toBe(older);
+  expect(commentField().value).toBe("Older words.");
+  await act(async () => { document.querySelector<HTMLElement>(`[data-prototype-round="${newer}"]`)!.click(); });
+  expect(commentField().value).toBe("");
+});

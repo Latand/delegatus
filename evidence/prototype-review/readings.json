@@ -733,7 +733,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/6/2026, 9:00:00 PM",
+      "time": "10/6/2026, 9:58:10 PM",
       "posts": [
         {
           "taskId": "t-search",
@@ -1100,6 +1100,59 @@
       "earlierChosen": [
         "1"
       ]
+    },
+    "desktop-1440-en-light-dictating-round-pinned-geometry": {
+      "regions": {
+        "header": [
+          101,
+          55,
+          1238,
+          57
+        ],
+        "rail": [
+          101,
+          112,
+          264,
+          573.5
+        ],
+        "toolbar": [
+          365,
+          112,
+          974,
+          48
+        ],
+        "canvas": [
+          365,
+          160,
+          974,
+          525.5
+        ],
+        "footer": [
+          101,
+          685.5,
+          1238,
+          159.5
+        ]
+      },
+      "overlaps": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "desktop-1440-en-light-dictation-round-pinned": {
+      "duringRecording": {
+        "disabled": true,
+        "title": "Another round opens once the dictation has landed in this one"
+      },
+      "shownRecording": "r-links-2",
+      "duringTranscription": {
+        "disabled": true,
+        "title": "Another round opens once the dictation has landed in this one"
+      },
+      "shownTranscribing": "r-links-2",
+      "landed": true,
+      "earlierComment": "Arrows, but smaller.",
+      "keptInWaiting": "Take the header from the two columns and keep the dense rows of the table.",
+      "linksPosts": 0
     },
     "desktop-1440-en-light-files-gone-geometry": {
       "regions": {
@@ -2012,7 +2065,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/6/2026, 9:00:18 PM",
+      "time": "10/6/2026, 9:58:31 PM",
       "posts": [
         {
           "taskId": "t-search",
@@ -2379,6 +2432,59 @@
       "earlierChosen": [
         "1"
       ]
+    },
+    "desktop-1440-en-dark-dictating-round-pinned-geometry": {
+      "regions": {
+        "header": [
+          101,
+          55,
+          1238,
+          57
+        ],
+        "rail": [
+          101,
+          112,
+          264,
+          573.5
+        ],
+        "toolbar": [
+          365,
+          112,
+          974,
+          48
+        ],
+        "canvas": [
+          365,
+          160,
+          974,
+          525.5
+        ],
+        "footer": [
+          101,
+          685.5,
+          1238,
+          159.5
+        ]
+      },
+      "overlaps": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "desktop-1440-en-dark-dictation-round-pinned": {
+      "duringRecording": {
+        "disabled": true,
+        "title": "Another round opens once the dictation has landed in this one"
+      },
+      "shownRecording": "r-links-2",
+      "duringTranscription": {
+        "disabled": true,
+        "title": "Another round opens once the dictation has landed in this one"
+      },
+      "shownTranscribing": "r-links-2",
+      "landed": true,
+      "earlierComment": "Arrows, but smaller.",
+      "keptInWaiting": "Take the header from the two columns and keep the dense rows of the table.",
+      "linksPosts": 0
     },
     "desktop-1440-en-dark-files-gone-geometry": {
       "regions": {
@@ -3291,7 +3397,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "06.10.2026, 21:00:36",
+      "time": "06.10.2026, 21:58:53",
       "posts": [
         {
           "taskId": "t-search",
@@ -3658,6 +3764,59 @@
       "earlierChosen": [
         "1"
       ]
+    },
+    "desktop-1440-uk-light-dictating-round-pinned-geometry": {
+      "regions": {
+        "header": [
+          101,
+          55,
+          1238,
+          57
+        ],
+        "rail": [
+          101,
+          112,
+          264,
+          573.5
+        ],
+        "toolbar": [
+          365,
+          112,
+          974,
+          48
+        ],
+        "canvas": [
+          365,
+          160,
+          974,
+          525.5
+        ],
+        "footer": [
+          101,
+          685.5,
+          1238,
+          159.5
+        ]
+      },
+      "overlaps": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "desktop-1440-uk-light-dictation-round-pinned": {
+      "duringRecording": {
+        "disabled": true,
+        "title": "Інший раунд відкриється, коли диктування ляже в цей"
+      },
+      "shownRecording": "r-links-2",
+      "duringTranscription": {
+        "disabled": true,
+        "title": "Інший раунд відкриється, коли диктування ляже в цей"
+      },
+      "shownTranscribing": "r-links-2",
+      "landed": true,
+      "earlierComment": "Стрілки, але менші.",
+      "keptInWaiting": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
+      "linksPosts": 0
     },
     "desktop-1440-uk-light-files-gone-geometry": {
       "regions": {
@@ -4570,7 +4729,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "06.10.2026, 21:00:56",
+      "time": "06.10.2026, 21:59:14",
       "posts": [
         {
           "taskId": "t-search",
@@ -4937,6 +5096,59 @@
       "earlierChosen": [
         "1"
       ]
+    },
+    "desktop-1440-uk-dark-dictating-round-pinned-geometry": {
+      "regions": {
+        "header": [
+          101,
+          55,
+          1238,
+          57
+        ],
+        "rail": [
+          101,
+          112,
+          264,
+          573.5
+        ],
+        "toolbar": [
+          365,
+          112,
+          974,
+          48
+        ],
+        "canvas": [
+          365,
+          160,
+          974,
+          525.5
+        ],
+        "footer": [
+          101,
+          685.5,
+          1238,
+          159.5
+        ]
+      },
+      "overlaps": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "desktop-1440-uk-dark-dictation-round-pinned": {
+      "duringRecording": {
+        "disabled": true,
+        "title": "Інший раунд відкриється, коли диктування ляже в цей"
+      },
+      "shownRecording": "r-links-2",
+      "duringTranscription": {
+        "disabled": true,
+        "title": "Інший раунд відкриється, коли диктування ляже в цей"
+      },
+      "shownTranscribing": "r-links-2",
+      "landed": true,
+      "earlierComment": "Стрілки, але менші.",
+      "keptInWaiting": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
+      "linksPosts": 0
     },
     "desktop-1440-uk-dark-files-gone-geometry": {
       "regions": {
@@ -5890,7 +6102,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/6/2026, 9:01:15 PM",
+      "time": "10/6/2026, 9:59:35 PM",
       "posts": [
         {
           "taskId": "t-search",
@@ -6257,6 +6469,59 @@
       "earlierChosen": [
         "1"
       ]
+    },
+    "pane-1000-en-light-dictating-round-pinned-geometry": {
+      "regions": {
+        "header": [
+          25,
+          43,
+          950,
+          57
+        ],
+        "rail": [
+          25,
+          100,
+          264,
+          397.5
+        ],
+        "toolbar": [
+          289,
+          100,
+          686,
+          48
+        ],
+        "canvas": [
+          289,
+          148,
+          686,
+          349.5
+        ],
+        "footer": [
+          25,
+          497.5,
+          950,
+          159.5
+        ]
+      },
+      "overlaps": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "pane-1000-en-light-dictation-round-pinned": {
+      "duringRecording": {
+        "disabled": true,
+        "title": "Another round opens once the dictation has landed in this one"
+      },
+      "shownRecording": "r-links-2",
+      "duringTranscription": {
+        "disabled": true,
+        "title": "Another round opens once the dictation has landed in this one"
+      },
+      "shownTranscribing": "r-links-2",
+      "landed": true,
+      "earlierComment": "Arrows, but smaller.",
+      "keptInWaiting": "Take the header from the two columns and keep the dense rows of the table.",
+      "linksPosts": 0
     },
     "pane-1000-en-light-files-gone-geometry": {
       "regions": {
@@ -7210,7 +7475,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/6/2026, 9:01:33 PM",
+      "time": "10/6/2026, 9:59:56 PM",
       "posts": [
         {
           "taskId": "t-search",
@@ -7577,6 +7842,59 @@
       "earlierChosen": [
         "1"
       ]
+    },
+    "pane-1000-en-dark-dictating-round-pinned-geometry": {
+      "regions": {
+        "header": [
+          25,
+          43,
+          950,
+          57
+        ],
+        "rail": [
+          25,
+          100,
+          264,
+          397.5
+        ],
+        "toolbar": [
+          289,
+          100,
+          686,
+          48
+        ],
+        "canvas": [
+          289,
+          148,
+          686,
+          349.5
+        ],
+        "footer": [
+          25,
+          497.5,
+          950,
+          159.5
+        ]
+      },
+      "overlaps": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "pane-1000-en-dark-dictation-round-pinned": {
+      "duringRecording": {
+        "disabled": true,
+        "title": "Another round opens once the dictation has landed in this one"
+      },
+      "shownRecording": "r-links-2",
+      "duringTranscription": {
+        "disabled": true,
+        "title": "Another round opens once the dictation has landed in this one"
+      },
+      "shownTranscribing": "r-links-2",
+      "landed": true,
+      "earlierComment": "Arrows, but smaller.",
+      "keptInWaiting": "Take the header from the two columns and keep the dense rows of the table.",
+      "linksPosts": 0
     },
     "pane-1000-en-dark-files-gone-geometry": {
       "regions": {
@@ -8530,7 +8848,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "06.10.2026, 21:01:50",
+      "time": "06.10.2026, 22:00:17",
       "posts": [
         {
           "taskId": "t-search",
@@ -8897,6 +9215,59 @@
       "earlierChosen": [
         "1"
       ]
+    },
+    "pane-1000-uk-light-dictating-round-pinned-geometry": {
+      "regions": {
+        "header": [
+          25,
+          43,
+          950,
+          57
+        ],
+        "rail": [
+          25,
+          100,
+          264,
+          397.5
+        ],
+        "toolbar": [
+          289,
+          100,
+          686,
+          48
+        ],
+        "canvas": [
+          289,
+          148,
+          686,
+          349.5
+        ],
+        "footer": [
+          25,
+          497.5,
+          950,
+          159.5
+        ]
+      },
+      "overlaps": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "pane-1000-uk-light-dictation-round-pinned": {
+      "duringRecording": {
+        "disabled": true,
+        "title": "Інший раунд відкриється, коли диктування ляже в цей"
+      },
+      "shownRecording": "r-links-2",
+      "duringTranscription": {
+        "disabled": true,
+        "title": "Інший раунд відкриється, коли диктування ляже в цей"
+      },
+      "shownTranscribing": "r-links-2",
+      "landed": true,
+      "earlierComment": "Стрілки, але менші.",
+      "keptInWaiting": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
+      "linksPosts": 0
     },
     "pane-1000-uk-light-files-gone-geometry": {
       "regions": {
@@ -9850,7 +10221,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "06.10.2026, 21:02:08",
+      "time": "06.10.2026, 22:00:38",
       "posts": [
         {
           "taskId": "t-search",
@@ -10217,6 +10588,59 @@
       "earlierChosen": [
         "1"
       ]
+    },
+    "pane-1000-uk-dark-dictating-round-pinned-geometry": {
+      "regions": {
+        "header": [
+          25,
+          43,
+          950,
+          57
+        ],
+        "rail": [
+          25,
+          100,
+          264,
+          397.5
+        ],
+        "toolbar": [
+          289,
+          100,
+          686,
+          48
+        ],
+        "canvas": [
+          289,
+          148,
+          686,
+          349.5
+        ],
+        "footer": [
+          25,
+          497.5,
+          950,
+          159.5
+        ]
+      },
+      "overlaps": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "pane-1000-uk-dark-dictation-round-pinned": {
+      "duringRecording": {
+        "disabled": true,
+        "title": "Інший раунд відкриється, коли диктування ляже в цей"
+      },
+      "shownRecording": "r-links-2",
+      "duringTranscription": {
+        "disabled": true,
+        "title": "Інший раунд відкриється, коли диктування ляже в цей"
+      },
+      "shownTranscribing": "r-links-2",
+      "landed": true,
+      "earlierComment": "Стрілки, але менші.",
+      "keptInWaiting": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
+      "linksPosts": 0
     },
     "pane-1000-uk-dark-files-gone-geometry": {
       "regions": {
@@ -11018,7 +11442,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/6/2026, 9:02:25 PM",
+      "time": "10/6/2026, 10:00:58 PM",
       "posts": [
         {
           "taskId": "t-search",
@@ -11313,6 +11737,47 @@
       "earlierChosen": [
         "1"
       ]
+    },
+    "phone-390-en-light-dictating-round-pinned-geometry": {
+      "regions": {
+        "header": [
+          0,
+          115.3,
+          390,
+          48
+        ],
+        "body": [
+          0,
+          163.3,
+          390,
+          468.7
+        ],
+        "footer": [
+          0,
+          632,
+          390,
+          206
+        ]
+      },
+      "overlaps": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "phone-390-en-light-dictation-round-pinned": {
+      "duringRecording": {
+        "disabled": true,
+        "title": "Another round opens once the dictation has landed in this one"
+      },
+      "shownRecording": "r-links-2",
+      "duringTranscription": {
+        "disabled": true,
+        "title": "Another round opens once the dictation has landed in this one"
+      },
+      "shownTranscribing": "r-links-2",
+      "landed": true,
+      "earlierComment": "Arrows, but smaller.",
+      "keptInWaiting": "Take the header from the two columns and keep the dense rows of the table.",
+      "linksPosts": 0
     },
     "phone-390-en-light-files-gone-geometry": {
       "regions": {
@@ -12078,7 +12543,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/6/2026, 9:02:43 PM",
+      "time": "10/6/2026, 10:01:20 PM",
       "posts": [
         {
           "taskId": "t-search",
@@ -12373,6 +12838,47 @@
       "earlierChosen": [
         "1"
       ]
+    },
+    "phone-390-en-dark-dictating-round-pinned-geometry": {
+      "regions": {
+        "header": [
+          0,
+          115.3,
+          390,
+          48
+        ],
+        "body": [
+          0,
+          163.3,
+          390,
+          468.7
+        ],
+        "footer": [
+          0,
+          632,
+          390,
+          206
+        ]
+      },
+      "overlaps": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "phone-390-en-dark-dictation-round-pinned": {
+      "duringRecording": {
+        "disabled": true,
+        "title": "Another round opens once the dictation has landed in this one"
+      },
+      "shownRecording": "r-links-2",
+      "duringTranscription": {
+        "disabled": true,
+        "title": "Another round opens once the dictation has landed in this one"
+      },
+      "shownTranscribing": "r-links-2",
+      "landed": true,
+      "earlierComment": "Arrows, but smaller.",
+      "keptInWaiting": "Take the header from the two columns and keep the dense rows of the table.",
+      "linksPosts": 0
     },
     "phone-390-en-dark-files-gone-geometry": {
       "regions": {
@@ -13138,7 +13644,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "06.10.2026, 21:03:01",
+      "time": "06.10.2026, 22:01:42",
       "posts": [
         {
           "taskId": "t-search",
@@ -13433,6 +13939,47 @@
       "earlierChosen": [
         "1"
       ]
+    },
+    "phone-390-uk-light-dictating-round-pinned-geometry": {
+      "regions": {
+        "header": [
+          0,
+          115.3,
+          390,
+          48
+        ],
+        "body": [
+          0,
+          163.3,
+          390,
+          468.7
+        ],
+        "footer": [
+          0,
+          632,
+          390,
+          206
+        ]
+      },
+      "overlaps": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "phone-390-uk-light-dictation-round-pinned": {
+      "duringRecording": {
+        "disabled": true,
+        "title": "Інший раунд відкриється, коли диктування ляже в цей"
+      },
+      "shownRecording": "r-links-2",
+      "duringTranscription": {
+        "disabled": true,
+        "title": "Інший раунд відкриється, коли диктування ляже в цей"
+      },
+      "shownTranscribing": "r-links-2",
+      "landed": true,
+      "earlierComment": "Стрілки, але менші.",
+      "keptInWaiting": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
+      "linksPosts": 0
     },
     "phone-390-uk-light-files-gone-geometry": {
       "regions": {
@@ -14198,7 +14745,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "06.10.2026, 21:03:20",
+      "time": "06.10.2026, 22:02:04",
       "posts": [
         {
           "taskId": "t-search",
@@ -14493,6 +15040,47 @@
       "earlierChosen": [
         "1"
       ]
+    },
+    "phone-390-uk-dark-dictating-round-pinned-geometry": {
+      "regions": {
+        "header": [
+          0,
+          115.3,
+          390,
+          48
+        ],
+        "body": [
+          0,
+          163.3,
+          390,
+          468.7
+        ],
+        "footer": [
+          0,
+          632,
+          390,
+          206
+        ]
+      },
+      "overlaps": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "phone-390-uk-dark-dictation-round-pinned": {
+      "duringRecording": {
+        "disabled": true,
+        "title": "Інший раунд відкриється, коли диктування ляже в цей"
+      },
+      "shownRecording": "r-links-2",
+      "duringTranscription": {
+        "disabled": true,
+        "title": "Інший раунд відкриється, коли диктування ляже в цей"
+      },
+      "shownTranscribing": "r-links-2",
+      "landed": true,
+      "earlierComment": "Стрілки, але менші.",
+      "keptInWaiting": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
+      "linksPosts": 0
     },
     "phone-390-uk-dark-files-gone-geometry": {
       "regions": {

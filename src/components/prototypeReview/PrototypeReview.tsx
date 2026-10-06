@@ -138,9 +138,9 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
     if (round && !round.decision) markPrototypeReviewSeen(round.id);
   }, [round]);
 
-  const setDraft = useCallback((change: (held: Draft) => Draft) => {
-    if (!roundId) return;
-    setDrafts((held) => ({ ...held, [roundId]: change(held[roundId] ?? EMPTY_DRAFT) }));
+  const setDraft = useCallback((change: (held: Draft) => Draft, target: string | null = roundId) => {
+    if (!target) return;
+    setDrafts((held) => ({ ...held, [target]: change(held[target] ?? EMPTY_DRAFT) }));
   }, [roundId]);
   const toggle = useCallback((number: number) => {
     setDraft((held) => ({ ...held, chosen: held.chosen.includes(number) ? held.chosen.filter((own) => own !== number) : [...held.chosen, number].sort((a, b) => a - b) }));
@@ -152,9 +152,12 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
 
   /* The composer's dictation, as the composer wires it: a spoken segment is
      appended to what is typed, and the transcript in flight overlays the
-     field until it lands. */
+     field until it lands. Speech belongs to the round it was started in: the
+     press on the microphone pins that round on the stage, and every word that
+     comes back, live or after the recording, is written into its comment. */
+  const speechRound = useRef<string | null>(null);
   const insertSpoken = useCallback((spoken: string) => {
-    setDraft((held) => ({ ...held, comment: held.comment ? `${held.comment.trimEnd()} ${spoken}` : spoken }));
+    setDraft((held) => ({ ...held, comment: held.comment ? `${held.comment.trimEnd()} ${spoken}` : spoken }), speechRound.current ?? roundId);
     setVoiceError(null);
     requestAnimationFrame(() => {
       const element = field.current;
@@ -163,9 +166,17 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
       element.setSelectionRange(element.value.length, element.value.length);
       element.scrollTop = element.scrollHeight;
     });
-  }, [setDraft]);
+  }, [setDraft, roundId]);
   const dictation = useDictation({ onError: setVoiceError, onUnclaimedText: insertSpoken, onLiveCommit: insertSpoken });
+  const startSpeech = dictation.start;
+  const startDictation = useCallback(() => {
+    speechRound.current = roundId;
+    if (roundId) setPicked(roundId);
+    return startSpeech();
+  }, [roundId, startSpeech]);
   const recording = dictation.phase === "rec";
+  /* From the press to the last word landing, no other round can be opened. */
+  const speaking = dictation.phase !== "idle" || Boolean(dictation.liveText);
   const comment = dictation.liveText ? (draft.comment ? `${draft.comment.trimEnd()} ` : "") + dictation.liveText : draft.comment;
 
   /* Closing with a comment that was never saved asks first. Speech counts from
@@ -274,9 +285,10 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
           type="button"
           data-prototype-round={entry.id}
           aria-pressed={entry.id === roundId}
-          title={`${entry.title} · ${new Date(entry.createdAt).toLocaleString(locale)}`}
-          className="inline-flex h-7 shrink-0 items-center gap-1 rounded-full border border-border bg-canvas px-2.5 text-label font-semibold text-secondary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 aria-pressed:border-accent/50 aria-pressed:bg-accent-soft aria-pressed:text-accent [@media(pointer:coarse)]:h-9"
-          onClick={() => setPicked(entry.id)}
+          disabled={speaking && entry.id !== roundId}
+          title={speaking && entry.id !== roundId ? t("proto.round.speaking") : `${entry.title} · ${new Date(entry.createdAt).toLocaleString(locale)}`}
+          className="inline-flex h-7 shrink-0 items-center gap-1 rounded-full border border-border bg-canvas px-2.5 text-label font-semibold text-secondary enabled:hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50 aria-pressed:border-accent/50 aria-pressed:bg-accent-soft aria-pressed:text-accent [@media(pointer:coarse)]:h-9"
+          onClick={() => { if (!speaking) setPicked(entry.id); }}
         >
           {t("proto.round", { n: at + 1 })}
           {entry.decision ? <Check className="h-3 w-3" aria-label={t("proto.round.decided")} /> : <span className="h-1.5 w-1.5 rounded-full bg-accent" role="img" aria-label={t("proto.round.waiting")} />}
@@ -579,7 +591,7 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
             }}
           />
           <span className={recording ? "self-end" : "shrink-0"}>
-            <MicButtonView {...dictation} busy={review.saving} onText={insertSpoken} anchored />
+            <MicButtonView {...dictation} start={startDictation} busy={review.saving} onText={insertSpoken} anchored />
           </span>
         </div>
         <button type="button" className={PRIMARY} data-prototype-save="" disabled={!savable} onClick={() => void save()}>
