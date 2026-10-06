@@ -328,11 +328,44 @@ test.each(["merge-batch", "review-export", "attribution"])("a %s checkout inside
   expect(fs.readFileSync(path.join(checkout, "local-work.txt"), "utf8")).toBe("unpublished work");
 });
 
-test.each(["process", "activity", "parent-redirect", "replacement"])("temp cleanup retains %s acquired during measurement", async change => {
+test.each(["container", "inside-checkout", "aliased-container"])("a protected pipeline attributes %s temp allocations once", async layout => {
+  const root = tempRoot();
+  const container = aged(root, "llv-review-export", 3 * DAY);
+  const checkout = path.join(container, "checkout");
+  fs.mkdirSync(checkout);
+  fs.writeFileSync(path.join(checkout, "source.txt"), Buffer.alloc(262144, 1));
+  const log = path.join(container, "role.log");
+  fs.writeFileSync(log, Buffer.alloc(262144, 2));
+  let temp = root;
+  if (layout === "inside-checkout") {
+    temp = path.join(checkout, "scratch");
+    fs.mkdirSync(temp);
+    aged(temp, "llv-review-export", 3 * DAY);
+  }
+  const old = new Date(Date.now() - 3 * DAY);
+  for (const entry of [checkout, log, container]) fs.utimesSync(entry, old, old);
+  const owned = layout === "aliased-container" ? path.join(root, "checkout-alias") : checkout;
+  if (owned !== checkout) fs.symlinkSync(checkout, owned, "dir");
+  const report = await sweepStaleTempDirs({ maxAgeMs: DAY, roots: [{ path: temp, via: "" }],
+    scan: { ownNamespace: null, processes: [] }, worktrees: [owned], accountedWorktrees: [owned] });
+  const status = tempSweepStatus(report)!;
+  expect(report.removed).toEqual([]);
+  expect(report.held).toHaveLength(1);
+  const bytes = Object.values(status.heldBytes).reduce((sum, value) => sum + value, 0);
+  if (layout !== "inside-checkout") {
+    expect(bytes).toBeGreaterThanOrEqual(fs.statSync(log).blocks * 512);
+    expect(bytes).toBeLessThan(fs.statSync(path.join(checkout, "source.txt")).blocks * 512 + fs.statSync(log).blocks * 512);
+  } else expect(bytes).toBe(0);
+  expect(fs.existsSync(log)).toBeTrue();
+  expect(fs.existsSync(path.join(checkout, "source.txt"))).toBeTrue();
+});
+
+test.each(["process", "process-alias", "pipeline", "activity", "parent-redirect", "replacement"])("temp cleanup retains %s acquired during measurement", async change => {
   const root = tempRoot();
   const external = tempRoot();
   const directory = aged(root, "llv-late-owner", 3 * DAY);
   const scan: ProcessScan = { ownNamespace: null, processes: [] };
+  let worktrees: string[] = [];
   const original = fs.promises.readdir;
   let injected = false;
   const read = spyOn(fs.promises, "readdir").mockImplementation((async (...args: Parameters<typeof fs.promises.readdir>) => {
@@ -340,6 +373,12 @@ test.each(["process", "activity", "parent-redirect", "replacement"])("temp clean
     if (String(args[0]) === directory && !injected) {
       injected = true;
       if (change === "process") scan.processes.push({ pid: 456789, namespace: null, stamped: true, paths: [path.join(directory, "file.txt")] });
+      else if (change === "process-alias") {
+        const alias = path.join(external, "active-alias");
+        fs.symlinkSync(directory, alias, "dir");
+        scan.processes.push({ pid: 456789, namespace: null, stamped: true, paths: [path.join(alias, "pending")] });
+      }
+      else if (change === "pipeline") worktrees = [directory];
       else if (change === "activity") fs.writeFileSync(path.join(directory, "new.txt"), "new output");
       else if (change === "parent-redirect") {
         fs.renameSync(root, path.join(external, "original"));
@@ -356,11 +395,12 @@ test.each(["process", "activity", "parent-redirect", "replacement"])("temp clean
     return entries;
   }) as typeof fs.promises.readdir);
   try {
-    const report = await sweepStaleTempDirs({ roots: [{ path: root, via: "" }], scan, maxAgeMs: DAY });
+    const report = await sweepStaleTempDirs({ roots: [{ path: root, via: "" }], scan, currentWorktrees: () => worktrees, maxAgeMs: DAY });
     expect(injected).toBeTrue();
     expect(report.removed).toEqual([]);
     expect(fs.existsSync(path.join(directory, "file.txt"))).toBeTrue();
-    if (change === "process") expect(report.kept.inUse).toBe(1);
+    if (change === "process" || change === "process-alias") expect(report.kept.inUse).toBe(1);
+    if (change === "pipeline") expect(report.kept.worktree).toBe(1);
     if (change === "activity") {
       expect(report.kept.young).toBe(1);
       expect(fs.readFileSync(path.join(directory, "new.txt"), "utf8")).toBe("new output");

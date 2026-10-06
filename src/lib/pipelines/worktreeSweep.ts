@@ -8,7 +8,7 @@ import type { ForgeCacheFile } from "@/lib/forge/cache";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { githubRunner, type GithubRunner } from "@/lib/monitor/githubEvidence";
 import { writeJsonDurably } from "@/lib/state/durableJson";
-import { containsGitCheckout, isOwnedTempName, ownTempRoots, scanProcesses, sweepRoots, type ProcessScan, type TempSweepRoot } from "@/lib/tempSweep";
+import { containsGitCheckout, isOwnedTempName, ownTempRoots, resolvePhysicalPath, scanProcesses, sweepRoots, type ProcessScan, type TempSweepRoot } from "@/lib/tempSweep";
 import type { ExecResult } from "@/lib/workflows/provision";
 
 import { pipelineActivitySettled, type Pipeline } from "./types";
@@ -720,36 +720,46 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
   const previouslyKept = new Map((ports.previous?.kept ?? []).map(kept => [kept.path, kept] as const));
   const tempRoots = (ports.tempRoots ?? []).filter(Boolean).map((root) => path.resolve(root));
   const resolve = (entry: string) => path.resolve(entry);
+  const physical = (entry: string) => resolvePhysicalPath(accessible(entry));
+  const paths = (entries: readonly string[]) => [...new Set([...new Set(entries)].flatMap(entry => [resolve(entry), physical(entry)]))];
   const currentPipelines = ports.currentPipelines ?? (() => ports.pipelines);
   // The live list omits archived lanes. Preserve their settled ownership,
   // letting fresh live entries override the initial snapshot by id.
   const ownershipPipelines = () => [...new Map([...ports.pipelines, ...currentPipelines()].map((pipeline) => [pipeline.id, pipeline])).values()];
   /** What a live pipeline, process or conversation holds right now. An open
       pipeline needs its own checkout and the repository it runs git in. */
-  const readGuards = () => ({
-    open: ownershipPipelines().filter(pipelineHoldsCheckout)
-      .flatMap((pipeline) => [pipeline.worktreeDir, pipeline.repoDir].filter(Boolean).map(resolve)),
-    conversations: ports.conversationCwds().map(resolve),
-    scan: ports.scan(),
-  });
+  const readGuards = () => {
+    const scan = ports.scan();
+    return {
+      open: paths(ownershipPipelines().filter(pipelineHoldsCheckout)
+        .flatMap(pipeline => [pipeline.worktreeDir, pipeline.repoDir].filter(Boolean))),
+      conversations: paths(ports.conversationCwds()),
+      scan: { ...scan, processes: scan.processes.map(process => ({ ...process, paths: paths(process.paths) })) },
+    };
+  };
   const heldBy = (guards: ReturnType<typeof readGuards>, directory: string, branch: string | null = null): WorktreeKept | null => {
-    if (guards.open.some((open) => inside(open, directory))) return { path: directory, reason: "open-pipeline" };
+    const destinations = paths([directory]);
+    const holds = (candidate: string) => destinations.some(destination => inside(candidate, destination));
+    if (guards.open.some(holds)) return { path: directory, reason: "open-pipeline" };
     const batch = mergeBatchOwnership(directory, branch, guards.scan, accessible);
     if (batch.hold) return { path: directory, reason: "in-use", detail: batch.hold };
     for (const process of guards.scan.processes) {
-      if (process.paths.some((entry) => inside(resolve(entry), directory))) return { path: directory, reason: "in-use", detail: `pid ${process.pid}` };
+      if (process.paths.some(holds)) return { path: directory, reason: "in-use", detail: `pid ${process.pid}` };
     }
-    if (guards.conversations.some((cwd) => inside(cwd, directory))) return { path: directory, reason: "live-conversation" };
+    if (guards.conversations.some(holds)) return { path: directory, reason: "live-conversation" };
     return null;
   };
   /* The first read skips what is plainly busy; each removal reads them again. */
   const initial = readGuards();
   const ownersAtStart = ownershipPipelines();
-  const ownersOf = (pipelines: readonly SweptPipeline[], worktree: string) =>
-    pipelines.filter((pipeline) => pipeline.worktreeDir && resolve(pipeline.worktreeDir) === worktree);
+  const ownersOf = (pipelines: readonly SweptPipeline[], worktree: string) => {
+    const target = physical(worktree);
+    return pipelines.filter(pipeline => pipeline.worktreeDir && (resolve(pipeline.worktreeDir) === worktree
+      || physical(pipeline.worktreeDir) === target));
+  };
 
   /* A project registered at a linked checkout, or inside one, is its root. */
-  const projectRoots = (ports.repositories ?? []).filter(Boolean).map(resolve);
+  const projectRoots = paths((ports.repositories ?? []).filter(Boolean));
   const roots = new Map<string, string>();
   for (const candidate of [...ports.pipelines.map((pipeline) => pipeline.repoDir), ...(ports.repositories ?? [])]) {
     if (!candidate || !fs.existsSync(candidate)) continue;
@@ -946,7 +956,8 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
         keep({ ...busyNow, ...base });
         continue;
       }
-      if (!dryRun && !ports.recordResolution(worktree)) {
+      const resolutionPaths = [...new Set([worktree, ...ownersOf(ownershipPipelines(), worktree).map(owner => owner.worktreeDir).filter(Boolean)])];
+      if (!dryRun && resolutionPaths.some(directory => !ports.recordResolution(directory))) {
         keep({ ...base, reason: "map-write-failed" });
         continue;
       }

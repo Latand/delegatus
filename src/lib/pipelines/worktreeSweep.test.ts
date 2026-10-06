@@ -939,6 +939,72 @@ test("a settled lane created from a linked checkout trims its own cache", async 
 
 const RETAIN_NOW = Date.parse("2026-10-06T12:00:00Z");
 const OLD_TERMINAL = new Date(RETAIN_NOW - FINISHED_WORKTREE_RETENTION_MS - 1).toISOString();
+test.each(["conversation", "process", "pipeline"])("a %s holding a symlink cwd preserves its physical checkout and branch", async guard => {
+  const root = repository(); remoteRepository(root);
+  const dir = path.join(caseDir, "alias-checkout");
+  const branch = "topic/alias-guard";
+  git(["worktree", "add", "-q", "-b", branch, dir, "main"], root);
+  const alias = path.join(caseDir, "checkout-alias");
+  fs.symlinkSync(dir, alias, "dir");
+  const cwd = path.join(alias, "pending-directory");
+  const owner = pipeline({ repoDir: root, worktreeDir: dir, branch, baseRef: git(["rev-parse", "HEAD"], dir), closedAt: OLD_TERMINAL });
+  const queued = () => liveOrWaitingConversationCwds({ heldDeliveries: { delivery: { state: "held", conversationId: "queued" } },
+    conversations: { queued: { generations: [{ launchProfile: { cwd } }] } } });
+  const report = await sweepMergedWorktrees(ports({ pipelines: [owner, ...(guard === "pipeline"
+    ? [pipeline({ id: "open-alias", repoDir: root, worktreeDir: alias, branch, state: "running" })] : [])],
+    conversationCwds: guard === "conversation" ? queued : () => [],
+    scan: () => guard === "process" ? { ownNamespace: null, processes: [{ pid: 456789, namespace: null, stamped: true, paths: [cwd] }] } : NO_PROCESSES,
+    now: () => RETAIN_NOW }));
+  expect(report.removed).toEqual([]);
+  expect(report.kept[0]!.reason).toBe(guard === "conversation" ? "live-conversation" : guard === "process" ? "in-use" : "open-pipeline");
+  expect(fs.existsSync(path.join(dir, "README.md"))).toBeTrue();
+  expect(branchExists(root, branch)).toBeTrue();
+});
+
+test("a conversation acquiring a symlink cwd during measurement preserves the checkout", async () => {
+  const root = repository(); remoteRepository(root);
+  const dir = path.join(caseDir, "late-alias");
+  git(["worktree", "add", "-q", "-b", "topic/late-alias", dir, "main"], root);
+  const alias = path.join(caseDir, "cwd-alias");
+  fs.symlinkSync(dir, alias, "dir");
+  let conversations: string[] = [];
+  const owner = pipeline({ repoDir: root, worktreeDir: dir, branch: "topic/late-alias", baseRef: git(["rev-parse", "HEAD"], dir), closedAt: OLD_TERMINAL });
+  const report = await sweepMergedWorktrees(ports({ pipelines: [owner], conversationCwds: () => conversations,
+    now: () => RETAIN_NOW, measure: async () => { conversations = [alias]; return 1; } }));
+  expect(report.removed).toEqual([]);
+  expect(report.kept[0]!.reason).toBe("live-conversation");
+  expect(fs.existsSync(dir)).toBeTrue();
+});
+
+test("a finished owner recorded through a symlink releases its physical checkout after retention", async () => {
+  const root = repository(); remoteRepository(root);
+  const dir = path.join(caseDir, "finished-alias");
+  git(["worktree", "add", "-q", "-b", "topic/finished-alias", dir, "main"], root);
+  const alias = path.join(caseDir, "owner-alias");
+  fs.symlinkSync(dir, alias, "dir");
+  const owner = pipeline({ repoDir: root, worktreeDir: alias, branch: "topic/finished-alias", baseRef: git(["rev-parse", "HEAD"], dir), closedAt: OLD_TERMINAL });
+  const parentProject = projectForCwd(root);
+  const report = await sweepMergedWorktrees(ports({ pipelines: [owner], now: () => RETAIN_NOW }));
+  expect(report.removed).toHaveLength(1);
+  expect(report.removed[0]!.pipelineId).toBe(owner.id);
+  expect(fs.existsSync(dir)).toBeFalse();
+  globalCache("project-info-cwd-v2").clear();
+  globalCache("worktree-git").clear();
+  expect(projectForCwd(alias)).toBe(parentProject);
+});
+
+test("a project registered through a symlink retains its physical root checkout", async () => {
+  const root = repository(); remoteRepository(root);
+  const dir = path.join(caseDir, "project-alias");
+  git(["worktree", "add", "-q", "-b", "topic/project-alias", dir, "main"], root);
+  const alias = path.join(caseDir, "project-root-alias");
+  fs.symlinkSync(dir, alias, "dir");
+  const owner = pipeline({ repoDir: root, worktreeDir: dir, branch: "topic/project-alias", baseRef: git(["rev-parse", "HEAD"], dir), closedAt: OLD_TERMINAL });
+  const report = await sweepMergedWorktrees(ports({ pipelines: [owner], repositories: [root, alias], now: () => RETAIN_NOW }));
+  expect(report.removed).toEqual([]);
+  expect(fs.existsSync(dir)).toBeTrue();
+});
+
 function remoteRepository(root: string): string {
   const remote = path.join(caseDir, "remote.git");
   fs.mkdirSync(remote);

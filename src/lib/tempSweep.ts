@@ -185,6 +185,22 @@ function realDirectory(candidate: string | undefined): string | null {
   }
 }
 
+/** Resolve aliases even when a queued cwd or temp path has a missing suffix. */
+export function resolvePhysicalPath(candidate: string): string {
+  const original = path.resolve(candidate);
+  let current = original;
+  const suffix: string[] = [];
+  for (;;) {
+    try { return path.join(fs.realpathSync(current), ...suffix); }
+    catch {
+      const parent = path.dirname(current);
+      if (parent === current) return original;
+      suffix.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
 export function ownTempRoots(env: NodeJS.ProcessEnv = process.env): string[] {
   const roots = [os.tmpdir(), env.TMPDIR, "/tmp", "/var/tmp"].map(realDirectory);
   return [...new Set(roots.filter((root): root is string => root !== null && root !== "/"))];
@@ -250,6 +266,8 @@ export type TempSweepOptions = {
   scan?: ProcessScan;
   /** Pipeline worktrees; never removed, nor any directory holding one. */
   worktrees?: string[];
+  /** Refresh pipeline ownership after asynchronous measurements. */
+  currentWorktrees?: () => readonly string[];
   /** Retained checkouts already attributed by the worktree sweep report. */
   accountedWorktrees?: string[];
   procRoot?: string;
@@ -279,15 +297,21 @@ function newestMtimeMs(directory: string, own: fs.Stats): number {
 async function measureBytes(directory: string, seen = new Set<string>(), includeRoot = false, excluded: readonly string[] = []): Promise<number> {
   let bytes = 0;
   const excludedDirectories = new Set<string>();
+  const excludedPaths: string[] = [];
   for (const candidate of excluded) {
     try {
       const stat = fs.statSync(candidate);
-      if (stat.isDirectory()) excludedDirectories.add(`${stat.dev}:${stat.ino}`);
+      if (stat.isDirectory()) {
+        excludedDirectories.add(`${stat.dev}:${stat.ino}`);
+        excludedPaths.push(fs.realpathSync(candidate));
+      }
     } catch { /* An absent checkout has no overlapping allocation. */ }
   }
   try {
     const stat = await fs.promises.stat(directory);
     const identity = `${stat.dev}:${stat.ino}`;
+    const physical = fs.realpathSync(directory);
+    if (excludedPaths.some(excluded => physical.startsWith(excluded + path.sep))) return 0;
     if (seen.has(identity)) return 0;
     seen.add(identity);
     if (includeRoot) bytes += stat.blocks * 512;
@@ -378,7 +402,8 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
   const scan = readScan();
   const roots = options.roots ?? sweepRoots(scan, ownTempRoots(), procRoot);
   const inUse = scan.processes.flatMap((process) => process.paths.map((entry) => path.resolve(entry)));
-  const worktrees = (options.worktrees ?? []).map((entry) => path.resolve(entry));
+  const readWorktrees = () => (options.currentWorktrees?.() ?? options.worktrees ?? []).map(entry => path.resolve(entry));
+  const worktrees = readWorktrees();
   const accounted = (options.accountedWorktrees ?? []).map(entry => path.resolve(entry));
   const maxRemovals = options.maxRemovals ?? MAX_REMOVALS_PER_SWEEP;
   const report: TempSweepReport = {
@@ -435,16 +460,22 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
       report.kept.young += 1;
       continue;
     }
-    if (inUse.some((entry) => inside(entry, candidate))) {
+    const processHolds = (entry: string) => inside(entry, candidate)
+      || inside(resolvePhysicalPath(root.via + entry), originalPath);
+    if (inUse.some(processHolds)) {
       report.kept.inUse += 1;
       continue;
     }
-    if (worktrees.some((worktree) => inside(worktree, candidate) || inside(candidate, worktree))) {
-      report.kept.worktree += 1;
-      continue;
-    }
-    const hold = containsGitCheckout(reachable) ?? (accounted.some(checkout => inside(checkout, candidate)
-      && fs.existsSync(root.via + checkout)) ? "git-checkout" : null);
+    const physicallyOverlaps = (entries: readonly string[]) => entries.some(entry => (root.via ? [entry, root.via + entry] : [entry]).some(accessible => {
+      try {
+        const physical = fs.realpathSync(accessible);
+        return inside(physical, originalPath) || inside(originalPath, physical);
+      } catch { return false; }
+    }));
+    const protectedBy = (entries: readonly string[]) => entries.some(entry => inside(entry, candidate) || inside(candidate, entry)) || physicallyOverlaps(entries);
+    const checkoutHold = (entries: readonly string[]) => protectedBy(entries) ? "git-checkout" : containsGitCheckout(reachable)
+      ?? (physicallyOverlaps(accounted) ? "git-checkout" : null);
+    const hold = checkoutHold(worktrees);
     const excluded = accounted.flatMap(checkout => root.via ? [checkout, root.via + checkout] : [checkout]);
     const includeRoot = candidates.some(other => other.candidate !== candidate && inside(candidate, other.candidate));
     if (hold) {
@@ -467,7 +498,7 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
     }
     try {
       const bytes = await measureBytes(reachable, seenAllocations, includeRoot, excluded);
-      if (readScan().processes.some(process => process.paths.some(entry => inside(path.resolve(entry), candidate)))) {
+      if (readScan().processes.some(process => process.paths.some(entry => processHolds(path.resolve(entry))))) {
         report.kept.inUse += 1;
         continue;
       }
@@ -484,7 +515,7 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
         continue;
       }
       /* A checkout made meanwhile still keeps the measured tree. */
-      const finalHold = containsGitCheckout(reachable);
+      const finalHold = checkoutHold(readWorktrees());
       if (finalHold) {
         report.kept.worktree += 1;
         report.held!.push({ path: candidate, via: root.via, reason: finalHold, bytes });
@@ -553,6 +584,7 @@ async function cleanupWorktrees() {
   ]);
   return {
     worktrees: loadPipelinesForList().map(pipeline => pipeline.worktreeDir).filter((dir): dir is string => !!dir),
+    currentWorktrees: () => loadPipelinesForList().map(pipeline => pipeline.worktreeDir).filter((dir): dir is string => !!dir),
     accountedWorktrees: (readWorktreeSweepReport()?.kept ?? []).map(row => row.path),
   };
 }
