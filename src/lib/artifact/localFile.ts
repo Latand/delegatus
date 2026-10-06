@@ -2,6 +2,7 @@ import type { promises as fsp } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { statePath } from "@/lib/configDir";
 import { homeDirectory } from "@/lib/platformHome";
 
 /*
@@ -51,6 +52,19 @@ export function isEvidenceImage(pathname: string): boolean {
   return EVIDENCE_IMAGE_RE.test(pathname);
 }
 
+/* Stores under an allowed root that answer only through their own route. The
+   prototype review copies are read by manifest, task and caller; a path route
+   that handed them out would let any caller around that fence, so no path
+   under one is admitted, as written or after its links resolve. */
+export function fencedStores(): string[] {
+  return [statePath("prototype-reviews")];
+}
+
+/** Whether a path, as written or resolved, lies in a fenced store. */
+export function inFencedStore(candidate: string, fenced: readonly string[]): boolean {
+  return fenced.some((store) => underRoot(candidate, store));
+}
+
 /** Which root admits a path: home, or an evidence root for a raster image. */
 export type Admission = "home" | "evidence";
 
@@ -61,6 +75,7 @@ export type Admission = "home" | "evidence";
  * `realpathAdmitted`.
  */
 export function admittedAs(candidate: string, roots: AllowedRoots): Admission | null {
+  if (inFencedStore(candidate, roots.fenced)) return null;
   if (underRoot(candidate, roots.home)) return "home";
   return isEvidenceImage(candidate) && roots.evidence.some((root) => underRoot(candidate, root)) ? "evidence" : null;
 }
@@ -76,16 +91,18 @@ export function admittedAs(candidate: string, roots: AllowedRoots): Admission | 
 export function realpathAdmitted(lexical: Admission, real: string, roots: AllowedRoots): boolean {
   const resolved = admittedAs(real, roots);
   if (lexical === "home") return resolved !== null;
-  return isEvidenceImage(real) && roots.evidence.some((root) => underRoot(real, root));
+  return resolved !== null && isEvidenceImage(real) && roots.evidence.some((root) => underRoot(real, root));
 }
 
 export interface AllowedRoots {
   home: string;
   evidence: string[];
+  /** Fenced stores, which no root admits. */
+  fenced: string[];
 }
 
 export function lexicalAllowedRoots(): AllowedRoots {
-  return { home: homeRoot(), evidence: evidenceRoots() };
+  return { home: homeRoot(), evidence: evidenceRoots(), fenced: fencedStores() };
 }
 
 /** The same roots with symlinks resolved; a root that does not exist is dropped. */
@@ -93,7 +110,11 @@ export async function realAllowedRoots(): Promise<AllowedRoots> {
   const real = async (root: string) => fs.realpath(root).catch(() => null);
   const home = (await real(homeRoot())) ?? homeRoot();
   const evidence = (await Promise.all(evidenceRoots().map(real))).filter((root): root is string => root !== null);
-  return { home, evidence };
+  /* A store that does not exist yet holds nothing to read; one reached through
+     a link is fenced at the place the link leads to as well. */
+  const stores = fencedStores();
+  const fenced = [...new Set([...stores, ...(await Promise.all(stores.map(real))).filter((store): store is string => store !== null)])];
+  return { home, evidence, fenced };
 }
 
 /**

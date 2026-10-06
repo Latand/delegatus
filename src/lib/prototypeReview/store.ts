@@ -8,6 +8,7 @@ import { loadTasks, mutateTasks } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
 import { withFileTransaction } from "@/lib/state/fileTransaction";
 import { admittedSource, expandPrototypeInput, PrototypeError, PROTOTYPE_LIMITS, unreadableSource } from "./input";
+import { openedAt } from "./pinned";
 import type { PrototypeMedia, PrototypeReviewRound, PublishPrototypeInput } from "./types";
 
 const MIME: Record<string, PrototypeMedia["mime"]> = {
@@ -36,6 +37,12 @@ export function roundDirectory(id: string): string {
   if (!/^pr_[a-f0-9]{32}$/.test(id)) throw new PrototypeError("invalid review id");
   return path.join(prototypeRoot(), id);
 }
+/** Where a stored copy lies under the store's resolved root. The root may be
+    reached through a link (a chosen state directory); nothing below it may. */
+export function storedMediaPath(realRoot: string, reviewId: string, media: PrototypeMedia): string {
+  if (!/^pr_[a-f0-9]{32}$/.test(reviewId)) throw new PrototypeError("invalid review id");
+  return path.join(realRoot, reviewId, mediaFilename(media));
+}
 export function mediaFilename(media: PrototypeMedia): string {
   if (!/^[a-f0-9]{64}$/.test(media.id) || !Object.values(MIME).includes(media.mime)) throw new PrototypeError("invalid stored media");
   const ext = media.mime.split("/")[1] === "jpeg" ? "jpg" : media.mime.split("/")[1];
@@ -58,12 +65,11 @@ async function copyMedia(raw: string, staging: string): Promise<PrototypeMedia> 
   const real = await admittedSource(raw);
   let handle;
   try {
-    const before = await fs.stat(real);
-    if (!before.isFile()) throw unreadableSource(raw);
-    if (before.size > max) throw new PrototypeError(`one ${mime.startsWith("video/") ? "video" : "image"} exceeds ${max} bytes`);
     handle = await fs.open(real, constants.O_RDONLY | constants.O_NOFOLLOW);
     const pinned = await handle.stat();
-    if (pinned.ino !== before.ino || pinned.dev !== before.dev || await admittedSource(raw) !== real) throw unreadableSource(raw);
+    // The roots are checked against the file that was opened, never against the path again.
+    if (!pinned.isFile() || !await openedAt(handle, real)) throw unreadableSource(raw);
+    if (pinned.size > max) throw new PrototypeError(`one ${mime.startsWith("video/") ? "video" : "image"} exceeds ${max} bytes`);
     const buffer = Buffer.alloc(Math.min(max + 1, pinned.size + 1));
     let size = 0;
     while (size < buffer.length) {
@@ -156,6 +162,21 @@ export async function publishPrototype(input: PublishPrototypeInput, taskId: str
         const task = tasks.find(t => t.id === taskId);
         if (!task) throw new PrototypeError("task not found",404);
         round.project = task.project;
+        /* The task's history budget. The new round supersedes every undecided
+           one before it, so those leave first, oldest first, bytes and all. A
+           decision is never dropped: a task whose budget is all decisions
+           takes no further round. */
+        const history = [...task.prototypeReviews ?? []];
+        const dropped: string[] = [];
+        const over = () => history.length + 1 > PROTOTYPE_LIMITS.taskRounds
+          || Buffer.byteLength(JSON.stringify([...history,round])) > PROTOTYPE_LIMITS.taskMetadataBytes;
+        while (over()) {
+          const at = history.findIndex(r => !r.decision);
+          if (at < 0) throw new PrototypeError(`this task already holds ${history.length} decided prototype rounds, the most its history keeps (${PROTOTYPE_LIMITS.taskRounds} rounds, ${PROTOTYPE_LIMITS.taskMetadataBytes} bytes of metadata). Nothing was published. Publish the next round on a follow-up task`,409);
+          dropped.push(history.splice(at,1)[0]!.id);
+        }
+        if (dropped.length) task.prototypeReviews = history;
+        removed.push(...dropped);
         const all = tasks.flatMap(t => (t.prototypeReviews ?? []).map(r => ({ task: t, round: r })));
         const now = Date.now();
         for (const item of all) {

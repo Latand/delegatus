@@ -1,7 +1,6 @@
 import fs from "node:fs";
-import path from "node:path";
 import type { BoardTask } from "@/lib/tasks/types";
-import { mediaFilename, roundDirectory } from "./store";
+import { prototypeRoot, storedMediaPath } from "./store";
 import type { PrototypeReviewRead, PrototypeMediaView, PrototypeReviewSummary } from "./types";
 import { prototypeReviewSummary, prototypeRoundMetadata } from "./model";
 export { prototypeReviewSummary, prototypeReviewNotices } from "./model";
@@ -9,16 +8,35 @@ export function withPrototypeReviewSummaries<T extends BoardTask>(tasks: readonl
   return tasks.map(({ prototypeReviews, prototypeReviewReplica, ...task }) => ({ ...task,
     prototypeReview: prototypeReviewSummary(prototypeReviews ?? []) ?? prototypeReviewReplica?.summary ?? task.prototypeReview }));
 }
+/** What a caller that names itself with a capability gets on a shared board
+    read: the task, and nothing of its review. The board has no project fence,
+    so an agent reads a review only through the project-scoped review tool. */
+export function withoutPrototypeReviews<T extends BoardTask>(tasks: readonly T[]): Array<Omit<T, "prototypeReviews" | "prototypeReviewReplica" | "prototypeReview">> {
+  return tasks.map(held => {
+    const task = { ...held };
+    delete task.prototypeReviews; delete task.prototypeReviewReplica; delete task.prototypeReview;
+    return task;
+  });
+}
 export function readPrototypeReviews(task: BoardTask): PrototypeReviewRead {
   if (!task.prototypeReviews?.length && task.prototypeReviewReplica) return { taskId: task.id,
     rounds: task.prototypeReviewReplica.rounds, summary: task.prototypeReviewReplica.summary,
     ...(task.prototypeReviewReplica.historyTruncated ? { historyTruncated: true } : {}),
     waitingReviewId: task.prototypeReviewReplica.summary.waitingReviewId, unavailable: "another-installation" };
+  // The media route's own test: a regular file at its place under the resolved root.
+  let realRoot: string | null = null;
+  try { realRoot = fs.realpathSync(prototypeRoot()); } catch { /* No copy was ever stored here. */ }
+  const stored = (roundId: string, media: PrototypeMediaView) => {
+    if (!realRoot) return false;
+    try {
+      const place = storedMediaPath(realRoot,roundId,media);
+      return fs.realpathSync(place) === place && fs.lstatSync(place).isFile();
+    } catch { return false; /* Copy is absent on linked installations and after retention. */ }
+  };
   const rounds = (task.prototypeReviews ?? []).map(round => {
     const publicRound = prototypeRoundMetadata(round);
     const mediaView = (media: PrototypeMediaView) => {
-      let available = false;
-      try { available = !round.mediaRemovedAt && fs.lstatSync(path.join(roundDirectory(round.id),mediaFilename(media))).isFile(); } catch { /* Copy is absent on linked installations and after retention. */ }
+      const available = !round.mediaRemovedAt && stored(round.id,media);
       const url = !available ? null : media.mime.startsWith("image/")
         ? `/api/image?taskId=${encodeURIComponent(task.id)}&prototype=${round.id}&media=${media.id}`
         : `/api/tasks/${encodeURIComponent(task.id)}/prototypes/${round.id}/video/${media.id}`;

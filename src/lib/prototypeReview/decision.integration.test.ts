@@ -4,11 +4,12 @@ import path from "node:path";
 import { NextRequest } from "next/server";
 import { startComposerPayloadRuntime, type ComposerPayloadRuntime } from "@/lib/runtime/fixtures/composerPayloadRuntime";
 import { resetLegacyDocumentStoresForTests } from "@/lib/state/legacyDocumentStore";
-import { saveTasks, loadTasks } from "@/lib/tasks/store";
+import { saveTasks, loadTasks, TASKS_FILE } from "@/lib/tasks/store";
 import { setConversationHostDependenciesForTests } from "@/app/api/conversation-host/dependencies";
 import { publishPOST, reviewGET, reviewPOST } from "./http";
 import { prototypeDelivery, prototypeDeliveryResponse, type PrototypeDelivery } from "./decision";
 import { prototypeWorld, type PrototypeWorld } from "./world";
+import { stateDir } from "@/lib/configDir";
 import type { PrototypeReviewRead } from "./types";
 
 let runtime: ComposerPayloadRuntime;
@@ -85,4 +86,34 @@ test("a lost acknowledgement is recovered from the original receipt after reload
   expect((await reviewPOST(request({ reviewId: id,retry: true }),"task-prototype",world,losingAck)).status).toBe(200);
   expect(sends).toBe(1); expect(runtime.delivered).toHaveLength(2);
   expect((await read()).rounds[1]!.decision!.delivery.state).toBe("sent");
+});
+test("a Viewer stopped between the saved decision and its admission offers a retry after reload, and the retry delivers once", async () => {
+  const previous = loadTasks()[0]!.prototypeReviews![0]!;
+  const input = { taskId: "task-prototype",clientRequestId: "stopped",title: "Navigation, third",dir: path.join(process.env.HOME!,"prototype-input"),
+    variants: previous.variants.map(v => ({ number: v.number,name: v.name,description: v.description })) };
+  const published = await publishPOST(new NextRequest("http://localhost/api/prototype-reviews",{ method: "POST",headers: { host: "localhost" },body: JSON.stringify(input) }),world);
+  const id = (await published.json()).reviewId as string;
+  const before = runtime.delivered.length;
+  const child = Bun.spawn({ cmd: [process.execPath,path.join(import.meta.dir,"decisionStopChild.ts")],cwd: process.cwd(),stdout: "ignore",stderr: "inherit",
+    env: { ...process.env,PROTOTYPE_STOP_TASKS_STATE: path.dirname(TASKS_FILE),PROTOTYPE_STOP_STATE: stateDir(),PROTOTYPE_STOP_TASK: "task-prototype",PROTOTYPE_STOP_REVIEW: id,PROTOTYPE_STOP_SEAT: runtime.conversationId,PROTOTYPE_STOP_COMMENT: comment } });
+  expect(await child.exited).toBe(0);
+  resetLegacyDocumentStoresForTests();
+  const stored = () => loadTasks()[0]!.prototypeReviews!.find(round => round.id === id)!.decision!;
+  expect(stored()).toMatchObject({ chosen: [1,2],comment,delivery: { state: "pending" } });
+  expect(stored().delivery.operationId).toBeUndefined();
+  // Reloads read the truth and send nothing.
+  for (let n = 0; n < 3; n += 1) {
+    const shown = (await read()).rounds.find(round => round.id === id)!.decision!;
+    expect(shown.comment).toBe(comment); expect(shown.delivery).toEqual({ state: "failed",retryable: true });
+  }
+  expect(runtime.delivered).toHaveLength(before);
+  expect((await reviewPOST(request({ reviewId: id,retry: true }),"task-prototype",world,delivery)).status).toBe(200);
+  await until(() => runtime.delivered.length === before + 1);
+  resetLegacyDocumentStoresForTests();
+  const repeats = await Promise.all(Array.from({ length: 3 },() => reviewPOST(request({ reviewId: id,retry: true }),"task-prototype",world,delivery)));
+  expect(repeats.every(response => response.status === 200)).toBe(true);
+  for (let n = 0; n < 2; n += 1) expect((await read()).rounds.find(round => round.id === id)!.decision!.delivery.state).toBe("sent");
+  expect(runtime.delivered).toHaveLength(before + 1);
+  expect(runtime.delivered.at(-1)!.text).toBe(stored().delivery.text);
+  expect(runtime.delivered.at(-1)!.text).toContain(`Chosen: 1 — Compact, 2 — Roomy\n\nComment:\n${comment}\n\n`);
 });

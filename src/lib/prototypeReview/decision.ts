@@ -74,8 +74,12 @@ export async function refreshPrototypeDelivery(taskId: string,reviewId: string,d
   await withFileTransaction(path.join(prototypeRoot(),`${reviewId}.decision.lock`),"prototype decision is busy",async () => {
     const decision = findPrototypeRound(taskId,reviewId)?.decision;
     if (!decision?.delivery.conversationId || decision.delivery.state === "sent") return;
-    const recovered: PrototypeDeliveryResult | null = await delivery.recover(decision).catch(() => ({ state: "uncertain" }));
-    if (recovered && (recovered.state !== decision.delivery.state || recovered.operationId !== decision.delivery.operationId)) recordDelivery(taskId,reviewId,recovered);
+    /* Under the decision's lock no send is in flight here. A message the send
+       path never admitted was stopped between the saved decision and its
+       admission: it is not on its way, and saying so is what offers the retry.
+       The read itself sends nothing. */
+    const recovered: PrototypeDeliveryResult = await delivery.recover(decision).then(result => result ?? { state: "failed" as const },() => ({ state: "uncertain" as const }));
+    if (recovered.state !== decision.delivery.state || recovered.operationId !== decision.delivery.operationId) recordDelivery(taskId,reviewId,recovered);
   });
 }
 export async function decidePrototype(request: NextRequest,taskId: string,input: DecidePrototypeInput | { reviewId: string; retry: true },

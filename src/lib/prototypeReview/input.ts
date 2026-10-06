@@ -1,13 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
-import { homeRoot, evidenceRoots, resolveLocal, underRoot, realAllowedRoots } from "@/lib/artifact/localFile";
+import { homeRoot, evidenceRoots, fencedStores, inFencedStore, resolveLocal, underRoot, realAllowedRoots } from "@/lib/artifact/localFile";
 import type { PublishPrototypeInput } from "./types";
 
 export const PROTOTYPE_LIMITS = {
   variants: 9, media: 240, imageBytes: 4 * 1024 * 1024, videoBytes: 64 * 1024 * 1024,
   imageSetBytes: 48 * 1024 * 1024, setBytes: 192 * 1024 * 1024,
   storeBytes: 2 * 1024 * 1024 * 1024, storedRounds: 200, comment: 20_000,
+  /* One task's history in the task store: rounds, and bytes of their metadata at publication. */
+  taskRounds: 30, taskMetadataBytes: 1024 * 1024,
 } as const;
 const localPath = z.string().min(1).max(4096).refine(value => !/[\0\r\n]/.test(value));
 export const prototypePublishSchema = z.object({
@@ -42,12 +44,13 @@ export function unreadableSource(raw: string): PrototypeError {
 export async function admittedSource(raw: string): Promise<string> {
   const abs = resolveLocal(raw);
   const fromHome = underRoot(abs, homeRoot());
-  if (!fromHome && !evidenceRoots().some(root => underRoot(abs, root))) throw unreadableSource(raw);
+  if ((!fromHome && !evidenceRoots().some(root => underRoot(abs, root))) || inFencedStore(abs, fencedStores())) throw unreadableSource(raw);
   try {
     const real = await fs.realpath(abs);
     const roots = await realAllowedRoots();
     const inEvidence = roots.evidence.some(root => underRoot(real, root));
-    if (!(fromHome ? underRoot(real, roots.home) || inEvidence : inEvidence)) throw unreadableSource(raw);
+    // A stored copy belongs to its task's review; it is never the source of another.
+    if (inFencedStore(real, roots.fenced) || !(fromHome ? underRoot(real, roots.home) || inEvidence : inEvidence)) throw unreadableSource(raw);
     return real;
   } catch { throw unreadableSource(raw); }
 }

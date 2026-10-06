@@ -23,12 +23,48 @@ Images use `/api/image` with task, review and media IDs. MP4 and WebM use the
 task's video route, descriptor pinning, MIME sniffing and byte ranges. Both
 routes enforce the existing origin and team fences and the caller's project.
 
+The roots are checked against the file that was opened. `O_NOFOLLOW` guards
+only a path's last component, so a directory above it swapped for a link
+between the check and the open would hand back a file from elsewhere. After
+the open, `openedAt` (`src/lib/prototypeReview/pinned.ts`) asks the kernel for
+the open file's own name (`/proc/self/fd`) and requires the admitted path;
+where the platform publishes no such name the path is resolved again and must
+lead to the same inode. Publication copies and both media routes use it. The
+store's root is resolved once and may be reached through a link (a chosen
+`LLV_STATE_DIR`); nothing below the root may be a link, and a read reports a
+copy as available by the same test the route serves it by.
+
+The store is fenced from every path route. `fencedStores()` in
+`src/lib/artifact/localFile.ts` names it, and the shared admission
+(`admittedAs`, `realpathAdmitted`) refuses a path that lies in it as written or
+after its links resolve, so `/api/image?path=`, `/api/artifact`, the report
+frame route and the task album cannot hand out a copy, and a stored copy is
+never the source of another publication. A copy answers only through its
+manifest, its task and its caller.
+
+A task's review belongs to its project, and the board reads have no project
+fence. A caller that presents a capability therefore gets `/api/files`,
+`/api/tasks` and a task write's answer without the review summary and without
+`prototypeReviewNotices`; `/api/files` keeps that body in a cache scope of its
+own, so the operator's cached body, its ETag and its deltas never reach an
+agent. Agents read a review through `read_prototype_review`, which checks the
+project.
+
 Bounds: 9 variants, 240 media files including originals, 4 MiB per image,
 64 MiB per video, 48 MiB images and 192 MiB total per round. At publication,
 copies on tasks completed over 30 days ago are retired, then oldest copies are
 retired until the store holds at most 200 rounds and 2 GiB of declared media.
 Retirement keeps all round metadata and decisions, marks media unavailable and
-removes owned copies. The next publication removes marked orphan copies from
+removes owned copies.
+
+One task's history is bounded too: 30 rounds and 1 MiB of round metadata,
+measured at publication. The new round supersedes every undecided round before
+it, so when the budget is full those leave first, oldest first, with their
+copies. A decided round is never dropped: its chosen variants, its exact
+comment and its time stay. A task whose budget is all decisions takes no
+further round; the publication answers 409, says nothing was published and
+tells the agent to publish on a follow-up task. A read therefore walks at most
+30 rounds per task. The next publication removes marked orphan copies from
 deleted tasks or interrupted publication. The task sync v5 wire carries public round metadata,
 including decisions, without bytes, URLs or dispatch keys; older peers retain
 their previous row shape. The existing 170 KB wire row bound keeps the summary
@@ -46,6 +82,14 @@ unknown delivery waits for evidence. With no designated seat the decision stays
 saved as `no-orchestrator`; an explicit retry can resolve a subsequently seated
 orchestrator. No automatic resend occurs on a read.
 
+A Viewer stopped between the saved decision and the message's admission leaves
+a decision whose message was never sent. Reads take the decision's lock, so no
+send is in flight when one looks: a message the send path has no record of is
+then recorded as `failed`, which is what offers the retry. The retry checks
+admission and receipt again before it sends, so repeating it, or reloading,
+never sends twice, and a message that is in flight stays `pending` with no
+retry.
+
 The interface imports client-safe contracts from
 `src/lib/prototypeReview/types.ts` and these hooks from
 `src/hooks/usePrototypeReview.ts`:
@@ -60,17 +104,26 @@ The interface imports client-safe contracts from
   changed frame. Pair and viewer labels combine the variant's number, name and
   the frame's caption. `decision.delivery` exposes state and retry availability.
 - `usePrototypeReviewNotices(tasks, project)` returns one notice per waiting
-  task and `needsYouCount`. `/api/files` also exposes `prototypeReviewNotices`;
-  the kanban model already counts waiting reviews once in needs-you totals.
+  task and `needsYouCount`. `/api/files` also exposes `prototypeReviewNotices`.
+  A waiting review is an entry of the one needs-you queue
+  (`buildNeedsYouQueue`, kind `prototype`, one per task), so the header's
+  count, the panel, the rail, the phone's badge and sheet and the tab title
+  count it; its row opens the task's review and has no «Dismiss», because the
+  choice is what clears it. The kanban model marks the card from the same fact.
 - `openPrototypeReview(target)` and `usePrototypeReviewJump(onOpen)` share the
   notice/card navigation event. Its target names the task and review to open.
   The interface focuses the task before opening the requested round.
 
 
-Production-seam tests are `src/lib/prototypeReview/http.test.ts` and
-`src/lib/prototypeReview/decision.integration.test.ts`. The latter uses the
-existing fake engine fixture with the real send handler, registry, runtime
-journal and retry leaf. Task sync, prompt and needs-you regressions extend their
+Production-seam tests are `src/lib/prototypeReview/http.test.ts`,
+`src/lib/prototypeReview/fences.test.ts` and
+`src/lib/prototypeReview/decision.integration.test.ts`. The fences file swaps
+a directory for a link exactly while a file is opened, on publication and on
+both media routes, and covers the linked state root, the path routes and the
+history budget. The integration file uses the existing fake engine fixture
+with the real send handler, registry, runtime journal and retry leaf; its
+stopped-Viewer case ends a real child process (`decisionStopChild.ts`) between
+the saved decision and its admission. Task sync, prompt and needs-you regressions extend their
 existing test files. Run every file in a separate process with isolated
 `LLV_STATE_DIR`, `HOME`, `TMPDIR` and a closed `LLV_VIEWER_CONTROL_URL`.
 

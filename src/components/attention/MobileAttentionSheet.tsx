@@ -1,6 +1,6 @@
 "use client";
 
-import { Filter } from "lucide-react";
+import { Filter, GalleryHorizontalEnd } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { ChevronDown, ChevronRight, X } from "@/components/icons";
@@ -21,6 +21,8 @@ import { RoleTag } from "../RoleFrameMark";
 import { cleanTitle, fileModelLabel, fmtAgeSeconds } from "../utils";
 import { AutoDrainDecision } from "../selfUpdate/AutoDrainDecision";
 import { openSelfUpdate } from "../selfUpdate/openSelfUpdate";
+import type { PrototypeReviewNotice } from "@/lib/prototypeReview/types";
+
 import type { MobileAttentionEntry } from "./attentionQueue";
 import { decisionLine, reasonLine } from "./decision";
 import { sendDismissal } from "./dismissalOverlay";
@@ -78,6 +80,8 @@ export interface MobileAttentionSheetProps {
   onOpenConversation: (item: AttentionItem) => void;
   /** The pipeline screen's opener (lane 7). Absent, pipeline rows are inert. */
   onOpenPipeline?: (row: MobileBoardPipelineRow) => void;
+  /** Takes the operator to a task's waiting prototype review. Absent, its rows are inert. */
+  onOpenPrototype?: (notice: PrototypeReviewNotice) => void;
   onClose: () => void;
   /** For the role each row names. */
   pipelines?: readonly Pipeline[];
@@ -113,7 +117,7 @@ const NO_NOTICES: readonly MobileNoticeRow[] = [];
 const NO_PIPELINES: readonly Pipeline[] = [];
 const NO_NAMES: Readonly<Record<string, string>> = {};
 
-export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenPipeline, onClose, pipelines = NO_PIPELINES, projectNames = NO_NAMES, current = null, order, screen, dismiss = sendDismissal, notices = NO_NOTICES, onOpenNotice, onClearNotice, onNoticesSeen, filterActive = false, onToggleFilter }: MobileAttentionSheetProps) {
+export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenPipeline, onOpenPrototype, onClose, pipelines = NO_PIPELINES, projectNames = NO_NAMES, current = null, order, screen, dismiss = sendDismissal, notices = NO_NOTICES, onOpenNotice, onClearNotice, onNoticesSeen, filterActive = false, onToggleFilter }: MobileAttentionSheetProps) {
   const { t } = useLocale();
   const [folded, setFolded] = useState<ReadonlySet<string>>(() => new Set());
   const shownNotices = notices.map((row) => row.notice.id).join("\n");
@@ -124,6 +128,7 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
   const here = screen ?? topScreen(navState);
   const open = (entry: MobileAttentionEntry) => {
     if (entry.kind === "update") { openSelfUpdate(); return; }
+    if (entry.kind === "prototype") { onOpenPrototype?.(entry.notice); return; }
     if (entry.kind === "conversation") onOpenConversation(entry.item);
     else onOpenPipeline?.(entry.row);
   };
@@ -141,7 +146,7 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
     const since = needsYouEntrySince(entry);
     return since === null ? (entry.kind === "pipeline" ? entry.row.seconds : null) : Math.max(0, now - since);
   };
-  const rowTitle = (entry: MobileAttentionEntry) => (entry.kind === "update" ? t("selfUpdate.auto.decision.title") : entry.kind === "conversation" ? cleanTitle(entry.item.file.title, 90) : entry.row.task);
+  const rowTitle = (entry: MobileAttentionEntry) => (entry.kind === "update" ? t("selfUpdate.auto.decision.title") : entry.kind === "prototype" ? entry.notice.title : entry.kind === "conversation" ? cleanTitle(entry.item.file.title, 90) : entry.row.task);
   const sections = needsYouSections(entries, current, order);
   const titled = sections.length > 1;
   const dismissible = needsYouDismissibleCount(entries);
@@ -149,6 +154,8 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
   const row = (entry: MobileAttentionEntry) => {
     // The card keeps the sheet's content gutter; a bare card ran edge to edge.
     if (entry.kind === "update") return <div key={entry.id} className="px-4 py-1"><AutoDrainDecision key={entry.decision.id} decision={entry.decision} /></div>;
+    /* A prototype review leaves the list by its choice, so the row has no «Dismiss». */
+    if (entry.kind === "prototype") return <PrototypeRow key={entry.id} notice={entry.notice} age={laneAge(entry)} onOpen={onOpenPrototype ? () => open(entry) : undefined} />;
     const role = needsYouEntryRole(entry, pipelines);
     const body = entry.kind === "conversation" ? (
       <ConversationRow item={entry.item} now={now} role={role} current={here.kind === "chat" && here.id === entry.item.file.path} onOpen={() => open(entry)} />
@@ -365,6 +372,36 @@ function ConversationRow({ item, now, current, onOpen, role }: { item: Attention
       {row}
       <PermissionActions file={item.file} size="touch" />
     </div>
+  );
+}
+
+function PrototypeRow({ notice, age, onOpen }: { notice: PrototypeReviewNotice; age: number | null; onOpen?: () => void }) {
+  const { t } = useLocale();
+  const Tag = onOpen ? "button" : "div";
+  return (
+    <Tag
+      {...(onOpen ? { type: "button" as const, onClick: onOpen, "aria-label": t("proto.notice.openAria", { title: notice.title }) } : {})}
+      data-needs-you-row={notice.id}
+      data-attention-row={notice.id}
+      data-mobile2-row="prototype"
+      data-attention-prototype={notice.taskId}
+      className={ROW}
+    >
+      <GalleryHorizontalEnd className="h-[18px] w-[18px] shrink-0 text-accent" aria-hidden />
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="min-w-0 truncate text-body font-semibold leading-[1.25] text-primary">{notice.title}</span>
+        <span className={META}>
+          <span data-attention-decision className="min-w-0 truncate">{t("proto.notice.ready")}</span>
+          {age === null ? null : (
+            <>
+              {SEP}
+              <span data-attention-age className="shrink-0">{fmtAgeSeconds(age)}</span>
+            </>
+          )}
+        </span>
+      </span>
+      {onOpen ? <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden /> : null}
+    </Tag>
   );
 }
 

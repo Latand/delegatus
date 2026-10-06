@@ -1,13 +1,13 @@
 import { constants } from "node:fs";
 import fs from "node:fs/promises";
-import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { refuseAnonymous, teamActor } from "@/lib/team";
 import { parseByteRange } from "@/lib/artifact/serve";
-import { streamWindow, underRoot } from "@/lib/artifact/localFile";
+import { streamWindow } from "@/lib/artifact/localFile";
 import { PrototypeError } from "./input";
-import { mediaFilename, roundDirectory, roundMedia, sniffPrototype } from "./store";
+import { openedAt } from "./pinned";
+import { prototypeRoot, roundMedia, sniffPrototype, storedMediaPath } from "./store";
 import { prototypeWorld, taskForPrototype, type PrototypeWorld } from "./world";
 
 /** Only descriptor-pinned bytes named by this task's stored manifest. */
@@ -21,15 +21,11 @@ export async function prototypeMediaGET(request: NextRequest,taskId: string,revi
     const round = task.prototypeReviews?.find(r => r.id === reviewId);
     const media = round && !round.mediaRemovedAt ? roundMedia(round).find(m => m.id === mediaId && m.mime.startsWith(`${kind}/`)) : null;
     if (!media) throw new PrototypeError("media not found",404);
-    const directory = roundDirectory(reviewId);
-    const candidate = path.join(directory,mediaFilename(media));
-    const root = await fs.realpath(directory);
-    if (root !== directory || !underRoot(await fs.realpath(candidate),root)) throw new PrototypeError("stored media is unavailable",404);
-    const before = await fs.lstat(candidate);
-    if (!before.isFile()) throw new PrototypeError("stored media is unavailable",404);
+    const candidate = storedMediaPath(await fs.realpath(prototypeRoot()),reviewId,media);
     handle = await fs.open(candidate,constants.O_RDONLY | constants.O_NOFOLLOW);
     const pinned = await handle.stat();
-    if (pinned.ino !== before.ino || pinned.dev !== before.dev || pinned.size !== media.bytes) throw new PrototypeError("stored media is unavailable",404);
+    // The open file itself must be the store's copy: a round directory swapped for a link answers from elsewhere.
+    if (!pinned.isFile() || pinned.size !== media.bytes || !await openedAt(handle,candidate)) throw new PrototypeError("stored media is unavailable",404);
     const head = Buffer.alloc(Math.min(512,pinned.size));
     await handle.read(head,0,head.length,0);
     if (!sniffPrototype(media.mime,head)) throw new PrototypeError("stored media type disagrees",415);

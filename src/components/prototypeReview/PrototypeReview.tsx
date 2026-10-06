@@ -226,7 +226,7 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
 
   const save = async () => {
     if (!round || !draft.chosen.length || review.saving) return;
-    const saved = await review.save({ reviewId: round.id, chosen: draft.chosen, comment: draft.comment.trim() });
+    const saved = await review.save({ reviewId: round.id, chosen: draft.chosen, comment: draft.comment });
     if (saved) setDrafts((held) => Object.fromEntries(Object.entries(held).filter(([id]) => id !== round.id)));
   };
 
