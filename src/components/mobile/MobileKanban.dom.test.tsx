@@ -304,6 +304,12 @@ test("a long-press opens the card's sheet; Move to moves the card at once with U
   const sheet = q(dom.document.body as unknown as HTMLElement, "[data-phone-card-sheet]")!;
   const actions = qa(sheet, "[data-phone-card-action]").map((row) => row.getAttribute("data-phone-card-action"));
   expect(actions).toEqual(["move-inbox", "move-blocked", "move-done", "hide", "open-agent"]);
+  /* The other columns are one row of cells under "Move to", each captioned with the column and named in full; the rest stay rows with their second line. */
+  expect(qa(sheet, "[data-phone-card-cells] > button").map((cell) => [cell.getAttribute("data-phone-card-action"), cell.textContent, cell.getAttribute("aria-label")])).toEqual([
+    ["move-inbox", "Inbox", "Move to Inbox"], ["move-blocked", "Waiting", "Move to Waiting"], ["move-done", "Done", "Move to Done"],
+  ]);
+  expect(q(sheet, "[data-phone-card-cells]")?.getAttribute("aria-label")).toBe("Move to");
+  expect(q(sheet, '[data-phone-card-action="hide"]')?.textContent).toContain("Hide from board");
   /* The press opened a sheet, not the task under the finger. */
   expect(opened.tasks).toEqual([]);
 

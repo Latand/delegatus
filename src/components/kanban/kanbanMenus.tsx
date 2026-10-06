@@ -48,7 +48,7 @@ export function popoverLeft(anchor: { left: number; right: number }, width: numb
   return Math.max(8, Math.min(left, viewportWidth - width - 8));
 }
 
-export function placeMenu(element: HTMLElement, anchor: HTMLElement, within?: HTMLElement | null): void {
+function place(element: HTMLElement, anchor: HTMLElement, within?: HTMLElement | null): void {
   const rect = anchor.getBoundingClientRect();
   const width = element.offsetWidth;
   const height = element.offsetHeight;
@@ -99,7 +99,7 @@ export function KanbanMenu({ anchor, label, items, onClose }: KanbanMenuProps) {
   useMenuDismiss(ref, anchor, onClose);
   useLayoutEffect(() => {
     if (!ref.current) return;
-    placeMenu(ref.current, anchor);
+    place(ref.current, anchor);
     ref.current.querySelector<HTMLElement>('[role^="menuitem"]:not([aria-disabled="true"])')?.focus();
   }, [anchor]);
   const focusables = () => [...(ref.current?.querySelectorAll<HTMLElement>('[role^="menuitem"]') ?? [])]
@@ -188,7 +188,7 @@ export function KanbanPopover({ anchor, label, onClose, children, initialFocus =
   useMenuDismiss(ref, anchor, onClose);
   useLayoutEffect(() => {
     if (!ref.current) return;
-    placeMenu(ref.current, anchor, within);
+    place(ref.current, anchor, within);
     ref.current.querySelector<HTMLElement>(initialFocus)?.focus();
   }, [anchor, initialFocus, within]);
   return (

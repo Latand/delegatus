@@ -333,10 +333,29 @@ describe("self-update reload notice", () => {
 /* The loading leaf draws its own header bar until the Board mounts and draws
    the same bar itself, so a ⋯ menu opened before then is thrown away with the
    bar it opened in. Open the Board's own menu and wait until it is open. */
-async function openBoardMenu(page: Page) {
+async function openBoardMenu(page: Page, section?: string) {
   await page.locator('[data-kanban-board] [data-bar="project"] [data-bar-more]').click();
   await page.locator('[data-kanban-board] [data-bar-more][aria-expanded="true"]').waitFor();
+  /* The project's switches sit behind the menu's sections. */
+  if (section) await page.locator(`[data-bar-more-menu] [data-bar-menu-head="${section}"]`).click();
 }
+
+/* A pipeline's actions are a page of the card's ⋯: one row opens it, and on a
+   card holding several pipelines that row lists them first. Pressed from the
+   page, so the guard against a double click on a row that swaps the list does
+   not read these two presses as one. */
+async function openLaneActions(page: Page) {
+  for (let depth = 0; depth < 2; depth += 1) {
+    const opened = await page.evaluate(() => {
+      const row = document.querySelector<HTMLElement>('.menu [data-cm-shown] [data-cm-opens="drill"]');
+      row?.click();
+      return Boolean(row);
+    });
+    if (!opened) return;
+    await page.waitForTimeout(120);
+  }
+}
+const openMenuSection = (page: Page, id: string) => page.locator(`.menu [data-cm-shown] [data-cm-section="${id}"]`).click();
 
 describe("linked boards M1 settings", () => {
   browserTest("a mounted project row preserves sharing changed in Settings", async () => {
@@ -359,7 +378,7 @@ describe("linked boards M1 settings", () => {
           }
           await route.fulfill({ json: { shared: { v: 1, all: false, projects: selected }, known: [{ key: "atlas", name: "atlas" }], states: [] } });
         });
-        await openBoardMenu(page);
+        await openBoardMenu(page, "merging");
         await page.locator('[data-share-project-switch]').waitFor();
         selected = [];
         await page.locator('[data-share-project-switch]').click();
@@ -387,7 +406,7 @@ describe("linked boards M1 settings", () => {
             json: { shared: { v: 1, all: false, projects: [] }, known: [{ key: "atlas", name: "atlas" }], states: [] },
           });
         });
-        await openBoardMenu(page);
+        await openBoardMenu(page, "merging");
         const retry = page.getByRole("button", { name: "Retry sharing settings" });
         await retry.waitFor();
         expect(await page.locator('[data-share-project]').textContent()).toContain("Could not load or save sharing");
@@ -1472,11 +1491,12 @@ describe("#1695 K3 conversations inside cards", () => {
         const explore = readerFor("conversation_export-explore");
         await page.waitForSelector(explore, { timeout: 5_000 });
         await page.click(`${explore} [data-reader-menu]`);
+        await openMenuSection(page, "more");
         await page.click('.menu [role="menuitem"]:has-text("Unlink from this task")');
         await page.waitForFunction(() => document.querySelector("[data-kanban-receipt].error"), undefined, { timeout: 5_000 });
         const refusedUnlink = await receipts();
         await page.click(`${explore} [data-reader-menu]`);
-        await page.click('.menu [role="menuitem"]:has-text("Link to another task")');
+        await page.click('.menu [role="menuitem"][aria-label^="Link to another task"]');
         await page.fill("[data-link-search]", "walkthrough");
         await page.screenshot({ path: path.join(OUT, "flow-link-picker.png") });
         await page.click('[data-link-task="t-onboarding"]');
@@ -1485,6 +1505,7 @@ describe("#1695 K3 conversations inside cards", () => {
         await page.waitForTimeout(600);
         const exploreNow = await page.evaluate((selector) => document.querySelector(selector) ? document.querySelector(selector)!.closest<HTMLElement>(".card")?.dataset.id ?? "parked" : null, explore);
         await page.click(`${explore} [data-reader-menu]`);
+        await openMenuSection(page, "more");
         await page.click('.menu [role="menuitem"]:has-text("Unlink from this task")');
         await page.waitForFunction(() => [...document.querySelectorAll("[data-kanban-receipt] .msg")].some((node) => node.textContent?.startsWith("Unlinked")), undefined, { timeout: 5_000 });
         const unlinked = await receipts();
@@ -1577,6 +1598,7 @@ describe("#1695 K3 conversations inside cards", () => {
         await page.click(`${card("t-export")} .tile >> nth=0`);
         await waitSettled(page, "conversation_export-impl");
         await page.click(`${readerFor("conversation_export-impl")} [data-reader-menu]`);
+        await openMenuSection(page, "more");
         const menuItems = await page.evaluate(() => [...document.querySelectorAll('.menu [role="menuitem"]')].map((node) => node.textContent ?? ""));
         const stopItem = menuItems.find((text) => text.startsWith("Stop host"));
         if (!stopItem?.includes("PID 4401")) failures.push(`stop host: the reader's actions offer ${JSON.stringify(menuItems)}`);
@@ -1773,6 +1795,7 @@ describe("#1695 K4b inline editing, colour, hide and the Hidden tray", () => {
         await production(scheme, async (page) => {
           await page.locator(card("t-export")).scrollIntoViewIfNeeded();
           await page.click(`${card("t-export")} [data-menu]`);
+          await openMenuSection(page, "appearance");
           await page.waitForSelector(".menu .swatch");
           await page.waitForTimeout(350);
           const menu = await page.evaluate(() => {
@@ -1783,7 +1806,8 @@ describe("#1695 K4b inline editing, colour, hide and the Hidden tray", () => {
               swatches: [...root.querySelectorAll(".swatch")].map((node) => node.getAttribute("aria-label")),
               swatchBox: { width: Math.round(swatch.width), height: Math.round(swatch.height) },
               checked: root.querySelector('.swatch[aria-checked="true"]')?.getAttribute("data-swatch") ?? null,
-              items: [...root.querySelectorAll<HTMLElement>('[role="menuitem"]')].map((item) => ({ label: item.querySelector(".lbl")?.firstChild?.textContent ?? "", kbd: item.querySelector(".kbd")?.textContent ?? null, why: item.querySelector(".why")?.textContent ?? null, disabled: item.getAttribute("aria-disabled") === "true" })),
+              /* An icon cell is named by its full label, carries its key as `aria-keyshortcuts` and says its second line under the row of cells. */
+              items: [...root.querySelectorAll<HTMLElement>('[data-cm-shown] [role="menuitem"]')].map((item) => ({ label: item.getAttribute("aria-label") ?? item.querySelector(".lbl")?.firstChild?.textContent ?? "", kbd: item.getAttribute("aria-keyshortcuts") ?? item.querySelector(".kbd")?.textContent ?? null, why: item.querySelector(".why")?.textContent ?? root.querySelector(`[data-cm-note="${item.dataset.cmItem ?? ""}"]`)?.textContent ?? null, disabled: item.getAttribute("aria-disabled") === "true" })),
             };
           });
           await shot(page, "production", "card-menu", scheme);
@@ -1974,8 +1998,8 @@ describe("#1695 K4b inline editing, colour, hide and the Hidden tray", () => {
         if (loadReceipts.length) failures.push(`seat group: the first seat read announced ${JSON.stringify(loadReceipts)}`);
         await page.click(`${card("t-seat")} [data-menu]`);
         const menuHide = await page.evaluate(() => {
-          const item = [...document.querySelectorAll<HTMLElement>('.menu [role="menuitem"]')].find((node) => node.querySelector(".lbl")?.firstChild?.textContent === "Hide from board");
-          return item ? { disabled: item.getAttribute("aria-disabled") === "true", why: item.querySelector(".why")?.textContent ?? null } : null;
+          const item = [...document.querySelectorAll<HTMLElement>('.menu [role="menuitem"]')].find((node) => node.getAttribute("aria-label") === "Hide from board");
+          return item ? { disabled: item.getAttribute("aria-disabled") === "true", why: document.querySelector('.menu [data-cm-note="hide"]')?.textContent ?? null } : null;
         });
         const patches = await evidenceOf(page, (evidence) => evidence.taskPatches.length);
         if (!seatCard || seatCard.column !== "assigned" || !seatCard.lock || seatCard.hideButton || seatCard.resurfaced !== "Back on the board: it holds the orchestrator's conversation" || seatCard.hideAgain) failures.push(`seat group: ${JSON.stringify(seatCard)}`);
@@ -2097,6 +2121,7 @@ describe("#1695 K4b inline editing, colour, hide and the Hidden tray", () => {
         const before = await evidenceOf(page, (evidence) => String(evidence.storedTask("t-disk")?.updatedAt ?? ""));
         await page.locator(card("t-disk")).scrollIntoViewIfNeeded();
         await page.click(`${card("t-disk")} [data-menu]`);
+        await openMenuSection(page, "appearance");
         await page.click('.menu .swatch[aria-label="Teal"]');
         const applied = await page.evaluate((selector) => {
           const element = document.querySelector<HTMLElement>(selector)!;
@@ -3013,11 +3038,12 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
 
       await production("light", "pipeline actions", async (page) => {
         const section = `${card("t-upload")} .pblock`;
-        /* The lane's actions are a group in the card's one ⋯ (#2148). */
+        /* The lane's actions are a page of the card's one ⋯ (#2148). */
         const laneMenu = `${card("t-upload")} [data-menu]`;
         await page.locator(section).evaluate((element) => element.scrollIntoView({ block: "center" }));
         if (await page.locator(`${section} [data-pipeline-menu]`).count()) failures.push("pipeline actions: the lane still draws a ⋯ of its own");
         await page.click(laneMenu);
+        await openLaneActions(page);
         await page.waitForTimeout(350);
         await shot(page, "production", "pipeline-menu", "light");
         await page.locator('.menu [role="menuitem"]', { hasText: "Pause" }).first().click();
@@ -3027,6 +3053,7 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         const pausedReceipt = await page.locator("[data-kanban-receipt] .msg").last().textContent();
         await page.evaluate(() => { (window as unknown as Hook).evidence.refuseNextPipelinePatch = { status: 409, error: "the runtime host did not answer" }; });
         await page.click(laneMenu);
+        await openLaneActions(page);
         await page.locator('.menu [role="menuitem"]', { hasText: "Resume" }).first().click();
         await page.waitForSelector("[data-kanban-receipt].error", { timeout: 5_000 });
         await page.waitForTimeout(350);
@@ -3037,6 +3064,7 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         /* The pause is carried out and its answer lost: not confirmed, and Check again only reads. */
         await page.evaluate(() => { (window as unknown as Hook).evidence.loseNextPipelineAnswer = true; });
         await page.click(laneMenu);
+        await openLaneActions(page);
         await page.locator('.menu [role="menuitem"]', { hasText: "Pause" }).first().click();
         await page.waitForFunction(() => [...document.querySelectorAll("[data-kanban-receipt].error .msg")].some((node) => node.textContent?.includes("is not confirmed")), undefined, { timeout: 5_000 });
         await page.waitForTimeout(350);
@@ -3063,6 +3091,7 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         await page.locator(section).evaluate((element) => element.scrollIntoView({ block: "center" }));
         await page.evaluate(() => { (window as unknown as Hook).evidence.refuseNextPipelinePatch = { status: 409, error: "the stage worktree has uncommitted changes" }; });
         await page.click(`${card("t-links")} [data-menu]`);
+        await openLaneActions(page);
         await page.locator('.menu [role="menuitem"]', { hasText: "Skip Builder" }).first().click();
         await page.waitForSelector("[data-kanban-receipt].error", { timeout: 5_000 });
         const refused = await page.locator("[data-kanban-receipt].error .msg").textContent();
@@ -8699,13 +8728,13 @@ describe("task priority: the Inbox takes high first and low last, the other colu
             if (extra.length) failures.push(`${label}: normal tasks carry a mark: ${extra.join(", ")}`);
             if (read.squeezed.length) failures.push(`${label}: title widths differ: ${read.squeezed.join(", ")}`);
             if (read.misplaced.length) failures.push(`${label}: mark not leading the foot: ${read.misplaced.join(", ")}`);
-            /* The card's ⋯: the Priority group under Move to, the current level checked. */
+            /* The card's ⋯: the priority row after the columns', the current level checked. */
             await page.locator(`${card("t-prio-notes")} [data-menu]`).click();
             await page.waitForSelector(".menu", { timeout: 10_000 });
             await page.waitForTimeout(300);
             await page.locator(".menu").screenshot({ path: path.join(pngDir, `${label}-menu.png`) });
             const menu = await page.evaluate(() => ({
-              heads: [...document.querySelectorAll(".menu .head")].map((head) => head.textContent?.trim()),
+              heads: [...document.querySelectorAll(".menu [data-cm-segments]")].map((group) => group.getAttribute("aria-label")),
               checked: [...document.querySelectorAll('.menu [role="menuitemradio"][aria-checked="true"]')].map((item) => item.querySelector(".lbl")?.firstChild?.textContent?.trim() ?? item.textContent?.trim()),
             }));
             readings[`${label}-menu`] = menu;
@@ -9037,10 +9066,13 @@ describe("interface polish round 2: press and open/close motion, the status menu
           /* A toast may stand over the ⋯, so no pointer. */
           await page.locator(`${card("t-upload")} [data-menu]`).evaluate((element) => { element.scrollIntoView({ block: "center" }); (element as HTMLElement).click(); });
           await page.waitForSelector('.menu[aria-label^="Actions for"]', { timeout: 5_000 });
-          const attach = await page.evaluate((selector) => ({
+          /* The task's own Attach is an icon cell; each lane's is on that lane's page. */
+          const own = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.menu .cm-quick [role="menuitem"]')].map((cell) => cell.getAttribute("aria-label") ?? "").filter((label) => label.startsWith("Attach PR or issue")));
+          await openLaneActions(page);
+          const attach = await page.evaluate(([selector, cells]) => ({
             lanes: document.querySelectorAll(`${selector} .pblock`).length,
-            labels: [...document.querySelectorAll<HTMLElement>('.menu [role^="menuitem"] .lbl')].map((label) => label.firstChild?.textContent ?? "").filter((label) => label.startsWith("Attach PR or issue")),
-          }), card("t-upload"));
+            labels: [...(cells as string[]), ...[...document.querySelectorAll<HTMLElement>('.menu [role^="menuitem"] .lbl')].map((label) => label.firstChild?.textContent ?? "").filter((label) => label.startsWith("Attach PR or issue"))],
+          }), [card("t-upload"), own] as const);
           await page.waitForTimeout(400);
           await page.screenshot({ path: path.join(OUT, "card-menu-attach.png") });
           await page.keyboard.press("Escape");
@@ -10328,11 +10360,22 @@ describe("#2187 a pipeline that finishes its task, and the wait for the task's o
             /* The card's ⋯: both lanes' toggles, the marked one checked with the count in warning ink. */
             await page.locator(card("t-finish-hold")).scrollIntoViewIfNeeded();
             await page.click(`${card("t-finish-hold")} [data-menu]`);
-            await page.waitForSelector('.menu [role="menuitemcheckbox"]', { timeout: 10_000 });
-            await page.waitForTimeout(350);
-            await page.locator(".menu").screenshot({ path: path.join(OUT, `menu-hold-${label}.png`) });
-            await page.screenshot({ path: path.join(OUT, `board-menu-${label}.png`) });
-            const menu = await page.evaluate(READ_MENU);
+            /* Each lane's toggle is on that lane's page, behind the card's one pipelines row. */
+            await page.evaluate(() => document.querySelector<HTMLElement>('.menu [data-cm-shown] [data-cm-section="pipelines"]')?.click());
+            const lanePages = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>(".menu [data-cm-shown] [data-cm-section]")].map((row) => row.dataset.cmSection!));
+            const menu: ReturnType<typeof READ_MENU> = [];
+            for (const [index, lane] of lanePages.entries()) {
+              await page.evaluate((id) => [...document.querySelectorAll<HTMLElement>(".menu [data-cm-shown] [data-cm-section]")].find((row) => row.dataset.cmSection === id)?.click(), lane);
+              await page.waitForSelector('.menu [role="menuitemcheckbox"]', { timeout: 10_000 });
+              await page.waitForTimeout(350);
+              if (index === 0) {
+                await page.locator(".menu").screenshot({ path: path.join(OUT, `menu-hold-${label}.png`) });
+                await page.screenshot({ path: path.join(OUT, `board-menu-${label}.png`) });
+              }
+              menu.push(...await page.evaluate(READ_MENU));
+              await page.evaluate(() => document.querySelector<HTMLElement>(".menu [data-cm-back]")?.click());
+              await page.waitForTimeout(120);
+            }
             const want = [
               { label: t("pipelineBlock.finish.menu"), checked: "true", why: t("pipelineBlock.finish.menuWhy"), warn: t("pipelineBlock.finish.menuOpen", { count: 1 }) },
               { label: t("pipelineBlock.finish.menu"), checked: "false", why: t("pipelineBlock.finish.menuWhy"), warn: null },
@@ -10346,6 +10389,7 @@ describe("#2187 a pipeline that finishes its task, and the wait for the task's o
             /* The toggle: clearing the running lane's flag sends link-task, and the flag leaves the row. */
             if (scheme === "light") {
               await page.click(`${card("t-finish-marked")} [data-menu]`);
+              await openLaneActions(page);
               await page.waitForSelector('.menu [role="menuitemcheckbox"]', { timeout: 10_000 });
               await page.locator('.menu [role="menuitemcheckbox"]').first().click();
               await page.waitForFunction(() => !document.querySelector('[data-kanban-board] .card[data-id="task:t-finish-marked"] span[data-pipeline-finish]'), undefined, { timeout: 10_000 }).catch(() => fail("the flag stayed on the row after clearing it"));
@@ -15982,6 +16026,7 @@ describe("task motion and waiting reasons", () => {
             await page.locator('[data-phone-task-hold]').click();
           } else {
             await page.locator(`${selector("motion-worker")} [data-menu]`).click();
+            await openMenuSection(page, "more");
             await page.getByRole("menuitem", { name: translate(locale, "kanban.hold.edit"), exact: true }).click();
           }
           const editor = page.locator('[data-hold-editor]');

@@ -1,7 +1,51 @@
-# A compact task card menu and overflow menus: three numbered variants
+# A compact task card menu and overflow menus
 
-Status: design only. Nothing here ships. The prototypes run in the evidence
-fixture under `?menus=1|2|3`; the product draws today's menus.
+Status: **variant 1 is built** and is the product's menu for every user. The
+operator chose it on 2026-10-06. Variants 2 and 3, the `?menus=1|2|3` switch
+and the prototype files are gone from the product; the comparison of the three
+stays below as the record. The header's ⋯ is pending its own design and is
+drawn as it was.
+
+## What was built
+
+| Menu | Built | Where |
+|---|---|---|
+| A card's ⋯ | variant 1 | `src/components/kanban/compactMenu.tsx`, laid out by `compactMenuModel.ts` |
+| A column's ⋯ | variant 1 | the same |
+| A conversation's ⋯ | variant 1 | the same |
+| The board's ⋯ | variant 1 | `BarMenuSection` in `src/components/ProjectBar.tsx` |
+| Phone: the card's long-press sheet | variant 1 | `CardSheet` in `src/components/mobile/MobileKanban.tsx` |
+| Phone: the task's ⋯ | variant 1 | `src/components/mobile/MobileTaskScreen.tsx` |
+| A pipeline's and a stage's menu | as they were | `compactLayout` returns `null` for them, held by a test |
+| The header's ⋯ | as it was | pending its own design (icons, grouping, names) |
+| Phone: the board menu | as it was | it holds the header's entries, so it follows the header's design |
+| Phone: a conversation's menu | as it was | not built in this change; variant 1 below is still its design |
+
+Four things differ from variant 1 as it was drawn, each to close a note the
+critic left open on it:
+
+- **A section always opens under its own row.** A menu with no room below its
+  button no longer stands above it and grows upward. It stands beside the
+  button, hung from its top edge like every other state, so the rows of a
+  section appear under the row that opened them wherever the card is, and a
+  closed row always points down. Placement is below, else beside
+  (`menuPlacement`); "above" is gone. At 1000×700, where the board is one
+  column, most cards open beside.
+- **What Hide leaves running is written under the cells**: "Hide: 2 agents keep
+  working", or "Hide: nothing stops", or the reason a Hide is refused. What the
+  ends of the priority row do is written under them: "Top of the Inbox" under
+  High, "Bottom of the Inbox" under Low. Neither is only a tooltip now.
+- **The keys stay on the menu.** Enter, E and H are drawn in the corner of
+  their cells (Enter as ↵) and named to a screen reader; I stays on the Icon
+  row.
+- **On the phone the cells stand at one inset from both edges** of the sheet,
+  and the line about Hide is under them there too.
+
+The two lines of words make the card's menu 300×280 at rest and 300×356 at its
+tallest (Appearance open), against 300×257 and 300×341 as drawn; the separator
+between the cells and the priority row was taken out to stay inside 360 px.
+The board's ⋯ rests at 256×192. The built measurements are in
+`evidence/compact-card-menu/built.json`.
 
 ## The request
 
@@ -70,8 +114,9 @@ phone: the board menu 390×743, scrolling, 29 controls; a conversation's menu
 
 ## The three variants
 
-Each one lays out the entries the board builds today, with their own labels
-and handlers (`compactMenus.prototype.model.ts`). New words are only the
+The rest of this note is the design as it was compared, before the build. Each
+variant laid out the entries the board builds, with their own labels and
+handlers. New words are only the
 section names. Six rules hold in all three:
 
 - **No state is taller than 360 px**, on a card with one pipeline, a waiting
@@ -84,8 +129,8 @@ section names. Six rules hold in all three:
   state fits there. Otherwise above it, with the bottom edge held: the
   resting list sits right over the button, a page grows upward, and a section
   that opens in place puts its rows above its own row. Where the tallest
-  state fits on neither side, the menu stands beside the button
-  (`menuPlacement` in `compactMenus.prototype.model.ts`).
+  state fits on neither side, the menu stands beside the button. (The build
+  replaced this rule: see "What was built".)
 - **The arrow says what a row will do.** A row that replaces the list with a
   page carries the arrow to the right. A row that opens in place carries the
   arrow down (up in a menu that grows upward), and it turns over once open.
@@ -327,37 +372,43 @@ a page (from 2), and the two prunings of the family with a visible second home
 
 ## Evidence
 
-`evidence/compact-card-menu/measurements.json` holds every reading: 706 states
-over today and three variants, at 1440×900, 1000×700 and 390×844, light and
-dark, en and uk, with the taps, the acted checks, the steadiness and
-double-click tallies, the side of the button each card menu opened on and the
-per-row sizes of today's menus. The driver is one `describe` block in
-`src/components/kanban/kanbanBoard.browser.test.tsx`:
+`evidence/compact-card-menu/measurements.json` is the design's record: 706
+states over the menus as they were and the three variants, at 1440×900,
+1000×700 and 390×844, light and dark, en and uk, with the taps, the acted
+checks, the steadiness and double-click tallies and the per-row sizes of the
+old menus. The prototype that produced it is no longer in the tree.
+
+`evidence/compact-card-menu/built.json` is the build's record, written by one
+`describe` block in `src/components/kanban/kanbanBoard.browser.test.tsx`:
 
 ```
 CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 LLV_COMPACT_MENUS_OUT=<dir> \
   bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "compact card menu"
 ```
 
-It writes the frames (each with its variant number in a strip above the
-application frame) and four contact sheets to `<dir>`; they are not committed.
-It fails when any state of a card's menu is over 300×360 or scrolls; when any
-state of a column's, a conversation's, the board's or the header's menu is
-over 360 px tall or scrolls; when any state of a phone sheet is taller than
-today's sheet or scrolls; when opening a section moves the pressed row or the
-edge that faces the ⋯; when any state lies over its own ⋯; when a double
-click on a row that opens a page, or on a back row, sends a write or lands on
-another row; when a row that opens in place and a row that opens a page carry
-the same arrow; when a state leaves the window or cuts a label; and when an
-entry is lost without a named home.
-`compactMenus.prototype.model.test.ts` holds that no layout loses an entry
-without naming where it went, that the resting list does not grow with the
-number of pipelines, and that no placement puts the tallest state over the
-button, for a button anywhere in either desktop window. `compactMenus.prototype.test.tsx` reads the one state the
-fixture cannot reach: no card of the fixture holds the orchestrator's
-conversation, so the refused Hide and its reason are read from the rendered
-markup.
+It writes the frames and two comparison sheets to `<dir>`; they are not
+committed. For the menus as they were, the same block runs first over an
+export of the merge base with `LLV_COMPACT_MENUS_SIDE=today` and the same
+`<dir>`; the built run then compares against those readings and lays both on
+the sheets.
 
-What the product gains for this, inert outside the fixture: an `id`, a
-`group` and a `note` on the board's menu entries, the menu's `kind`, and
-`menuPresenter` in `kanbanMenus.tsx`, which nothing in the product sets.
+It fails when any state of a card's menu is over 300×360 or scrolls; when any
+state of a column's, a conversation's or the board's menu is over 360 px tall
+or scrolls; when the card's sheet or the task's menu on the phone is taller
+than it was or scrolls; when opening a section moves the pressed row or the
+menu's top edge; when any state lies over its own ⋯; when the rows of a
+section opened in place are not under its row, or a closed row carries the
+arrow of an open one; when the line under the Hide cell or the two under the
+priority row are missing or cut; when the phone's cells stand at different
+insets; when a double click on a row that opens a page, or on a back row,
+sends a write or lands on another row; when a state leaves the window or cuts
+a label; when an entry of the old card or conversation menu is not in the
+built one; and when the header's ⋯, the phone's board menu or the phone's
+conversation menu measures differently from before.
+
+`compactMenuModel.test.ts` holds that the layout loses no entry, that the
+resting list does not grow with the number of pipelines, and that no placement
+puts the tallest state over the button or outside the window, for a button
+anywhere in either desktop window. `compactMenu.test.tsx` reads the states the
+fixture cannot reach, such as the refused Hide on the card that holds the
+orchestrator's conversation.

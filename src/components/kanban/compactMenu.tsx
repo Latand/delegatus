@@ -224,7 +224,7 @@ function CompactMenu({ layout, anchor, label, onClose }: { layout: CompactLayout
     const view = menu.querySelector<HTMLElement>("[data-cm-shown]");
     const rest = menu.offsetHeight;
     const chrome = rest - (view?.offsetHeight ?? rest);
-    const cap = parseFloat(getComputedStyle(menu).maxHeight) || window.innerHeight - 16;
+    const cap = parseFloat(menu.ownerDocument.defaultView?.getComputedStyle?.(menu).maxHeight ?? "") || window.innerHeight - 16;
     const probes = [...menu.querySelectorAll<HTMLElement>("[data-cm-probe]")].map((probe) => probe.offsetHeight + chrome);
     const tallest = Math.min(cap, Math.max(rest, ...probes));
     const spot = menuPlacement(anchor.getBoundingClientRect(), menu.offsetWidth, tallest, { width: window.innerWidth, height: window.innerHeight });
@@ -241,7 +241,7 @@ function CompactMenu({ layout, anchor, label, onClose }: { layout: CompactLayout
   useLayoutEffect(() => {
     const menu = ref.current;
     if (!menu || !placed) return;
-    const row = (id: string | undefined) => (id ? menu.querySelector<HTMLElement>(`[data-cm-section="${CSS.escape(id)}"]`) : null);
+    const row = (id: string | undefined) => (id ? [...menu.querySelectorAll<HTMLElement>("[data-cm-shown] [data-cm-section]")].find((element) => element.dataset.cmSection === id) ?? null : null);
     /* Into a page: its first entry. Back out: the row that led there. Opened in place: the row itself. */
     const left = from.current.length > path.length ? row(from.current[path.length]) : null;
     const first = menu.querySelector<HTMLElement>('.cm-page [role^="menuitem"]:not([aria-disabled="true"]):not(.cm-back)');
