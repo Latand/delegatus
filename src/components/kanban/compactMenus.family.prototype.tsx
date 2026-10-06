@@ -35,9 +35,15 @@ export interface Section {
   trail?: ComponentType;
 }
 /** How a row is drawn over the product's own: an icon in front of it, another name on it. */
-export interface Dress { icon?: LucideIcon; name?: Words; /** Drawn after the name: the state of what the row opens. */ trail?: ComponentType }
+export interface Dress {
+  icon?: LucideIcon; name?: Words;
+  /** Drawn with the name: the state of what the row opens. */
+  trail?: ComponentType;
+  /** The row opens this as a page of the menu, with a back row, where the product's row would open a dialog. */
+  panel?: ComponentType;
+}
 /** A row the menu does not have: it announces itself with an event, then presses the product's row that opens the same place. */
-export interface VirtualRow { press: string; event: string }
+export interface VirtualRow { press: string; event?: string }
 export type Placement =
   | { rows: readonly string[]; cells?: boolean }
   | { section: Section };
@@ -188,6 +194,14 @@ export const FAMILY_CSS = `
 [data-cmf] [data-cmf-head], [data-cmf] [data-cmf-proxy] { display: flex; width: 100%; align-items: center; text-align: left; }
 [data-cmf] .cmf-ico { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; opacity: 0.72; }
 [data-cmf] [data-cmf-mask]::before { content: ""; width: 16px; height: 16px; flex-shrink: 0; background: currentColor; opacity: 0.72; -webkit-mask: var(--cmf-mask) center / contain no-repeat; mask: var(--cmf-mask) center / contain no-repeat; }
+[data-cmf] .cmf-two { display: flex; min-width: 0; flex: 1 1 auto; flex-direction: column; gap: 1px; }
+[data-cmf] [data-cmf-proxy]:has(> .cmf-two), [data-cmf] [data-cmf-head]:has(> .cmf-two) { padding-top: 4px; padding-bottom: 4px; }
+[data-cmf] .cmf-two > .cmf-title { line-height: 16px; }
+[data-cmf] .cmf-two > .cmf-state { line-height: 14px; }
+[data-cmf="phone-board"] [data-cmf-proxy]:has(> .cmf-two), [data-cmf="phone-board"] [data-cmf-head]:has(> .cmf-two) { padding-top: revert-layer; padding-bottom: revert-layer; }
+[data-cmf] .cmf-two > .cmf-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+[data-cmf="phone-board"] .cmf-two { flex-direction: row; align-items: center; justify-content: space-between; gap: 8px; }
+[data-cmf] [data-cmf-panel] { order: 0; }
 [data-cmf] [data-cmf-name] { font-size: 0; }
 [data-cmf] [data-cmf-name]::after { content: attr(data-cmf-name); font-size: 12px; }
 [data-cmf] [data-cmf-proxy] > .cmf-title, [data-cmf] [data-cmf-head] > .cmf-title { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -266,6 +280,9 @@ function FamilyMenu({ container, spec, variant }: { container: HTMLElement; spec
   /* A dressed row: drawn here with its icon and name, pressing the product's own row, which stays in the menu unseen. */
   const [proxies, setProxies] = useState<{ key: string; title: string; order: number; cell: number | null; within: boolean }[]>([]);
   const pressed = useRef(new Map<string, HTMLElement>());
+  /* A row's own page: what it holds, and the state to return to. */
+  const panelKey = open?.startsWith("panel:") ? open.slice(6) : null;
+  const [from, setFrom] = useState<string | null>(null);
   const swapped = useSwapGuard();
   const swap = (next: string | null, event: React.MouseEvent) => {
     swapped(event);
@@ -284,7 +301,7 @@ function FamilyMenu({ container, spec, variant }: { container: HTMLElement; spec
       stand.setAttribute("data-cmf-virtual", key);
       stand.setAttribute("data-cmf-key", key);
       stand.textContent = key;
-      stand.onclick = () => { window.dispatchEvent(new Event(virtual.event)); container.querySelector<HTMLElement>(virtual.press)?.click(); };
+      stand.onclick = () => { if (virtual.event) window.dispatchEvent(new Event(virtual.event)); container.querySelector<HTMLElement>(virtual.press)?.click(); };
       container.appendChild(stand);
     }
     const laid = rowsOf(container, spec);
@@ -297,8 +314,9 @@ function FamilyMenu({ container, spec, variant }: { container: HTMLElement; spec
     pressed.current.clear();
     const sections = layout.placements.flatMap((placement) => ("section" in placement ? [placement.section] : []));
     const inside = open ? sections.find((section) => section.id === open && paged(variant, section)) ?? null : null;
-    const put = (entry: Laid, shown: boolean, cell: number | null, within: boolean) => {
+    const put = (entry: Laid, visible: boolean, cell: number | null, within: boolean) => {
       taken.add(entry);
+      const shown = visible && !panelKey;
       const dress = spec.dress?.[entry.key];
       const proxied = Boolean(dress) && entry.row.matches("button, a");
       entry.row.toggleAttribute("data-cmf-proxied", proxied);
@@ -342,7 +360,7 @@ function FamilyMenu({ container, spec, variant }: { container: HTMLElement; spec
     /* The section rows are counted from the rows the product drew, which only the laid-out DOM knows. */
     setHeads((current) => (JSON.stringify(current) === JSON.stringify(next) ? current : next));
     setProxies((current) => (JSON.stringify(current) === JSON.stringify(drawn) ? current : drawn));
-  }, [chrome, container, spec, variant, layout, open, lang, tick]);
+  }, [chrome, container, spec, variant, layout, open, panelKey, lang, tick]);
   useEffect(() => () => { chrome.remove(); }, [chrome]);
   const inside = open ? heads.find((head) => head.id === open && head.page) ?? null : null;
   const sectionOf = (id: string) => layout.placements.flatMap((placement) => ("section" in placement && placement.section.id === id ? [placement.section] : []))[0];
@@ -355,23 +373,40 @@ function FamilyMenu({ container, spec, variant }: { container: HTMLElement; spec
   return createPortal(
     <>
       <style>{FAMILY_CSS}</style>
-      {proxies.map((proxy) => (
-        <button
-          key={proxy.key}
-          type="button"
-          className={sample}
-          data-cmf-proxy={proxy.key}
-          data-cmf-cell={proxy.cell ? "" : undefined}
-          data-cmf-in={proxy.within ? "" : undefined}
-          style={{ order: proxy.order, gridColumn: proxy.cell ? `span ${proxy.cell}` : undefined }}
-          onClick={() => pressed.current.get(proxy.key)?.click()}
-        >
-          {mark(spec.dress?.[proxy.key]?.icon)}
-          <span className="cmf-title">{proxy.title}</span>
-          {trail(spec.dress?.[proxy.key]?.trail)}
-        </button>
-      ))}
-      {inside ? (
+      {proxies.map((proxy) => {
+        const dress = spec.dress?.[proxy.key];
+        return (
+          <button
+            key={proxy.key}
+            type="button"
+            className={sample}
+            data-cmf-proxy={proxy.key}
+            data-cmf-cell={proxy.cell ? "" : undefined}
+            data-cmf-in={proxy.within ? "" : undefined}
+            data-cmf-opens={dress?.panel ? "page" : undefined}
+            aria-haspopup={dress?.panel ? "menu" : undefined}
+            style={{ order: proxy.order, gridColumn: proxy.cell ? `span ${proxy.cell}` : undefined }}
+            onClick={(event) => {
+              if (!dress?.panel) { pressed.current.get(proxy.key)?.click(); return; }
+              setFrom(open);
+              swap(`panel:${proxy.key}`, event);
+            }}
+          >
+            {mark(dress?.icon)}
+            {dress?.trail ? <span className="cmf-two"><span className="cmf-title">{proxy.title}</span>{trail(dress.trail)}</span> : <span className="cmf-title">{proxy.title}</span>}
+            {dress?.panel ? <ChevronRight aria-hidden style={{ width: 16, height: 16, flexShrink: 0, opacity: 0.55 }} /> : null}
+          </button>
+        );
+      })}
+      {panelKey && spec.dress?.[panelKey]?.panel ? (
+        <>
+          <button type="button" className={sample} data-cmf-head="back" data-cmf-section={`panel:${panelKey}`} style={{ order: -1 }} onClick={(event) => swap(from, event)}>
+            <ChevronLeft aria-hidden />
+            <span className="cmf-title">{spec.dress[panelKey]!.name?.[lang] ?? panelKey}</span>
+          </button>
+          <div data-cmf-panel={panelKey}>{trail(spec.dress[panelKey]!.panel)}</div>
+        </>
+      ) : inside ? (
         <button type="button" className={sample} data-cmf-head="back" data-cmf-section={inside.id} style={{ order: -1 }} onClick={(event) => swap(null, event)}>
           <ChevronLeft aria-hidden />
           <span className="cmf-title">{inside.title}</span>
@@ -390,8 +425,7 @@ function FamilyMenu({ container, spec, variant }: { container: HTMLElement; spec
           onClick={(event) => (head.page ? swap(head.id, event) : setOpen(open === head.id ? null : head.id))}
         >
           {mark(iconOf(head.id))}
-          <span className="cmf-title">{head.title}</span>
-          {trail(sectionOf(head.id)?.trail)}
+          {sectionOf(head.id)?.trail ? <span className="cmf-two"><span className="cmf-title">{head.title}</span>{trail(sectionOf(head.id)!.trail)}</span> : <span className="cmf-title">{head.title}</span>}
           <span className="cmf-count">{head.count}</span>
           {/* A page is the arrow to the right; a section that opens in place points down, and up once it is open. */}
           {head.page ? <ChevronRight aria-hidden /> : open === head.id ? <ChevronUp aria-hidden /> : <ChevronDown aria-hidden />}

@@ -421,7 +421,7 @@ read from the code and the interface; there is no click telemetry.
 | 6 | Призначення агентів / Agent mapping | 461 | 2112 | The table "Who does what": engine, model and effort for each role, read by every pipeline and role-based spawn | an installation setting; weekly for an operator who tunes the engine mix |
 | 7 | Диктування / Dictation | 469 | 2112 | Chooses what transcribes dictated speech, a local model or a service | an installation setting; rare |
 | 8 | Налаштування / Settings | 477 | 2113 | A dialog titled Settings (`src/components/telemetry/TelemetrySettings.tsx:49`) that holds the six things listed as 8a–8f | see each |
-| 8a | The notice about the daily ping, and the switch "Анонімний пінг встановлення / Anonymous install ping" | dialog, `TelemetrySettings.tsx:51` | the same dialog | Turns off the daily ping of a random id, version and OS to delegatus.org | an installation privacy switch; once |
+| 8a | The notice about the daily ping, and the switch "Анонімний пінг встановлення / Anonymous install ping" | dialog, `TelemetrySettings.tsx:51` | the same dialog | Turns off the daily ping of a random id, version and OS to delegatus.org | an installation privacy switch; once. The paragraph with its environment variables opens the dialog today, above memory; it belongs behind an entry named for the ping, as that dialog's whole body |
 | 8b | "Ключ OpenRouter / OpenRouter key": whether a key is present and from where, a field and "Save key" (`src/components/asks/OpenRouterKeySetting.tsx:39`) | dialog | the same dialog | Stores the one installation key that "Asks you" and shared memory both call the provider with | an installation credential; once, and again when memory reports no key |
 | 8c | The switch "Спільна пам’ять для цього проєкту / Shared memory for this project" (`src/components/memory/MemorySetting.tsx:44`) with its one-line explanation | dialog | the same dialog | Lets Jev pick relevant memory for each operator message in this project and hand it to the agent | a per-project rule; once per project |
 | 8d | The status line (`MemorySetting.tsx:50`): "Injection can run…", or the reason it cannot: off for this project, no OpenRouter key, the monthly cap reached, another release serves traffic | dialog | the same dialog | Says whether memory is being injected now and what blocks it | a state to read; whenever memory seems silent |
@@ -481,16 +481,17 @@ Groups (uk / en) and what each holds:
 
 | Variant | At rest | Groups |
 |---|---|---|
-| 1 | Активність, Оновлення, Пам’ять проєкту (with its state) | **Цей браузер / This browser** (on the phone **Цей пристрій / This device**): language, notifications; on the phone sound alerts and keep awake. **Ця інсталяція / This installation**: roles table, dictation, linked installs, relay, the ping (opens as a page). **Люди й доступ / People and access**: team, open on phone, sign out. **Довідка / Help**: setup guide, interface walk |
-| 2 | cells Активність · Команда · Оновлення; Sign out | **Агенти й голос / Agents and voice**: roles table, dictation. **Підключення / Connections**: open on phone, linked installs, relay. **Мова й сповіщення / Language and alerts** (on the phone **Звук і екран / Sound and screen**). **Що йде назовні / What leaves here** (its row carries memory's state): shared memory, the ping. **Як користуватися / How to use it**: setup guide, interface walk |
-| 3 | Звіт про час, Команда й сеанси, Відкрити на телефоні, Оновлення; Sign out | **Налаштування / Settings** (a page): language, notifications, sound alerts and keep awake on the phone, project memory (with its state), roles table, dictation, linked installs, relay, the ping; its row carries memory's state. **Довідка й навчання / Help and learning**: setup guide, interface walk |
+| 1 | Активність, Оновлення, Спільна пам’ять (with its state), Ключ OpenRouter | **Цей браузер / This browser** (on the phone **Цей пристрій / This device**): language, notifications; on the phone sound alerts and keep awake. **Ця інсталяція / This installation**: roles table, dictation, linked installs, relay, the ping (opens as a page). **Люди й доступ / People and access**: team, open on phone, sign out. **Довідка / Help**: setup guide, interface walk |
+| 2 | cells Активність · Команда · Оновлення; Sign out | **Агенти й голос / Agents and voice**: roles table, dictation. **Підключення / Connections**: open on phone, linked installs, relay. **Мова й сповіщення / Language and alerts** (on the phone **Звук і екран / Sound and screen**). **Що йде назовні / What leaves here** (its row carries memory's state): shared memory, the OpenRouter key, the ping. **Як користуватися / How to use it**: setup guide, interface walk |
+| 3 | Звіт про час, Команда й сеанси, Відкрити на телефоні, Оновлення; Sign out | **Налаштування / Settings** (a page): language, notifications, sound alerts and keep awake on the phone, shared memory (with its state), the OpenRouter key, roles table, dictation, linked installs, relay, the ping; its row carries memory's state. **Довідка й навчання / Help and learning**: setup guide, interface walk |
 
 Renamed buttons, old name → new name:
 
 | Entry | 1 | 2 | 3 |
 |---|---|---|---|
 | Налаштування / Settings (the ping's side of the dialog) | Приватність / Privacy | Анонімний пінг / Install ping | Анонімний пінг / Install ping |
-| no entry today (the memory side of the same dialog) | Пам’ять проєкту / Project memory | Спільна пам’ять / Shared memory | Пам’ять проєкту / Project memory |
+| no entry today (the memory block of the same dialog) | Спільна пам’ять / Shared memory | the same | the same |
+| no entry today (the key row of the same dialog) | Ключ OpenRouter / OpenRouter key | the same | the same |
 | Призначення агентів / Agent mapping | Агенти для ролей / Agents by role | Хто що робить / Who does what (the dialog's own heading) | Ролі: рушій і модель / Roles: engine and model |
 | Диктування / Dictation | Розпізнавання мовлення / Speech recognition | Голосове введення / Voice input | unchanged |
 | Пов’язані інсталяції / Linked installs | Пов’язані комп’ютери / Linked machines | Інші інсталяції / Other installs | unchanged |
@@ -517,7 +518,8 @@ surface, and every entry opens the dialog, sheet or page it opens today.
 | Roles table (Agent mapping) | rest | This installation | Agents and voice | Settings |
 | Dictation | rest | This installation | Agents and voice | Settings |
 | The Settings dialog, opened at the ping | rest | This installation | What leaves here | Settings |
-| The Settings dialog, opened at shared memory | no entry of its own | rest, with its state | What leaves here, with its state | Settings, with its state |
+| Shared memory (today a block of the Settings dialog) | no entry of its own | rest, with its state; opens its page | What leaves here, with its state | Settings, with its state |
+| The OpenRouter key (today a row of the Settings dialog) | no entry of its own | rest, beside memory | What leaves here | Settings |
 | Linked installs | rest | This installation | Connections | Settings |
 | External relay | rest | This installation | Connections | Settings |
 | Update | rest | rest | rest, a cell | rest |
@@ -541,88 +543,139 @@ Desktop, the header's ⋯ (232 px wide):
 
 | State | Today | 1 | 2 | 3 |
 |---|---|---|---|---|
-| At rest | 437, 13 controls | 220 | 220 | 202 |
-| Tallest open state | | 296 (This browser) | 322 (Connections) | page 301 (Settings) |
-| Other groups open | | 280–292; page 195 (This installation) | 280–296 | 262 |
+| At rest | 437, 13 controls | 268 | 229 | 211 |
+| Tallest group open | | 344 (This browser) | 337 (What leaves here) | page 349 (Settings) |
+| Other groups open | | 328–340; page 195 (This installation) | 289–331 | 271 |
+| Memory page; with More | | 177–282; 340 at most | the same | the same |
+| Key page | | 100–126 | the same | the same |
 
 Phone, the board menu's sheet (390 px wide). Its board rows keep the chosen
 variant 1 layout; the header's rows take the header variant.
 
 | State | Today | 1 | 2 | 3 |
 |---|---|---|---|---|
-| At rest | 743, scrolls, 29 controls | 660 | 632 | 572 |
+| At rest | 743, scrolls, 29 controls | 704 | 632 | 572 |
 | Tallest open state | | at rest (every group is a page) | 720 | 660 (Help and learning) |
-| Pages | | 208–340 | 229 (Sound and screen) | 493 (Settings) |
+| Pages | | 208–340 | 229–252 | 537 (Settings) |
+| Memory page; key page | | 292–434; 206–232 | the same | the same |
 
 In each variant the driver also presses the entry today called Settings under
 its new name and checks that the product's own dialog opens.
 
 ### Shared memory's home
 
-The block is the product's own in every variant: the same switch, status
-line, key row and counters, with no new capability. Two things change. The
-menu gains an entry that names memory, and the dialog behind it draws the
-block as one card.
+A read-only critique of today's memory surfaces arrived after the first round
+(its frames and measurements are in the handoff folder `memory-ui`). Its
+verdict on the Settings block: "working" and "blocked" differ by one sentence
+of plain text, the switch is a browser checkbox that looks the same when
+memory is blocked, the counters read as a log line, and on the phone the
+reason says "enter it below" while the field is under the fold. What it asks
+of this menu is the content of two rows, and all three variants carry it
+unchanged; they still differ in where the rows stand and what stands around
+them. Nothing here is a new capability: the same switch, state, key and
+counters, read from and written to `/api/memory/settings` and
+`/api/asks-you/key`.
 
-**In the menu.** The entry carries memory's state as a dot and one word, read
-from the reasons the status line already reports: працює / working (green),
-вимкнено / off (grey), без ключа / no key and ліміт / capped (amber), and
-інший реліз / other release where another release serves traffic. Where the
-entry is inside a group, the group's row carries the dot, so the first level
-answers "is memory working" in every variant.
+**The first level: one row, "Спільна пам’ять / Shared memory".** Icon, name,
+state. The state is a word beside a coloured dot, never the colour alone:
+
+| State | The row reads |
+|---|---|
+| Working | green dot · Працює · 61 цього місяця / Working · 61 this month |
+| Off | grey dot · Вимкнено / Off |
+| No key | amber dot · Потрібен ключ / Key needed |
+| At the cap | amber dot · Ліміт до 1 листопада / Cap until November 1 |
+
+On the phone the state stands at the row's right end. The desktop panel is
+232 px wide, where the name and "Працює · 61 цього місяця" do not fit one
+line, so the state is the row's second line there.
+
+**One step in: the memory page.** The row opens a page of the menu with a
+back row. It holds, in this order:
+
+1. the switch "Для цього проєкту / For this project", drawn by the product's
+   own `ProjectSettingRow`, the control the board's project rules use; a
+   switch that is on while memory is blocked turns amber, so "on but blocked"
+   does not look like "on";
+2. while blocked, the reason in one sentence with its action beside it:
+   "Щоб пам’ять підставлялась, потрібен ключ OpenRouter." with "Ввести ключ /
+   Enter the key", which opens the field right there; at the cap, "Ліміт $5
+   на місяць використано, відновиться 1 листопада." with no action, because
+   the product has no place where the cap is set;
+3. three numbers in a row: підставлено / added, перевірено / checked,
+   витрачено із $5 / spent of $5, captioned "Повідомлення всієї інсталяції,
+   не лише цього проєкту · жовтень". A month of zeros is hidden while memory
+   is blocked;
+4. "Докладніше / More", which opens the other five counters as a small
+   two-column table: дібрано, без кандидатів, без збігу, пропущено, невдалих.
+
+**The OpenRouter key is its own row beside memory**, since "Asks you" and
+shared memory both use it. Its state reads Збережено / Saved or Немає /
+Missing. Its page says "Для «Питає вас» і спільної пам’яті"; a saved key shows
+no empty field until "Замінити / Replace" asks for one, a missing key shows
+the field at once, and a key set in the environment says so. The field
+itself is the product's own key row (`OpenRouterKeySetting`), of which only
+the field, its button and its errors are drawn.
+
+**Wording.** One verb for what happens to a memory: підставлено / added. The
+model is "невелика модель через OpenRouter / a small model through
+OpenRouter"; "Jev" is gone. No counter is called "decisions": the number is
+"перевірено / checked". The month is its name, money has two decimals and
+none on a whole amount, and the installation-wide numbers say so under the
+per-project switch. The driver fails on "Jev", "decisions", a `2026-10` month
+or a three-decimal amount anywhere on the page.
+
+**Where the telemetry paragraph belongs.** The Settings dialog opens today
+with a paragraph about the daily ping and its environment variables, and
+memory starts 336 px down. In every variant that paragraph and its switch are
+the whole dialog, behind the entry named for it ("Приватність" in 1,
+"Анонімний пінг" in 2 and 3); the dialog takes that entry's name, and memory
+and the key leave it for their rows.
+
+Where the two rows stand:
 
 | | 1 Whose it is | 2 What I came to do | 3 Settings that are settings |
 |---|---|---|---|
-| Found by the name | Пам’ять проєкту / Project memory | Спільна пам’ять / Shared memory, in "Що йде назовні" | Пам’ять проєкту / Project memory, in "Налаштування" |
-| At the first level | the entry itself with the dot and the word | the dot on the group's row | the dot on the Settings row |
-| One step in | the dialog: switch, state, counters, key | the entry with the dot and the word | the entry with the dot and the word |
-| Two steps in | | the dialog | the dialog |
-| Why there | memory is this project's, so it stands outside the browser's and the installation's groups | memory sends context out, as the ping does | it is a switch, and this variant keeps every switch on one page |
+| Memory and the key | at the first level, after Activity and Update | in the group "Що йде назовні / What leaves here", with the ping | on the Settings page, after language and notifications |
+| The state at the first level | on the memory row, in full | on the group's row: "пам’ять: працює / memory: working" | on the Settings row: "пам’ять: працює" |
+| Taps to the memory page | 2 | 3 | 3 |
+| Why there | memory is this project's and the key is used by two features, so neither belongs to the browser's or the installation's group | memory and the ping both send something out, and the key is what sends it | each is a switch or a credential, and this variant keeps all of them on one page |
 
-**In the dialog.** Pressing the memory entry opens the Settings dialog under
-the entry's name with memory first, as one card:
-
-- the product's switch "Shared memory for this project";
-- a state chip (Працює / Working, Вимкнено для цього проєкту / Off for this
-  project, Потрібен ключ OpenRouter / Needs an OpenRouter key, Пауза:
-  місячний ліміт вичерпано / Paused: the monthly cap is reached) over the
-  product's own status sentence, which gives the reason and what to do;
-- three tiles for the numbers the operator named: decisions, turns with
-  memory, and the spend against the cap with a bar that turns amber at the
-  cap; one muted line under them keeps the other five counters (prepared, no
-  candidates, no match, skipped, failed) with the month and the scope;
-- the explanation of what is sent to Jev;
-- the OpenRouter key row as the card's lower part, since the "no key" reason
-  points at it.
-
-The ping follows under a small "Privacy" heading. Pressing the ping's entry
-opens the same dialog with that part first. The dialog is 512×728–790 px at
-1440×900 against 669–732 today and does not scroll; on the phone it is a page
-that scrolls, as today.
+**Why a page.** The critique asks for the row to open in place. In place the
+memory page would make the desktop menu 430 to 560 px tall, over the 360 px
+bound of this family, so it opens as a page with a back row, as every group
+does that would pass the bound. The page is 177 to 282 px, 340 px at most
+with "More" open; the key page is 100 to 126 px. On the phone the memory page
+is 292 to 434 px and the key page 206 to 232 px, with the action and the
+field always in view.
 
 Frames: every variant with memory working, off, without a key and at its cap,
-in uk and en at 1440×900 in light (the menu at rest, the group that holds the
-entry, the dialog), the working and keyless states also in dark and on the
-phone, and today's dialog in the same states. The driver fails when the first
-level shows any other state than the one served, when the dialog's chip, the
-switch, the three tiles or the key row are missing or disagree with it, when
-memory, the key and the ping stand in another order, when a tile's text is
-cut, and when the desktop dialog scrolls.
+in uk and en at 1440×900 in light (the first level, the group, the memory
+page, the page with "More" or with the key field open, the key page, the key
+page after "Replace", the ping's dialog); the working and keyless states also
+in dark and on the phone; today's dialog in the same states. The driver fails
+when the first level shows other words than the state served, when the switch,
+its blocked look, the reason, the numbers or the key's state disagree with
+that state, when "Enter the key" or "Replace" does not open the field where
+it was pressed, when "More" does not list the five remaining counters, when a
+banned word appears, when the ping's dialog still draws memory or the key, and
+when any state is over its bound.
 
-Costs of this part: the prototype draws the tiles from the same
-`/api/memory/settings` answer and hides the product's two sentences, so a
-build moves that drawing into `MemorySetting.tsx`; the chip's words are new
-strings; the menu reads the memory state when it opens, one request more; the
-counters are the installation's while the switch is the project's, which the
-muted line says and the tiles do not. The read-only critique of today's
-memory surfaces had not arrived when this was written; its findings go into
-the next round.
+Costs of this part: two rows of two lines make the first level taller than in
+the first round (variant 1 rests at 268 px, was 220). Variants 2 and 3 name
+the state at the first level only in its short form, on a group's row. The
+pages are drawn by the prototype over the product's endpoints and its
+`ProjectSettingRow`; a build writes them as components and retires the two
+blocks of the dialog. "Asks you" keeps its own switch in the board's ⋯ and
+shares the key row with memory. The message-side part of the critique, the
+chip under a message, belongs to another lane.
 
 ### Costs
 
 - **All three**: ten of thirteen entries go from two taps to three. Memory
-  now has its own entry, and its honest long-term home is still the project's
-  rules in the board's ⋯ beside "Asks you", a menu this round does not touch.
+  and the key now have their own rows; the per-project switch could also
+  stand among the project's rules in the board's ⋯ beside "Asks you", a menu
+  this round does not touch.
   The phone's sheet is
   taller at rest than the chosen variant 1 sheet (484 px) because the places
   to go stand at the first level; it stays under today's 743 and never
@@ -630,31 +683,31 @@ the next round.
   row under it; a build writes the names and icons into `ProjectRail.tsx` and
   the phone's entries.
 - **1**: "This installation" holds five rows and opens as a page, the one
-  group here that leaves the list; with memory at rest the first level is
-  seven rows.
+  group here that leaves the list; with memory and the key at rest the first
+  level is eight rows, 268 px.
   "Open on phone" sits under "People and access", which is true of what it
   does and may be looked for under the browser.
 - **2**: the grouping follows today's habits of one operator; "What leaves
   here" names what the dialog's switches share and leaves out the "Asks you"
-  switch, which also sends text out and lives in the board's ⋯. Memory's word
-  is one step in; the first level shows only its dot.
+  switch, which also sends text out and lives in the board's ⋯. Memory's full
+  state is one step in; the first level names it in short on the group's row.
 - **3**: the Settings page hides the first level while it is open, and its
-  eight rows mix a browser's preferences with the installation's. Three
+  ten rows mix a browser's preferences with the installation's. Three
   entries are renamed beyond the complaint (Activity, Team, the relay).
 
 ### Recommendation
 
 **Variant 1.** Its group names answer the question a person brings to this
-menu, "where does this change apply"; its first level is half of today's
-(220 px against 437); and it is the one variant where shared memory is found
-by its name at the first level with its state in a word, which is what a demo
-shows first. If the operator
+menu, "where does this change apply"; its first level is well under today's
+(268 px against 437); and it is the one variant where shared memory is found
+by its name at the first level with its whole state in words, two taps from
+its page, which is what a demo shows first. If the operator
 wants the word "Налаштування" kept in the menu, variant 3 is the one that
 makes it true.
 
 ### Evidence
 
-`evidence/compact-card-menu/header-menu.json`: 326 states over today and the
+`evidence/compact-card-menu/header-menu.json`: 446 states over today and the
 three variants at 1440×900, 1000×700 and 390×844, light and dark, en and uk,
 with the entries each state shows and the name each is drawn under. The
 driver is a second case of the same `describe` block:
@@ -666,7 +719,8 @@ CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 LLV_HEADER_MENU_OUT=<dir> \
 
 It writes the single frames, `sheet-compare-uk.png` and `sheet-compare-en.png`
 (today and 1, 2, 3 at rest), one sheet per variant with its groups open and
-`sheet-memory-uk.png` and `sheet-memory-en.png` (memory's home in each state);
+`sheet-memory-uk.png` and `sheet-memory-en.png` (memory and the key in each
+state) with one `sheet-memory-<lang>-variant-<n>.png` per variant;
 they are not committed. It fails when a desktop state is over 360 px, when a
 phone state is taller than today's sheet, when a state scrolls, leaves the
 window or cuts a label, when opening a group moves its own row, when an entry
@@ -674,8 +728,9 @@ of today's menu is shown in no state, when a renamed entry reads otherwise
 than its variant names it, and when the renamed Settings entry does not open
 the product's dialog. `headerMenu.prototype.test.ts` holds that every entry
 has exactly one home in every variant, Sign out included, which the fixture
-cannot draw without a member session, and that one state is read from the
-reasons the product reports. The prototype is `headerMenu.prototype.ts` and
+cannot draw without a member session, that memory and the key stand at one level with a state and a page each,
+that one state is read from the reasons the product reports, and how the
+state, the month and the money are worded. The prototype is `headerMenu.prototype.ts` and
 `headerMemory.prototype.tsx` over the family prototype, mounted by the
 fixture under `?header=1|2|3` with `&memory=working|off|noKey|capped`; the
 product is unchanged.

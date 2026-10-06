@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 
 import type { MemorySettingView } from "@/lib/memory/viewTypes";
 
-import { HEADER_ITEMS, HEADER_LAYOUTS, HEADER_MEMORY_EVENT, HEADER_VARIANTS, headerFamilySpecs, headerHome, headerName, type HeaderItem } from "./headerMenu.prototype";
-import { MEMORY_STATES, memoryFixtureView, memoryTone } from "./headerMemory.prototype";
+import { HEADER_ITEMS, HEADER_LAYOUTS, HEADER_VARIANTS, headerFamilySpecs, headerHome, headerName, type HeaderItem } from "./headerMenu.prototype";
+import { MEMORY_STATES, memoryFixtureServer, memoryFixtureView, memoryTone, memoryWord, money } from "./headerMemory.prototype";
 
 const ITEMS = Object.keys(HEADER_ITEMS) as HeaderItem[];
 
@@ -54,16 +54,21 @@ describe("the header's menu, three groupings (docs/design/compact-card-menu.md)"
   });
 });
 
-describe("shared memory's home in the header's menu", () => {
-  test("every variant names memory apart from the ping and shows its state at the first level", () => {
+describe("shared memory and the key in the header's menu", () => {
+  test("every variant gives memory and the key their own rows, each with its state and its page", () => {
     for (const variant of HEADER_VARIANTS) {
-      expect(headerName(variant, "memory")).not.toEqual(headerName(variant, "settings"));
+      expect(headerName(variant, "memory").en).toBe("Shared memory");
+      expect(headerName(variant, "settings")).not.toEqual(HEADER_ITEMS.settings.today);
+      /* The key stands at the level memory does, since two features use it. */
+      expect(headerHome(variant, "key")?.group?.id).toBe(headerHome(variant, "memory")?.group?.id);
       const home = headerHome(variant, "memory")!;
-      const [rail, phone] = headerFamilySpecs(variant);
-      for (const spec of [rail!, phone!]) {
-        expect(spec.dress?.memory?.trail).toBeDefined();
-        expect(spec.virtual?.memory?.event).toBe(HEADER_MEMORY_EVENT);
-        /* At rest the entry carries its state itself; inside a group the group's row carries it. */
+      for (const spec of headerFamilySpecs(variant)) {
+        for (const row of ["memory", "key"] as const) {
+          expect(spec.dress?.[row]?.trail).toBeDefined();
+          expect(spec.dress?.[row]?.panel).toBeDefined();
+          expect(spec.virtual?.[row]).toBeDefined();
+        }
+        /* At rest the entry carries its state itself; inside a group the group's row names it too. */
         const section = spec.layouts[1].placements.flatMap((placement) => ("section" in placement && placement.section.rows.includes("memory") ? [placement.section] : []))[0];
         if (home.group) expect(section?.trail).toBeDefined(); else expect(section).toBeUndefined();
       }
@@ -80,5 +85,29 @@ describe("shared memory's home in the header's menu", () => {
     expect(memoryTone(view(["capped"]))).toBe("capped");
     expect(memoryTone(view(["noKey", "notOwner"]))).toBe("notOwner");
     for (const state of MEMORY_STATES) expect(memoryTone(memoryFixtureView(state))).toBe(state);
+  });
+
+  test("the state is a word in both languages, with the month's count and the day the cap resets", () => {
+    expect(memoryWord(memoryFixtureView("working"), "en")).toBe("Working · 61 this month");
+    expect(memoryWord(memoryFixtureView("working"), "uk")).toBe("Працює · 61 цього місяця");
+    expect(memoryWord(memoryFixtureView("off"), "uk")).toBe("Вимкнено");
+    expect(memoryWord(memoryFixtureView("noKey"), "en")).toBe("Key needed");
+    expect(memoryWord(memoryFixtureView("capped"), "en")).toBe("Cap until November 1");
+    expect(memoryWord(memoryFixtureView("capped"), "uk")).toBe("Ліміт до 1 листопада");
+    for (const state of MEMORY_STATES) for (const lang of ["en", "uk"] as const) for (const short of [false, true]) expect(memoryWord(memoryFixtureView(state), lang, short)).not.toMatch(/Jev|decision|рішен/i);
+  });
+
+  test("money has two decimals, and none on a whole amount", () => {
+    expect(money(1.214)).toBe("$1.21");
+    expect(money(4.996)).toBe("$5.00");
+    expect(money(5)).toBe("$5");
+  });
+
+  test("the fixture's endpoints answer a flipped switch and a saved key as the product's would", () => {
+    const server = memoryFixtureServer("noKey");
+    expect(memoryTone(server("GET", "/api/memory/settings", null) as MemorySettingView)).toBe("noKey");
+    expect(server("PUT", "/api/asks-you/key", { key: "k" })).toEqual({ present: true, source: "file" });
+    expect(memoryTone(server("GET", "/api/memory/settings", null) as MemorySettingView)).toBe("working");
+    expect(memoryTone(server("PUT", "/api/memory/settings", { enabled: false }) as MemorySettingView)).toBe("off");
   });
 });

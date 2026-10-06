@@ -16,7 +16,7 @@ import { REPORT_LOG_CHAT_MIN_WIDTH, REPORT_LOG_MAX_WIDTH, REPORT_LOG_MIN_WIDTH, 
 import { playPath, pointerPath, recordDrag } from "./dragFrameMeter";
 import { captureSeatMandateHandover, openFixture, serveEvidenceFixture } from "./issue1695BrowserHarness";
 import { HEADER_ITEMS, HEADER_LAYOUTS, headerHome, headerName, type HeaderItem, type HeaderVariant } from "./headerMenu.prototype";
-import { MEMORY_STATES, type MemoryState } from "./headerMemory.prototype";
+import { MEMORY_STATES, memoryFixtureView, memoryWord, type MemoryState } from "./headerMemory.prototype";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { clipTitle } from "./taskText";
 import { maintenanceCardText } from "@/lib/boardMaintenance/text";
@@ -18898,10 +18898,11 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
         const at = `${keyOf(where)} ${surface} ${state}`;
         if (!entry.inside) failures.push(`${at}: leaves the window ${JSON.stringify(entry.box)}`);
         /* The dialog on the phone is a page of its own length, today as well. */
-        if (entry.scrolls && !(state === "dialog" && surface === "phone")) failures.push(`${at}: scrolls`);
+        if (entry.scrolls && !(state.startsWith("dialog") && surface === "phone")) failures.push(`${at}: scrolls`);
         if (entry.cut.length) failures.push(`${at}: cut labels ${JSON.stringify(entry.cut)}`);
         if (reading.arrows.length) failures.push(`${at}: a row that opens in place and a row that opens a page carry the same arrow ${JSON.stringify(reading.arrows)}`);
         if (surface === "header" && !state.startsWith("dialog") && entry.box[3] > 360.5) failures.push(`${at}: ${entry.box[3]} px is taller than 360`);
+        if (surface === "phone" && memory && !state.startsWith("dialog") && entry.box[3] > 743.5) failures.push(`${at}: ${entry.box[3]} px is taller than today's sheet`);
       }
       return entry;
     }
@@ -18979,7 +18980,7 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
       }
     }
 
-    /* Shared memory's home (#2536's block): the menu with the state at a glance, the group that holds the entry, and the dialog behind it, with memory working, off, without a key and at its cap. */
+    /* Shared memory and the OpenRouter key as rows of the menu (the block #2536 put in the Settings dialog), with memory working, off, without a key and at its cap: the first level, the group that holds the rows, the memory page with what blocks it and its numbers, the key page, and the dialog that keeps the ping. */
     const DIALOG = "[data-telemetry-settings]";
     async function memoryHome(where: Where, memory: MemoryState) {
       const phoneFrame = where.frame.phone;
@@ -18987,6 +18988,7 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
       const at = `${keyOf(where)} memory ${memory}`;
       const surface = phoneFrame ? "phone" : "header";
       const panel = phoneFrame ? SHEET : RAIL;
+      const settle = () => page.waitForTimeout(160);
       try {
         if (phoneFrame) {
           await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
@@ -19012,47 +19014,105 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
         }
         const variant = where.variant as HeaderVariant;
         const home = headerHome(variant, "memory");
-        const marks = () => page.evaluate((target) => [...document.querySelectorAll<HTMLElement>(`${target} [data-hm-memory]`)].filter((element) => element.getBoundingClientRect().width > 0).map((element) => element.getAttribute("data-hm-memory")), panel);
+        const served = memoryFixtureView(memory);
+        /* Every visible mark of memory's state: which state it names, and the words beside its dot. */
+        const marks = () => page.evaluate((target) => [...document.querySelectorAll<HTMLElement>(`${target} [data-hm-memory]`)].filter((element) => element.getBoundingClientRect().width > 0)
+          .map((element) => ({ tone: element.getAttribute("data-hm-memory"), words: (element.textContent ?? "").trim() })), panel);
+        const head = (id: string) => `${panel} [data-cmf-head="section"][data-cmf-section="${id}"]`;
         await capture(page, where, panel, surface, "rest", memory);
-        /* At the first level the state is read without a press: on the entry, or on the row of the group that holds it. */
+        /* At the first level the state is read without a press, as a word beside its dot: on the row itself, or on the row of the group that holds it. */
         const first = await marks();
-        if (first.length !== 1 || first[0] !== memory) failures.push(`${at}: the first level shows ${JSON.stringify(first)}, expected one mark reading ${memory}`);
+        const firstWord = home?.group ? memoryWord(served, where.lang, true) : memoryWord(served, where.lang);
+        if (first.length !== 1 || first[0]!.tone !== memory || !first[0]!.words.includes(firstWord)) failures.push(`${at}: the first level shows ${JSON.stringify(first)}, expected one mark reading ${JSON.stringify(firstWord)}`);
         if (home?.group) {
-          await jsClick(page, `${panel} [data-cmf-head="section"][data-cmf-section="${home.group.id}"]`);
-          await page.waitForTimeout(150);
+          await jsClick(page, head(home.group.id));
+          await settle();
           await capture(page, where, panel, surface, `open ${home.group.id}`, memory);
-          if (!(await marks()).includes(memory)) failures.push(`${at}: the open group does not show ${memory} on the memory entry`);
+          if (!(await marks()).some((mark) => mark.words === memoryWord(served, where.lang))) failures.push(`${at}: the memory row does not read ${JSON.stringify(memoryWord(served, where.lang))}`);
         }
-        await page.locator(`${panel} [data-cmf-proxy="memory"]`).click();
-        await page.waitForSelector(`${DIALOG}[data-hm="memory"] [data-hm-state]`, { timeout: 10_000 });
-        await page.waitForTimeout(400);
-        const dialog = await capture(page, where, DIALOG, surface, "dialog", memory);
+        /* One step in: the memory page. */
+        await jsClick(page, `${panel} [data-cmf-proxy="memory"]`);
+        await page.waitForSelector(`${panel} [data-hm-panel="memory"]`, { timeout: 10_000 });
+        await settle();
+        const memoryPage = await capture(page, where, panel, surface, "memory page", memory);
         const drawn = await page.evaluate((target) => {
-          const dialogElement = document.querySelector<HTMLElement>(target)!;
-          const text = (selector: string) => (dialogElement.querySelector(selector)?.textContent ?? "").replace(/\s+/g, " ").trim();
-          const top = (selector: string) => dialogElement.querySelector(selector)?.getBoundingClientRect().top ?? null;
+          const pane = document.querySelector<HTMLElement>(`${target} [data-hm-panel="memory"]`)!;
+          const toggle = pane.querySelector<HTMLElement>("[role='switch']");
           return {
-            title: dialogElement.querySelector("#telemetry-title")?.getAttribute("data-hm-title") ?? null,
-            state: dialogElement.querySelector("[data-hm-state]")?.getAttribute("data-hm-state") ?? null,
-            status: text("[data-memory-status]"),
-            on: dialogElement.querySelector<HTMLInputElement>("[data-memory-setting] input[role='switch']")?.checked ?? null,
-            tiles: [...dialogElement.querySelectorAll(".hm-tile > b")].map((element) => (element.textContent ?? "").trim()),
-            key: text("[data-provider-key] label"),
-            /* Memory first, the key under it, the ping after both. */
-            order: [top("[data-memory-setting]"), top("[data-provider-key]"), top(":scope > label")],
-            cut: [...dialogElement.querySelectorAll<HTMLElement>(".hm-tile > b, .hm-tile > span, .hm-state")].filter((element) => element.scrollWidth > element.clientWidth + 1).map((element) => (element.textContent ?? "").trim()),
+            on: toggle?.getAttribute("aria-checked") === "true",
+            blocked: Boolean(pane.querySelector("[data-hm-blocked]")),
+            track: toggle?.firstElementChild ? getComputedStyle(toggle.firstElementChild).backgroundColor : null,
+            reason: pane.querySelector("[data-hm-reason]")?.getAttribute("data-hm-reason") ?? null,
+            numbers: [...pane.querySelectorAll(".hm-num > b")].map((element) => (element.textContent ?? "").trim()),
+            scope: (pane.querySelector("[data-hm-scope]")?.textContent ?? "").trim(),
+            words: (pane.textContent ?? "").replace(/\s+/g, " ").trim(),
+            cut: [...pane.querySelectorAll<HTMLElement>(".hm-num > b, .hm-act")].filter((element) => element.scrollWidth > element.clientWidth + 1).map((element) => (element.textContent ?? "").trim()),
           };
-        }, DIALOG);
-        if (dialog) (dialog as State & { drawn?: unknown }).drawn = drawn;
-        if (drawn.title !== headerName(variant, "memory")[where.lang]) failures.push(`${at}: the dialog is titled ${JSON.stringify(drawn.title)}`);
-        if (drawn.state !== memory) failures.push(`${at}: the dialog's state reads ${drawn.state}`);
-        if (!drawn.status) failures.push(`${at}: the product's status line is missing`);
-        if (drawn.on !== (memory !== "off")) failures.push(`${at}: the switch is ${drawn.on}`);
-        if (drawn.tiles.length !== 3) failures.push(`${at}: ${drawn.tiles.length} counter tiles, expected decisions, turns with memory and spend`);
-        if (!drawn.key) failures.push(`${at}: the key row is missing`);
-        if (drawn.cut.length) failures.push(`${at}: the dialog cut ${JSON.stringify(drawn.cut)}`);
-        if (!(drawn.order[0]! < drawn.order[1]! && drawn.order[1]! < drawn.order[2]!)) failures.push(`${at}: memory, the key and the ping stand in another order ${JSON.stringify(drawn.order)}`);
-        if (dialog?.scrolls && !phoneFrame) failures.push(`${at}: the dialog scrolls at ${where.frame.width}×${where.frame.height}`);
+        }, panel);
+        if (memoryPage) (memoryPage as State & { drawn?: unknown }).drawn = drawn;
+        const blocked = memory === "noKey" || memory === "capped";
+        if (drawn.on !== (memory !== "off")) failures.push(`${at}: the switch is ${drawn.on ? "on" : "off"}`);
+        if (drawn.blocked !== blocked) failures.push(`${at}: the switch ${drawn.blocked ? "is" : "is not"} drawn as blocked`);
+        if ((drawn.reason !== null) !== blocked || (blocked && drawn.reason !== memory)) failures.push(`${at}: the reason shown is ${drawn.reason}`);
+        /* Zero counters are hidden while memory is blocked; otherwise three numbers. */
+        if (drawn.numbers.length !== (memory === "noKey" ? 0 : 3)) failures.push(`${at}: ${drawn.numbers.length} numbers ${JSON.stringify(drawn.numbers)}`);
+        if (drawn.numbers.length && !/жовтень|October/.test(drawn.scope)) failures.push(`${at}: the numbers are captioned ${JSON.stringify(drawn.scope)}, with no month by name`);
+        const banned = /Jev|decision|рішен|\d{4}-\d{2}|\$\d+\.\d{3}|Injection|передаван/i.exec(drawn.words);
+        if (banned) failures.push(`${at}: the memory page says ${JSON.stringify(banned[0])}`);
+        if (drawn.cut.length) failures.push(`${at}: the memory page cut ${JSON.stringify(drawn.cut)}`);
+        if (memory === "noKey") {
+          /* The action stands beside the reason and opens the field right there. */
+          await jsClick(page, `${panel} [data-hm-reason] [data-hm-enter-key]`);
+          await settle();
+          if (!(await page.locator(`${panel} [data-hm-reason] [data-hm-key-field] input`).isVisible())) failures.push(`${at}: «Enter the key» did not open the field beside the reason`);
+          await capture(page, where, panel, surface, "memory page, key field", memory);
+        } else {
+          await jsClick(page, `${panel} [data-hm-more]`);
+          await settle();
+          const rows = await page.locator(`${panel} [data-hm-table] dt`).count();
+          if (rows !== 5) failures.push(`${at}: «More» lists ${rows} counters, expected the remaining five`);
+          await capture(page, where, panel, surface, "memory page, more", memory);
+        }
+        /* The key's own row and page. */
+        await jsClick(page, `${panel} [data-cmf-head="back"]`);
+        await settle();
+        await jsClick(page, `${panel} [data-cmf-proxy="key"]`);
+        await page.waitForSelector(`${panel} [data-hm-panel="key"]`, { timeout: 10_000 });
+        await settle();
+        const keyState = await page.evaluate((target) => ({
+          state: document.querySelector(`${target} [data-hm-key-state]`)?.getAttribute("data-hm-key-state") ?? null,
+          caption: (document.querySelector(`${target} [data-hm-key-for]`)?.textContent ?? "").trim(),
+          field: Boolean(document.querySelector(`${target} [data-hm-panel="key"] [data-hm-key-field]`)),
+        }), panel);
+        if (keyState.state !== (memory === "noKey" ? "missing" : "saved")) failures.push(`${at}: the key page reads ${keyState.state}`);
+        if (!/Питає вас|Asks you/.test(keyState.caption)) failures.push(`${at}: the key page does not say what uses the key: ${JSON.stringify(keyState.caption)}`);
+        /* A saved key shows no empty field until Replace asks for it; a missing one shows the field at once. */
+        if (keyState.field !== (memory === "noKey")) failures.push(`${at}: the key field is ${keyState.field ? "open" : "closed"} on arrival`);
+        await capture(page, where, panel, surface, "key page", memory);
+        if (memory !== "noKey") {
+          await jsClick(page, `${panel} [data-hm-replace]`);
+          await settle();
+          if (!(await page.locator(`${panel} [data-hm-panel="key"] [data-hm-key-field] input`).isVisible())) failures.push(`${at}: «Replace» did not open the field`);
+          await capture(page, where, panel, surface, "key page, replace", memory);
+        }
+        /* The dialog keeps the ping alone, under the name its entry carries. */
+        if (memory === "working" && !phoneFrame) {
+          await jsClick(page, `${panel} [data-cmf-head="back"]`);
+          await settle();
+          const ping = headerHome(variant, "settings");
+          if (ping?.group && ping.group.id !== home?.group?.id) { await jsClick(page, head(ping.group.id)); await settle(); }
+          await jsClick(page, `${panel} [data-cmf-proxy="rail-menu-settings"]`);
+          await page.waitForSelector(`${DIALOG}[data-hm]`, { timeout: 10_000 });
+          await page.waitForTimeout(300);
+          const dialog = await page.evaluate((target) => {
+            const element = document.querySelector<HTMLElement>(target)!;
+            const tall = (selector: string) => element.querySelector<HTMLElement>(selector)?.getBoundingClientRect().height ?? 0;
+            return { title: element.querySelector("#telemetry-title")?.getAttribute("data-hm-title") ?? null, memory: tall("[data-memory-setting]"), key: tall("[data-provider-key]"), ping: tall(":scope > label") };
+          }, DIALOG);
+          if (dialog.title !== headerName(variant, "settings")[where.lang]) failures.push(`${at}: the ping's dialog is titled ${JSON.stringify(dialog.title)}`);
+          if (dialog.memory || dialog.key || !dialog.ping) failures.push(`${at}: the ping's dialog still draws memory or the key, or lost its switch ${JSON.stringify(dialog)}`);
+          await capture(page, where, DIALOG, surface, "dialog ping", memory);
+        }
         if (pageErrors.length) failures.push(`${at}: page errors ${pageErrors.join(" | ")}`);
       } catch (error) {
         failures.push(`${at}: ${brief(error)}`);
@@ -19125,7 +19185,7 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
       const width = Math.max(size.width!, compared ? 310 : 250);
       const named = entry.variant ? HEADER_LAYOUTS[entry.variant as HeaderVariant] : null;
       const groupName = (id: string) => named?.slots.flatMap((slot) => ("group" in slot && slot.group.id === id ? [(entry.surface === "phone" ? slot.group.phoneTitle ?? slot.group.title : slot.group.title)[lang]] : []))[0] ?? id;
-      const note = `${named && compared ? `${named.name[lang]} · ` : ""}${entry.memory ? `${entry.memory} · ` : ""}${entry.state === "dialog" ? (lang === "uk" ? "діалог" : "the dialog") : entry.state === "rest" ? (lang === "uk" ? "у спокої" : "at rest") : `${lang === "uk" ? "відкрито" : "open"}: ${groupName(entry.state.slice(5))}`} · ${Math.round(entry.box[2])}×${Math.round(entry.box[3])}${entry.scrolls ? (lang === "uk" ? " · прокручується" : " · scrolls") : ""}`;
+      const note = `${named && compared ? `${named.name[lang]} · ` : ""}${entry.memory ? `${entry.memory} · ` : ""}${entry.state === "rest" ? (lang === "uk" ? "у спокої" : "at rest") : entry.state.startsWith("open ") ? `${lang === "uk" ? "відкрито" : "open"}: ${groupName(entry.state.slice(5))}` : entry.state} · ${Math.round(entry.box[2])}×${Math.round(entry.box[3])}${entry.scrolls ? (lang === "uk" ? " · прокручується" : " · scrolls") : ""}`;
       const image = await sharp({ create: { width, height: size.height! + 54, channels: 3, background: "#f1efe9" } })
         .composite([{ input: svgText(entry.variant ? `${lang === "uk" ? "ВАРІАНТ" : "VARIANT"} ${entry.variant}` : title(0, lang), width, 14, "#fff", 700, COLOURS[entry.variant]!), left: 0, top: 0 }, { input: svgText(note, width, 11, "#555", 400), left: 0, top: 28 }, { input: picture, left: 0, top: 54 }]).png().toBuffer();
       return { image, width, height: size.height! + 54 };
@@ -19172,27 +19232,35 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
       await sheet(`sheet-variant-${variant}.png`, `${title(variant, "en")} · ${title(variant, "uk")}`, COLOURS[variant]!, rows);
     }
 
-    /* Shared memory: per language, each variant's menu in the four states, then the dialog today and as the variants draw it. */
-    const memoryOf = (variant: number, frame: string, scheme: Scheme, lang: string, memory: MemoryState, state: (name: string) => boolean) =>
+    /* Shared memory and the key. Per language one overview (the first level in the four states, then the pages), and per variant one sheet with every state. */
+    const memoryOf = (variant: number, frame: string, scheme: Scheme, lang: string, memory: MemoryState, state: (name: string) => boolean = () => true) =>
       states.filter((entry) => entry.memory === memory && entry.variant === variant && entry.frame === frame && entry.scheme === scheme && entry.lang === lang && state(entry.state));
+    const tiles = async (entries: State[], lang: "en" | "uk", scale = 1) => Promise.all(entries.map((entry) => tile(entry, lang, scale)));
     for (const lang of LANGS) {
       const uk = lang === "uk";
-      const rows: { name: string; tiles: Tile[] }[] = [];
-      const menu = (name: string) => name !== "dialog";
+      const overview: { name: string; tiles: Tile[] }[] = [];
       for (const variant of VARIANTS.filter((entry) => entry > 0)) {
-        rows.push({
-          name: `${title(variant, lang)} · ${uk ? "меню: працює, вимкнено, без ключа, ліміт (у спокої, потім група з пам’яттю)" : "the menu: working, off, no key, capped (at rest, then the group that holds memory)"}`,
-          tiles: (await Promise.all(MEMORY_STATES.map((memory) => Promise.all(memoryOf(variant, "1440", "light", lang, memory, menu).map((entry) => tile(entry, lang)))))).flat(),
+        const level = (name: string) => name === "rest" || name.startsWith("open ");
+        overview.push({
+          name: `${title(variant, lang)} · ${uk ? "перший рівень: працює, вимкнено, потрібен ключ, ліміт" : "the first level: working, off, key needed, capped"}`,
+          tiles: (await Promise.all(MEMORY_STATES.map((memory) => tiles(memoryOf(variant, "1440", "light", lang, memory, level).slice(-1), lang)))).flat(),
         });
+        const rows: { name: string; tiles: Tile[] }[] = [];
+        for (const memory of MEMORY_STATES) rows.push({ name: `${memory} · 1440×900 · ${lang} · light: the first level, the group, the memory page, the key page`, tiles: await tiles(memoryOf(variant, "1440", "light", lang, memory, (name) => !name.startsWith("dialog")), lang) });
+        rows.push({ name: "The dialog that keeps the ping (×0.75)", tiles: await tiles(memoryOf(variant, "1440", "light", lang, "working", (name) => name === "dialog ping"), lang, 0.75) });
+        if (uk) {
+          for (const memory of ["working", "noKey"] as const) rows.push({ name: `${memory} · 1440×900 · uk · dark`, tiles: await tiles(memoryOf(variant, "1440", "dark", lang, memory, (name) => !name.startsWith("dialog")), lang) });
+          for (const memory of ["working", "noKey"] as const) rows.push({ name: `${memory} · phone 390×844 · uk · light (×0.5)`, tiles: await tiles(memoryOf(variant, "390", "light", lang, memory), lang, 0.5) });
+        }
+        await sheet(`sheet-memory-${lang}-variant-${variant}.png`, `${title(variant, lang)} · ${uk ? "спільна пам’ять і ключ" : "shared memory and the key"}`, COLOURS[variant]!, rows);
       }
       const shown = VARIANTS.find((entry) => entry > 0) ?? 0;
-      rows.push({ name: uk ? "Діалог сьогодні: працює, вимкнено, без ключа, ліміт (×0.75)" : "The dialog today: working, off, no key, capped (×0.75)", tiles: (await Promise.all(MEMORY_STATES.map((memory) => Promise.all(memoryOf(0, "1440", "light", lang, memory, (name) => name === "dialog").map((entry) => tile(entry, lang, 0.75)))))).flat() });
-      rows.push({ name: `${uk ? "Діалог у варіантах (той самий блок, зібраний карткою; тут із" : "The dialog in the variants (the same block as one card; here from"} ${title(shown, lang)}) ×0.75`, tiles: (await Promise.all(MEMORY_STATES.map((memory) => Promise.all(memoryOf(shown, "1440", "light", lang, memory, (name) => name === "dialog").map((entry) => tile(entry, lang, 0.75)))))).flat() });
-      if (uk) {
-        rows.push({ name: "Темна тема: меню й діалог, працює та без ключа (×0.75)", tiles: (await Promise.all((["working", "noKey"] as const).map((memory) => Promise.all(memoryOf(shown, "1440", "dark", lang, memory, () => true).map((entry) => tile(entry, lang, 0.75)))))).flat() });
-        rows.push({ name: "Телефон 390×844: аркуш, група, діалог; працює та без ключа (×0.5)", tiles: (await Promise.all((["working", "noKey"] as const).map((memory) => Promise.all(memoryOf(shown, "390", "light", lang, memory, () => true).map((entry) => tile(entry, lang, 0.5)))))).flat() });
-      }
-      await sheet(`sheet-memory-${lang}.png`, uk ? "Спільна пам’ять у меню заголовка: де вона живе в кожному варіанті" : "Shared memory in the header's menu: its home in each variant", "#222", rows);
+      const pages = (name: string) => name.startsWith("memory page") || name.startsWith("key page");
+      overview.push({ name: `${uk ? "Один крок углиб (однаково в усіх варіантах; тут із" : "One step in (the same in every variant; here from"} ${title(shown, lang)}): ${uk ? "сторінка пам’яті в чотирьох станах" : "the memory page in the four states"}`, tiles: (await Promise.all(MEMORY_STATES.map((memory) => tiles(memoryOf(shown, "1440", "light", lang, memory, (name) => name.startsWith("memory page")), lang)))).flat() });
+      overview.push({ name: uk ? "Сторінка ключа: збережено, «Замінити», немає" : "The key page: saved, Replace, missing", tiles: [...await tiles(memoryOf(shown, "1440", "light", lang, "working", (name) => name.startsWith("key page")), lang), ...await tiles(memoryOf(shown, "1440", "light", lang, "noKey", (name) => name.startsWith("key page")), lang)] });
+      overview.push({ name: uk ? "Сьогодні: той самий блок у діалозі «Налаштування» (працює, без ключа; ×0.6)" : "Today: the same block in the Settings dialog (working, no key; ×0.6)", tiles: [...await tiles(memoryOf(0, "1440", "light", lang, "working"), lang, 0.6), ...await tiles(memoryOf(0, "1440", "light", lang, "noKey"), lang, 0.6)] });
+      if (uk) overview.push({ name: "Телефон 390×844: аркуш, сторінка пам’яті, сторінка ключа; без ключа (×0.5)", tiles: await tiles(memoryOf(shown, "390", "light", lang, "noKey", (name) => name === "rest" || pages(name)), lang, 0.5) });
+      await sheet(`sheet-memory-${lang}.png`, uk ? "Спільна пам’ять і ключ OpenRouter у меню заголовка" : "Shared memory and the OpenRouter key in the header's menu", "#222", overview);
     }
 
     const summary = {
