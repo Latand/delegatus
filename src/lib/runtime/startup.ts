@@ -3,7 +3,7 @@ import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { accountManager } from "@/lib/accounts/manager";
 import { turnStateFromRecords } from "@/lib/accounts/migration/turnState";
 import { launchProfileEngineReadOnly, type ViewerConversationId } from "@/lib/accounts/migration/contracts";
-import { agentRegistry, resolveConversationAlias, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt } from "@/lib/agent/registry";
+import { agentRegistry, resolveConversationAlias, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt } from "@/lib/agent/registry";
 import { effectiveClaudePermissionMode } from "@/lib/agent/cli";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { activeOrchestratorSeats, type OrchestratorSeat } from "@/lib/orchestrator/seats";
@@ -429,7 +429,7 @@ async function restartCutTargets(
        its terminal, an idle row had no process for the restart to end, and a
        row this process already claimed is its own work. */
     if (!entry?.structuredHost || entry.host !== null || entry.status !== "live") continue;
-    if (entry.claimOwner?.pid === process.pid) continue;
+    if (entry.claimOwner && structuredClaimIdentity(entry.claimOwner)?.pid === process.pid) continue;
     let evidence;
     try {
       evidence = await readTranscriptEvidence(conversation.engine, generation.path);
