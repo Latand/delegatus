@@ -77,6 +77,23 @@ test("the threshold defaults to 24 h, reads hours from the environment, and 0 tu
   expect(tempSweepMaxAgeMs({ LLV_TEMP_SWEEP_MAX_AGE_HOURS: "soon" })).toBe(DAY);
 });
 
+test.each(["checkout", "bare"])("an owned stale temp tree preserves a %s repository inside dependencies", async kind => {
+  const root = tempRoot();
+  const directory = aged(root, "llv-private-dependencies", 2 * DAY);
+  const repository = path.join(directory, "node_modules/pkg");
+  if (kind === "checkout") {
+    fs.mkdirSync(path.join(repository, ".git"));
+    fs.writeFileSync(path.join(repository, ".git/HEAD"), "ref: refs/heads/private\n");
+  } else {
+    fs.mkdirSync(path.join(repository, "objects"));
+    fs.writeFileSync(path.join(repository, "HEAD"), "ref: refs/heads/private\n");
+  }
+  const report = await sweepStaleTempDirs({ roots: [{ path: root, via: "" }], scan: { ownNamespace: null, processes: [] }, maxAgeMs: DAY });
+  expect(report.removed).toHaveLength(0);
+  expect(report.held).toEqual([expect.objectContaining({ path: directory, reason: "git-checkout" })]);
+  expect(fs.readFileSync(path.join(repository, "index.js"), "utf8")).toBe("x".repeat(8192));
+});
+
 test("a sweep removes old owned directories and keeps young, foreign, shared, in-use and worktree ones", async () => {
   const root = tempRoot();
   const outside = tempRoot();

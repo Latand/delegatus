@@ -330,17 +330,21 @@ function gitCheckoutMarker(entry: string, directory: boolean): boolean {
     delete cannot prove them kept, so a root holding one stays: a linked
     checkout of a registered repository is the worktree sweep's to free, under
     its retention and remote proof. A tree too large to search stays too. */
-function containsGitCheckout(directory: string): "git-checkout" | "unreadable-tree" | "entry-limit" | null {
+export function containsGitCheckout(directory: string): "git-checkout" | "unreadable-tree" | "entry-limit" | null {
   const pending = [directory];
   let visited = 0;
   try {
+    if (!fs.lstatSync(directory).isDirectory()) return null;
     while (pending.length) {
       const current = pending.pop()!;
+      // A bare repository has its HEAD and object store at the root.
+      if (fs.existsSync(path.join(current, "HEAD")) && fs.existsSync(path.join(current, "objects"))
+        && fs.statSync(path.join(current, "objects")).isDirectory()) return "git-checkout";
       for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
         if (++visited > MEASURE_ENTRY_LIMIT) return "entry-limit";
         const child = path.join(current, entry.name);
         if (entry.name === ".git" && gitCheckoutMarker(child, entry.isDirectory())) return "git-checkout";
-        if (entry.isDirectory() && entry.name !== "node_modules" && entry.name !== ".git") pending.push(child);
+        if (entry.isDirectory() && entry.name !== ".git") pending.push(child);
       }
     }
     return null;
