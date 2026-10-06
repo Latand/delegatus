@@ -223,3 +223,27 @@ test("the route answers the read, and refuses a request that names no project", 
   expect(answer.status).toBe(200);
   expect(await answer.json()).toMatchObject({ project: "proj-a", designated: true, conversationId: "conversation_a" });
 });
+
+test("a seat that holds Telegram reports what the operator has to do; a seat without it reports nothing", async () => {
+  const transcript = seatWithTranscript(4_096);
+  const withGrant = (mcpServers: string[]) => {
+    const record = conversation(transcript);
+    (record.generations[0]!.launchProfile as { mcpServers: string[] }).mcpServers = mcpServers;
+    return record;
+  };
+  for (const action of ["sign_in", "check", null] as const) {
+    const body = await readOrchestratorIncumbent("proj-a", dependencies({
+      conversation: () => withGrant(["viewer", "telegram"]),
+      telegramAction: () => action,
+    }));
+    expect(body.telegram).toBe(action);
+  }
+  /* No grant: Telegram's state is not this seat's business. */
+  const ungranted = await readOrchestratorIncumbent("proj-a", dependencies({
+    conversation: () => withGrant(["viewer"]),
+    telegramAction: () => "sign_in",
+  }));
+  expect(ungranted.telegram).toBeNull();
+  const vacant = await readOrchestratorIncumbent("proj-b", dependencies({ telegramAction: () => "sign_in" }));
+  expect(vacant.telegram).toBeNull();
+});

@@ -1245,7 +1245,14 @@ test("a server recommendation is SHOWN, in the server's own words, and rotates n
       recommended: true,
       level: "strongly_recommend",
       advisory: "STRONGLY_RECOMMEND_ROTATION",
-      reasons: ["context usage 620,000 tokens has reached the rotation threshold of 500,000 tokens (claude-opus-1m: 50% of a 1,000,000-token window)"],
+      reasons: [
+        "context usage 620,000 tokens has reached the rotation threshold of 500,000 tokens (claude-opus-1m: 50% of a 1,000,000-token window)",
+        "the designated conversation's host is gone; rotate, or resume it with send_message_to_orchestrator",
+      ],
+      causes: [
+        { kind: "context", tokens: 620_000, estimated: false, thresholdTokens: 500_000, windowTokens: 1_000_000 },
+        { kind: "host_gone" },
+      ],
       thresholdUnknown: false,
     },
   }));
@@ -1253,7 +1260,14 @@ test("a server recommendation is SHOWN, in the server's own words, and rotates n
   const banner = host.querySelector("[data-orchestrator-rotation]")!;
   expect(banner.getAttribute("data-orchestrator-rotation")).toBe("strongly_recommend");
   expect(banner.textContent).toContain("Rotation strongly recommended");
-  expect(banner.textContent).toContain("rotation threshold of 500,000 tokens");
+  /* The server's threshold, worded for the operator: one line per cause, and
+     the sentence it writes for an agent (which names a tool) is never printed. */
+  const causes = [...banner.querySelectorAll("[data-orchestrator-rotation-cause]")].map((line) => line.textContent);
+  expect(causes).toEqual([
+    translate("en", "orchPanel.rotationContextTokens", { tokens: "620,000", threshold: "500,000" }),
+    translate("en", "orchPanel.rotationDead"),
+  ]);
+  expect(banner.textContent).not.toContain("send_message_to_orchestrator");
   /* WORDS ONLY: no rotation was posted, and the conversation is untouched. */
   expect(rotatePosts).toHaveLength(0);
   expect(host.querySelector('[data-orchestrator-conversation="conversation_orch"]')).not.toBeNull();
