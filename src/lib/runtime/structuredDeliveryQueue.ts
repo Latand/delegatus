@@ -154,6 +154,7 @@ interface SendEffect {
   content: StructuredMessageContent;
   contentDigest: string;
   turnId?: string | null;
+  onlyIfIdle?: import("./contracts").RuntimeIdleKillFence;
   policy?: "queue" | "steer-if-active" | "steer-or-queue" | "interrupt-active";
   kind: "send" | "steer";
   runtime?: RuntimeSendSettings;
@@ -332,6 +333,11 @@ function sendEffect(effect: StructuredDeliveryEffect): SendEffect | null {
      independent content and runtime profile. */
   const selectedContext = parseSelectedContextRef(effect.payload.selectedContext);
   const origin = parseMessageOrigin(effect.payload.origin);
+  let onlyIfIdle: import("./contracts").RuntimeIdleKillFence | undefined;
+  try {
+    if (effect.payload.onlyIfIdle !== undefined) onlyIfIdle = parseRuntimeIdleKillFence(effect.payload.onlyIfIdle);
+  } catch { return null; }
+  if (onlyIfIdle && (effect.kind !== "runtime.send" || policy !== "queue" || turnId !== null)) return null;
   return {
     operationId,
     conversationId,
@@ -344,6 +350,7 @@ function sendEffect(effect: StructuredDeliveryEffect): SendEffect | null {
     ...(runtime ? { runtime } : {}),
     ...(selectedContext ? { selectedContext } : {}),
     ...(origin ? { origin } : {}),
+    ...(onlyIfIdle ? { onlyIfIdle } : {}),
   };
 }
 
@@ -1246,6 +1253,10 @@ export class StructuredDeliveryQueue {
          it back from the receipt; Claude and Codex receipts carry no route. */
       const recordsRoute = host.steerFallback === "interrupt";
       const clearedRoute: RuntimeTransitionDetails = recordsRoute ? { delivery: null, interruptedTurnId: null } : {};
+      if (effect.onlyIfIdle && (health.status !== "idle" || health.activeTurnRef !== null)) {
+        await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "idle-continuation-cancelled" });
+        continue;
+      }
       if (health.status !== "idle" && !steersIntoTurn && !shouldInterrupt) return true;
       if (!replacesTurn && [...this.activeSteers.values()].some(steer =>
         steer.conversationId === effect.conversationId
@@ -1305,6 +1316,13 @@ export class StructuredDeliveryQueue {
           ...(routedTurnId ? { delivery: "interrupt-then-turn-started" as const, interruptedTurnId: routedTurnId } : {}),
         },
       )) continue;
+      if (effect.onlyIfIdle) {
+        const claimed = await this.readStatus(effect.operationId);
+        if (!claimed.readable || claimed.value?.status !== "delivering") {
+          if (!claimed.readable) this.retrySoon();
+          continue;
+        }
+      }
       if (firstDispatch) {
         this.firstDispatches.set(effect.operationId, firstDispatch);
         while (this.firstDispatches.size > 128) this.firstDispatches.delete(this.firstDispatches.keys().next().value!);

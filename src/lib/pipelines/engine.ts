@@ -326,6 +326,8 @@ export interface PipelinePorts {
     text: string;
     /** Restart recovery must not interrupt work that began after its snapshot. */
     policy?: "queue";
+    /** Recheck the cut after delivery preflight; the runtime also fences its idle revision. */
+    continuationAllowed?: () => Promise<boolean>;
     project?: string;
     cwd?: string;
     /** Admission time of the attempt this message continues. An update drain
@@ -338,6 +340,8 @@ export interface PipelinePorts {
   conversationMigration?(conversationId: string): { targetId: string; retry: boolean } | null;
   /** Whether the limit continuation's durable send has completed. */
   conversationDeliveryCompleted?(conversationId: string, clientMessageId: string): boolean;
+  /** Withdraw queued automatic continuations before acknowledging operator control. */
+  invalidateProviderContinuation?(conversationId: string): Promise<void>;
   /** A fresh live quota reading after the limit proves the source recovered. */
   claudeAccountRecovered?(accountId: string, limitedAt: number, model: string | null): boolean;
   /** Confirmed reset of the source account's governing exhausted quota window. */
@@ -1546,9 +1550,10 @@ export function defaultPipelinePorts(
            feed labels it as one rather than as the operator's. */
         origin: delegatusMessageOrigin("pipeline", input.project, input.cwd),
         ...(input.cohortAt ? { cohortAt: input.cohortAt } : {}),
-      });
+      }, input.continuationAllowed ? { idleContinuationAllowed: input.continuationAllowed } : {});
       return result?.ok === true;
     },
+    invalidateProviderContinuation,
     requestConversationReseat: async (conversationId, targetAccountId) => {
       const id = conversationId as ViewerConversationId;
       const migration = registry.conversation(id)?.migration;
@@ -2107,6 +2112,11 @@ async function recoverProviderCut(
   const now = ports.now();
   const time = unixMs(now);
   let wait = attempt.providerWait;
+  if (wait?.retryCancelled) {
+    park(pipeline, "provider recovery cancelled by operator control; waiting for operator decision", attempt);
+    persist();
+    return true;
+  }
   if (notice && (!wait || notice.ts > wait.turnTs)) {
     const engine = attempt.effectiveRole.engine;
     const current = attempt.agentPath ? ports.accountForTranscript?.(engine, attempt.agentPath) : null;
@@ -2253,10 +2263,22 @@ async function recoverProviderCut(
     } catch (error) { waitForProviderTransport(pipeline, attempt, condition, `account authorization unavailable: ${String(error)}`, ports, persist); return true; }
   }
   const key = `stage-provider-${pipeline.id}-${stage.id}-${attempt.n}-${wait.turnTs}`;
+  const cutTs = wait.turnTs;
+  const controlGeneration = pipeline.controlGeneration;
+  const continuationAllowed = async () => {
+    const latest = await ports.durableTurnEvidence(engine, attempt.agentPath!, undefined, attempt.startedAt, undefined, cutTs);
+    return pipeline.state === "running" && !pipeline.closedAt && !pipeline.hiddenAt
+      && pipeline.controlGeneration === controlGeneration && !attempt.report && !attempt.verdict && !wait.retryCancelled
+      && latest?.promptHistoryComplete !== false && !newerExternalProviderPrompt(attempt, latest)
+      && latest?.turn === "terminal" && latest.terminalProviderMessage?.ts === cutTs;
+  };
   let delivered: boolean;
   try {
+    wait.continuationRequestedAt ??= now;
+    persist();
     delivered = await ports.resumeSeveredTurn({ conversationId: attempt.conversationId, transcriptPath: attempt.agentPath,
       clientMessageId: key, text: `This stage was cut by ${condition.label}. Continue the same stage from its current worktree, keeping uncommitted work, and report when complete.`,
+      policy: "queue", continuationAllowed,
       project: pipeline.project, cwd: pipeline.worktreeDir ?? pipeline.repoDir, ...(attempt.startedAt ? { cohortAt: attempt.startedAt } : {}) });
   } catch (error) {
     waitForProviderTransport(pipeline, attempt, condition, `continuation refused: ${String(error)}`, ports, persist);
@@ -2292,6 +2314,16 @@ async function stopStageForRecovery(target: PipelineStageHostRef, ports: Pipelin
   return pane.outcome === "unknown" ? { outcome: "failed", error: pane.detail } : pane;
 }
 
+/** Withdraw the idle revision a queued provider continuation was admitted against. */
+export async function invalidateProviderContinuation(conversationId: string, client = runtimeHostClient()): Promise<void> {
+  if (!client) throw new Error("runtime host is unavailable");
+  // Informational session events consume a revision. Held deliveries retain
+  // their old fence and are refused when they subsequently reach the journal.
+  await client.append({ scope: { type: "session", id: conversationId },
+    kind: "pipeline.provider-continuation-cancelled", payload: { conversationId },
+    producer: { kind: "viewer-command", eventKey: `provider-cancel:${crypto.randomUUID()}` } });
+}
+
 async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, condition: ProviderCondition, ports: PipelinePorts, persist: () => void, target: string | null): Promise<boolean> {
   if (unixMs(attempt.controllerWait?.retryAfter ?? "") > unixMs(ports.now())) return true;
   const attempts = runFor(pipeline, stage.id)?.attempts ?? [];
@@ -2306,7 +2338,7 @@ async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attemp
     park(pipeline, "stage host died without output twice; automatic relaunch exhausted", attempt);
     return true;
   }
-  const providerLimit = condition.kind === "usage_limit" || condition.kind === "auth_required";
+  const providerLimit = condition.kind === "usage_limit" || condition.kind === "auth_required" || condition.kind === "transient";
   const confirmProviderCut = async () => {
     if (!providerLimit) return true;
     if (!attempt.paneId && attempt.conversationId && ports.conversationRegistered?.(attempt.conversationId) === false) {
@@ -6632,8 +6664,8 @@ async function providerCutActivity(pipeline: Pipeline, attempt: PipelineStageAtt
 
 function cancelProviderStageRetry(pipeline: Pipeline, attempt: PipelineStageAttempt, detail: string): void {
   const wait = attempt.providerWait;
-  if (!wait?.stageRetry) return;
-  const oldDetail = wait.stageRetry.detail;
+  if (!wait || wait.retryCancelled) return;
+  const oldDetail = wait.stageRetry?.detail;
   delete wait.stageRetry;
   wait.retryCancelled = true;
   delete attempt.controllerWait;
@@ -10320,6 +10352,10 @@ export async function patchPipeline(
     } else if (req.action === "pause") {
       if (pipeline.state === "draft") return { error: "draft pipelines can only be started, edited, or deleted", status: 409 };
       if (!TERMINAL_STATES.has(pipeline.state) && pipeline.state !== "paused") {
+        if ((attempt?.providerWait?.actionAt || attempt?.providerWait?.continuationRequestedAt) && attempt.conversationId) {
+          try { await ports.invalidateProviderContinuation?.(attempt.conversationId); }
+          catch (error) { return { error: `automatic continuation cancellation failed: ${String(error)}`, status: 503 }; }
+        }
         for (const run of pipeline.runs) for (const attempt of run.attempts) {
           if (attempt.activation) attempt.activation.cancelRequested = true;
         }
@@ -10753,6 +10789,10 @@ export async function patchPipeline(
         discardDraft(pipeline, ports);
         persist();
         return { pipeline };
+      }
+      if ((attempt?.providerWait?.actionAt || attempt?.providerWait?.continuationRequestedAt) && attempt.conversationId) {
+        try { await ports.invalidateProviderContinuation?.(attempt.conversationId); }
+        catch (error) { return { error: `automatic continuation cancellation failed: ${String(error)}`, status: 503 }; }
       }
       const activations = pipeline.runs.flatMap((run) => run.attempts).filter((item) => item.activation);
       for (const item of activations) item.activation!.closeRequested = true;

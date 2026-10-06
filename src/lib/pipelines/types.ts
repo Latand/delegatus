@@ -398,6 +398,8 @@ export type PipelineStageAttempt = {
     resumeAt: string;
     resetsAt: number | null;
     actionAt?: string;
+    /** Persisted before sending; a lost acknowledgment still owes cancellation on control. */
+    continuationRequestedAt?: string;
     switchedAccountId?: string;
     failedAccounts?: string[];
     capacityProbes?: number;

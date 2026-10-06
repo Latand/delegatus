@@ -355,6 +355,8 @@ export interface RuntimeSendCommand extends RuntimeCommandBase {
   contentDigest?: string;
   policy?: "queue" | "steer-if-active" | "steer-or-queue" | "interrupt-active";
   turnId?: string | null;
+  /** Automatic continuation requires this same idle revision and writer at admission and execution. */
+  onlyIfIdle?: RuntimeIdleKillFence;
   runtime?: RuntimeSendSettings;
   /** The Viewer card selected when this turn was submitted (#844). Admitted
       atomically with the text and never re-read afterwards, so board movement

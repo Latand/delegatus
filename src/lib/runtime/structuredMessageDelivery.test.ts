@@ -3956,3 +3956,44 @@ test("a live deputy takes the Viewer's own interruption continuation and nothing
     else process.env.LLV_STATE_DIR = previousStateDir;
   }
 });
+
+
+test.each(["unchanged", "active", "reply-during-read", "reply-before-command"] as const)("automatic continuation admission rechecks idle ownership and stage evidence: %s", scenario => {
+  const { registry, conversation } = registryWithConversation();
+  recordStructuredOwner(registry, conversation);
+  let commands = 0;
+  let guardReads = 0;
+  let eligible = true;
+  const current = snapshot(conversation.id);
+  current.sessions[0]!.writerClaim = "fixture:1";
+  if (scenario === "active") Object.assign(current.sessions[0]!, { turn: "running", activeTurnId: "operator-turn" });
+  const client = {
+    readSession: sessionReader(async () => {
+      if (scenario === "reply-during-read") eligible = false;
+      return current;
+    }),
+    command: async (command: Record<string, unknown>) => {
+      commands += 1;
+      expect(command).toMatchObject({ policy: "queue", turnId: null, onlyIfIdle: { revision: 1, writerClaim: "fixture:1" } });
+      return { operationId: command.operationId, replayed: false, receipt: {
+        operationId: command.operationId, idempotencyKey: command.idempotencyKey, conversationId: conversation.id,
+        kind: "send", status: "queued", at: "2026-10-05T00:00:00Z", revision: 1,
+      } };
+    },
+  } as unknown as RuntimeHostClient;
+  return enqueueStructuredMessage({ path: artifactPath, conversationId: conversation.id, clientMessageId: "automatic-continuation", text: "continue",
+    origin: { kind: "agent", role: "pipeline" } }, {
+    enabled: () => true, client: () => client, registry: () => registry, kick: () => {},
+    idleContinuationAllowed: () => {
+      guardReads += 1;
+      if (scenario === "reply-before-command" && guardReads === 3) eligible = false;
+      return eligible;
+    },
+  }).then(result => {
+    expect(result?.ok).toBe(scenario === "unchanged");
+    expect(commands).toBe(scenario === "unchanged" ? 1 : 0);
+    const reservations = Object.values(registry.snapshot().heldDeliveries);
+    if (scenario === "unchanged") expect(reservations[0]!.command.onlyIfIdle).toEqual({ revision: 1, writerClaim: "fixture:1" });
+    if (scenario === "reply-before-command") expect(reservations[0]!.state).toBe("failed");
+  });
+});

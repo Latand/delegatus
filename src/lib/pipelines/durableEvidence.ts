@@ -306,7 +306,7 @@ function stagePrompts(records: RecordLike[], codex: boolean, transcriptPath: str
       || record.promptSource !== "sdk" && /^<(?:task-notification|wakeup)\b/.test(text))) return [{ ts, origin: "harness" as const }];
     if (!human && isClaudeTurnWindowMeta(record)) return [];
     const author = provenance[stringValue(record.uuid) ?? ""];
-    return [{ ts, origin: author?.origin === "agent" && (author.senderRole === "pipeline" || author.senderRole === RECOVERY_NOTICE_ORIGIN.role) ? "pipeline" as const : "external" as const }];
+    return [{ ts, origin: !human && author?.origin === "agent" && (author.senderRole === "pipeline" || author.senderRole === RECOVERY_NOTICE_ORIGIN.role) ? "pipeline" as const : "external" as const }];
   });
 }
 
@@ -381,7 +381,9 @@ export async function durableStageTurnEvidence(
   return {
     turn: nativeCut || turn.state === "terminal" ? "terminal" : turn.state === "busy" ? "busy" : "unknown",
     message: nativeCut ? null : message,
-    prompts: stagePrompts(turnRecords, codex, transcriptPath),
+    // Shutdown normalization may remove a human prompt whose turn was interrupted.
+    // Cancellation evidence must retain that prompt even when terminal evidence does not.
+    prompts: stagePrompts(evidenceRead.records, codex, transcriptPath),
     promptHistoryComplete: !evidenceRead.prefixTruncated || Number.isFinite(cutTime)
       && (recordTs(evidenceRead.records[0] ?? {}, 0) || Infinity) <= cutTime,
     ...(reportAt ? { reportProse } : {}),

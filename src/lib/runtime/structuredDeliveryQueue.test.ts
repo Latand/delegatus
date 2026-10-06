@@ -2881,3 +2881,31 @@ test.each(["native-queue", "native-inject", "structured-image-v1", "native-turn-
   await queue.drain();
   expect(terminations).toBe(1);
 });
+
+
+test.each(["unchanged", "active", "claim-cancelled", "unreadable"] as const)("idle continuation execution preserves its fence: %s", scenario => {
+  let status = "queued";
+  let reads = 0;
+  let sends = 0;
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => status === "queued" ? [{ id: "effect:automatic", kind: "runtime.send", eventSeq: 1,
+      payload: { kind: "send", operationId: "automatic", conversationId: "conversation-one", text: "continue", policy: "queue", turnId: null,
+        onlyIfIdle: { revision: 1, writerClaim: "owner:1" } } }] : [],
+    status: async () => {
+      reads += 1;
+      if (scenario === "unreadable" && status === "delivering") throw new Error("journal unavailable");
+      return { status, revision: 1 } as Awaited<ReturnType<NonNullable<StructuredDeliveryQueuePort["status"]>>>;
+    },
+    hostClaim: async () => "owner:1",
+    transition: async (_operation, next) => { status = next === "delivering" && scenario === "claim-cancelled" ? "failed" : next; },
+  }, () => ({ ...host(async entry => {
+    expect(entry.expectedTurnId).toBeNull();
+    sends += 1;
+    return { outcome: "turn-started" as const, turnId: "automatic-turn" };
+  }), health: async () => scenario === "active" ? { ...idleState(), status: "active" as const, activeTurnRef: "operator-turn" } : idleState() }));
+  return queue.drain().then(() => {
+    expect(reads).toBeGreaterThan(0);
+    expect(sends).toBe(scenario === "unchanged" ? 1 : 0);
+    if (scenario === "active" || scenario === "claim-cancelled") expect(status).toBe("failed");
+  });
+});

@@ -1,5 +1,6 @@
 import { normalizeHostMemory, type HostMemoryState } from "@/lib/runtime/agentMemoryState";
 import crypto from "node:crypto";
+import { parseRuntimeIdleKillFence } from "@/lib/runtime/commands";
 import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -2359,6 +2360,7 @@ function canonicalHeldDeliveryCommand(
       : "interrupt-active",
   };
   if (value?.turnId === null || typeof value?.turnId === "string") command.turnId = value.turnId;
+  if (value?.onlyIfIdle !== undefined) command.onlyIfIdle = value.onlyIfIdle;
   /* #1117: authorship rides the held record so a migration replay keeps it.
      Re-validated on every normalization — a corrupt persisted origin drops
      rather than replaying as a forged attribution. */
@@ -2371,7 +2373,7 @@ function canonicalHeldDeliveryCommand(
 function heldDeliveryRequestDigest(
   conversationId: ViewerConversationId,
   text: string,
-  command: Pick<HeldDeliveryCommand, "kind" | "policy" | "turnId">,
+  command: Pick<HeldDeliveryCommand, "kind" | "policy" | "turnId" | "onlyIfIdle">,
 ): string {
   const turnFence = command.turnId === undefined
     ? ["absent"]
@@ -2383,6 +2385,7 @@ function heldDeliveryRequestDigest(
     command.kind,
     command.policy,
     turnFence,
+    ...(command.onlyIfIdle ? [["idle", command.onlyIfIdle.revision, command.onlyIfIdle.writerClaim]] : []),
   ])).digest("hex");
 }
 
@@ -2406,7 +2409,7 @@ function heldDeliveryRequestDigests(
   file: RegistryFile,
   conversationId: ViewerConversationId,
   text: string,
-  command: Pick<HeldDeliveryCommand, "kind" | "policy" | "turnId">,
+  command: Pick<HeldDeliveryCommand, "kind" | "policy" | "turnId" | "onlyIfIdle">,
 ): Set<string> {
   const identities = conversationIdentities(file, conversationId);
   return new Set([...identities].map((identity) => heldDeliveryRequestDigest(identity, text, command)));
@@ -2419,6 +2422,14 @@ function normalizeHeldDelivery(value: HeldDelivery): HeldDelivery {
   let state = value.state ?? "held";
   const text = typeof value.text === "string" ? value.text : "";
   const command = canonicalHeldDeliveryCommand(value.command, value.id);
+  let idleFenceCorrupt = false;
+  if (command.onlyIfIdle !== undefined) {
+    try {
+      command.onlyIfIdle = parseRuntimeIdleKillFence(command.onlyIfIdle);
+      idleFenceCorrupt = command.kind !== "send" || command.policy !== "queue" || command.turnId !== null;
+    } catch { idleFenceCorrupt = true; }
+    if (idleFenceCorrupt && state !== "delivered") state = "failed";
+  }
   const legacyDigest = text
     ? heldDeliveryRequestDigest(value.conversationId, text, command)
     : null;
@@ -2460,7 +2471,8 @@ function normalizeHeldDelivery(value: HeldDelivery): HeldDelivery {
     attempts: Number.isInteger(value.attempts) ? value.attempts : 0,
     assignedAt: imagesCorrupt ? null : value.assignedAt ?? null,
     deliveredAt: value.deliveredAt ?? null,
-    error: imagesCorrupt ? CORRUPT_HELD_DELIVERY_IMAGES_ERROR : value.error ?? null,
+    error: imagesCorrupt ? CORRUPT_HELD_DELIVERY_IMAGES_ERROR
+      : idleFenceCorrupt ? "held continuation idle fence is invalid" : value.error ?? null,
   };
 }
 

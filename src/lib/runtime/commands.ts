@@ -179,6 +179,10 @@ export function parseRuntimeCommand(kind: RuntimeOperationKind, value: unknown):
     }
     if (policy === "steer-or-queue" && turnId !== undefined) throw new Error("steer-or-queue follows the live turn and takes no fence");
     const runtime = parseRuntimeSendSettings(body.runtime);
+    const onlyIfIdle = body.onlyIfIdle === undefined ? undefined : parseRuntimeIdleKillFence(body.onlyIfIdle);
+    if (onlyIfIdle && (kind !== "send" || policy !== "queue" || turnId !== null)) {
+      throw new Error("idle continuation requires a queued send with an idle turn fence");
+    }
     /* #844: validated here, with the text, so the turn and the card it points at
        are admitted as one fact. A body the validator refuses drops the reference
        and admits the turn anyway — an instruction that arrives without its badge
@@ -195,6 +199,7 @@ export function parseRuntimeCommand(kind: RuntimeOperationKind, value: unknown):
       ...(policy ? { policy } : {}),
       ...(turnId !== undefined ? { turnId } : {}),
       ...(runtime ? { runtime } : {}),
+      ...(onlyIfIdle ? { onlyIfIdle } : {}),
       ...(selectedContext ? { selectedContext } : {}),
     };
   }

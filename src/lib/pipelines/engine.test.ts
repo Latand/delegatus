@@ -21839,3 +21839,120 @@ for (const engine of ["claude", "codex"] as const) {
     expect(f.sends).toHaveLength(0);
   });
 }
+
+
+test.each(["claude", "codex"] as const)("%s reply racing continuation admission prevents automatic delivery", async engine => {
+  const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded", "You've hit your session limit", 120_000, true);
+  await tickPipelines([], f.h.ports);
+  f.advance(180_000);
+  let policy: string | undefined;
+  f.h.ports.resumeSeveredTurn = async input => {
+    policy = input.policy;
+    f.h.durableTurns.set("/codex/stage-1.jsonl", { turn: "busy", message: null, lastRecordAt: f.now() + 1,
+      prompts: [{ ts: f.now() + 1, origin: "external" }] });
+    f.h.setConversationActive(true);
+    if (input.continuationAllowed && !await input.continuationAllowed()) return false;
+    f.sends.push(input.clientMessageId);
+    return true;
+  };
+  await tickPipelines([], f.h.ports);
+  expect(f.sends).toHaveLength(0);
+  expect(policy).toBe("queue");
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait?.tries).toBe(0);
+});
+
+test.each(["running", "parked"] as const)("%s quota wait retains a human prompt removed by shutdown normalization", async mode => {
+  const f = await providerRecoveryHarness("claude", "rate_limit", "You've hit your session limit", 120_000, true);
+  if (mode === "parked") {
+    const lane = loadPipelines()[0]!;
+    lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries: 3, startedAt: f.h.ports.now() };
+    savePipelines([lane]);
+  }
+  await tickPipelines([], f.h.ports);
+  const cutAt = f.h.ports.now();
+  f.advance(1_000);
+  readFixtures(f.h, { "/codex/stage-1.jsonl": stageTranscript(`shutdown-human-${mode}`, [
+    { type: "assistant", timestamp: cutAt, isApiErrorMessage: true, error: "rate_limit",
+      message: { role: "assistant", model: "<synthetic>", stop_reason: "end_turn", content: [{ type: "text", text: "You've hit your session limit" }] } },
+    { type: "user", timestamp: f.h.ports.now(), origin: { kind: "human" }, promptSource: "typed", isMeta: true, message: { role: "user", content: "Wait for my answer" } },
+    { type: "user", timestamp: new Date(f.now() + 1).toISOString(), interruptedByShutdown: true, message: { role: "user", content: "[Request interrupted by user]" } },
+    { type: "assistant", timestamp: new Date(f.now() + 2).toISOString(), message: { role: "assistant", model: "<synthetic>", content: [{ type: "text", text: "No response requested." }] } },
+  ]) });
+  f.advance(180_000);
+  await tickPipelines([], f.h.ports);
+  expect(f.h.spawnInputs).toHaveLength(1);
+  expect(f.sends).toHaveLength(0);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait?.retryCancelled).toBe(true);
+});
+
+
+test.each(["claude", "codex"] as const)("%s pause and resume withdraws a running provider reset obligation", async engine => {
+  const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded", "You've hit your session limit", 120_000, true);
+  await tickPipelines([], f.h.ports);
+  const id = loadPipelines()[0]!.id;
+  expect((await patchPipeline(id, { action: "pause" }, f.h.ports)).error).toBeUndefined();
+  expect((await patchPipeline(id, { action: "resume" }, f.h.ports)).error).toBeUndefined();
+  f.advance(180_000);
+  await tickPipelines([], f.h.ports);
+  expect(f.sends).toHaveLength(0);
+  expect(f.h.spawnInputs).toHaveLength(1);
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+});
+
+test.each([
+  ["pause", "acknowledged"], ["close", "acknowledged"], ["pause", "lost-acknowledgment"], ["close", "lost-acknowledgment"],
+  ["pause", "transport-error"], ["close", "transport-error"],
+] as const)("%s invalidates an admitted provider continuation before dispatch with %s", async (action, acknowledgment) => {
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const { invalidateProviderContinuation } = await import("./engine");
+  const f = await providerRecoveryHarness("codex", "usage_limit_exceeded", "You've hit your session limit", 120_000, true);
+  const journal = new RuntimeJournal(path.join(process.env.LLV_STATE_DIR!, `continuation-${action}-${acknowledgment}.sqlite`), { structuredHosts: true });
+  const conversationId = loadPipelines()[0]!.runs[0]!.attempts[0]!.conversationId!;
+  journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
+    conversationId, sessionKey: { engine: "codex", sessionId: "continuation-generation" }, hostKind: "codex-app-server",
+    host: "hosted", turn: "idle", activeTurnId: null, writerClaim: "fixture:1", attentionIds: [],
+    capabilities: { steer: true, structuredAttention: true },
+  } });
+  let operationId = "";
+  f.h.ports.resumeSeveredTurn = async input => {
+    if (input.continuationAllowed && !await input.continuationAllowed()) return false;
+    const session = journal.readSession({ conversationId })!;
+    operationId = input.clientMessageId;
+    journal.executeOperation({ kind: "send", conversationId, operationId, idempotencyKey: operationId, text: input.text,
+      policy: "queue", turnId: null, onlyIfIdle: { revision: session.revision, writerClaim: session.writerClaim! } });
+    if (acknowledgment === "transport-error") throw new Error("runtime acknowledgment lost");
+    return acknowledgment === "acknowledged";
+  };
+  f.h.ports.invalidateProviderContinuation = id => invalidateProviderContinuation(id, {
+    append: async event => journal.append(event),
+  } as import("@/lib/runtime/client").RuntimeHostClient);
+  try {
+    await tickPipelines([], f.h.ports);
+    f.advance(180_000);
+    await tickPipelines([], f.h.ports);
+    // A new Viewer reads the pending intent before applying operator control.
+    const requestedAt = loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait?.continuationRequestedAt;
+    expect((await patchPipeline(loadPipelines()[0]!.id, { action }, { ...f.h.ports })).error).toBeUndefined();
+    expect(journal.transitionOperation(operationId, "delivering").receipt).toMatchObject({ status: "failed", reason: "idle-continuation-cancelled" });
+    expect(requestedAt).toBeDefined();
+  } finally { journal.close(); }
+});
+
+test("capacity relaunch preserves idle-only retirement and rechecks operator input after termination", async () => {
+  const f = await providerRecoveryHarness("codex", "other", "Selected model is at capacity. Please try a different model.");
+  f.h.ports.resumeSeveredTurn = undefined;
+  await tickPipelines([], f.h.ports);
+  f.advance(60_000);
+  let stopOptions: unknown;
+  f.h.ports.stopStageAgent = async (_target, options) => {
+    stopOptions = options;
+    f.h.durableTurns.set("/codex/stage-1.jsonl", { turn: "busy", message: null, lastRecordAt: f.now() + 1,
+      prompts: [{ ts: f.now() + 1, origin: "external" }] });
+    return { outcome: "stopped" };
+  };
+  await tickPipelines([], f.h.ports);
+  expect(stopOptions).toEqual({ onlyIfIdle: true });
+  expect(f.h.spawnInputs).toHaveLength(1);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+  expect(loadPipelines()[0]!.stateDetail).toContain("newer stage activity");
+});

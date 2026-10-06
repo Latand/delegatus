@@ -4002,3 +4002,39 @@ test.each(["live", "unverified", "dead"])("automatic retirement claim protects t
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+
+test.each(["unchanged", "active", "answered", "writer", "queued"] as const)("idle continuation fence checks admission and execution: %s", change => {
+  const dir = sandbox("idle-continuation");
+  let journal = new RuntimeJournal(path.join(dir, "events.sqlite"), { structuredHosts: true });
+  const conversationId = "conversation_continuation";
+  const key = { engine: "codex" as const, sessionId: "continuation-generation" };
+  journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
+    conversationId, sessionKey: key, hostKind: "codex-app-server", host: "hosted", turn: "idle", activeTurnId: null,
+    writerClaim: "fixture:1", attentionIds: [], capabilities: { steer: true, structuredAttention: true, nativeQueue: true },
+  } });
+  const onlyIfIdle = { revision: journal.readSession({ conversationId })!.revision, writerClaim: "fixture:1" };
+  const command = { kind: "send" as const, conversationId, operationId: "automatic", idempotencyKey: "automatic", text: "continue",
+    policy: "queue" as const, turnId: null, onlyIfIdle };
+  expect(journal.executeOperation(command).receipt.status).toBe("queued");
+  journal.close();
+  journal = new RuntimeJournal(path.join(dir, "events.sqlite"), { structuredHosts: true });
+  expect(journal.nativeQueueRead(conversationId)).toHaveLength(0);
+  if (change === "active" || change === "answered") {
+    journal.append({ scope: { type: "session", id: conversationId }, kind: "turn-started", payload: { conversationId, turnId: "operator-turn" } });
+    if (change === "answered") journal.append({ scope: { type: "session", id: conversationId }, kind: "turn-completed", payload: { conversationId, turnId: "operator-turn" } });
+  } else if (change === "writer") {
+    journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: { conversationId, writerClaim: "fixture:2" } });
+  } else if (change === "queued") {
+    journal.executeOperation({ kind: "send", conversationId, operationId: "operator", idempotencyKey: "operator", text: "my answer", policy: "queue" });
+  }
+  const claimed = journal.transitionOperation("automatic", "delivering");
+  expect(claimed.receipt.status).toBe(change === "unchanged" ? "delivering" : "failed");
+  if (change !== "unchanged") {
+    expect(claimed.receipt.reason).toBe("idle-continuation-cancelled");
+    expect(journal.executeOperation({ ...command, operationId: "later", idempotencyKey: "later" }).receipt.status).toBe("rejected");
+    expect(journal.effectBatch(100, ["runtime.send"]).some(effect => effect.payload.operationId === "automatic")).toBe(false);
+  }
+  journal.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});

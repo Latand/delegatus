@@ -177,3 +177,15 @@ test("automatic kill preserves its idle fence and rejects malformed conditions",
     expect(() => parseRuntimeCommand("kill", { ...command, onlyIfIdle })).toThrow();
   }
 });
+
+
+test("automatic continuation parsing retains its idle fence and refuses unsafe policies", () => {
+  const body = { conversationId: "conversation-one", idempotencyKey: "automatic", text: "continue", policy: "queue", turnId: null,
+    onlyIfIdle: { revision: 3, writerClaim: "fixture:1" } };
+  expect(parseRuntimeCommand("send", body)).toMatchObject({ onlyIfIdle: body.onlyIfIdle, turnId: null, policy: "queue" });
+  for (const patch of [{ policy: "interrupt-active" }, { turnId: "operator-turn" }, { turnId: undefined },
+    { onlyIfIdle: { revision: 0, writerClaim: "fixture:1" } }, { onlyIfIdle: null }]) {
+    expect(() => parseRuntimeCommand("send", { ...body, ...patch })).toThrow();
+  }
+  expect(() => parseRuntimeCommand("steer", body)).toThrow();
+});
