@@ -184,7 +184,10 @@ export function Hint({
       onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) send("blur");
       }}
-      onClick={() => send("dismiss")}
+      /* In the capture phase, so a control that stops its own click (Send
+         with nothing to send stays enabled for its menu and swallows the
+         click) still closes its bubble. */
+      onClickCapture={() => send("dismiss")}
     >
       {children}
       {shown ? (

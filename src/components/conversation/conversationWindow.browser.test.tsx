@@ -3395,6 +3395,7 @@ describe("a control's hint never outlives its click", () => {
   const URL_QUERY = "?case=own-message-steps&surface=orchestrator&lang=en";
   const compact = `button[aria-label^="${translate("en", "composer.compactAria")}"]`;
   const stop = `button[aria-label^="${translate("en", "composer.interruptAria")}"]`;
+  const sendButton = `button[aria-label="${translate("en", "composer.sendToAgent")}"]`;
   const HOLD = `window.heldControls = [];
     const send = window.fetch;
     window.fetch = async (input, init) => {
@@ -3429,7 +3430,7 @@ describe("a control's hint never outlives its click", () => {
     await page.waitForTimeout(HINT_SHOWN_MS);
   }
 
-  browserTest("Compact, Stop and a keyboard-focus hint in Chromium", async () => {
+  browserTest("Compact, Stop, Send and a keyboard-focus hint in Chromium", async () => {
     const out = path.resolve(".artifacts/control-hints");
     fs.mkdirSync(out, { recursive: true });
     const served = await serveEvidenceFixture(out, FIXTURE);
@@ -3489,6 +3490,27 @@ describe("a control's hint never outlives its click", () => {
           await release(page);
           await page.waitForTimeout(HINT_SHOWN_MS);
           expect(await hints(page)).toEqual([]);
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+      }
+
+      /* Send with an empty field keeps its menu, so it stays enabled, says it
+         cannot send, and stops its own click from propagating. */
+      {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}${URL_QUERY}`, { width: 1280, height: 900 }, "dark", "en");
+        try {
+          await page.waitForSelector(sendButton, { timeout: 20_000 });
+          expect(await page.evaluate((query) => document.querySelector(query)!.getAttribute("aria-disabled"), sendButton)).toBe("true");
+          await rest(page, sendButton);
+          expect(await hints(page)).toEqual([translate("en", "composer.sendToAgent")]);
+          await press(page);
+          expect(await disabled(page, sendButton)).toBe(false);
+          expect(await hints(page)).toEqual([]);
+          await leave(page);
+          await rest(page, sendButton);
+          expect(await hints(page)).toEqual([translate("en", "composer.sendToAgent")]);
           expect(pageErrors).toEqual([]);
         } finally {
           await context.close();
