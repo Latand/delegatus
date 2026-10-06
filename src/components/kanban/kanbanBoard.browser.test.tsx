@@ -17976,8 +17976,9 @@ describe("the left sidebar, numbered design variants", () => {
   const SIZES = [{ width: 1440, height: 900 }, { width: 1000, height: 700 }] as const;
   const CROP = 320;
 
-  /* `everywhere` states are shot at both sizes, both schemes and both languages; the rest once, at 1440x900 light, in `lang`. */
-  interface State { name: string; query: string; folded?: boolean; click?: string; first?: boolean; bare?: boolean; variants?: readonly number[]; everywhere: boolean; lang?: "en" | "uk" }
+  /* `everywhere` states are shot at both sizes, both schemes and both languages; the rest at 1440x900 light, once in `lang` or once per language. */
+  interface State { name: string; query: string; folded?: boolean; click?: string; first?: boolean; bare?: boolean; variants?: readonly number[]; everywhere: boolean; lang?: "en" | "uk" | "both" }
+  const langsOf = (state: State): readonly ("en" | "uk")[] => state.lang === "both" ? ["uk", "en"] : [state.lang ?? "en"];
   const ACCOUNT = '[data-engine-limits="claude"] button[aria-haspopup="dialog"]';
   const STATES: readonly State[] = [
     { name: "overview", query: "rail=few&railview=overview", everywhere: true },
@@ -17993,15 +17994,16 @@ describe("the left sidebar, numbered design variants", () => {
     { name: "ask", query: "rail=few&railask=1", variants: [1], everywhere: true },
     { name: "ask-many", query: "rail=many&railask=1", variants: [1], everywhere: true },
     /* The states "every function is kept" rests on: in variant 1's lines and on variant 2's gauges. */
-    { name: "copilot", query: "rail=few&railstate=copilot", variants: [1, 2], everywhere: false, lang: "uk" },
+    { name: "copilot", query: "rail=few&railstate=copilot", variants: [1, 2, 3], everywhere: false, lang: "both" },
     { name: "copilot-accounts", query: "rail=few&railstate=copilot", click: '[data-engine-limits="copilot"] button', first: true, variants: [1, 2], everywhere: false, lang: "uk" },
-    { name: "stale", query: "rail=few&railstate=stale", variants: [1, 2], everywhere: false, lang: "uk" },
+    { name: "stale", query: "rail=few&railstate=stale", variants: [1, 2, 3], everywhere: false, lang: "both" },
     { name: "detail", query: "rail=few", click: "[data-rail-footer-detail]", variants: [1], everywhere: false, lang: "uk" },
     { name: "panel-accounts", query: "rail=few", click: ACCOUNT, first: true, variants: [1, 2], everywhere: false, lang: "uk" },
     { name: "panel-burndown", query: "rail=few", click: ACCOUNT, variants: [1], everywhere: false, lang: "uk" },
     { name: "panel-cleanup", query: "rail=few", click: "[data-resources-footer] > button", variants: [1, 2], everywhere: false, lang: "uk" },
     { name: "panel-telegram", query: "rail=few", click: "[data-rail-footer] button[aria-haspopup='dialog']", variants: [1, 2], everywhere: false, lang: "uk" },
-    { name: "empty", query: "rail=few&railstate=empty&railview=overview", variants: [1], everywhere: false, lang: "uk" },
+    /* Today's empty rail is shot beside variant 1's. */
+    { name: "empty", query: "rail=few&railstate=empty&railview=overview", variants: [0, 1], everywhere: false, lang: "uk" },
     { name: "loading", query: "rail=few&railstate=loading", bare: true, variants: [1], everywhere: false, lang: "uk" },
     { name: "unreachable", query: "rail=few&railstate=unreachable", bare: true, variants: [1], everywhere: false, lang: "uk" },
   ];
@@ -18011,8 +18013,10 @@ describe("the left sidebar, numbered design variants", () => {
   interface Reading {
     frame: string; variant: number; state: string; width: number; height: number; scheme: Scheme; lang: "en" | "uk";
     rail: { width: number; listHeight: number; footerHeight: number; rows: number; rowsInView: number; clippedNames: number; overflowX: boolean };
-    /** The left edge of every name and label, and of each mark column: one value each when they line up. */
-    edges: { text: number[]; needs: number[]; live: number[] };
+    /** The left edge of every name and label, of each mark column, and of the account names on the engine lines: one value each when they line up. */
+    edges: { text: number[]; needs: number[]; live: number[]; accounts: number[] };
+    /** The account named on each engine line, and whether the line cuts it. */
+    accounts: { name: string; cut: boolean }[];
     /** A footer line: the share its bar draws, and the reading beside the bar. */
     meters: { label: string; value: string; bar: number | null }[];
     /** The question lines: how many are cut, and how many of the cut ones the row's tooltip does not complete. */
@@ -18038,7 +18042,8 @@ describe("the left sidebar, numbered design variants", () => {
     const cut = asks.filter((ask) => ask.scrollHeight > ask.clientHeight + 1 || ask.scrollWidth > ask.clientWidth + 1);
     const dialog = [...document.querySelectorAll<HTMLElement>('[role="dialog"], [data-rail-menu-panel], [data-resources-panel]')].map((element) => element.getBoundingClientRect()).find((box) => box.width > 0) ?? null;
     return {
-      edges: { text: lefts("nav [data-rail-name], nav [data-rail-label], [data-rail-footer] [data-rail-label]"), needs: lefts('[data-rail-slot="needs"] [data-rail-needs]'), live: lefts('[data-rail-slot="live"] [data-rail-live]') },
+      edges: { text: lefts("nav [data-rail-name], nav [data-rail-label], [data-rail-footer] [data-rail-label]"), needs: lefts('[data-rail-slot="needs"] [data-rail-needs]'), live: lefts('[data-rail-slot="live"] [data-rail-live]'), accounts: lefts("[data-meter-line] [data-meter-name]") },
+      accounts: [...rail.querySelectorAll<HTMLElement>("[data-meter-line] [data-meter-name]")].map((name) => ({ name: name.textContent ?? "", cut: name.scrollWidth > name.clientWidth + 1 })),
       meters: [...rail.querySelectorAll<HTMLElement>("[data-meter-line]")].map((line) => {
         const track = line.querySelector<HTMLElement>("[data-meter-bar]");
         const fill = track?.firstElementChild as HTMLElement | null;
@@ -18182,7 +18187,7 @@ describe("the left sidebar, numbered design variants", () => {
     try {
       for (const variant of [0, 1, 2, 3]) for (const state of STATES) for (const size of SIZES) for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) {
         if (state.variants && !state.variants.includes(variant)) continue;
-        if (!state.everywhere && !(size.width === 1440 && scheme === "light" && lang === (state.lang ?? "en"))) continue;
+        if (!state.everywhere && !(size.width === 1440 && scheme === "light" && langsOf(state).includes(lang))) continue;
         const frame = `v${variant}-${state.name}-${size.width}x${size.height}-${scheme}-${lang}`;
         if (ONLY && !ONLY.test(frame)) continue;
         const context = await browser.newContext({ viewport: { width: size.width, height: size.height + STRIP }, colorScheme: scheme, reducedMotion: "reduce" });
@@ -18225,6 +18230,10 @@ describe("the left sidebar, numbered design variants", () => {
               if (named === null) failures.push(`${frame}: the line "${meter.label}" has a bar and no reading to compare it with: "${meter.value}"`);
               else if (Math.abs(named - meter.bar) > 2) failures.push(`${frame}: "${meter.label} ${meter.value}" stands beside a bar drawn at ${meter.bar}%`);
             }
+            /* An engine line shows its account whole in every state, an aged or failed reading included. */
+            for (const account of reading.accounts) if (account.cut) failures.push(`${frame}: the engine line cuts the account "${account.name}"`);
+            /* The fixture's long project name fits its two lines in English. */
+            if (lang === "en" && reading.rail.clippedNames) failures.push(`${frame}: ${reading.rail.clippedNames} project name(s) cut`);
             if (reading.asks.cutWithoutTooltip) failures.push(`${frame}: ${reading.asks.cutWithoutTooltip} cut question(s) the tooltip does not complete`);
             /* A panel and the narrow rail's opened sidebar lie outside the sidebar's box by design. */
             if (reading.rail.overflowX && !reading.panel && !(variant === 2 && state.query.includes("railopen"))) failures.push(`${frame}: the sidebar is wider than its box`);
@@ -18353,10 +18362,10 @@ describe("the left sidebar, numbered design variants", () => {
         await sheet(path.join(OUT, `sheet-variant-${variant}-menu-and-create.png`), extras.length, extras);
         /* The states behind "every function is kept": the left part of each frame at full size. */
         const kept = [];
-        for (const state of STATES.filter((entry) => entry.lang && entry.variants?.includes(variant))) {
-          const file = path.join(OUT, `v${variant}-${state.name}-1440x900-light-${state.lang}.png`);
+        for (const state of STATES.filter((entry) => entry.lang && entry.variants?.includes(variant))) for (const lang of langsOf(state)) {
+          const file = path.join(OUT, `v${variant}-${state.name}-1440x900-light-${lang}.png`);
           const data = fs.existsSync(file) ? await sharp(file).extract({ left: 0, top: 0, width: 760, height: 900 + STRIP }).png().toBuffer() : null;
-          kept.push({ label: `${variant} · ${state.name} · 1440x900 · light · ${state.lang}`, picture: data, width: 760, height: data ? 900 + STRIP : 60 });
+          kept.push({ label: `${variant} · ${state.name} · 1440x900 · light · ${lang}`, picture: data, width: 760, height: data ? 900 + STRIP : 60 });
         }
         if (kept.length) await sheet(path.join(OUT, `sheet-variant-${variant}-states.png`), 4, kept);
       }

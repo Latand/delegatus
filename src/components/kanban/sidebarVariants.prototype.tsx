@@ -31,8 +31,8 @@ import { useLocale } from "@/lib/i18n";
  * panels, and the summaries `buildProjectSummaries` computes. What a variant
  * changes is where those parts sit and how a project row reads.
  *
- *   1  the full sidebar, tidied: one-line rows with each mark in its own
- *      column, labelled sections on one left edge, and a system block of one
+ *   1  the full sidebar, tidied: rows of one line (two for a long name) with
+ *      each mark in its own column, labelled sections on one left edge, and a system block of one
  *      line per reading; `?railask=1` adds variant 3's question line to it,
  *      which is the note's recommendation;
  *   2  a narrow rail of project tiles and gauges; the full sidebar opens beside
@@ -93,7 +93,10 @@ function shortAge(smt: number, now: number, lang: Lang): string {
 }
 
 const FOCUS = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
-const SQUARE = `flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-[8px] border border-border bg-card text-muted hover:text-primary ${FOCUS}`;
+/* A header control is an icon until the pointer is on it, so the first frame the eye meets is the filter. */
+const SQUARE = `flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-[8px] text-muted hover:bg-canvas hover:text-primary ${FOCUS}`;
+/* The header menu is the rail's own component; its trigger takes the same quiet drawing here. */
+const QUIET_MENU = "[data-rail-quiet] [data-rail-menu]:not(:hover):not([aria-expanded='true']){border-color:transparent;background-color:transparent}";
 
 interface RowFacts extends ProjectSummary {
   /** Engines with a live transcript in the project, each once. */
@@ -162,13 +165,15 @@ function LiveMark({ count }: { count: number }) {
 /**
  * The two marks of a one-line row, each in a column of its own, so "waiting"
  * and "working" are read down the list. A column exists while some project
- * carries its mark; a row without the mark keeps the column empty.
+ * carries its mark.
  */
-function MarkColumns({ needs, live, model }: { needs: number; live: number; model: RailModel }) {
+function MarkColumns({ needs, live, model, own = false }: { needs: number; live: number; model: RailModel; own?: boolean }) {
+  /* `own`: a project row gives its name the columns it does not use itself. The marks stand at fixed
+     distances from the row's right edge, so a waiting mark keeps the working column to its right. */
   return (
     <>
-      {model.totalAttention ? <span data-rail-slot="needs" className={SLOT_NEEDS}><NeedsMark count={needs} /></span> : null}
-      {model.totalLive ? <span data-rail-slot="live" className="flex w-6 shrink-0 items-center"><LiveMark count={live} /></span> : null}
+      {model.totalAttention && (!own || needs > 0) ? <span data-rail-slot="needs" className={SLOT_NEEDS}><NeedsMark count={needs} /></span> : null}
+      {model.totalLive && (!own || needs > 0 || live > 0) ? <span data-rail-slot="live" className="flex w-6 shrink-0 items-center"><LiveMark count={live} /></span> : null}
     </>
   );
 }
@@ -226,11 +231,17 @@ function ProjectRow({ row, kind, props, model, crowned }: { row: RowFacts; kind:
         onClick={() => props.onSelect(row.project)}
         className={`mb-px block w-full rounded-[10px] border px-2.5 text-left ${FOCUS} ${active ? "border-border bg-canvas" : "border-transparent hover:bg-canvas"} ${row.catalogOnly ? "opacity-70" : ""}`}
       >
-        <span className={`flex items-center gap-1.5 ${rich && busy ? "pt-1.5" : "min-h-[30px] py-1.5"}`}>
-          {/* A name longer than its column takes a second line before it is cut. */}
-          <span data-rail-name="" className={`line-clamp-2 min-w-0 flex-1 break-words text-[13px] leading-[18px] ${active ? "font-bold" : "font-semibold"} ${row.catalogOnly ? "text-muted" : ""}`}>{row.displayName}</span>
-          {rich ? null : <MarkColumns needs={row.attentionCount} live={row.liveCount} model={model} />}
-          <span data-rail-slot="age" className={SLOT_AGE}>{age}</span>
+        {/* The marks and the age stand at the right of the first line only. A name longer than what is
+            left of that line goes on under them across the whole row, and is cut after two lines. */}
+        <span data-rail-name="" className={`line-clamp-2 text-[13px] leading-[18px] ${rich && busy ? "mt-1.5" : "my-1.5"} ${active ? "font-bold" : "font-semibold"} ${row.catalogOnly ? "text-muted" : ""}`}>
+          <span className="block break-words">
+            <span className="float-right ml-1.5 flex h-[18px] items-center gap-1.5 font-normal">
+              {rich ? null : <MarkColumns needs={row.attentionCount} live={row.liveCount} model={model} own />}
+              {/* The crown control takes the age's place while the pointer is on the row. */}
+              <span data-rail-slot="age" className={`${SLOT_AGE} ${props.onToggleCrown ? "group-hover:opacity-0" : ""}`}>{age}</span>
+            </span>
+            {row.displayName}
+          </span>
         </span>
         {kind === "ask" && question ? <span data-rail-ask="" className="-mt-0.5 block pb-1.5 text-[11.5px] leading-[15px] text-warning line-clamp-2">{question}</span> : null}
         {rich && busy ? (
@@ -251,7 +262,6 @@ function ProjectRow({ row, kind, props, model, crowned }: { row: RowFacts; kind:
             ) : null}
           </span>
         ) : null}
-        {active ? <span className="-mt-0.5 block pb-1.5 text-[10.5px] text-muted">{total}</span> : null}
       </button>
       {props.onToggleCrown ? <CrownToggle crowned={crowned} onToggle={() => props.onToggleCrown!(row.project, !crowned)} /> : null}
     </div>
@@ -328,7 +338,8 @@ function SystemBlock({ gauges = false }: { gauges?: boolean }) {
 function RailHeader({ onHide, children, beside = false }: { onHide?: () => void; children?: ReactNode; beside?: boolean }) {
   const { t } = useLocale();
   return (
-    <header className={`flex h-10 shrink-0 items-center gap-2 border-b border-border pr-2 text-[13.5px] font-bold ${beside ? "pl-[19px]" : "pl-2"}`}>
+    <header data-rail-quiet="" className={`flex h-10 shrink-0 items-center gap-1 border-b border-border pr-2 text-[13.5px] font-bold ${beside ? "pl-[19px]" : "pl-2"}`}>
+      <style>{QUIET_MENU}</style>
       <span className="flex min-w-0 flex-1 items-center gap-2">
         {beside ? null : <DelegatusMark size={20} />}
         <span className="min-w-0 truncate" data-rail-brand="">{PRODUCT_NAME}</span>
@@ -360,15 +371,18 @@ function FullRail({ props, model, kind, headerExtra, start, beside = false }: { 
     <>
       <RailHeader onHide={props.onHide} beside={beside}>{headerExtra}</RailHeader>
       <div className="flex gap-1.5 px-2 pb-1 pt-2">
-        <label className={`flex h-[30px] min-w-0 flex-1 items-center gap-1.5 rounded-[9px] border border-border bg-canvas px-2 focus-within:ring-2 focus-within:ring-accent/40`}>
-          <Search className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden />
-          <input ref={filter} data-rail-filter="" className="w-full min-w-0 bg-transparent text-[12px] outline-none" placeholder={t("rail.filter")} value={query} onChange={(event) => setQuery(event.target.value)} />
-        </label>
+        {/* A rail with no project has nothing to filter, so the labelled button takes the row. */}
+        {firstRun && props.onCreateProject ? null : (
+          <label className={`flex h-[30px] min-w-0 flex-1 items-center gap-1.5 rounded-[9px] border border-border bg-canvas px-2 focus-within:ring-2 focus-within:ring-accent/40`}>
+            <Search className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden />
+            <input ref={filter} data-rail-filter="" className="w-full min-w-0 bg-transparent text-[12px] outline-none" placeholder={t("rail.filter")} value={query} onChange={(event) => setQuery(event.target.value)} />
+          </label>
+        )}
         {props.onCreateProject ? (
           <button
             type="button"
             data-testid="rail-create-project"
-            className={`flex h-[30px] shrink-0 items-center justify-center gap-1.5 rounded-[9px] border bg-canvas ${FOCUS} ${firstRun ? "border-accent/45 px-2.5 text-[12px] font-semibold text-accent hover:bg-accent/10" : `w-[30px] border-border hover:text-primary ${createOpen ? "text-primary" : "text-muted"}`}`}
+            className={`flex h-[30px] shrink-0 items-center justify-center gap-1.5 rounded-[9px] border bg-canvas ${FOCUS} ${firstRun ? "min-w-0 flex-1 border-accent/45 px-2.5 text-[12px] font-semibold text-accent hover:bg-accent/10" : `w-[30px] border-border hover:text-primary ${createOpen ? "text-primary" : "text-muted"}`}`}
             title={t("rail.createProject")}
             aria-label={t("rail.createProject")}
             aria-expanded={createOpen}

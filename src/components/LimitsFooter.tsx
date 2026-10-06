@@ -297,12 +297,15 @@ function EngineLimitsBlock({
     return (
       <div ref={containerRef} className="relative" data-engine-limits={engine}>
         <div data-meter-line="" className={`flex h-[26px] items-center pl-[13px] pr-1.5 ${anyStale ? "opacity-60" : ""}`}>
-          <button ref={triggerRef} type="button" aria-expanded={open} aria-haspopup="dialog" aria-label={t("accounts.triggerAria", { engine: label })} title={summary} className="flex h-[22px] min-w-0 flex-1 items-center gap-1.5 rounded-[7px] px-1.5 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" onClick={() => { setChartOpen(false); setOpen((value) => !value); }}>
-            {/* The mark names the engine here, as it does on a card; the words go to the account. */}
-            <EngineMark engine={engine} size={12} label={label} />
-            <span className="min-w-0 truncate text-[11.5px] font-semibold text-primary">{activeLabel}</span>
+          <button ref={triggerRef} type="button" aria-expanded={open} aria-haspopup="dialog" aria-label={t("accounts.triggerAria", { engine: label })} title={summary} className={`flex h-[22px] min-w-0 items-center gap-1.5 rounded-[7px] px-1.5 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${hasWindows && effective ? "flex-1" : "flex-initial"}`} onClick={() => { setChartOpen(false); setOpen((value) => !value); }}>
+            {/* The mark names the engine here, as it does on a card; the words go to the account.
+                The amber dot stands on the mark's corner, where it takes no width from the name. */}
+            <span className="relative flex shrink-0">
+              <EngineMark engine={engine} size={12} label={label} />
+              {staleReason ? <span data-limits-stale-dot="" title={staleReason} className="absolute -right-[3px] -top-[3px] h-1.5 w-1.5 rounded-full bg-warning ring-1 ring-card" /> : null}
+            </span>
+            <span data-meter-name="" className="min-w-0 truncate text-[11.5px] font-semibold text-primary">{activeLabel}</span>
             {draining ? <Loader2 className="h-3 w-3 shrink-0 animate-spin text-accent motion-reduce:animate-none" aria-hidden /> : null}
-            {staleReason ? <span data-limits-stale-dot="" title={staleReason} className="h-1.5 w-1.5 shrink-0 rounded-full bg-warning" /> : null}
           </button>
           {hasWindows && effective ? (
             <button ref={chartTriggerRef} type="button" aria-expanded={chartOpen} aria-haspopup="dialog" aria-label={t("burndown.openAria", { engine: label })} title={windows} className="flex h-[22px] shrink-0 items-center gap-1.5 rounded-[7px] px-1.5 hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" onClick={() => { setOpen(false); setChartOpen((value) => !value); }}>
@@ -310,7 +313,8 @@ function EngineLimitsBlock({
               <ReserveBar percent={left} color={color} />
             </button>
           ) : (
-            <span data-limits-reason="" title={staleReason || undefined} className="min-w-0 max-w-[60%] shrink-0 truncate px-1.5 text-[10px] text-muted">{visibleFailureReason ?? (accounts.status === "loading" || identityPending ? "…" : t("limits.noDataYet"))}</span>
+            /* The reason takes what the account's name leaves: the name is never cut to make room for it. */
+            <span data-limits-reason="" title={staleReason || undefined} className="min-w-0 flex-1 truncate px-1.5 text-right text-[10px] text-muted">{visibleFailureReason ?? (accounts.status === "loading" || identityPending ? "…" : t("limits.noDataYet"))}</span>
           )}
         </div>
         {panels}
