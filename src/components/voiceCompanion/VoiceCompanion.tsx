@@ -7,7 +7,7 @@ import { EngineMark } from "@/components/EngineMark";
 import { useLocale } from "@/lib/i18n";
 import type { Locale, VoiceCompanionAdapter } from "@/lib/voiceCompanion/contract";
 import {
-  BUBBLE_MAX_WIDTH, clampToViewport, CONTROL_SELECTOR, isFree, isPassiveCursor, laneLayout, placeCollapsed, placeExpanded, splitSpeech,
+  BUBBLE_MAX_CHARS, BUBBLE_MAX_WIDTH, clampToViewport, CONTROL_SELECTOR, isFree, isPassiveCursor, laneLayout, placeCollapsed, placeExpanded, splitSpeech,
   type LaneLayout, type Point, type Rect, type Size,
 } from "@/lib/voiceCompanion/placement";
 import { bezierSlope, cssBezier, riseCurve, RISE_MS, type Bezier } from "@/lib/voiceCompanion/motion";
@@ -36,7 +36,10 @@ import { VOICE_COMPANION_CSS } from "./voiceCompanionStyles";
  * Where it stands is a function of the page and of the corner asked for, so
  * one page gives one place. Until the operator moves it, the character keeps
  * off the page's text as well as its controls; while a conversation is in the
- * lane it holds its place unless a control comes under it. It collapses to a
+ * lane it holds its place unless a control comes under it. In a conversation's
+ * feed, which the host names, it keeps off the whole track of each row control,
+ * so the rows that arrive while it talks bring none beneath it, and off the room
+ * the host says a control of its own will take. It collapses to a
  * small shape, which also keeps off the page's text, and has no way to be
  * dismissed.
  */
@@ -116,10 +119,16 @@ function reachable(within: Element | null, box: { left: number; top: number; rig
 
 /** Every visible control on the page outside the companion, as viewport rectangles:
     what the selector names, and whatever shows a cursor of its own (a resize
-    handle, a surface that drags), which no selector can list. */
-function controlRects(self: Element | null, extra: string | undefined): Rect[] {
+    handle, a surface that drags), which no selector can list. A control inside a
+    surface that fills with rows (`rows`: a conversation's feed) may come to stand
+    anywhere along that surface as rows arrive and as it scrolls, so its whole
+    track, the control's width over the surface's height, counts as well. */
+function controlRects(self: Element | null, extra: string | undefined, rows: string | undefined): Rect[] {
   const rects: Rect[] = [];
   const clips = new Map<Element, DOMRect | null>();
+  const surfaces = rows ? [...document.querySelectorAll<HTMLElement>(rows)].filter((surface) => !self?.contains(surface)) : [];
+  const views = new Map<HTMLElement, Rect | null>();
+  const tracks = new Set<string>();
   const nodes = new Set<HTMLElement>(document.querySelectorAll<HTMLElement>(extra ? `${CONTROL_SELECTOR},${extra}` : CONTROL_SELECTOR));
   /* The cursor is inherited, so the outermost element that sets one stands for all it contains. */
   const walk = (parent: Element, inherited: boolean) => {
@@ -133,11 +142,20 @@ function controlRects(self: Element | null, extra: string | undefined): Rect[] {
   walk(document.body, !isPassiveCursor(getComputedStyle(document.body).cursor));
   for (const node of nodes) {
     if (self?.contains(node)) continue;
-    const rect = reachable(node.parentElement, node.getBoundingClientRect(), clips);
-    if (!rect) continue;
     const style = getComputedStyle(node);
     if (style.visibility === "hidden" || style.display === "none" || style.pointerEvents === "none") continue;
-    rects.push(rect);
+    const box = node.getBoundingClientRect();
+    const surface = surfaces.find((candidate) => candidate !== node && candidate.contains(node));
+    if (surface && box.width >= 1 && box.height >= 1) {
+      if (!views.has(surface)) views.set(surface, reachable(surface.parentElement, surface.getBoundingClientRect(), clips));
+      const view = views.get(surface);
+      const left = view ? Math.max(box.left, view.x) : 0;
+      const right = view ? Math.min(box.right, view.x + view.width) : 0;
+      const key = `${surfaces.indexOf(surface)}:${Math.round(left)}:${Math.round(right)}`;
+      if (view && right - left >= 1 && !tracks.has(key)) { tracks.add(key); rects.push({ x: left, y: view.y, width: right - left, height: view.height }); }
+    }
+    const rect = reachable(node.parentElement, box, clips);
+    if (rect) rects.push(rect);
   }
   return rects;
 }
@@ -187,6 +205,13 @@ const LINGER_MS: Record<Exclude<Floater["kind"], "more">, number> = { speech: SP
 /* `far`: how far the element's far edge stands from the lane's end at the character. */
 type Place = { top: number; height: number; width: number; left: number; far: number; arrival: number | null };
 
+/** A line's bubbles. While the line still streams, its last bubble holds only the words no later cut
+    can take from it, so a bubble never gives a word back and never keeps a line it emptied. */
+function bubblesOf(line: SpeechLine): string[] {
+  const streams = !line.final && line.playback !== "cut" && line.playback !== "played";
+  return splitSpeech(line.text, BUBBLE_MAX_CHARS, streams);
+}
+
 /** How many bubbles of a line are out: all of an operator's line and of a
     played one, none before its audio starts, and while it plays, those the
     nominal pace has reached. A cut line keeps those its audio reached. */
@@ -234,7 +259,7 @@ const tied = (text: string) => (text.trim().split(/\s+/u).length > 2 ? text.repl
 
 const DELEGATION_SETTLED = new Set(["answered", "refused", "cancelled", "failed"]);
 
-export function VoiceCompanion({ adapter, variant, project, locale: sessionLocale, protect, defaultCollapsed = false, showVariantNumber = false }: {
+export function VoiceCompanion({ adapter, variant, project, locale: sessionLocale, protect, rows, reserve, defaultCollapsed = false, showVariantNumber = false }: {
   adapter: VoiceCompanionAdapter;
   variant: CompanionVariant;
   project: string;
@@ -242,6 +267,14 @@ export function VoiceCompanion({ adapter, variant, project, locale: sessionLocal
   locale?: Locale;
   /** Extra selector for surfaces the host treats as controls (a draggable card). */
   protect?: string;
+  /** Selector for surfaces that fill with rows carrying their own controls (a conversation's feed).
+      The companion keeps off the whole track of every control in one, so a row that arrives under
+      it, or a scroll, brings no control beneath it and it has no reason to move. */
+  rows?: string;
+  /** Room the host keeps for controls of its own that are not on the page yet (the strip a feed
+      shows under itself while the reader is away from its end), as viewport rectangles. Read with
+      the page; the function itself must stay the same between renders. */
+  reserve?: () => Rect[];
   defaultCollapsed?: boolean;
   /** Prints the variant number beside the character, for comparison captures. */
   showVariantNumber?: boolean;
@@ -282,7 +315,7 @@ export function VoiceCompanion({ adapter, variant, project, locale: sessionLocal
       The answer depends on the page, the viewport and the anchor alone. */
   const settle = useCallback((isCollapsed: boolean) => {
     const viewport = viewportSize();
-    const obstacles = controlRects(root.current, protect);
+    const obstacles = [...controlRects(root.current, protect, rows), ...(reserve?.() ?? [])];
     const text = textRects(root.current);
     const corner = anchor.current ?? { x: viewport.width - 16, y: viewport.height - 16 };
     const inputs = JSON.stringify([viewport, isCollapsed, corner, chosen.current, obstacles, text]);
@@ -302,7 +335,7 @@ export function VoiceCompanion({ adapter, variant, project, locale: sessionLocal
       next = { mode: "collapsed", at, yielded: !isCollapsed };
     }
     setLayout((current) => (current && JSON.stringify(current) === JSON.stringify(next) ? current : next));
-  }, [block, protect, shape]);
+  }, [block, protect, rows, reserve, shape]);
 
   /* First placement, and again whenever the viewport changes. */
   useLayoutEffect(() => {
@@ -329,7 +362,7 @@ export function VoiceCompanion({ adapter, variant, project, locale: sessionLocal
     character.current?.setLevel(reducedMotion() ? (current.mouth > 0 ? 0.5 : 0) : current.mouth);
     const playing = current.playing && current.lines.find((line) => line.key === `companion:${current.playing!.itemId}`);
     if (!playing) return;
-    const out = bubblesOut(playing, splitSpeech(playing.text), current.playedMs);
+    const out = bubblesOut(playing, bubblesOf(playing), current.playedMs);
     setPaced((shown) => (shown?.key === playing.key && shown.out === out ? shown : { key: playing.key, out }));
   }), [store]);
   const speaking = state.phase === "speaking";
@@ -339,8 +372,8 @@ export function VoiceCompanion({ adapter, variant, project, locale: sessionLocal
   const candidates = useMemo((): Floater[] => {
     const speech: Floater[] = [];
     for (const line of state.lines.filter((entry) => entry.text.trim())) {
-      const chunks = splitSpeech(line.text);
-      const out = line.playback === "playing" && paced?.key === line.key ? Math.max(1, Math.min(paced.out, chunks.length)) : bubblesOut(line, chunks, 0);
+      const chunks = bubblesOf(line);
+      const out = Math.min(chunks.length, line.playback === "playing" && paced?.key === line.key ? Math.max(1, paced.out) : bubblesOut(line, chunks, 0));
       const done = line.speaker === "operator" ? line.final : line.playback === "played" || line.playback === "cut";
       for (let index = 0; index < out; index += 1) {
         const last = index === out - 1;
@@ -435,7 +468,7 @@ export function VoiceCompanion({ adapter, variant, project, locale: sessionLocal
     const check = () => {
       timer = null;
       if (atRest || layout.mode === "collapsed") { settle(collapsed); return; }
-      const obstacles = controlRects(root.current, protect);
+      const obstacles = [...controlRects(root.current, protect, rows), ...(reserve?.() ?? [])];
       if (footprint().some((rect) => !isFree(rect, obstacles))) { settledFor.current = null; settle(collapsed); }
     };
     const schedule = () => { timer ??= setTimeout(check, 250); };
@@ -448,6 +481,8 @@ export function VoiceCompanion({ adapter, variant, project, locale: sessionLocal
     const onSettled = (event: Event) => { if (!(event.target instanceof Node) || !root.current?.contains(event.target)) schedule(); };
     document.addEventListener("transitionend", onSettled, true);
     document.addEventListener("animationend", onSettled, true);
+    /* A surface that scrolled carried its controls with it. */
+    document.addEventListener("scroll", onSettled, { capture: true, passive: true });
     let live = true;
     void document.fonts?.ready.then(() => { if (live) schedule(); });
     /* The lane emptied, or this placement is new: the page is read once more. */
@@ -457,9 +492,10 @@ export function VoiceCompanion({ adapter, variant, project, locale: sessionLocal
       observer.disconnect();
       document.removeEventListener("transitionend", onSettled, true);
       document.removeEventListener("animationend", onSettled, true);
+      document.removeEventListener("scroll", onSettled, true);
       if (timer) clearTimeout(timer);
     };
-  }, [layout, dragging, collapsed, protect, settle, footprint, atRest]);
+  }, [layout, dragging, collapsed, protect, rows, reserve, settle, footprint, atRest]);
 
   /* The lane's stack: fit, rise and leave. Measured after each commit and
      played back as transforms, so nothing animates layout. */
@@ -580,11 +616,13 @@ export function VoiceCompanion({ adapter, variant, project, locale: sessionLocal
     if (entered > 1 || (entered === 1 && stamp - lastEntry.current < RISE_MS)) mark("vc:together", RISE_MS);
     if (entered) lastEntry.current = stamp;
     /* What left: it drifts away from the character and fades where it was. When the stack is rising
-       into its place it is gone at once, so no element shows through another. */
-    if (moved && motion) for (const node of stack.querySelectorAll<HTMLElement>(":scope > [data-leaving]")) fadeAtOnce(node);
+       into its place, or a new element comes out where it stood (it was the last one there), it is
+       gone at once, so no element shows through another. */
+    const taken = moved || (motion && arrivals.length > 0);
+    if (taken && motion) for (const node of stack.querySelectorAll<HTMLElement>(":scope > [data-leaving]")) fadeAtOnce(node);
     const gone = [...before.keys()].filter((key) => !after.has(key) && contents.current.has(key));
     if (gone.length && motion) {
-      setLeaving((current) => [...current.filter((item) => !gone.includes(item.floater.key)), ...gone.map((key) => ({ floater: contents.current.get(key)!, ...before.get(key)!, quick: moved }))]);
+      setLeaving((current) => [...current.filter((item) => !gone.includes(item.floater.key)), ...gone.map((key) => ({ floater: contents.current.get(key)!, ...before.get(key)!, quick: taken }))]);
       mark("vc:bubble-out", EXIT_MS);
     }
     positions.current = after;

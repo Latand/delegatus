@@ -3034,15 +3034,19 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return json({ messages: { [FM_SEAT_UUID]: { origin: "agent", mandate: { kind: "version", version: 1 } } }, occurrences: [{ textDigest: messageTextDigest(fmDeliveredText()), deliveredAt: iso(60), origin: "agent", mandate: { kind: "version", version: 1 } }] });
   }
   /* The delegated message is the operator's own instruction on the voice channel; the reviewer's relay beside it is
-     ordinary internal traffic. Both joins are answered: the engine id (Claude) and the occurrence (Codex). */
+     ordinary internal traffic. Both joins are answered: the engine id (Claude) and the occurrence (Codex).
+     The relay's owner is answered from the first read, before its record exists, as the registry writes a
+     delivery's owner when it admits the send. The feed reads provenance only once a row it cannot name is
+     shown, and until that read answers it draws such a record as a system fold across the whole row: answered
+     late, the delegated row flashed as a fold before it took its tint. */
   if (url.pathname === "/api/log/provenance" && VOICE) {
     const relay = { origin: "operator", channel: "voice-delegatus", submissionId: DEMO_IDS.clientMessageId };
     const internal = { origin: "agent", senderRole: "reviewer", senderProject: PROJECT };
     return json({
-      messages: { [VOICE_INTERNAL_UUID]: internal, ...(voice.delivered ? { [VOICE_RELAY_UUID]: relay } : {}) },
+      messages: { [VOICE_INTERNAL_UUID]: internal, [VOICE_RELAY_UUID]: relay },
       occurrences: [
         { ...internal, textDigest: messageTextDigest(voiceInternalText()), deliveredAt: iso(5 * MIN) },
-        ...(voice.delivered ? [{ ...relay, textDigest: messageTextDigest(demoInstruction(UK ? "uk" : "en")), deliveredAt: iso(40) }] : []),
+        { ...relay, textDigest: messageTextDigest(demoInstruction(UK ? "uk" : "en")), deliveredAt: iso(40) },
       ],
     });
   }
@@ -3140,6 +3144,15 @@ const queueTaskPreview = <div className="p-3"><NativeQueuePanel
 /* The companion over the real Viewer. The simulator's one effect is `dispatch`, which here makes the delegated
    message appear in the seat's transcript; the orchestrator's answer joins it when the simulator reports one.
    The page gives up the strip the companion docks into, as a host surface is asked to. */
+/* What the host knows about its own conversation pane and the companion cannot read from the page: while the
+   reader is away from the feed's end, the feed shows a 44 px strip under itself with the way back. That room is
+   kept for it before the strip exists; once it is there, it is protected as the control it is. */
+const VOICE_FEED_STRIP = 44;
+const voiceReserved = () => [...document.querySelectorAll<HTMLElement>("[data-log-feed-scroller]")].flatMap((feed) => {
+  const box = feed.getBoundingClientRect();
+  const shown = [...document.querySelectorAll<HTMLElement>("[data-feed-jump-strip]")].some((strip) => Math.abs(strip.getBoundingClientRect().top - box.bottom) < 2);
+  return shown || box.height <= VOICE_FEED_STRIP ? [] : [{ x: box.x, y: box.bottom - VOICE_FEED_STRIP, width: box.width, height: VOICE_FEED_STRIP }];
+});
 function voiceCompanionScene() {
   const params = new URLSearchParams(location.search);
   const variant = (Number(params.get("variant")) || 1) as CompanionVariant;
@@ -3176,7 +3189,7 @@ function voiceCompanionScene() {
           ))}
         </div>
       ) : <Viewer />}
-      <VoiceCompanion adapter={adapter} variant={variant} project={PROJECT} defaultCollapsed={params.get("collapsed") === "1"} showVariantNumber protect=".kb .card" />
+      <VoiceCompanion adapter={adapter} variant={variant} project={PROJECT} defaultCollapsed={params.get("collapsed") === "1"} showVariantNumber protect=".kb .card,[data-feed-jump-strip]" rows="[data-log-feed-scroller]" reserve={voiceReserved} />
     </>
   );
 }

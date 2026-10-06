@@ -41,8 +41,13 @@
       "overlapFrames": 0,
       "entriesAwayFromCharacter": 0,
       "orphanLastLines": [],
-      "riseMaxFrameShare": "<= 0.12"
+      "riseMaxFrameShare": "<= 0.12",
+      "placesDuringConversation": 1,
+      "maxBubbleSlackPx": "<= 2",
+      "samplesOverControls": 0
     },
+    "place": "stood, on every run: where the character stood at Talk, how many places it stood in until the script ended (required: 1), and the px² of the page's text under the character at the end. Over a conversation the text figure is an accepted cost: the feed fills under a character that holds its place, and at rest, once the lane is empty, the character moves off the text again",
+    "bubbleHeight": "geometry.maxBubbleSlackPx, sampled every 120 ms: the largest difference between a bubble's height and its text lines at the line height plus the note of a cut, padding and border (required: <= 2 px)",
     "delegatedRow": "delegatedRowAsItAppeared, on the delegation runs: the visible area of the delegated row in the orchestrator's conversation in the frame it appeared, and how much of it lay under the lane's elements and under the character; an accepted cost of standing over the conversation, reported and not required to be 0"
   },
   "limitations": [
@@ -62,7 +67,7 @@
       "motion": "no-preference",
       "recordingDuringMeasurement": false,
       "idle": {
-        "frames": 90,
+        "frames": 91,
         "medianMs": 16.7,
         "p95Ms": 16.7,
         "maxMs": 16.8
@@ -125,13 +130,13 @@
         }
       },
       "conversation": {
-        "frames": 217,
+        "frames": 220,
         "medianMs": 16.7,
-        "p95Ms": 16.7,
-        "maxMs": 16.8,
-        "framesOver1_5T": 0,
-        "missedFramesEstimate": 0,
-        "missedShare": 0,
+        "p95Ms": 16.8,
+        "maxMs": 33.3,
+        "framesOver1_5T": 1,
+        "missedFramesEstimate": 1,
+        "missedShare": 0.0045,
         "withinTarget": true
       },
       "hiddenTabSamples": 0,
@@ -140,23 +145,35 @@
         "events": 12,
         "proposal": null
       },
+      "stood": {
+        "character": {
+          "x": 760,
+          "y": 400
+        },
+        "placesDuringConversation": 1,
+        "pageTextUnderCharacterAtEndPx2": 0,
+        "rowControlsInConversation": 1
+      },
       "recording": "scenario-short-1440-en-light-v1.webm",
       "screenshots": [
         "scenario-short-1440-en-light-v1-end.png"
       ],
       "geometry": {
-        "samples": 29,
+        "samples": 33,
         "maxBubbles": 1,
         "maxCalls": 0,
         "maxFloaters": 1,
         "maxBubbleLines": 1,
         "maxBubbleWidth": 219,
+        "maxBubbleSlackPx": 0,
+        "slackestBubble": "",
+        "controlUnder": "",
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
         "samplesOverControls": 0
       },
       "lane": {
-        "frames": 207,
+        "frames": 221,
         "entries": 1,
         "entriesAwayFromCharacter": 0,
         "entryAwayMaxPx": 0,
@@ -164,18 +181,27 @@
         "towardCharacterMaxPx": 0,
         "awayMaxStepPx": 3,
         "rises": 1,
-        "riseMaxFrameShare": 0.055,
+        "riseMaxFrameShare": 0.056,
         "riseMaxFrameShareStepPx": 2.5,
-        "riseMaxFrameSharePathPx": 46,
-        "riseLongestPathPx": 46,
+        "riseMaxFrameSharePathPx": 45,
+        "riseLongestPathPx": 45,
         "risesCutByLeaving": 0,
         "lateFramesInRises": 0,
         "overlapFrames": 0,
         "overlapMaxPx": 0,
         "overlapWorstPair": "",
-        "bubblesRead": 3,
+        "bubblesRead": 2,
         "orphanLastLines": [],
         "running": false
+      },
+      "stoodWhileRecorded": {
+        "character": {
+          "x": 760,
+          "y": 400
+        },
+        "placesDuringConversation": 1,
+        "pageTextUnderCharacterAtEndPx2": 0,
+        "rowControlsInConversation": 1
       }
     },
     {
@@ -188,7 +214,7 @@
       "motion": "no-preference",
       "recordingDuringMeasurement": false,
       "idle": {
-        "frames": 89,
+        "frames": 90,
         "medianMs": 16.7,
         "p95Ms": 16.7,
         "maxMs": 16.8
@@ -196,9 +222,9 @@
       "windows": {
         "bubblesRising": {
           "marks": 5,
-          "frames": 85,
+          "frames": 87,
           "medianMs": 16.7,
-          "p95Ms": 16.7,
+          "p95Ms": 16.8,
           "maxMs": 16.8,
           "framesOver1_5T": 0,
           "missedFramesEstimate": 0,
@@ -251,20 +277,29 @@
         }
       },
       "conversation": {
-        "frames": 385,
+        "frames": 393,
         "medianMs": 16.7,
         "p95Ms": 16.8,
-        "maxMs": 16.8,
-        "framesOver1_5T": 0,
-        "missedFramesEstimate": 0,
-        "missedShare": 0,
-        "withinTarget": true
+        "maxMs": 349.9,
+        "framesOver1_5T": 3,
+        "missedFramesEstimate": 22,
+        "missedShare": 0.053,
+        "withinTarget": false
       },
       "hiddenTabSamples": 0,
       "contract": {
         "dispatches": 0,
         "events": 26,
         "proposal": null
+      },
+      "stood": {
+        "character": {
+          "x": 760,
+          "y": 416
+        },
+        "placesDuringConversation": 1,
+        "pageTextUnderCharacterAtEndPx2": 0,
+        "rowControlsInConversation": 1
       },
       "recording": "scenario-three-1440-uk-light-v2.webm",
       "screenshots": [
@@ -273,37 +308,49 @@
         "scenario-three-1440-uk-light-v2-end.png"
       ],
       "geometry": {
-        "samples": 54,
+        "samples": 57,
         "maxBubbles": 3,
         "maxCalls": 0,
         "maxFloaters": 3,
         "maxBubbleLines": 1,
         "maxBubbleWidth": 244,
+        "maxBubbleSlackPx": 0,
+        "slackestBubble": "",
+        "controlUnder": "",
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
         "samplesOverControls": 0
       },
       "lane": {
-        "frames": 385,
+        "frames": 350,
         "entries": 3,
         "entriesAwayFromCharacter": 0,
         "entryAwayMaxPx": 0,
         "towardCharacterFrames": 0,
         "towardCharacterMaxPx": 0,
-        "awayMaxStepPx": 2,
+        "awayMaxStepPx": 7,
         "rises": 6,
-        "riseMaxFrameShare": 0.055,
+        "riseMaxFrameShare": 0.057,
         "riseMaxFrameShareStepPx": 2.4,
-        "riseMaxFrameSharePathPx": 44,
+        "riseMaxFrameSharePathPx": 43,
         "riseLongestPathPx": 44,
         "risesCutByLeaving": 0,
-        "lateFramesInRises": 0,
+        "lateFramesInRises": 31,
         "overlapFrames": 0,
         "overlapMaxPx": 0,
         "overlapWorstPair": "",
-        "bubblesRead": 5,
+        "bubblesRead": 4,
         "orphanLastLines": [],
         "running": false
+      },
+      "stoodWhileRecorded": {
+        "character": {
+          "x": 760,
+          "y": 416
+        },
+        "placesDuringConversation": 1,
+        "pageTextUnderCharacterAtEndPx2": 0,
+        "rowControlsInConversation": 1
       }
     },
     {
@@ -316,17 +363,17 @@
       "motion": "no-preference",
       "recordingDuringMeasurement": false,
       "idle": {
-        "frames": 89,
+        "frames": 90,
         "medianMs": 16.7,
-        "p95Ms": 16.7,
+        "p95Ms": 16.8,
         "maxMs": 16.8
       },
       "windows": {
         "bubblesRising": {
           "marks": 7,
-          "frames": 132,
+          "frames": 143,
           "medianMs": 16.7,
-          "p95Ms": 16.8,
+          "p95Ms": 16.7,
           "maxMs": 16.8,
           "framesOver1_5T": 0,
           "missedFramesEstimate": 0,
@@ -379,13 +426,13 @@
         }
       },
       "conversation": {
-        "frames": 1065,
+        "frames": 1068,
         "medianMs": 16.7,
         "p95Ms": 16.7,
-        "maxMs": 16.8,
-        "framesOver1_5T": 0,
-        "missedFramesEstimate": 0,
-        "missedShare": 0,
+        "maxMs": 33.4,
+        "framesOver1_5T": 3,
+        "missedFramesEstimate": 3,
+        "missedShare": 0.0028,
         "withinTarget": true
       },
       "hiddenTabSamples": 0,
@@ -394,6 +441,15 @@
         "events": 54,
         "proposal": null
       },
+      "stood": {
+        "character": {
+          "x": 760,
+          "y": 400
+        },
+        "placesDuringConversation": 1,
+        "pageTextUnderCharacterAtEndPx2": 0,
+        "rowControlsInConversation": 1
+      },
       "recording": "scenario-paragraph-1440-en-dark-v3.webm",
       "screenshots": [
         "scenario-paragraph-1440-en-dark-v3-peak-2.png",
@@ -401,37 +457,49 @@
         "scenario-paragraph-1440-en-dark-v3-end.png"
       ],
       "geometry": {
-        "samples": 149,
+        "samples": 150,
         "maxBubbles": 3,
         "maxCalls": 0,
         "maxFloaters": 3,
         "maxBubbleLines": 3,
         "maxBubbleWidth": 280,
+        "maxBubbleSlackPx": 0,
+        "slackestBubble": "",
+        "controlUnder": "",
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
         "samplesOverControls": 0
       },
       "lane": {
-        "frames": 1070,
+        "frames": 917,
         "entries": 3,
         "entriesAwayFromCharacter": 0,
         "entryAwayMaxPx": 0,
         "towardCharacterFrames": 0,
         "towardCharacterMaxPx": 0,
-        "awayMaxStepPx": 5,
-        "rises": 6,
+        "awayMaxStepPx": 13,
+        "rises": 7,
         "riseMaxFrameShare": 0.055,
         "riseMaxFrameShareStepPx": 4.6,
         "riseMaxFrameSharePathPx": 84,
         "riseLongestPathPx": 84,
         "risesCutByLeaving": 0,
-        "lateFramesInRises": 0,
+        "lateFramesInRises": 43,
         "overlapFrames": 0,
         "overlapMaxPx": 0,
         "overlapWorstPair": "",
-        "bubblesRead": 17,
+        "bubblesRead": 14,
         "orphanLastLines": [],
         "running": false
+      },
+      "stoodWhileRecorded": {
+        "character": {
+          "x": 760,
+          "y": 400
+        },
+        "placesDuringConversation": 1,
+        "pageTextUnderCharacterAtEndPx2": 0,
+        "rowControlsInConversation": 1
       }
     },
     {
@@ -446,15 +514,15 @@
       "idle": {
         "frames": 89,
         "medianMs": 16.7,
-        "p95Ms": 16.7,
+        "p95Ms": 16.8,
         "maxMs": 16.8
       },
       "windows": {
         "bubblesRising": {
-          "marks": 18,
-          "frames": 301,
+          "marks": 17,
+          "frames": 284,
           "medianMs": 16.7,
-          "p95Ms": 16.7,
+          "p95Ms": 16.8,
           "maxMs": 16.8,
           "framesOver1_5T": 0,
           "missedFramesEstimate": 0,
@@ -507,13 +575,13 @@
         }
       },
       "conversation": {
-        "frames": 2558,
+        "frames": 2541,
         "medianMs": 16.7,
-        "p95Ms": 16.7,
-        "maxMs": 16.8,
-        "framesOver1_5T": 0,
-        "missedFramesEstimate": 0,
-        "missedShare": 0,
+        "p95Ms": 16.8,
+        "maxMs": 50,
+        "framesOver1_5T": 4,
+        "missedFramesEstimate": 5,
+        "missedShare": 0.002,
         "withinTarget": true
       },
       "hiddenTabSamples": 0,
@@ -522,6 +590,15 @@
         "events": 113,
         "proposal": null
       },
+      "stood": {
+        "character": {
+          "x": 760,
+          "y": 400
+        },
+        "placesDuringConversation": 1,
+        "pageTextUnderCharacterAtEndPx2": 0,
+        "rowControlsInConversation": 1
+      },
       "recording": "scenario-long-1440-uk-dark-v1.webm",
       "screenshots": [
         "scenario-long-1440-uk-dark-v1-peak-2.png",
@@ -529,37 +606,49 @@
         "scenario-long-1440-uk-dark-v1-end.png"
       ],
       "geometry": {
-        "samples": 355,
+        "samples": 358,
         "maxBubbles": 3,
         "maxCalls": 0,
         "maxFloaters": 3,
         "maxBubbleLines": 4,
         "maxBubbleWidth": 280,
+        "maxBubbleSlackPx": 0,
+        "slackestBubble": "",
+        "controlUnder": "",
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
         "samplesOverControls": 0
       },
       "lane": {
-        "frames": 2551,
+        "frames": 2325,
         "entries": 8,
         "entriesAwayFromCharacter": 0,
         "entryAwayMaxPx": 0,
         "towardCharacterFrames": 0,
         "towardCharacterMaxPx": 0,
-        "awayMaxStepPx": 6,
-        "rises": 21,
-        "riseMaxFrameShare": 0.055,
-        "riseMaxFrameShareStepPx": 5.9,
-        "riseMaxFrameSharePathPx": 106,
+        "awayMaxStepPx": 8,
+        "rises": 22,
+        "riseMaxFrameShare": 0.056,
+        "riseMaxFrameShareStepPx": 3.6,
+        "riseMaxFrameSharePathPx": 65,
         "riseLongestPathPx": 106,
         "risesCutByLeaving": 0,
-        "lateFramesInRises": 0,
+        "lateFramesInRises": 37,
         "overlapFrames": 0,
         "overlapMaxPx": 0,
         "overlapWorstPair": "",
-        "bubblesRead": 22,
+        "bubblesRead": 17,
         "orphanLastLines": [],
         "running": false
+      },
+      "stoodWhileRecorded": {
+        "character": {
+          "x": 760,
+          "y": 400
+        },
+        "placesDuringConversation": 1,
+        "pageTextUnderCharacterAtEndPx2": 0,
+        "rowControlsInConversation": 1
       }
     },
     {
@@ -572,17 +661,17 @@
       "motion": "no-preference",
       "recordingDuringMeasurement": false,
       "idle": {
-        "frames": 90,
+        "frames": 89,
         "medianMs": 16.7,
-        "p95Ms": 16.7,
+        "p95Ms": 16.8,
         "maxMs": 16.8
       },
       "windows": {
         "bubblesRising": {
           "marks": 19,
-          "frames": 281,
+          "frames": 229,
           "medianMs": 16.7,
-          "p95Ms": 16.7,
+          "p95Ms": 16.8,
           "maxMs": 16.8,
           "framesOver1_5T": 0,
           "missedFramesEstimate": 0,
@@ -590,8 +679,8 @@
           "withinTarget": true
         },
         "arrivingTogether": {
-          "marks": 4,
-          "frames": 115,
+          "marks": 5,
+          "frames": 145,
           "medianMs": 16.7,
           "p95Ms": 16.7,
           "maxMs": 16.8,
@@ -602,7 +691,7 @@
         },
         "leaving": {
           "marks": 6,
-          "frames": 151,
+          "frames": 126,
           "medianMs": 16.7,
           "p95Ms": 16.7,
           "maxMs": 16.8,
@@ -635,9 +724,9 @@
         }
       },
       "conversation": {
-        "frames": 627,
+        "frames": 615,
         "medianMs": 16.7,
-        "p95Ms": 16.7,
+        "p95Ms": 16.8,
         "maxMs": 16.8,
         "framesOver1_5T": 0,
         "missedFramesEstimate": 0,
@@ -650,6 +739,15 @@
         "events": 61,
         "proposal": null
       },
+      "stood": {
+        "character": {
+          "x": 760,
+          "y": 416
+        },
+        "placesDuringConversation": 1,
+        "pageTextUnderCharacterAtEndPx2": 0,
+        "rowControlsInConversation": 1
+      },
       "recording": "scenario-many-1440-en-light-v2.webm",
       "screenshots": [
         "scenario-many-1440-en-light-v2-peak-2.png",
@@ -658,37 +756,49 @@
         "scenario-many-1440-en-light-v2-end.png"
       ],
       "geometry": {
-        "samples": 87,
+        "samples": 90,
         "maxBubbles": 4,
         "maxCalls": 0,
         "maxFloaters": 4,
         "maxBubbleLines": 1,
         "maxBubbleWidth": 155,
+        "maxBubbleSlackPx": 0,
+        "slackestBubble": "",
+        "controlUnder": "",
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
         "samplesOverControls": 0
       },
       "lane": {
-        "frames": 625,
+        "frames": 525,
         "entries": 10,
         "entriesAwayFromCharacter": 0,
         "entryAwayMaxPx": 0,
         "towardCharacterFrames": 0,
         "towardCharacterMaxPx": 0,
-        "awayMaxStepPx": 2,
-        "rises": 22,
-        "riseMaxFrameShare": 0.056,
-        "riseMaxFrameShareStepPx": 2.3,
-        "riseMaxFrameSharePathPx": 42,
+        "awayMaxStepPx": 11,
+        "rises": 18,
+        "riseMaxFrameShare": 0.058,
+        "riseMaxFrameShareStepPx": 2.8,
+        "riseMaxFrameSharePathPx": 47,
         "riseLongestPathPx": 86,
-        "risesCutByLeaving": 2,
-        "lateFramesInRises": 0,
+        "risesCutByLeaving": 3,
+        "lateFramesInRises": 152,
         "overlapFrames": 0,
         "overlapMaxPx": 0,
         "overlapWorstPair": "",
-        "bubblesRead": 12,
+        "bubblesRead": 10,
         "orphanLastLines": [],
         "running": false
+      },
+      "stoodWhileRecorded": {
+        "character": {
+          "x": 760,
+          "y": 416
+        },
+        "placesDuringConversation": 1,
+        "pageTextUnderCharacterAtEndPx2": 0,
+        "rowControlsInConversation": 1
       }
     },
     {
@@ -701,15 +811,15 @@
       "motion": "no-preference",
       "recordingDuringMeasurement": false,
       "idle": {
-        "frames": 89,
+        "frames": 90,
         "medianMs": 16.7,
-        "p95Ms": 16.7,
+        "p95Ms": 16.8,
         "maxMs": 16.8
       },
       "windows": {
         "bubblesRising": {
           "marks": 15,
-          "frames": 232,
+          "frames": 239,
           "medianMs": 16.7,
           "p95Ms": 16.7,
           "maxMs": 16.8,
@@ -719,19 +829,8 @@
           "withinTarget": true
         },
         "arrivingTogether": {
-          "marks": 3,
-          "frames": 40,
-          "medianMs": 16.7,
-          "p95Ms": 16.8,
-          "maxMs": 16.8,
-          "framesOver1_5T": 0,
-          "missedFramesEstimate": 0,
-          "missedShare": 0,
-          "withinTarget": true
-        },
-        "leaving": {
-          "marks": 5,
-          "frames": 114,
+          "marks": 4,
+          "frames": 69,
           "medianMs": 16.7,
           "p95Ms": 16.7,
           "maxMs": 16.8,
@@ -740,11 +839,22 @@
           "missedShare": 0,
           "withinTarget": true
         },
+        "leaving": {
+          "marks": 5,
+          "frames": 124,
+          "medianMs": 16.7,
+          "p95Ms": 16.8,
+          "maxMs": 33.4,
+          "framesOver1_5T": 1,
+          "missedFramesEstimate": 1,
+          "missedShare": 0.008,
+          "withinTarget": true
+        },
         "calls": {
           "marks": 4,
           "frames": 45,
           "medianMs": 16.7,
-          "p95Ms": 16.8,
+          "p95Ms": 16.7,
           "maxMs": 16.8,
           "framesOver1_5T": 0,
           "missedFramesEstimate": 0,
@@ -767,10 +877,10 @@
         "frames": 798,
         "medianMs": 16.7,
         "p95Ms": 16.7,
-        "maxMs": 16.8,
-        "framesOver1_5T": 0,
-        "missedFramesEstimate": 0,
-        "missedShare": 0,
+        "maxMs": 33.4,
+        "framesOver1_5T": 1,
+        "missedFramesEstimate": 1,
+        "missedShare": 0.0013,
         "withinTarget": true
       },
       "hiddenTabSamples": 0,
@@ -778,6 +888,15 @@
         "dispatches": 0,
         "events": 49,
         "proposal": null
+      },
+      "stood": {
+        "character": {
+          "x": 760,
+          "y": 400
+        },
+        "placesDuringConversation": 1,
+        "pageTextUnderCharacterAtEndPx2": 0,
+        "rowControlsInConversation": 1
       },
       "recording": "scenario-burst-1440-uk-light-v3.webm",
       "screenshots": [
@@ -787,37 +906,49 @@
         "scenario-burst-1440-uk-light-v3-end.png"
       ],
       "geometry": {
-        "samples": 113,
+        "samples": 114,
         "maxBubbles": 2,
         "maxCalls": 4,
         "maxFloaters": 6,
         "maxBubbleLines": 3,
         "maxBubbleWidth": 280,
+        "maxBubbleSlackPx": 0,
+        "slackestBubble": "",
+        "controlUnder": "",
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
         "samplesOverControls": 0
       },
       "lane": {
-        "frames": 811,
+        "frames": 702,
         "entries": 8,
         "entriesAwayFromCharacter": 0,
         "entryAwayMaxPx": 0,
         "towardCharacterFrames": 0,
         "towardCharacterMaxPx": 0,
-        "awayMaxStepPx": 9,
-        "rises": 19,
-        "riseMaxFrameShare": 0.055,
-        "riseMaxFrameShareStepPx": 4.6,
-        "riseMaxFrameSharePathPx": 84,
+        "awayMaxStepPx": 16,
+        "rises": 18,
+        "riseMaxFrameShare": 0.056,
+        "riseMaxFrameShareStepPx": 2.4,
+        "riseMaxFrameSharePathPx": 43,
         "riseLongestPathPx": 216,
         "risesCutByLeaving": 2,
-        "lateFramesInRises": 0,
+        "lateFramesInRises": 199,
         "overlapFrames": 0,
         "overlapMaxPx": 0,
         "overlapWorstPair": "",
-        "bubblesRead": 13,
+        "bubblesRead": 8,
         "orphanLastLines": [],
         "running": false
+      },
+      "stoodWhileRecorded": {
+        "character": {
+          "x": 760,
+          "y": 400
+        },
+        "placesDuringConversation": 1,
+        "pageTextUnderCharacterAtEndPx2": 0,
+        "rowControlsInConversation": 1
       }
     },
     {
@@ -837,8 +968,8 @@
       },
       "windows": {
         "bubblesRising": {
-          "marks": 32,
-          "frames": 579,
+          "marks": 30,
+          "frames": 521,
           "medianMs": 16.7,
           "p95Ms": 16.8,
           "maxMs": 16.8,
@@ -848,10 +979,10 @@
           "withinTarget": true
         },
         "arrivingTogether": {
-          "marks": 1,
-          "frames": 29,
+          "marks": 2,
+          "frames": 58,
           "medianMs": 16.7,
-          "p95Ms": 16.8,
+          "p95Ms": 16.7,
           "maxMs": 16.8,
           "framesOver1_5T": 0,
           "missedFramesEstimate": 0,
@@ -859,8 +990,8 @@
           "withinTarget": true
         },
         "leaving": {
-          "marks": 10,
-          "frames": 255,
+          "marks": 9,
+          "frames": 225,
           "medianMs": 16.7,
           "p95Ms": 16.8,
           "maxMs": 16.8,
@@ -871,7 +1002,7 @@
         },
         "calls": {
           "marks": 2,
-          "frames": 58,
+          "frames": 57,
           "medianMs": 16.7,
           "p95Ms": 16.8,
           "maxMs": 16.8,
@@ -895,7 +1026,7 @@
       "conversation": {
         "frames": 2189,
         "medianMs": 16.7,
-        "p95Ms": 16.7,
+        "p95Ms": 16.8,
         "maxMs": 16.8,
         "framesOver1_5T": 0,
         "missedFramesEstimate": 0,
@@ -910,6 +1041,15 @@
           "dispatchesBefore": 0
         }
       },
+      "stood": {
+        "character": {
+          "x": 760,
+          "y": 400
+        },
+        "placesDuringConversation": 1,
+        "pageTextUnderCharacterAtEndPx2": 0,
+        "rowControlsInConversation": 2
+      },
       "recording": "scenario-delegation-1440-en-dark-v1.webm",
       "screenshots": [
         "scenario-delegation-1440-en-dark-v1-peak-2.png",
@@ -922,46 +1062,57 @@
         "scenario-delegation-1440-en-dark-v1-conversation.png"
       ],
       "geometry": {
-        "samples": 303,
+        "samples": 310,
         "maxBubbles": 4,
         "maxCalls": 1,
         "maxFloaters": 4,
         "maxBubbleLines": 4,
         "maxBubbleWidth": 280,
+        "maxBubbleSlackPx": 0,
+        "slackestBubble": "",
+        "controlUnder": "",
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
         "samplesOverControls": 0
       },
       "lane": {
-        "frames": 2177,
+        "frames": 2001,
         "entries": 13,
         "entriesAwayFromCharacter": 0,
         "entryAwayMaxPx": 0,
         "towardCharacterFrames": 0,
         "towardCharacterMaxPx": 0,
-        "awayMaxStepPx": 10,
-        "rises": 52,
-        "riseMaxFrameShare": 0.056,
-        "riseMaxFrameShareStepPx": 1.1,
-        "riseMaxFrameSharePathPx": 20,
+        "awayMaxStepPx": 13,
+        "rises": 44,
+        "riseMaxFrameShare": 0.058,
+        "riseMaxFrameShareStepPx": 2.3,
+        "riseMaxFrameSharePathPx": 40,
         "riseLongestPathPx": 272,
-        "risesCutByLeaving": 3,
-        "lateFramesInRises": 0,
+        "risesCutByLeaving": 2,
+        "lateFramesInRises": 216,
         "overlapFrames": 0,
         "overlapMaxPx": 0,
         "overlapWorstPair": "",
-        "bubblesRead": 78,
+        "bubblesRead": 35,
         "orphanLastLines": [],
         "running": false
+      },
+      "stoodWhileRecorded": {
+        "character": {
+          "x": 760,
+          "y": 400
+        },
+        "placesDuringConversation": 1,
+        "pageTextUnderCharacterAtEndPx2": 0,
+        "rowControlsInConversation": 2
       },
       "delegatedRowAsItAppeared": {
         "seen": true,
         "visiblePx2": 43781,
-        "underLaneElementsPx2": 17509,
+        "underLaneElementsPx2": 19836,
         "underCharacterPx2": 0,
-        "coveredShare": 0.4,
+        "coveredShare": 0.453,
         "by": [
-          "speech",
           "delegation"
         ]
       }
@@ -976,15 +1127,166 @@
       "motion": "no-preference",
       "recordingDuringMeasurement": false,
       "idle": {
-        "frames": 89,
+        "frames": 91,
+        "medianMs": 16.7,
+        "p95Ms": 16.8,
+        "maxMs": 16.8
+      },
+      "windows": {
+        "bubblesRising": {
+          "marks": 10,
+          "frames": 171,
+          "medianMs": 16.7,
+          "p95Ms": 16.8,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "arrivingTogether": {
+          "marks": 2,
+          "frames": 58,
+          "medianMs": 16.7,
+          "p95Ms": 16.8,
+          "maxMs": 16.8,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": true
+        },
+        "leaving": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        },
+        "calls": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        },
+        "delegation": {
+          "marks": 0,
+          "frames": 0,
+          "medianMs": 0,
+          "p95Ms": 0,
+          "maxMs": 0,
+          "framesOver1_5T": 0,
+          "missedFramesEstimate": 0,
+          "missedShare": 0,
+          "withinTarget": false
+        }
+      },
+      "conversation": {
+        "frames": 572,
+        "medianMs": 16.7,
+        "p95Ms": 16.8,
+        "maxMs": 33.4,
+        "framesOver1_5T": 1,
+        "missedFramesEstimate": 1,
+        "missedShare": 0.0017,
+        "withinTarget": true
+      },
+      "hiddenTabSamples": 0,
+      "contract": {
+        "dispatches": 0,
+        "events": 62,
+        "proposal": null
+      },
+      "stood": {
+        "character": {
+          "x": 760,
+          "y": 416
+        },
+        "placesDuringConversation": 1,
+        "pageTextUnderCharacterAtEndPx2": 0,
+        "rowControlsInConversation": 1
+      },
+      "recording": "scenario-interrupt-1440-uk-dark-v2.webm",
+      "screenshots": [
+        "scenario-interrupt-1440-uk-dark-v2-peak-2.png",
+        "scenario-interrupt-1440-uk-dark-v2-cut.png",
+        "scenario-interrupt-1440-uk-dark-v2-peak-3.png",
+        "scenario-interrupt-1440-uk-dark-v2-peak-4.png",
+        "scenario-interrupt-1440-uk-dark-v2-end.png"
+      ],
+      "geometry": {
+        "samples": 82,
+        "maxBubbles": 4,
+        "maxCalls": 0,
+        "maxFloaters": 4,
+        "maxBubbleLines": 3,
+        "maxBubbleWidth": 280,
+        "maxBubbleSlackPx": 0,
+        "slackestBubble": "",
+        "controlUnder": "",
+        "samplesOutsideViewport": 0,
+        "samplesOutsideLane": 0,
+        "samplesOverControls": 0
+      },
+      "lane": {
+        "frames": 548,
+        "entries": 4,
+        "entriesAwayFromCharacter": 0,
+        "entryAwayMaxPx": 0,
+        "towardCharacterFrames": 0,
+        "towardCharacterMaxPx": 0,
+        "awayMaxStepPx": 7,
+        "rises": 8,
+        "riseMaxFrameShare": 0.056,
+        "riseMaxFrameShareStepPx": 1.7,
+        "riseMaxFrameSharePathPx": 30,
+        "riseLongestPathPx": 126,
+        "risesCutByLeaving": 0,
+        "lateFramesInRises": 31,
+        "overlapFrames": 0,
+        "overlapMaxPx": 0,
+        "overlapWorstPair": "",
+        "bubblesRead": 11,
+        "orphanLastLines": [],
+        "running": false
+      },
+      "stoodWhileRecorded": {
+        "character": {
+          "x": 760,
+          "y": 416
+        },
+        "placesDuringConversation": 1,
+        "pageTextUnderCharacterAtEndPx2": 0,
+        "rowControlsInConversation": 1
+      }
+    },
+    {
+      "label": "short-1000-uk-dark-v2",
+      "scenario": "short",
+      "viewport": "1000x800",
+      "lang": "uk",
+      "scheme": "dark",
+      "variant": 2,
+      "motion": "no-preference",
+      "recordingDuringMeasurement": false,
+      "idle": {
+        "frames": 90,
         "medianMs": 16.7,
         "p95Ms": 16.7,
         "maxMs": 16.8
       },
       "windows": {
         "bubblesRising": {
-          "marks": 11,
-          "frames": 198,
+          "marks": 1,
+          "frames": 29,
           "medianMs": 16.7,
           "p95Ms": 16.7,
           "maxMs": 16.8,
@@ -1039,144 +1341,14 @@
         }
       },
       "conversation": {
-        "frames": 555,
-        "medianMs": 16.7,
-        "p95Ms": 16.7,
-        "maxMs": 16.8,
-        "framesOver1_5T": 0,
-        "missedFramesEstimate": 0,
-        "missedShare": 0,
-        "withinTarget": true
-      },
-      "hiddenTabSamples": 0,
-      "contract": {
-        "dispatches": 0,
-        "events": 62,
-        "proposal": null
-      },
-      "recording": "scenario-interrupt-1440-uk-dark-v2.webm",
-      "screenshots": [
-        "scenario-interrupt-1440-uk-dark-v2-peak-2.png",
-        "scenario-interrupt-1440-uk-dark-v2-cut.png",
-        "scenario-interrupt-1440-uk-dark-v2-peak-3.png",
-        "scenario-interrupt-1440-uk-dark-v2-peak-4.png",
-        "scenario-interrupt-1440-uk-dark-v2-end.png"
-      ],
-      "geometry": {
-        "samples": 80,
-        "maxBubbles": 4,
-        "maxCalls": 0,
-        "maxFloaters": 4,
-        "maxBubbleLines": 4,
-        "maxBubbleWidth": 280,
-        "samplesOutsideViewport": 0,
-        "samplesOutsideLane": 0,
-        "samplesOverControls": 0
-      },
-      "lane": {
-        "frames": 575,
-        "entries": 4,
-        "entriesAwayFromCharacter": 0,
-        "entryAwayMaxPx": 0,
-        "towardCharacterFrames": 0,
-        "towardCharacterMaxPx": 0,
-        "awayMaxStepPx": 3,
-        "rises": 10,
-        "riseMaxFrameShare": 0.055,
-        "riseMaxFrameShareStepPx": 2.4,
-        "riseMaxFrameSharePathPx": 44,
-        "riseLongestPathPx": 104,
-        "risesCutByLeaving": 0,
-        "lateFramesInRises": 0,
-        "overlapFrames": 0,
-        "overlapMaxPx": 0,
-        "overlapWorstPair": "",
-        "bubblesRead": 23,
-        "orphanLastLines": [],
-        "running": false
-      }
-    },
-    {
-      "label": "short-1000-uk-dark-v2",
-      "scenario": "short",
-      "viewport": "1000x800",
-      "lang": "uk",
-      "scheme": "dark",
-      "variant": 2,
-      "motion": "no-preference",
-      "recordingDuringMeasurement": false,
-      "idle": {
-        "frames": 89,
-        "medianMs": 16.7,
-        "p95Ms": 16.7,
-        "maxMs": 16.8
-      },
-      "windows": {
-        "bubblesRising": {
-          "marks": 1,
-          "frames": 29,
-          "medianMs": 16.6,
-          "p95Ms": 16.8,
-          "maxMs": 16.8,
-          "framesOver1_5T": 0,
-          "missedFramesEstimate": 0,
-          "missedShare": 0,
-          "withinTarget": true
-        },
-        "arrivingTogether": {
-          "marks": 0,
-          "frames": 0,
-          "medianMs": 0,
-          "p95Ms": 0,
-          "maxMs": 0,
-          "framesOver1_5T": 0,
-          "missedFramesEstimate": 0,
-          "missedShare": 0,
-          "withinTarget": false
-        },
-        "leaving": {
-          "marks": 0,
-          "frames": 0,
-          "medianMs": 0,
-          "p95Ms": 0,
-          "maxMs": 0,
-          "framesOver1_5T": 0,
-          "missedFramesEstimate": 0,
-          "missedShare": 0,
-          "withinTarget": false
-        },
-        "calls": {
-          "marks": 0,
-          "frames": 0,
-          "medianMs": 0,
-          "p95Ms": 0,
-          "maxMs": 0,
-          "framesOver1_5T": 0,
-          "missedFramesEstimate": 0,
-          "missedShare": 0,
-          "withinTarget": false
-        },
-        "delegation": {
-          "marks": 0,
-          "frames": 0,
-          "medianMs": 0,
-          "p95Ms": 0,
-          "maxMs": 0,
-          "framesOver1_5T": 0,
-          "missedFramesEstimate": 0,
-          "missedShare": 0,
-          "withinTarget": false
-        }
-      },
-      "conversation": {
-        "frames": 191,
+        "frames": 195,
         "medianMs": 16.7,
         "p95Ms": 16.8,
-        "maxMs": 16.8,
-        "framesOver1_5T": 0,
-        "missedFramesEstimate": 0,
-        "missedShare": 0,
-        "withinTarget": true
+        "maxMs": 200,
+        "framesOver1_5T": 1,
+        "missedFramesEstimate": 11,
+        "missedShare": 0.0534,
+        "withinTarget": false
       },
       "hiddenTabSamples": 0,
       "contract": {
@@ -1184,23 +1356,35 @@
         "events": 13,
         "proposal": null
       },
+      "stood": {
+        "character": {
+          "x": 576,
+          "y": 416
+        },
+        "placesDuringConversation": 1,
+        "pageTextUnderCharacterAtEndPx2": 0,
+        "rowControlsInConversation": 1
+      },
       "recording": "scenario-short-1000-uk-dark-v2.webm",
       "screenshots": [
         "scenario-short-1000-uk-dark-v2-end.png"
       ],
       "geometry": {
-        "samples": 26,
+        "samples": 28,
         "maxBubbles": 1,
         "maxCalls": 0,
         "maxFloaters": 1,
         "maxBubbleLines": 1,
         "maxBubbleWidth": 197,
+        "maxBubbleSlackPx": 0,
+        "slackestBubble": "",
+        "controlUnder": "",
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
         "samplesOverControls": 0
       },
       "lane": {
-        "frames": 187,
+        "frames": 198,
         "entries": 1,
         "entriesAwayFromCharacter": 0,
         "entryAwayMaxPx": 0,
@@ -1220,6 +1404,15 @@
         "bubblesRead": 2,
         "orphanLastLines": [],
         "running": false
+      },
+      "stoodWhileRecorded": {
+        "character": {
+          "x": 576,
+          "y": 416
+        },
+        "placesDuringConversation": 1,
+        "pageTextUnderCharacterAtEndPx2": 0,
+        "rowControlsInConversation": 1
       }
     },
     {
@@ -1234,13 +1427,13 @@
       "idle": {
         "frames": 89,
         "medianMs": 16.7,
-        "p95Ms": 16.7,
+        "p95Ms": 16.8,
         "maxMs": 16.8
       },
       "windows": {
         "bubblesRising": {
           "marks": 5,
-          "frames": 85,
+          "frames": 86,
           "medianMs": 16.7,
           "p95Ms": 16.7,
           "maxMs": 16.8,
@@ -1295,20 +1488,29 @@
         }
       },
       "conversation": {
-        "frames": 385,
+        "frames": 370,
         "medianMs": 16.7,
-        "p95Ms": 16.8,
-        "maxMs": 16.8,
-        "framesOver1_5T": 0,
-        "missedFramesEstimate": 0,
-        "missedShare": 0,
-        "withinTarget": true
+        "p95Ms": 16.7,
+        "maxMs": 266.7,
+        "framesOver1_5T": 1,
+        "missedFramesEstimate": 15,
+        "missedShare": 0.039,
+        "withinTarget": false
       },
       "hiddenTabSamples": 0,
       "contract": {
         "dispatches": 0,
         "events": 28,
         "proposal": null
+      },
+      "stood": {
+        "character": {
+          "x": 632,
+          "y": 400
+        },
+        "placesDuringConversation": 1,
+        "pageTextUnderCharacterAtEndPx2": 0,
+        "rowControlsInConversation": 1
       },
       "recording": "scenario-three-1000-en-dark-v3.webm",
       "screenshots": [
@@ -1317,18 +1519,21 @@
         "scenario-three-1000-en-dark-v3-end.png"
       ],
       "geometry": {
-        "samples": 52,
+        "samples": 55,
         "maxBubbles": 3,
         "maxCalls": 0,
         "maxFloaters": 3,
         "maxBubbleLines": 1,
         "maxBubbleWidth": 205,
+        "maxBubbleSlackPx": 0,
+        "slackestBubble": "",
+        "controlUnder": "",
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
         "samplesOverControls": 0
       },
       "lane": {
-        "frames": 374,
+        "frames": 391,
         "entries": 3,
         "entriesAwayFromCharacter": 0,
         "entryAwayMaxPx": 0,
@@ -1341,13 +1546,22 @@
         "riseMaxFrameSharePathPx": 44,
         "riseLongestPathPx": 44,
         "risesCutByLeaving": 0,
-        "lateFramesInRises": 0,
+        "lateFramesInRises": 1,
         "overlapFrames": 0,
         "overlapMaxPx": 0,
         "overlapWorstPair": "",
         "bubblesRead": 4,
         "orphanLastLines": [],
         "running": false
+      },
+      "stoodWhileRecorded": {
+        "character": {
+          "x": 632,
+          "y": 400
+        },
+        "placesDuringConversation": 1,
+        "pageTextUnderCharacterAtEndPx2": 0,
+        "rowControlsInConversation": 1
       }
     },
     {
@@ -1362,13 +1576,13 @@
       "idle": {
         "frames": 89,
         "medianMs": 16.7,
-        "p95Ms": 16.7,
+        "p95Ms": 16.8,
         "maxMs": 16.8
       },
       "windows": {
         "bubblesRising": {
           "marks": 8,
-          "frames": 150,
+          "frames": 154,
           "medianMs": 16.7,
           "p95Ms": 16.7,
           "maxMs": 16.8,
@@ -1390,7 +1604,7 @@
         },
         "leaving": {
           "marks": 1,
-          "frames": 25,
+          "frames": 26,
           "medianMs": 16.7,
           "p95Ms": 16.7,
           "maxMs": 16.7,
@@ -1423,20 +1637,29 @@
         }
       },
       "conversation": {
-        "frames": 1184,
+        "frames": 1193,
         "medianMs": 16.7,
         "p95Ms": 16.7,
-        "maxMs": 16.8,
-        "framesOver1_5T": 0,
-        "missedFramesEstimate": 0,
-        "missedShare": 0,
-        "withinTarget": true
+        "maxMs": 266.7,
+        "framesOver1_5T": 1,
+        "missedFramesEstimate": 15,
+        "missedShare": 0.0124,
+        "withinTarget": false
       },
       "hiddenTabSamples": 0,
       "contract": {
         "dispatches": 0,
         "events": 49,
         "proposal": null
+      },
+      "stood": {
+        "character": {
+          "x": 576,
+          "y": 400
+        },
+        "placesDuringConversation": 1,
+        "pageTextUnderCharacterAtEndPx2": 0,
+        "rowControlsInConversation": 1
       },
       "recording": "scenario-paragraph-1000-uk-light-v1.webm",
       "screenshots": [
@@ -1445,37 +1668,49 @@
         "scenario-paragraph-1000-uk-light-v1-end.png"
       ],
       "geometry": {
-        "samples": 164,
+        "samples": 166,
         "maxBubbles": 3,
         "maxCalls": 0,
         "maxFloaters": 3,
         "maxBubbleLines": 4,
         "maxBubbleWidth": 280,
+        "maxBubbleSlackPx": 0,
+        "slackestBubble": "",
+        "controlUnder": "",
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
         "samplesOverControls": 0
       },
       "lane": {
-        "frames": 1178,
+        "frames": 1180,
         "entries": 3,
         "entriesAwayFromCharacter": 0,
         "entryAwayMaxPx": 0,
         "towardCharacterFrames": 0,
         "towardCharacterMaxPx": 0,
         "awayMaxStepPx": 5,
-        "rises": 7,
+        "rises": 6,
         "riseMaxFrameShare": 0.055,
-        "riseMaxFrameShareStepPx": 4.7,
+        "riseMaxFrameShareStepPx": 4.8,
         "riseMaxFrameSharePathPx": 86,
-        "riseLongestPathPx": 86,
+        "riseLongestPathPx": 106,
         "risesCutByLeaving": 0,
-        "lateFramesInRises": 0,
+        "lateFramesInRises": 3,
         "overlapFrames": 0,
         "overlapMaxPx": 0,
         "overlapWorstPair": "",
-        "bubblesRead": 15,
+        "bubblesRead": 12,
         "orphanLastLines": [],
         "running": false
+      },
+      "stoodWhileRecorded": {
+        "character": {
+          "x": 576,
+          "y": 400
+        },
+        "placesDuringConversation": 1,
+        "pageTextUnderCharacterAtEndPx2": 0,
+        "rowControlsInConversation": 1
       }
     },
     {
@@ -1490,13 +1725,13 @@
       "idle": {
         "frames": 90,
         "medianMs": 16.7,
-        "p95Ms": 16.7,
+        "p95Ms": 16.8,
         "maxMs": 16.8
       },
       "windows": {
         "bubblesRising": {
           "marks": 19,
-          "frames": 298,
+          "frames": 311,
           "medianMs": 16.7,
           "p95Ms": 16.8,
           "maxMs": 16.8,
@@ -1520,7 +1755,7 @@
           "marks": 7,
           "frames": 175,
           "medianMs": 16.7,
-          "p95Ms": 16.8,
+          "p95Ms": 16.7,
           "maxMs": 16.8,
           "framesOver1_5T": 0,
           "missedFramesEstimate": 0,
@@ -1551,20 +1786,29 @@
         }
       },
       "conversation": {
-        "frames": 2780,
+        "frames": 2796,
         "medianMs": 16.7,
         "p95Ms": 16.7,
-        "maxMs": 16.8,
-        "framesOver1_5T": 0,
-        "missedFramesEstimate": 0,
-        "missedShare": 0,
-        "withinTarget": true
+        "maxMs": 249.9,
+        "framesOver1_5T": 1,
+        "missedFramesEstimate": 14,
+        "missedShare": 0.005,
+        "withinTarget": false
       },
       "hiddenTabSamples": 0,
       "contract": {
         "dispatches": 0,
         "events": 146,
         "proposal": null
+      },
+      "stood": {
+        "character": {
+          "x": 632,
+          "y": 416
+        },
+        "placesDuringConversation": 1,
+        "pageTextUnderCharacterAtEndPx2": 0,
+        "rowControlsInConversation": 1
       },
       "recording": "scenario-long-1000-en-light-v2.webm",
       "screenshots": [
@@ -1574,37 +1818,49 @@
         "scenario-long-1000-en-light-v2-end.png"
       ],
       "geometry": {
-        "samples": 387,
+        "samples": 389,
         "maxBubbles": 4,
         "maxCalls": 0,
         "maxFloaters": 4,
         "maxBubbleLines": 3,
         "maxBubbleWidth": 280,
+        "maxBubbleSlackPx": 0,
+        "slackestBubble": "",
+        "controlUnder": "",
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
         "samplesOverControls": 0
       },
       "lane": {
-        "frames": 2784,
+        "frames": 2752,
         "entries": 9,
         "entriesAwayFromCharacter": 0,
         "entryAwayMaxPx": 0,
         "towardCharacterFrames": 0,
         "towardCharacterMaxPx": 0,
-        "awayMaxStepPx": 5,
+        "awayMaxStepPx": 9,
         "rises": 27,
-        "riseMaxFrameShare": 0.055,
-        "riseMaxFrameShareStepPx": 4.6,
-        "riseMaxFrameSharePathPx": 84,
+        "riseMaxFrameShare": 0.056,
+        "riseMaxFrameShareStepPx": 3.5,
+        "riseMaxFrameSharePathPx": 63,
         "riseLongestPathPx": 84,
         "risesCutByLeaving": 0,
-        "lateFramesInRises": 0,
+        "lateFramesInRises": 25,
         "overlapFrames": 0,
         "overlapMaxPx": 0,
         "overlapWorstPair": "",
-        "bubblesRead": 25,
+        "bubblesRead": 16,
         "orphanLastLines": [],
         "running": false
+      },
+      "stoodWhileRecorded": {
+        "character": {
+          "x": 632,
+          "y": 416
+        },
+        "placesDuringConversation": 1,
+        "pageTextUnderCharacterAtEndPx2": 0,
+        "rowControlsInConversation": 1
       }
     },
     {
@@ -1617,15 +1873,15 @@
       "motion": "no-preference",
       "recordingDuringMeasurement": false,
       "idle": {
-        "frames": 89,
+        "frames": 90,
         "medianMs": 16.7,
-        "p95Ms": 16.7,
+        "p95Ms": 16.8,
         "maxMs": 16.8
       },
       "windows": {
         "bubblesRising": {
           "marks": 19,
-          "frames": 279,
+          "frames": 229,
           "medianMs": 16.7,
           "p95Ms": 16.7,
           "maxMs": 16.8,
@@ -1635,10 +1891,10 @@
           "withinTarget": true
         },
         "arrivingTogether": {
-          "marks": 4,
-          "frames": 113,
+          "marks": 5,
+          "frames": 145,
           "medianMs": 16.7,
-          "p95Ms": 16.8,
+          "p95Ms": 16.7,
           "maxMs": 16.8,
           "framesOver1_5T": 0,
           "missedFramesEstimate": 0,
@@ -1647,7 +1903,7 @@
         },
         "leaving": {
           "marks": 6,
-          "frames": 151,
+          "frames": 125,
           "medianMs": 16.7,
           "p95Ms": 16.7,
           "maxMs": 16.8,
@@ -1680,13 +1936,13 @@
         }
       },
       "conversation": {
-        "frames": 580,
+        "frames": 594,
         "medianMs": 16.7,
-        "p95Ms": 16.8,
-        "maxMs": 216.7,
+        "p95Ms": 16.7,
+        "maxMs": 216.6,
         "framesOver1_5T": 1,
         "missedFramesEstimate": 12,
-        "missedShare": 0.0203,
+        "missedShare": 0.0198,
         "withinTarget": false
       },
       "hiddenTabSamples": 0,
@@ -1694,6 +1950,15 @@
         "dispatches": 0,
         "events": 58,
         "proposal": null
+      },
+      "stood": {
+        "character": {
+          "x": 576,
+          "y": 400
+        },
+        "placesDuringConversation": 1,
+        "pageTextUnderCharacterAtEndPx2": 0,
+        "rowControlsInConversation": 1
       },
       "recording": "scenario-many-1000-uk-dark-v3.webm",
       "screenshots": [
@@ -1703,37 +1968,49 @@
         "scenario-many-1000-uk-dark-v3-end.png"
       ],
       "geometry": {
-        "samples": 81,
+        "samples": 84,
         "maxBubbles": 4,
         "maxCalls": 0,
         "maxFloaters": 4,
         "maxBubbleLines": 1,
         "maxBubbleWidth": 147,
+        "maxBubbleSlackPx": 0,
+        "slackestBubble": "",
+        "controlUnder": "",
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
         "samplesOverControls": 0
       },
       "lane": {
-        "frames": 579,
+        "frames": 561,
         "entries": 10,
         "entriesAwayFromCharacter": 0,
         "entryAwayMaxPx": 0,
         "towardCharacterFrames": 0,
         "towardCharacterMaxPx": 0,
-        "awayMaxStepPx": 2,
-        "rises": 22,
+        "awayMaxStepPx": 6,
+        "rises": 18,
         "riseMaxFrameShare": 0.055,
-        "riseMaxFrameShareStepPx": 2.4,
-        "riseMaxFrameSharePathPx": 44,
+        "riseMaxFrameShareStepPx": 3,
+        "riseMaxFrameSharePathPx": 54,
         "riseLongestPathPx": 86,
-        "risesCutByLeaving": 2,
-        "lateFramesInRises": 0,
+        "risesCutByLeaving": 3,
+        "lateFramesInRises": 61,
         "overlapFrames": 0,
         "overlapMaxPx": 0,
         "overlapWorstPair": "",
-        "bubblesRead": 12,
+        "bubblesRead": 10,
         "orphanLastLines": [],
         "running": false
+      },
+      "stoodWhileRecorded": {
+        "character": {
+          "x": 576,
+          "y": 400
+        },
+        "placesDuringConversation": 1,
+        "pageTextUnderCharacterAtEndPx2": 0,
+        "rowControlsInConversation": 1
       }
     },
     {
@@ -1746,15 +2023,15 @@
       "motion": "no-preference",
       "recordingDuringMeasurement": false,
       "idle": {
-        "frames": 90,
+        "frames": 89,
         "medianMs": 16.7,
-        "p95Ms": 16.8,
+        "p95Ms": 16.7,
         "maxMs": 16.8
       },
       "windows": {
         "bubblesRising": {
           "marks": 12,
-          "frames": 174,
+          "frames": 187,
           "medianMs": 16.7,
           "p95Ms": 16.8,
           "maxMs": 16.8,
@@ -1764,10 +2041,10 @@
           "withinTarget": true
         },
         "arrivingTogether": {
-          "marks": 3,
-          "frames": 40,
+          "marks": 4,
+          "frames": 68,
           "medianMs": 16.7,
-          "p95Ms": 16.8,
+          "p95Ms": 16.7,
           "maxMs": 16.8,
           "framesOver1_5T": 0,
           "missedFramesEstimate": 0,
@@ -1776,7 +2053,7 @@
         },
         "leaving": {
           "marks": 4,
-          "frames": 99,
+          "frames": 98,
           "medianMs": 16.7,
           "p95Ms": 16.8,
           "maxMs": 16.8,
@@ -1789,7 +2066,7 @@
           "marks": 4,
           "frames": 45,
           "medianMs": 16.7,
-          "p95Ms": 16.8,
+          "p95Ms": 16.7,
           "maxMs": 16.8,
           "framesOver1_5T": 0,
           "missedFramesEstimate": 0,
@@ -1809,13 +2086,13 @@
         }
       },
       "conversation": {
-        "frames": 798,
+        "frames": 820,
         "medianMs": 16.7,
         "p95Ms": 16.7,
-        "maxMs": 216.6,
+        "maxMs": 299.9,
         "framesOver1_5T": 1,
-        "missedFramesEstimate": 12,
-        "missedShare": 0.0148,
+        "missedFramesEstimate": 17,
+        "missedShare": 0.0203,
         "withinTarget": false
       },
       "hiddenTabSamples": 0,
@@ -1824,46 +2101,67 @@
         "events": 55,
         "proposal": null
       },
+      "stood": {
+        "character": {
+          "x": 632,
+          "y": 400
+        },
+        "placesDuringConversation": 1,
+        "pageTextUnderCharacterAtEndPx2": 0,
+        "rowControlsInConversation": 1
+      },
       "recording": "scenario-burst-1000-en-dark-v1.webm",
       "screenshots": [
         "scenario-burst-1000-en-dark-v1-peak-2.png",
-        "scenario-burst-1000-en-dark-v1-peak-4.png",
+        "scenario-burst-1000-en-dark-v1-peak-3.png",
         "scenario-burst-1000-en-dark-v1-peak-6.png",
         "scenario-burst-1000-en-dark-v1-peak-7.png",
         "scenario-burst-1000-en-dark-v1-end.png"
       ],
       "geometry": {
-        "samples": 111,
+        "samples": 115,
         "maxBubbles": 3,
         "maxCalls": 4,
         "maxFloaters": 7,
         "maxBubbleLines": 2,
         "maxBubbleWidth": 280,
+        "maxBubbleSlackPx": 0,
+        "slackestBubble": "",
+        "controlUnder": "",
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
         "samplesOverControls": 0
       },
       "lane": {
-        "frames": 795,
+        "frames": 783,
         "entries": 8,
         "entriesAwayFromCharacter": 0,
         "entryAwayMaxPx": 0,
         "towardCharacterFrames": 0,
         "towardCharacterMaxPx": 0,
-        "awayMaxStepPx": 9,
-        "rises": 20,
-        "riseMaxFrameShare": 0.055,
-        "riseMaxFrameShareStepPx": 3.6,
-        "riseMaxFrameSharePathPx": 66,
+        "awayMaxStepPx": 18,
+        "rises": 19,
+        "riseMaxFrameShare": 0.056,
+        "riseMaxFrameShareStepPx": 2.5,
+        "riseMaxFrameSharePathPx": 46,
         "riseLongestPathPx": 200,
         "risesCutByLeaving": 2,
-        "lateFramesInRises": 0,
+        "lateFramesInRises": 89,
         "overlapFrames": 0,
         "overlapMaxPx": 0,
         "overlapWorstPair": "",
-        "bubblesRead": 18,
+        "bubblesRead": 12,
         "orphanLastLines": [],
         "running": false
+      },
+      "stoodWhileRecorded": {
+        "character": {
+          "x": 632,
+          "y": 400
+        },
+        "placesDuringConversation": 1,
+        "pageTextUnderCharacterAtEndPx2": 0,
+        "rowControlsInConversation": 1
       }
     },
     {
@@ -1876,28 +2174,28 @@
       "motion": "no-preference",
       "recordingDuringMeasurement": false,
       "idle": {
-        "frames": 89,
+        "frames": 90,
         "medianMs": 16.7,
         "p95Ms": 16.7,
         "maxMs": 16.8
       },
       "windows": {
         "bubblesRising": {
-          "marks": 32,
-          "frames": 558,
+          "marks": 30,
+          "frames": 493,
           "medianMs": 16.7,
-          "p95Ms": 16.8,
-          "maxMs": 16.8,
-          "framesOver1_5T": 0,
-          "missedFramesEstimate": 0,
-          "missedShare": 0,
+          "p95Ms": 16.7,
+          "maxMs": 33.3,
+          "framesOver1_5T": 1,
+          "missedFramesEstimate": 1,
+          "missedShare": 0.002,
           "withinTarget": true
         },
         "arrivingTogether": {
-          "marks": 1,
-          "frames": 28,
+          "marks": 3,
+          "frames": 87,
           "medianMs": 16.7,
-          "p95Ms": 16.8,
+          "p95Ms": 16.7,
           "maxMs": 16.8,
           "framesOver1_5T": 0,
           "missedFramesEstimate": 0,
@@ -1905,10 +2203,10 @@
           "withinTarget": true
         },
         "leaving": {
-          "marks": 10,
-          "frames": 250,
+          "marks": 9,
+          "frames": 225,
           "medianMs": 16.7,
-          "p95Ms": 16.8,
+          "p95Ms": 16.7,
           "maxMs": 16.8,
           "framesOver1_5T": 0,
           "missedFramesEstimate": 0,
@@ -1939,14 +2237,14 @@
         }
       },
       "conversation": {
-        "frames": 2059,
+        "frames": 2083,
         "medianMs": 16.7,
         "p95Ms": 16.7,
-        "maxMs": 16.8,
-        "framesOver1_5T": 0,
-        "missedFramesEstimate": 0,
-        "missedShare": 0,
-        "withinTarget": true
+        "maxMs": 383.3,
+        "framesOver1_5T": 2,
+        "missedFramesEstimate": 23,
+        "missedShare": 0.0109,
+        "withinTarget": false
       },
       "hiddenTabSamples": 0,
       "contract": {
@@ -1955,6 +2253,15 @@
         "proposal": {
           "dispatchesBefore": 0
         }
+      },
+      "stood": {
+        "character": {
+          "x": 576,
+          "y": 416
+        },
+        "placesDuringConversation": 1,
+        "pageTextUnderCharacterAtEndPx2": 1980,
+        "rowControlsInConversation": 2
       },
       "recording": "scenario-delegation-1000-uk-light-v2.webm",
       "screenshots": [
@@ -1968,46 +2275,59 @@
         "scenario-delegation-1000-uk-light-v2-conversation.png"
       ],
       "geometry": {
-        "samples": 286,
+        "samples": 293,
         "maxBubbles": 4,
         "maxCalls": 1,
         "maxFloaters": 4,
-        "maxBubbleLines": 4,
+        "maxBubbleLines": 3,
         "maxBubbleWidth": 280,
+        "maxBubbleSlackPx": 0,
+        "slackestBubble": "",
+        "controlUnder": "",
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
         "samplesOverControls": 0
       },
       "lane": {
-        "frames": 2055,
+        "frames": 2023,
         "entries": 13,
         "entriesAwayFromCharacter": 0,
         "entryAwayMaxPx": 0,
         "towardCharacterFrames": 0,
         "towardCharacterMaxPx": 0,
-        "awayMaxStepPx": 10,
-        "rises": 50,
-        "riseMaxFrameShare": 0.055,
-        "riseMaxFrameShareStepPx": 3.5,
-        "riseMaxFrameSharePathPx": 64,
-        "riseLongestPathPx": 250,
+        "awayMaxStepPx": 15,
+        "rises": 43,
+        "riseMaxFrameShare": 0.056,
+        "riseMaxFrameShareStepPx": 2.4,
+        "riseMaxFrameSharePathPx": 43,
+        "riseLongestPathPx": 268,
         "risesCutByLeaving": 2,
-        "lateFramesInRises": 0,
+        "lateFramesInRises": 126,
         "overlapFrames": 0,
         "overlapMaxPx": 0,
         "overlapWorstPair": "",
-        "bubblesRead": 54,
+        "bubblesRead": 30,
         "orphanLastLines": [],
         "running": false
+      },
+      "stoodWhileRecorded": {
+        "character": {
+          "x": 576,
+          "y": 416
+        },
+        "placesDuringConversation": 1,
+        "pageTextUnderCharacterAtEndPx2": 1980,
+        "rowControlsInConversation": 2
       },
       "delegatedRowAsItAppeared": {
         "seen": true,
         "visiblePx2": 47182,
-        "underLaneElementsPx2": 19836,
-        "underCharacterPx2": 0,
-        "coveredShare": 0.42,
+        "underLaneElementsPx2": 16151,
+        "underCharacterPx2": 5746,
+        "coveredShare": 0.464,
         "by": [
-          "delegation"
+          "delegation",
+          "speech"
         ]
       }
     },
@@ -2021,15 +2341,15 @@
       "motion": "no-preference",
       "recordingDuringMeasurement": false,
       "idle": {
-        "frames": 89,
+        "frames": 88,
         "medianMs": 16.7,
-        "p95Ms": 16.7,
-        "maxMs": 16.8
+        "p95Ms": 16.8,
+        "maxMs": 33.3
       },
       "windows": {
         "bubblesRising": {
           "marks": 9,
-          "frames": 160,
+          "frames": 171,
           "medianMs": 16.7,
           "p95Ms": 16.7,
           "maxMs": 16.8,
@@ -2039,15 +2359,15 @@
           "withinTarget": true
         },
         "arrivingTogether": {
-          "marks": 0,
-          "frames": 0,
-          "medianMs": 0,
-          "p95Ms": 0,
-          "maxMs": 0,
+          "marks": 1,
+          "frames": 29,
+          "medianMs": 16.7,
+          "p95Ms": 16.7,
+          "maxMs": 16.7,
           "framesOver1_5T": 0,
           "missedFramesEstimate": 0,
           "missedShare": 0,
-          "withinTarget": false
+          "withinTarget": true
         },
         "leaving": {
           "marks": 0,
@@ -2084,7 +2404,7 @@
         }
       },
       "conversation": {
-        "frames": 579,
+        "frames": 571,
         "medianMs": 16.7,
         "p95Ms": 16.7,
         "maxMs": 16.8,
@@ -2099,6 +2419,15 @@
         "events": 69,
         "proposal": null
       },
+      "stood": {
+        "character": {
+          "x": 632,
+          "y": 400
+        },
+        "placesDuringConversation": 1,
+        "pageTextUnderCharacterAtEndPx2": 0,
+        "rowControlsInConversation": 1
+      },
       "recording": "scenario-interrupt-1000-en-light-v3.webm",
       "screenshots": [
         "scenario-interrupt-1000-en-light-v3-peak-2.png",
@@ -2108,37 +2437,49 @@
         "scenario-interrupt-1000-en-light-v3-end.png"
       ],
       "geometry": {
-        "samples": 79,
+        "samples": 81,
         "maxBubbles": 4,
         "maxCalls": 0,
         "maxFloaters": 4,
-        "maxBubbleLines": 3,
+        "maxBubbleLines": 2,
         "maxBubbleWidth": 280,
+        "maxBubbleSlackPx": 0,
+        "slackestBubble": "",
+        "controlUnder": "",
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
         "samplesOverControls": 0
       },
       "lane": {
-        "frames": 569,
+        "frames": 578,
         "entries": 4,
         "entriesAwayFromCharacter": 0,
         "entryAwayMaxPx": 0,
         "towardCharacterFrames": 0,
         "towardCharacterMaxPx": 0,
         "awayMaxStepPx": 2,
-        "rises": 12,
+        "rises": 9,
         "riseMaxFrameShare": 0.055,
         "riseMaxFrameShareStepPx": 2.4,
         "riseMaxFrameSharePathPx": 44,
-        "riseLongestPathPx": 64,
+        "riseLongestPathPx": 86,
         "risesCutByLeaving": 0,
-        "lateFramesInRises": 0,
+        "lateFramesInRises": 2,
         "overlapFrames": 0,
         "overlapMaxPx": 0,
         "overlapWorstPair": "",
-        "bubblesRead": 29,
+        "bubblesRead": 16,
         "orphanLastLines": [],
         "running": false
+      },
+      "stoodWhileRecorded": {
+        "character": {
+          "x": 632,
+          "y": 400
+        },
+        "placesDuringConversation": 1,
+        "pageTextUnderCharacterAtEndPx2": 0,
+        "rowControlsInConversation": 1
       }
     }
   ]
