@@ -274,7 +274,8 @@ Heavy commands run through `scripts/gate-slot.sh`: six slots by default,
 (default `8G`), and a default Node heap of 6144 MB. The slot locks live in
 `/var/tmp`, the files the installed `/var/tmp/llv-gate` uses, so both gates
 share one set of slots; `LLV_GATE_LOCK_DIR` overrides the directory. On Linux a
-gate waits while CPU pressure is high, then runs in its own scope in
+gate waits while CPU pressure is high (sampled again when it takes its slot),
+then runs in its own scope in
 `delegatus-agents-work.slice` with a 300% CPU quota; without a reachable user
 systemd manager it refuses with exit 69 unless `DELEGATUS_AGENT_CPU=off`
 (docs/design/cpu-placement.md). Without flock (macOS), the slot lock is omitted.

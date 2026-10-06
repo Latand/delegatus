@@ -21,7 +21,7 @@ user@<uid>.service
       ├─ delegatus-agent-*.scope     operator hosts: CPUWeight=1000, no CPU ceiling
       └─ delegatus-agents-work.slice CPUWeight=100, CPUQuota=75% of the logical CPUs
          ├─ delegatus-agent-*.scope  pipeline and flow hosts, headless runs: CPUWeight=100, CPUQuota=300%
-         ├─ delegatus-work-*.scope   publication install and push, release install and build
+         ├─ delegatus-work-*.scope   publication install and push, release install and build, workflow setup
          └─ run-*.scope              gates from scripts/gate-slot.sh
 ```
 
@@ -43,11 +43,13 @@ pipeline scopes there are.
 | Pipeline stage hosts and flow members (any engine, fresh or resumed) | same; `workloadForMemberships` reads the conversation's `pipeline`/`flow` membership | `delegatus-agents-work.slice/delegatus-agent-<engine>-<id>.scope` | weight 100, 300% per scope |
 | Headless runs: flow reviewers, the external relay agent, the handoff digest | `launchDetached` in `src/lib/agent/headless.ts` | `delegatus-agents-work.slice/delegatus-agent-headless-<id>.scope` | weight 100, 300% |
 | Every command an agent runs: tools, MCP servers, subagents, test runs, detached and orphaned children | descendants of the host process | the host's scope (cgroup membership survives reparenting) | the host's |
-| Gates: hook steps marked capped, `scripts/local-gate.ts`, anything an agent runs through `scripts/gate-slot.sh` (and `scripts/merge-batch.ts` once the parallel test-child lane moves it off `/var/tmp/llv-gate`) | `scripts/gate-slot.sh` | `delegatus-agents-work.slice/run-<id>.scope` | weight 100, 300%, `MemoryMax=8G` |
+| Gates: hook steps marked capped, `scripts/local-gate.ts`, anything an agent runs through `scripts/gate-slot.sh` | `scripts/gate-slot.sh` | `delegatus-agents-work.slice/run-<id>.scope` | weight 100, 300%, `MemoryMax=8G` |
+| Merger gates: every local gate, the bisect runs and the trusted privacy checks of `scripts/merge-batch.ts` | `gateCommand` and `trustedPrivacy`, through the `gate-slot.sh` beside the script | `delegatus-agents-work.slice/run-<id>.scope` | weight 100, 300%, `MemoryMax=8G` |
+| Workflow setup (`bun install` in the built-in template, any command a template names) | `startSetup` in `src/lib/workflows/provision.ts` | `delegatus-agents-work.slice/delegatus-work-workflow-setup-<id>.scope` | weight 100, 300% |
 | Pipeline publication: `bun install --frozen-lockfile` and `git push` with every pre-push hook | `fencedExec` in `src/lib/pipelines/git.ts` | `delegatus-agents-work.slice/delegatus-work-publish-{install,push}-<id>.scope` | weight 100, 300% |
-| Self-update install and build of a new release | `realPorts().run` in `src/lib/selfUpdate/steps.ts` | `delegatus-agents-work.slice/delegatus-work-update-{install,build}-<id>.scope` | weight 100, 300% |
-| Viewer, runtime host, launcher, scan and search workers, recovery controller, self-update git fetch and checkout, pipeline provisioning git | production | `delegatus.service` | the service's (weight 1000 after the installation files) |
-| The installed `/var/tmp/llv-gate` | outside the repository | `app.slice/run-<id>.scope` | none; it shares the gate slots (below) |
+| Self-update install and build of a new release; the package install of a packaged release | `realPorts().run` in `src/lib/selfUpdate/steps.ts` | `delegatus-agents-work.slice/delegatus-work-update-{install,build,package}-<id>.scope` | weight 100, 300% |
+| Viewer, runtime host, launcher, scan and search workers, recovery controller, self-update git fetch and checkout, pipeline and workflow provisioning git, observation of a running setup | production | `delegatus.service` | the service's (weight 1000 after the installation files) |
+| The installed `/var/tmp/llv-gate`, run by hand | outside the repository; no first-party code calls it | `app.slice/run-<id>.scope` | none; it shares the gate slots (below) |
 | Legacy tmux panes | the tmux server | the tmux server's scope | none |
 | Docker image builds and rehearsals (`deploy-staging`, `verify-candidate`) | the Docker daemon | the daemon's cgroups | none (see "Not covered") |
 
@@ -79,11 +81,11 @@ the reason and the setting that opts out:
 > without CPU placement.
 
 A pipeline stage start fails with that message; a publication fails with it as
-its recorded cause and pushes nothing; a gate exits 69. Operator hosts never
-wait on CPU placement and run without it, with a one-time warning. A release
-build reports the message in the update log and runs in the service's CPU
-domain, so production can always update itself. On macOS and inside a container
-CPU placement does not apply and nothing is refused.
+its recorded cause and pushes nothing; a gate exits 69; a workflow parks with
+it before its setup starts; a release install or build fails its update step
+with it as the step's last line and starts no child. Operator hosts never wait
+on CPU placement and run without it, with a one-time warning. On macOS and
+inside a container CPU placement does not apply and nothing is refused.
 
 | Setting | Default | Effect |
 |---|---|---|
@@ -110,12 +112,23 @@ A pipeline stage start is held before its spawn reservation, so a stage starts
 exactly once after admission and a stage that already launched is never held.
 The pipeline shows the reason in its detail line, for example
 `stage start held for CPU pressure since 2026-10-06T12:00:00.000Z (avg10 45% ≥ 20%)`,
-and wakes itself every five seconds to check again. A gate prints
-`gate-slot: held for CPU pressure: …` before it waits and
+and wakes itself every five seconds to check again.
+
+A workflow's setup is held the same way before its first launch, with
+`setup held for CPU pressure since …` in the workflow's detail line; a setup
+that already started is observed whatever the pressure reads. A release install
+or build waits before its child is created and writes
+`update-build held for CPU pressure since …` (then `… deferred by CPU pressure …`)
+into the update step's visible tail and log. The wait counts against the step's
+time limit, and stopping the update ends it.
+
+A gate samples pressure in the same pass that takes a slot: a gate that waited
+behind busy slots starts on a fresh sample, and a held gate occupies no slot.
+It prints `gate-slot: held for CPU pressure: …` when the hold begins and
 `gate-slot: deferred by CPU pressure for 120s …` once the budget is spent.
 
-Operator sends, receipt reconciliation, staged-launch recovery and the delivery
-queue never consult admission. `DELEGATUS_CPU_PRESSURE=off` turns it off;
+Operator sends, receipt reconciliation, staged-launch recovery, the delivery
+queue, update observation and setup observation never consult admission. `DELEGATUS_CPU_PRESSURE=off` turns it off;
 `DELEGATUS_CPU_PRESSURE_HOLD` and `DELEGATUS_CPU_PRESSURE_RELEASE` tune the
 thresholds. Tune them from measurements: while this change was built, the
 incident machine read 14–24% with dozens of agents and no incident.
@@ -220,8 +233,9 @@ CPU list of a sample process in each scope.
   a constrained build worker, and a host-wide guarantee has to count
   daemon-executed work. No evidence ties Docker to the incident.
 - **The installed `/var/tmp/llv-gate`.** It lives outside the repository and
-  places its scopes in `app.slice` without CPU controls. It shares the slots;
-  first-party callers move to `scripts/gate-slot.sh`.
+  places its scopes in `app.slice` without CPU controls. It shares the slots.
+  No first-party code calls it: the merger and its role prompt use
+  `scripts/gate-slot.sh`. A command typed by hand through it stays uncovered.
 - **Owned test runners** (the parallel test-child lane runs each test file in a
   transient `delegatus-gate-<uuid>.service`). When both changes are on main,
   that unit takes `--slice=delegatus-agents-work.slice` and
@@ -234,6 +248,18 @@ All tests run by path with isolated state; the real-cgroup tests create private
 `llvcputest…` slices and scopes and remove them, and never touch
 `delegatus.slice`, the live agent slices or a service unit.
 
+- `src/lib/runtime/cpuPlacement.scope.test.ts` also runs a workflow setup with
+  memory mode off and its orphaned `setsid` child in a private
+  `delegatus-work-workflow-setup-…` scope, and a merger gate through
+  `MergeBatch` that starts no child under high pressure, then lands in the
+  private work slice on the shared slot.
+- `src/lib/workflows/provision.test.ts` and `engine.test.ts`: a missing
+  mechanism refuses the setup without a child; pressure holds the first launch
+  with a visible reason, launches it once, and never holds a launched setup.
+- `src/lib/selfUpdate/steps.test.ts`: a missing mechanism fails the install or
+  build step with the reason and no child; sustained pressure starts no child,
+  a recovered window starts the step once, a failed sample starts it with the
+  quotas, and abort ends a held start.
 - `src/lib/runtime/cpuPlacement.scope.test.ts`: real transient scopes. An
   operator scope reads `cpu.weight 1000` and `cpu.max max 100000`; a work scope
   reads `cpu.max 60000 20000` under a slice reading `360000 20000`, with its
@@ -252,7 +278,8 @@ All tests run by path with isolated state; the real-cgroup tests create private
   visible reason, defers after 120 s, releases one launch after ten seconds
   below 10%, never holds a launched stage, and admits on a failed sample.
 - `scripts/gate-slot.test.ts`: work slice and quotas, the explicit refusals,
-  the hold, deferral and single start, and admission on a failed sample.
+  the hold, deferral and single start, admission on a failed sample, and
+  pressure that rises while the gate waits for a slot.
 - `src/lib/runtime/cpuPlacement.test.ts`, `cpuPressure.test.ts`,
   `agentMemory.test.ts`, `bin/install-cpu-placement.test.ts`,
   `src/lib/selfUpdate/steps.test.ts`, `scripts/local-gate.test.ts`.

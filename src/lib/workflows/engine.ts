@@ -23,6 +23,7 @@ import { paneInfo, spawnAgentWithPrompt } from "@/lib/tmux";
 import { cleanTitle } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";
 
+import { cpuPressureHoldDetail, isCpuPressureDetail, machineCpuPressureGate, type CpuPressureHold } from "@/lib/runtime/cpuPressure";
 import { realExec, provisionWorktree, runFinish, setupStatus, startSetup, type ExecPort, type SetupStatus } from "./provision";
 import { fixerKickoff, prBody, stageKickoff } from "./prompts";
 import { buildWorkflow, loadTemplates, loadWorkflows, normalizeStages, saveWorkflows, setupExitPath, validateWorkflowLaunchModels } from "./store";
@@ -57,6 +58,8 @@ export interface StageSpawn {
 export interface WorkflowPorts {
   exec: ExecPort;
   startSetup(wf: Workflow): { pid: number | null; error?: string };
+  /** A held setup start waits for CPU pressure to fall; null admits. */
+  cpuPressureHold?(): CpuPressureHold | null;
   setupStatus(wf: Workflow): SetupStatus;
   spawnAgent(role: RoleConfig, cwd: string, prompt: string, accountId: string | null | undefined, title: string): Promise<StageSpawn>;
   /** The pane still hosts a non-shell foreground process. */
@@ -79,6 +82,7 @@ export function defaultPorts(): WorkflowPorts {
   return {
     exec: realExec,
     startSetup,
+    cpuPressureHold: () => machineCpuPressureGate()?.check() ?? null,
     setupStatus,
     spawnAgent: async (role, cwd, prompt, accountId, title) => {
       const account = accountManager.resolveSpawn(role.engine, accountId);
@@ -328,6 +332,8 @@ function workflowGitFence(wf: Workflow, ports: WorkflowPorts) {
   return { exec, current: revalidate, release: () => clearInterval(watch) };
 }
 
+const SETUP_HOLD_SUBJECT = "setup";
+
 async function tickProvisioning(wf: Workflow, ports: WorkflowPorts, persistCheckpoint: () => void): Promise<void> {
   if (!wf.baseRef) {
     const fence = workflowGitFence(wf, ports);
@@ -344,12 +350,17 @@ async function tickProvisioning(wf: Workflow, ports: WorkflowPorts, persistCheck
   }
   if (wf.template.setup) {
     if (wf.setupPid == null && ports.setupStatus(wf).status !== "done") {
+      // Only the first launch asks; a setup that already started is observed
+      // below whatever the pressure reads.
+      const pressure = ports.cpuPressureHold?.();
+      if (pressure) { wf.stateDetail = cpuPressureHoldDetail(pressure, SETUP_HOLD_SUBJECT); return; }
       const started = ports.startSetup(wf);
       if (started.pid == null) {
         park(wf, started.error ?? "setup failed to start");
         return;
       }
       wf.setupPid = started.pid;
+      if (isCpuPressureDetail(wf.stateDetail, SETUP_HOLD_SUBJECT)) wf.stateDetail = null;
       return;
     }
     const status = ports.setupStatus(wf);

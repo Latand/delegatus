@@ -830,3 +830,39 @@ test("every allowed account out of capacity parks the workflow instead of crossi
   expect(parked.stageRuns[0]!.startedAt).toBeNull();
   expect(parked.stageRuns[0]!.accountId ?? null).toBeNull();
 });
+
+test("CPU pressure holds the setup launch with a visible reason, then launches it once; a launched setup is never held", async () => {
+  const { CpuPressureGate, DEFAULT_CPU_PRESSURE_POLICY } = await import("@/lib/runtime/cpuPressure");
+  const harness = makeHarness();
+  let pressure = 80; let clock = 0; let asked = 0;
+  const gate = new CpuPressureGate(DEFAULT_CPU_PRESSURE_POLICY, { sample: () => pressure, now: () => clock });
+  harness.ports.cpuPressureHold = () => { asked += 1; return gate.check(); };
+  harness.state.setup = "running";
+  const wf = await createWf(harness.ports, { setup: "bun install" });
+  const starts = () => harness.calls.filter((call) => call === "startSetup").length;
+
+  await tickWorkflows([], harness.ports);
+  expect(starts()).toBe(0);
+  expect(load(wf.id)).toMatchObject({ state: "provisioning", setupPid: null, stateDetail: "setup held for CPU pressure since 1970-01-01T00:00:00.000Z (avg10 80% ≥ 20%)" });
+  clock = 120_000;
+  await tickWorkflows([], harness.ports);
+  expect(starts()).toBe(0);
+  expect(load(wf.id).stateDetail).toStartWith("setup deferred by CPU pressure: held since 1970-01-01T00:00:00.000Z");
+
+  pressure = 5; clock = 130_000;
+  await tickWorkflows([], harness.ports);
+  expect(starts()).toBe(0); // the release window has only begun
+  clock = 140_000;
+  await tickWorkflows([], harness.ports);
+  expect(starts()).toBe(1);
+  expect(load(wf.id)).toMatchObject({ state: "provisioning", setupPid: 4242, stateDetail: null });
+
+  // Observation of the launched setup never asks, whatever the pressure reads.
+  pressure = 95; const before = asked;
+  await tickWorkflows([], harness.ports);
+  harness.state.setup = "done";
+  await tickWorkflows([], harness.ports);
+  expect(asked).toBe(before);
+  expect(starts()).toBe(1);
+  expect(load(wf.id).state).toBe("implementing");
+});

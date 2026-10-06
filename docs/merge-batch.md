@@ -27,7 +27,9 @@ body paragraph (up to 600 characters), and deduplicated machine credit.
 Human `users.noreply` author identities add no trailers; an existing
 non-machine `Co-Authored-By` trailer is refused.
 
-`gate` runs the commands from `localGateCommands` through `/var/tmp/llv-gate`:
+`gate` runs the commands from `localGateCommands` through `scripts/gate-slot.sh`
+(a shared machine slot, CPU-pressure admission and a scope in the CPU work
+slice; see `docs/design/cpu-placement.md`):
 frozen dependency installation, TypeScript, ESLint on changed source files,
 changed tests and existing sibling tests by file path, and the publication
 gate with `--check-commits`. Each command has isolated state under `/var/tmp`.

@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { join } from "node:path";
 import { builtRevision, realPorts, releaseBuilt, UpdateRunner, type StepPorts } from "./steps";
 import { releaseDirFor } from "./release";
+import { setCpuPortsForTests } from "@/lib/runtime/cpuPlacement";
+import { CpuPressureGate, DEFAULT_CPU_PRESSURE_POLICY } from "@/lib/runtime/cpuPressure";
 import { CHECKOUT_STEPS as STEP_NAMES, type CheckoutStepName as StepName } from "./types";
 
 const TARGET = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
@@ -358,5 +360,107 @@ describe("a release directory that already passed its ready check", () => {
     expect(builtRevision(failing.dir)).toBeNull(); expect(releaseBuilt(failing.dir, TARGET)).toBe(false);
     failBuild = false; await runner.retry();
     expect(runner.state.state).toBe("done"); expect(builtRevision(failing.dir)).toBe(TARGET);
+  });
+});
+
+/* The real runner behind install and build: heavy work is refused without CPU
+   containment and waits for CPU pressure; git steps ask for neither. */
+describe("release install and build admission", () => {
+  const dir = () => { const base = mkdtempSync("/var/tmp/self-update-admission-"); roots.push(base); return base; };
+  const available = { probe: () => ({ kind: "available" as const, systemdVersion: 255 }), runner: () => "" };
+  async function withCpu<T>(ports: Parameters<typeof setCpuPortsForTests>[0], body: () => Promise<T>): Promise<T> {
+    const previous = process.env.LLV_AGENT_CPU;
+    process.env.LLV_AGENT_CPU = "auto";
+    setCpuPortsForTests(ports);
+    try { return await body(); }
+    finally { setCpuPortsForTests(null); if (previous === undefined) delete process.env.LLV_AGENT_CPU; else process.env.LLV_AGENT_CPU = previous; }
+  }
+  /** A fake systemd-run on PATH that runs the command after `--`, so the wrapped launch needs no user manager. */
+  function launch(base: string) {
+    const bin = join(base, "bin"); mkdirSync(bin);
+    writeFileSync(join(bin, "systemd-run"), '#!/bin/bash\nprintf "%s\\n" "$@" > "$(dirname "$0")/args"\nwhile [[ "$1" != -- ]]; do shift; done\nshift\nexec "$@"\n', { mode: 0o755 });
+    const marker = join(base, "ran");
+    return { marker, argv: ["/bin/sh", "-c", `echo run >> "${marker}"`], env: { PATH: `${bin}:/usr/bin:/bin`, TMPDIR: base } };
+  }
+
+  test("a missing CPU mechanism fails the step with its reason and starts no child; off opts out", async () => {
+    const base = dir(); const { marker, argv, env } = launch(base);
+    let probes = 0;
+    const missing = { probe: () => { probes += 1; return { kind: "missing" as const, reason: "the systemd user manager is not running for this user" }; } };
+    await withCpu(missing, async () => {
+      const lines: string[] = [];
+      await expect(realPorts(() => {}).run(argv, { cwd: base, env, onLine: (line) => lines.push(line), work: "update-build" }))
+        .rejects.toThrow("CPU containment for agent work is unavailable: the systemd user manager is not running for this user. Set DELEGATUS_AGENT_CPU=off");
+      expect(probes).toBe(1);
+      expect(existsSync(marker)).toBe(false);
+      // A step that is not heavy work (fetch, checkout) never asks.
+      expect(await realPorts(() => {}).run(["/bin/true"], { cwd: base, env, onLine: () => {} })).toBe(0);
+      expect(probes).toBe(1);
+      process.env.LLV_AGENT_CPU = "off";
+      expect(await realPorts(() => {}).run(argv, { cwd: base, env, onLine: () => {}, work: "update-build" })).toBe(0);
+      expect(readFileSync(marker, "utf8")).toBe("run\n");
+    });
+  });
+
+  test("the update records the refusal as the failed step's cause", async () => {
+    const base = dir(); const { marker, argv, env } = launch(base);
+    await withCpu({ probe: () => ({ kind: "missing", reason: "the systemd user manager does not delegate the cpu controller" }) }, async () => {
+      const real = realPorts(() => {});
+      const { runner } = harness({}, { run: (command, options) => options.work ? real.run(argv, { ...options, cwd: base, env }) : Promise.resolve(0) });
+      await runner.start(TARGET);
+      const install = runner.state.steps.find((step) => step.name === "install")!;
+      expect(install.state).toBe("failed");
+      expect(install.failure).toMatchObject({ kind: "error" });
+      expect(install.tail.join("\n")).toContain("CPU containment for agent work is unavailable: the systemd user manager does not delegate the cpu controller");
+      expect(runner.state.state).toBe("failed");
+      expect(existsSync(marker)).toBe(false);
+    });
+  });
+
+  test("sustained CPU pressure starts no child; a recovered window starts the step once", async () => {
+    const base = dir(); const { marker, argv, env } = launch(base);
+    let pressure = 80; let clock = 0; let samples = 0;
+    const gate = new CpuPressureGate(DEFAULT_CPU_PRESSURE_POLICY, { sample: () => { samples += 1; return pressure; }, now: () => clock });
+    await withCpu(available, async () => {
+      const lines: string[] = [];
+      const done = realPorts(() => {}, { pressure: () => gate, pollMs: 5 }).run(argv, { cwd: base, env, onLine: (line) => lines.push(line), work: "update-build" });
+      await Bun.sleep(60);
+      expect(existsSync(marker)).toBe(false);
+      expect(lines).toEqual(["update-build held for CPU pressure since 1970-01-01T00:00:00.000Z (avg10 80% ≥ 20%)"]);
+      clock = 120_000;
+      await Bun.sleep(60);
+      expect(existsSync(marker)).toBe(false);
+      expect(lines[1]).toStartWith("update-build deferred by CPU pressure: held since 1970-01-01T00:00:00.000Z");
+      pressure = 15; clock = 200_000; // between the thresholds the hold stays
+      await Bun.sleep(60);
+      pressure = 5; clock = 201_000;
+      await Bun.sleep(60);
+      expect(existsSync(marker)).toBe(false); // below 10% for less than ten seconds
+      clock = 212_000;
+      expect(await done).toBe(0);
+      expect(readFileSync(marker, "utf8")).toBe("run\n");
+      expect(samples).toBeGreaterThan(3);
+    });
+  });
+
+  test("abort ends a held start without a child; a failed sample starts it at once", async () => {
+    const base = dir(); const { marker, argv, env } = launch(base);
+    await withCpu(available, async () => {
+      const held = new CpuPressureGate(DEFAULT_CPU_PRESSURE_POLICY, { sample: () => 90, now: Date.now });
+      const ports = realPorts(() => {}, { pressure: () => held, pollMs: 60_000 });
+      const waiting = ports.run(argv, { cwd: base, env, onLine: () => {}, work: "update-install" });
+      await Bun.sleep(20);
+      expect(ports.childAlive!()).toBe(true);
+      ports.abort();
+      expect(await waiting).toBe(143);
+      expect(existsSync(marker)).toBe(false);
+      const blind = new CpuPressureGate(DEFAULT_CPU_PRESSURE_POLICY, { sample: () => { throw new Error("EACCES"); }, now: Date.now });
+      const lines: string[] = [];
+      expect(await realPorts(() => {}, { pressure: () => blind }).run(argv, { cwd: base, env, onLine: (line) => lines.push(line), work: "update-install" })).toBe(0);
+      expect(lines).toEqual([]);
+      expect(readFileSync(marker, "utf8")).toBe("run\n");
+      const args = readFileSync(join(base, "bin", "args"), "utf8").split("\n");
+      for (const expected of ["--slice=delegatus-agents-work.slice", "CPUWeight=100", "CPUQuota=300%", "CPUQuotaPeriodSec=20ms"]) expect(args).toContain(expected);
+    });
   });
 });

@@ -5,8 +5,8 @@ import { delegatusSetting } from "./cpuPlacement";
 /*
  * CPU-pressure admission for heavy work (docs/design/cpu-placement.md).
  *
- * A pipeline stage start waits while the machine's CPU pressure is high:
- * it is held once `some avg10` reaches the hold threshold and released only
+ * A pipeline stage start, a workflow setup and a release install or build wait
+ * while the machine's CPU pressure is high: each is held once `some avg10` reaches the hold threshold and released only
  * after the value has stayed below the release threshold for the release
  * window. Operator sends, receipt reconciliation and recovery never ask.
  * A failed sample admits: the work scopes' CPU quotas still bound the work.
@@ -63,14 +63,41 @@ export class CpuPressureGate {
   }
 }
 
-/** The pipeline's visible reason; stable while one hold lasts, so it is not rewritten each tick. */
-export function cpuPressureHoldDetail(hold: CpuPressureHold): string {
+/** The visible reason for one held start; stable while one hold lasts, so it is not rewritten each tick. */
+export function cpuPressureHoldDetail(hold: CpuPressureHold, subject = "stage start"): string {
   const since = new Date(hold.since).toISOString();
   return hold.deferred
-    ? `stage start deferred by CPU pressure: held since ${since} (avg10 ${hold.avg10}% ≥ ${hold.policy.holdAt}%); it starts once pressure stays below ${hold.policy.releaseBelow}% for ${hold.policy.releaseAfterMs / 1000} s`
-    : `stage start held for CPU pressure since ${since} (avg10 ${hold.avg10}% ≥ ${hold.policy.holdAt}%)`;
+    ? `${subject} deferred by CPU pressure: held since ${since} (avg10 ${hold.avg10}% ≥ ${hold.policy.holdAt}%); it starts once pressure stays below ${hold.policy.releaseBelow}% for ${hold.policy.releaseAfterMs / 1000} s`
+    : `${subject} held for CPU pressure since ${since} (avg10 ${hold.avg10}% ≥ ${hold.policy.holdAt}%)`;
 }
 export const CPU_PRESSURE_DETAIL_PREFIXES = ["stage start held for CPU pressure", "stage start deferred by CPU pressure"] as const;
+/** Whether `detail` is a reason cpuPressureHoldDetail wrote for `subject`. */
+export function isCpuPressureDetail(detail: string | null | undefined, subject: string): boolean {
+  return !!detail && (detail.startsWith(`${subject} held for CPU pressure`) || detail.startsWith(`${subject} deferred by CPU pressure`));
+}
+
+/**
+ * Waits until the gate admits a start that has no tick of its own. Each change
+ * of the visible reason is reported once. Answers false when `signal` aborts
+ * the wait; the caller then starts nothing.
+ */
+export async function waitForCpuPressure(gate: Pick<CpuPressureGate, "check"> | null, options: {
+  subject: string; onReason: (reason: string) => void; signal?: AbortSignal; pollMs?: number;
+}): Promise<boolean> {
+  let shown: string | null = null;
+  for (;;) {
+    if (options.signal?.aborted) return false;
+    const hold = gate?.check() ?? null;
+    if (!hold) return true;
+    const reason = cpuPressureHoldDetail(hold, options.subject);
+    if (reason !== shown) { shown = reason; options.onReason(reason); }
+    await new Promise<void>((resolve) => {
+      const done = () => { clearTimeout(timer); options.signal?.removeEventListener("abort", done); resolve(); };
+      const timer = setTimeout(done, options.pollMs ?? 2_000);
+      options.signal?.addEventListener("abort", done, { once: true });
+    });
+  }
+}
 
 const globalGate = globalThis as unknown as { __llvCpuPressureGate?: CpuPressureGate | null };
 /** The process-wide gate over /proc/pressure/cpu; null when turned off. */

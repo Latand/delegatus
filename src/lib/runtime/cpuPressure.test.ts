@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { CpuPressureGate, cpuPressureHoldDetail, cpuPressurePolicy, DEFAULT_CPU_PRESSURE_POLICY, parseCpuPressure } from "./cpuPressure";
+import { CpuPressureGate, cpuPressureHoldDetail, cpuPressurePolicy, DEFAULT_CPU_PRESSURE_POLICY, isCpuPressureDetail, parseCpuPressure, waitForCpuPressure } from "./cpuPressure";
 
 function gate(samples: (number | null | Error)[]) {
   let now = 0;
@@ -57,4 +57,26 @@ test("operator settings tune or turn off the thresholds", () => {
   expect(cpuPressurePolicy({ LLV_CPU_PRESSURE_HOLD: "35" })).toMatchObject({ holdAt: 35 });
   expect(cpuPressurePolicy({ DELEGATUS_CPU_PRESSURE_HOLD: "40", DELEGATUS_CPU_PRESSURE_RELEASE: "60" })).toMatchObject({ holdAt: 40, releaseBelow: 40 });
   expect(cpuPressurePolicy({ DELEGATUS_CPU_PRESSURE_HOLD: "x" })).toMatchObject({ holdAt: 20 });
+});
+
+test("a waiting start reports each reason once, names its subject and resolves on admission", async () => {
+  let now = 0;
+  const samples = [50, 50, 50, 5, 5];
+  const gate = new CpuPressureGate(DEFAULT_CPU_PRESSURE_POLICY, { sample: () => { now += 60_000; return samples.shift() ?? 5; }, now: () => now });
+  const reasons: string[] = [];
+  expect(await waitForCpuPressure(gate, { subject: "update-build", onReason: (reason) => reasons.push(reason), pollMs: 1 })).toBe(true);
+  expect(reasons).toHaveLength(2);
+  expect(reasons[0]).toStartWith("update-build held for CPU pressure since ");
+  expect(reasons[1]).toStartWith("update-build deferred by CPU pressure: held since ");
+  expect(isCpuPressureDetail(reasons[1], "update-build")).toBe(true);
+  expect(isCpuPressureDetail(reasons[1], "setup")).toBe(false);
+  expect(await waitForCpuPressure(null, { subject: "x", onReason: () => { throw new Error("no reason without a gate"); } })).toBe(true);
+});
+
+test("an aborted wait answers false and starts nothing", async () => {
+  const gate = new CpuPressureGate(DEFAULT_CPU_PRESSURE_POLICY, { sample: () => 90, now: Date.now });
+  const abort = new AbortController();
+  const waiting = waitForCpuPressure(gate, { subject: "update-install", onReason: () => {}, signal: abort.signal, pollMs: 60_000 });
+  abort.abort();
+  expect(await waiting).toBe(false);
 });

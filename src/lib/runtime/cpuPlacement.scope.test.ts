@@ -164,3 +164,49 @@ scopeTest("gate-slot runs a gate in the work slice with the same quotas", () => 
   expect(seen.group).toMatch(new RegExp(`/${slices.top}/${slices.agents}/${slices.work}/run-[^/]+\\.scope$`));
   expect([seen.weight, seen.max, seen.memory, seen.parentMax]).toEqual(["100", "60000 20000", String(8 * GIB), "360000 20000"]);
 });
+
+scopeTest("a workflow setup and its orphaned child run in a work scope without memory properties", async () => {
+  process.env.LLV_STATE_DIR ??= fs.mkdtempSync(path.join(sandbox, "state-"));
+  const { startSetup, setupStatus } = await import("@/lib/workflows/provision");
+  const { setupStdoutPath } = await import("@/lib/workflows/store");
+  const wf = { id: `cpu${prefix.slice(-8)}`, worktreeDir: sandbox, setupPid: null as number | null,
+    template: { setup: `${REPORT}; (setsid sh -c 'sed -n "s/^0:://p" /proc/self/cgroup > "${sandbox}/setup-orphan"' </dev/null >/dev/null 2>&1 &); sleep 0.3` } } as unknown as import("@/lib/workflows/types").Workflow;
+  const started = startSetup(wf, { env: { ...process.env, ...env, DELEGATUS_AGENT_MEMORY: "off" }, ports });
+  expect(started.error).toBeUndefined();
+  wf.setupPid = started.pid;
+  for (let i = 0; i < 100 && setupStatus(wf).status === "running"; i++) await Bun.sleep(50);
+  expect(setupStatus(wf).status).toBe("done");
+  const seen = report(fs.readFileSync(setupStdoutPath(wf.id), "utf8"));
+  expect(seen.group).toMatch(new RegExp(`/${slices.top}/${slices.agents}/${slices.work}/delegatus-work-workflow-setup-[0-9a-f-]{12}\\.scope$`));
+  expect(seen.group).not.toBe(cgroupOf("self"));
+  expect([seen.weight, seen.max, seen.memory, seen.parentMax]).toEqual(["100", "60000 20000", "max", "360000 20000"]);
+  expect(fs.readFileSync(path.join(sandbox, "setup-orphan"), "utf8").trim()).toBe(seen.group!);
+});
+
+scopeTest("a merger gate runs in the work slice, on a shared slot, and waits out CPU pressure", async () => {
+  const { MergeBatch, commandRunner } = await import("../../../scripts/merge-batch");
+  const repo = fs.mkdtempSync(path.join(sandbox, "merger-"));
+  runner("git", ["-C", repo, "init", "-q", "-b", "main"]);
+  const stateFile = path.join(sandbox, "merge-batch.json");
+  fs.writeFileSync(stateFile, JSON.stringify({ version: 1, repo, work: repo, branch: `merge-batch/${randomUUID()}`, base: "", tip: "", rows: [], gated: null, batch: null, published: null, refreshes: 0, landed: false, gates: [] }));
+  const lock = fs.mkdtempSync(path.join(sandbox, "merger-locks-"));
+  const pressure = path.join(sandbox, "merger-pressure");
+  fs.writeFileSync(pressure, "some avg10=80.00 avg60=0.00 avg300=0.00 total=1\n");
+  const gateEnv = { ...env, DELEGATUS_CPU_PRESSURE: "on", LLV_GATE_PSI_FILE: pressure, LLV_GATE_PSI_RELEASE_SECONDS: "1", LLV_GATE_POLL_SECONDS: "0.1",
+    LLV_GATE_SLICE: slices.work, LLV_GATE_LOCK_DIR: lock, LLV_GATE_SLOTS: "1" };
+  const marker = path.join(sandbox, "merger-ran");
+  const slot = `flock -n "${lock}/llv-heavy-gate.slot1.lock" true && echo free || echo taken`;
+  const batch = new MergeBatch(repo, stateFile, (cwd, args, runEnv) => commandRunner(cwd, args, { ...runEnv, ...gateEnv } as NodeJS.ProcessEnv), async () => "");
+  const gated = batch.bisectSubject({ id: "fixture", args: ["/bin/sh", "-c", `echo run >> "${marker}"; ${slot}; ${REPORT}`] });
+  await Bun.sleep(1_000);
+  expect(fs.existsSync(marker)).toBe(false); // high pressure: no gate child
+  fs.writeFileSync(pressure, "some avg10=1.00 avg60=0.00 avg300=0.00 total=1\n");
+  const result = await gated;
+  expect(result.code).toBe(0);
+  expect(result.output).toContain("gate-slot: held for CPU pressure: avg10 80.00% >= 20%");
+  expect(result.output).toContain("taken"); // the gate holds the shared slot while its command runs
+  expect(fs.readFileSync(marker, "utf8")).toBe("run\n");
+  const seen = report(result.output);
+  expect(seen.group).toMatch(new RegExp(`/${slices.top}/${slices.agents}/${slices.work}/run-[^/]+\\.scope$`));
+  expect([seen.weight, seen.max, seen.memory, seen.parentMax]).toEqual(["100", "60000 20000", String(8 * GIB), "360000 20000"]);
+}, 30_000);

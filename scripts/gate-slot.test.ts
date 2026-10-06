@@ -118,3 +118,27 @@ test.skipIf(process.platform !== "linux")("the gate reads the folded LLV_ spelli
   expect(result.status).toBe(0);
   expect(spawnSync("/bin/bash", [join(import.meta.dir, "gate-slot.sh"), "/bin/true"], { env: { ...env, LLV_AGENT_CPU: "auto" }, encoding: "utf8" }).status).toBe(69);
 });
+test.skipIf(process.platform !== "linux")("pressure that rises while a gate waits for a slot holds it; it starts once after the release window", async () => {
+  const f = cpuFixture({ manager: true });
+  const pressure = join(f.root, "pressure");
+  writeFileSync(pressure, "some avg10=0.00 avg60=0.00 avg300=0.00 total=1\n");
+  // Another gate holds the only slot.
+  const holder = Bun.spawn(["/bin/bash", "-c", 'exec 9>"$1"; /usr/bin/flock 9; exec /usr/bin/sleep 30', "_", join(f.root, "llv-heavy-gate.slot1.lock")], { stdout: "ignore", stderr: "ignore" });
+  for (let i = 0; i < 100 && spawnSync("/usr/bin/flock", ["-n", join(f.root, "llv-heavy-gate.slot1.lock"), "/bin/true"]).status === 0; i++) await Bun.sleep(10);
+  const child = Bun.spawn(["/bin/bash", join(import.meta.dir, "gate-slot.sh"), "/bin/bash", "-c", f.script],
+    { env: { ...f.env, DELEGATUS_CPU_PRESSURE: "on", LLV_GATE_PSI_RELEASE_SECONDS: "1" }, stdout: "ignore", stderr: "pipe" });
+  await Bun.sleep(500);
+  writeFileSync(pressure, "some avg10=80.00 avg60=40.00 avg300=20.00 total=1\n");
+  await Bun.sleep(300);
+  holder.kill(); await holder.exited;
+  await Bun.sleep(1_000);
+  expect(Bun.file(f.marker).size).toBe(0); // the slot is free and the pressure is high
+  // A held gate occupies no slot.
+  expect(spawnSync("/usr/bin/flock", ["-n", join(f.root, "llv-heavy-gate.slot1.lock"), "/bin/true"]).status).toBe(0);
+  writeFileSync(pressure, "some avg10=2.00 avg60=30.00 avg300=20.00 total=1\n");
+  expect(await child.exited).toBe(0);
+  const stderr = await new Response(child.stderr).text();
+  expect(stderr).toContain("gate-slot: held for CPU pressure: avg10 80.00% >= 20%");
+  expect(stderr).toMatch(/gate-slot: admitted after \d+s of CPU pressure/);
+  expect(readFileSync(f.marker, "utf8")).toBe("run\n");
+}, 20_000);

@@ -730,15 +730,16 @@ for a decision. See [the design](docs/design/agent-memory-isolation.md).
 
 On Linux with a systemd user manager, hosts the operator talks to run in
 `delegatus-agents.slice` with `CPUWeight=1000`. Pipeline and flow hosts,
-headless reviews, gates from `scripts/gate-slot.sh`, pipeline publication and
-release builds run in `delegatus-agents-work.slice`: `CPUWeight=100`, 300% of a
+headless reviews, gates from `scripts/gate-slot.sh` (the merger's included),
+workflow setup, pipeline publication and release installs and builds run in `delegatus-agents-work.slice`: `CPUWeight=100`, 300% of a
 CPU per scope and 75% of the logical CPUs for the whole slice. This placement is
 independent of the memory mode. Where it should work and cannot, work is refused
-with the reason; operator hosts and the release build still run.
+with the reason, a release build included; operator hosts still run.
 
-A pipeline stage or gate waits while CPU pressure (`some avg10`) is at or above
+A pipeline stage, workflow setup, release install or build, or gate waits while CPU pressure (`some avg10`) is at or above
 20% and starts once it has stayed below 10% for ten seconds; the wait shows in
-the pipeline's detail line. Operator messages never wait on it.
+the pipeline's or workflow's detail line and in the update step's log. Operator
+messages never wait on it.
 
 | Variable | Effect |
 |---|---|

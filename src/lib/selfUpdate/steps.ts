@@ -10,7 +10,8 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, write
 import { join } from "node:path";
 import { setPriority } from "node:os";
 
-import { CpuContainmentUnavailable, wrapWorkCommand } from "@/lib/runtime/cpuPlacement";
+import { wrapWorkCommand } from "@/lib/runtime/cpuPlacement";
+import { machineCpuPressureGate, waitForCpuPressure, type CpuPressureGate } from "@/lib/runtime/cpuPressure";
 import { runGit, TIP_REF } from "./git";
 import { readStartIdentity, sameProcess, signalGroup, type RecordedPid } from "./pid";
 import { releaseDirFor, type Release } from "./release";
@@ -306,21 +307,23 @@ export class UpdateRunner {
     this runner started and nothing else. */
 export interface RealPorts extends StepPorts { abort(): void }
 
-export function realPorts(publish: (release: Release) => void | Promise<void>): RealPorts {
+export function realPorts(publish: (release: Release) => void | Promise<void>,
+  cpu: { pressure?: () => Pick<CpuPressureGate, "check"> | null; pollMs?: number } = {}): RealPorts {
   let current: RecordedPid | null = null;
+  let waiting: AbortController | null = null;
   return {
     async run(command, { cwd, env, onLine, lowPriority, work }) {
       mkdirSync(env.TMPDIR ?? cwd, { recursive: true });
       if (work) {
-        // The service's own release is never blocked on CPU placement; a
-        // missing mechanism is reported in the update log instead.
+        // Heavy work: a missing CPU mechanism refuses the step with its reason
+        // (CpuContainmentUnavailable names the opt-out), and the start waits
+        // for CPU pressure to fall. Neither creates a child.
+        const wrapped = wrapWorkCommand(command[0]!, command.slice(1), { label: work });
+        command = [wrapped.command, ...wrapped.args];
+        waiting = new AbortController();
         try {
-          const wrapped = wrapWorkCommand(command[0]!, command.slice(1), { label: work });
-          command = [wrapped.command, ...wrapped.args];
-        } catch (error) {
-          if (!(error instanceof CpuContainmentUnavailable)) throw error;
-          onLine(`${error.message} This build runs in the service's CPU domain.`);
-        }
+          if (!await waitForCpuPressure((cpu.pressure ?? machineCpuPressureGate)(), { subject: work, onReason: onLine, signal: waiting.signal, ...(cpu.pollMs ? { pollMs: cpu.pollMs } : {}) })) return 143;
+        } finally { waiting = null; }
       }
       const child = spawn(command[0]!, command.slice(1), { cwd, env: env as NodeJS.ProcessEnv, detached: true, stdio: ["ignore", "pipe", "pipe"] });
       const exited = new Promise<number>((resolve) => {
@@ -340,6 +343,7 @@ export function realPorts(publish: (release: Release) => void | Promise<void>): 
       }
     },
     abort() {
+      waiting?.abort();
       if (current) signalGroup(current, "SIGTERM");
     },
     childAlive: () => current === null || sameProcess(current),

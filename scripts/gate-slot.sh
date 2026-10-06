@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Heavy commands wait for CPU pressure to fall and for one of the shared machine
-# slots, then run in their own scope in the CPU work slice
+# Heavy commands wait for low CPU pressure and a free shared machine slot in
+# the same pass, then run in their own scope in the CPU work slice
 # (docs/design/cpu-placement.md). The slot lock files are the ones the installed
 # /var/tmp/llv-gate uses, so both gates count against one set of slots.
 set -euo pipefail
@@ -95,16 +95,22 @@ pressure_admits() {
   return 1
 }
 
-until pressure_admits; do sleep "$poll"; done
 # macOS has neither flock nor a systemd user manager.
-if ! command -v flock >/dev/null; then run "$@"; fi
+if ! command -v flock >/dev/null; then
+  until pressure_admits; do sleep "$poll"; done
+  run "$@"
+fi
 lock_dir=${LLV_GATE_LOCK_DIR:-/var/tmp}
 mkdir -p "$lock_dir"
+# Pressure is sampled in the pass that takes the slot, so a gate that waited
+# behind busy slots starts on a fresh sample, and a held gate occupies no slot.
 while :; do
-  for ((i=1; i<=slots; i++)); do
-    exec 9>"$lock_dir/llv-heavy-gate.slot$i.lock"
-    if flock -n 9; then run "$@"; fi
-    exec 9>&-
-  done
+  if pressure_admits; then
+    for ((i=1; i<=slots; i++)); do
+      exec 9>"$lock_dir/llv-heavy-gate.slot$i.lock"
+      if flock -n 9; then run "$@"; fi
+      exec 9>&-
+    done
+  fi
   sleep "$poll"
 done
