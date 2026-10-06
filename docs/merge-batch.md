@@ -63,10 +63,16 @@ clear it, those PRs are reported as `integration: needs both`. If no single
 omission clears it, the gate samples a combined removal and restores PRs one at
 a time to establish a minimal clearing removal set, with the same integration
 label. When the preserved candidate test still fails with all PRs removed, the
-gate checks changes to the test itself: it omits the test-writing PRs using each
-subject's native test versions, then restores those PRs one at a time to find a
-minimal clearing removal set. A complete native inventory may show that an
-added test is absent; a skipped test supplies no passing evidence. The report
+gate checks changes to the test itself only when the entire candidate test file
+contains self-contained literal assertions registered with `bun:test`. This
+conservative syntax check supplies independent evidence that the failure cannot
+observe implementation code or project data. Imports of project code, external
+inputs, snapshots and unsupported test syntax leave attribution uncertain and
+stop the pass with the detector retained. Native omission alone proves only
+who wrote a test, including a healthy detector of a new feature.
+For supported files, the gate omits the test-writing PRs using each subject's
+native test versions, then restores them one at a time to find a minimal
+clearing removal set. A skipped test supplies no passing evidence. The report
 labels these failures `test change regression` and records the native samples.
 Only files with proven faulty test changes are replaced with the remaining
 batch's native versions before revalidation. All other candidate detectors stay

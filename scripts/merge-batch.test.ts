@@ -8,6 +8,7 @@ import { applyClaudeSpawnPolicy } from "../src/lib/agent/spawnPolicy";
 import { agentCodexPublicationPolicy } from "../src/lib/git/agentPublicationIdentity";
 import { report, attributeBatchTests, compareBatchTests, parseReviewedPrs, batchMessage, touchedTests, noticePrs, git, patchId, MergeBatch, localGateCommands, requiredVerdict, nextRefresh, MAX_REQUIRED_CHECK_POLLS, MAX_TEST_CONFIRMATION_RUNS, commandRunner, type CommandRunner } from "./merge-batch";
 import type { TestRun, TestSite } from "./local-gate-tests";
+import * as merger from "./merge-batch";
 
 const site = (name: string, file = "example.test.ts"): TestSite => ({ file, suite: "suite", name, kind: "test", occurrence: 0 });
 const recorded = (failures: TestSite[] = [], passed: TestSite[] = []): TestRun => ({
@@ -99,6 +100,7 @@ test("multiple faulty test authors retain integration evidence and exclude unrel
   const decision = await attributeBatchTests(recorded(), recorded([failure]), [12, 13, 14],
     async () => recorded([failure]), async () => recorded([failure]), {
       owners: () => [12, 13],
+      independent: () => true,
       without: async removed => ({ run: removed.includes(12) && removed.includes(13) ? recorded() : recorded([failure]),
         absent: removed.includes(12) && removed.includes(13) }),
     });
@@ -109,6 +111,32 @@ test("multiple faulty test authors retain integration evidence and exclude unrel
     { removed: [13], outcome: "fail", corpus: "native" },
     { removed: [12], outcome: "fail", corpus: "native" },
   ]);
+});
+
+test("native absence alone cannot attribute a healthy feature detector to its author", async () => {
+  const failure = site("new feature", "feature.test.ts");
+  await expect(attributeBatchTests(recorded(), recorded([failure]), [12, 13, 14],
+    async () => recorded([failure]), async () => recorded([failure]), {
+      owners: () => [14], independent: () => false,
+      without: async removed => ({ run: removed.includes(14) ? recorded() : recorded([failure]), absent: removed.includes(14) }),
+    })).rejects.toThrow("Insufficient test-change attribution");
+});
+
+test("literal test evidence admits self-contained assertions and refuses project inputs", () => {
+  const valid = "const { test, expect } = require('bun:test');\ntest('invariant', () => expect(1).toBe(2));\n";
+  expect(merger.literalAssertionFile(valid)).toBeTrue();
+  expect(merger.literalAssertionFile("import { test, expect } from 'bun:test';\ntest('invariant', () => { expect('a').toEqual('b'); });")).toBeTrue();
+  for (const contents of [
+    "const { double } = require('./adder.js');\n" + valid,
+    valid.replace("expect(1)", "expect(process.env.VALUE)"),
+    valid.replace("expect(1)", "expect(double?.(2))"),
+    valid.replace("toBe(2)", "toMatchSnapshot()"),
+    valid.replace("() =>", "async () =>"),
+    valid.replace("{ test, expect }", "{ test, expect, mock }"),
+    valid.replace("test('invariant'", "test.only('invariant'"),
+    valid.replace("toBe(2)", "toBe(require('./value.js'))"),
+    valid.replace("expect(1).toBe(2)", "expect(1).toBe(2); return require('./value.js')"),
+  ]) expect(merger.literalAssertionFile(contents)).toBeFalse();
 });
 
 test("between-test errors and missing confirmation tests remain hard failures", async () => {
@@ -506,6 +534,33 @@ test("one run lands the healthy PR after attributing a faulty new test to its au
   expect(report(state)).toContain("#13 | culprit test change regression");
   expect(existsSync(join(f.repo, "new.test.ts"))).toBeFalse();
 }, 30_000);
+
+for (const mode of ["new", "modified"] as const) {
+  test(`a healthy ${mode} feature detector retains the wrong implementation failure with real git and Bun`, async () => {
+    const f = landingFixture("green", async (cwd, args, env) => args[1] === "bun" && args[2] === "test"
+      ? commandRunner(cwd, args.slice(1), env) : successfulCommand(args));
+    f.seed("adder.js", "exports.existing = 1;\n");
+    if (mode === "modified") f.seed("adder.test.ts", "const { test, expect } = require('bun:test');\ntest('double', () => expect(1).toBe(1));\n");
+    const main = git(f.repo, ["rev-parse", "main"]);
+    const healthy = f.addPr(12, "healthy.txt", "healthy");
+    const implementation = f.addPr(13, "adder.js", "exports.existing = 1;\nexports.double = x => x * 3;\n");
+    const contents = "const { test, expect } = require('bun:test');\nconst { double } = require('./adder.js');\ntest('double', () => expect(double?.(2)).toBe(4));\n";
+    const detector = f.addPr(14, "adder.test.ts", contents);
+    await f.batch.build(`12@${healthy},13@${implementation},14@${detector}`);
+    await expect(f.batch.gate()).rejects.toThrow("Insufficient test-change attribution");
+    const state = f.batch.read();
+    expect(state.gated).toBeNull();
+    expect(state.rows.map(row => row.status)).toEqual(["clean", "clean", "clean"]);
+    expect(Buffer.from(state.testCorpus!["adder.test.ts"]!, "base64").toString()).toBe(contents);
+    expect(readFileSync(join(state.work, "adder.test.ts"), "utf8")).toBe(contents);
+    await expect(f.batch.land()).rejects.toThrow("Run gate before land");
+    expect(f.calls.some(args => args[0] === "pr" && ["create", "merge", "close"].includes(args[1]!))).toBeFalse();
+    expect(git(f.repo, ["rev-parse", "main"])).toBe(main);
+    for (const [number, head] of [[13, implementation], [14, detector]] as const) {
+      expect(git(f.repo, ["ls-remote", "origin", `refs/heads/topic-${number}`]).split(/\s/)[0]).toBe(head);
+    }
+  }, 30_000);
+}
 
 function seedTrustedPrivacyFiles(f: ReturnType<typeof fixture>): void {
   mkdirSync(join(f.repo, "scripts"));

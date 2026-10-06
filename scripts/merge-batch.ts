@@ -6,6 +6,63 @@ import { createHash, randomUUID } from "node:crypto";
 import type { GithubRunner } from "../src/lib/monitor/githubEvidence";
 import { parseReport, type TestRun, type TestSite } from "./local-gate-tests";
 import { isolatedEnvironment } from "./local-gate";
+import ts from "typescript";
+
+/** Positive proof for the narrow case where a test cannot observe project code
+ * or data. Anything beyond literal assertions needs passing removal evidence.
+ */
+export function literalAssertionFile(contents: string): boolean {
+  const source = ts.createSourceFile("candidate.test.ts", contents, ts.ScriptTarget.Latest, true);
+  const bindings = new Set<string>();
+  let assertions = 0;
+  const literal = (node: ts.Expression): boolean => ts.isStringLiteral(node) || ts.isNumericLiteral(node)
+    || [ts.SyntaxKind.TrueKeyword, ts.SyntaxKind.FalseKeyword, ts.SyntaxKind.NullKeyword].includes(node.kind)
+    || (ts.isPrefixUnaryExpression(node) && [ts.SyntaxKind.PlusToken, ts.SyntaxKind.MinusToken].includes(node.operator)
+      && ts.isNumericLiteral(node.operand));
+  const assertion = (node: ts.Expression): boolean => {
+    if (!ts.isCallExpression(node) || node.arguments.length !== 1 || !literal(node.arguments[0]!)) return false;
+    const matcher = node.expression;
+    if (!ts.isPropertyAccessExpression(matcher) || !["toBe", "toEqual", "toStrictEqual"].includes(matcher.name.text)) return false;
+    const expect = matcher.expression;
+    if (!ts.isCallExpression(expect) || !ts.isIdentifier(expect.expression) || expect.expression.text !== "expect"
+      || expect.arguments.length !== 1 || !literal(expect.arguments[0]!)) return false;
+    assertions++;
+    return true;
+  };
+  for (const statement of source.statements) {
+    let names: string[] | undefined;
+    if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier) && statement.moduleSpecifier.text === "bun:test") {
+      const clause = statement.importClause;
+      if (!clause || clause.name || clause.isTypeOnly || !clause.namedBindings || !ts.isNamedImports(clause.namedBindings)) return false;
+      if (clause.namedBindings.elements.some(element => element.propertyName || element.isTypeOnly)) return false;
+      names = clause.namedBindings.elements.map(element => element.name.text);
+    } else if (ts.isVariableStatement(statement) && statement.declarationList.flags & ts.NodeFlags.Const) {
+      if (statement.declarationList.declarations.length !== 1) return false;
+      const { name, initializer } = statement.declarationList.declarations[0]!;
+      if (!ts.isObjectBindingPattern(name) || !initializer || !ts.isCallExpression(initializer)
+        || !ts.isIdentifier(initializer.expression) || initializer.expression.text !== "require"
+        || initializer.arguments.length !== 1 || !ts.isStringLiteral(initializer.arguments[0]!)
+        || initializer.arguments[0]!.text !== "bun:test") return false;
+      if (name.elements.some(element => element.propertyName || element.initializer || element.dotDotDotToken || !ts.isIdentifier(element.name))) return false;
+      names = name.elements.map(element => element.name.getText(source));
+    } else {
+      if (!bindings.has("test") || !bindings.has("expect") || !ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression)) return false;
+      const call = statement.expression;
+      const callee = ts.isPropertyAccessExpression(call.expression) && call.expression.name.text === "skip" ? call.expression.expression : call.expression;
+      if (!ts.isIdentifier(callee) || callee.text !== "test" || call.arguments.length !== 2 || !ts.isStringLiteral(call.arguments[0]!)) return false;
+      const callback = call.arguments[1]!;
+      if (!ts.isArrowFunction(callback) || callback.parameters.length || callback.modifiers?.length) return false;
+      if (ts.isBlock(callback.body)) {
+        if (!callback.body.statements.length || !callback.body.statements.every(item => ts.isExpressionStatement(item) && assertion(item.expression))) return false;
+      } else if (!assertion(callback.body)) return false;
+    }
+    if (names) for (const name of names) {
+      if (!["test", "expect"].includes(name) || bindings.has(name)) return false;
+      bindings.add(name);
+    }
+  }
+  return assertions > 0;
+}
 
 const testIdentity = (site: TestSite) => JSON.stringify([site.file, site.suite, site.name, site.occurrence ?? 0]);
 export function compareBatchTests(base: TestRun, candidate: TestRun) {
@@ -40,7 +97,8 @@ function observed(run: TestRun, test: TestSite, label: string): "pass" | "fail" 
 /** Recorded results drive the decision; callbacks supply fresh file samples. */
 export async function attributeBatchTests(base: TestRun, candidate: TestRun, prs: number[],
   rerun: (files: string[]) => Promise<TestRun>, without: (removed: number[], files: string[]) => Promise<TestRun>,
-  native?: { owners: (test: TestSite) => number[]; without: (removed: number[], test: TestSite) => Promise<NativeTestSample> }): Promise<BatchTestDecision> {
+  native?: { owners: (test: TestSite) => number[]; independent: (test: TestSite) => boolean;
+    without: (removed: number[], test: TestSite) => Promise<NativeTestSample> }): Promise<BatchTestDecision> {
   const comparison = compareBatchTests(base, candidate);
   const decision: BatchTestDecision = { preExisting: comparison.preExisting, intermittent: [], attributed: [] };
   const pending = new Map(comparison.introduced.map(test => [testIdentity(test), { test, confirmation: [] as ("pass" | "fail")[] }]));
@@ -85,11 +143,12 @@ export async function attributeBatchTests(base: TestRun, candidate: TestRun, prs
       const outcome = observed(all, test, "combined PR removal");
       evidence.push({ removed: [...responsible], outcome });
       if (outcome !== "pass") {
-        // A detector that passes on the base implementation must stay installed
-        // when its author is omitted. Only a detector that also fails there can
-        // be attributed to changes in the test itself using native subjects.
+        // Native absence identifies authorship only. A new feature's healthy
+        // detector can also fail when its implementation is entirely removed.
+        // Require independent proof that the test cannot observe that code.
         const owners = native?.owners(test).filter(pr => prs.includes(pr)) ?? [];
         if (!owners.length) throw new Error("Integration failure persists without any PR; cannot establish attribution");
+        if (!native!.independent(test)) throw new Error(`Insufficient test-change attribution for ${test.file} > ${test.name}; detector retained; batch not gated`);
         const nativeOutcome = async (removed: number[]) => {
           const sample = await native!.without(removed, test);
           // Absence comes from the native subject's complete test inventory.
@@ -598,6 +657,7 @@ export class MergeBatch {
     const decision = await attributeBatchTests(baseline, candidate, state.rows.filter(row => row.status === "clean").map(row => row.number),
       files => this.testSample(state.work, files, true), (removed, files) => this.testSubject(state, files, removed), {
         owners: test => state.rows.filter(row => row.status === "clean" && row.paths.includes(test.file)).map(row => row.number),
+        independent: test => literalAssertionFile(Buffer.from(state.testCorpus![test.file]!, "base64").toString("utf8")),
         without: async (removed, test) => {
           const run = await this.testSubject(state, [test.file], removed, false);
           return { run, absent: !run.present.some(site => testIdentity(site) === testIdentity(test)) };
