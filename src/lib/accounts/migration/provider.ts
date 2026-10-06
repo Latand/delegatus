@@ -26,10 +26,10 @@ import { CodexAppServerHost } from "@/lib/runtime/codexAppServerHost";
 import { StructuredHostAdoptionCleanupError } from "@/lib/runtime/engineHost";
 import { hasStructuredDeliveryHost, publishStructuredDeliveryHost, releaseStructuredDeliveryHost, requireStructuredDeliveryControllerPublication } from "@/lib/runtime/structuredDeliveryController";
 import { bindClaudeHostPersistence, bindCodexHostPersistence, structuredHostsEnabled } from "@/lib/runtime/registry";
-import { claudeHostLaunchPaths, materializeStructuredHostAccess, structuredHostAccessPolicy } from "@/lib/runtime/structuredSpawn";
+import { claudeHostLaunchPaths, materializeStructuredHostAccess, structuredHostAccessPolicy, structuredHostCell } from "@/lib/runtime/structuredSpawn";
 import { cleanupTmuxHostIfMatches, forgetResumePaneIfMatches, verifyTmuxHostEvidence, type TmuxHostCleanupResult } from "@/lib/tmux";
 
-import { launchProfileCodexSandbox, launchProfileEngineReadOnly, type LaunchProfile, type ProviderReceipt, type SuccessorProviderPort } from "./contracts";
+import { launchProfileCodexSandbox, launchProfileEngineReadOnly, type LaunchProfile, type ProviderReceipt, type SuccessorProviderPort, type ViewerConversationId } from "./contracts";
 import { forkClaudeHistory, hashValidatedHistory, HistorySecurityError, MigrationTargetUnavailableError, safeCopyHistory, validateHistorySource } from "./safeHistoryCopy";
 
 interface StructuredHostPublicationInput {
@@ -287,6 +287,9 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
      so nothing is started and the predecessor keeps serving. */
   const refused = successorRefusal(input, "codex", input.registry.readOnlySnapshot());
   if (refused) throw new Error(refused.error);
+  /* The successor runs in the cell a fresh launch of this conversation gets;
+     work that cannot be contained is refused here, before anything starts. */
+  const memoryCell = structuredHostCell(input.registry, "codex", input.receipt.operationId, input.conversationId as ViewerConversationId | undefined);
   const existing = input.registry.readOnlySnapshot().entries[sessionKeyId(key)];
   const entry = input.registry.upsert({
     ...(existing ?? {
@@ -356,6 +359,7 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
       approvalPolicy,
       initialEventCursor: claimed.structuredHost?.eventCursor,
       env: access.env,
+      ...(memoryCell ? { memoryCell } : {}),
     });
     stopPersistence = await bindCodexHostPersistence(
       input.registry,
@@ -416,6 +420,9 @@ async function publishClaudeSuccessorHost(
      so nothing is started and the predecessor keeps serving. */
   const refused = successorRefusal(input, "claude", input.registry.readOnlySnapshot());
   if (refused) throw new Error(refused.error);
+  /* The successor runs in the cell a fresh launch of this conversation gets;
+     work that cannot be contained is refused here, before anything starts. */
+  const memoryCell = structuredHostCell(input.registry, "claude", input.receipt.operationId, input.conversationId as ViewerConversationId | undefined);
   const existing = input.registry.readOnlySnapshot().entries[sessionKeyId(key)];
   const entry = input.registry.upsert({
     ...(existing ?? {
@@ -490,6 +497,7 @@ async function publishClaudeSuccessorHost(
       permissionMode: input.profile.permissionMode ?? undefined,
       initialEventCursor: claimed.structuredHost?.eventCursor,
       ...access.host,
+      ...(memoryCell ? { memoryCell } : {}),
     });
     stopPersistence = await bindClaudeHostPersistence(
       input.registry,

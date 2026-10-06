@@ -1,12 +1,14 @@
-import { afterAll, afterEach, expect, test } from "bun:test";
+import { afterAll, afterEach, expect, spyOn, test } from "bun:test";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { GIB, planAgentMemory, wrapAgentCommand } from "./agentMemory";
-import { planAgentCpu, setCpuPortsForTests, wrapWorkCommand, type CpuPorts } from "./cpuPlacement";
+import { GIB, planAgentMemory, setAgentMemoryPortsForTests, wrapAgentCommand } from "./agentMemory";
+import { invalidateCpuContainmentProbe, planAgentCpu, setCpuPortsForTests, wrapWorkCommand, type CpuPorts } from "./cpuPlacement";
+import { CpuPressureGate } from "./cpuPressure";
+import { startupAdoptionCell } from "./fixtures/startupAdoptionCell";
 
 /*
  * Real transient scopes in private slices (`llvcputest…`), created and torn
@@ -23,7 +25,9 @@ const scopeTest = reachable ? test : test.skip;
 
 const runner = (command: string, args: string[]) => execFileSync(command, args, { encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "pipe"] });
 const prefix = `llvcputest${process.pid}x${randomUUID().slice(0, 6)}`;
-const slices = { top: `${prefix}.slice`, agents: `${prefix}-agents.slice`, work: `${prefix}-agents-work.slice` };
+const slices = { top: `${prefix}.slice`, agents: `${prefix}-agents.slice`, work: `${prefix}-agents-work.slice`,
+  // A work slice whose scopes get no cpu controller, and a branch where the agents slice gets none either.
+  workOff: `${prefix}-agents-off.slice`, off: `${prefix}-off.slice`, offAgents: `${prefix}-off-agents.slice`, offWork: `${prefix}-off-agents-work.slice` };
 const ports: CpuPorts = { agentSlice: slices.agents, workSlice: slices.work, cpus: 24, runner };
 const env = { DELEGATUS_AGENT_CPU: "auto", DELEGATUS_WORK_CPU_QUOTA: "1800" };
 const units: string[] = [];
@@ -33,8 +37,8 @@ const quiet = (command: string, args: string[]) => { try { runner(command, args)
 afterEach(() => { for (const unit of units.splice(0)) quiet("systemctl", ["--user", "stop", unit]); });
 afterAll(() => {
   setCpuPortsForTests(null);
-  quiet("systemctl", ["--user", "stop", slices.work, slices.agents, slices.top]);
-  quiet("systemctl", ["--user", "revert", slices.work]);
+  quiet("systemctl", ["--user", "stop", slices.offWork, slices.offAgents, slices.off, slices.workOff, slices.work, slices.agents, slices.top]);
+  quiet("systemctl", ["--user", "revert", slices.work, slices.workOff, slices.off, slices.offWork]);
   fs.rmSync(sandbox, { recursive: true, force: true });
 });
 
@@ -211,6 +215,93 @@ scopeTest("a merger gate runs in the work slice, on a shared slot, and waits out
   expect([seen.weight, seen.max, seen.memory, seen.parentMax]).toEqual(["100", "60000 20000", String(8 * GIB), "360000 20000"]);
 }, 30_000);
 
+scopeTest("boot adoption relaunches Codex and Claude hosts in the CPU scope of their class, with memory off and on", async () => {
+  const saved = { cpu: process.env.LLV_AGENT_CPU, memory: process.env.LLV_AGENT_MEMORY, quota: process.env.LLV_WORK_CPU_QUOTA };
+  Object.assign(process.env, { LLV_AGENT_CPU: "auto", LLV_WORK_CPU_QUOTA: "1800" });
+  setCpuPortsForTests(ports);
+  // The memory budget goes to a fake runner: the live agent slice is never probed or budgeted.
+  setAgentMemoryPortsForTests({ totalBytes: 16 * GIB, probe: () => 255, runner: () => "" });
+  const pressure = spyOn(CpuPressureGate.prototype, "check");
+  try {
+    for (const memory of ["off", "scope"] as const) {
+      process.env.LLV_AGENT_MEMORY = memory;
+      for (const engine of ["codex", "claude"] as const) {
+        for (const member of ["pipeline", "flow", null] as const) {
+          const adopted = await startupAdoptionCell(sandbox, engine, member);
+          if (!("cell" in adopted)) throw adopted.refused;
+          const cell = adopted.cell!;
+          units.push(cell.plan.unit!);
+          // The host spawns its engine through exactly this wrapper.
+          const child = cell.wrapSpawn()("/bin/sh", ["-c", REPORT], {});
+          let stdout = "";
+          child.stdout.setEncoding("utf8").on("data", (chunk: string) => { stdout += chunk; });
+          await new Promise<void>((resolve) => child.once("close", () => resolve()));
+          cell.close();
+          const seen = report(stdout);
+          if (member) {
+            expect(seen.group).toEndWith(`/${slices.top}/${slices.agents}/${slices.work}/${cell.plan.unit}`);
+            expect([seen.weight, seen.max, seen.parentMax]).toEqual(["100", "60000 20000", "360000 20000"]);
+          } else {
+            expect(seen.group).toEndWith(`/${slices.top}/${slices.agents}/${cell.plan.unit}`);
+            expect([seen.weight, seen.max]).toEqual(["1000", "max 100000"]);
+          }
+          expect(seen.memory).toBe(memory === "off" ? "max" : String(cell.plan.limitBytes));
+        }
+      }
+    }
+    expect(pressure).not.toHaveBeenCalled();
+  } finally {
+    pressure.mockRestore();
+    setCpuPortsForTests(null);
+    setAgentMemoryPortsForTests(null);
+    for (const [key, value] of [["LLV_AGENT_CPU", saved.cpu], ["LLV_AGENT_MEMORY", saved.memory], ["LLV_WORK_CPU_QUOTA", saved.quota]] as const) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+}, 60_000);
+
+scopeTest("a slice whose cpu controller is disabled refuses work in both implementations, before any work runs", async () => {
+  // systemd accepts every CPU property here; the scopes below simply get no cpu.max.
+  runner("systemctl", ["--user", "set-property", "--runtime", slices.workOff, "DisableControllers=cpu"]);
+  runner("systemctl", ["--user", "set-property", "--runtime", slices.off, "DisableControllers=cpu"]);
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  const saved = { cpu: process.env.LLV_AGENT_CPU, memory: process.env.LLV_AGENT_MEMORY, quota: process.env.LLV_WORK_CPU_QUOTA };
+  try {
+    // The work scope itself: the agents slice keeps its controls, the work slice hands none to its scopes.
+    expect(() => planAgentCpu("work", env, { ...ports, workSlice: slices.workOff }))
+      .toThrow(`CPU containment for agent work is unavailable: the kernel applied no CPU controls to a scope in ${slices.workOff}; the cpu controller is off on one of its ancestors`);
+    // The whole branch: the probe itself sees no controls; operator hosts run without placement.
+    invalidateCpuContainmentProbe();
+    const offPorts = { ...ports, agentSlice: slices.offAgents, workSlice: slices.offWork };
+    expect(() => planAgentCpu("work", env, offPorts)).toThrow(`the kernel applied no CPU controls to a scope in ${slices.offAgents}; the cpu controller is off on one of its ancestors`);
+    expect(planAgentCpu("operator", env, offPorts)).toBeNull();
+    // Boot adoption of a pipeline host is refused with the same reason.
+    Object.assign(process.env, { LLV_AGENT_CPU: "auto", LLV_AGENT_MEMORY: "off", LLV_WORK_CPU_QUOTA: "1800" });
+    setCpuPortsForTests(offPorts);
+    for (const engine of ["codex", "claude"] as const) {
+      const refused = await startupAdoptionCell(sandbox, engine, "pipeline");
+      expect("refused" in refused && refused.refused.message).toContain(`the kernel applied no CPU controls to a scope in ${slices.offAgents}`);
+    }
+    // The gate: systemd-run starts its scope, the scope's own check refuses before the command.
+    for (const slice of [slices.workOff, slices.offWork]) {
+      const lock = fs.mkdtempSync(path.join(sandbox, "off-locks-"));
+      const marker = path.join(sandbox, `off-ran-${path.basename(lock)}`);
+      const result = spawnSync("/bin/bash", [path.join(import.meta.dir, "../../../scripts/gate-slot.sh"), "/bin/sh", "-c", `echo run > "${marker}"`], { encoding: "utf8",
+        env: { ...process.env, ...env, DELEGATUS_CPU_PRESSURE: "off", LLV_GATE_SLICE: slice, LLV_GATE_LOCK_DIR: lock, LLV_GATE_SLOTS: "1" } });
+      expect(result.status).toBe(69);
+      expect(result.stderr).toContain("gate-slot: CPU containment for gates is unavailable: the kernel applied no CPU quota to");
+      expect(fs.existsSync(marker)).toBe(false);
+    }
+  } finally {
+    warn.mockRestore();
+    setCpuPortsForTests(null);
+    invalidateCpuContainmentProbe();
+    for (const [key, value] of [["LLV_AGENT_CPU", saved.cpu], ["LLV_AGENT_MEMORY", saved.memory], ["LLV_WORK_CPU_QUOTA", saved.quota]] as const) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+}, 60_000);
+
 const tmuxScopeTest = reachable && spawnSync("tmux", ["-V"]).status === 0 ? test : test.skip;
 
 /**
@@ -244,8 +335,21 @@ tmuxScopeTest("tmux launches place the pane, the agent, its descendants and an o
   let serverPid: number | null = null;
   const pids: number[] = [];
   try {
-    expect(tmux("-f", "/dev/null", "new-session", "-d", "-x", "160", "-y", "40", "-s", "agents").status).toBe(0);
+    // The server runs in an agent's scope, as one an agent started does, and
+    // cannot reach the user bus itself, as when its own pane move times out
+    // under load: every new pane stays in that agent scope and must still be
+    // placed. Panes get the real bus through the global environment.
+    const serverUnit = `delegatus-agent-codex-${randomUUID().replace(/-/g, "").slice(0, 12)}.scope`;
+    units.push(serverUnit);
+    expect(spawnSync("systemd-run", ["--user", "--scope", "--quiet", "--collect", `--slice=${slices.top}`, `--unit=${serverUnit}`, "--",
+      "env", "DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent", "XDG_RUNTIME_DIR=/nonexistent",
+      "tmux", "-f", "/dev/null", "new-session", "-d", "-x", "160", "-y", "40", "-s", "agents"], { env: tmuxEnv }).status).toBe(0);
     serverPid = Number(tmux("display-message", "-p", "#{pid}").stdout.trim());
+    expect(cgroupOf(serverPid)).toEndWith(`/${serverUnit}`);
+    for (const name of ["DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR"]) {
+      const value = process.env[name];
+      if (value) expect(tmux("set-environment", "-g", name, value).status).toBe(0);
+    }
     expect(tmux("set-option", "-g", "default-shell", "/bin/bash").status).toBe(0);
     Object.assign(process.env, { TMUX_TMPDIR: tmuxTmpdir, LLV_AGENT_CPU: "auto", LLV_AGENT_MEMORY: "off", LLV_WORK_CPU_QUOTA: "1800" });
     setCpuPortsForTests(ports);

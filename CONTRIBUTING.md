@@ -277,7 +277,8 @@ share one set of slots; `LLV_GATE_LOCK_DIR` overrides the directory. On Linux a
 gate waits while CPU pressure is high (sampled again when it takes its slot),
 then runs in its own scope in
 `delegatus-agents-work.slice` with a 300% CPU quota; without a reachable user
-systemd manager it refuses with exit 69 unless `DELEGATUS_AGENT_CPU=off`
+systemd manager, or when the kernel shows no CPU quota on the gate's scope, it
+refuses with exit 69 unless `DELEGATUS_AGENT_CPU=off`
 (docs/design/cpu-placement.md). Without flock (macOS), the slot lock is omitted.
 An existing `NODE_OPTIONS` is preserved.
 

@@ -16,6 +16,9 @@ import {
 import { CodexAppServerError, type CodexAppServerClient } from "@/lib/accounts/codexAppServer";
 import { AgentRegistry, type ConversationObservation, type TmuxHostEvidence } from "@/lib/agent/registry";
 import { ClaudeStreamBrokerHost } from "@/lib/runtime/claudeStreamBrokerHost";
+import { CodexAppServerHost } from "@/lib/runtime/codexAppServerHost";
+import { setCpuPortsForTests, type CpuContainment } from "@/lib/runtime/cpuPlacement";
+import type { AgentMemoryCell } from "@/lib/runtime/agentMemory";
 import * as structuredSpawn from "@/lib/runtime/structuredSpawn";
 import type { EngineHost, HostState } from "@/lib/runtime/engineHost";
 import { StructuredDeliveryControllerUnavailableError } from "@/lib/runtime/structuredDeliveryController";
@@ -439,6 +442,85 @@ test("a migrated Claude successor names itself by a fresh capability that resolv
     adopt.mockRestore();
     if (structuredFlag === undefined) delete process.env.LLV_STRUCTURED_HOSTS;
     else process.env.LLV_STRUCTURED_HOSTS = structuredFlag;
+  }
+});
+
+test.each(["codex", "claude"] as const)("a %s migration successor runs in the CPU cell of its conversation's class, and work it cannot contain is refused before it starts", async (engine) => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), `llv-provider-${engine}-successor-cpu-`));
+  roots.push(base);
+  const source = accountRoot(engine, base, "source");
+  const target = accountRoot(engine, base, "target");
+  const registry = new AgentRegistry(path.join(base, "provider-registry.json"));
+  const fakeHost = {
+    setWriterFence() {},
+    health: async () => ({ status: "idle", sessionKey: "successor", endpoint: "stdio:successor", pid: process.pid, processStartIdentity: null,
+      eventCursor: 0, protocolVersion: "test-v1", activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null }),
+    onStateChange: () => () => {},
+    release: async () => {},
+  };
+  const cells: Array<AgentMemoryCell | null> = [];
+  const capture = async (sessionId: string, options: { memoryCell?: AgentMemoryCell | null }) => {
+    cells.push(options.memoryCell ?? null);
+    return { ...fakeHost, identity: engine === "codex" ? { threadId: sessionId } : { sessionId } };
+  };
+  const adopt = engine === "codex"
+    ? spyOn(CodexAppServerHost, "adopt").mockImplementation(capture as unknown as typeof CodexAppServerHost.adopt)
+    : spyOn(ClaudeStreamBrokerHost, "adopt").mockImplementation(capture as unknown as typeof ClaudeStreamBrokerHost.adopt);
+  const provider = new RegisteredSuccessorProvider({
+    accounts: { resolveSpawn: () => target, resolveTranscriptOwner: () => source },
+    startCodex: async () => { throw new Error("unexpected Codex client"); },
+    claudeStatus: async () => ({ loggedIn: true }),
+    verifyClaudeHost: async () => true,
+    cancelClaude: async () => "absent",
+    registry,
+    now: () => "2026-10-07T09:00:00.000Z",
+  });
+  const launch = (member: "pipeline" | null) => {
+    const begun = registry.beginSpawn(engine, base, { cwd: base, title: "Migrated conversation" });
+    if (member) registry.rememberMembership(begun.conversationId, { kind: member, containerId: "pipeline_successor", role: "builder", slot: "build:1",
+      stageId: null, stageOrder: null, round: null, parentConversationId: null });
+    return begun.conversationId;
+  };
+  let attempt = 0;
+  const publish = (conversationId: string) => {
+    attempt += 1;
+    const nativeId = ["50505050", "5050", "4050", "8050", `50505050505${attempt}`].join("-");
+    const transcript = path.join(target.transcriptRoot, `${nativeId}.jsonl`);
+    fs.writeFileSync(transcript, JSON.stringify({ sessionId: nativeId }) + "\n", { mode: 0o600 });
+    const receipt = { operationId: `${engine}-successor-cpu-${attempt}`, nativeId, path: transcript, continuityPaths: [transcript], historyHash: `history-${attempt}`,
+      host: engine === "codex"
+        ? { kind: "codex-app-server", identity: nativeId, epoch: 1, verifiedAt: "2026-10-07T09:00:00.000Z" }
+        : { kind: "claude-fork", identity: nativeId, epoch: 1, verifiedAt: "2026-10-07T09:00:00.000Z" } } as ProviderReceipt;
+    return provider.publishHost(receipt, { engine, conversationId: conversationId as `conversation_${string}`, targetAccountId: "target", launchProfile: emptyLaunchProfile({ cwd: base }) });
+  };
+  const saved = { structured: process.env.LLV_STRUCTURED_HOSTS, cpu: process.env.LLV_AGENT_CPU, memory: process.env.LLV_AGENT_MEMORY };
+  Object.assign(process.env, { LLV_STRUCTURED_HOSTS: "1", LLV_AGENT_CPU: "auto", LLV_AGENT_MEMORY: "off" });
+  const controller = (process as typeof process & {
+    __llvStructuredDeliveryController?: { registerActiveHost: ((item: unknown) => Promise<() => Promise<void>>) | null };
+  }).__llvStructuredDeliveryController!;
+  const originalRegister = controller.registerActiveHost;
+  controller.registerActiveHost = async () => async () => {};
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    setCpuPortsForTests({ probe: () => ({ kind: "available", systemdVersion: 255 }), cpus: 24, agentSlice: "test-agents.slice", workSlice: "test-agents-work.slice", runner: () => "" });
+    await publish(launch("pipeline"));
+    await publish(launch(null));
+    expect(cells.map((cell) => cell?.plan.cpu)).toMatchObject([
+      { workload: "work", slice: "test-agents-work.slice", weight: 100, quotaPercent: 300 },
+      { workload: "operator", slice: "test-agents.slice", weight: 1000, quotaPercent: null },
+    ]);
+    const reason = "the kernel applied no CPU controls to a scope in test-agents.slice; the cpu controller is off on one of its ancestors";
+    setCpuPortsForTests({ probe: (): CpuContainment => ({ kind: "missing", reason }), runner: () => "" });
+    await expect(publish(launch("pipeline"))).rejects.toThrow(`CPU containment for agent work is unavailable: ${reason}`);
+    expect(cells).toHaveLength(2);
+  } finally {
+    warn.mockRestore();
+    setCpuPortsForTests(null);
+    controller.registerActiveHost = originalRegister;
+    adopt.mockRestore();
+    for (const [key, value] of [["LLV_STRUCTURED_HOSTS", saved.structured], ["LLV_AGENT_CPU", saved.cpu], ["LLV_AGENT_MEMORY", saved.memory]] as const) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
   }
 });
 

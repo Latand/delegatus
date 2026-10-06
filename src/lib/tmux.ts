@@ -1479,13 +1479,17 @@ function receiptWorkload(receipt: SpawnReceipt): AgentWorkload {
  * starts, orphans included, stay in that scope. The shell replaces itself with
  * `systemd-run --scope`, which keeps the pane's PID and executes a new login
  * shell in the scope. tmux built with systemd moves each new pane into its own
- * scope before `new-window` returns, so this runs after that move and wins.
- * A pane already in an agent scope (a recovered launch) is left as it is.
+ * scope, and this move is queued after that one, so it wins.
+ * A pane already in a pane scope of its own (a recovered launch) is left as it
+ * is. Until tmux's move lands a new pane shares the tmux server's cgroup, which
+ * is an agent's scope when an agent started the server, so only a pane scope
+ * the server does not share counts as placed.
  */
 async function placePaneInCpuScope(binding: TmuxSpawnBinding, engine: ResumeSpec["engine"], plan: AgentCpuPlan,
   endpoint: TmuxEndpointDescriptor, run: (args: string[]) => Promise<RunResult>): Promise<void> {
   const pid = binding.panePid.pid;
-  if (/\/delegatus-agent-[\w.-]+\.scope$/.test(procCgroup(pid) ?? "")) return;
+  const current = procCgroup(pid);
+  if (current && /\/delegatus-agent-\w+-pane-[0-9a-f-]{12}\.scope$/.test(current) && current !== procCgroup(binding.server.pid)) return;
   const configured = await run(["show-options", "-gv", "default-shell"]);
   const shell = (configured.code === 0 ? configured.stdout.trim() : "") || process.env.SHELL || "/bin/sh";
   const unit = `delegatus-agent-${engine}-pane-${crypto.randomUUID().slice(0, 12)}.scope`;

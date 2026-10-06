@@ -39,8 +39,10 @@ pipeline scopes there are.
 
 | Launch path | Code | cgroup | CPU controls |
 |---|---|---|---|
-| Operator Claude, Codex and Copilot hosts (fresh, resumed, migration and recovery successors) | `defaultStartHost` in `src/lib/runtime/structuredSpawn.ts`, wrapped by `AgentMemoryCell.wrapSpawn` | `delegatus-agents.slice/delegatus-agent-<engine>-<id>.scope` | weight 1000 |
+| Operator Claude, Codex and Copilot hosts (fresh, resumed and recovery successors) | `defaultStartHost` in `src/lib/runtime/structuredSpawn.ts`, through `structuredHostCell`, wrapped by `AgentMemoryCell.wrapSpawn` | `delegatus-agents.slice/delegatus-agent-<engine>-<id>.scope` | weight 1000 |
 | Pipeline stage hosts and flow members (any engine, fresh or resumed) | same; `workloadForMemberships` reads the conversation's `pipeline`/`flow` membership | `delegatus-agents-work.slice/delegatus-agent-<engine>-<id>.scope` | weight 100, 300% per scope |
+| Boot adoption of Codex and Claude hosts after a Viewer restart | `adoptStructuredHostsAtStartup` in `src/lib/runtime/startup.ts`, through `structuredHostCell` | by the conversation's membership, as above | as above |
+| Account-migration successors (Codex and Claude) | `publishCodexSuccessorHost` and `publishClaudeSuccessorHost` in `src/lib/accounts/migration/provider.ts`, through `structuredHostCell` | by the conversation's membership, as above | as above |
 | Headless runs: flow reviewers, the external relay agent, the handoff digest | `launchDetached` in `src/lib/agent/headless.ts` | `delegatus-agents-work.slice/delegatus-agent-headless-<id>.scope` | weight 100, 300% |
 | Every command an agent runs: tools, MCP servers, subagents, test runs, detached and orphaned children | descendants of the host process | the host's scope (cgroup membership survives reparenting) | the host's |
 | Gates: hook steps marked capped, `scripts/local-gate.ts`, anything an agent runs through `scripts/gate-slot.sh` | `scripts/gate-slot.sh` | `delegatus-agents-work.slice/run-<id>.scope` | weight 100, 300%, `MemoryMax=8G` |
@@ -66,7 +68,10 @@ runs `exec systemd-run --scope … -- <default-shell> -l`, which keeps the pane'
 PID, and the agent command is typed only once `/proc/<pane>/cgroup` names the
 new scope and the pane is back at a shell. Everything the agent starts,
 detached and orphaned children included, inherits that scope. A recovered pane
-already in an agent scope is left as it is.
+already in a pane scope of its own is left as it is. Until tmux's own move lands
+(or when it fails, for a server that cannot reach the user bus) a new pane sits
+in the tmux server's cgroup, which is an agent's scope when an agent started the
+server; a pane sharing the server's cgroup is always placed.
 
 ## Classification
 
@@ -85,15 +90,27 @@ CPU scope; with memory off the scope carries no memory properties.
 
 Where the mechanism should exist (Linux outside a container) and cannot be used
 (no reachable user manager, the cpu controller not delegated, systemd older than
-242, a refused probe scope, a refused work slice quota), work is refused with
-the reason and the setting that opts out:
+242, a refused probe scope, a refused work slice quota, a scope the kernel gives
+no CPU controls), work is refused with the reason and the setting that opts out:
 
 > CPU containment for agent work is unavailable: the systemd user manager does
 > not delegate the cpu controller. Set DELEGATUS_AGENT_CPU=off to run work
 > without CPU placement.
 
+The user manager accepts `CPUWeight=` and `CPUQuota=` even where an ancestor
+keeps the cpu controller off (`DisableControllers=cpu`, a slice that never got
+the controller); the scope then runs with no `cpu.max` at all. So the check
+reads the kernel. `planAgentCpu` runs one probe scope in the agents slice that
+must read `cpu.weight 1000`, and, once per work slice and quota, one probe
+scope with the work properties that must read a numeric `cpu.max` for itself
+and for the work slice. `gate-slot.sh` checks the scope it runs the gate in:
+the command runs through the script once more inside the new scope, which
+refuses with exit 69 unless the scope and the work slice above it both show a
+quota. A caller already in a work scope is checked the same way.
+
 A pipeline stage start and a work tmux pane fail with that message before any
-window exists; a publication fails with it as
+window exists; a boot-adopted or migrated work host is left stopped with the
+message in the log, and its next message relaunches it; a publication fails with it as
 its recorded cause and pushes nothing; a gate exits 69; a workflow parks with
 it before its setup starts; a release install or build fails its update step
 with it as the step's last line and starts no child. Operator hosts never wait
@@ -306,7 +323,21 @@ All tests run by path with isolated state; the real-cgroup tests create private
 - `src/lib/runtime/structuredSpawn.cpuPlacement.test.ts`: the real
   `defaultStartHost` gives pipeline and flow members the work placement and
   operator hosts the agents slice, and refuses a pipeline host when the
-  mechanism is missing.
+  mechanism is missing. Boot adoption of both engines, with memory off and on,
+  hands every host the cell of its class without sampling CPU pressure, refuses
+  a work host it cannot contain, and the real adopter leaves that row dead with
+  the reason logged.
+- `src/lib/runtime/cpuPlacement.scope.test.ts`: boot adoption of Codex and
+  Claude hosts, operator, pipeline and flow, with memory off and on, spawns
+  through the adopted cell into real scopes (work `60000 20000` under
+  `360000 20000`, operator weight 1000); a private slice with
+  `DisableControllers=cpu` makes `planAgentCpu`, boot adoption and
+  `gate-slot.sh` refuse work before it runs; the tmux case runs its private
+  server inside an agent scope that cannot reach the user bus, so every pane
+  starts in the server's agent scope and is still placed.
+- `src/lib/accounts/migration/provider.test.ts`: a Codex or Claude migration
+  successor gets the cell of its conversation's class and is refused before it
+  starts when work cannot be contained.
 - `src/lib/pipelines/git.test.ts`: publication runs install and push in work
   scopes and pushes nothing when the mechanism is missing; sustained pressure
   starts no install, a recovered window starts it once, a failed sample starts
@@ -314,7 +345,8 @@ All tests run by path with isolated state; the real-cgroup tests create private
 - `src/lib/pipelines/engine.test.ts`: CPU pressure holds a stage start with a
   visible reason, defers after 120 s, releases one launch after ten seconds
   below 10%, never holds a launched stage, and admits on a failed sample.
-- `scripts/gate-slot.test.ts`: work slice and quotas, the explicit refusals,
+- `scripts/gate-slot.test.ts`: work slice and quotas, the explicit refusals
+  (a scope or a work slice the kernel shows no quota for included),
   the hold, deferral and single start, admission on a failed sample, and
   pressure that rises while the gate waits for a slot.
 - `src/lib/runtime/cpuPlacement.test.ts`, `cpuPressure.test.ts`,

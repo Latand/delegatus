@@ -85,6 +85,10 @@ export function probeAgentScopes(options: { platform: NodeJS.Platform; cgroupRoo
 let cachedMechanism: { mechanism: "scope" | "watchdog"; version: number } | null = null;
 let sliceConfigured = false;
 export function invalidateAgentScopeProbe(): void { cachedMechanism = null; sliceConfigured = false; }
+type MemoryPorts = { totalBytes?: number; probe?: () => number | null; runner?: MemoryRunner };
+let testMemoryPorts: MemoryPorts | null = null;
+/** Points every caller that passes no ports at fakes, so a launch-path test never probes or budgets the live agent slice. */
+export function setAgentMemoryPortsForTests(ports: MemoryPorts | null): void { testMemoryPorts = ports; invalidateAgentScopeProbe(); }
 /** The unit name every agent scope carries; HostMemoryState validates it. */
 function agentScopeUnit(engine: string, sessionKey: string): string {
   return `delegatus-agent-${engine}-${createHash("sha256").update(sessionKey + randomUUID()).digest("hex").slice(0,12)}.scope`;
@@ -97,7 +101,7 @@ function cpuOnlyPlan(input: { engine: string; sessionKey: string; cpu?: AgentCpu
     systemdVersion: input.cpu.systemdVersion, cpu: input.cpu };
 }
 /** `input.cpu` comes from planAgentCpu; CPU placement is independent of the memory mode. */
-export function planAgentMemory(input: { engine: string; sessionKey: string; liveAgents: number; cpu?: AgentCpuPlan | null }, env = process.env, ports: { totalBytes?: number; probe?: () => number | null; runner?: MemoryRunner } = {}): AgentMemoryPlan | null {
+export function planAgentMemory(input: { engine: string; sessionKey: string; liveAgents: number; cpu?: AgentCpuPlan | null }, env = process.env, ports: MemoryPorts = testMemoryPorts ?? {}): AgentMemoryPlan | null {
   const raw = env.DELEGATUS_AGENT_MEMORY ?? env.LLV_AGENT_MEMORY ?? "auto";
   const mode: MemoryMode = ["auto", "scope", "watchdog", "off"].includes(raw) ? raw as MemoryMode : "auto";
   if (raw !== mode) diagnostic("mode", "Invalid agent memory mode; using auto.");

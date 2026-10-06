@@ -114,7 +114,31 @@ function firstLine(error: unknown): string {
   return text.trim().split("\n")[0]!.slice(0, 200);
 }
 
-/** One probe scope proves the user manager can place CPU under `slice`. */
+/** Prints the kernel's cpu.weight and cpu.max for the scope, then the cpu.max of its slice. */
+const CONTROLS_REPORT = 'g=$(sed -n "s/^0:://p" /proc/self/cgroup); for f in "$g/cpu.weight" "$g/cpu.max" "${g%/*}/cpu.max"; do cat "$1$f" 2>/dev/null || echo absent; done';
+
+/**
+ * Runs one scope with `plan`'s properties and reads back what the kernel
+ * applied. The user manager accepts CPU properties even where an ancestor keeps
+ * the cpu controller off (`DisableControllers=cpu`, an undelegated slice), and
+ * the scope then runs with no controls, so only the kernel files prove them.
+ * Returns why the controls are missing, or null when they hold.
+ */
+export function verifyCpuScope(plan: Pick<AgentCpuPlan, "slice" | "weight" | "quotaPercent" | "periodMs" | "systemdVersion">, runner: CpuRunner, cgroupRoot = "/sys/fs/cgroup"): string | null {
+  let output: string;
+  try {
+    output = runner("systemd-run", ["--user", "--scope", "--quiet", "--collect", ...(plan.systemdVersion >= 254 ? ["--expand-environment=no"] : []),
+      `--slice=${plan.slice}`, ...cpuScopeProperties(plan), "--", "/bin/sh", "-c", CONTROLS_REPORT, "delegatus-cpu-probe", cgroupRoot]);
+  } catch (error) { return `the user manager refused a CPU scope in ${plan.slice} (${firstLine(error)})`; }
+  const [weight = "absent", max = "absent", sliceMax = "absent"] = output.trim().split("\n").slice(-3).map((line) => line.trim());
+  if (weight === "absent") return `the kernel applied no CPU controls to a scope in ${plan.slice}; the cpu controller is off on one of its ancestors`;
+  if (weight !== String(plan.weight)) return `the kernel set cpu.weight ${weight} on a scope in ${plan.slice}, not ${plan.weight}`;
+  if (plan.quotaPercent !== null && !/^\d+ /.test(max)) return `the kernel applied no CPU quota to a scope in ${plan.slice} (cpu.max ${max})`;
+  if (plan.quotaPercent !== null && !/^\d+ /.test(sliceMax)) return `the kernel applied no aggregate CPU quota to ${plan.slice} (cpu.max ${sliceMax})`;
+  return null;
+}
+
+/** One probe scope proves the kernel applies CPU controls under `slice`. */
 export function probeCpuContainment(options: { platform: NodeJS.Platform; cgroupRoot: string; uid: number; runner: CpuRunner; container: boolean; slice: string }): CpuContainment {
   if (options.platform !== "linux") return { kind: "not-applicable", reason: "CPU placement uses Linux cgroups" };
   if (options.container) return { kind: "not-applicable", reason: "inside a container the container runtime owns CPU limits" };
@@ -127,14 +151,13 @@ export function probeCpuContainment(options: { platform: NodeJS.Platform; cgroup
   try { version = Number(/systemd\s+(\d+)/.exec(options.runner("systemd-run", ["--version"]))?.[1]); }
   catch (error) { return { kind: "missing", reason: `systemd-run is unavailable (${firstLine(error)})` }; }
   if (!(version >= MIN_SYSTEMD)) return { kind: "missing", reason: `systemd ${version || "unknown"} predates CPUQuotaPeriodSec (needs ${MIN_SYSTEMD})` };
-  try {
-    options.runner("systemd-run", ["--user", "--scope", "--quiet", "--collect", ...(version >= 254 ? ["--expand-environment=no"] : []),
-      `--slice=${options.slice}`, "-p", `CPUWeight=${WORK_CPU_WEIGHT}`, "--", "true"]);
-  } catch (error) { return { kind: "missing", reason: `the user manager refused a CPU scope (${firstLine(error)})` }; }
-  return { kind: "available", systemdVersion: version };
+  const failure = verifyCpuScope({ slice: options.slice, weight: OPERATOR_CPU_WEIGHT, quotaPercent: null, periodMs: CPU_QUOTA_PERIOD_MS, systemdVersion: version },
+    options.runner, options.cgroupRoot);
+  return failure ? { kind: "missing", reason: failure } : { kind: "available", systemdVersion: version };
 }
 
 export interface CpuPorts {
+  /** Stands in for the whole kernel check, the work slice's included. */
   probe?: () => CpuContainment;
   runner?: CpuRunner;
   cpus?: number;
@@ -153,7 +176,8 @@ export function setCpuPortsForTests(ports: CpuPorts | null): void { testPorts = 
 /**
  * The CPU placement for one launch, or null when this install runs without it.
  * Throws CpuContainmentUnavailable for work when the mechanism is expected and
- * missing, including a failed aggregate quota on the work slice.
+ * missing, including a failed aggregate quota on the work slice and a work
+ * scope the kernel gives no quota.
  */
 export function planAgentCpu(workload: AgentWorkload, env: Readonly<Record<string, string | undefined>> = process.env, ports: CpuPorts = testPorts ?? {}): AgentCpuPlan | null {
   const settings = cpuSettings(env, ports.cpus);
@@ -175,16 +199,19 @@ export function planAgentCpu(workload: AgentWorkload, env: Readonly<Record<strin
   if (workload === "operator") {
     return { workload, slice: agentSlice, weight: OPERATOR_CPU_WEIGHT, quotaPercent: null, periodMs: CPU_QUOTA_PERIOD_MS, systemdVersion: containment.systemdVersion };
   }
-  const key = `${workSlice}:${settings.aggregateQuotaPercent}`;
+  const plan: AgentCpuPlan = { workload, slice: workSlice, weight: WORK_CPU_WEIGHT, quotaPercent: settings.scopeQuotaPercent, periodMs: CPU_QUOTA_PERIOD_MS, systemdVersion: containment.systemdVersion };
+  const key = `${workSlice}:${settings.aggregateQuotaPercent}:${settings.scopeQuotaPercent}`;
   if (!configuredSlices.has(key)) {
     try { runner("systemctl", ["--user", "set-property", "--runtime", workSlice, ...workSliceProperties(settings.aggregateQuotaPercent)]); }
     catch (error) {
       if (!ports.probe) cachedContainment = null;
       throw new CpuContainmentUnavailable(`the work slice quota could not be set (${firstLine(error)})`);
     }
+    const failure = ports.probe ? null : verifyCpuScope(plan, runner);
+    if (failure) { cachedContainment = null; throw new CpuContainmentUnavailable(failure); }
     configuredSlices.add(key);
   }
-  return { workload, slice: workSlice, weight: WORK_CPU_WEIGHT, quotaPercent: settings.scopeQuotaPercent, periodMs: CPU_QUOTA_PERIOD_MS, systemdVersion: containment.systemdVersion };
+  return plan;
 }
 
 /**

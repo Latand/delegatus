@@ -5,7 +5,7 @@ import path from "node:path";
 
 import {
   CpuContainmentUnavailable, cpuScopeProperties, cpuSettings, invalidateCpuContainmentProbe, planAgentCpu, probeCpuContainment,
-  workAggregateCpuQuota, workloadForMemberships, workSliceProperties, wrapWorkCommand, type CpuContainment,
+  verifyCpuScope, workAggregateCpuQuota, workloadForMemberships, workSliceProperties, wrapWorkCommand, type CpuContainment,
 } from "./cpuPlacement";
 
 const available: CpuContainment = { kind: "available", systemdVersion: 255 };
@@ -43,17 +43,24 @@ test("the probe names why CPU placement is missing or does not apply", () => {
   fs.writeFileSync(path.join(root, "cgroup.controllers"), "cpu memory pids");
   fs.writeFileSync(path.join(manager, "cgroup.controllers"), "cpu memory pids");
   const calls: string[][] = [];
+  let kernel = "1000\nmax 100000\nmax 100000\n";
   const options = { platform: "linux" as const, cgroupRoot: root, uid: 1000, container: false, slice: "test-agents.slice",
-    runner: (command: string, args: string[]) => { calls.push([command, ...args]); return args[0] === "--version" ? "systemd 255 (255.4)" : ""; } };
+    runner: (command: string, args: string[]) => { calls.push([command, ...args]); return args[0] === "--version" ? "systemd 255 (255.4)" : kernel; } };
   try {
     expect(probeCpuContainment(options)).toEqual({ kind: "available", systemdVersion: 255 });
-    expect(calls.at(-1)).toEqual(["systemd-run", "--user", "--scope", "--quiet", "--collect", "--expand-environment=no", "--slice=test-agents.slice", "-p", "CPUWeight=100", "--", "true"]);
+    const probe = calls.at(-1)!;
+    expect(probe.slice(0, probe.indexOf("--") + 3)).toEqual(["systemd-run", "--user", "--scope", "--quiet", "--collect", "--expand-environment=no", "--slice=test-agents.slice", "-p", "CPUWeight=1000", "--", "/bin/sh", "-c"]);
+    expect(probe.slice(-2)).toEqual(["delegatus-cpu-probe", root]);
+    // systemd accepts the scope where an ancestor keeps the cpu controller off; the kernel files show it.
+    kernel = "absent\nabsent\nabsent\n";
+    expect(probeCpuContainment(options)).toEqual({ kind: "missing", reason: "the kernel applied no CPU controls to a scope in test-agents.slice; the cpu controller is off on one of its ancestors" });
+    kernel = "1000\nmax 100000\nmax 100000\n";
     expect(probeCpuContainment({ ...options, platform: "darwin" }).kind).toBe("not-applicable");
     expect(probeCpuContainment({ ...options, container: true }).kind).toBe("not-applicable");
     expect(probeCpuContainment({ ...options, runner: (command, args) => args[0] === "--version" ? "systemd 241" : "" }))
       .toEqual({ kind: "missing", reason: "systemd 241 predates CPUQuotaPeriodSec (needs 242)" });
     expect(probeCpuContainment({ ...options, runner: (command, args) => { if (args[0] === "--version") return "systemd 255"; throw Object.assign(new Error("exit 1"), { stderr: "Failed to connect to bus: No medium found\n" }); } }))
-      .toEqual({ kind: "missing", reason: "the user manager refused a CPU scope (Failed to connect to bus: No medium found)" });
+      .toEqual({ kind: "missing", reason: "the user manager refused a CPU scope in test-agents.slice (Failed to connect to bus: No medium found)" });
     fs.writeFileSync(path.join(manager, "cgroup.controllers"), "memory pids");
     expect(probeCpuContainment(options)).toEqual({ kind: "missing", reason: "the systemd user manager does not delegate the cpu controller" });
     fs.rmSync(path.join(root, "user.slice"), { recursive: true });
@@ -72,6 +79,22 @@ test("operator hosts get a high weight and no ceiling; work gets its slice quota
   planAgentCpu("work", {}, ports);
   expect(calls).toEqual([["systemctl", "--user", "set-property", "--runtime", "test-agents-work.slice", "CPUWeight=100", "CPUQuota=1800%", "CPUQuotaPeriodSec=20ms"]]);
   expect(planAgentCpu("work", { DELEGATUS_AGENT_CPU: "off" }, ports)).toBeNull();
+});
+
+test("a work scope the kernel gives no quota is refused before any work runs", () => {
+  const kernel = { scope: "60000 20000", slice: "360000 20000" };
+  const work = { workload: "work" as const, slice: "test-agents-work.slice", weight: 100, quotaPercent: 300, periodMs: 20, systemdVersion: 255 };
+  const runner = (command: string, args: string[]) => {
+    expect(args).toEqual(expect.arrayContaining(["--slice=test-agents-work.slice", "CPUWeight=100", "CPUQuota=300%", "CPUQuotaPeriodSec=20ms"]));
+    return `100\n${kernel.scope}\n${kernel.slice}\n`;
+  };
+  expect(verifyCpuScope(work, runner)).toBeNull();
+  kernel.scope = "absent";
+  expect(verifyCpuScope(work, runner)).toBe("the kernel applied no CPU quota to a scope in test-agents-work.slice (cpu.max absent)");
+  Object.assign(kernel, { scope: "60000 20000", slice: "max 20000" });
+  expect(verifyCpuScope(work, runner)).toBe("the kernel applied no aggregate CPU quota to test-agents-work.slice (cpu.max max 20000)");
+  expect(verifyCpuScope(work, () => { throw Object.assign(new Error("exit 1"), { stderr: "Failed to start transient scope unit: Access denied\n" }); }))
+    .toBe("the user manager refused a CPU scope in test-agents-work.slice (Failed to start transient scope unit: Access denied)");
 });
 
 test("a missing mechanism refuses work explicitly and leaves operator hosts running", () => {

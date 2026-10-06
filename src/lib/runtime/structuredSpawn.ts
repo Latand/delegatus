@@ -9,7 +9,7 @@ import { launchServiceTier } from "./codexTurnProfile";
 import { accountManager } from "@/lib/accounts/manager";
 import { claudeSettingsPath } from "@/lib/accounts/claude";
 import { claudeValidityFromLimitRead } from "@/lib/accounts/spawnHealth";
-import { explicitLaunchProfileSandbox, launchProfileEngineReadOnly, type LaunchProfile } from "@/lib/accounts/migration/contracts";
+import { explicitLaunchProfileSandbox, launchProfileEngineReadOnly, type LaunchProfile, type ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import type { SpawnAccountAdmission } from "@/lib/agent/accountLiveness";
 import { effectiveClaudePermissionMode, resolveCopilotBinary, type AgentEngine, type ResumeSpec } from "@/lib/agent/cli";
 import { identityMaterializationFence, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt, type StructuredHostColumns } from "@/lib/agent/registry";
@@ -1679,6 +1679,20 @@ export function claudeStructuredHostOptions(
   };
 }
 
+/**
+ * The memory and CPU cell a structured host launches in. A fresh start, a
+ * resume, boot adoption and a migration successor all build it here, so a host
+ * keeps its class and its controls across restarts. Throws
+ * CpuContainmentUnavailable for work that cannot be contained.
+ */
+export function structuredHostCell(registry: AgentRegistry, engine: string, sessionKey: string, conversationId: ViewerConversationId | null | undefined): AgentMemoryCell | null {
+  const snapshot = registry.readOnlySnapshot();
+  const liveAgents = Object.values(snapshot.entries).filter((entry) => entry.structuredHost && entry.status !== "dead" && entry.status !== "unhosted").length + 1;
+  const cpu = planAgentCpu(workloadForMemberships(conversationId ? snapshot.memberships[registry.canonicalConversationId(conversationId)] : undefined));
+  const plan = planAgentMemory({ engine, sessionKey, liveAgents, cpu });
+  return plan ? new AgentMemoryCell(plan) : null;
+}
+
 /** Narrow external-engine seam for launch-path tests; production passes none. */
 export async function defaultStartHost(
   input: StructuredSpawnInput,
@@ -1689,11 +1703,7 @@ export async function defaultStartHost(
   } = {},
 ): Promise<SpawnedStructuredHost> {
   input = admittedStructuredLaunchInput(input);
-  const snapshot = input.registry.readOnlySnapshot();
-  const liveAgents = Object.values(snapshot.entries).filter((entry) => entry.structuredHost && entry.status !== "dead" && entry.status !== "unhosted").length + 1;
-  const cpu = planAgentCpu(workloadForMemberships(snapshot.memberships[input.registry.canonicalConversationId(input.receipt.conversationId)]));
-  const plan = planAgentMemory({ engine: input.engine, sessionKey: input.receipt.launchId, liveAgents, cpu });
-  const memoryCell = plan ? new AgentMemoryCell(plan) : null;
+  const memoryCell = structuredHostCell(input.registry, input.engine, input.receipt.launchId, input.receipt.conversationId);
   if (input.engine === "copilot") return await startCopilotStructuredHost(input, capability, {
     ...(memoryCell ? { memoryCell } : {}),
   });

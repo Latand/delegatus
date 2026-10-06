@@ -38,7 +38,7 @@ import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { enqueueStructuredMessage } from "./structuredMessageDelivery";
 import { INTERRUPTED_CODEX_CONTINUATION_TEXT, RECOVERY_NOTICE_ORIGIN } from "./recoveryNotices";
 import { delegatusOriginForRecipient } from "./agentMessageAuthor";
-import { claudeHostLaunchPaths, materializeStructuredHostAccess, recoverPendingStructuredSpawns, structuredHostAccessPolicy } from "./structuredSpawn";
+import { claudeHostLaunchPaths, materializeStructuredHostAccess, recoverPendingStructuredSpawns, structuredHostAccessPolicy, structuredHostCell } from "./structuredSpawn";
 import { conversationTurnLiveness, readTranscriptEvidence, transcriptEvidenceFromRecords, type TranscriptEventKind, type TurnLivenessDependencies } from "./liveness";
 import { markStructuredHostStartupProgress, type StructuredHostStartupPhase } from "./startupStatus";
 import { startupDiagnostic } from "../startupDiagnostics";
@@ -1429,9 +1429,16 @@ async function adoptStructuredHostsPass(
     const resolveClaudeOwner = dependencies.resolveClaudeOwner ?? ((entry: AgentRegistryEntry) =>
       accountManager.resolveTranscriptOwner("claude", entry.artifactPath));
     const startupEnvironment = withoutUnsupportedApiCredentials(process.env);
+    /* An adopted host gets the memory and CPU cell a fresh launch of its
+       conversation gets. Work that cannot be contained throws here, and the
+       adopter leaves the row dead with the reason. Adoption never waits on CPU
+       pressure. */
+    const adoptionCell = (entry: AgentRegistryEntry) =>
+      structuredHostCell(registry, entry.key.engine, sessionKeyId(entry.key), registry.conversationForPath(entry.artifactPath)?.id);
     const codex = resumeDeferred && codexCandidateCount === 0 ? [] : await (dependencies.adopt ?? adoptCodexRegistryHosts)(
       registry,
       (entry) => {
+        const memoryCell = adoptionCell(entry);
         const owner = resolveCodexOwner(entry);
         const capability = registry.rotateSpawnCapabilityForPath(entry.artifactPath);
         const access = materializeStructuredHostAccess(
@@ -1455,6 +1462,7 @@ async function adoptStructuredHostsPass(
           ...access.codex,
           ...access.host,
           env: access.env,
+          ...(memoryCell ? { memoryCell } : {}),
         };
       },
       startupEnvironment,
@@ -1473,6 +1481,7 @@ async function adoptStructuredHostsPass(
     const claude = resumeDeferred && claudeCandidateCount === 0 ? [] : await (dependencies.adoptClaude ?? adoptClaudeRegistryHosts)(
       registry,
       (entry) => {
+        const memoryCell = adoptionCell(entry);
         const options = claudeStartupHostOptions(
           entry,
           resolveClaudeOwner(entry),
@@ -1491,7 +1500,7 @@ async function adoptStructuredHostsPass(
             reason: "no Claude account owns this transcript",
           });
         }
-        return options;
+        return { ...options, ...(memoryCell ? { memoryCell } : {}) };
       },
       startupEnvironment,
       shouldAdopt,

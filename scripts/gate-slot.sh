@@ -33,23 +33,44 @@ cpu_applies() {
 user_manager() {
   command -v systemd-run >/dev/null && command -v systemctl >/dev/null && systemctl --user show-environment >/dev/null 2>&1
 }
-# A caller already in a work scope (a pipeline host's command, a sandboxed
-# stage without the user bus) is bounded by that scope's quota.
-in_work_slice() {
+own_cgroup() {
   local line
-  { while IFS= read -r line; do [[ $line == 0::*/"$slice"/* ]] && return 0; done < "${LLV_GATE_CGROUP_FILE:-/proc/self/cgroup}"; } 2>/dev/null
+  { while IFS= read -r line; do [[ $line == 0::* ]] && { echo "${line#0::}"; return 0; }; done < "${LLV_GATE_CGROUP_FILE:-/proc/self/cgroup}"; } 2>/dev/null
   return 1
 }
+# The user manager accepts CPU properties even where an ancestor keeps the cpu
+# controller off (DisableControllers=cpu, an undelegated slice), and the scope
+# then runs with no controls; only the kernel files prove the quotas hold. This
+# process's scope and the work slice above it must both carry a quota.
+cpu_quota_effective() {
+  local root=${LLV_GATE_CGROUP_ROOT:-/sys/fs/cgroup} group own="" above=""
+  group=$(own_cgroup) && [[ $group == */"$slice"/* ]] || { echo "the gate's cgroup ${group:-(unreadable)} is outside $slice"; return 1; }
+  { read -r own _ < "$root$group/cpu.max"; } 2>/dev/null
+  { read -r above _ < "$root${group%%/"$slice"/*}/$slice/cpu.max"; } 2>/dev/null
+  [[ $own =~ ^[0-9]+$ && $above =~ ^[0-9]+$ ]] && return 0
+  echo "the kernel applied no CPU quota to $group (cpu.max ${own:-absent}, $slice cpu.max ${above:-absent}); the cpu controller is off on an ancestor"
+  return 1
+}
+verified_exec() {
+  local reason
+  reason=$(cpu_quota_effective) || refuse "$reason"
+  exec "$@"
+}
+# The command runs through this script once more inside its new scope, which
+# checks the kernel's controls before it execs the command in place.
+if [[ ${1:-} == --in-cpu-scope ]]; then shift; verified_exec "$@"; fi
 run() {
   if cpu_applies; then
     if ! user_manager; then
-      in_work_slice && exec "$@"
+      # A caller already in a work scope (a pipeline host's command, a
+      # sandboxed stage without the user bus) is bounded by that scope's quota.
+      [[ $(own_cgroup) == */"$slice"/* ]] && verified_exec "$@"
       refuse "no reachable systemd user manager"
     fi
     systemctl --user set-property --runtime "$slice" CPUWeight=100 "CPUQuota=${aggregate}%" CPUQuotaPeriodSec=20ms >/dev/null 2>&1 \
       || refuse "the user manager refused the quota for $slice"
     exec systemd-run --user --scope -q --collect "--slice=$slice" -p "MemoryMax=${LLV_GATE_MEM:-8G}" \
-      -p CPUWeight=100 -p "CPUQuota=${scope_quota}%" -p CPUQuotaPeriodSec=20ms -- "$@"
+      -p CPUWeight=100 -p "CPUQuota=${scope_quota}%" -p CPUQuotaPeriodSec=20ms -- /bin/bash "${BASH_SOURCE[0]}" --in-cpu-scope "$@"
   fi
   if user_manager; then
     exec systemd-run --user --scope -q -p "MemoryMax=${LLV_GATE_MEM:-8G}" -- "$@"

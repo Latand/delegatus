@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 const roots: string[] = [];
@@ -34,8 +34,18 @@ test("another command waits for the same legacy-compatible slot", async () => {
   expect(await child.exited).toBe(0);
 });
 
+const WORK_GROUP = "/user.slice/user-1000.slice/user@1000.service/delegatus.slice/delegatus-agents.slice/delegatus-agents-work.slice";
+/** A fake cgroup tree under `root`: the cgroup file names `group`, and each `cpu.max` the kernel would show. */
+function fakeCgroup(root: string, group: string, controls: { scope?: string; slice?: string }) {
+  const tree = join(root, "cgroup-root");
+  mkdirSync(join(tree, group), { recursive: true });
+  if (controls.scope) writeFileSync(join(tree, group, "cpu.max"), `${controls.scope}\n`);
+  if (controls.slice) writeFileSync(join(tree, WORK_GROUP, "cpu.max"), `${controls.slice}\n`);
+  writeFileSync(join(root, "cgroup"), `0::${group}\n`);
+  return { LLV_GATE_CGROUP_FILE: join(root, "cgroup"), LLV_GATE_CGROUP_ROOT: tree };
+}
 /** A Linux fixture whose systemd records what the gate asked for. */
-function cpuFixture(options: { manager: boolean; refuseQuota?: boolean }) {
+function cpuFixture(options: { manager: boolean; refuseQuota?: boolean; kernel?: { scope?: string; slice?: string } }) {
   const root = mkdtempSync(join(tmpdir(), "slot-cpu-test-")); roots.push(root);
   for (const name of ["mkdir", "flock", "sleep", "awk", "uname", "cat"]) symlinkSync(`/usr/bin/${name}`, join(root, name));
   writeFileSync(join(root, "getconf"), "#!/bin/bash\necho 24\n"); chmodSync(join(root, "getconf"), 0o755);
@@ -48,6 +58,8 @@ function cpuFixture(options: { manager: boolean; refuseQuota?: boolean }) {
     DELEGATUS_AGENT_CPU: "auto", DELEGATUS_CPU_PRESSURE: "off", LLV_GATE_PSI_FILE: join(root, "pressure"), LLV_GATE_POLL_SECONDS: "0.1",
     // The test run itself may sit in a work scope (a hook's gate); judge a fixture cgroup instead.
     LLV_GATE_CGROUP_FILE: join(root, "no-cgroup") };
+  // The fake systemd-run execs in place, so the scope's check reads the cgroup a real scope would get.
+  if (options.manager) Object.assign(env, fakeCgroup(root, `${WORK_GROUP}/run-fixture.scope`, options.kernel ?? { scope: "60000 20000", slice: "360000 20000" }));
   // Inherited gate and CPU settings (a hook's own gate) must not steer the fixture.
   for (const key of Object.keys(env)) if (/^(?:LLV|DELEGATUS)_(?:GATE_SLICE|GATE_PSI_|WORK_|CPU_PRESSURE_)/.test(key)) delete env[key];
   env.LLV_GATE_PSI_FILE = join(root, "pressure"); env.LLV_GATE_POLL_SECONDS = "0.1";
@@ -103,12 +115,27 @@ test.skipIf(process.platform !== "linux")("a failed pressure sample admits; the 
 });
 test.skipIf(process.platform !== "linux")("a caller already in a work scope runs its gate there when the user bus is out of reach", () => {
   const f = cpuFixture({ manager: false });
-  const cgroup = join(f.root, "cgroup");
-  writeFileSync(cgroup, "0::/user.slice/user-1000.slice/user@1000.service/delegatus.slice/delegatus-agents.slice/delegatus-agents-work.slice/delegatus-agent-codex-0123456789ab.scope\n");
-  expect(f.run({ LLV_GATE_CGROUP_FILE: cgroup }).status).toBe(0);
+  const scope = `${WORK_GROUP}/delegatus-agent-codex-0123456789ab.scope`;
+  expect(f.run(fakeCgroup(f.root, scope, { scope: "60000 20000", slice: "360000 20000" })).status).toBe(0);
   expect(readFileSync(f.marker, "utf8")).toBe("run\n");
-  writeFileSync(cgroup, "0::/user.slice/user-1000.slice/user@1000.service/delegatus.slice/delegatus-agents.slice/delegatus-agent-codex-0123456789ab.scope\n");
-  expect(f.run({ LLV_GATE_CGROUP_FILE: cgroup }).status).toBe(69);
+  // A work scope the kernel gives no quota bounds nothing.
+  const unbounded = f.run(fakeCgroup(join(f.root, "unbounded"), scope, {}));
+  expect(unbounded.status).toBe(69);
+  expect(unbounded.stderr).toContain("the kernel applied no CPU quota");
+  expect(f.run(fakeCgroup(join(f.root, "operator"), "/user.slice/user-1000.slice/user@1000.service/delegatus.slice/delegatus-agents.slice/delegatus-agent-codex-0123456789ab.scope",
+    { scope: "max 100000" })).status).toBe(69);
+  expect(readFileSync(f.marker, "utf8")).toBe("run\n");
+});
+test.skipIf(process.platform !== "linux")("a scope the kernel gives no CPU controls refuses the gate before its command runs", () => {
+  // systemd accepts the properties when an ancestor disables the cpu controller; the scope then has no cpu.max.
+  for (const kernel of [{}, { scope: "max 20000", slice: "360000 20000" }, { scope: "60000 20000" }]) {
+    const f = cpuFixture({ manager: true, kernel });
+    const result = f.run();
+    expect(result.status).toBe(69);
+    expect(result.stderr).toContain("gate-slot: CPU containment for gates is unavailable: the kernel applied no CPU quota to");
+    expect(result.stderr).toContain("the cpu controller is off on an ancestor");
+    expect(Bun.file(f.marker).size).toBe(0);
+  }
 });
 test.skipIf(process.platform !== "linux")("the gate reads the folded LLV_ spelling an entry point leaves behind", () => {
   const f = cpuFixture({ manager: false });
