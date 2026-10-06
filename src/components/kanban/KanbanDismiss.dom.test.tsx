@@ -205,6 +205,20 @@ test("the foot names why the card needs the operator, and a member tile names it
   expect(card.querySelector("[data-dismiss]")?.getAttribute("aria-label")).toContain("stop flagging it until something new");
 });
 
+test("a card that waits only on its prototype says so in the foot, with nothing to dismiss, until the choice", () => {
+  const review = { latestReviewId: "pr_round", waitingReviewId: "pr_round" as string | null, title: "Layout", rounds: 1, createdAt: "2026-10-01T00:00:00Z" };
+  const waiting = { ...task("p", "assigned", "Lay out the search results"), prototypeReview: review } as BoardTask;
+  const { host, render } = mount({ tasks: [waiting], files: [] });
+  const foot = cardEl(host, "task:p")!.querySelector<HTMLElement>(".foot")!;
+  const line = foot.querySelector<HTMLElement>("[data-foot-prototype]")!;
+  expect(line.textContent).toBe("Prototype ready");
+  expect(line.className).toContain("needs");
+  expect(foot.querySelector("[data-foot-needs]")).toBeNull();
+  expect(foot.querySelector("[data-dismiss]")).toBeNull();
+  render({ tasks: [{ ...waiting, prototypeReview: { ...review, waitingReviewId: null } } as BoardTask] });
+  expect(cardEl(host, "task:p")!.querySelector("[data-foot-prototype]")).toBeNull();
+});
+
 test("one click posts what the card drew, clears it at once with who cleared it, and Undo brings it back", async () => {
   const asker = asking(1, "Unit", 900);
   const { host } = mount({ tasks: [task("a", "assigned", "Retire the systemd install path", [asker])], files: [asker] });

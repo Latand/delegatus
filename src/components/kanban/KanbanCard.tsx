@@ -412,8 +412,9 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
   const stageReaders = readerKeys.filter((key) => !tileKeys.has(key));
   const openTiles = new Set(readerKeys.filter((key) => tileKeys.has(key)));
   /* A card that waits with no reason of its own waits on its prototype
-     review. The foot's highlighted review button says so, and the choice
-     clears it, so the foot adds no second line of words and no dismissal. */
+     review. A wide foot says so on its review button; a narrow one, where the
+     button keeps only its mark, says so on the reason line instead. The
+     choice clears it, so there is no dismissal. */
   const reasons = !card.needsYou ? "" : card.reasons.length ? reasonsText(t, card.reasons) : t("proto.notice.ready");
   const cleared = !card.needsYou ? card.cleared[0] ?? null : null;
   const remote = card.task ? props.remote ?? null : null;
@@ -433,6 +434,11 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
     <>
       {card.needsYou && card.reasons.length ? (
         <span className="foot-meta needs" data-foot-needs={card.reasons.length} title={card.reasons.map((need) => needLabel(t, need)).join("\n")}>
+          <span className="clamp">{reasons}</span>
+        </span>
+      ) : null}
+      {card.needsYou && !card.reasons.length ? (
+        <span className="foot-meta needs proto-wait" data-foot-prototype="" title={reasons}>
           <span className="clamp">{reasons}</span>
         </span>
       ) : null}

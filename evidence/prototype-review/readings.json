@@ -9,6 +9,7 @@
         "aria": "A prototype of «Restore search results after the index rebuild» is ready: Search results layout. Open the review",
         "word": false,
         "dot": true,
+        "reason": "Prototype ready",
         "background": "rgb(236, 235, 251)",
         "color": "rgb(90, 81, 224)",
         "size": [
@@ -17,7 +18,7 @@
         ],
         "insideCard": true,
         "overlaps": 0,
-        "footLines": 1
+        "footLines": 2
       },
       {
         "task": "t-upload",
@@ -26,6 +27,7 @@
         "aria": "The prototype of «Redesign attachment upload for large files» still waits for your choice: Upload progress sheet. Open the review",
         "word": false,
         "dot": false,
+        "reason": "Prototype ready",
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(90, 81, 224)",
         "size": [
@@ -34,7 +36,7 @@
         ],
         "insideCard": true,
         "overlaps": 0,
-        "footLines": 1
+        "footLines": 2
       },
       {
         "task": "t-links",
@@ -43,6 +45,7 @@
         "aria": "A prototype of «Repair old links in the release notes» is ready: Release notes links, smaller arrows. Open the review",
         "word": false,
         "dot": true,
+        "reason": null,
         "background": "rgb(236, 235, 251)",
         "color": "rgb(90, 81, 224)",
         "size": [
@@ -60,6 +63,7 @@
         "aria": "Prototype of «Simplify the export settings sheet»: chosen 2 · Segmented control, 3 · Advanced drawer. Open the review",
         "word": false,
         "dot": false,
+        "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(85, 85, 95)",
         "size": [
@@ -77,6 +81,7 @@
         "aria": "Prototype of «Disk space: find what Docker, worktrees and temp storage hold»: chosen 2 · Sorted bars, the orchestrator has not received it. Open the review",
         "word": false,
         "dot": true,
+        "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(85, 85, 95)",
         "size": [
@@ -170,7 +175,12 @@
     },
     "desktop-1440-en-light-four-variants": {
       "slide": "1:f0",
-      "caption": "1Compact list results, desktop",
+      "caption": "1Compact list — results, desktop",
+      "captionParts": [
+        "1",
+        "Compact list",
+        "results, desktop"
+      ],
       "position": "1 / 3",
       "canvas": [
         974,
@@ -234,7 +244,12 @@
     },
     "desktop-1440-en-light-pair-side": {
       "slide": "2:f0",
-      "caption": "2Two columns results page, before and after",
+      "caption": "2Two columns — results page, before and after",
+      "captionParts": [
+        "2",
+        "Two columns",
+        "results page, before and after"
+      ],
       "position": "1 / 3",
       "canvas": [
         974,
@@ -302,7 +317,12 @@
     },
     "desktop-1440-en-light-pair-slider": {
       "slide": "2:f0",
-      "caption": "2Two columns results page, before and after",
+      "caption": "2Two columns — results page, before and after",
+      "captionParts": [
+        "2",
+        "Two columns",
+        "results page, before and after"
+      ],
       "position": "1 / 3",
       "canvas": [
         974,
@@ -311,11 +331,11 @@
       "media": [
         [
           950,
-          454
+          435
         ],
         [
           950,
-          454
+          435
         ]
       ],
       "mediaInside": true,
@@ -324,7 +344,47 @@
       "thumbs": 3,
       "chosen": [],
       "round": "r-search",
-      "clip": "inset(0px 65% 0px 0px)"
+      "clip": "inset(0px 65% 0px 0px)",
+      "labels": {
+        "drawn": [
+          [
+            504,
+            191,
+            696,
+            435
+          ],
+          [
+            504,
+            191,
+            696,
+            435
+          ]
+        ],
+        "labels": [
+          {
+            "side": "original",
+            "box": [
+              377,
+              172,
+              50.9,
+              15
+            ],
+            "inside": true,
+            "overPicture": false
+          },
+          {
+            "side": "changed",
+            "box": [
+              1274.7,
+              172,
+              52.3,
+              15
+            ],
+            "inside": true,
+            "overPicture": false
+          }
+        ]
+      }
     },
     "desktop-1440-en-light-pair-slider-geometry": {
       "regions": {
@@ -371,7 +431,12 @@
     },
     "desktop-1440-en-light-forty": {
       "slide": "3:f39",
-      "caption": "3Dense table table state 40",
+      "caption": "3Dense table — table state 40",
+      "captionParts": [
+        "3",
+        "Dense table",
+        "table state 40"
+      ],
       "position": "40 / 40",
       "canvas": [
         974,
@@ -441,7 +506,12 @@
     },
     "desktop-1440-en-light-video": {
       "slide": "4:v0",
-      "caption": "4Cards with a preview hover and keyboard walk",
+      "caption": "4Cards with a preview — hover and keyboard walk",
+      "captionParts": [
+        "4",
+        "Cards with a preview",
+        "hover and keyboard walk"
+      ],
       "position": "3 / 3",
       "canvas": [
         974,
@@ -557,7 +627,12 @@
     },
     "desktop-1440-en-light-combination": {
       "slide": "1:f0",
-      "caption": "1Compact list results, desktop",
+      "caption": "1Compact list — results, desktop",
+      "captionParts": [
+        "1",
+        "Compact list",
+        "results, desktop"
+      ],
       "position": "1 / 3",
       "canvas": [
         974,
@@ -658,7 +733,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/6/2026, 4:27:53 PM",
+      "time": "10/6/2026, 5:12:51 PM",
       "posts": [
         {
           "taskId": "t-search",
@@ -759,7 +834,12 @@
     },
     "desktop-1440-en-light-one-variant": {
       "slide": "1:f0",
-      "caption": "1Progress under the attached file with speed, size and a stop uploading",
+      "caption": "1Progress under the attached file with speed, size and a stop — uploading",
+      "captionParts": [
+        "1",
+        "Progress under the attached file with speed, size and a stop",
+        "uploading"
+      ],
       "position": "1 / 2",
       "canvas": [
         974,
@@ -802,7 +882,7 @@
       "caption": {
         "text": "resumed after a drop: the bar keeps what was already sent, the label names the retry, the speed returns once two samples exist, and the stop button stays where the pointer left it, so nothing jumps.",
         "left": 381,
-        "right": 1067.9,
+        "right": 1083.3,
         "lines": 3,
         "inside": true
       },
@@ -904,6 +984,30 @@
       "overlaps": [],
       "outside": [],
       "sideways": 0
+    },
+    "desktop-1440-en-light-no-orchestrator-delivery-row": {
+      "state": "no-orchestrator",
+      "lines": 1,
+      "mark": [
+        117,
+        810,
+        14,
+        14
+      ],
+      "firstLine": [
+        139,
+        810.8,
+        304.4,
+        12
+      ],
+      "markOnFirstLine": true,
+      "retry": [
+        451.4,
+        801,
+        102.7,
+        32
+      ],
+      "retryInside": true
     },
     "desktop-1440-en-light-no-orchestrator": "Saved. Nothing was sent: this project has no orchestrator.Send now",
     "desktop-1440-en-light-transcribed-comment-saved": {
@@ -1076,8 +1180,98 @@
       "outside": [],
       "sideways": 0
     },
+    "desktop-1440-en-light-send-failed-delivery-row": {
+      "state": "failed",
+      "lines": 1,
+      "mark": [
+        117,
+        810,
+        14,
+        14
+      ],
+      "firstLine": [
+        139,
+        810.8,
+        270.2,
+        12
+      ],
+      "markOnFirstLine": true,
+      "retry": [
+        417.2,
+        801,
+        110,
+        32
+      ],
+      "retryInside": true
+    },
+    "desktop-1440-en-light-send-uncertain-geometry": {
+      "regions": {
+        "header": [
+          101,
+          55,
+          1238,
+          57
+        ],
+        "rail": [
+          101,
+          112,
+          264,
+          611.5
+        ],
+        "toolbar": [
+          365,
+          112,
+          974,
+          48
+        ],
+        "canvas": [
+          365,
+          160,
+          974,
+          563.5
+        ],
+        "footer": [
+          101,
+          723.5,
+          1238,
+          121.5
+        ]
+      },
+      "overlaps": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "desktop-1440-en-light-send-uncertain-delivery-row": {
+      "state": "uncertain",
+      "lines": 1,
+      "mark": [
+        117,
+        810,
+        14,
+        14
+      ],
+      "firstLine": [
+        139,
+        810.8,
+        267.1,
+        12
+      ],
+      "markOnFirstLine": true,
+      "retry": [
+        414.1,
+        801,
+        110,
+        32
+      ],
+      "retryInside": true
+    },
     "desktop-1440-en-light-retry": {
       "posts": [
+        {
+          "taskId": "t-disk",
+          "reviewId": "r-disk",
+          "retry": true
+        },
         {
           "taskId": "t-disk",
           "reviewId": "r-disk",
@@ -1094,6 +1288,7 @@
         "aria": "A prototype of «Restore search results after the index rebuild» is ready: Search results layout. Open the review",
         "word": false,
         "dot": true,
+        "reason": "Prototype ready",
         "background": "rgb(38, 35, 71)",
         "color": "rgb(143, 136, 255)",
         "size": [
@@ -1102,7 +1297,7 @@
         ],
         "insideCard": true,
         "overlaps": 0,
-        "footLines": 1
+        "footLines": 2
       },
       {
         "task": "t-upload",
@@ -1111,6 +1306,7 @@
         "aria": "The prototype of «Redesign attachment upload for large files» still waits for your choice: Upload progress sheet. Open the review",
         "word": false,
         "dot": false,
+        "reason": "Prototype ready",
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(143, 136, 255)",
         "size": [
@@ -1119,7 +1315,7 @@
         ],
         "insideCard": true,
         "overlaps": 0,
-        "footLines": 1
+        "footLines": 2
       },
       {
         "task": "t-links",
@@ -1128,6 +1324,7 @@
         "aria": "A prototype of «Repair old links in the release notes» is ready: Release notes links, smaller arrows. Open the review",
         "word": false,
         "dot": true,
+        "reason": null,
         "background": "rgb(38, 35, 71)",
         "color": "rgb(143, 136, 255)",
         "size": [
@@ -1145,6 +1342,7 @@
         "aria": "Prototype of «Simplify the export settings sheet»: chosen 2 · Segmented control, 3 · Advanced drawer. Open the review",
         "word": false,
         "dot": false,
+        "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(162, 162, 174)",
         "size": [
@@ -1162,6 +1360,7 @@
         "aria": "Prototype of «Disk space: find what Docker, worktrees and temp storage hold»: chosen 2 · Sorted bars, the orchestrator has not received it. Open the review",
         "word": false,
         "dot": true,
+        "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(162, 162, 174)",
         "size": [
@@ -1255,7 +1454,12 @@
     },
     "desktop-1440-en-dark-four-variants": {
       "slide": "1:f0",
-      "caption": "1Compact list results, desktop",
+      "caption": "1Compact list — results, desktop",
+      "captionParts": [
+        "1",
+        "Compact list",
+        "results, desktop"
+      ],
       "position": "1 / 3",
       "canvas": [
         974,
@@ -1319,7 +1523,12 @@
     },
     "desktop-1440-en-dark-pair-side": {
       "slide": "2:f0",
-      "caption": "2Two columns results page, before and after",
+      "caption": "2Two columns — results page, before and after",
+      "captionParts": [
+        "2",
+        "Two columns",
+        "results page, before and after"
+      ],
       "position": "1 / 3",
       "canvas": [
         974,
@@ -1387,7 +1596,12 @@
     },
     "desktop-1440-en-dark-pair-slider": {
       "slide": "2:f0",
-      "caption": "2Two columns results page, before and after",
+      "caption": "2Two columns — results page, before and after",
+      "captionParts": [
+        "2",
+        "Two columns",
+        "results page, before and after"
+      ],
       "position": "1 / 3",
       "canvas": [
         974,
@@ -1396,11 +1610,11 @@
       "media": [
         [
           950,
-          454
+          435
         ],
         [
           950,
-          454
+          435
         ]
       ],
       "mediaInside": true,
@@ -1409,7 +1623,47 @@
       "thumbs": 3,
       "chosen": [],
       "round": "r-search",
-      "clip": "inset(0px 65% 0px 0px)"
+      "clip": "inset(0px 65% 0px 0px)",
+      "labels": {
+        "drawn": [
+          [
+            504,
+            191,
+            696,
+            435
+          ],
+          [
+            504,
+            191,
+            696,
+            435
+          ]
+        ],
+        "labels": [
+          {
+            "side": "original",
+            "box": [
+              377,
+              172,
+              50.9,
+              15
+            ],
+            "inside": true,
+            "overPicture": false
+          },
+          {
+            "side": "changed",
+            "box": [
+              1274.7,
+              172,
+              52.3,
+              15
+            ],
+            "inside": true,
+            "overPicture": false
+          }
+        ]
+      }
     },
     "desktop-1440-en-dark-pair-slider-geometry": {
       "regions": {
@@ -1456,7 +1710,12 @@
     },
     "desktop-1440-en-dark-forty": {
       "slide": "3:f39",
-      "caption": "3Dense table table state 40",
+      "caption": "3Dense table — table state 40",
+      "captionParts": [
+        "3",
+        "Dense table",
+        "table state 40"
+      ],
       "position": "40 / 40",
       "canvas": [
         974,
@@ -1526,7 +1785,12 @@
     },
     "desktop-1440-en-dark-video": {
       "slide": "4:v0",
-      "caption": "4Cards with a preview hover and keyboard walk",
+      "caption": "4Cards with a preview — hover and keyboard walk",
+      "captionParts": [
+        "4",
+        "Cards with a preview",
+        "hover and keyboard walk"
+      ],
       "position": "3 / 3",
       "canvas": [
         974,
@@ -1642,7 +1906,12 @@
     },
     "desktop-1440-en-dark-combination": {
       "slide": "1:f0",
-      "caption": "1Compact list results, desktop",
+      "caption": "1Compact list — results, desktop",
+      "captionParts": [
+        "1",
+        "Compact list",
+        "results, desktop"
+      ],
       "position": "1 / 3",
       "canvas": [
         974,
@@ -1743,7 +2012,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/6/2026, 4:28:09 PM",
+      "time": "10/6/2026, 5:13:08 PM",
       "posts": [
         {
           "taskId": "t-search",
@@ -1844,7 +2113,12 @@
     },
     "desktop-1440-en-dark-one-variant": {
       "slide": "1:f0",
-      "caption": "1Progress under the attached file with speed, size and a stop uploading",
+      "caption": "1Progress under the attached file with speed, size and a stop — uploading",
+      "captionParts": [
+        "1",
+        "Progress under the attached file with speed, size and a stop",
+        "uploading"
+      ],
       "position": "1 / 2",
       "canvas": [
         974,
@@ -1887,7 +2161,7 @@
       "caption": {
         "text": "resumed after a drop: the bar keeps what was already sent, the label names the retry, the speed returns once two samples exist, and the stop button stays where the pointer left it, so nothing jumps.",
         "left": 381,
-        "right": 1067.9,
+        "right": 1083.3,
         "lines": 3,
         "inside": true
       },
@@ -1989,6 +2263,30 @@
       "overlaps": [],
       "outside": [],
       "sideways": 0
+    },
+    "desktop-1440-en-dark-no-orchestrator-delivery-row": {
+      "state": "no-orchestrator",
+      "lines": 1,
+      "mark": [
+        117,
+        810,
+        14,
+        14
+      ],
+      "firstLine": [
+        139,
+        810.8,
+        304.4,
+        12
+      ],
+      "markOnFirstLine": true,
+      "retry": [
+        451.4,
+        801,
+        102.7,
+        32
+      ],
+      "retryInside": true
     },
     "desktop-1440-en-dark-no-orchestrator": "Saved. Nothing was sent: this project has no orchestrator.Send now",
     "desktop-1440-en-dark-transcribed-comment-saved": {
@@ -2161,8 +2459,98 @@
       "outside": [],
       "sideways": 0
     },
+    "desktop-1440-en-dark-send-failed-delivery-row": {
+      "state": "failed",
+      "lines": 1,
+      "mark": [
+        117,
+        810,
+        14,
+        14
+      ],
+      "firstLine": [
+        139,
+        810.8,
+        270.2,
+        12
+      ],
+      "markOnFirstLine": true,
+      "retry": [
+        417.2,
+        801,
+        110,
+        32
+      ],
+      "retryInside": true
+    },
+    "desktop-1440-en-dark-send-uncertain-geometry": {
+      "regions": {
+        "header": [
+          101,
+          55,
+          1238,
+          57
+        ],
+        "rail": [
+          101,
+          112,
+          264,
+          611.5
+        ],
+        "toolbar": [
+          365,
+          112,
+          974,
+          48
+        ],
+        "canvas": [
+          365,
+          160,
+          974,
+          563.5
+        ],
+        "footer": [
+          101,
+          723.5,
+          1238,
+          121.5
+        ]
+      },
+      "overlaps": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "desktop-1440-en-dark-send-uncertain-delivery-row": {
+      "state": "uncertain",
+      "lines": 1,
+      "mark": [
+        117,
+        810,
+        14,
+        14
+      ],
+      "firstLine": [
+        139,
+        810.8,
+        267.1,
+        12
+      ],
+      "markOnFirstLine": true,
+      "retry": [
+        414.1,
+        801,
+        110,
+        32
+      ],
+      "retryInside": true
+    },
     "desktop-1440-en-dark-retry": {
       "posts": [
+        {
+          "taskId": "t-disk",
+          "reviewId": "r-disk",
+          "retry": true
+        },
         {
           "taskId": "t-disk",
           "reviewId": "r-disk",
@@ -2179,6 +2567,7 @@
         "aria": "Прототип «Restore search results after the index rebuild» готовий: Макет результатів пошуку. Відкрити огляд",
         "word": false,
         "dot": true,
+        "reason": "Прототип готовий",
         "background": "rgb(236, 235, 251)",
         "color": "rgb(90, 81, 224)",
         "size": [
@@ -2187,7 +2576,7 @@
         ],
         "insideCard": true,
         "overlaps": 0,
-        "footLines": 1
+        "footLines": 2
       },
       {
         "task": "t-upload",
@@ -2196,6 +2585,7 @@
         "aria": "Прототип «Redesign attachment upload for large files» ще чекає на ваш вибір: Панель перебігу завантаження. Відкрити огляд",
         "word": false,
         "dot": false,
+        "reason": "Прототип готовий",
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(90, 81, 224)",
         "size": [
@@ -2204,7 +2594,7 @@
         ],
         "insideCard": true,
         "overlaps": 0,
-        "footLines": 1
+        "footLines": 2
       },
       {
         "task": "t-links",
@@ -2213,6 +2603,7 @@
         "aria": "Прототип «Repair old links in the release notes» готовий: Посилання в нотатках релізу, менші стрілки. Відкрити огляд",
         "word": false,
         "dot": true,
+        "reason": null,
         "background": "rgb(236, 235, 251)",
         "color": "rgb(90, 81, 224)",
         "size": [
@@ -2230,6 +2621,7 @@
         "aria": "Прототип «Simplify the export settings sheet»: обрано 2 · Сегментований перемикач, 3 · Шухляда розширених. Відкрити огляд",
         "word": false,
         "dot": false,
+        "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(85, 85, 95)",
         "size": [
@@ -2247,6 +2639,7 @@
         "aria": "Прототип «Disk space: find what Docker, worktrees and temp storage hold»: обрано 2 · Впорядковані смуги, оркестратор цього ще не отримав. Відкрити огляд",
         "word": false,
         "dot": true,
+        "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(85, 85, 95)",
         "size": [
@@ -2340,7 +2733,12 @@
     },
     "desktop-1440-uk-light-four-variants": {
       "slide": "1:f0",
-      "caption": "1Компактний список результати, десктоп",
+      "caption": "1Компактний список — результати, десктоп",
+      "captionParts": [
+        "1",
+        "Компактний список",
+        "результати, десктоп"
+      ],
       "position": "1 / 3",
       "canvas": [
         974,
@@ -2404,7 +2802,12 @@
     },
     "desktop-1440-uk-light-pair-side": {
       "slide": "2:f0",
-      "caption": "2Дві колонки сторінка результатів, до і після",
+      "caption": "2Дві колонки — сторінка результатів, до і після",
+      "captionParts": [
+        "2",
+        "Дві колонки",
+        "сторінка результатів, до і після"
+      ],
       "position": "1 / 3",
       "canvas": [
         974,
@@ -2472,7 +2875,12 @@
     },
     "desktop-1440-uk-light-pair-slider": {
       "slide": "2:f0",
-      "caption": "2Дві колонки сторінка результатів, до і після",
+      "caption": "2Дві колонки — сторінка результатів, до і після",
+      "captionParts": [
+        "2",
+        "Дві колонки",
+        "сторінка результатів, до і після"
+      ],
       "position": "1 / 3",
       "canvas": [
         974,
@@ -2481,11 +2889,11 @@
       "media": [
         [
           950,
-          454
+          435
         ],
         [
           950,
-          454
+          435
         ]
       ],
       "mediaInside": true,
@@ -2494,7 +2902,47 @@
       "thumbs": 3,
       "chosen": [],
       "round": "r-search",
-      "clip": "inset(0px 65% 0px 0px)"
+      "clip": "inset(0px 65% 0px 0px)",
+      "labels": {
+        "drawn": [
+          [
+            504,
+            191,
+            696,
+            435
+          ],
+          [
+            504,
+            191,
+            696,
+            435
+          ]
+        ],
+        "labels": [
+          {
+            "side": "original",
+            "box": [
+              377,
+              172,
+              53.7,
+              15
+            ],
+            "inside": true,
+            "overPicture": false
+          },
+          {
+            "side": "changed",
+            "box": [
+              1279,
+              172,
+              48,
+              15
+            ],
+            "inside": true,
+            "overPicture": false
+          }
+        ]
+      }
     },
     "desktop-1440-uk-light-pair-slider-geometry": {
       "regions": {
@@ -2541,7 +2989,12 @@
     },
     "desktop-1440-uk-light-forty": {
       "slide": "3:f39",
-      "caption": "3Щільна таблиця стан таблиці 40",
+      "caption": "3Щільна таблиця — стан таблиці 40",
+      "captionParts": [
+        "3",
+        "Щільна таблиця",
+        "стан таблиці 40"
+      ],
       "position": "40 / 40",
       "canvas": [
         974,
@@ -2611,7 +3064,12 @@
     },
     "desktop-1440-uk-light-video": {
       "slide": "4:v0",
-      "caption": "4Картки з переглядом наведення і прохід клавіатурою",
+      "caption": "4Картки з переглядом — наведення і прохід клавіатурою",
+      "captionParts": [
+        "4",
+        "Картки з переглядом",
+        "наведення і прохід клавіатурою"
+      ],
       "position": "3 / 3",
       "canvas": [
         974,
@@ -2727,7 +3185,12 @@
     },
     "desktop-1440-uk-light-combination": {
       "slide": "1:f0",
-      "caption": "1Компактний список результати, десктоп",
+      "caption": "1Компактний список — результати, десктоп",
+      "captionParts": [
+        "1",
+        "Компактний список",
+        "результати, десктоп"
+      ],
       "position": "1 / 3",
       "canvas": [
         974,
@@ -2828,7 +3291,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "06.10.2026, 16:28:26",
+      "time": "06.10.2026, 17:13:26",
       "posts": [
         {
           "taskId": "t-search",
@@ -2929,7 +3392,12 @@
     },
     "desktop-1440-uk-light-one-variant": {
       "slide": "1:f0",
-      "caption": "1Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп завантажується",
+      "caption": "1Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп — завантажується",
+      "captionParts": [
+        "1",
+        "Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп",
+        "завантажується"
+      ],
       "position": "1 / 2",
       "canvas": [
         974,
@@ -3074,6 +3542,30 @@
       "overlaps": [],
       "outside": [],
       "sideways": 0
+    },
+    "desktop-1440-uk-light-no-orchestrator-delivery-row": {
+      "state": "no-orchestrator",
+      "lines": 1,
+      "mark": [
+        117,
+        810,
+        14,
+        14
+      ],
+      "firstLine": [
+        139,
+        810.8,
+        350.6,
+        12
+      ],
+      "markOnFirstLine": true,
+      "retry": [
+        497.6,
+        801,
+        142.5,
+        32
+      ],
+      "retryInside": true
     },
     "desktop-1440-uk-light-no-orchestrator": "Збережено. Нічого не надіслано: у проєкту немає оркестратора.Надіслати зараз",
     "desktop-1440-uk-light-transcribed-comment-saved": {
@@ -3246,8 +3738,98 @@
       "outside": [],
       "sideways": 0
     },
+    "desktop-1440-uk-light-send-failed-delivery-row": {
+      "state": "failed",
+      "lines": 1,
+      "mark": [
+        117,
+        810,
+        14,
+        14
+      ],
+      "firstLine": [
+        139,
+        810.8,
+        299.9,
+        12
+      ],
+      "markOnFirstLine": true,
+      "retry": [
+        446.9,
+        801,
+        150.1,
+        32
+      ],
+      "retryInside": true
+    },
+    "desktop-1440-uk-light-send-uncertain-geometry": {
+      "regions": {
+        "header": [
+          101,
+          55,
+          1238,
+          57
+        ],
+        "rail": [
+          101,
+          112,
+          264,
+          611.5
+        ],
+        "toolbar": [
+          365,
+          112,
+          974,
+          48
+        ],
+        "canvas": [
+          365,
+          160,
+          974,
+          563.5
+        ],
+        "footer": [
+          101,
+          723.5,
+          1238,
+          121.5
+        ]
+      },
+      "overlaps": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "desktop-1440-uk-light-send-uncertain-delivery-row": {
+      "state": "uncertain",
+      "lines": 1,
+      "mark": [
+        117,
+        810,
+        14,
+        14
+      ],
+      "firstLine": [
+        139,
+        810.8,
+        290.6,
+        12
+      ],
+      "markOnFirstLine": true,
+      "retry": [
+        437.6,
+        801,
+        150.1,
+        32
+      ],
+      "retryInside": true
+    },
     "desktop-1440-uk-light-retry": {
       "posts": [
+        {
+          "taskId": "t-disk",
+          "reviewId": "r-disk",
+          "retry": true
+        },
         {
           "taskId": "t-disk",
           "reviewId": "r-disk",
@@ -3264,6 +3846,7 @@
         "aria": "Прототип «Restore search results after the index rebuild» готовий: Макет результатів пошуку. Відкрити огляд",
         "word": false,
         "dot": true,
+        "reason": "Прототип готовий",
         "background": "rgb(38, 35, 71)",
         "color": "rgb(143, 136, 255)",
         "size": [
@@ -3272,7 +3855,7 @@
         ],
         "insideCard": true,
         "overlaps": 0,
-        "footLines": 1
+        "footLines": 2
       },
       {
         "task": "t-upload",
@@ -3281,6 +3864,7 @@
         "aria": "Прототип «Redesign attachment upload for large files» ще чекає на ваш вибір: Панель перебігу завантаження. Відкрити огляд",
         "word": false,
         "dot": false,
+        "reason": "Прототип готовий",
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(143, 136, 255)",
         "size": [
@@ -3289,7 +3873,7 @@
         ],
         "insideCard": true,
         "overlaps": 0,
-        "footLines": 1
+        "footLines": 2
       },
       {
         "task": "t-links",
@@ -3298,6 +3882,7 @@
         "aria": "Прототип «Repair old links in the release notes» готовий: Посилання в нотатках релізу, менші стрілки. Відкрити огляд",
         "word": false,
         "dot": true,
+        "reason": null,
         "background": "rgb(38, 35, 71)",
         "color": "rgb(143, 136, 255)",
         "size": [
@@ -3315,6 +3900,7 @@
         "aria": "Прототип «Simplify the export settings sheet»: обрано 2 · Сегментований перемикач, 3 · Шухляда розширених. Відкрити огляд",
         "word": false,
         "dot": false,
+        "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(162, 162, 174)",
         "size": [
@@ -3332,6 +3918,7 @@
         "aria": "Прототип «Disk space: find what Docker, worktrees and temp storage hold»: обрано 2 · Впорядковані смуги, оркестратор цього ще не отримав. Відкрити огляд",
         "word": false,
         "dot": true,
+        "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(162, 162, 174)",
         "size": [
@@ -3425,7 +4012,12 @@
     },
     "desktop-1440-uk-dark-four-variants": {
       "slide": "1:f0",
-      "caption": "1Компактний список результати, десктоп",
+      "caption": "1Компактний список — результати, десктоп",
+      "captionParts": [
+        "1",
+        "Компактний список",
+        "результати, десктоп"
+      ],
       "position": "1 / 3",
       "canvas": [
         974,
@@ -3489,7 +4081,12 @@
     },
     "desktop-1440-uk-dark-pair-side": {
       "slide": "2:f0",
-      "caption": "2Дві колонки сторінка результатів, до і після",
+      "caption": "2Дві колонки — сторінка результатів, до і після",
+      "captionParts": [
+        "2",
+        "Дві колонки",
+        "сторінка результатів, до і після"
+      ],
       "position": "1 / 3",
       "canvas": [
         974,
@@ -3557,7 +4154,12 @@
     },
     "desktop-1440-uk-dark-pair-slider": {
       "slide": "2:f0",
-      "caption": "2Дві колонки сторінка результатів, до і після",
+      "caption": "2Дві колонки — сторінка результатів, до і після",
+      "captionParts": [
+        "2",
+        "Дві колонки",
+        "сторінка результатів, до і після"
+      ],
       "position": "1 / 3",
       "canvas": [
         974,
@@ -3566,11 +4168,11 @@
       "media": [
         [
           950,
-          454
+          435
         ],
         [
           950,
-          454
+          435
         ]
       ],
       "mediaInside": true,
@@ -3579,7 +4181,47 @@
       "thumbs": 3,
       "chosen": [],
       "round": "r-search",
-      "clip": "inset(0px 65% 0px 0px)"
+      "clip": "inset(0px 65% 0px 0px)",
+      "labels": {
+        "drawn": [
+          [
+            504,
+            191,
+            696,
+            435
+          ],
+          [
+            504,
+            191,
+            696,
+            435
+          ]
+        ],
+        "labels": [
+          {
+            "side": "original",
+            "box": [
+              377,
+              172,
+              53.7,
+              15
+            ],
+            "inside": true,
+            "overPicture": false
+          },
+          {
+            "side": "changed",
+            "box": [
+              1279,
+              172,
+              48,
+              15
+            ],
+            "inside": true,
+            "overPicture": false
+          }
+        ]
+      }
     },
     "desktop-1440-uk-dark-pair-slider-geometry": {
       "regions": {
@@ -3626,7 +4268,12 @@
     },
     "desktop-1440-uk-dark-forty": {
       "slide": "3:f39",
-      "caption": "3Щільна таблиця стан таблиці 40",
+      "caption": "3Щільна таблиця — стан таблиці 40",
+      "captionParts": [
+        "3",
+        "Щільна таблиця",
+        "стан таблиці 40"
+      ],
       "position": "40 / 40",
       "canvas": [
         974,
@@ -3696,7 +4343,12 @@
     },
     "desktop-1440-uk-dark-video": {
       "slide": "4:v0",
-      "caption": "4Картки з переглядом наведення і прохід клавіатурою",
+      "caption": "4Картки з переглядом — наведення і прохід клавіатурою",
+      "captionParts": [
+        "4",
+        "Картки з переглядом",
+        "наведення і прохід клавіатурою"
+      ],
       "position": "3 / 3",
       "canvas": [
         974,
@@ -3812,7 +4464,12 @@
     },
     "desktop-1440-uk-dark-combination": {
       "slide": "1:f0",
-      "caption": "1Компактний список результати, десктоп",
+      "caption": "1Компактний список — результати, десктоп",
+      "captionParts": [
+        "1",
+        "Компактний список",
+        "результати, десктоп"
+      ],
       "position": "1 / 3",
       "canvas": [
         974,
@@ -3913,7 +4570,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "06.10.2026, 16:28:42",
+      "time": "06.10.2026, 17:13:44",
       "posts": [
         {
           "taskId": "t-search",
@@ -4014,7 +4671,12 @@
     },
     "desktop-1440-uk-dark-one-variant": {
       "slide": "1:f0",
-      "caption": "1Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп завантажується",
+      "caption": "1Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп — завантажується",
+      "captionParts": [
+        "1",
+        "Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп",
+        "завантажується"
+      ],
       "position": "1 / 2",
       "canvas": [
         974,
@@ -4159,6 +4821,30 @@
       "overlaps": [],
       "outside": [],
       "sideways": 0
+    },
+    "desktop-1440-uk-dark-no-orchestrator-delivery-row": {
+      "state": "no-orchestrator",
+      "lines": 1,
+      "mark": [
+        117,
+        810,
+        14,
+        14
+      ],
+      "firstLine": [
+        139,
+        810.8,
+        350.6,
+        12
+      ],
+      "markOnFirstLine": true,
+      "retry": [
+        497.6,
+        801,
+        142.5,
+        32
+      ],
+      "retryInside": true
     },
     "desktop-1440-uk-dark-no-orchestrator": "Збережено. Нічого не надіслано: у проєкту немає оркестратора.Надіслати зараз",
     "desktop-1440-uk-dark-transcribed-comment-saved": {
@@ -4331,8 +5017,98 @@
       "outside": [],
       "sideways": 0
     },
+    "desktop-1440-uk-dark-send-failed-delivery-row": {
+      "state": "failed",
+      "lines": 1,
+      "mark": [
+        117,
+        810,
+        14,
+        14
+      ],
+      "firstLine": [
+        139,
+        810.8,
+        299.9,
+        12
+      ],
+      "markOnFirstLine": true,
+      "retry": [
+        446.9,
+        801,
+        150.1,
+        32
+      ],
+      "retryInside": true
+    },
+    "desktop-1440-uk-dark-send-uncertain-geometry": {
+      "regions": {
+        "header": [
+          101,
+          55,
+          1238,
+          57
+        ],
+        "rail": [
+          101,
+          112,
+          264,
+          611.5
+        ],
+        "toolbar": [
+          365,
+          112,
+          974,
+          48
+        ],
+        "canvas": [
+          365,
+          160,
+          974,
+          563.5
+        ],
+        "footer": [
+          101,
+          723.5,
+          1238,
+          121.5
+        ]
+      },
+      "overlaps": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "desktop-1440-uk-dark-send-uncertain-delivery-row": {
+      "state": "uncertain",
+      "lines": 1,
+      "mark": [
+        117,
+        810,
+        14,
+        14
+      ],
+      "firstLine": [
+        139,
+        810.8,
+        290.6,
+        12
+      ],
+      "markOnFirstLine": true,
+      "retry": [
+        437.6,
+        801,
+        150.1,
+        32
+      ],
+      "retryInside": true
+    },
     "desktop-1440-uk-dark-retry": {
       "posts": [
+        {
+          "taskId": "t-disk",
+          "reviewId": "r-disk",
+          "retry": true
+        },
         {
           "taskId": "t-disk",
           "reviewId": "r-disk",
@@ -4349,6 +5125,7 @@
         "aria": "A prototype of «Restore search results after the index rebuild» is ready: Search results layout. Open the review",
         "word": true,
         "dot": true,
+        "reason": null,
         "background": "rgb(236, 235, 251)",
         "color": "rgb(90, 81, 224)",
         "size": [
@@ -4366,6 +5143,7 @@
         "aria": "The prototype of «Redesign attachment upload for large files» still waits for your choice: Upload progress sheet. Open the review",
         "word": true,
         "dot": false,
+        "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(90, 81, 224)",
         "size": [
@@ -4383,6 +5161,7 @@
         "aria": "A prototype of «Repair old links in the release notes» is ready: Release notes links, smaller arrows. Open the review",
         "word": true,
         "dot": true,
+        "reason": null,
         "background": "rgb(236, 235, 251)",
         "color": "rgb(90, 81, 224)",
         "size": [
@@ -4400,6 +5179,7 @@
         "aria": "Prototype of «Simplify the export settings sheet»: chosen 2 · Segmented control, 3 · Advanced drawer. Open the review",
         "word": false,
         "dot": false,
+        "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(85, 85, 95)",
         "size": [
@@ -4417,6 +5197,7 @@
         "aria": "Prototype of «Disk space: find what Docker, worktrees and temp storage hold»: chosen 2 · Sorted bars, the orchestrator has not received it. Open the review",
         "word": false,
         "dot": true,
+        "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(85, 85, 95)",
         "size": [
@@ -4551,7 +5332,12 @@
     },
     "pane-1000-en-light-four-variants": {
       "slide": "1:f0",
-      "caption": "1Compact list results, desktop",
+      "caption": "1Compact list — results, desktop",
+      "captionParts": [
+        "1",
+        "Compact list",
+        "results, desktop"
+      ],
       "position": "1 / 3",
       "canvas": [
         686,
@@ -4615,7 +5401,12 @@
     },
     "pane-1000-en-light-pair-side": {
       "slide": "2:f0",
-      "caption": "2Two columns results page, before and after",
+      "caption": "2Two columns — results page, before and after",
+      "captionParts": [
+        "2",
+        "Two columns",
+        "results page, before and after"
+      ],
       "position": "1 / 3",
       "canvas": [
         686,
@@ -4683,7 +5474,12 @@
     },
     "pane-1000-en-light-pair-slider": {
       "slide": "2:f0",
-      "caption": "2Two columns results page, before and after",
+      "caption": "2Two columns — results page, before and after",
+      "captionParts": [
+        "2",
+        "Two columns",
+        "results page, before and after"
+      ],
       "position": "1 / 3",
       "canvas": [
         686,
@@ -4692,11 +5488,11 @@
       "media": [
         [
           662,
-          278
+          259
         ],
         [
           662,
-          278
+          259
         ]
       ],
       "mediaInside": true,
@@ -4705,7 +5501,47 @@
       "thumbs": 3,
       "chosen": [],
       "round": "r-search",
-      "clip": "inset(0px 65% 0px 0px)"
+      "clip": "inset(0px 65% 0px 0px)",
+      "labels": {
+        "drawn": [
+          [
+            424.8,
+            179,
+            414.4,
+            259
+          ],
+          [
+            424.8,
+            179,
+            414.4,
+            259
+          ]
+        ],
+        "labels": [
+          {
+            "side": "original",
+            "box": [
+              301,
+              160,
+              50.9,
+              15
+            ],
+            "inside": true,
+            "overPicture": false
+          },
+          {
+            "side": "changed",
+            "box": [
+              910.7,
+              160,
+              52.3,
+              15
+            ],
+            "inside": true,
+            "overPicture": false
+          }
+        ]
+      }
     },
     "pane-1000-en-light-pair-slider-geometry": {
       "regions": {
@@ -4752,7 +5588,12 @@
     },
     "pane-1000-en-light-forty": {
       "slide": "3:f39",
-      "caption": "3Dense table table state 40",
+      "caption": "3Dense table — table state 40",
+      "captionParts": [
+        "3",
+        "Dense table",
+        "table state 40"
+      ],
       "position": "40 / 40",
       "canvas": [
         686,
@@ -4822,7 +5663,12 @@
     },
     "pane-1000-en-light-video": {
       "slide": "4:v0",
-      "caption": "4Cards with a preview hover and keyboard walk",
+      "caption": "4Cards with a preview — hover and keyboard walk",
+      "captionParts": [
+        "4",
+        "Cards with a preview",
+        "hover and keyboard walk"
+      ],
       "position": "3 / 3",
       "canvas": [
         686,
@@ -4938,7 +5784,12 @@
     },
     "pane-1000-en-light-combination": {
       "slide": "1:f0",
-      "caption": "1Compact list results, desktop",
+      "caption": "1Compact list — results, desktop",
+      "captionParts": [
+        "1",
+        "Compact list",
+        "results, desktop"
+      ],
       "position": "1 / 3",
       "canvas": [
         686,
@@ -5039,7 +5890,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/6/2026, 4:28:58 PM",
+      "time": "10/6/2026, 5:14:02 PM",
       "posts": [
         {
           "taskId": "t-search",
@@ -5140,7 +5991,12 @@
     },
     "pane-1000-en-light-one-variant": {
       "slide": "1:f0",
-      "caption": "1Progress under the attached file with speed, size and a stop uploading",
+      "caption": "1Progress under the attached file with speed, size and a stop — uploading",
+      "captionParts": [
+        "1",
+        "Progress under the attached file with speed, size and a stop",
+        "uploading"
+      ],
       "position": "1 / 2",
       "canvas": [
         686,
@@ -5183,8 +6039,8 @@
       "caption": {
         "text": "resumed after a drop: the bar keeps what was already sent, the label names the retry, the speed returns once two samples exist, and the stop button stays where the pointer left it, so nothing jumps.",
         "left": 305,
-        "right": 722.6,
-        "lines": 4,
+        "right": 716.3,
+        "lines": 3,
         "inside": true
       },
       "reachable": {
@@ -5285,6 +6141,30 @@
       "overlaps": [],
       "outside": [],
       "sideways": 0
+    },
+    "pane-1000-en-light-no-orchestrator-delivery-row": {
+      "state": "no-orchestrator",
+      "lines": 1,
+      "mark": [
+        41,
+        622,
+        14,
+        14
+      ],
+      "firstLine": [
+        63,
+        622.8,
+        304.4,
+        12
+      ],
+      "markOnFirstLine": true,
+      "retry": [
+        375.4,
+        613,
+        102.7,
+        32
+      ],
+      "retryInside": true
     },
     "pane-1000-en-light-no-orchestrator": "Saved. Nothing was sent: this project has no orchestrator.Send now",
     "pane-1000-en-light-transcribed-comment-saved": {
@@ -5457,8 +6337,98 @@
       "outside": [],
       "sideways": 0
     },
+    "pane-1000-en-light-send-failed-delivery-row": {
+      "state": "failed",
+      "lines": 1,
+      "mark": [
+        41,
+        622,
+        14,
+        14
+      ],
+      "firstLine": [
+        63,
+        622.8,
+        270.2,
+        12
+      ],
+      "markOnFirstLine": true,
+      "retry": [
+        341.2,
+        613,
+        110,
+        32
+      ],
+      "retryInside": true
+    },
+    "pane-1000-en-light-send-uncertain-geometry": {
+      "regions": {
+        "header": [
+          25,
+          43,
+          950,
+          57
+        ],
+        "rail": [
+          25,
+          100,
+          264,
+          435.5
+        ],
+        "toolbar": [
+          289,
+          100,
+          686,
+          48
+        ],
+        "canvas": [
+          289,
+          148,
+          686,
+          387.5
+        ],
+        "footer": [
+          25,
+          535.5,
+          950,
+          121.5
+        ]
+      },
+      "overlaps": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "pane-1000-en-light-send-uncertain-delivery-row": {
+      "state": "uncertain",
+      "lines": 1,
+      "mark": [
+        41,
+        622,
+        14,
+        14
+      ],
+      "firstLine": [
+        63,
+        622.8,
+        267.1,
+        12
+      ],
+      "markOnFirstLine": true,
+      "retry": [
+        338.1,
+        613,
+        110,
+        32
+      ],
+      "retryInside": true
+    },
     "pane-1000-en-light-retry": {
       "posts": [
+        {
+          "taskId": "t-disk",
+          "reviewId": "r-disk",
+          "retry": true
+        },
         {
           "taskId": "t-disk",
           "reviewId": "r-disk",
@@ -5475,6 +6445,7 @@
         "aria": "A prototype of «Restore search results after the index rebuild» is ready: Search results layout. Open the review",
         "word": true,
         "dot": true,
+        "reason": null,
         "background": "rgb(38, 35, 71)",
         "color": "rgb(143, 136, 255)",
         "size": [
@@ -5492,6 +6463,7 @@
         "aria": "The prototype of «Redesign attachment upload for large files» still waits for your choice: Upload progress sheet. Open the review",
         "word": true,
         "dot": false,
+        "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(143, 136, 255)",
         "size": [
@@ -5509,6 +6481,7 @@
         "aria": "A prototype of «Repair old links in the release notes» is ready: Release notes links, smaller arrows. Open the review",
         "word": true,
         "dot": true,
+        "reason": null,
         "background": "rgb(38, 35, 71)",
         "color": "rgb(143, 136, 255)",
         "size": [
@@ -5526,6 +6499,7 @@
         "aria": "Prototype of «Simplify the export settings sheet»: chosen 2 · Segmented control, 3 · Advanced drawer. Open the review",
         "word": false,
         "dot": false,
+        "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(162, 162, 174)",
         "size": [
@@ -5543,6 +6517,7 @@
         "aria": "Prototype of «Disk space: find what Docker, worktrees and temp storage hold»: chosen 2 · Sorted bars, the orchestrator has not received it. Open the review",
         "word": false,
         "dot": true,
+        "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(162, 162, 174)",
         "size": [
@@ -5677,7 +6652,12 @@
     },
     "pane-1000-en-dark-four-variants": {
       "slide": "1:f0",
-      "caption": "1Compact list results, desktop",
+      "caption": "1Compact list — results, desktop",
+      "captionParts": [
+        "1",
+        "Compact list",
+        "results, desktop"
+      ],
       "position": "1 / 3",
       "canvas": [
         686,
@@ -5741,7 +6721,12 @@
     },
     "pane-1000-en-dark-pair-side": {
       "slide": "2:f0",
-      "caption": "2Two columns results page, before and after",
+      "caption": "2Two columns — results page, before and after",
+      "captionParts": [
+        "2",
+        "Two columns",
+        "results page, before and after"
+      ],
       "position": "1 / 3",
       "canvas": [
         686,
@@ -5809,7 +6794,12 @@
     },
     "pane-1000-en-dark-pair-slider": {
       "slide": "2:f0",
-      "caption": "2Two columns results page, before and after",
+      "caption": "2Two columns — results page, before and after",
+      "captionParts": [
+        "2",
+        "Two columns",
+        "results page, before and after"
+      ],
       "position": "1 / 3",
       "canvas": [
         686,
@@ -5818,11 +6808,11 @@
       "media": [
         [
           662,
-          278
+          259
         ],
         [
           662,
-          278
+          259
         ]
       ],
       "mediaInside": true,
@@ -5831,7 +6821,47 @@
       "thumbs": 3,
       "chosen": [],
       "round": "r-search",
-      "clip": "inset(0px 65% 0px 0px)"
+      "clip": "inset(0px 65% 0px 0px)",
+      "labels": {
+        "drawn": [
+          [
+            424.8,
+            179,
+            414.4,
+            259
+          ],
+          [
+            424.8,
+            179,
+            414.4,
+            259
+          ]
+        ],
+        "labels": [
+          {
+            "side": "original",
+            "box": [
+              301,
+              160,
+              50.9,
+              15
+            ],
+            "inside": true,
+            "overPicture": false
+          },
+          {
+            "side": "changed",
+            "box": [
+              910.7,
+              160,
+              52.3,
+              15
+            ],
+            "inside": true,
+            "overPicture": false
+          }
+        ]
+      }
     },
     "pane-1000-en-dark-pair-slider-geometry": {
       "regions": {
@@ -5878,7 +6908,12 @@
     },
     "pane-1000-en-dark-forty": {
       "slide": "3:f39",
-      "caption": "3Dense table table state 40",
+      "caption": "3Dense table — table state 40",
+      "captionParts": [
+        "3",
+        "Dense table",
+        "table state 40"
+      ],
       "position": "40 / 40",
       "canvas": [
         686,
@@ -5948,7 +6983,12 @@
     },
     "pane-1000-en-dark-video": {
       "slide": "4:v0",
-      "caption": "4Cards with a preview hover and keyboard walk",
+      "caption": "4Cards with a preview — hover and keyboard walk",
+      "captionParts": [
+        "4",
+        "Cards with a preview",
+        "hover and keyboard walk"
+      ],
       "position": "3 / 3",
       "canvas": [
         686,
@@ -6064,7 +7104,12 @@
     },
     "pane-1000-en-dark-combination": {
       "slide": "1:f0",
-      "caption": "1Compact list results, desktop",
+      "caption": "1Compact list — results, desktop",
+      "captionParts": [
+        "1",
+        "Compact list",
+        "results, desktop"
+      ],
       "position": "1 / 3",
       "canvas": [
         686,
@@ -6165,7 +7210,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/6/2026, 4:29:14 PM",
+      "time": "10/6/2026, 5:14:19 PM",
       "posts": [
         {
           "taskId": "t-search",
@@ -6266,7 +7311,12 @@
     },
     "pane-1000-en-dark-one-variant": {
       "slide": "1:f0",
-      "caption": "1Progress under the attached file with speed, size and a stop uploading",
+      "caption": "1Progress under the attached file with speed, size and a stop — uploading",
+      "captionParts": [
+        "1",
+        "Progress under the attached file with speed, size and a stop",
+        "uploading"
+      ],
       "position": "1 / 2",
       "canvas": [
         686,
@@ -6309,8 +7359,8 @@
       "caption": {
         "text": "resumed after a drop: the bar keeps what was already sent, the label names the retry, the speed returns once two samples exist, and the stop button stays where the pointer left it, so nothing jumps.",
         "left": 305,
-        "right": 722.6,
-        "lines": 4,
+        "right": 716.3,
+        "lines": 3,
         "inside": true
       },
       "reachable": {
@@ -6411,6 +7461,30 @@
       "overlaps": [],
       "outside": [],
       "sideways": 0
+    },
+    "pane-1000-en-dark-no-orchestrator-delivery-row": {
+      "state": "no-orchestrator",
+      "lines": 1,
+      "mark": [
+        41,
+        622,
+        14,
+        14
+      ],
+      "firstLine": [
+        63,
+        622.8,
+        304.4,
+        12
+      ],
+      "markOnFirstLine": true,
+      "retry": [
+        375.4,
+        613,
+        102.7,
+        32
+      ],
+      "retryInside": true
     },
     "pane-1000-en-dark-no-orchestrator": "Saved. Nothing was sent: this project has no orchestrator.Send now",
     "pane-1000-en-dark-transcribed-comment-saved": {
@@ -6583,8 +7657,98 @@
       "outside": [],
       "sideways": 0
     },
+    "pane-1000-en-dark-send-failed-delivery-row": {
+      "state": "failed",
+      "lines": 1,
+      "mark": [
+        41,
+        622,
+        14,
+        14
+      ],
+      "firstLine": [
+        63,
+        622.8,
+        270.2,
+        12
+      ],
+      "markOnFirstLine": true,
+      "retry": [
+        341.2,
+        613,
+        110,
+        32
+      ],
+      "retryInside": true
+    },
+    "pane-1000-en-dark-send-uncertain-geometry": {
+      "regions": {
+        "header": [
+          25,
+          43,
+          950,
+          57
+        ],
+        "rail": [
+          25,
+          100,
+          264,
+          435.5
+        ],
+        "toolbar": [
+          289,
+          100,
+          686,
+          48
+        ],
+        "canvas": [
+          289,
+          148,
+          686,
+          387.5
+        ],
+        "footer": [
+          25,
+          535.5,
+          950,
+          121.5
+        ]
+      },
+      "overlaps": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "pane-1000-en-dark-send-uncertain-delivery-row": {
+      "state": "uncertain",
+      "lines": 1,
+      "mark": [
+        41,
+        622,
+        14,
+        14
+      ],
+      "firstLine": [
+        63,
+        622.8,
+        267.1,
+        12
+      ],
+      "markOnFirstLine": true,
+      "retry": [
+        338.1,
+        613,
+        110,
+        32
+      ],
+      "retryInside": true
+    },
     "pane-1000-en-dark-retry": {
       "posts": [
+        {
+          "taskId": "t-disk",
+          "reviewId": "r-disk",
+          "retry": true
+        },
         {
           "taskId": "t-disk",
           "reviewId": "r-disk",
@@ -6601,6 +7765,7 @@
         "aria": "Прототип «Restore search results after the index rebuild» готовий: Макет результатів пошуку. Відкрити огляд",
         "word": true,
         "dot": true,
+        "reason": null,
         "background": "rgb(236, 235, 251)",
         "color": "rgb(90, 81, 224)",
         "size": [
@@ -6618,6 +7783,7 @@
         "aria": "Прототип «Redesign attachment upload for large files» ще чекає на ваш вибір: Панель перебігу завантаження. Відкрити огляд",
         "word": true,
         "dot": false,
+        "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(90, 81, 224)",
         "size": [
@@ -6635,6 +7801,7 @@
         "aria": "Прототип «Repair old links in the release notes» готовий: Посилання в нотатках релізу, менші стрілки. Відкрити огляд",
         "word": true,
         "dot": true,
+        "reason": null,
         "background": "rgb(236, 235, 251)",
         "color": "rgb(90, 81, 224)",
         "size": [
@@ -6652,6 +7819,7 @@
         "aria": "Прототип «Simplify the export settings sheet»: обрано 2 · Сегментований перемикач, 3 · Шухляда розширених. Відкрити огляд",
         "word": false,
         "dot": false,
+        "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(85, 85, 95)",
         "size": [
@@ -6669,6 +7837,7 @@
         "aria": "Прототип «Disk space: find what Docker, worktrees and temp storage hold»: обрано 2 · Впорядковані смуги, оркестратор цього ще не отримав. Відкрити огляд",
         "word": false,
         "dot": true,
+        "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(85, 85, 95)",
         "size": [
@@ -6803,7 +7972,12 @@
     },
     "pane-1000-uk-light-four-variants": {
       "slide": "1:f0",
-      "caption": "1Компактний список результати, десктоп",
+      "caption": "1Компактний список — результати, десктоп",
+      "captionParts": [
+        "1",
+        "Компактний список",
+        "результати, десктоп"
+      ],
       "position": "1 / 3",
       "canvas": [
         686,
@@ -6867,7 +8041,12 @@
     },
     "pane-1000-uk-light-pair-side": {
       "slide": "2:f0",
-      "caption": "2Дві колонки сторінка результатів, до і після",
+      "caption": "2Дві колонки — сторінка результатів, до і після",
+      "captionParts": [
+        "2",
+        "Дві колонки",
+        "сторінка результатів, до і після"
+      ],
       "position": "1 / 3",
       "canvas": [
         686,
@@ -6935,7 +8114,12 @@
     },
     "pane-1000-uk-light-pair-slider": {
       "slide": "2:f0",
-      "caption": "2Дві колонки сторінка результатів, до і після",
+      "caption": "2Дві колонки — сторінка результатів, до і після",
+      "captionParts": [
+        "2",
+        "Дві колонки",
+        "сторінка результатів, до і після"
+      ],
       "position": "1 / 3",
       "canvas": [
         686,
@@ -6944,11 +8128,11 @@
       "media": [
         [
           662,
-          278
+          259
         ],
         [
           662,
-          278
+          259
         ]
       ],
       "mediaInside": true,
@@ -6957,7 +8141,47 @@
       "thumbs": 3,
       "chosen": [],
       "round": "r-search",
-      "clip": "inset(0px 65% 0px 0px)"
+      "clip": "inset(0px 65% 0px 0px)",
+      "labels": {
+        "drawn": [
+          [
+            424.8,
+            179,
+            414.4,
+            259
+          ],
+          [
+            424.8,
+            179,
+            414.4,
+            259
+          ]
+        ],
+        "labels": [
+          {
+            "side": "original",
+            "box": [
+              301,
+              160,
+              53.7,
+              15
+            ],
+            "inside": true,
+            "overPicture": false
+          },
+          {
+            "side": "changed",
+            "box": [
+              915,
+              160,
+              48,
+              15
+            ],
+            "inside": true,
+            "overPicture": false
+          }
+        ]
+      }
     },
     "pane-1000-uk-light-pair-slider-geometry": {
       "regions": {
@@ -7004,7 +8228,12 @@
     },
     "pane-1000-uk-light-forty": {
       "slide": "3:f39",
-      "caption": "3Щільна таблиця стан таблиці 40",
+      "caption": "3Щільна таблиця — стан таблиці 40",
+      "captionParts": [
+        "3",
+        "Щільна таблиця",
+        "стан таблиці 40"
+      ],
       "position": "40 / 40",
       "canvas": [
         686,
@@ -7074,7 +8303,12 @@
     },
     "pane-1000-uk-light-video": {
       "slide": "4:v0",
-      "caption": "4Картки з переглядом наведення і прохід клавіатурою",
+      "caption": "4Картки з переглядом — наведення і прохід клавіатурою",
+      "captionParts": [
+        "4",
+        "Картки з переглядом",
+        "наведення і прохід клавіатурою"
+      ],
       "position": "3 / 3",
       "canvas": [
         686,
@@ -7190,7 +8424,12 @@
     },
     "pane-1000-uk-light-combination": {
       "slide": "1:f0",
-      "caption": "1Компактний список результати, десктоп",
+      "caption": "1Компактний список — результати, десктоп",
+      "captionParts": [
+        "1",
+        "Компактний список",
+        "результати, десктоп"
+      ],
       "position": "1 / 3",
       "canvas": [
         686,
@@ -7291,7 +8530,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "06.10.2026, 16:29:30",
+      "time": "06.10.2026, 17:14:35",
       "posts": [
         {
           "taskId": "t-search",
@@ -7392,7 +8631,12 @@
     },
     "pane-1000-uk-light-one-variant": {
       "slide": "1:f0",
-      "caption": "1Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп завантажується",
+      "caption": "1Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп — завантажується",
+      "captionParts": [
+        "1",
+        "Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп",
+        "завантажується"
+      ],
       "position": "1 / 2",
       "canvas": [
         686,
@@ -7435,7 +8679,7 @@
       "caption": {
         "text": "відновлено після обриву: смуга зберігає вже надіслане, підпис називає повтор, швидкість повертається після двох замірів, а кнопка зупинки лишається там, де її залишив вказівник, тож ніщо не стрибає.",
         "left": 305,
-        "right": 701.3,
+        "right": 716.7,
         "lines": 3,
         "inside": true
       },
@@ -7537,6 +8781,30 @@
       "overlaps": [],
       "outside": [],
       "sideways": 0
+    },
+    "pane-1000-uk-light-no-orchestrator-delivery-row": {
+      "state": "no-orchestrator",
+      "lines": 1,
+      "mark": [
+        41,
+        622,
+        14,
+        14
+      ],
+      "firstLine": [
+        63,
+        622.8,
+        350.6,
+        12
+      ],
+      "markOnFirstLine": true,
+      "retry": [
+        421.6,
+        613,
+        142.5,
+        32
+      ],
+      "retryInside": true
     },
     "pane-1000-uk-light-no-orchestrator": "Збережено. Нічого не надіслано: у проєкту немає оркестратора.Надіслати зараз",
     "pane-1000-uk-light-transcribed-comment-saved": {
@@ -7709,8 +8977,98 @@
       "outside": [],
       "sideways": 0
     },
+    "pane-1000-uk-light-send-failed-delivery-row": {
+      "state": "failed",
+      "lines": 1,
+      "mark": [
+        41,
+        622,
+        14,
+        14
+      ],
+      "firstLine": [
+        63,
+        622.8,
+        299.9,
+        12
+      ],
+      "markOnFirstLine": true,
+      "retry": [
+        370.9,
+        613,
+        150.1,
+        32
+      ],
+      "retryInside": true
+    },
+    "pane-1000-uk-light-send-uncertain-geometry": {
+      "regions": {
+        "header": [
+          25,
+          43,
+          950,
+          57
+        ],
+        "rail": [
+          25,
+          100,
+          264,
+          435.5
+        ],
+        "toolbar": [
+          289,
+          100,
+          686,
+          48
+        ],
+        "canvas": [
+          289,
+          148,
+          686,
+          387.5
+        ],
+        "footer": [
+          25,
+          535.5,
+          950,
+          121.5
+        ]
+      },
+      "overlaps": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "pane-1000-uk-light-send-uncertain-delivery-row": {
+      "state": "uncertain",
+      "lines": 1,
+      "mark": [
+        41,
+        622,
+        14,
+        14
+      ],
+      "firstLine": [
+        63,
+        622.8,
+        290.6,
+        12
+      ],
+      "markOnFirstLine": true,
+      "retry": [
+        361.6,
+        613,
+        150.1,
+        32
+      ],
+      "retryInside": true
+    },
     "pane-1000-uk-light-retry": {
       "posts": [
+        {
+          "taskId": "t-disk",
+          "reviewId": "r-disk",
+          "retry": true
+        },
         {
           "taskId": "t-disk",
           "reviewId": "r-disk",
@@ -7727,6 +9085,7 @@
         "aria": "Прототип «Restore search results after the index rebuild» готовий: Макет результатів пошуку. Відкрити огляд",
         "word": true,
         "dot": true,
+        "reason": null,
         "background": "rgb(38, 35, 71)",
         "color": "rgb(143, 136, 255)",
         "size": [
@@ -7744,6 +9103,7 @@
         "aria": "Прототип «Redesign attachment upload for large files» ще чекає на ваш вибір: Панель перебігу завантаження. Відкрити огляд",
         "word": true,
         "dot": false,
+        "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(143, 136, 255)",
         "size": [
@@ -7761,6 +9121,7 @@
         "aria": "Прототип «Repair old links in the release notes» готовий: Посилання в нотатках релізу, менші стрілки. Відкрити огляд",
         "word": true,
         "dot": true,
+        "reason": null,
         "background": "rgb(38, 35, 71)",
         "color": "rgb(143, 136, 255)",
         "size": [
@@ -7778,6 +9139,7 @@
         "aria": "Прототип «Simplify the export settings sheet»: обрано 2 · Сегментований перемикач, 3 · Шухляда розширених. Відкрити огляд",
         "word": false,
         "dot": false,
+        "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(162, 162, 174)",
         "size": [
@@ -7795,6 +9157,7 @@
         "aria": "Прототип «Disk space: find what Docker, worktrees and temp storage hold»: обрано 2 · Впорядковані смуги, оркестратор цього ще не отримав. Відкрити огляд",
         "word": false,
         "dot": true,
+        "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(162, 162, 174)",
         "size": [
@@ -7929,7 +9292,12 @@
     },
     "pane-1000-uk-dark-four-variants": {
       "slide": "1:f0",
-      "caption": "1Компактний список результати, десктоп",
+      "caption": "1Компактний список — результати, десктоп",
+      "captionParts": [
+        "1",
+        "Компактний список",
+        "результати, десктоп"
+      ],
       "position": "1 / 3",
       "canvas": [
         686,
@@ -7993,7 +9361,12 @@
     },
     "pane-1000-uk-dark-pair-side": {
       "slide": "2:f0",
-      "caption": "2Дві колонки сторінка результатів, до і після",
+      "caption": "2Дві колонки — сторінка результатів, до і після",
+      "captionParts": [
+        "2",
+        "Дві колонки",
+        "сторінка результатів, до і після"
+      ],
       "position": "1 / 3",
       "canvas": [
         686,
@@ -8061,7 +9434,12 @@
     },
     "pane-1000-uk-dark-pair-slider": {
       "slide": "2:f0",
-      "caption": "2Дві колонки сторінка результатів, до і після",
+      "caption": "2Дві колонки — сторінка результатів, до і після",
+      "captionParts": [
+        "2",
+        "Дві колонки",
+        "сторінка результатів, до і після"
+      ],
       "position": "1 / 3",
       "canvas": [
         686,
@@ -8070,11 +9448,11 @@
       "media": [
         [
           662,
-          278
+          259
         ],
         [
           662,
-          278
+          259
         ]
       ],
       "mediaInside": true,
@@ -8083,7 +9461,47 @@
       "thumbs": 3,
       "chosen": [],
       "round": "r-search",
-      "clip": "inset(0px 65% 0px 0px)"
+      "clip": "inset(0px 65% 0px 0px)",
+      "labels": {
+        "drawn": [
+          [
+            424.8,
+            179,
+            414.4,
+            259
+          ],
+          [
+            424.8,
+            179,
+            414.4,
+            259
+          ]
+        ],
+        "labels": [
+          {
+            "side": "original",
+            "box": [
+              301,
+              160,
+              53.7,
+              15
+            ],
+            "inside": true,
+            "overPicture": false
+          },
+          {
+            "side": "changed",
+            "box": [
+              915,
+              160,
+              48,
+              15
+            ],
+            "inside": true,
+            "overPicture": false
+          }
+        ]
+      }
     },
     "pane-1000-uk-dark-pair-slider-geometry": {
       "regions": {
@@ -8130,7 +9548,12 @@
     },
     "pane-1000-uk-dark-forty": {
       "slide": "3:f39",
-      "caption": "3Щільна таблиця стан таблиці 40",
+      "caption": "3Щільна таблиця — стан таблиці 40",
+      "captionParts": [
+        "3",
+        "Щільна таблиця",
+        "стан таблиці 40"
+      ],
       "position": "40 / 40",
       "canvas": [
         686,
@@ -8200,7 +9623,12 @@
     },
     "pane-1000-uk-dark-video": {
       "slide": "4:v0",
-      "caption": "4Картки з переглядом наведення і прохід клавіатурою",
+      "caption": "4Картки з переглядом — наведення і прохід клавіатурою",
+      "captionParts": [
+        "4",
+        "Картки з переглядом",
+        "наведення і прохід клавіатурою"
+      ],
       "position": "3 / 3",
       "canvas": [
         686,
@@ -8316,7 +9744,12 @@
     },
     "pane-1000-uk-dark-combination": {
       "slide": "1:f0",
-      "caption": "1Компактний список результати, десктоп",
+      "caption": "1Компактний список — результати, десктоп",
+      "captionParts": [
+        "1",
+        "Компактний список",
+        "результати, десктоп"
+      ],
       "position": "1 / 3",
       "canvas": [
         686,
@@ -8417,7 +9850,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "06.10.2026, 16:29:45",
+      "time": "06.10.2026, 17:14:54",
       "posts": [
         {
           "taskId": "t-search",
@@ -8518,7 +9951,12 @@
     },
     "pane-1000-uk-dark-one-variant": {
       "slide": "1:f0",
-      "caption": "1Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп завантажується",
+      "caption": "1Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп — завантажується",
+      "captionParts": [
+        "1",
+        "Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп",
+        "завантажується"
+      ],
       "position": "1 / 2",
       "canvas": [
         686,
@@ -8561,7 +9999,7 @@
       "caption": {
         "text": "відновлено після обриву: смуга зберігає вже надіслане, підпис називає повтор, швидкість повертається після двох замірів, а кнопка зупинки лишається там, де її залишив вказівник, тож ніщо не стрибає.",
         "left": 305,
-        "right": 701.3,
+        "right": 716.7,
         "lines": 3,
         "inside": true
       },
@@ -8663,6 +10101,30 @@
       "overlaps": [],
       "outside": [],
       "sideways": 0
+    },
+    "pane-1000-uk-dark-no-orchestrator-delivery-row": {
+      "state": "no-orchestrator",
+      "lines": 1,
+      "mark": [
+        41,
+        622,
+        14,
+        14
+      ],
+      "firstLine": [
+        63,
+        622.8,
+        350.6,
+        12
+      ],
+      "markOnFirstLine": true,
+      "retry": [
+        421.6,
+        613,
+        142.5,
+        32
+      ],
+      "retryInside": true
     },
     "pane-1000-uk-dark-no-orchestrator": "Збережено. Нічого не надіслано: у проєкту немає оркестратора.Надіслати зараз",
     "pane-1000-uk-dark-transcribed-comment-saved": {
@@ -8835,8 +10297,98 @@
       "outside": [],
       "sideways": 0
     },
+    "pane-1000-uk-dark-send-failed-delivery-row": {
+      "state": "failed",
+      "lines": 1,
+      "mark": [
+        41,
+        622,
+        14,
+        14
+      ],
+      "firstLine": [
+        63,
+        622.8,
+        299.9,
+        12
+      ],
+      "markOnFirstLine": true,
+      "retry": [
+        370.9,
+        613,
+        150.1,
+        32
+      ],
+      "retryInside": true
+    },
+    "pane-1000-uk-dark-send-uncertain-geometry": {
+      "regions": {
+        "header": [
+          25,
+          43,
+          950,
+          57
+        ],
+        "rail": [
+          25,
+          100,
+          264,
+          435.5
+        ],
+        "toolbar": [
+          289,
+          100,
+          686,
+          48
+        ],
+        "canvas": [
+          289,
+          148,
+          686,
+          387.5
+        ],
+        "footer": [
+          25,
+          535.5,
+          950,
+          121.5
+        ]
+      },
+      "overlaps": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "pane-1000-uk-dark-send-uncertain-delivery-row": {
+      "state": "uncertain",
+      "lines": 1,
+      "mark": [
+        41,
+        622,
+        14,
+        14
+      ],
+      "firstLine": [
+        63,
+        622.8,
+        290.6,
+        12
+      ],
+      "markOnFirstLine": true,
+      "retry": [
+        361.6,
+        613,
+        150.1,
+        32
+      ],
+      "retryInside": true
+    },
     "pane-1000-uk-dark-retry": {
       "posts": [
+        {
+          "taskId": "t-disk",
+          "reviewId": "r-disk",
+          "retry": true
+        },
         {
           "taskId": "t-disk",
           "reviewId": "r-disk",
@@ -8918,7 +10470,12 @@
     },
     "phone-390-en-light-four-variants": {
       "slide": "1:f0",
-      "caption": "1Compact list results, desktop",
+      "caption": "1Compact list — results, desktop",
+      "captionParts": [
+        "1",
+        "Compact list",
+        "results, desktop"
+      ],
       "position": "1 / 3",
       "canvas": [
         390,
@@ -8964,7 +10521,12 @@
     },
     "phone-390-en-light-pair-slider": {
       "slide": "2:f0",
-      "caption": "2Two columns results page, before and after",
+      "caption": "2Two columns — results page, before and after",
+      "captionParts": [
+        "2",
+        "Two columns",
+        "results page, before and after"
+      ],
       "position": "1 / 3",
       "canvas": [
         390,
@@ -8973,11 +10535,11 @@
       "media": [
         [
           366,
-          194
+          175
         ],
         [
           366,
-          194
+          175
         ]
       ],
       "mediaInside": true,
@@ -8986,7 +10548,47 @@
       "thumbs": 3,
       "chosen": [],
       "round": "r-search",
-      "clip": "inset(0px 65% 0px 0px)"
+      "clip": "inset(0px 65% 0px 0px)",
+      "labels": {
+        "drawn": [
+          [
+            54.9,
+            406.8,
+            280.1,
+            175.1
+          ],
+          [
+            54.9,
+            406.8,
+            280.1,
+            175.1
+          ]
+        ],
+        "labels": [
+          {
+            "side": "original",
+            "box": [
+              12,
+              387.8,
+              50.9,
+              15
+            ],
+            "inside": true,
+            "overPicture": false
+          },
+          {
+            "side": "changed",
+            "box": [
+              325.7,
+              387.8,
+              52.3,
+              15
+            ],
+            "inside": true,
+            "overPicture": false
+          }
+        ]
+      }
     },
     "phone-390-en-light-pair-slider-geometry": {
       "regions": {
@@ -9015,7 +10617,12 @@
     },
     "phone-390-en-light-forty": {
       "slide": "3:f39",
-      "caption": "3Dense table table state 40",
+      "caption": "3Dense table — table state 40",
+      "captionParts": [
+        "3",
+        "Dense table",
+        "table state 40"
+      ],
       "position": "40 / 40",
       "canvas": [
         390,
@@ -9067,7 +10674,12 @@
     },
     "phone-390-en-light-video": {
       "slide": "4:v0",
-      "caption": "4Cards with a preview hover and keyboard walk",
+      "caption": "4Cards with a preview — hover and keyboard walk",
+      "captionParts": [
+        "4",
+        "Cards with a preview",
+        "hover and keyboard walk"
+      ],
       "position": "3 / 3",
       "canvas": [
         390,
@@ -9147,7 +10759,12 @@
     },
     "phone-390-en-light-combination": {
       "slide": "3:f0",
-      "caption": "3Dense table table state 1",
+      "caption": "3Dense table — table state 1",
+      "captionParts": [
+        "3",
+        "Dense table",
+        "table state 1"
+      ],
       "position": "1 / 40",
       "canvas": [
         390,
@@ -9230,7 +10847,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/6/2026, 4:30:00 PM",
+      "time": "10/6/2026, 5:15:12 PM",
       "posts": [
         {
           "taskId": "t-search",
@@ -9295,7 +10912,12 @@
     },
     "phone-390-en-light-one-variant": {
       "slide": "1:f0",
-      "caption": "1Progress under the attached file with speed, size and a stop uploading",
+      "caption": "1Progress under the attached file with speed, size and a stop — uploading",
+      "captionParts": [
+        "1",
+        "Progress under the attached file with speed, size and a stop",
+        "uploading"
+      ],
       "position": "1 / 2",
       "canvas": [
         390,
@@ -9338,7 +10960,7 @@
       "caption": {
         "text": "resumed after a drop: the bar keeps what was already sent, the label names the retry, the speed returns once two samples exist, and the stop button stays where the pointer left it, so nothing jumps.",
         "left": 16,
-        "right": 368.2,
+        "right": 373.5,
         "lines": 4,
         "inside": true
       },
@@ -9404,6 +11026,30 @@
       "overlaps": [],
       "outside": [],
       "sideways": 0
+    },
+    "phone-390-en-light-no-orchestrator-delivery-row": {
+      "state": "no-orchestrator",
+      "lines": 1,
+      "mark": [
+        16,
+        774.8,
+        14,
+        14
+      ],
+      "firstLine": [
+        38,
+        775.5,
+        304.4,
+        12
+      ],
+      "markOnFirstLine": true,
+      "retry": [
+        16,
+        794,
+        102.7,
+        44
+      ],
+      "retryInside": true
     },
     "phone-390-en-light-no-orchestrator": "Saved. Nothing was sent: this project has no orchestrator.Send now",
     "phone-390-en-light-transcribed-comment-saved": {
@@ -9528,8 +11174,86 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-light-send-failed-delivery-row": {
+      "state": "failed",
+      "lines": 1,
+      "mark": [
+        16,
+        774.8,
+        14,
+        14
+      ],
+      "firstLine": [
+        38,
+        775.5,
+        270.2,
+        12
+      ],
+      "markOnFirstLine": true,
+      "retry": [
+        16,
+        794,
+        110,
+        44
+      ],
+      "retryInside": true
+    },
+    "phone-390-en-light-send-uncertain-geometry": {
+      "regions": {
+        "header": [
+          0,
+          171.4,
+          390,
+          48
+        ],
+        "body": [
+          0,
+          219.4,
+          390,
+          479.6
+        ],
+        "footer": [
+          0,
+          699,
+          390,
+          139
+        ]
+      },
+      "overlaps": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "phone-390-en-light-send-uncertain-delivery-row": {
+      "state": "uncertain",
+      "lines": 1,
+      "mark": [
+        16,
+        774.8,
+        14,
+        14
+      ],
+      "firstLine": [
+        38,
+        775.5,
+        267.1,
+        12
+      ],
+      "markOnFirstLine": true,
+      "retry": [
+        16,
+        794,
+        110,
+        44
+      ],
+      "retryInside": true
+    },
     "phone-390-en-light-retry": {
       "posts": [
+        {
+          "taskId": "t-disk",
+          "reviewId": "r-disk",
+          "retry": true
+        },
         {
           "taskId": "t-disk",
           "reviewId": "r-disk",
@@ -9611,7 +11335,12 @@
     },
     "phone-390-en-dark-four-variants": {
       "slide": "1:f0",
-      "caption": "1Compact list results, desktop",
+      "caption": "1Compact list — results, desktop",
+      "captionParts": [
+        "1",
+        "Compact list",
+        "results, desktop"
+      ],
       "position": "1 / 3",
       "canvas": [
         390,
@@ -9657,7 +11386,12 @@
     },
     "phone-390-en-dark-pair-slider": {
       "slide": "2:f0",
-      "caption": "2Two columns results page, before and after",
+      "caption": "2Two columns — results page, before and after",
+      "captionParts": [
+        "2",
+        "Two columns",
+        "results page, before and after"
+      ],
       "position": "1 / 3",
       "canvas": [
         390,
@@ -9666,11 +11400,11 @@
       "media": [
         [
           366,
-          194
+          175
         ],
         [
           366,
-          194
+          175
         ]
       ],
       "mediaInside": true,
@@ -9679,7 +11413,47 @@
       "thumbs": 3,
       "chosen": [],
       "round": "r-search",
-      "clip": "inset(0px 65% 0px 0px)"
+      "clip": "inset(0px 65% 0px 0px)",
+      "labels": {
+        "drawn": [
+          [
+            54.9,
+            406.8,
+            280.1,
+            175.1
+          ],
+          [
+            54.9,
+            406.8,
+            280.1,
+            175.1
+          ]
+        ],
+        "labels": [
+          {
+            "side": "original",
+            "box": [
+              12,
+              387.8,
+              50.9,
+              15
+            ],
+            "inside": true,
+            "overPicture": false
+          },
+          {
+            "side": "changed",
+            "box": [
+              325.7,
+              387.8,
+              52.3,
+              15
+            ],
+            "inside": true,
+            "overPicture": false
+          }
+        ]
+      }
     },
     "phone-390-en-dark-pair-slider-geometry": {
       "regions": {
@@ -9708,7 +11482,12 @@
     },
     "phone-390-en-dark-forty": {
       "slide": "3:f39",
-      "caption": "3Dense table table state 40",
+      "caption": "3Dense table — table state 40",
+      "captionParts": [
+        "3",
+        "Dense table",
+        "table state 40"
+      ],
       "position": "40 / 40",
       "canvas": [
         390,
@@ -9760,7 +11539,12 @@
     },
     "phone-390-en-dark-video": {
       "slide": "4:v0",
-      "caption": "4Cards with a preview hover and keyboard walk",
+      "caption": "4Cards with a preview — hover and keyboard walk",
+      "captionParts": [
+        "4",
+        "Cards with a preview",
+        "hover and keyboard walk"
+      ],
       "position": "3 / 3",
       "canvas": [
         390,
@@ -9840,7 +11624,12 @@
     },
     "phone-390-en-dark-combination": {
       "slide": "3:f0",
-      "caption": "3Dense table table state 1",
+      "caption": "3Dense table — table state 1",
+      "captionParts": [
+        "3",
+        "Dense table",
+        "table state 1"
+      ],
       "position": "1 / 40",
       "canvas": [
         390,
@@ -9923,7 +11712,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/6/2026, 4:30:18 PM",
+      "time": "10/6/2026, 5:15:32 PM",
       "posts": [
         {
           "taskId": "t-search",
@@ -9988,7 +11777,12 @@
     },
     "phone-390-en-dark-one-variant": {
       "slide": "1:f0",
-      "caption": "1Progress under the attached file with speed, size and a stop uploading",
+      "caption": "1Progress under the attached file with speed, size and a stop — uploading",
+      "captionParts": [
+        "1",
+        "Progress under the attached file with speed, size and a stop",
+        "uploading"
+      ],
       "position": "1 / 2",
       "canvas": [
         390,
@@ -10031,7 +11825,7 @@
       "caption": {
         "text": "resumed after a drop: the bar keeps what was already sent, the label names the retry, the speed returns once two samples exist, and the stop button stays where the pointer left it, so nothing jumps.",
         "left": 16,
-        "right": 368.2,
+        "right": 373.5,
         "lines": 4,
         "inside": true
       },
@@ -10097,6 +11891,30 @@
       "overlaps": [],
       "outside": [],
       "sideways": 0
+    },
+    "phone-390-en-dark-no-orchestrator-delivery-row": {
+      "state": "no-orchestrator",
+      "lines": 1,
+      "mark": [
+        16,
+        774.8,
+        14,
+        14
+      ],
+      "firstLine": [
+        38,
+        775.5,
+        304.4,
+        12
+      ],
+      "markOnFirstLine": true,
+      "retry": [
+        16,
+        794,
+        102.7,
+        44
+      ],
+      "retryInside": true
     },
     "phone-390-en-dark-no-orchestrator": "Saved. Nothing was sent: this project has no orchestrator.Send now",
     "phone-390-en-dark-transcribed-comment-saved": {
@@ -10221,8 +12039,86 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-dark-send-failed-delivery-row": {
+      "state": "failed",
+      "lines": 1,
+      "mark": [
+        16,
+        774.8,
+        14,
+        14
+      ],
+      "firstLine": [
+        38,
+        775.5,
+        270.2,
+        12
+      ],
+      "markOnFirstLine": true,
+      "retry": [
+        16,
+        794,
+        110,
+        44
+      ],
+      "retryInside": true
+    },
+    "phone-390-en-dark-send-uncertain-geometry": {
+      "regions": {
+        "header": [
+          0,
+          171.4,
+          390,
+          48
+        ],
+        "body": [
+          0,
+          219.4,
+          390,
+          479.6
+        ],
+        "footer": [
+          0,
+          699,
+          390,
+          139
+        ]
+      },
+      "overlaps": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "phone-390-en-dark-send-uncertain-delivery-row": {
+      "state": "uncertain",
+      "lines": 1,
+      "mark": [
+        16,
+        774.8,
+        14,
+        14
+      ],
+      "firstLine": [
+        38,
+        775.5,
+        267.1,
+        12
+      ],
+      "markOnFirstLine": true,
+      "retry": [
+        16,
+        794,
+        110,
+        44
+      ],
+      "retryInside": true
+    },
     "phone-390-en-dark-retry": {
       "posts": [
+        {
+          "taskId": "t-disk",
+          "reviewId": "r-disk",
+          "retry": true
+        },
         {
           "taskId": "t-disk",
           "reviewId": "r-disk",
@@ -10304,7 +12200,12 @@
     },
     "phone-390-uk-light-four-variants": {
       "slide": "1:f0",
-      "caption": "1Компактний список результати, десктоп",
+      "caption": "1Компактний список — результати, десктоп",
+      "captionParts": [
+        "1",
+        "Компактний список",
+        "результати, десктоп"
+      ],
       "position": "1 / 3",
       "canvas": [
         390,
@@ -10350,7 +12251,12 @@
     },
     "phone-390-uk-light-pair-slider": {
       "slide": "2:f0",
-      "caption": "2Дві колонки сторінка результатів, до і після",
+      "caption": "2Дві колонки — сторінка результатів, до і після",
+      "captionParts": [
+        "2",
+        "Дві колонки",
+        "сторінка результатів, до і після"
+      ],
       "position": "1 / 3",
       "canvas": [
         390,
@@ -10359,11 +12265,11 @@
       "media": [
         [
           366,
-          194
+          175
         ],
         [
           366,
-          194
+          175
         ]
       ],
       "mediaInside": true,
@@ -10372,7 +12278,47 @@
       "thumbs": 3,
       "chosen": [],
       "round": "r-search",
-      "clip": "inset(0px 65% 0px 0px)"
+      "clip": "inset(0px 65% 0px 0px)",
+      "labels": {
+        "drawn": [
+          [
+            54.9,
+            423.3,
+            280.1,
+            175.1
+          ],
+          [
+            54.9,
+            423.3,
+            280.1,
+            175.1
+          ]
+        ],
+        "labels": [
+          {
+            "side": "original",
+            "box": [
+              12,
+              404.3,
+              53.7,
+              15
+            ],
+            "inside": true,
+            "overPicture": false
+          },
+          {
+            "side": "changed",
+            "box": [
+              330,
+              404.3,
+              48,
+              15
+            ],
+            "inside": true,
+            "overPicture": false
+          }
+        ]
+      }
     },
     "phone-390-uk-light-pair-slider-geometry": {
       "regions": {
@@ -10401,7 +12347,12 @@
     },
     "phone-390-uk-light-forty": {
       "slide": "3:f39",
-      "caption": "3Щільна таблиця стан таблиці 40",
+      "caption": "3Щільна таблиця — стан таблиці 40",
+      "captionParts": [
+        "3",
+        "Щільна таблиця",
+        "стан таблиці 40"
+      ],
       "position": "40 / 40",
       "canvas": [
         390,
@@ -10453,7 +12404,12 @@
     },
     "phone-390-uk-light-video": {
       "slide": "4:v0",
-      "caption": "4Картки з переглядом наведення і прохід клавіатурою",
+      "caption": "4Картки з переглядом — наведення і прохід клавіатурою",
+      "captionParts": [
+        "4",
+        "Картки з переглядом",
+        "наведення і прохід клавіатурою"
+      ],
       "position": "3 / 3",
       "canvas": [
         390,
@@ -10533,7 +12489,12 @@
     },
     "phone-390-uk-light-combination": {
       "slide": "3:f0",
-      "caption": "3Щільна таблиця стан таблиці 1",
+      "caption": "3Щільна таблиця — стан таблиці 1",
+      "captionParts": [
+        "3",
+        "Щільна таблиця",
+        "стан таблиці 1"
+      ],
       "position": "1 / 40",
       "canvas": [
         390,
@@ -10616,7 +12577,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "06.10.2026, 16:30:35",
+      "time": "06.10.2026, 17:15:52",
       "posts": [
         {
           "taskId": "t-search",
@@ -10681,7 +12642,12 @@
     },
     "phone-390-uk-light-one-variant": {
       "slide": "1:f0",
-      "caption": "1Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп завантажується",
+      "caption": "1Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп — завантажується",
+      "captionParts": [
+        "1",
+        "Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп",
+        "завантажується"
+      ],
       "position": "1 / 2",
       "canvas": [
         390,
@@ -10724,7 +12690,7 @@
       "caption": {
         "text": "відновлено після обриву: смуга зберігає вже надіслане, підпис називає повтор, швидкість повертається після двох замірів, а кнопка зупинки лишається там, де її залишив вказівник, тож ніщо не стрибає.",
         "left": 16,
-        "right": 348.2,
+        "right": 363.5,
         "lines": 4,
         "inside": true
       },
@@ -10778,18 +12744,42 @@
           0,
           163.3,
           390,
-          456.2
+          457.7
         ],
         "footer": [
           0,
-          619.5,
+          621,
           390,
-          218.5
+          217
         ]
       },
       "overlaps": [],
       "outside": [],
       "sideways": 0
+    },
+    "phone-390-uk-light-no-orchestrator-delivery-row": {
+      "state": "no-orchestrator",
+      "lines": 2,
+      "mark": [
+        16,
+        758.3,
+        14,
+        14
+      ],
+      "firstLine": [
+        38,
+        759,
+        270.5,
+        12
+      ],
+      "markOnFirstLine": true,
+      "retry": [
+        16,
+        794,
+        142.5,
+        44
+      ],
+      "retryInside": true
     },
     "phone-390-uk-light-no-orchestrator": "Збережено. Нічого не надіслано: у проєкту немає оркестратора.Надіслати зараз",
     "phone-390-uk-light-transcribed-comment-saved": {
@@ -10914,8 +12904,86 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-light-send-failed-delivery-row": {
+      "state": "failed",
+      "lines": 1,
+      "mark": [
+        16,
+        774.8,
+        14,
+        14
+      ],
+      "firstLine": [
+        38,
+        775.5,
+        299.9,
+        12
+      ],
+      "markOnFirstLine": true,
+      "retry": [
+        16,
+        794,
+        150.1,
+        44
+      ],
+      "retryInside": true
+    },
+    "phone-390-uk-light-send-uncertain-geometry": {
+      "regions": {
+        "header": [
+          0,
+          171.4,
+          390,
+          48
+        ],
+        "body": [
+          0,
+          219.4,
+          390,
+          479.6
+        ],
+        "footer": [
+          0,
+          699,
+          390,
+          139
+        ]
+      },
+      "overlaps": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "phone-390-uk-light-send-uncertain-delivery-row": {
+      "state": "uncertain",
+      "lines": 1,
+      "mark": [
+        16,
+        774.8,
+        14,
+        14
+      ],
+      "firstLine": [
+        38,
+        775.5,
+        290.6,
+        12
+      ],
+      "markOnFirstLine": true,
+      "retry": [
+        16,
+        794,
+        150.1,
+        44
+      ],
+      "retryInside": true
+    },
     "phone-390-uk-light-retry": {
       "posts": [
+        {
+          "taskId": "t-disk",
+          "reviewId": "r-disk",
+          "retry": true
+        },
         {
           "taskId": "t-disk",
           "reviewId": "r-disk",
@@ -10997,7 +13065,12 @@
     },
     "phone-390-uk-dark-four-variants": {
       "slide": "1:f0",
-      "caption": "1Компактний список результати, десктоп",
+      "caption": "1Компактний список — результати, десктоп",
+      "captionParts": [
+        "1",
+        "Компактний список",
+        "результати, десктоп"
+      ],
       "position": "1 / 3",
       "canvas": [
         390,
@@ -11043,7 +13116,12 @@
     },
     "phone-390-uk-dark-pair-slider": {
       "slide": "2:f0",
-      "caption": "2Дві колонки сторінка результатів, до і після",
+      "caption": "2Дві колонки — сторінка результатів, до і після",
+      "captionParts": [
+        "2",
+        "Дві колонки",
+        "сторінка результатів, до і після"
+      ],
       "position": "1 / 3",
       "canvas": [
         390,
@@ -11052,11 +13130,11 @@
       "media": [
         [
           366,
-          194
+          175
         ],
         [
           366,
-          194
+          175
         ]
       ],
       "mediaInside": true,
@@ -11065,7 +13143,47 @@
       "thumbs": 3,
       "chosen": [],
       "round": "r-search",
-      "clip": "inset(0px 65% 0px 0px)"
+      "clip": "inset(0px 65% 0px 0px)",
+      "labels": {
+        "drawn": [
+          [
+            54.9,
+            423.3,
+            280.1,
+            175.1
+          ],
+          [
+            54.9,
+            423.3,
+            280.1,
+            175.1
+          ]
+        ],
+        "labels": [
+          {
+            "side": "original",
+            "box": [
+              12,
+              404.3,
+              53.7,
+              15
+            ],
+            "inside": true,
+            "overPicture": false
+          },
+          {
+            "side": "changed",
+            "box": [
+              330,
+              404.3,
+              48,
+              15
+            ],
+            "inside": true,
+            "overPicture": false
+          }
+        ]
+      }
     },
     "phone-390-uk-dark-pair-slider-geometry": {
       "regions": {
@@ -11094,7 +13212,12 @@
     },
     "phone-390-uk-dark-forty": {
       "slide": "3:f39",
-      "caption": "3Щільна таблиця стан таблиці 40",
+      "caption": "3Щільна таблиця — стан таблиці 40",
+      "captionParts": [
+        "3",
+        "Щільна таблиця",
+        "стан таблиці 40"
+      ],
       "position": "40 / 40",
       "canvas": [
         390,
@@ -11146,7 +13269,12 @@
     },
     "phone-390-uk-dark-video": {
       "slide": "4:v0",
-      "caption": "4Картки з переглядом наведення і прохід клавіатурою",
+      "caption": "4Картки з переглядом — наведення і прохід клавіатурою",
+      "captionParts": [
+        "4",
+        "Картки з переглядом",
+        "наведення і прохід клавіатурою"
+      ],
       "position": "3 / 3",
       "canvas": [
         390,
@@ -11226,7 +13354,12 @@
     },
     "phone-390-uk-dark-combination": {
       "slide": "3:f0",
-      "caption": "3Щільна таблиця стан таблиці 1",
+      "caption": "3Щільна таблиця — стан таблиці 1",
+      "captionParts": [
+        "3",
+        "Щільна таблиця",
+        "стан таблиці 1"
+      ],
       "position": "1 / 40",
       "canvas": [
         390,
@@ -11309,7 +13442,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "06.10.2026, 16:30:52",
+      "time": "06.10.2026, 17:16:11",
       "posts": [
         {
           "taskId": "t-search",
@@ -11374,7 +13507,12 @@
     },
     "phone-390-uk-dark-one-variant": {
       "slide": "1:f0",
-      "caption": "1Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп завантажується",
+      "caption": "1Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп — завантажується",
+      "captionParts": [
+        "1",
+        "Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп",
+        "завантажується"
+      ],
       "position": "1 / 2",
       "canvas": [
         390,
@@ -11417,7 +13555,7 @@
       "caption": {
         "text": "відновлено після обриву: смуга зберігає вже надіслане, підпис називає повтор, швидкість повертається після двох замірів, а кнопка зупинки лишається там, де її залишив вказівник, тож ніщо не стрибає.",
         "left": 16,
-        "right": 348.2,
+        "right": 363.5,
         "lines": 4,
         "inside": true
       },
@@ -11471,18 +13609,42 @@
           0,
           163.3,
           390,
-          456.2
+          457.7
         ],
         "footer": [
           0,
-          619.5,
+          621,
           390,
-          218.5
+          217
         ]
       },
       "overlaps": [],
       "outside": [],
       "sideways": 0
+    },
+    "phone-390-uk-dark-no-orchestrator-delivery-row": {
+      "state": "no-orchestrator",
+      "lines": 2,
+      "mark": [
+        16,
+        758.3,
+        14,
+        14
+      ],
+      "firstLine": [
+        38,
+        759,
+        270.5,
+        12
+      ],
+      "markOnFirstLine": true,
+      "retry": [
+        16,
+        794,
+        142.5,
+        44
+      ],
+      "retryInside": true
     },
     "phone-390-uk-dark-no-orchestrator": "Збережено. Нічого не надіслано: у проєкту немає оркестратора.Надіслати зараз",
     "phone-390-uk-dark-transcribed-comment-saved": {
@@ -11607,8 +13769,86 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-dark-send-failed-delivery-row": {
+      "state": "failed",
+      "lines": 1,
+      "mark": [
+        16,
+        774.8,
+        14,
+        14
+      ],
+      "firstLine": [
+        38,
+        775.5,
+        299.9,
+        12
+      ],
+      "markOnFirstLine": true,
+      "retry": [
+        16,
+        794,
+        150.1,
+        44
+      ],
+      "retryInside": true
+    },
+    "phone-390-uk-dark-send-uncertain-geometry": {
+      "regions": {
+        "header": [
+          0,
+          171.4,
+          390,
+          48
+        ],
+        "body": [
+          0,
+          219.4,
+          390,
+          479.6
+        ],
+        "footer": [
+          0,
+          699,
+          390,
+          139
+        ]
+      },
+      "overlaps": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "phone-390-uk-dark-send-uncertain-delivery-row": {
+      "state": "uncertain",
+      "lines": 1,
+      "mark": [
+        16,
+        774.8,
+        14,
+        14
+      ],
+      "firstLine": [
+        38,
+        775.5,
+        290.6,
+        12
+      ],
+      "markOnFirstLine": true,
+      "retry": [
+        16,
+        794,
+        150.1,
+        44
+      ],
+      "retryInside": true
+    },
     "phone-390-uk-dark-retry": {
       "posts": [
+        {
+          "taskId": "t-disk",
+          "reviewId": "r-disk",
+          "retry": true
+        },
         {
           "taskId": "t-disk",
           "reviewId": "r-disk",

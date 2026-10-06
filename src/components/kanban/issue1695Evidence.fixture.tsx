@@ -2613,7 +2613,11 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       protoPosts.push({ taskId, ...body });
       const held = rounds.find((entry) => entry.id === body.reviewId);
       if (!held) return json({ error: "prototype review not found" }, 404);
-      if (body.retry && held.decision) held.decision = { ...held.decision, delivery: { state: "sent", retryable: false } };
+      if (body.retry && held.decision) {
+        /* A driver may queue what the next retries answer; with nothing queued a retry lands. */
+        const state = (window as unknown as { protoRetryAnswers?: PrototypeDeliveryState[] }).protoRetryAnswers?.shift() ?? "sent";
+        held.decision = { ...held.decision, delivery: { state, retryable: state !== "sent" } };
+      }
       else if (!held.decision) {
         const state = protoSaveState[taskId] ?? "sent";
         held.decision = { chosen: [...(body.chosen ?? [])].sort((a, b) => a - b), comment: body.comment ?? "", at: new Date().toISOString(), delivery: { state, retryable: state !== "sent" } };

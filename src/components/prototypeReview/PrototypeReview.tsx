@@ -388,7 +388,7 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
     </button>
   ) : <div className="absolute inset-0">{gone}</div>);
 
-  const pairTag = "rounded-sm bg-card/90 px-1.5 py-0.5 text-caption font-semibold text-secondary shadow-1";
+  const pairTag = "shrink-0 text-caption font-semibold uppercase tracking-wide text-muted";
   const stageBody = !slide ? (
     <div className="absolute inset-0 flex items-center justify-center text-label text-muted">{t("proto.noMedia")}</div>
   ) : slide.video ? (
@@ -399,14 +399,17 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
     ) : <div className="absolute inset-0">{gone}</div>
   ) : slide.frame?.original && mode === "slider" && shown(slide.frame.original, broken) && shown(slide.frame.image, broken) ? (
     <div data-prototype-pair="slider" className="absolute inset-0 flex flex-col gap-2 p-3">
+      {/* The two names stand over the frame, as they do side by side: a picture as wide as the frame keeps its corners. */}
+      <div className="-mb-1 flex shrink-0 items-center justify-between gap-2">
+        <span data-prototype-pair-label="original" className={pairTag}>{t("proto.pair.original")}</span>
+        <span data-prototype-pair-label="changed" className={pairTag}>{t("proto.pair.changed")}</span>
+      </div>
       <div className="relative min-h-0 flex-1 overflow-hidden">
         {/* eslint-disable-next-line @next/next/no-img-element -- a fenced local copy */}
         <img src={slide.frame.image.url} alt={`${slideLabel(slide)} · ${t("proto.pair.changed")}`} draggable={false} className="absolute inset-0 h-full w-full object-contain" onError={() => markBroken(slide.frame!.image.id)} />
         {/* eslint-disable-next-line @next/next/no-img-element -- a fenced local copy */}
         <img src={slide.frame.original.url} alt={`${slideLabel(slide)} · ${t("proto.pair.original")}`} draggable={false} className="absolute inset-0 h-full w-full bg-sunken object-contain" style={{ clipPath: `inset(0 ${100 - split}% 0 0)` }} onError={() => markBroken(slide.frame!.original!.id)} />
         <span aria-hidden className="absolute bottom-0 top-0 w-0.5 -translate-x-1/2 bg-accent" style={{ left: `${split}%` }} />
-        <span className={`absolute left-1.5 top-1.5 ${pairTag}`}>{t("proto.pair.original")}</span>
-        <span className={`absolute right-1.5 top-1.5 ${pairTag}`}>{t("proto.pair.changed")}</span>
       </div>
       <input
         type="range"
@@ -423,7 +426,7 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
     <div data-prototype-pair="side" className="absolute inset-0 grid grid-cols-2 gap-2 p-3">
       {(["original", "changed"] as const).map((side) => (
         <figure key={side} data-prototype-pair-side={side} className="m-0 flex min-h-0 min-w-0 flex-col gap-1">
-          <figcaption className="shrink-0 text-caption font-semibold uppercase tracking-wide text-muted">{t(`proto.pair.${side}`)}</figcaption>
+          <figcaption className={pairTag}>{t(`proto.pair.${side}`)}</figcaption>
           <div className="relative min-h-0 flex-1 overflow-hidden rounded-sm border border-border bg-card">
             {picture(side === "original" ? slide.frame!.original : slide.frame!.image, `${slideLabel(slide)} · ${t(`proto.pair.${side}`)}`)}
           </div>
@@ -443,7 +446,7 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
           <p data-prototype-caption="" className="m-0 min-w-0 flex-1 basis-56 text-ui [overflow-wrap:anywhere]">
             <span data-prototype-caption-number="" className="mr-1.5 inline-grid h-5 min-w-5 place-items-center rounded-sm bg-sunken px-1 align-middle text-caption font-bold tabular-nums text-secondary">{slide.variant.number}</span>
             <span data-prototype-caption-name="" className="font-semibold text-primary">{slide.variant.name}</span>
-            {slide.caption ? <>{" "}<span data-prototype-caption-text="" className="text-secondary">{slide.caption}</span></> : null}
+            {slide.caption ? <><span aria-hidden className="text-muted">{" — "}</span><span data-prototype-caption-text="" className="text-secondary">{slide.caption}</span></> : null}
           </p>
         ) : <span className="flex-1" />}
         <span className="ml-auto flex shrink-0 items-center gap-1.5">
@@ -519,8 +522,13 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
     const tone = state === "sent" ? "text-success" : state === "pending" ? "text-muted" : "text-warning";
     return (
       <p role="status" data-prototype-delivery={state} className={`m-0 flex flex-wrap items-center gap-x-2 gap-y-1 text-label font-semibold ${tone}`}>
-        {state === "sent" ? <CircleCheck className="h-3.5 w-3.5 shrink-0" aria-hidden /> : state === "pending" ? <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden /> : <TriangleAlert className="h-3.5 w-3.5 shrink-0" aria-hidden />}
-        <span className="min-w-0">{t(`proto.delivery.${state}`)}</span>
+        {/* The mark stays on the first line of its words, which wrap inside themselves; only the retry moves to a line of its own. */}
+        <span data-prototype-delivery-said="" className="flex min-w-0 items-start gap-2">
+          <span aria-hidden className="flex h-[1lh] shrink-0 items-center">
+            {state === "sent" ? <CircleCheck className="h-3.5 w-3.5" /> : state === "pending" ? <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" /> : <TriangleAlert className="h-3.5 w-3.5" />}
+          </span>
+          <span className="min-w-0">{t(`proto.delivery.${state}`)}</span>
+        </span>
         {retryable && state !== "pending" && state !== "sent" && !elsewhere ? (
           <button type="button" className={SECONDARY} data-prototype-retry="" disabled={review.saving} onClick={() => void review.retry(round!.id)}>
             {review.saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <RotateCw className="h-3.5 w-3.5" aria-hidden />}

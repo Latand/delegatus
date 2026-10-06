@@ -211,3 +211,49 @@ test("discarding in the guard is what drops speech still being transcribed", asy
   await act(async () => { document.querySelector<HTMLElement>("[data-prototype-guard-discard]")!.click(); });
   expect(closed).toBe(1);
 });
+
+async function mountReview(read: PrototypeReviewRead) {
+  globalThis.fetch = (async () => new Response(JSON.stringify(read), { status: 200, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
+  const host = dom.document.createElement("div") as unknown as HTMLElement;
+  dom.document.body.appendChild(host as never);
+  root = createRoot(host);
+  await act(async () => { root!.render(<PrototypeReview taskId="task-1" reviewId={null} taskTitle="Layout task" onClose={() => {}} />); });
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+}
+
+test("the line over the picture parts the variant's name from the picture's caption with the viewer's dash", async () => {
+  await mountReview(reviewRead());
+  const line = document.querySelector<HTMLElement>("[data-prototype-caption]")!;
+  expect(line.querySelector("[data-prototype-caption-name]")?.textContent).toBe("Compact");
+  expect(line.querySelector("[data-prototype-caption-text]")?.textContent).toBe("Board");
+  expect(line.textContent).toBe("1Compact — Board");
+});
+
+test("in the slider comparison the two labels stand outside the box that draws the pictures", async () => {
+  const shownMedia = (id: string) => ({ ...media(id), available: true, url: `/media/${id}.png` });
+  const read = reviewRead();
+  read.rounds[0]!.variants[0]!.frames = [{ image: shownMedia("c"), original: shownMedia("o"), caption: "Board" }];
+  await mountReview(read);
+  await act(async () => { document.querySelector<HTMLElement>('[data-prototype-pair-mode="slider"]')!.click(); });
+  const pair = document.querySelector<HTMLElement>('[data-prototype-pair="slider"]')!;
+  const labels = [...pair.querySelectorAll<HTMLElement>("[data-prototype-pair-label]")];
+  expect(labels.map((label) => [label.dataset.prototypePairLabel, label.textContent])).toEqual([["original", "Original"], ["changed", "Changed"]]);
+  const pictures = [...pair.querySelectorAll("img")];
+  expect(pictures).toHaveLength(2);
+  for (const label of labels) for (const picture of pictures) expect(picture.parentElement!.contains(label)).toBe(false);
+});
+
+for (const state of ["no-orchestrator", "failed", "uncertain"] as const) {
+  test(`a ${state} delivery keeps its mark and its words in one group, and only the retry stands beside it`, async () => {
+    const read = reviewRead({ chosen: [1], comment: "" });
+    read.rounds[0]!.decision!.delivery = { state, retryable: true };
+    await mountReview(read);
+    const line = document.querySelector<HTMLElement>("[data-prototype-delivery]")!;
+    expect([...line.children].map((child) => child.tagName)).toEqual(["SPAN", "BUTTON"]);
+    const said = line.querySelector<HTMLElement>("[data-prototype-delivery-said]")!;
+    expect(said.className).not.toContain("flex-wrap");
+    expect(said.querySelector("svg")).not.toBeNull();
+    expect(said.textContent?.startsWith("Saved.")).toBe(true);
+    expect(said.contains(line.querySelector("[data-prototype-retry]"))).toBe(false);
+  });
+}

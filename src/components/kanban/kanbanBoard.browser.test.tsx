@@ -17965,6 +17965,10 @@ describe("prototype review on a task: the card's button, the review and the orch
    * and the earlier round; a name of 60 characters with a caption of 200 read
    * in full, and a close while speech is still transcribed asks first. Measured at 1440, 1000 and 390, in English and
    * Ukrainian, light and dark: nothing overlaps and nothing leaves its frame.
+   * A card that waits on its prototype says so in drawn words at every desktop
+   * width, the line over the picture parts the variant's name from the caption,
+   * the slider's two labels stand clear of both drawn pictures, and a delivery
+   * line keeps its mark on the first line of its words.
    *
    *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "prototype review"
    *
@@ -18094,6 +18098,7 @@ describe("prototype review on a task: the card's button, the review and the orch
           return {
             slide: review.querySelector<HTMLElement>("[data-prototype-stage]")?.dataset.prototypeStage ?? null,
             caption: review.querySelector("[data-prototype-caption]")?.textContent ?? null,
+            captionParts: ["number", "name", "text"].map((part) => review.querySelector(`[data-prototype-caption-${part}]`)?.textContent ?? null),
             position: review.querySelector("[data-prototype-position]")?.textContent ?? null,
             canvas: [Math.round(canvas.width), Math.round(canvas.height)],
             media: media.map((element) => { const box = element.getBoundingClientRect(); return [Math.round(box.width), Math.round(box.height)]; }),
@@ -18105,6 +18110,37 @@ describe("prototype review on a task: the card's button, the review and the orch
             round: review.dataset.prototypeRoundShown ?? document.querySelector<HTMLElement>("[data-prototype-round-shown]")?.dataset.prototypeRoundShown ?? null,
           };
         });
+        /* The line over the picture reads number, name, a dash, caption: the name ends where the dash stands. */
+        const captionParted = (name: string, state: { caption: string | null; captionParts: (string | null)[] }) => {
+          const [number, variantName, text] = state.captionParts;
+          if (!number || !variantName || !text || state.caption !== `${number}${variantName} — ${text}`) failures.push(`${label} ${name}: the line over the picture runs the name into the caption: ${JSON.stringify(state.caption)}`);
+        };
+        /* A delivery line: the mark on the first line of its words, the retry inside the review and a full target on the phone. */
+        const deliveryRow = async (name: string) => {
+          const row = await page.evaluate((frameSelector) => {
+            const line = document.querySelector<HTMLElement>("[data-prototype-delivery]")!;
+            const frame = document.querySelector<HTMLElement>(frameSelector)!.getBoundingClientRect();
+            const said = line.querySelector<HTMLElement>("[data-prototype-delivery-said]");
+            const mark = said?.querySelector("svg")?.getBoundingClientRect() ?? null;
+            /* The words' own lines, read off the text: the span that holds them is one box however often it wraps. */
+            const text = document.createRange();
+            if (said?.lastElementChild) text.selectNodeContents(said.lastElementChild);
+            const words = [...text.getClientRects()].filter((box) => box.width > 0);
+            const retry = line.querySelector<HTMLElement>("[data-prototype-retry]")?.getBoundingClientRect() ?? null;
+            const first = words[0] ?? null;
+            const round = (value: number) => Math.round(value * 10) / 10;
+            return {
+              state: line.dataset.prototypeDelivery, lines: new Set(words.map((box) => Math.round(box.top))).size,
+              mark: mark ? [round(mark.left), round(mark.top), round(mark.width), round(mark.height)] : null,
+              firstLine: first ? [round(first.left), round(first.top), round(first.width), round(first.height)] : null,
+              markOnFirstLine: Boolean(mark && first && (mark.top + mark.bottom) / 2 > first.top && (mark.top + mark.bottom) / 2 < first.bottom && mark.right <= first.left + 0.5),
+              retry: retry ? [round(retry.left), round(retry.top), round(retry.width), round(retry.height)] : null,
+              retryInside: !retry || (retry.left >= frame.left - 0.5 && retry.right <= frame.right + 0.5 && retry.top >= frame.top - 0.5 && retry.bottom <= frame.bottom + 0.5),
+            };
+          }, size.phone ? "[data-mobile2-sheet=prototype-review]" : `${REVIEW} [role=dialog]`);
+          record(`${name}-delivery-row`, row);
+          if (!row.markOnFirstLine || !row.retry || !row.retryInside || (size.phone && row.retry[3]! < 44)) failures.push(`${label} ${name}: the delivery line reads ${JSON.stringify(row)}`);
+        };
         const showVariant = (number: number) => page.locator(size.phone ? `${REVIEW} button[data-prototype-variant="${number}"]` : `${REVIEW} [data-prototype-show="${number}"]`).click();
         const choose = async (number: number) => {
           if (size.phone) await showVariant(number);
@@ -18152,6 +18188,7 @@ describe("prototype review on a task: the card's button, the review and the orch
               return {
                 task: button.dataset.prototypeButton, state: button.dataset.prototypeState, text: button.textContent?.trim() ?? "", aria: button.getAttribute("aria-label"),
                 word: Boolean(button.querySelector<HTMLElement>(".proto-word")?.getBoundingClientRect().width), dot: Boolean(button.querySelector(".proto-dot")),
+                reason: [...foot.querySelectorAll<HTMLElement>("[data-foot-prototype]")].filter((line) => box(line).width > 0 && box(line).left >= box(cardElement).left - 0.5 && box(line).right <= box(cardElement).right + 0.5).map((line) => line.textContent?.trim() ?? "")[0] ?? null,
                 background: style.backgroundColor, color: style.color, size: [Math.round(own.width), Math.round(own.height)],
                 insideCard: own.left >= box(cardElement).left - 0.5 && own.right <= box(cardElement).right + 0.5,
                 overlaps: others.filter((other) => { const b = box(other); return own.left < b.right - 0.5 && b.left < own.right - 0.5 && own.top < b.bottom - 0.5 && b.top < own.bottom - 0.5; }).length,
@@ -18171,6 +18208,12 @@ describe("prototype review on a task: the card's button, the review and the orch
             /* A waiting button names itself to assistive tech at every width; its word is drawn where the foot has room. */
             const byTask = Object.fromEntries(cards.map((entry) => [entry.task, entry]));
             if (!byTask["t-search"]?.aria?.includes(tr("proto.title").split(" ")[0]!.slice(0, 5)) && !byTask["t-search"]?.aria?.toLowerCase().includes(tr("proto.button.word").toLowerCase())) failures.push(`${label}: the waiting button is unnamed: ${byTask["t-search"]?.aria}`);
+            /* A card that waits only on its prototype says so in drawn words, once: on the button where the foot is wide, on the reason line where it is narrow. */
+            for (const task of ["t-search", "t-upload"]) {
+              const entry = byTask[task];
+              if (!entry || entry.word === Boolean(entry.reason) || (entry.reason !== null && entry.reason !== tr("proto.notice.ready"))) failures.push(`${label}: the waiting card of ${task} draws the word ${entry?.word} and the reason ${JSON.stringify(entry?.reason)}`);
+            }
+            if (byTask["t-export"]?.reason || byTask["t-disk"]?.reason) failures.push(`${label}: a decided card still says a prototype is ready`);
             if (byTask["t-export"]?.text !== "2, 3" || byTask["t-disk"]?.text !== "2") failures.push(`${label}: the buttons say ${JSON.stringify(cards.map((entry) => entry.text))}`);
             if (byTask["t-search"]?.background === byTask["t-upload"]?.background) failures.push(`${label}: a waiting unopened review is not highlighted against an opened one`);
             await page.locator(card("t-search")).scrollIntoViewIfNeeded();
@@ -18296,6 +18339,7 @@ describe("prototype review on a task: the card's button, the review and the orch
           const four = await stageState();
           record("four-variants", four);
           await frameCheck("four-variants");
+          captionParted("four-variants", four);
           if (await page.locator(`${REVIEW} [data-prototype-variant]`).count() !== 4) failures.push(`${label}: the review does not list four variants`);
           if (!four.caption?.includes(lang === "en" ? "Compact list" : "Компактний список") || !four.caption.startsWith("1") || four.position?.trim() !== "1 / 3" || !four.mediaInside || !four.loaded) failures.push(`${label}: the first picture reads ${JSON.stringify(four)}`);
 
@@ -18317,7 +18361,29 @@ describe("prototype review on a task: the card's button, the review and the orch
           await settle();
           const slider = await stageState();
           const clip = await page.evaluate(() => getComputedStyle(document.querySelectorAll<HTMLElement>("[data-prototype-pair] img")[1]!).clipPath);
-          record("pair-slider", { ...slider, clip });
+          /* The two names against what each picture really paints inside its box. */
+          const sliderLabels = await page.evaluate(() => {
+            const round = (value: number) => Math.round(value * 10) / 10;
+            const canvas = document.querySelector<HTMLElement>("[data-prototype-canvas]")!.getBoundingClientRect();
+            const drawn = [...document.querySelectorAll<HTMLImageElement>("[data-prototype-pair] img")].map((image) => {
+              const box = image.getBoundingClientRect();
+              const scale = Math.min(box.width / image.naturalWidth, box.height / image.naturalHeight);
+              const width = image.naturalWidth * scale, height = image.naturalHeight * scale;
+              return { left: box.left + (box.width - width) / 2, top: box.top + (box.height - height) / 2, right: box.left + (box.width + width) / 2, bottom: box.top + (box.height + height) / 2 };
+            });
+            const labels = [...document.querySelectorAll<HTMLElement>("[data-prototype-pair-label]")].map((element) => {
+              const box = element.getBoundingClientRect();
+              return {
+                side: element.dataset.prototypePairLabel, box: [round(box.left), round(box.top), round(box.width), round(box.height)],
+                inside: box.width > 0 && box.left >= canvas.left - 0.5 && box.right <= canvas.right + 0.5 && box.top >= canvas.top - 0.5 && box.bottom <= canvas.bottom + 0.5,
+                overPicture: drawn.some((picture) => box.left < picture.right - 0.5 && picture.left < box.right - 0.5 && box.top < picture.bottom - 0.5 && picture.top < box.bottom - 0.5),
+              };
+            });
+            return { drawn: drawn.map((picture) => [round(picture.left), round(picture.top), round(picture.right - picture.left), round(picture.bottom - picture.top)]), labels };
+          });
+          record("pair-slider", { ...slider, clip, labels: sliderLabels });
+          captionParted("pair-slider", slider);
+          if (sliderLabels.labels.length !== 2 || sliderLabels.labels.some((entry) => !entry.inside || entry.overPicture) || sliderLabels.labels[0]!.box[0]! + sliderLabels.labels[0]!.box[2]! > sliderLabels.labels[1]!.box[0]!) failures.push(`${label}: the slider's labels lie over a picture, leave the stage or meet: ${JSON.stringify(sliderLabels)}`);
           await shot("pair-slider");
           await frameCheck("pair-slider");
           if (slider.pair !== "slider" || slider.media.length !== 2 || !slider.mediaInside || !clip.includes("65%")) failures.push(`${label}: the pair slider reads ${JSON.stringify({ slider, clip })}`);
@@ -18338,6 +18404,7 @@ describe("prototype review on a task: the card's button, the review and the orch
           record("forty", { ...forty, strip });
           await shot("forty-pictures");
           await frameCheck("forty-pictures");
+          captionParted("forty-pictures", forty);
           if (forty.thumbs !== 40 || forty.position?.trim() !== "40 / 40" || !strip.scrolls || strip.tall > 0 || !strip.currentInView || !forty.mediaInside) failures.push(`${label}: forty pictures read ${JSON.stringify({ forty, strip })}`);
 
           /* 6. A video. */
@@ -18509,6 +18576,7 @@ describe("prototype review on a task: the card's button, the review and the orch
           await settle();
           await shot("no-orchestrator");
           await frameCheck("no-orchestrator");
+          await deliveryRow("no-orchestrator");
           const unsent = await page.locator("[data-prototype-delivery]").textContent();
           record("no-orchestrator", unsent);
           const keptSpeech = { comment: await page.locator(`${scope} [data-prototype-decision] [data-prototype-comment]`).textContent(), posts: (await posts()).filter((post) => post.taskId === "t-upload").length };
@@ -18565,11 +18633,20 @@ describe("prototype review on a task: the card's button, the review and the orch
           await settle();
           await shot("send-failed");
           await frameCheck("send-failed");
+          await deliveryRow("send-failed");
+          /* The first retry comes back unconfirmed and offers itself again; the second lands. */
+          await page.evaluate(() => { (window as unknown as { protoRetryAnswers: string[] }).protoRetryAnswers = ["uncertain"]; });
+          await page.locator("[data-prototype-retry]").click();
+          await page.waitForSelector(`${scope} [data-prototype-delivery="uncertain"]`, { timeout: 10_000 });
+          await settle();
+          await shot("send-uncertain");
+          await frameCheck("send-uncertain");
+          await deliveryRow("send-uncertain");
           await page.locator("[data-prototype-retry]").click();
           await page.waitForSelector(`${scope} [data-prototype-delivery="sent"]`, { timeout: 10_000 });
           const retries = (await posts()).filter((post) => post.taskId === "t-disk");
           record("retry", { posts: retries, button: await page.locator("[data-prototype-retry]").count() });
-          if (retries.length !== 1 || retries[0]!.retry !== true || await page.locator("[data-prototype-retry]").count()) failures.push(`${label}: the retry sent ${JSON.stringify(retries)} and the button ${await page.locator("[data-prototype-retry]").count() ? "stays" : "went"}`);
+          if (retries.length !== 2 || retries.some((post) => post.retry !== true) || await page.locator("[data-prototype-retry]").count()) failures.push(`${label}: the retry sent ${JSON.stringify(retries)} and the button ${await page.locator("[data-prototype-retry]").count() ? "stays" : "went"}`);
           await shot("retry-sent");
           await closeReview();
           if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
