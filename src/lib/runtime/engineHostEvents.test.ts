@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import { streamingVoiceDelivery } from "./voiceDelivery";
 import type { RuntimeEvent } from "./engineHost";
-import { coalesceReadyEngineDeltas, projectEngineHostEvent } from "./engineHostEvents";
+import { coalesceReadyEngineDeltas, projectEngineHostEvent, type CoalescedEngineEvent } from "./engineHostEvents";
 import { normalizeRuntimeLiveTurn, projectRuntimeLiveTurnItem, runtimeLiveTurnItems } from "./liveTurn";
 
 describe("projectEngineHostEvent", () => {
@@ -525,7 +525,7 @@ function hostStream() {
 }
 
 describe("coalesceReadyEngineDeltas", () => {
-  const delta = (seq: number, text: string, turnId = "turn-final"): RuntimeEvent => ({ kind: "delta", turnId, text, seq });
+  const delta = (seq: number, text: string, turnId = "turn-final"): Extract<RuntimeEvent, { kind: "delta" }> => ({ kind: "delta", turnId, text, seq });
 
   test("a long final answer reaches the journal in a few appends and its turn end follows at once", async () => {
     // The observed answer: about 6 000 deltas of five characters, all produced
@@ -575,7 +575,7 @@ describe("coalesceReadyEngineDeltas", () => {
     const item: RuntimeEvent = { kind: "item", turnId: "turn-a", item: { type: "agentMessage", id: "a" }, phase: "completed", seq: 3 };
     stream.push(delta(1, "a"), delta(2, "b"), item, delta(4, "c", "turn-a"), delta(5, "d", "turn-b"), delta(6, "e", "turn-b"));
     stream.end();
-    const seen: RuntimeEvent[] = [];
+    const seen: CoalescedEngineEvent[] = [];
     const events = coalesceReadyEngineDeltas(stream.iterator);
     for (let next = await events.next(); !next.done; next = await events.next()) seen.push(next.value);
     expect(seen).toEqual([
@@ -590,7 +590,7 @@ describe("coalesceReadyEngineDeltas", () => {
     const stream = hostStream();
     stream.push(delta(1, "a"), delta(2, "bb"), delta(4, "ccc"), delta(5, "d"));
     stream.end();
-    const seen: RuntimeEvent[] = [];
+    const seen: CoalescedEngineEvent[] = [];
     const events = coalesceReadyEngineDeltas(stream.iterator);
     for (let next = await events.next(); !next.done; next = await events.next()) seen.push(next.value);
     expect(seen).toEqual([
