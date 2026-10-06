@@ -8,6 +8,8 @@ export interface CompanionToolContext {
   sessionId: string;
   callId: string;
   delegationId: string;
+  /** Confirmation visible when this backend answer turn was created. */
+  confirmationProposalId?: string | null;
   /** The operator's Live turn when Live delegated. */
   sourceTurn?: number;
   admission: CompanionAdmission;
@@ -55,7 +57,7 @@ export const COMPANION_TOOL_REGISTRY: readonly ToolEntry[] = [
     description: "Pass on the operator's spoken answer to the confirmation that is waiting: send when they clearly agree, cancel when they decline or change their mind. When the answer is unclear, ask again and call nothing. A cancelled confirmation sends nothing; say so.",
     parameters: schema({ decision: { type: "string", enum: ["send", "cancel"] } }),
     handler: async (context, args) => {
-      const proposal = context.admission.awaiting(context.sessionId);
+      const proposal = context.admission.awaiting(context.sessionId, context.confirmationProposalId);
       if (!proposal) {
         // Speech that took the request back, or time, may have ended it before this answer arrived.
         const last = context.admission.lastAsked(context.sessionId);

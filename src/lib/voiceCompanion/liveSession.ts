@@ -225,6 +225,7 @@ export class CompanionLiveSessions {
     const work = (async () => {
       const record = active.transcript.record().map(row => `${row.speaker === "operator" ? "Operator" : "Delegatus"}: ${row.text}`).join("\n").slice(-12_000);
       const waiting = this.admission.awaiting(active.id);
+      const completedDelegations: string[] = [];
       const input: BackendItem[] = [{ role: "user", content: `The conversation so far, oldest first:\n${record || "(no transcript yet)"}\n\nThe voice delegated here. Answer it with the registry tools, or send the operator's explicit orchestrator request.${waiting
         ? `\n\nA request to the orchestrator is waiting for the operator's answer and has not been sent: "${waiting.instruction}". When the operator has just answered it, pass that answer on with resolve_orchestrator_confirmation.` : ""}` }];
       const calls = new Set<string>();
@@ -241,7 +242,14 @@ export class CompanionLiveSessions {
         const usd = backendUsageUsd(result?.usage);
         this.receipt(active, responseKey, usd);
         const output = Array.isArray(result?.output) ? result.output.map(jsonObject).filter((item): item is Record<string, unknown> => item !== null) : null;
-        if (!output) { this.say(active, delegationId, "The board could not be read just now. Nothing was sent."); return; }
+        if (!output) {
+          const report = completedDelegations.length ? completedDelegations.map(delivery => delivery === "delivered" ? "The orchestrator received the request."
+            : delivery === "queued" ? "The request is queued for the orchestrator."
+              : delivery === "unknown" ? "The request's delivery is not confirmed yet."
+                : "The request delivery failed; nothing reached the orchestrator.").join(" ") : "No request was sent.";
+          this.say(active, delegationId, `The board could not be read just now. ${report}`);
+          return;
+        }
         if (active.ended || active.closePromise) return;
         const asked = output.filter(item => item.type === "function_call" && typeof item.call_id === "string" && item.call_id.length <= 200
           && typeof item.name === "string" && typeof item.arguments === "string" && item.arguments.length <= 8_000 && !calls.has(item.call_id));
@@ -254,7 +262,13 @@ export class CompanionLiveSessions {
         for (const item of asked) {
           calls.add(item.call_id as string);
           input.push({ type: "function_call", call_id: item.call_id, name: item.name, arguments: item.arguments });
-          input.push({ type: "function_call_output", call_id: item.call_id, output: JSON.stringify(await this.tool(active, item, delegationId, sourceTurn)) });
+          const toolResult = await this.tool(active, item, delegationId, sourceTurn, waiting?.proposalId ?? null);
+          const resultObject = jsonObject(toolResult);
+          if (item.name === "request_orchestrator_delegation" && resultObject?.status === "sent"
+            && ["delivered", "queued", "unknown", "failed"].includes(String(resultObject.delivery))) {
+            completedDelegations.push(String(resultObject.delivery));
+          }
+          input.push({ type: "function_call_output", call_id: item.call_id, output: JSON.stringify(toolResult) });
         }
         if (active.endRequested) return;
       }
@@ -267,11 +281,12 @@ export class CompanionLiveSessions {
       try { this.settleClosed(active); } catch { void this.forceHangup(active); }
     });
   }
-  private async tool(active: ActiveSession, item: Record<string, unknown>, delegationId: string, sourceTurn: number | undefined): Promise<unknown> {
+  private async tool(active: ActiveSession, item: Record<string, unknown>, delegationId: string, sourceTurn: number | undefined,
+    confirmationProposalId?: string | null): Promise<unknown> {
     const callId = item.call_id as string; const name = item.name as string;
     this.admission.emit(active.id, { type: "tool.called", callId, name: name.slice(0, 80), summary: name.slice(0, 80).replaceAll("_", " ") });
     try {
-      const result = await runCompanionTool({ project: this.admission.session(active.id).project, sessionId: active.id, callId, delegationId, sourceTurn,
+      const result = await runCompanionTool({ project: this.admission.session(active.id).project, sessionId: active.id, callId, delegationId, sourceTurn, confirmationProposalId,
         admission: this.admission, reads: this.reads, endConversation: () => { active.endRequested = true; } }, name, JSON.parse(item.arguments as string));
       const output = jsonObject(result);
       this.admission.emit(active.id, { type: "tool.result", callId, status: output?.status === "refused" ? "failed" : "done",

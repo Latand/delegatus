@@ -210,6 +210,11 @@ export function reduceCompanion(state: CompanionState, event: CompanionEvent): C
   if (next.delegation === state.delegation && !deliveryEvent) return next;
   const cards = [...state.deliveryCards];
   const reports = new Set(next.reports);
+  if (event.type === "delegation.tool.called" && state.delegation?.stage === "sending"
+    && state.delegation.callId !== event.callId && !cards.some(card => card.callId === state.delegation!.callId)) {
+    // Keep the in-flight card even before its transport returns a delivery key.
+    cards.push(state.delegation);
+  }
   if (deliveryEvent) {
     for (let i = 0; i < cards.length; i++) {
       if (cards[i].callId === next.delegation?.callId) continue;

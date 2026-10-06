@@ -32,6 +32,23 @@ test("a Live request needs no completed transcript and is sent at once, exactly 
   expect(types.slice(0, 3)).toEqual(["delegation.tool.called", "delegation.sending", "delegation.tool.result"]);
 });
 
+test("a repeated Live delegation reuses its durable outcome and delivery key across call IDs and restart", async () => {
+  fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+  const keys: string[] = [];
+  const paths = { recipient: () => ({ project: "retry", conversationId: "conversation_retry", seatEpoch: 1, engine: "codex" as const }),
+    send: async ({ delivery }: { delivery: { clientMessageId: string } }) => { keys.push(delivery.clientMessageId); return { status: "delivered" as const, operationId: "retry-operation" }; }, reports: () => [] };
+  const storage = new CompanionStorage();
+  const admission = new CompanionAdmission(storage, paths);
+  const session = admission.create({ project: "retry", locale: "en", authority: "live-model" });
+  expect(await admission.delegate(session.id, "call-first", "delegation-same", "Review the plan")).toEqual({ state: "sent", status: "delivered" });
+  const key = storage.read().sessions[session.id]!.proposals[Object.keys(storage.read().sessions[session.id]!.proposals)[0]!]!.delivery!.clientMessageId;
+  const restarted = new CompanionAdmission(new CompanionStorage(), paths);
+  expect(await restarted.delegate(session.id, "call-retry", "delegation-same", "Review the plan")).toEqual({ state: "sent", status: "delivered" });
+  expect(await restarted.delegate(session.id, "call-distinct", "delegation-other", "Review the plan")).toEqual({ state: "sent", status: "delivered" });
+  expect(keys).toEqual([key, expect.any(String)]);
+  expect(keys[1]).not.toBe(key);
+});
+
 test("nothing on the server asks for a confirmation the model did not ask for, whatever the request says", async () => {
   let sends = 0;
   const admission = new CompanionAdmission(new CompanionStorage(), {

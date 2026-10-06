@@ -134,8 +134,14 @@ export class CompanionAdmission {
    * its first outcome and never sends again. `confirmation` is the model's own
    * reason for asking first: nothing here reads the request to decide that. */
   async delegate(id: string, callId: string, sourceItemId: string, instruction: string, options: { sourceTurn?: number; confirmation?: string } = {}): Promise<DelegationOutcome> {
+    const clean = this.cleaner();
+    const logicalInstruction = clean(instruction).trim();
+    const duplicate = Object.values(this.session(id).proposals).find(row => row.proposal.sourceItemId === clean(sourceItemId)
+      && row.proposal.instruction.trim() === logicalInstruction);
+    if (duplicate) return this.outcome(id, duplicate.proposal.proposalId);
     const proposal = this.propose(id, callId, sourceItemId, instruction, options);
-    const row = Object.values(this.session(id).proposals).find(held => held.proposal.callId === this.cleaner()(callId));
+    const row = Object.values(this.session(id).proposals).find(held => held.proposal.callId === clean(callId)
+      || (held.proposal.sourceItemId === clean(sourceItemId) && held.proposal.instruction.trim() === logicalInstruction));
     if (!row) {
       const last = this.events(id, 0).at(-1);
       return { state: "refused", code: last?.type === "delegation.tool.result" && "code" in last.result ? last.result.code : "not_admitted" };
@@ -150,9 +156,11 @@ export class CompanionAdmission {
     if (!row || row.state === "cancelled") return { state: "refused", code: row?.cancelCode ?? "proposal_unavailable" };
     return row.state === "pending" ? { state: "awaiting", proposal: row.proposal } : { state: "sent", status: row.status ?? "unknown" };
   }
-  /** The confirmation a spoken answer resolves: the latest one still waiting. */
-  awaiting(id: string): Proposal | null {
-    return Object.values(this.session(id).proposals).findLast(row => row.state === "pending" && !!row.proposal.confirmation && this.now() <= row.expiresAt)?.proposal ?? null;
+  /** The confirmation included in the backend round that received this answer. */
+  awaiting(id: string, proposalId?: string | null): Proposal | null {
+    const row = proposalId !== undefined ? (proposalId ? this.session(id).proposals[proposalId] : undefined)
+      : Object.values(this.session(id).proposals).findLast(held => held.state === "pending" && !!held.proposal.confirmation);
+    return row?.state === "pending" && !!row.proposal.confirmation && this.now() <= row.expiresAt ? row.proposal : null;
   }
   /** The confirmation asked last, whatever became of it: a spoken answer that finds none waiting reports this one. */
   lastAsked(id: string): Proposal | null {
@@ -164,11 +172,14 @@ export class CompanionAdmission {
     const [callId, sourceItemId, instruction, asked] = [rawCallId, rawSourceItemId, rawInstruction, options.confirmation?.trim().slice(0, 240) ?? ""].map(this.cleaner());
     const existing = Object.values(this.session(id).proposals).find(row => row.proposal.callId === callId);
     if (existing) return existing.state === "pending" ? existing.proposal : null;
-    this.emit(id, { type: "delegation.tool.called", callId, sourceItemId, instruction: instruction.slice(0, 2_000) });
     let refusal = "not_admitted";
+    let reusedLogicalRequest = false;
     const proposal = this.storage.change(document => {
       const session = document.sessions[id];
       if (!session || session.closed) { refusal = "session_closed"; return null; }
+      const logicalDuplicate = Object.values(session.proposals).find(row => row.proposal.sourceItemId === sourceItemId
+        && row.proposal.instruction.trim() === instruction.trim());
+      if (logicalDuplicate) { reusedLogicalRequest = true; return logicalDuplicate.proposal; }
       const reason = session.authority === "live-model" ? liveProposalRefusal(instruction, session.inputs, sourceTurn)
         : (() => { const gate = admitDelegationProposal({ sourceItemId, instruction, inputs: session.inputs }); return gate.admit ? null : gate.reason; })();
       if (reason) { refusal = reason; return null; }
@@ -181,6 +192,8 @@ export class CompanionAdmission {
         ...(sourceTurn !== undefined ? { sourceTurn } : {}) };
       return proposal;
     });
+    if (reusedLogicalRequest) return proposal;
+    this.emit(id, { type: "delegation.tool.called", callId, sourceItemId, instruction: instruction.slice(0, 2_000) });
     // With no confirmation asked, the send that follows announces itself.
     if (proposal?.confirmation) this.emit(id, { type: "delegation.confirmation.required", proposal });
     else if (!proposal) this.emit(id, { type: "delegation.tool.result", callId, result: { status: "refused", code: refusal } });

@@ -63,6 +63,65 @@ test("minting is server configured, a model request is delivered at once with no
   expect(f.storage.settings().usageUsd).toBeCloseTo(0.015031, 6);
 });
 
+test("a repeated logical delegation in a later backend round reuses its stored send", async () => {
+  const f = fixture();
+  f.provider.responder = (_request, index) => index === 0
+    ? backendResponse("resp_first", [functionCall("call-first", "request_orchestrator_delegation", { instruction: "Review the plan" })])
+      : index === 1 ? backendResponse("resp_retry", [functionCall("call-retry", "request_orchestrator_delegation", { instruction: "Review the plan" })])
+        : backendResponse("resp_done", [message("The request was already sent.")]);
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  f.provider.replay(s.providerId, delegationCreated("same-logical-delegation", 10));
+  await f.service.drain(s.sessionId);
+  const rows = Object.values(f.admission.session(s.sessionId).proposals);
+  expect(rows).toHaveLength(1);
+  expect(f.sends()).toBe(1);
+  expect(f.provider.requests.at(-1)!.input.filter(item => item.type === "function_call_output").map(item => JSON.parse(item.output as string)))
+    .toEqual([{ status: "sent", delivery: "queued", speech: "Sent. It is queued for the orchestrator." },
+      { status: "sent", delivery: "queued", speech: "Sent. It is queued for the orchestrator." }]);
+  await f.service.close(s.sessionId);
+});
+
+test("a delayed yes from one backend turn cannot confirm a newer proposal", async () => {
+  const f = fixture();
+  let releaseAnswer!: () => void;
+  f.provider.responder = (_request, index) => index === 0
+    ? backendResponse("resp_a", [functionCall("call-a", "request_orchestrator_delegation", { instruction: "Delete the old presets", confirmation_reason: "A needs confirmation." })])
+      : index === 2 ? new Promise(resolve => { releaseAnswer = () => resolve(backendResponse("resp_yes", [functionCall("call-yes", "resolve_orchestrator_confirmation", { decision: "send" })])); })
+        : index === 3 ? backendResponse("resp_b", [functionCall("call-b", "request_orchestrator_delegation", { instruction: "Deploy the new release", confirmation_reason: "B needs confirmation." })])
+          : backendResponse(`resp_${index}`, [message("Waiting for confirmation.")]);
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  f.provider.replay(s.providerId, delegationCreated("delegation-a", 10));
+  await f.service.drain(s.sessionId);
+  f.provider.replay(s.providerId, delegationCreated("answer-turn-a", 20));
+  for (let waited = 0; waited < 50 && f.provider.requests.length < 3; waited++) await new Promise(resolve => setTimeout(resolve, 2));
+  expect(f.provider.requests).toHaveLength(3);
+  f.provider.replay(s.providerId, delegationCreated("delegation-b", 30));
+  for (let waited = 0; waited < 50 && Object.values(f.admission.session(s.sessionId).proposals).length < 2; waited++) await new Promise(resolve => setTimeout(resolve, 2));
+  const proposals = Object.values(f.admission.session(s.sessionId).proposals);
+  expect(proposals).toHaveLength(2);
+  expect(proposals.map(row => row.state)).toEqual(["pending", "pending"]);
+  releaseAnswer();
+  await f.service.drain(s.sessionId);
+  expect(f.sends()).toBe(1);
+  expect(f.admission.outcome(s.sessionId, proposals[0]!.proposal.proposalId)).toMatchObject({ state: "sent", status: "queued" });
+  expect(f.admission.outcome(s.sessionId, proposals[1]!.proposal.proposalId)).toMatchObject({ state: "awaiting" });
+  await f.service.close(s.sessionId);
+});
+
+test("a backend failure after autosend reports the recorded delivery state", async () => {
+  const f = fixture();
+  f.provider.responder = (_request, index) => index === 0
+    ? backendResponse("resp_send", [functionCall("call-send", "request_orchestrator_delegation", { instruction: "Review the plan" })])
+      : Promise.reject(new Error("backend unavailable"));
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  f.provider.replay(s.providerId, delegationCreated("delegation-after-send", 10));
+  await f.service.drain(s.sessionId);
+  expect(f.sends()).toBe(1);
+  expect(spoken(f).at(-1)).toMatchObject({ delegation_id: "delegation-after-send", content: "The board could not be read just now. The request is queued for the orchestrator." });
+  expect(spoken(f).at(-1)?.content).not.toContain("Nothing was sent");
+  await f.service.close(s.sessionId);
+});
+
 test("parallel delegations keep their own calls, outputs and spoken answers", async () => {
   const f = fixture();
   f.provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output")

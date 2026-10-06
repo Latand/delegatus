@@ -44,8 +44,8 @@ test("the delegation tool sends at once; the model's own flag asks first, and th
     send: async ({ text }) => { sent.push(text.split("\n")[0]!); return { status: "delivered", operationId: `operation-${sent.length}` }; } });
   const session = admission.create({ project: "fixture", locale: "en", authority: "live-model" });
   const reads = new CompanionBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] });
-  const call = (callId: string, name: string, args: Record<string, unknown>) =>
-    runCompanionTool({ project: "fixture", sessionId: session.id, callId, delegationId: `delegation-${callId}`, admission, reads, endConversation: () => undefined }, name, args);
+  const call = (callId: string, name: string, args: Record<string, unknown>, confirmationProposalId?: string) =>
+    runCompanionTool({ project: "fixture", sessionId: session.id, callId, delegationId: `delegation-${callId}`, confirmationProposalId, admission, reads, endConversation: () => undefined }, name, args);
   // The default, with the flag null or left out: delivered before the tool answers, and a replayed call adds nothing.
   expect(await call("c1", "request_orchestrator_delegation", { instruction: "Review the plan", confirmation_reason: null })).toMatchObject({ status: "sent", delivery: "delivered" });
   expect(await call("c1", "request_orchestrator_delegation", { instruction: "Review the plan", confirmation_reason: null })).toMatchObject({ status: "sent" });
@@ -70,6 +70,29 @@ test("the delegation tool sends at once; the model's own flag asks first, and th
   for (const args of [{ decision: "maybe" }, { decision: "" }, {}, { decision: "send", proposalId: "x" }])
     await expect(call("c10", "resolve_orchestrator_confirmation", args)).rejects.toThrow("INVALID_TOOL_ARGUMENTS");
   await expect(call("c11", "request_orchestrator_delegation", { instruction: "Review", confirmation_reason: "x".repeat(241) })).rejects.toThrow("INVALID_TOOL_ARGUMENTS");
+});
+
+test("a delayed spoken answer stays bound to the proposal included in its backend turn", async () => {
+  fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+  const sent: string[] = [];
+  const admission = new CompanionAdmission(new CompanionStorage(), { recipient: () => ({ project: "fixture", conversationId: "conversation_seat", seatEpoch: 1, engine: "claude" }), reports: () => [],
+    send: async ({ text }) => { sent.push(text.split("\n")[0]!); return { status: "delivered", operationId: `operation-${sent.length}` }; } });
+  const session = admission.create({ project: "fixture", locale: "en", authority: "live-model" });
+  const reads = new CompanionBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] });
+  const a = await admission.delegate(session.id, "call-a", "delegation-a", "Delete the old presets", { confirmation: "A needs confirmation." });
+  const b = await admission.delegate(session.id, "call-b", "delegation-b", "Deploy the new release", { confirmation: "B needs confirmation." });
+  expect(a.state).toBe("awaiting"); expect(b.state).toBe("awaiting");
+  const target = a.state === "awaiting" ? a.proposal.proposalId : "missing";
+  const result = await runCompanionTool({ project: "fixture", sessionId: session.id, callId: "answer-a", delegationId: "answer-turn-a",
+    confirmationProposalId: target, admission, reads, endConversation: () => undefined }, "resolve_orchestrator_confirmation", { decision: "send" }) as { status: string };
+  expect(result.status).toBe("sent");
+  expect(sent).toEqual(["Delete the old presets"]);
+  expect(admission.outcome(session.id, target)).toMatchObject({ state: "sent", status: "delivered" });
+  const noSnapshot = await runCompanionTool({ project: "fixture", sessionId: session.id, callId: "answer-none", delegationId: "answer-turn-none",
+    confirmationProposalId: null, admission, reads, endConversation: () => undefined }, "resolve_orchestrator_confirmation", { decision: "send" }) as { status: string };
+  expect(noSnapshot.status).toBe("nothing_waiting");
+  expect(sent).toEqual(["Delete the old presets"]);
+  expect(admission.outcome(session.id, b.state === "awaiting" ? b.proposal.proposalId : "missing")).toMatchObject({ state: "awaiting" });
 });
 
 test("asking first is the model's judgment in the schema: an optional reason, and no list of words anywhere in the registry", () => {

@@ -787,6 +787,21 @@ describe("a delivery and its answer bind the whole frozen identity", () => {
     ]);
     expect(state.delegation).toMatchObject({ stage: "proposed", delivery: null });
   });
+
+  test("a newer call retains an in-flight send and applies its later unknown receipt to that card", () => {
+    const sendingA = confirmed();
+    const proposalB = { proposalId: "p2", callId: "c2", sourceItemId: "i2", instruction: "Deploy the release", recipient: RECIPIENT };
+    const currentB = run([
+      at({ type: "delegation.tool.called", callId: "c2", sourceItemId: "i2", instruction: proposalB.instruction }),
+      at({ type: "delegation.sending", proposal: proposalB }),
+    ], sendingA);
+    expect(currentB.deliveryCards).toContainEqual(expect.objectContaining({ callId: "c1", stage: "sending", delivery: null }));
+    const withReceipt = reduceCompanion(currentB, at({ type: "delegation.tool.result", callId: "c1", proposalId: "p1",
+      result: { status: "unknown", delivery: { ...delivery, operationId: null } } }));
+    expect(withReceipt.delegation).toMatchObject({ callId: "c2", stage: "sending" });
+    expect(withReceipt.deliveryCards).toContainEqual(expect.objectContaining({ callId: "c1", stage: "unknown", notice: "DELIVERY_UNCONFIRMED",
+      delivery: expect.objectContaining({ clientMessageId: "m1", operationId: null }) }));
+  });
 });
 
 describe("geometry", () => {
