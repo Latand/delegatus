@@ -278,11 +278,6 @@ export interface RuntimeOperationReceipt {
 }
 export type RuntimeReceipt = RuntimeOperationReceipt;
 
-/** Automatic lifecycle work has its own audit receipt outside message history. */
-export function runtimeReceiptIsAutomaticRetirement(receipt: Pick<RuntimeOperationReceipt, "kind" | "origin">): boolean {
-  return receipt.kind === "kill" && receipt.origin === "system";
-}
-
 /** `interrupt-then-turn-started`: the running turn was interrupted and this
     message started the next one (docs/design/copilot-engine.md 3.4). */
 export type RuntimeDeliveryMode = "interrupt-then-turn-started";

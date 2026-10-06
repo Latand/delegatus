@@ -3942,6 +3942,30 @@ test("legacy retirement origin is recovered from commands on readback, snapshot 
   }
 });
 
+test("automatic receipt origin survives pruning of its terminal command", () => {
+  const dir = sandbox("retirement-origin-retention");
+  const journal = new RuntimeJournal(path.join(dir, "events.sqlite"), { structuredHosts: true });
+  const conversationId = "conversation_retirement_retention";
+  try {
+    journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
+      conversationId, sessionKey: { engine: "codex", sessionId: "retention-thread" },
+      hostKind: "codex-app-server", host: "hosted", turn: "idle", activeTurnId: null,
+      writerClaim: "fixture:1", attentionIds: [], capabilities: { steer: true, structuredAttention: true },
+    } });
+    journal.executeOperation({ kind: "kill", operationId: "retention-retire", idempotencyKey: "retention-retire",
+      conversationId, sessionKey: { engine: "codex", sessionId: "retention-thread" },
+      onlyIfIdle: { revision: 999, writerClaim: "fixture:1" } });
+    for (let index = 0; index < 3; index++) journal.append({ scope: { type: "session", id: conversationId }, kind: "limits", payload: {} });
+    journal.compact(1);
+    expect(journal.operationResult("retention-retire")).toBeNull();
+    expect(journal.readSession({ conversationId })!.recentReceipts[0]).toMatchObject({ kind: "kill", origin: "system", status: "rejected" });
+    expect(journal.snapshot().sessions[0].recentReceipts[0].origin).toBe("system");
+  } finally {
+    journal.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test.each(["work-first", "retirement-first"])("automatic retirement claim serializes new work: %s", (ordering) => {
   const dir = sandbox("retirement-claim");
   const journal = new RuntimeJournal(path.join(dir, "events.sqlite"), { structuredHosts: true });

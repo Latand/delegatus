@@ -230,7 +230,10 @@ export interface RuntimeReceipt {
   revision: number;
 }
 
-export { runtimeReceiptIsAutomaticRetirement } from "@/lib/runtime/contracts";
+/** Automatic lifecycle work has its own audit receipt outside message history. */
+export function runtimeReceiptIsAutomaticRetirement(receipt: Pick<RuntimeReceipt, "kind" | "origin">): boolean {
+  return receipt.kind === "kill" && receipt.origin === "system";
+}
 
 export interface RuntimeEdge {
   id: string;
