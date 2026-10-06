@@ -30,6 +30,10 @@ export interface StoredProposal {
   status?: "delivered" | "queued" | "unknown" | "failed";
   /** The operator's Live turn when the proposal was raised. */
   sourceTurn?: number;
+  /** Why a waiting confirmation ended with nothing sent. */
+  cancelCode?: string;
+  /** What admitted the send: no confirmation asked, a tap, or the operator's spoken answer. */
+  via?: "auto" | "tap" | "speech";
   reports: string[];
 }
 export interface StoredSession {

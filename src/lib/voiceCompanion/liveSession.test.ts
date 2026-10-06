@@ -38,15 +38,20 @@ const said = (delta: string, at: number, speaker: "input" | "output" = "input") 
 const spoken = (f: ReturnType<typeof fixture>) => f.provider.commands.filter(row => row.type === "session.commentary.append");
 const large = { input_tokens: 1_050_000, input_tokens_details: { cached_tokens: 0 }, output_tokens: 512 };
 
-test("minting is server configured, a model proposal sends nothing, and tap delivery survives a closed media call", async () => {
+test("minting is server configured, a model request is delivered at once with no tap, and a later tap or a closed media call adds nothing", async () => {
   const f = fixture();
   f.provider.responder = calling(functionCall("call-a", "request_orchestrator_delegation", { instruction: "Review the plan" }));
   const session = await f.service.start({ project: "fixture", locale: "uk", sdp: "v=0\r\n" });
   f.provider.replay(session.providerId, said("Ask the orchestrator to review the plan.", 0), delegationCreated("delegation-a", 600));
   await f.service.drain(session.sessionId);
-  const proposal = Object.values(f.admission.session(session.sessionId).proposals)[0].proposal;
-  expect(f.sends()).toBe(0);
+  const [held] = Object.values(f.admission.session(session.sessionId).proposals);
+  const proposal = held.proposal;
+  expect(f.sends()).toBe(1);
+  expect(held).toMatchObject({ state: "admitted", status: "queued", via: "auto" });
+  const types = f.admission.events(session.sessionId, 0).map(event => event.type).filter(type => type.startsWith("delegation."));
+  expect(types).toEqual(["delegation.tool.called", "delegation.sending", "delegation.tool.result"]);
   expect(f.provider.requests).toHaveLength(2);
+  expect(JSON.parse(f.provider.requests[1].input.find(item => item.type === "function_call_output")!.output as string)).toMatchObject({ status: "sent", delivery: "queued" });
   expect(f.provider.requests[0].input[0].content).toContain("Operator: Ask the orchestrator to review the plan.");
   expect(f.provider.requests[1].input.filter(item => item.type === "function_call_output")).toHaveLength(1);
   expect(spoken(f)).toMatchObject([{ delegation_id: "delegation-a", content: "Here is what I found." }]);
@@ -305,7 +310,7 @@ test("a backend round the cap cannot pay for is never requested", async () => {
   expect(f.admission.events(s.sessionId, 0)).toContainEqual(expect.objectContaining({ type: "session.closed", reason: "cap" }));
 });
 
-test("a completed board question never becomes a delegation proposal, even when the model proposes one", async () => {
+test("a completed board question never becomes a delegation, even when the model raises one", async () => {
   for (const question of ["What is on the board?", "Що зараз на дошці?", "If the build is green, ask the orchestrator to merge it."]) {
     fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
     const f = fixture();
@@ -315,11 +320,11 @@ test("a completed board question never becomes a delegation proposal, even when 
     await f.service.drain(s.sessionId);
     expect(f.admission.session(s.sessionId).inputs.at(-1)).toMatchObject({ text: question, final: true });
     expect(Object.values(f.admission.session(s.sessionId).proposals), question).toEqual([]);
-    expect(f.admission.events(s.sessionId, 0).some(event => event.type === "delegation.confirmation.required")).toBe(false);
+    expect(f.admission.events(s.sessionId, 0).some(event => event.type === "delegation.confirmation.required" || event.type === "delegation.sending")).toBe(false);
     await f.service.close(s.sessionId);
     expect(f.sends()).toBe(0);
   }
-  // The explicit request still reaches the card, and a request split by a backchannel too.
+  // The explicit request is sent at once, and a request split by a backchannel too.
   for (const parts of [["Ask the orchestrator to review the plan."], ["Ask the orchestrator", "to review the plan."]]) {
     fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
     const f = fixture();
@@ -328,12 +333,13 @@ test("a completed board question never becomes a delegation proposal, even when 
     f.provider.replay(s.providerId, said(parts[0], 0), ...(parts[1] ? [said("Mm-hm.", 2_000, "output"), said(parts[1], 2_600)] : []), delegationCreated("request", 3_500));
     await f.service.drain(s.sessionId);
     const [held] = Object.values(f.admission.session(s.sessionId).proposals);
-    expect(held?.state, parts.join(" / ")).toBe("pending");
+    expect(held?.state, parts.join(" / ")).toBe("admitted");
+    expect(f.sends()).toBe(1);
     await f.service.command(s.sessionId, { type: "confirmation", proposalId: held.proposal.proposalId, decision: "send", via: "tap" });
     expect(f.sends()).toBe(1);
     await f.service.close(s.sessionId);
   }
-  // With no transcript at all, the proposal waits for the tap.
+  // With no transcript at all, the model's reading stands and the request is sent.
   const f = fixture();
   fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
   f.storage.updateSettings({ enabled: true });
@@ -341,7 +347,8 @@ test("a completed board question never becomes a delegation proposal, even when 
   const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
   f.provider.replay(s.providerId, delegationCreated("bare", 100));
   await f.service.drain(s.sessionId);
-  expect(Object.values(f.admission.session(s.sessionId).proposals).map(row => row.state)).toEqual(["pending"]);
+  expect(Object.values(f.admission.session(s.sessionId).proposals).map(row => row.state)).toEqual(["admitted"]);
+  expect(f.sends()).toBe(1);
   await f.service.close(s.sessionId);
 });
 
@@ -402,7 +409,7 @@ test("a hangup the provider refused is asked again after a restart until it is c
   expect(f.provider.hangups.filter(id => id === live.providerId)).toHaveLength(2);
 });
 
-test("a restart between the Send tap and its recorded outcome recovers that very send with its key, once", async () => {
+test("a restart between a send and its recorded outcome recovers that very send with its key, once", async () => {
   for (const crash of ["before-send", "after-relay"] as const) {
     fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
     const storage = new CompanionStorage(); storage.updateSettings({ enabled: true });
@@ -416,10 +423,10 @@ test("a restart between the Send tap and its recorded outcome recovers that very
     const provider = new FakeLiveProvider();
     const service = new CompanionLiveSessions(storage, admission, noReads(), provider, { key: () => KEY, timers: false, closeTimeoutMs: 20 });
     const s = await service.start({ project: "fixture", locale: "en", sdp: "v=0" });
-    const proposal = admission.propose(s.sessionId, "call", "delegation", "Review the plan")!;
-    void service.command(s.sessionId, { type: "confirmation", proposalId: proposal.proposalId, decision: "send", via: "tap" });
+    void admission.delegate(s.sessionId, "call", "delegation", "Review the plan");
     await new Promise(resolve => setTimeout(resolve, 5));
-    const held = storage.read().sessions[s.sessionId].proposals[proposal.proposalId];
+    const [held] = Object.values(storage.read().sessions[s.sessionId].proposals);
+    const proposal = held.proposal;
     expect(held).toMatchObject({ state: "admitted", status: "unknown" });
     const nextStorage = new CompanionStorage();
     const next = new CompanionLiveSessions(nextStorage, new CompanionAdmission(nextStorage, { recipient: () => recipient, reports: () => [],
@@ -499,13 +506,14 @@ test("documented cache-write receipts never let the month spend past the cap, in
   }
 });
 
-test("a finished withdrawal takes the proposal off: the old tap, a late result, a retry and a restart send nothing", async () => {
+test("a finished withdrawal stops a request not yet raised and takes a waiting confirmation off: the old tap, a retry and a restart send nothing", async () => {
   const withdrawals = [["Never mind. Cancel that request."], ["Never mind."], ["Cancel that request."], ["Забудь."], ["Скасуй."], ["Передумав."], ["Забудь. Скасуй це."]];
   for (const [withdrawal] of withdrawals) for (const late of [false, true]) {
     fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
     const f = fixture();
     let answer!: () => void;
-    const proposal = backendResponse("resp_0", [functionCall("call-a", "request_orchestrator_delegation", { instruction: "Review the plan" })]);
+    // Raised late, the request would go at once: the withdrawal said before it stops the send. Raised early, the model asked first.
+    const proposal = backendResponse("resp_0", [functionCall("call-a", "request_orchestrator_delegation", { instruction: "Review the plan", ...(late ? {} : { confirmation_reason: "Two plans exist." }) })]);
     f.provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output") ? backendResponse(`resp_${index}`, [message("Shown.")])
       : late ? new Promise(resolve => { answer = () => resolve(proposal); }) : proposal;
     const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
@@ -522,7 +530,7 @@ test("a finished withdrawal takes the proposal off: the old tap, a late result, 
     expect(session.inputs.at(-1), withdrawal).toMatchObject({ text: withdrawal, final: true });
     if (late) {
       expect(Object.values(session.proposals), withdrawal).toEqual([]);
-      expect(f.admission.events(s.sessionId, 0).some(event => event.type === "delegation.confirmation.required"), withdrawal).toBe(false);
+      expect(f.admission.events(s.sessionId, 0).some(event => event.type === "delegation.confirmation.required" || event.type === "delegation.sending"), withdrawal).toBe(false);
       await f.service.close(s.sessionId);
       expect(f.sends(), withdrawal).toBe(0);
       continue;
@@ -534,7 +542,7 @@ test("a finished withdrawal takes the proposal off: the old tap, a late result, 
     await f.service.command(s.sessionId, tap);
     await f.service.command(s.sessionId, tap);
     // The model raising the same call again revives nothing.
-    expect(f.admission.propose(s.sessionId, "call-a", "request", "Review the plan", 1)).toBeNull();
+    expect(f.admission.propose(s.sessionId, "call-a", "request", "Review the plan", { sourceTurn: 1 })).toBeNull();
     const storage = new CompanionStorage();
     const restarted = new CompanionLiveSessions(storage, new CompanionAdmission(storage, { recipient: () => ({ project: "fixture", conversationId: "conversation_fixture", seatEpoch: 1, engine: "claude" }),
       send: async () => { throw new Error("unexpected delivery"); }, reports: () => [] }), noReads(), f.provider, { key: () => KEY, timers: false, closeTimeoutMs: 20 });
@@ -547,14 +555,15 @@ test("a finished withdrawal takes the proposal off: the old tap, a late result, 
   }
 });
 
-test("a withdrawal still arriving takes the proposal off, and ordinary speech after a request leaves it", async () => {
+test("a withdrawal still arriving takes a waiting confirmation off, and ordinary speech leaves it for the answer", async () => {
   for (const [later, state] of [["Never mind, cancel that", "cancelled"], ["Забудь", "cancelled"], ["It is in the docs folder", "pending"]] as const) {
     fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
     const f = fixture();
-    f.provider.responder = calling(functionCall("call-a", "request_orchestrator_delegation", { instruction: "Review the plan" }));
+    f.provider.responder = calling(functionCall("call-a", "request_orchestrator_delegation", { instruction: "Review the plan", confirmation_reason: "Two plans exist." }));
     const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
     f.provider.replay(s.providerId, said("Ask the orchestrator to review the plan.", 0), delegationCreated("request", 600));
     await f.service.drain(s.sessionId);
+    expect(f.sends(), later).toBe(0);
     f.provider.replay(s.providerId, said(later, 3_000));
     await f.service.drain(s.sessionId);
     const [held] = Object.values(f.admission.session(s.sessionId).proposals);
@@ -654,4 +663,79 @@ test("end_conversation closes nothing unless the operator asked to end the call;
     expect(f.provider.attached).toBe(0);
     expect(f.sends()).toBe(0);
   }
+});
+
+test("a confirmation the model asked for is answered hands-free: the next delegation learns what waits, and the spoken yes sends once", async () => {
+  const f = fixture();
+  f.provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output") ? backendResponse(`resp_${index}`, [message("Spoken.")])
+    : String(request.input[0].content).includes("waiting for the operator's answer") ? backendResponse(`resp_${index}`, [functionCall("call-yes", "resolve_orchestrator_confirmation", { decision: "send" })])
+    : backendResponse(`resp_${index}`, [functionCall("call-ask", "request_orchestrator_delegation", { instruction: "Delete the old presets", confirmation_reason: "Deleting cannot be undone." })]);
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  f.provider.replay(s.providerId, said("Tell the orchestrator to delete the old presets.", 0), delegationCreated("ask", 600));
+  await f.service.drain(s.sessionId);
+  const output = (request: number) => JSON.parse(f.provider.requests[request].input.find(item => item.type === "function_call_output")!.output as string);
+  expect(f.sends()).toBe(0);
+  expect(output(1)).toMatchObject({ status: "awaiting_confirmation", reason: "Deleting cannot be undone." });
+  expect(f.provider.requests[0].input[0].content).not.toContain("waiting for the operator's answer");
+  const [held] = Object.values(f.admission.session(s.sessionId).proposals);
+  expect(held).toMatchObject({ state: "pending", proposal: { confirmation: { reason: "Deleting cannot be undone." } } });
+  // The companion asks aloud, the operator answers aloud, and Live delegates the answer.
+  f.provider.replay(s.providerId, said("Deleting cannot be undone. Shall I send it?", 1_500, "output"), said("Yes, send it.", 4_000), delegationCreated("answer", 4_600));
+  await f.service.drain(s.sessionId);
+  expect(f.provider.requests[2].input[0].content).toContain('has not been sent: "Delete the old presets"');
+  expect(output(3)).toMatchObject({ status: "sent", delivery: "queued" });
+  expect(f.sends()).toBe(1);
+  const events = f.admission.events(s.sessionId, 0);
+  expect(events.map(event => event.type).filter(type => type.startsWith("delegation."))).toEqual(["delegation.tool.called", "delegation.confirmation.required", "delegation.confirmed", "delegation.tool.result"]);
+  expect(events.find(event => event.type === "delegation.confirmed")).toMatchObject({ via: "speech" });
+  // A tap after the answer, and the same tool call again, add nothing.
+  await f.service.command(s.sessionId, { type: "confirmation", proposalId: held.proposal.proposalId, decision: "send", via: "tap" });
+  f.provider.replay(s.providerId, said("Send it.", 9_000), delegationCreated("again", 9_500));
+  await f.service.drain(s.sessionId);
+  expect(f.sends()).toBe(1);
+  await f.service.close(s.sessionId);
+});
+
+test("a spoken no, a request taken back and an unanswered confirmation each send nothing, and the companion is told to say so", async () => {
+  for (const [answer, code] of [["Leave it for today.", "operator_cancelled"], ["No, don't send it.", "source_changed"], ["Ні, не треба.", "source_changed"]] as const) {
+    fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+    const f = fixture();
+    f.provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output") ? backendResponse(`resp_${index}`, [message("Spoken.")])
+      : index === 0 ? backendResponse(`resp_${index}`, [functionCall("call-ask", "request_orchestrator_delegation", { instruction: "Delete the old presets", confirmation_reason: "Deleting cannot be undone." })])
+      : backendResponse(`resp_${index}`, [functionCall("call-no", "resolve_orchestrator_confirmation", { decision: "cancel" })]);
+    const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+    f.provider.replay(s.providerId, said("Tell the orchestrator to delete the old presets.", 0), delegationCreated("ask", 600));
+    await f.service.drain(s.sessionId);
+    f.provider.replay(s.providerId, said("Shall I send it?", 1_500, "output"), said(answer, 4_000), delegationCreated("answer", 4_600));
+    await f.service.drain(s.sessionId);
+    const [held] = Object.values(f.admission.session(s.sessionId).proposals);
+    expect([answer, held.state, held.cancelCode]).toEqual([answer, "cancelled", code]);
+    const said_ = JSON.parse(f.provider.requests[3].input.find(item => item.type === "function_call_output")!.output as string);
+    expect(said_, answer).toMatchObject({ status: "refused", code });
+    expect(said_.speech, answer).toContain("Nothing was sent");
+    await f.service.command(s.sessionId, { type: "confirmation", proposalId: held.proposal.proposalId, decision: "send", via: "tap" });
+    await f.service.close(s.sessionId);
+    expect(f.sends(), answer).toBe(0);
+  }
+  // Nobody answers: after its time the card ends with nothing sent and the companion is told once.
+  fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+  let now = Date.now();
+  const storage = new CompanionStorage(); storage.updateSettings({ enabled: true });
+  const admission = new CompanionAdmission(storage, { recipient: () => ({ project: "fixture", conversationId: "conversation_fixture", seatEpoch: 1, engine: "claude" }),
+    send: async () => { throw new Error("unexpected delivery"); }, reports: () => [] }, () => now);
+  const provider = new FakeLiveProvider();
+  const service = new CompanionLiveSessions(storage, admission, noReads(), provider, { key: () => KEY, timers: false, closeTimeoutMs: 20, now: () => now });
+  provider.responder = calling(functionCall("call-ask", "request_orchestrator_delegation", { instruction: "Delete the old presets", confirmation_reason: "Deleting cannot be undone." }));
+  const s = await service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  provider.replay(s.providerId, said("Tell the orchestrator to delete the old presets.", 0), delegationCreated("ask", 600));
+  await service.drain(s.sessionId);
+  await service.events(s.sessionId, 0);
+  const told = () => provider.commands.filter(row => row.type === "session.commentary.append" && String(row.content).includes("not answered in time"));
+  expect(told()).toHaveLength(0);
+  now += 121_000;
+  const events = await service.events(s.sessionId, 0);
+  await service.events(s.sessionId, 0);
+  expect(events.at(-1)).toMatchObject({ type: "delegation.tool.result", result: { status: "cancelled", code: "confirmation_expired" } });
+  expect(told()).toHaveLength(1);
+  await service.close(s.sessionId);
 });

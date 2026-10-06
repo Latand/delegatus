@@ -9,12 +9,14 @@ import type { ScriptStep } from "./simulator";
  * question about the board answered from one read call, from several, and a
  * long spoken answer after one, none of which delegates. Every call carries a
  * name from the tool registry (`tools.ts`). `demo` is what the product's demo
- * choice plays; the rest exist for the browser driver (a quick way to the
- * proposal, a fill of speech and calls for the edge readings, a withdrawal).
+ * choice plays; the rest exist for the browser driver (a quick way to a
+ * confirmation that waits, one answered by voice, a fill of speech and calls
+ * for the edge readings, a withdrawal). A request to the orchestrator is sent
+ * at once; the model asks first only where it judges that it should.
  */
 
 export const SCENARIOS = ["short", "three", "paragraph", "long", "many", "burst", "delegation", "interrupt", "read", "reads", "readLong"] as const;
-export const DRIVER_SCENARIOS = ["proposal", "edge", "withdraw", "demo", "demoNoSeat", "readThenAsk", "unconfirmed"] as const;
+export const DRIVER_SCENARIOS = ["proposal", "voiceConfirm", "edge", "withdraw", "demo", "demoNoSeat", "readThenAsk", "unconfirmed"] as const;
 export type ScenarioName = (typeof SCENARIOS)[number] | (typeof DRIVER_SCENARIOS)[number];
 
 export const isScenario = (value: unknown): value is ScenarioName =>
@@ -55,8 +57,15 @@ const TEXT = {
     opinion: "It does. Three presets cover the common cases, and one advanced sheet keeps the rare toggles out of the way. I'd keep the old keys readable.",
     ask: "Ask the orchestrator to review the export plan.",
     instruction: "Review the export plan: three presets and one advanced sheet, with the old keys still readable.",
-    readback: "I'll ask the atlas orchestrator to review the export plan. Shall I send it?",
+    readback: "I'm not sure which plan you mean. Shall I ask the atlas orchestrator to review the export plan?",
+    unsure: "I am not sure which plan is meant.",
     sent: "Sent. I'll tell you when it answers.",
+    askCritical: "Tell the orchestrator to delete the old export presets.",
+    instructionCritical: "Delete the old export presets: every preset saved before the three new ones.",
+    critical: "Deleting the old presets cannot be undone.",
+    askAloud: "That deletes the old presets and can't be undone. Shall I send it?",
+    yes: "Yes, send it.",
+    sentCritical: "Sent. The orchestrator has it now.",
     notSent: "Okay, nothing was sent.",
     hold: "Wait, don't send it yet.",
     dropped: "Okay, I dropped it. Nothing was sent.",
@@ -101,8 +110,15 @@ const TEXT = {
     opinion: "Так. Три пресети покривають типові випадки, а один розширений аркуш ховає рідкісні перемикачі. Старі ключі я б лишив читабельними.",
     ask: "Попроси оркестратора перевірити план експорту.",
     instruction: "Перевір план експорту: три пресети й один розширений аркуш, старі ключі лишаються читабельними.",
-    readback: "Попрошу оркестратора atlas перевірити план експорту. Надсилати?",
+    readback: "Я не певен, про який план мова. Попросити оркестратора atlas перевірити план експорту?",
+    unsure: "Я не певен, про який план мова.",
     sent: "Надіслав. Скажу, коли він відповість.",
+    askCritical: "Скажи оркестратору видалити старі пресети експорту.",
+    instructionCritical: "Видали старі пресети експорту: усі, збережені до трьох нових.",
+    critical: "Видалення старих пресетів не можна скасувати.",
+    askAloud: "Це видалить старі пресети, і скасувати це не вийде. Надсилати?",
+    yes: "Так, надсилай.",
+    sentCritical: "Надіслав. Оркестратор уже має це прохання.",
     notSent: "Гаразд, нічого не надіслано.",
     hold: "Стривай, поки не надсилай.",
     dropped: "Гаразд, я зняв це прохання. Нічого не надіслано.",
@@ -122,6 +138,12 @@ export const DEMO_IDS = {
   clientMessageId: "voice-delegation-1",
   operationId: "operation_voice_1",
   reportId: "report_voice_1",
+  criticalAskItem: "item_op_critical",
+  criticalCallId: "call_delegate_2",
+  criticalProposalId: "proposal_2",
+  criticalClientMessageId: "voice-delegation-2",
+  criticalOperationId: "operation_voice_2",
+  yesItem: "item_op_yes",
   bargeInItem: "item_op_wait",
   interruptedResponse: "resp_plan",
 } as const;
@@ -147,21 +169,44 @@ const reads = (prefix: string, calls: readonly CallText[], durations: readonly n
   })),
 });
 
+/** The default: the request goes to the orchestrator at once, the card shows what was sent, and the answer comes back. */
 function delegationSteps(locale: Locale): ScriptStep[] {
   const t = TEXT[locale];
   return [
     { kind: "operator", itemId: DEMO_IDS.askItem, text: t.ask },
     { kind: "propose", callId: DEMO_IDS.callId, proposalId: DEMO_IDS.proposalId, sourceItemId: DEMO_IDS.askItem, instruction: t.instruction },
-    companion("readback", t.readback),
-    {
-      kind: "confirm", clientMessageId: DEMO_IDS.clientMessageId, operationId: DEMO_IDS.operationId, settleAfterMs: 1100,
-      cancelled: [companion("cancel", t.notSent)],
-    },
+    { kind: "deliver", clientMessageId: DEMO_IDS.clientMessageId, operationId: DEMO_IDS.operationId, settleAfterMs: 1100, cancelled: [] },
     companion("sent", t.sent),
     { kind: "answer", reportId: DEMO_IDS.reportId, status: "result", text: t.answer, afterMs: 1800 },
     pause(600),
     /* Spoken with the delegation tool disabled: an answer is a report to explain. */
     companion("explain", t.explain),
+  ];
+}
+
+/** The exception: the model is unsure and asks first. The card waits for a tap; these scripts leave the answer to the driver. */
+function confirmationSteps(locale: Locale, readback: Partial<Extract<ScriptStep, { kind: "companion" }>> | null = {}): ScriptStep[] {
+  const t = TEXT[locale];
+  return [
+    { kind: "operator", itemId: DEMO_IDS.askItem, text: t.ask },
+    { kind: "propose", callId: DEMO_IDS.callId, proposalId: DEMO_IDS.proposalId, sourceItemId: DEMO_IDS.askItem, instruction: t.instruction, confirm: t.unsure },
+    ...(readback ? [companion("readback", t.readback, readback)] : []),
+    { kind: "deliver", clientMessageId: DEMO_IDS.clientMessageId, operationId: DEMO_IDS.operationId, settleAfterMs: 1100, cancelled: [companion("cancel", t.notSent)] },
+  ];
+}
+
+/** A request that is hard to undo: the model asks aloud, and the operator's spoken yes sends it through the tool. */
+function spokenConfirmationSteps(locale: Locale): ScriptStep[] {
+  const t = TEXT[locale];
+  return [
+    { kind: "operator", itemId: DEMO_IDS.criticalAskItem, text: t.askCritical },
+    { kind: "propose", callId: DEMO_IDS.criticalCallId, proposalId: DEMO_IDS.criticalProposalId, sourceItemId: DEMO_IDS.criticalAskItem, instruction: t.instructionCritical, confirm: t.critical },
+    companion("askaloud", t.askAloud),
+    {
+      kind: "deliver", clientMessageId: DEMO_IDS.criticalClientMessageId, operationId: DEMO_IDS.criticalOperationId, settleAfterMs: 1100,
+      spoken: { itemId: DEMO_IDS.yesItem, text: t.yes, decision: "send" }, cancelled: [companion("cancel", t.notSent)],
+    },
+    companion("sentcritical", t.sentCritical),
   ];
 }
 
@@ -193,13 +238,15 @@ export function scenarioScript(name: ScenarioName, locale: Locale): ScriptStep[]
     /* A long spoken answer after one read call: the pace and the split into bubbles can be watched. */
     case "readLong":
       return [pause(400), operator(1, t.readLongAsk), reads("long", [t.readLongCall], [1200]), companion(1, t.readLongAnswer)];
-    /* The product's demo choice: a greeting, a board question answered from a read call, then a delegation
-       the operator confirms. With no orchestrator seat the demo stops before the delegation. */
+    /* The product's demo choice: a greeting, a board question answered from a read call, a request sent to the
+       orchestrator at once with its answer, then one the model asks about first and the operator confirms by
+       voice. With no orchestrator seat the demo stops before the delegation. */
     case "demo":
       return [
         pause(500), operator(1, t.hello), companion(1, t.here), pause(400),
         operator("read", t.readAsk), reads("demo", [t.readCall], [1100]), companion("read", t.readAnswer), pause(500),
-        ...delegationSteps(locale),
+        ...delegationSteps(locale), pause(700),
+        ...spokenConfirmationSteps(locale),
       ];
     case "demoNoSeat":
       return [
@@ -221,33 +268,24 @@ export function scenarioScript(name: ScenarioName, locale: Locale): ScriptStep[]
         companion("presets", t.presets),
       ];
     case "proposal":
-      return [pause(300), ...delegationSteps(locale)];
+      return [pause(300), ...confirmationSteps(locale), companion("sent", t.sent)];
+    case "voiceConfirm":
+      return [pause(300), ...spokenConfirmationSteps(locale)];
     case "withdraw":
-      /* The operator speaks over the read-back: the preview leaves, and the confirm step finds nothing to send. */
-      return [
-        pause(300),
-        { kind: "operator", itemId: DEMO_IDS.askItem, text: t.ask },
-        { kind: "propose", callId: DEMO_IDS.callId, proposalId: DEMO_IDS.proposalId, sourceItemId: DEMO_IDS.askItem, instruction: t.instruction },
-        companion("readback", t.readback, { bargeIn: { afterMs: 1_400, itemId: "item_op_hold", text: t.hold } }),
-        { kind: "confirm", clientMessageId: DEMO_IDS.clientMessageId, operationId: DEMO_IDS.operationId, settleAfterMs: 1100, cancelled: [] },
-        companion("dropped", t.dropped),
-      ];
-    /* A read call and the proposal in the lane together, so the two kinds of card can be compared side by side. */
-    case "readThenAsk":
-      return [
-        pause(300),
-        { kind: "operator", itemId: DEMO_IDS.askItem, text: t.ask },
-        reads("ask", [t.readCall], [700]),
-        { kind: "propose", callId: DEMO_IDS.callId, proposalId: DEMO_IDS.proposalId, sourceItemId: DEMO_IDS.askItem, instruction: t.instruction },
-        { kind: "confirm", clientMessageId: DEMO_IDS.clientMessageId, operationId: DEMO_IDS.operationId, settleAfterMs: 1100, cancelled: [] },
-      ];
+      /* The operator speaks over the question and takes the request back: the card leaves, and nothing is left to send. */
+      return [pause(300), ...confirmationSteps(locale, { bargeIn: { afterMs: 1_400, itemId: "item_op_hold", text: t.hold } }).map((step) => (step.kind === "deliver" ? { ...step, cancelled: [] } : step)), companion("dropped", t.dropped)];
+    /* A read call and the waiting confirmation in the lane together, so the two kinds of card can be compared side by side. */
+    case "readThenAsk": {
+      const [ask, ...rest] = confirmationSteps(locale, null);
+      return [pause(300), ask!, reads("ask", [t.readCall], [700]), ...rest];
+    }
     /* The send's outcome stays unknown: the card says the delivery is not confirmed, and no answer is claimed. */
     case "unconfirmed":
       return [
         pause(300),
         { kind: "operator", itemId: DEMO_IDS.askItem, text: t.ask },
         { kind: "propose", callId: DEMO_IDS.callId, proposalId: DEMO_IDS.proposalId, sourceItemId: DEMO_IDS.askItem, instruction: t.instruction },
-        { kind: "confirm", clientMessageId: DEMO_IDS.clientMessageId, operationId: DEMO_IDS.operationId, settleAfterMs: 1100, cancelled: [], unconfirmed: true },
+        { kind: "deliver", clientMessageId: DEMO_IDS.clientMessageId, operationId: DEMO_IDS.operationId, settleAfterMs: 1100, cancelled: [], unconfirmed: true },
         { kind: "answer", reportId: DEMO_IDS.reportId, status: "result", text: t.answer, afterMs: 600 },
       ];
     case "edge":

@@ -1,12 +1,22 @@
 {
   "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
-  "fixture": "?scenario=voice-companion&script=proposal",
-  "rule": "the instruction is shown whole and wraps; past 9 lines (162 px) it scrolls inside the element, which takes keyboard focus",
+  "fixture": "?scenario=voice-companion&script=proposal | &script=voiceConfirm",
+  "rule": "a request to the orchestrator is sent at once; this card appears only when the model asked to confirm first, with its reason. The instruction is shown whole and wraps; past 9 lines (162 px) it scrolls inside the element, which takes keyboard focus. It is answered aloud, and the two buttons are the second way",
   "cases": [
     {
       "viewport": "1440x900",
       "lang": "en",
       "scheme": "light",
+      "reason": {
+        "text": "I am not sure which plan is meant.",
+        "inside": true,
+        "clipped": false
+      },
+      "hint": {
+        "text": "Say yes or no, or tap.",
+        "inside": true,
+        "clipped": false
+      },
       "text": "Review the export plan: three presets and one advanced sheet, with the old keys still readable.",
       "scrollHeight": 66,
       "clientHeight": 66,
@@ -38,6 +48,16 @@
       "viewport": "1440x900",
       "lang": "en",
       "scheme": "dark",
+      "reason": {
+        "text": "I am not sure which plan is meant.",
+        "inside": true,
+        "clipped": false
+      },
+      "hint": {
+        "text": "Say yes or no, or tap.",
+        "inside": true,
+        "clipped": false
+      },
       "text": "Review the export plan: three presets and one advanced sheet, with the old keys still readable.",
       "scrollHeight": 66,
       "clientHeight": 66,
@@ -69,6 +89,16 @@
       "viewport": "1440x900",
       "lang": "uk",
       "scheme": "light",
+      "reason": {
+        "text": "Я не певен, про який план мова.",
+        "inside": true,
+        "clipped": false
+      },
+      "hint": {
+        "text": "Скажіть «так» чи «ні» або натисніть.",
+        "inside": true,
+        "clipped": false
+      },
       "text": "Перевір план експорту: три пресети й один розширений аркуш, старі ключі лишаються читабельними.",
       "scrollHeight": 66,
       "clientHeight": 66,
@@ -100,6 +130,16 @@
       "viewport": "1440x900",
       "lang": "uk",
       "scheme": "dark",
+      "reason": {
+        "text": "Я не певен, про який план мова.",
+        "inside": true,
+        "clipped": false
+      },
+      "hint": {
+        "text": "Скажіть «так» чи «ні» або натисніть.",
+        "inside": true,
+        "clipped": false
+      },
       "text": "Перевір план експорту: три пресети й один розширений аркуш, старі ключі лишаються читабельними.",
       "scrollHeight": 66,
       "clientHeight": 66,
@@ -131,6 +171,16 @@
       "viewport": "1000x800",
       "lang": "en",
       "scheme": "light",
+      "reason": {
+        "text": "I am not sure which plan is meant.",
+        "inside": true,
+        "clipped": false
+      },
+      "hint": {
+        "text": "Say yes or no, or tap.",
+        "inside": true,
+        "clipped": false
+      },
       "text": "Review the export plan: three presets and one advanced sheet, with the old keys still readable.",
       "scrollHeight": 66,
       "clientHeight": 66,
@@ -162,6 +212,16 @@
       "viewport": "1000x800",
       "lang": "en",
       "scheme": "dark",
+      "reason": {
+        "text": "I am not sure which plan is meant.",
+        "inside": true,
+        "clipped": false
+      },
+      "hint": {
+        "text": "Say yes or no, or tap.",
+        "inside": true,
+        "clipped": false
+      },
       "text": "Review the export plan: three presets and one advanced sheet, with the old keys still readable.",
       "scrollHeight": 66,
       "clientHeight": 66,
@@ -193,6 +253,16 @@
       "viewport": "1000x800",
       "lang": "uk",
       "scheme": "light",
+      "reason": {
+        "text": "Я не певен, про який план мова.",
+        "inside": true,
+        "clipped": false
+      },
+      "hint": {
+        "text": "Скажіть «так» чи «ні» або натисніть.",
+        "inside": true,
+        "clipped": false
+      },
       "text": "Перевір план експорту: три пресети й один розширений аркуш, старі ключі лишаються читабельними.",
       "scrollHeight": 66,
       "clientHeight": 66,
@@ -224,6 +294,16 @@
       "viewport": "1000x800",
       "lang": "uk",
       "scheme": "dark",
+      "reason": {
+        "text": "Я не певен, про який план мова.",
+        "inside": true,
+        "clipped": false
+      },
+      "hint": {
+        "text": "Скажіть «так» чи «ні» або натисніть.",
+        "inside": true,
+        "clipped": false
+      },
       "text": "Перевір план експорту: три пресети й один розширений аркуш, старі ключі лишаються читабельними.",
       "scrollHeight": 66,
       "clientHeight": 66,
@@ -250,6 +330,88 @@
           "labelContrast": 5.68
         }
       ]
+    }
+  ],
+  "spokenAnswer": [
+    {
+      "viewport": "1440x900",
+      "lang": "en",
+      "scheme": "light",
+      "asked": {
+        "reason": "Deleting the old presets cannot be undone.",
+        "instruction": "Delete the old export presets: every preset saved before the three new ones.",
+        "dispatches": 0
+      },
+      "answer": "Yes, send it.",
+      "pointerEventsAfterTalk": 0,
+      "order": [
+        "delegation.tool.called",
+        "delegation.confirmation.required",
+        "delegation.confirmed",
+        "delegation.tool.result",
+        "delegation.delivery.settled"
+      ],
+      "dispatches": 1
+    },
+    {
+      "viewport": "1000x800",
+      "lang": "uk",
+      "scheme": "dark",
+      "asked": {
+        "reason": "Видалення старих пресетів не можна скасувати.",
+        "instruction": "Видали старі пресети експорту: усі, збережені до трьох нових.",
+        "dispatches": 0
+      },
+      "answer": "Так, надсилай.",
+      "pointerEventsAfterTalk": 0,
+      "order": [
+        "delegation.tool.called",
+        "delegation.confirmation.required",
+        "delegation.confirmed",
+        "delegation.tool.result",
+        "delegation.delivery.settled"
+      ],
+      "dispatches": 1
+    },
+    {
+      "viewport": "1440x900",
+      "lang": "uk",
+      "scheme": "light",
+      "asked": {
+        "reason": "Видалення старих пресетів не можна скасувати.",
+        "instruction": "Видали старі пресети експорту: усі, збережені до трьох нових.",
+        "dispatches": 0
+      },
+      "answer": "Так, надсилай.",
+      "pointerEventsAfterTalk": 0,
+      "order": [
+        "delegation.tool.called",
+        "delegation.confirmation.required",
+        "delegation.confirmed",
+        "delegation.tool.result",
+        "delegation.delivery.settled"
+      ],
+      "dispatches": 1
+    },
+    {
+      "viewport": "1000x800",
+      "lang": "en",
+      "scheme": "dark",
+      "asked": {
+        "reason": "Deleting the old presets cannot be undone.",
+        "instruction": "Delete the old export presets: every preset saved before the three new ones.",
+        "dispatches": 0
+      },
+      "answer": "Yes, send it.",
+      "pointerEventsAfterTalk": 0,
+      "order": [
+        "delegation.tool.called",
+        "delegation.confirmation.required",
+        "delegation.confirmed",
+        "delegation.tool.result",
+        "delegation.delivery.settled"
+      ],
+      "dispatches": 1
     }
   ]
 }

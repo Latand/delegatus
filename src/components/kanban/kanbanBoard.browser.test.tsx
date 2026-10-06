@@ -18,7 +18,7 @@ import { READ_TOOL_NAMES } from "@/lib/voiceCompanion/boardReads";
 import { companionErrorMessage } from "@/lib/voiceCompanion/errors";
 import { RISE_FRAME_SHARE } from "@/lib/voiceCompanion/motion";
 import { CONTROL_SELECTOR } from "@/lib/voiceCompanion/placement";
-import { DEMO_IDS, demoAnswer, demoInstruction, SCENARIOS } from "@/lib/voiceCompanion/scenarios";
+import { DEMO_IDS, demoAnswer, demoInstruction, SCENARIOS, scenarioText } from "@/lib/voiceCompanion/scenarios";
 import { captureSeatMandateHandover, openFixture, serveEvidenceFixture } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { clipTitle } from "./taskText";
@@ -17973,7 +17973,8 @@ describe("parallel ask idle fallback", () => {
  * collapsed, 1440 and 1000 wide, en and uk, both themes); that the lane flips at every
  * edge and no bubble leaves the viewport; that a click anywhere in the lane but on a
  * bubble reaches the page; that a companion dropped on a control is the one that moves;
- * that the proposal's whole text and both buttons can be read; that a read call and the
+ * that a confirmation the model asked for shows its reason, its whole text and both
+ * buttons, and is answered by voice with no tap; that a read call and the
  * delegation are told apart; the failures in plain words; the settings rows and the
  * product mount; the delegated message's own tint in the production conversation pane;
  * and the eleven scripted scenarios, each measured and then recorded at both widths,
@@ -18661,8 +18662,8 @@ describe("floating voice companion", () => {
           readings.collapsedProposal = { flagged: flagged.block, cancel: { dispatches: voice.dispatches }, ended: { block: ended.block, phase: ended.phase } };
         } finally { await context.close(); }
       }
-      /* The operator speaks over the read-back of a proposal: the preview leaves with its buttons, the element
-         says the request was dropped, and nothing is sent. Three passes: en and uk, both themes. */
+      /* The operator speaks over the question and takes the request back: the card leaves with its buttons, the
+         element says the request was dropped, and nothing is sent. Three passes: en and uk, both themes. */
       {
         const withdrawn: Record<string, unknown> = {};
         for (const [index, pass] of ([1, 2, 3] as const).entries()) {
@@ -18684,8 +18685,10 @@ describe("floating voice companion", () => {
             const seen = voice.events.map((event) => event.type);
             const offered = seen.indexOf("delegation.confirmation.required");
             const spoke = voice.events.findIndex((event, at) => at > offered && event.type === "input.speech.started");
-            expect(offered, `pass ${pass}: the preview was offered`).toBeGreaterThan(-1);
-            expect(seen[spoke + 1], `pass ${pass}: it left as the new speech started`).toBe("delegation.tool.result");
+            const left = seen.indexOf("delegation.tool.result", spoke);
+            expect(offered, `pass ${pass}: the confirmation was asked`).toBeGreaterThan(-1);
+            expect(left, `pass ${pass}: it left after the new speech started`).toBeGreaterThan(spoke);
+            expect(voice.events.slice(spoke, left).filter((event) => event.speaker === "operator" && event.type.startsWith("transcript.")), `pass ${pass}: it left on the first words that took it back`).toEqual([]);
             expect({ dispatches: voice.dispatches, confirmed: seen.filter((type) => type === "delegation.confirmed").length, answers: seen.filter((type) => type === "orchestrator.answer").length }, `pass ${pass}: nothing was sent`).toEqual({ dispatches: 0, confirmed: 0, answers: 0 });
             expect(await page.locator("[data-voice-relay]").count(), "no delegated row in the conversation").toBe(0);
             expect(pageErrors).toEqual([]);
@@ -18775,11 +18778,12 @@ describe("floating voice companion", () => {
     record("yield.json", { driver: DRIVER, fixture: "?scenario=voice-companion", behaviour: "the character follows the pointer while held, its lane flipping at the edges; on the drop the character and its lane move to the nearest free place, a shorter lane is tried, and with none the companion collapses", ...readings });
   }, 300_000);
 
-  browserTest("the proposal shows its whole text and both buttons: 1440 and 1000, en and uk, both themes", async () => {
+  browserTest("a confirmation the model asked for shows its reason, its whole text and both buttons, and a spoken yes sends it with no tap: 1440 and 1000, en and uk, both themes", async () => {
     fs.mkdirSync(HANDOFF, { recursive: true });
     const server = await serveEvidenceFixture(OUT);
     const { browser, close } = await launchOwned();
     const cases: unknown[] = [];
+    const spoken: unknown[] = [];
     let processes = { started: 0, leftAfterClose: 0 };
     try {
       for (const viewport of SIZES) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
@@ -18807,13 +18811,17 @@ describe("floating voice companion", () => {
               const style = getComputedStyle(button);
               return { label: button.innerText.trim(), inside: inside(box), reachable: !!hit && button.contains(hit), clipped: button.scrollWidth > button.clientWidth + 1, width: Math.round(box.width), height: Math.round(box.height), labelContrast: contrast(style.color, style.backgroundColor) };
             });
+            const note = (selector: string) => { const node = element.querySelector<HTMLElement>(selector); return node ? { text: node.innerText.trim(), inside: inside(node.getBoundingClientRect()), clipped: node.scrollHeight > node.clientHeight + 1 } : null; };
             return {
+              reason: note("[data-companion-confirm-reason]"), hint: note("[data-companion-confirm-hint]"),
               text: instruction.innerText.trim(), scrollHeight: instruction.scrollHeight, clientHeight: instruction.clientHeight,
               instructionInside: inside(instruction.getBoundingClientRect()), elementInside: inside(element.getBoundingClientRect()),
               lines: Math.round(instruction.scrollHeight / parseFloat(getComputedStyle(instruction).lineHeight)), buttons,
             };
           });
           expect(reading.text, `${label}: the whole frozen text`).toBe(demoInstruction(lang));
+          expect(reading.reason, `${label}: the model's reason for asking, whole`).toEqual({ text: scenarioText(lang).unsure, inside: true, clipped: false });
+          expect(reading.hint, `${label}: the spoken way to answer is named`).toEqual({ text: translate(lang, "voiceCompanion.confirmHint"), inside: true, clipped: false });
           expect(reading.scrollHeight, `${label}: nothing of it hidden`).toBeLessThanOrEqual(reading.clientHeight + 1);
           expect(reading.instructionInside && reading.elementInside, `${label}: inside the viewport`).toBe(true);
           expect(reading.buttons.map((button) => button.label), `${label}: both buttons`).toEqual([translate(lang, "voiceCompanion.cancel"), translate(lang, "voiceCompanion.send")]);
@@ -18825,9 +18833,41 @@ describe("floating voice companion", () => {
           await page.screenshot({ path: path.join(HANDOFF, `proposal-${label}.png`) });
         } finally { await context.close(); }
       }
+      /* The same card answered hands-free: the companion asks aloud, the operator says yes, and the request goes out
+         once with no pointer event on the page. */
+      for (const [viewport, lang, scheme] of [[VIEWPORT, "en", "light"], [NARROW, "uk", "dark"], [VIEWPORT, "uk", "light"], [NARROW, "en", "dark"]] as const) {
+        const label = `${viewport.width}-${lang}-${scheme}`;
+        const { context, page, pageErrors } = await openVoice(browser, server.base, "&script=voiceConfirm", { viewport, scheme, lang, motion: "reduce" });
+        try {
+          await page.locator("[data-companion-talk]").click();
+          await page.locator("[data-companion-send]").waitFor({ timeout: 30_000 });
+          await page.waitForTimeout(400);
+          const asked = { reason: (await page.locator("[data-companion-confirm-reason]").innerText()).trim(), instruction: (await page.locator("[data-companion-instruction]").innerText()).trim(), dispatches: (await voiceOf(page)).dispatches };
+          expect(asked, `${label}: the reason and the whole request, nothing sent yet`).toEqual({ reason: scenarioText(lang).critical, instruction: scenarioText(lang).instructionCritical, dispatches: 0 });
+          expectFree(await readCompanion(page), `${label}: asking`, { textMayLie: true });
+          await page.screenshot({ path: path.join(HANDOFF, `confirmation-voice-asked-${label}.png`) });
+          await page.waitForSelector('[data-companion-delegation][data-stage="delivered"]', { timeout: 15_000 });
+          await page.waitForFunction(() => (window as unknown as { voiceCompanion: Voice }).voiceCompanion.finished, null, { timeout: 30_000, polling: 100 });
+          const voice = await voiceOf(page);
+          const order = voice.events.filter((event) => event.type.startsWith("delegation.")).map((event) => event.type);
+          expect(order, `${label}: asked, answered, sent`).toEqual(["delegation.tool.called", "delegation.confirmation.required", "delegation.confirmed", "delegation.tool.result", "delegation.delivery.settled"]);
+          const answered = voice.events.findIndex((event) => event.type === "transcript.final" && event.speaker === "operator" && event.itemId === DEMO_IDS.yesItem);
+          expect(voice.events.findIndex((event) => event.type === "delegation.confirmed"), `${label}: sent only after the spoken yes`).toBeGreaterThan(answered);
+          expect(voice.dispatches, `${label}: sent once`).toBe(1);
+          expect(await page.locator("[data-companion-send], [data-companion-cancel], [data-companion-confirm-hint]").count(), `${label}: no button is left`).toBe(0);
+          expect((await page.locator("[data-companion-instruction]").innerText()).trim(), `${label}: the card shows what was sent`).toBe(scenarioText(lang).instructionCritical);
+          await page.screenshot({ path: path.join(HANDOFF, `confirmation-voice-sent-${label}.png`) });
+          expect(pageErrors, label).toEqual([]);
+          spoken.push({ viewport: `${viewport.width}x${viewport.height}`, lang, scheme, asked, answer: scenarioText(lang).yes, pointerEventsAfterTalk: 0, order, dispatches: voice.dispatches });
+        } finally { await context.close(); }
+      }
     } finally { processes = await close(); server.stop(); }
     expect(processes.leftAfterClose, "browser processes left after close").toBe(0);
-    record("proposal.json", { driver: DRIVER, fixture: "?scenario=voice-companion&script=proposal", rule: "the instruction is shown whole and wraps; past 9 lines (162 px) it scrolls inside the element, which takes keyboard focus", cases });
+    record("proposal.json", {
+      driver: DRIVER, fixture: "?scenario=voice-companion&script=proposal | &script=voiceConfirm",
+      rule: "a request to the orchestrator is sent at once; this card appears only when the model asked to confirm first, with its reason. The instruction is shown whole and wraps; past 9 lines (162 px) it scrolls inside the element, which takes keyboard focus. It is answered aloud, and the two buttons are the second way",
+      cases, spokenAnswer: spoken,
+    });
   }, 600_000);
 
   browserTest("the delegated message has its own tint beside the internal one, in the production conversation pane: 1440 and 1000, light and dark, en and uk, Claude and Codex seats", async () => {
@@ -19000,14 +19040,15 @@ describe("floating voice companion", () => {
             failures.push({ failure: "no_orchestrator", lang, scheme, viewport: `${viewport.width}x${viewport.height}`, where: "a note in the lane as the conversation starts", ...notice, delegationOffered: offered });
           } finally { await context.close(); }
         }
-        /* Delivery not confirmed: the send's outcome is unknown, the card says so, and no answer is shown for it. */
+        /* Delivery not confirmed: the request went out at once with no tap, the send's outcome is unknown, the card
+           says so, and no answer is shown for it. */
         {
           const label = `DELIVERY_UNCONFIRMED-${lang}`;
           const { context, page, pageErrors } = await openVoice(browser, server.base, "&script=unconfirmed", { viewport, scheme, lang, motion: "reduce" });
           try {
             await page.locator("[data-companion-talk]").click();
-            await page.locator("[data-companion-send]").click({ timeout: 30_000 });
-            await page.waitForSelector('[data-voice-companion][data-delegation-stage="unknown"]', { timeout: 20_000 });
+            await page.waitForSelector('[data-voice-companion][data-delegation-stage="unknown"]', { timeout: 40_000 });
+            expect(await page.locator("[data-companion-send], [data-companion-cancel]").count(), `${label}: no button was offered`).toBe(0);
             await page.waitForFunction(() => (window as unknown as { voiceCompanion: Voice }).voiceCompanion.finished, null, { timeout: 30_000, polling: 100 });
             await page.waitForTimeout(400);
             const reading = await page.evaluate(() => {
@@ -19145,17 +19186,32 @@ describe("floating voice companion", () => {
           const placed = await readCompanion(page);
           expectFree(placed, `${label}: the shell's own mount`);
           expect(placed.lane, `${label}: the lane is reserved`).not.toBeNull();
-          /* Its demo plays on the event contract: a board question answered from a read call, then a delegation that
-             waits for the tap. Nothing leaves the page: the demo's send goes nowhere. */
+          /* Its demo plays on the event contract: a board question answered from a read call, a request sent to the
+             orchestrator at once with its answer, then one the model asks about first and the operator confirms
+             by voice. After Talk the driver touches nothing. Nothing leaves the page: the demo's send goes nowhere. */
           await page.locator("[data-companion-talk]").click();
           await page.waitForSelector('[data-companion-call][data-tool="list_tasks"]', { timeout: 60_000 });
           await page.screenshot({ path: path.join(HANDOFF, `product-demo-read-${label}.png`) });
-          await page.locator("[data-companion-send]").waitFor({ timeout: 90_000 });
-          expect(await page.locator("[data-voice-relay]").count(), `${label}: nothing in the orchestrator's conversation before the tap`).toBe(0);
-          await page.screenshot({ path: path.join(HANDOFF, `product-demo-proposal-${label}.png`) });
-          await page.locator("[data-companion-send]").click();
-          await page.waitForSelector("[data-companion-reply]", { timeout: 60_000 });
+          const stagesSeen = new Set<string>();
+          let buttonsBeforeAnswer = 0;
+          for (let turn = 0; turn < 600 && !(await page.locator("[data-companion-reply]").count()); turn += 1) {
+            for (const stage of await page.locator("[data-companion-delegation]").evaluateAll((nodes) => nodes.map((node) => (node as HTMLElement).dataset.stage ?? ""))) stagesSeen.add(stage);
+            buttonsBeforeAnswer = Math.max(buttonsBeforeAnswer, await page.locator("[data-companion-send], [data-companion-cancel]").count());
+            await page.waitForTimeout(100);
+          }
+          expect(await page.locator("[data-companion-reply]").count(), `${label}: the first request was answered`).toBe(1);
+          expect({ buttons: buttonsBeforeAnswer, asked: stagesSeen.has("awaiting-confirmation"), sent: ["sending", "queued", "delivered"].some((stage) => stagesSeen.has(stage)) }, `${label}: the first request went out at once, with no button`).toEqual({ buttons: 0, asked: false, sent: true });
           await page.screenshot({ path: path.join(HANDOFF, `product-demo-answer-${label}.png`) });
+          await page.locator("[data-companion-send]").waitFor({ timeout: 90_000 });
+          const demoReason = (await page.locator("[data-companion-confirm-reason]").innerText()).trim();
+          expect(demoReason, `${label}: the second request is asked about, with the model's reason`).toBe(scenarioText(lang).critical);
+          await page.waitForTimeout(400);
+          await page.screenshot({ path: path.join(HANDOFF, `product-demo-confirmation-${label}.png`) });
+          await page.waitForSelector('[data-companion-delegation][data-stage="delivered"]', { timeout: 60_000 });
+          expect(await page.locator("[data-companion-send], [data-companion-cancel]").count(), `${label}: the spoken yes sent it and the buttons left`).toBe(0);
+          await page.waitForTimeout(400);
+          await page.screenshot({ path: path.join(HANDOFF, `product-demo-confirmed-by-voice-${label}.png`) });
+          const demo = { firstRequest: { buttons: buttonsBeforeAnswer, stages: [...stagesSeen] }, secondRequest: { reason: demoReason, answeredBy: "voice", pointerEvents: 0, stage: "delivered" } };
           expect(await page.locator("[data-voice-relay]").count(), `${label}: the demo sends nothing to the orchestrator`).toBe(0);
           expectFree(await readCompanion(page), `${label}: the shell's mount in a conversation`, { textMayLie: true });
           await page.locator("[data-companion-end]").click();
@@ -19165,7 +19221,7 @@ describe("floating voice companion", () => {
           await page.locator("[data-voice-companion-enable]").click();
           await page.waitForSelector("[data-voice-companion]", { state: "detached", timeout: 10_000 });
           expect(pageErrors, label).toEqual([]);
-          cases.push({ viewport: `${viewport.width}x${viewport.height}`, lang, scheme, mountedBeforeEnable: 0, settingsWrites: (await writes(page)).settings, keyWrites: 1, keyEchoed: false, keyFieldAfterSave: afterKey.value, keyStatus: afterKey.status, dialog, shellMount: { block: placed.block, lane: placed.lane, overlapArea: placed.overlapArea, textUnderCharacter: placed.textUnderCharacter } });
+          cases.push({ viewport: `${viewport.width}x${viewport.height}`, lang, scheme, demo, mountedBeforeEnable: 0, settingsWrites: (await writes(page)).settings, keyWrites: 1, keyEchoed: false, keyFieldAfterSave: afterKey.value, keyStatus: afterKey.status, dialog, shellMount: { block: placed.block, lane: placed.lane, overlapArea: placed.overlapArea, textUnderCharacter: placed.textUnderCharacter } });
         } finally { await context.close(); }
       }
       /* The real backend with no key refuses in words before any microphone prompt, and points at the settings;
@@ -19294,23 +19350,18 @@ describe("floating voice companion", () => {
           const places = new Set<string>();
           await page.locator("[data-companion-talk]").click();
           let peak = 0;
-          let proposal: unknown = null;
+          /* `proposal` stays null: no scenario of the eleven asks the operator to confirm. */
+          const proposal: unknown = null;
+          let sent: { firstStageShown: string | null; taps: 0 } | null = null;
+          let buttonsOffered = 0;
           for (let turn = 0; turn < 900; turn += 1) {
             await page.waitForTimeout(recorded ? 250 : 400);
-            if (name === "delegation" && proposal === null && await page.locator("[data-companion-send]").count()) {
-              const before = await voiceOf(page);
-              const ask = before.events.findIndex((event) => event.type === "transcript.final" && event.speaker === "operator" && event.itemId === DEMO_IDS.askItem);
-              expect(ask, `${label}: the explicit request was heard`).toBeGreaterThan(0);
-              expect(before.events.slice(0, ask).filter((event) => event.type.startsWith("delegation.")), `${label}: no delegation before the request`).toEqual([]);
-              expect(before.dispatches, `${label}: nothing sent before the confirmation`).toBe(0);
-              expect(await page.locator("[data-voice-relay]").count(), `${label}: no delegated row before the confirmation`).toBe(0);
-              expect((await page.locator("[data-companion-instruction]").innerText()).trim(), `${label}: the proposal shows the whole instruction`).toBe(demoInstruction(lang));
-              await page.waitForTimeout(600);
-              await shot("proposal");
-              proposal = { dispatchesBefore: before.dispatches };
-              await page.locator("[data-companion-send]").click();
-              await page.waitForSelector('[data-voice-companion][data-delegation-stage="sending"]', { timeout: 10_000 });
-              await page.waitForTimeout(400);
+            /* The request goes out by itself: the driver taps nothing after Talk, and no button is ever offered. */
+            if (name === "delegation") buttonsOffered = Math.max(buttonsOffered, await page.locator("[data-companion-send], [data-companion-cancel]").count());
+            if (name === "delegation" && sent === null && await page.locator("[data-companion-instruction]").count()) {
+              const stage = await page.locator("[data-companion-delegation]").first().getAttribute("data-stage");
+              expect((await page.locator("[data-companion-instruction]").first().innerText()).trim(), `${label}: the card shows the whole request that was sent`).toBe(demoInstruction(lang));
+              sent = { firstStageShown: stage, taps: 0 };
               await shot("sending");
             }
             if (recorded) {
@@ -19334,7 +19385,11 @@ describe("floating voice companion", () => {
           expect(after.dispatches, `${label}: sends`).toBe(name === "delegation" ? 1 : 0);
           if (name === "delegation") {
             expect(after.events.filter((event) => event.type.startsWith("delegation.") || event.type === "orchestrator.answer").map((event) => event.type), `${label}: delegation order`)
-              .toEqual(["delegation.tool.called", "delegation.confirmation.required", "delegation.confirmed", "delegation.tool.result", "delegation.delivery.settled", "orchestrator.answer"]);
+              .toEqual(["delegation.tool.called", "delegation.sending", "delegation.tool.result", "delegation.delivery.settled", "orchestrator.answer"]);
+            const ask = after.events.findIndex((event) => event.type === "transcript.final" && event.speaker === "operator" && event.itemId === DEMO_IDS.askItem);
+            expect(ask, `${label}: the explicit request was heard`).toBeGreaterThan(0);
+            expect(after.events.slice(0, ask).filter((event) => event.type.startsWith("delegation.")), `${label}: no delegation before the request`).toEqual([]);
+            expect({ buttonsOffered, shown: sent !== null }, `${label}: sent with no button and no tap, and the card showed it`).toEqual({ buttonsOffered: 0, shown: true });
             await page.waitForSelector("[data-voice-relay]", { timeout: 20_000 });
             await page.getByText(demoAnswer(lang), { exact: true }).first().waitFor({ timeout: 20_000 });
             await shot("conversation");
@@ -19430,7 +19485,7 @@ describe("floating voice companion", () => {
             label, scenario: name, viewport: `${viewport.width}x${viewport.height}`, lang, scheme, look: "final", measuredOnAttempt: attempt, motion: "no-preference", recordingDuringMeasurement: false,
             idle: { frames: idle.length, medianMs: two(frame), p95Ms: two(percentile(idle, 0.95)), maxMs: two(Math.max(...idle)) },
             windows, conversation: read(deltasIn(idleTo, meter.stamps.at(-1)!)), hiddenTabSamples: meter.hidden,
-            contract: { dispatches: after.dispatches, events: after.events.length, proposal }, stood,
+            contract: { dispatches: after.dispatches, events: after.events.length, proposal, ...(sent ? { sent } : {}) }, stood,
           });
         } finally { await context.close().catch(() => undefined); }
       }
@@ -19451,6 +19506,9 @@ describe("floating voice companion", () => {
         held.cases[held.cases.indexOf(earlier)] = fresh!;
       }
       held.windowFaults = [...held.windowFaults.filter((fault) => !REMEASURE.some((label) => of(label)(fault))), ...windowFaults];
+      /* Runs measured again because what they show changed, with the reason given to the driver. */
+      const why = process.env.LLV_VOICE_COMPANION_REMEASURE_WHY?.trim();
+      if (why) (held.remeasured as { changed?: Array<{ labels: string[]; why: string }> }).changed = [...((held.remeasured as { changed?: Array<{ labels: string[]; why: string }> }).changed ?? []), { labels: REMEASURE, why }];
       held.remeasured.later = "a run still off target after three attempts was measured and recorded again in a later session of the same driver on the same head (LLV_VOICE_COMPANION_REMEASURE); its attempts are numbered on from the earlier ones, which stay listed here";
       fs.writeFileSync(file, `${JSON.stringify(held, null, 2)}\n`);
       expect(laneFaults).toEqual([]);

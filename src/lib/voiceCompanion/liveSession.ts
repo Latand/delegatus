@@ -224,7 +224,9 @@ export class CompanionLiveSessions {
   private delegate(active: ActiveSession, delegationId: string, sourceTurn: number | undefined): void {
     const work = (async () => {
       const record = active.transcript.record().map(row => `${row.speaker === "operator" ? "Operator" : "Delegatus"}: ${row.text}`).join("\n").slice(-12_000);
-      const input: BackendItem[] = [{ role: "user", content: `The conversation so far, oldest first:\n${record || "(no transcript yet)"}\n\nThe voice delegated here. Answer it with the registry tools, or propose the operator's explicit orchestrator request.` }];
+      const waiting = this.admission.awaiting(active.id);
+      const input: BackendItem[] = [{ role: "user", content: `The conversation so far, oldest first:\n${record || "(no transcript yet)"}\n\nThe voice delegated here. Answer it with the registry tools, or send the operator's explicit orchestrator request.${waiting
+        ? `\n\nA request to the orchestrator is waiting for the operator's answer and has not been sent: "${waiting.instruction}". When the operator has just answered it, pass that answer on with resolve_orchestrator_confirmation.` : ""}` }];
       const calls = new Set<string>();
       for (let round = 0; round < BACKEND_ROUNDS; round += 1) {
         if (active.ended || active.closePromise) return;
@@ -390,6 +392,8 @@ export class CompanionLiveSessions {
     // An admitted send whose outcome was never recorded is sent again with its own key.
     for (const row of Object.values(session.proposals)) if (row.state === "admitted" && (row.status === "unknown" || row.status === undefined))
       await this.admission.confirm(id, { type: "confirmation", proposalId: row.proposal.proposalId, decision: "send", via: "tap" });
+    const expired = this.admission.expire(id);
+    if (expired.length && active && !active.ended && !active.closePromise) this.say(active, null, "The confirmation was not answered in time. Nothing was sent to the orchestrator. Say so briefly.");
     await this.admission.pollReceipts(id);
     const replies = this.admission.pollReplies(id);
     if (active && !active.ended && !active.closePromise) for (const reply of replies) if (reply.type === "orchestrator.answer")

@@ -154,72 +154,143 @@ describe("the explicit-request gate", () => {
     expect(admitDelegationProposal({ sourceItemId: "a", instruction: "  ", inputs: [ask] })).toEqual({ admit: false, reason: "empty_instruction" });
     expect(admitDelegationProposal({ sourceItemId: "a", instruction, inputs: [ask], frozenSourceText: ask.text })).toEqual({ admit: true });
     expect(admitDelegationProposal({ sourceItemId: "a", instruction, inputs: [{ ...ask, text: "Ask the orchestrator to delete the plan." }], frozenSourceText: ask.text })).toEqual({ admit: false, reason: "source_changed" });
+    /* A confirmation that waits is answered aloud: later speech leaves it unless it takes the request back. */
+    const waiting = { sourceItemId: "a", instruction, frozenSourceText: ask.text, waiting: true };
+    expect(admitDelegationProposal({ ...waiting, inputs: [ask, { itemId: "b", text: "Yes, send it.", final: true }] })).toEqual({ admit: true });
+    expect(admitDelegationProposal({ ...waiting, inputs: [ask, { itemId: "b", text: "", final: false }] })).toEqual({ admit: true });
+    expect(admitDelegationProposal({ ...waiting, inputs: [ask, { itemId: "b", text: "Never mind.", final: true }] })).toEqual({ admit: false, reason: "retracted" });
+    expect(admitDelegationProposal({ ...waiting, inputs: [ask, { itemId: "b", text: "Wait", final: false }] })).toEqual({ admit: false, reason: "retracted" });
+    expect(admitDelegationProposal({ ...waiting, inputs: [{ ...ask, text: "Ask the orchestrator to delete the plan." }, { itemId: "b", text: "Yes.", final: true }] })).toEqual({ admit: false, reason: "source_changed" });
   });
 });
 
-describe("the simulated companion opens a confirmation only for an explicit request", () => {
-  const propose = (sourceItemId: string): ScriptStep[] => [
-    { kind: "propose", callId: "call_x", proposalId: "proposal_x", sourceItemId, instruction: "Do the thing." },
-    { kind: "confirm", clientMessageId: "m_x", operationId: "op_x", settleAfterMs: 10, cancelled: [] },
+describe("the simulated companion sends an explicit request at once and asks first only where the model says so", () => {
+  const deliver: ScriptStep = { kind: "deliver", clientMessageId: "m_x", operationId: "op_x", settleAfterMs: 10, cancelled: [] };
+  /* The default: nothing asks the operator. */
+  const propose = (sourceItemId: string): ScriptStep[] => [{ kind: "propose", callId: "call_x", proposalId: "proposal_x", sourceItemId, instruction: "Do the thing." }, deliver];
+  /* The exception: the model gives its reason and the request waits. */
+  const ask = (sourceItemId: string, spoken?: Extract<ScriptStep, { kind: "deliver" }>["spoken"]): ScriptStep[] => [
+    { kind: "propose", callId: "call_x", proposalId: "proposal_x", sourceItemId, instruction: "Do the thing.", confirm: "This cannot be undone." },
+    { ...deliver, ...(spoken ? { spoken } : {}), cancelled: [{ kind: "companion", itemId: "c_no", responseId: "r_no", text: "Okay, nothing was sent." }] },
   ];
-  /* The model misfires: it proposes a delegation after each of these. The operator then taps Send anyway. */
-  const misfires: Array<[string, ScriptStep[]]> = [
-    ["greeting (en)", [{ kind: "operator", itemId: "i1", text: "Hi Delegatus. Are you there?" }, ...propose("i1")]],
-    ["greeting (uk)", [{ kind: "operator", itemId: "i1", text: "Привіт, Делегатусе. Ти тут?" }, ...propose("i1")]],
-    ["negation (en)", [{ kind: "operator", itemId: "i1", text: "Don't send anything to the orchestrator." }, ...propose("i1")]],
-    ["negation (uk)", [{ kind: "operator", itemId: "i1", text: "Не надсилай нічого оркестратору." }, ...propose("i1")]],
-    ["quotation", [{ kind: "operator", itemId: "i1", text: "He said “ask the orchestrator to merge it”." }, ...propose("i1")]],
-    ["conditional (en)", [{ kind: "operator", itemId: "i1", text: "Ask the orchestrator to merge it if the checks pass." }, ...propose("i1")]],
-    ["conditional (uk)", [{ kind: "operator", itemId: "i1", text: "Якщо збірка впаде, попроси оркестратора повторити." }, ...propose("i1")]],
-    ["a question about the orchestrator (en)", [{ kind: "operator", itemId: "i1", text: "Tell me how the orchestrator works." }, ...propose("i1")]],
-    ["a polite question about the orchestrator (en)", [{ kind: "operator", itemId: "i1", text: "Could you tell me how the orchestrator works?" }, ...propose("i1")]],
-    ["a question about the orchestrator (uk)", [{ kind: "operator", itemId: "i1", text: "Скажи, що робить оркестратор." }, ...propose("i1")]],
-    ["a retraction in the next sentence (en)", [{ kind: "operator", itemId: "i1", text: "Ask the orchestrator to review the plan. Actually, do not send anything." }, ...propose("i1")]],
-    ["a retraction in the next sentence (uk)", [{ kind: "operator", itemId: "i1", text: "Попроси оркестратора перевірити план. Нічого не надсилай." }, ...propose("i1")]],
-    ["a condition in the next sentence (en)", [{ kind: "operator", itemId: "i1", text: "Ask the orchestrator to review the plan. Only if the build is green." }, ...propose("i1")]],
-    ["a condition in the next sentence (uk)", [{ kind: "operator", itemId: "i1", text: "Попроси оркестратора перевірити план. Але тільки якщо збірка зелена." }, ...propose("i1")]],
-    ["an only-when condition in the next sentence (en)", [{ kind: "operator", itemId: "i1", text: "Ask the orchestrator to review the plan. But only when the checks pass." }, ...propose("i1")]],
-    ["an only-when condition in the next sentence (uk)", [{ kind: "operator", itemId: "i1", text: "Попроси оркестратора перевірити план. Лише коли перевірки пройдуть." }, ...propose("i1")]],
-    ["an only-when condition in the request's sentence (en)", [{ kind: "operator", itemId: "i1", text: "Ask the orchestrator to review the plan, but only when the checks pass." }, ...propose("i1")]],
-    ["an only-when condition in the request's sentence (uk)", [{ kind: "operator", itemId: "i1", text: "Попроси оркестратора перевірити план, але лише коли перевірки пройдуть." }, ...propose("i1")]],
-    ["missing input", [{ kind: "operator", itemId: "i1", text: "Ask the orchestrator to review the plan." }, ...propose("i9")]],
-    ["stale input", [{ kind: "operator", itemId: "i1", text: "Ask the orchestrator to review the plan." }, { kind: "operator", itemId: "i2", text: "Actually, never mind." }, ...propose("i1")]],
+  const tap = (run: ReturnType<typeof simulate>, decision: "send" | "cancel", proposalId = "proposal_x") => run.adapter.command({ type: "confirmation", proposalId, decision, via: "tap" });
+  /* The model misfires: it raises a delegation after each of these, asking to confirm it or not. Send is tapped anyway. */
+  const misfires: Array<[string, ScriptStep[], string]> = [
+    ["greeting (en)", [{ kind: "operator", itemId: "i1", text: "Hi Delegatus. Are you there?" }], "i1"],
+    ["greeting (uk)", [{ kind: "operator", itemId: "i1", text: "Привіт, Делегатусе. Ти тут?" }], "i1"],
+    ["negation (en)", [{ kind: "operator", itemId: "i1", text: "Don't send anything to the orchestrator." }], "i1"],
+    ["negation (uk)", [{ kind: "operator", itemId: "i1", text: "Не надсилай нічого оркестратору." }], "i1"],
+    ["quotation", [{ kind: "operator", itemId: "i1", text: "He said “ask the orchestrator to merge it”." }], "i1"],
+    ["conditional (en)", [{ kind: "operator", itemId: "i1", text: "Ask the orchestrator to merge it if the checks pass." }], "i1"],
+    ["conditional (uk)", [{ kind: "operator", itemId: "i1", text: "Якщо збірка впаде, попроси оркестратора повторити." }], "i1"],
+    ["a question about the orchestrator (en)", [{ kind: "operator", itemId: "i1", text: "Tell me how the orchestrator works." }], "i1"],
+    ["a polite question about the orchestrator (en)", [{ kind: "operator", itemId: "i1", text: "Could you tell me how the orchestrator works?" }], "i1"],
+    ["a question about the orchestrator (uk)", [{ kind: "operator", itemId: "i1", text: "Скажи, що робить оркестратор." }], "i1"],
+    ["a retraction in the next sentence (en)", [{ kind: "operator", itemId: "i1", text: "Ask the orchestrator to review the plan. Actually, do not send anything." }], "i1"],
+    ["a retraction in the next sentence (uk)", [{ kind: "operator", itemId: "i1", text: "Попроси оркестратора перевірити план. Нічого не надсилай." }], "i1"],
+    ["a condition in the next sentence (en)", [{ kind: "operator", itemId: "i1", text: "Ask the orchestrator to review the plan. Only if the build is green." }], "i1"],
+    ["a condition in the next sentence (uk)", [{ kind: "operator", itemId: "i1", text: "Попроси оркестратора перевірити план. Але тільки якщо збірка зелена." }], "i1"],
+    ["an only-when condition in the next sentence (en)", [{ kind: "operator", itemId: "i1", text: "Ask the orchestrator to review the plan. But only when the checks pass." }], "i1"],
+    ["an only-when condition in the next sentence (uk)", [{ kind: "operator", itemId: "i1", text: "Попроси оркестратора перевірити план. Лише коли перевірки пройдуть." }], "i1"],
+    ["an only-when condition in the request's sentence (en)", [{ kind: "operator", itemId: "i1", text: "Ask the orchestrator to review the plan, but only when the checks pass." }], "i1"],
+    ["an only-when condition in the request's sentence (uk)", [{ kind: "operator", itemId: "i1", text: "Попроси оркестратора перевірити план, але лише коли перевірки пройдуть." }], "i1"],
+    ["missing input", [{ kind: "operator", itemId: "i1", text: "Ask the orchestrator to review the plan." }], "i9"],
+    ["stale input", [{ kind: "operator", itemId: "i1", text: "Ask the orchestrator to review the plan." }, { kind: "operator", itemId: "i2", text: "Actually, never mind." }], "i1"],
   ];
-  for (const [name, script] of misfires) {
-    test(`${name}: no confirmation is offered and Send sends nothing`, async () => {
-      const run = simulate(script);
+  for (const [name, said, sourceItemId] of misfires) for (const [variant, steps] of [["sent at once", propose], ["asked first", ask]] as const) {
+    test(`${name}, ${variant}: nothing is offered, nothing is sent, and Send sends nothing`, async () => {
+      const run = simulate([...said, ...steps(sourceItemId)]);
       await run.adapter.start({ locale: "en", project: "atlas" });
       await run.until(() => run.events.some((event) => event.type === "delegation.tool.result"));
-      await run.adapter.command({ type: "confirmation", proposalId: "proposal_x", decision: "send", via: "tap" });
+      await tap(run, "send");
       await run.adapter.finished;
       expect(types(run.events)).not.toContain("delegation.confirmation.required");
+      expect(types(run.events)).not.toContain("delegation.sending");
       expect(run.dispatched).toEqual([]);
       expect(run.state().delegation?.stage).toBe("refused");
     });
   }
 
-  test("an explicit request plus Send delivers exactly once", async () => {
+  test("an explicit request is sent at once, exactly once, and no tap is asked for or counted", async () => {
     const run = simulate([{ kind: "operator", itemId: "i1", text: "Попроси оркестратора перевірити план." }, ...propose("i1")]);
+    const stages: Array<string | undefined> = [];
+    run.adapter.subscribe((event) => {
+      stages.push(run.state().delegation?.stage);
+      if (event.type === "delegation.sending") { void tap(run, "send"); void tap(run, "cancel"); }
+    });
+    await run.adapter.start({ locale: "uk", project: "atlas" });
+    await run.adapter.finished;
+    expect(delegationTypes(run.events)).toEqual(["delegation.tool.called", "delegation.sending", "delegation.tool.result", "delegation.delivery.settled"]);
+    expect(stages).not.toContain("awaiting-confirmation");
+    expect(run.dispatched.map((sent) => [sent.delivery.proposalId, sent.delivery.clientMessageId, sent.instruction])).toEqual([["proposal_x", "m_x", "Do the thing."]]);
+    expect(run.state().delegation).toMatchObject({ stage: "delivered", instruction: "Do the thing." });
+  });
+
+  test("a confirmation the model asked for waits with its reason, and Send delivers exactly once", async () => {
+    const run = simulate([{ kind: "operator", itemId: "i1", text: "Попроси оркестратора перевірити план." }, ...ask("i1")]);
     await run.adapter.start({ locale: "uk", project: "atlas" });
     await run.until(() => run.state().delegation?.stage === "awaiting-confirmation");
+    expect(run.state().delegation?.proposal?.confirmation).toEqual({ reason: "This cannot be undone." });
     expect(run.dispatched).toEqual([]);
-    await run.adapter.command({ type: "confirmation", proposalId: "proposal_x", decision: "send", via: "tap" });
-    await run.adapter.command({ type: "confirmation", proposalId: "proposal_x", decision: "send", via: "tap" });
+    await tap(run, "send");
+    await tap(run, "send");
     await run.adapter.finished;
     expect(run.dispatched.length).toBe(1);
     expect(run.state().delegation?.stage).toBe("delivered");
   });
 
-  /* Consent by speech is admitted nowhere yet: whatever item a speech command names, it sends nothing. */
-  const spoken: Array<[string, string | undefined]> = [
-    ["no consent item", undefined],
-    ["an invented consent item", "nonexistent"],
-    ["the request itself, heard before the preview", "i1"],
-    ["an older input, heard before the preview", "i0"],
-  ];
-  for (const [name, confirmationItemId] of spoken) {
-    test(`a spoken Send with ${name} sends nothing; the tap after it sends exactly once`, async () => {
-      const run = simulate([{ kind: "operator", itemId: "i0", text: "Yes, send it." }, { kind: "operator", itemId: "i1", text: "Ask the orchestrator to review the plan." }, ...propose("i1")]);
+  for (const [text, locale] of [["Yes, send it.", "en"], ["Так, надсилай.", "uk"]] as const) {
+    test(`the spoken answer «${text}», passed on by the tool, sends exactly once with no tap`, async () => {
+      const run = simulate([{ kind: "operator", itemId: "i1", text: "Ask the orchestrator to review the plan." }, ...ask("i1", { itemId: "i2", text, decision: "send" })]);
+      await run.adapter.start({ locale, project: "atlas" });
+      await run.adapter.finished;
+      expect(delegationTypes(run.events)).toEqual(["delegation.tool.called", "delegation.confirmation.required", "delegation.confirmed", "delegation.tool.result", "delegation.delivery.settled"]);
+      expect(run.events.find((event) => event.type === "delegation.confirmed")).toMatchObject({ via: "speech", confirmationItemId: "i2" });
+      /* Nothing went out while the question stood. */
+      const answered = run.events.findIndex((event) => event.type === "transcript.final" && event.itemId === "i2");
+      expect(run.events.findIndex((event) => event.type === "delegation.confirmed")).toBeGreaterThan(answered);
+      expect(run.dispatched.length).toBe(1);
+      expect(run.state().delegation?.stage).toBe("delivered");
+    });
+  }
+
+  /* Declined in words the model reads as a no, and in words that take the request back before the model is asked. */
+  for (const [text, code] of [["Leave it for today.", "operator_cancelled"], ["No, don't send it.", "retracted"], ["Ні, не треба.", "retracted"]] as const) {
+    test(`the spoken answer «${text}» sends nothing and says so`, async () => {
+      const run = simulate([{ kind: "operator", itemId: "i1", text: "Ask the orchestrator to review the plan." }, ...ask("i1", { itemId: "i2", text, decision: "cancel" })]);
+      await run.adapter.start({ locale: "en", project: "atlas" });
+      await run.adapter.finished;
+      await tap(run, "send");
+      expect(types(run.events)).not.toContain("delegation.confirmed");
+      expect(run.dispatched).toEqual([]);
+      expect(run.state().delegation).toMatchObject({ stage: "cancelled", refusal: code, delivery: null });
+      expect(run.state().lines.at(-1)?.text).toBe("Okay, nothing was sent.");
+    });
+  }
+
+  test("a tap that comes before the spoken answer decides, and the answer said after it changes nothing", async () => {
+    const run = simulate([{ kind: "operator", itemId: "i1", text: "Ask the orchestrator to review the plan." }, ...ask("i1", { itemId: "i2", text: "Yes, send it.", decision: "send" })]);
+    run.adapter.subscribe((event) => { if (event.type === "delegation.confirmation.required") void tap(run, "cancel"); });
+    await run.adapter.start({ locale: "en", project: "atlas" });
+    await run.adapter.finished;
+    expect(run.dispatched).toEqual([]);
+    expect(run.state().delegation).toMatchObject({ stage: "cancelled", refusal: "operator_cancelled" });
+  });
+
+  test("a confirmation nobody answers sends nothing when the conversation ends", async () => {
+    const run = simulate([{ kind: "operator", itemId: "i1", text: "Ask the orchestrator to review the plan." }, ...ask("i1")]);
+    await run.adapter.start({ locale: "en", project: "atlas" });
+    await run.until(() => run.state().delegation?.stage === "awaiting-confirmation");
+    await run.adapter.close();
+    await tap(run, "send");
+    expect(run.dispatched).toEqual([]);
+    expect(run.state().delegation).toMatchObject({ stage: "cancelled", refusal: "session_closed", delivery: null });
+  });
+
+  /* The page can only tap: the spoken answer is the model's tool call, never a command a page could forge. */
+  for (const confirmationItemId of [undefined, "nonexistent", "i1"]) {
+    test(`a speech command from outside naming ${confirmationItemId ?? "no item"} sends nothing; the tap after it sends exactly once`, async () => {
+      const run = simulate([{ kind: "operator", itemId: "i1", text: "Ask the orchestrator to review the plan." }, ...ask("i1")]);
       await run.adapter.start({ locale: "en", project: "atlas" });
       await run.until(() => run.state().delegation?.stage === "awaiting-confirmation");
       await run.adapter.command({ type: "confirmation", proposalId: "proposal_x", decision: "send", via: "speech", ...(confirmationItemId ? { confirmationItemId } : {}) });
@@ -227,97 +298,109 @@ describe("the simulated companion opens a confirmation only for an explicit requ
       expect(types(run.events)).not.toContain("delegation.confirmed");
       expect(run.dispatched).toEqual([]);
       expect(run.state().delegation?.stage).toBe("awaiting-confirmation");
-      /* The dropped command consumed nothing: the proposal still takes its one tap. */
-      await run.adapter.command({ type: "confirmation", proposalId: "proposal_x", decision: "send", via: "tap" });
+      await tap(run, "send");
       await run.adapter.finished;
       expect(run.dispatched.length).toBe(1);
       expect(run.state().delegation?.stage).toBe("delivered");
     });
   }
 
-  test("the reducer takes no spoken confirmation, and the delivery an adapter claims after it is not shown", () => {
+  test("the reducer shows a send that started with no confirmation, and takes a spoken confirmation as it takes a tap", () => {
     const at = (payload: Payload, seq: number): CompanionEvent => ({ ...payload, version: 1, sessionId: "s", generation: 1, eventId: `s:1:${seq}`, seq, atMs: seq } as CompanionEvent);
     const proposal = { proposalId: "p1", callId: "c1", sourceItemId: "i1", instruction: "Review the plan.", recipient: RECIPIENT };
     const delivery: Delivery = { proposalId: "p1", callId: "c1", clientMessageId: "m1", operationId: "op1", recipient: RECIPIENT };
-    const waiting = [
+    const called = [
       at({ type: "session.ready", mode: "simulated" }, 0),
       at({ type: "transcript.final", speaker: "operator", itemId: "i1", text: "Ask the orchestrator to review the plan." }, 1),
       at({ type: "delegation.tool.called", callId: "c1", sourceItemId: "i1", instruction: "Review the plan." }, 2),
-      at({ type: "delegation.confirmation.required", proposal }, 3),
     ].reduce(reduceCompanion, INITIAL_COMPANION_STATE);
-    expect(waiting.delegation?.stage).toBe("awaiting-confirmation");
-    for (const confirmationItemId of [undefined, "nonexistent", "i1"]) {
+    const sending = reduceCompanion(called, at({ type: "delegation.sending", proposal }, 3));
+    expect(sending.delegation).toMatchObject({ stage: "sending", proposal, delivery: null });
+    expect(reduceCompanion(sending, at({ type: "delegation.tool.result", callId: "c1", proposalId: "p1", result: { status: "queued", delivery } }, 4)).delegation).toMatchObject({ stage: "queued", delivery });
+    /* A send for another call, or one claimed over a confirmation that waits, moves nothing. */
+    expect(reduceCompanion(called, at({ type: "delegation.sending", proposal: { ...proposal, callId: "c2" } }, 3)).delegation?.stage).toBe("proposed");
+    const waiting = reduceCompanion(called, at({ type: "delegation.confirmation.required", proposal: { ...proposal, confirmation: { reason: "Hard to undo." } } }, 3));
+    expect(waiting.delegation).toMatchObject({ stage: "awaiting-confirmation", proposal: { confirmation: { reason: "Hard to undo." } } });
+    expect(reduceCompanion(waiting, at({ type: "delegation.sending", proposal }, 4)).delegation?.stage).toBe("awaiting-confirmation");
+    for (const via of ["speech", "tap"] as const) {
       const after = [
-        at({ type: "delegation.confirmed", proposalId: "p1", via: "speech", ...(confirmationItemId ? { confirmationItemId } : {}) }, 4),
+        at({ type: "delegation.confirmed", proposalId: "p1", via }, 4),
         at({ type: "delegation.tool.result", callId: "c1", proposalId: "p1", result: { status: "queued", delivery } }, 5),
       ].reduce(reduceCompanion, waiting);
-      expect(after.delegation).toMatchObject({ stage: "awaiting-confirmation", delivery: null });
+      expect(after.delegation).toMatchObject({ stage: "queued", delivery });
     }
-    const tapped = [
-      at({ type: "delegation.confirmed", proposalId: "p1", via: "tap" }, 4),
-      at({ type: "delegation.tool.result", callId: "c1", proposalId: "p1", result: { status: "queued", delivery } }, 5),
-    ].reduce(reduceCompanion, waiting);
-    expect(tapped.delegation).toMatchObject({ stage: "queued", delivery });
+    /* A delivery claimed with no confirmation before it is not shown. */
+    expect(reduceCompanion(waiting, at({ type: "delegation.tool.result", callId: "c1", proposalId: "p1", result: { status: "queued", delivery } }, 4)).delegation).toMatchObject({ stage: "awaiting-confirmation", delivery: null });
   });
 
-  /* The operator asks, sees the preview, then takes it back. Send is tapped anyway. */
+  /* The operator asks, hears the question, then takes the request back. Send is tapped anyway. */
   const withdrawals: Array<[string, string, ScriptStep]> = [
     ["a finished withdrawal (en)", "Ask the orchestrator to review the plan.", { kind: "operator", itemId: "i2", text: "Do not send anything. Never mind." }],
     ["a finished withdrawal (uk)", "Попроси оркестратора перевірити план.", { kind: "operator", itemId: "i2", text: "Нічого не надсилай. Забудь." }],
-    /* The read-back is interrupted: the new input has started and nothing of it is final when the preview leaves. */
+    /* The question is interrupted: the new input has started and nothing of it is final when the card leaves. */
     ["an unfinished new input (en)", "Ask the orchestrator to review the plan.", { kind: "companion", itemId: "c1", responseId: "r1", text: "I will ask the orchestrator to review the plan.", bargeIn: { afterMs: 200, itemId: "i2", text: "Wait, hold on" } }],
     ["an unfinished new input (uk)", "Попроси оркестратора перевірити план.", { kind: "companion", itemId: "c1", responseId: "r1", text: "Я попрошу оркестратора перевірити план.", bargeIn: { afterMs: 200, itemId: "i2", text: "Стривай, зачекай" } }],
   ];
-  for (const [name, ask, after] of withdrawals) {
-    test(`${name} after the preview removes the confirmation, and Send sends nothing`, async () => {
-      const run = simulate([{ kind: "operator", itemId: "i1", text: ask }, propose("i1")[0]!, after, propose("i1")[1]!]);
+  for (const [name, said, after] of withdrawals) {
+    test(`${name} while the confirmation waits removes it, and Send sends nothing`, async () => {
+      const run = simulate([{ kind: "operator", itemId: "i1", text: said }, ask("i1")[0]!, after, { ...deliver }]);
       await run.adapter.start({ locale: "en", project: "atlas" });
       await run.adapter.finished;
       expect(types(run.events)).toContain("delegation.confirmation.required");
       const started = run.events.findIndex((event) => event.type === "input.speech.started" && event.itemId === "i2");
       const withdrawn = run.events.findIndex((event) => event.type === "delegation.tool.result" && event.result.status === "cancelled");
       expect(withdrawn).toBeGreaterThan(started);
-      /* It left before the new input had a word, let alone a final. */
-      expect(run.events.slice(started + 1, withdrawn).map((event) => event.type)).toEqual([]);
-      expect(run.events[withdrawn]).toMatchObject({ result: { code: "stale_input" } });
-      await run.adapter.command({ type: "confirmation", proposalId: "proposal_x", decision: "send", via: "tap" });
+      /* It left on the words that took it back, before the new input was final. */
+      expect(run.events.slice(started, withdrawn).some((event) => event.type === "transcript.final" && event.itemId === "i2")).toBe(false);
+      expect(run.events[withdrawn]).toMatchObject({ result: { code: "retracted" } });
+      await tap(run, "send");
       await new Promise((resolve) => setTimeout(resolve, 5));
       expect(types(run.events)).not.toContain("delegation.confirmed");
       expect(run.dispatched).toEqual([]);
-      expect(run.state().delegation).toMatchObject({ stage: "cancelled", refusal: "stale_input", delivery: null });
+      expect(run.state().delegation).toMatchObject({ stage: "cancelled", refusal: "retracted", delivery: null });
     });
   }
 
-  test("after a withdrawal the old Send revives nothing; a new explicit request gets a new preview and its own Send", async () => {
+  test("ordinary speech while a confirmation waits leaves it standing for the answer", async () => {
     const run = simulate([
-      { kind: "operator", itemId: "i1", text: "Ask the orchestrator to review the plan." }, propose("i1")[0]!,
-      { kind: "operator", itemId: "i2", text: "Never mind." }, propose("i1")[1]!,
-      { kind: "operator", itemId: "i3", text: "Ask the orchestrator to review the export plan." },
-      { kind: "propose", callId: "call_y", proposalId: "proposal_y", sourceItemId: "i3", instruction: "Review the export plan." },
-      { kind: "confirm", clientMessageId: "m_y", operationId: "op_y", settleAfterMs: 10, cancelled: [] },
+      { kind: "operator", itemId: "i1", text: "Ask the orchestrator to review the plan." }, ask("i1")[0]!,
+      { kind: "operator", itemId: "i2", text: "Hmm, let me think about it." }, { ...deliver },
     ]);
-    /* Send is tapped the instant the first preview shows, before "Never mind" is said: the tap is dropped with the proposal. */
-    run.adapter.subscribe((event) => {
-      if (event.type === "delegation.confirmation.required" && event.proposal.proposalId === "proposal_x") void run.adapter.command({ type: "confirmation", proposalId: "proposal_x", decision: "send", via: "tap" });
-    });
+    await run.adapter.start({ locale: "en", project: "atlas" });
+    await run.until(() => run.events.some((event) => event.type === "transcript.final" && event.itemId === "i2"));
+    expect(run.state().delegation?.stage).toBe("awaiting-confirmation");
+    expect(run.dispatched).toEqual([]);
+    await tap(run, "send");
+    await run.adapter.finished;
+    expect(run.dispatched.length).toBe(1);
+  });
+
+  test("after a withdrawal the old Send revives nothing; a new explicit request gets its own card and its own Send", async () => {
+    const run = simulate([
+      { kind: "operator", itemId: "i1", text: "Ask the orchestrator to review the plan." }, ask("i1")[0]!,
+      { kind: "operator", itemId: "i2", text: "Never mind." }, { ...deliver },
+      { kind: "operator", itemId: "i3", text: "Ask the orchestrator to review the export plan." },
+      { kind: "propose", callId: "call_y", proposalId: "proposal_y", sourceItemId: "i3", instruction: "Review the export plan.", confirm: "Two plans exist." },
+      { kind: "deliver", clientMessageId: "m_y", operationId: "op_y", settleAfterMs: 10, cancelled: [] },
+    ]);
     await run.adapter.start({ locale: "en", project: "atlas" });
     await run.until(() => run.state().delegation?.proposal?.proposalId === "proposal_y");
     expect(run.dispatched).toEqual([]);
-    await run.adapter.command({ type: "confirmation", proposalId: "proposal_x", decision: "send", via: "tap" });
+    await tap(run, "send");
     await new Promise((resolve) => setTimeout(resolve, 5));
     expect(run.dispatched).toEqual([]);
     expect(types(run.events)).not.toContain("delegation.confirmed");
     expect(run.state().delegation?.stage).toBe("awaiting-confirmation");
-    await run.adapter.command({ type: "confirmation", proposalId: "proposal_y", decision: "send", via: "tap" });
+    await tap(run, "send", "proposal_y");
     await run.adapter.finished;
     expect(run.dispatched.map((sent) => [sent.delivery.proposalId, sent.instruction])).toEqual([["proposal_y", "Review the export plan."]]);
     expect(run.state().delegation?.stage).toBe("delivered");
   });
 
-  test("the reducer withdraws a waiting proposal on newer input or a corrected source, whatever the adapter then says", () => {
+  test("the reducer withdraws a waiting confirmation on speech that takes it back or a corrected source, and keeps it through an answer", () => {
     let seq = 0;
     const at = (payload: Payload): CompanionEvent => ({ ...payload, version: 1, sessionId: "s", generation: 1, eventId: `e${++seq}`, seq, atMs: seq } as CompanionEvent);
-    const proposal = { proposalId: "p1", callId: "c1", sourceItemId: "i1", instruction: "Review the plan.", recipient: RECIPIENT };
+    const proposal = { proposalId: "p1", callId: "c1", sourceItemId: "i1", instruction: "Review the plan.", recipient: RECIPIENT, confirmation: { reason: "Two plans exist." } };
     const delivery: Delivery = { proposalId: "p1", callId: "c1", clientMessageId: "m1", operationId: "op1", recipient: RECIPIENT };
     const waiting = [
       at({ type: "session.ready", mode: "official-realtime" }),
@@ -327,9 +410,8 @@ describe("the simulated companion opens a confirmation only for an explicit requ
     ].reduce(reduceCompanion, INITIAL_COMPANION_STATE);
     expect(waiting.delegation?.stage).toBe("awaiting-confirmation");
     const later: Array<[string, Payload, string]> = [
-      ["speech that has only started", { type: "input.speech.started", itemId: "i2" }, "stale_input"],
-      ["a first word of new speech", { type: "transcript.delta", speaker: "operator", itemId: "i2", delta: "Стривай" }, "stale_input"],
-      ["a finished new sentence", { type: "transcript.final", speaker: "operator", itemId: "i2", text: "Нічого не надсилай." }, "stale_input"],
+      ["a first word that takes it back", { type: "transcript.delta", speaker: "operator", itemId: "i2", delta: "Стривай" }, "retracted"],
+      ["a finished sentence that takes it back", { type: "transcript.final", speaker: "operator", itemId: "i2", text: "Нічого не надсилай." }, "retracted"],
       ["a corrected source", { type: "transcript.final", speaker: "operator", itemId: "i1", text: "Попроси оркестратора видалити план." }, "source_changed"],
     ];
     for (const [name, payload, reason] of later) {
@@ -338,14 +420,20 @@ describe("the simulated companion opens a confirmation only for an explicit requ
       /* A forged or late confirmation and delivery change nothing. */
       const forced = [
         at({ type: "delegation.confirmed", proposalId: "p1", via: "tap" }),
+        at({ type: "delegation.confirmed", proposalId: "p1", via: "speech" }),
         at({ type: "delegation.tool.result", callId: "c1", proposalId: "p1", result: { status: "queued", delivery } }),
         at({ type: "delegation.delivery.settled", delivery, status: "delivered" }),
       ].reduce(reduceCompanion, withdrawn);
       expect([name, forced.delegation?.stage, forced.delegation?.delivery]).toEqual([name, "cancelled", null]);
     }
-    /* The companion's own speech is no operator input: the preview stays through the read-back. */
-    const readBack = reduceCompanion(waiting, at({ type: "transcript.final", speaker: "companion", itemId: "c9", responseId: "r9", text: "I will ask the orchestrator." }));
-    expect(readBack.delegation?.stage).toBe("awaiting-confirmation");
+    /* The operator answers aloud, so speech that takes nothing back leaves the card for the answer. */
+    const standing: Payload[] = [
+      { type: "input.speech.started", itemId: "i2" },
+      { type: "transcript.delta", speaker: "operator", itemId: "i2", delta: "Так," },
+      { type: "transcript.final", speaker: "operator", itemId: "i2", text: "Так, надсилай." },
+      { type: "transcript.final", speaker: "companion", itemId: "c9", responseId: "r9", text: "I will ask the orchestrator." },
+    ];
+    for (const payload of standing) expect([payload.type, reduceCompanion(waiting, at(payload)).delegation?.stage]).toEqual([payload.type, "awaiting-confirmation"]);
   });
 
   test("the reducer applies the same gate: a confirmation the adapter should not have offered is refused", () => {
@@ -386,47 +474,75 @@ describe("the simulated companion opens a confirmation only for an explicit requ
   });
 });
 
-describe("the delegation scenario", () => {
+describe("the delegation scenarios", () => {
   for (const locale of ["en", "uk"] as const) {
-    test(`${locale}: ordinary talk reaches no tool; Send delivers once; the answer joins the delivery and is spoken back`, async () => {
+    test(`${locale}: ordinary talk reaches no tool; the request goes out once with no tap; the answer joins the delivery and is spoken back`, async () => {
       const run = scenario("delegation", locale);
+      const stages: Array<string | undefined> = [];
+      run.adapter.subscribe(() => { stages.push(run.state().delegation?.stage); });
       await run.adapter.start({ locale, project: "atlas" });
-      await run.until(() => run.state().delegation?.stage === "awaiting-confirmation");
-      const ask = run.events.findIndex((event) => event.type === "transcript.final" && event.speaker === "operator" && event.itemId === DEMO_IDS.askItem);
-      expect(delegationTypes(run.events.slice(0, ask))).toEqual([]);
-      expect(run.events.slice(0, ask).filter((event) => event.type === "transcript.final" && event.speaker === "operator").length).toBe(2);
-      expect(run.dispatched).toEqual([]);
-      await run.adapter.command({ type: "confirmation", proposalId: DEMO_IDS.proposalId, decision: "send", via: "tap" });
-      await run.adapter.command({ type: "confirmation", proposalId: DEMO_IDS.proposalId, decision: "cancel", via: "tap" });
       await run.adapter.finished;
+      const asked = run.events.findIndex((event) => event.type === "transcript.final" && event.speaker === "operator" && event.itemId === DEMO_IDS.askItem);
+      expect(delegationTypes(run.events.slice(0, asked))).toEqual([]);
+      expect(run.events.slice(0, asked).filter((event) => event.type === "transcript.final" && event.speaker === "operator").length).toBe(2);
+      expect(stages).not.toContain("awaiting-confirmation");
       expect(run.dispatched.length).toBe(1);
       expect(run.dispatched[0]!.delivery).toEqual({ proposalId: DEMO_IDS.proposalId, callId: DEMO_IDS.callId, clientMessageId: DEMO_IDS.clientMessageId, operationId: DEMO_IDS.operationId, recipient: RECIPIENT });
-      expect(delegationTypes(run.events)).toEqual(["delegation.tool.called", "delegation.confirmation.required", "delegation.confirmed", "delegation.tool.result", "delegation.delivery.settled", "orchestrator.answer"]);
+      expect(delegationTypes(run.events)).toEqual(["delegation.tool.called", "delegation.sending", "delegation.tool.result", "delegation.delivery.settled", "orchestrator.answer"]);
       expect(run.state().delegation?.stage).toBe("answered");
       expect(run.state().lines.at(-1)).toMatchObject({ speaker: "companion", text: scenarioText(locale).explain, playback: "played" });
     });
+
+    test(`${locale}: a request that is hard to undo is asked aloud, and the spoken yes sends it once`, async () => {
+      const run = scenario("voiceConfirm", locale);
+      /* What stood while the question was open: the model's reason on the card, and nothing sent. */
+      const asked: unknown[] = [];
+      run.adapter.subscribe((event) => { if (event.type === "delegation.confirmation.required") asked.push([run.state().delegation?.stage, run.state().delegation?.proposal?.confirmation, run.dispatched.length]); });
+      await run.adapter.start({ locale, project: "atlas" });
+      await run.adapter.finished;
+      expect(asked).toEqual([["awaiting-confirmation", { reason: scenarioText(locale).critical }, 0]]);
+      expect(delegationTypes(run.events)).toEqual(["delegation.tool.called", "delegation.confirmation.required", "delegation.confirmed", "delegation.tool.result", "delegation.delivery.settled"]);
+      expect(run.events.find((event) => event.type === "delegation.confirmed")).toMatchObject({ via: "speech", confirmationItemId: DEMO_IDS.yesItem });
+      expect(run.dispatched.map((sent) => [sent.delivery.clientMessageId, sent.instruction])).toEqual([[DEMO_IDS.criticalClientMessageId, scenarioText(locale).instructionCritical]]);
+      expect(run.state().lines.at(-1)).toMatchObject({ speaker: "companion", text: scenarioText(locale).sentCritical });
+    });
+
+    test(`${locale}: the demo sends one request at once and one after a spoken confirmation, each exactly once`, async () => {
+      const run = scenario("demo", locale);
+      await run.adapter.start({ locale, project: "atlas" });
+      await run.adapter.finished;
+      expect(run.dispatched.map((sent) => [sent.delivery.clientMessageId, sent.instruction])).toEqual([
+        [DEMO_IDS.clientMessageId, scenarioText(locale).instruction], [DEMO_IDS.criticalClientMessageId, scenarioText(locale).instructionCritical],
+      ]);
+      expect(delegationTypes(run.events)).toEqual([
+        "delegation.tool.called", "delegation.sending", "delegation.tool.result", "delegation.delivery.settled", "orchestrator.answer",
+        "delegation.tool.called", "delegation.confirmation.required", "delegation.confirmed", "delegation.tool.result", "delegation.delivery.settled",
+      ]);
+      /* The first request keeps its card and its answer while the second one is asked and sent. */
+      expect(run.state().deliveryCards.map((card) => [card.callId, card.stage])).toEqual([[DEMO_IDS.callId, "answered"], [DEMO_IDS.criticalCallId, "delivered"]]);
+    });
   }
 
-  test("cancel sends nothing and says so", async () => {
-    const run = scenario("delegation");
+  test("a declined confirmation sends nothing and says so", async () => {
+    const run = scenario("proposal");
     await run.adapter.start({ locale: "en", project: "atlas" });
     await run.until(() => run.state().delegation?.stage === "awaiting-confirmation");
     await run.adapter.command({ type: "confirmation", proposalId: DEMO_IDS.proposalId, decision: "cancel", via: "tap" });
     await run.adapter.finished;
     expect(run.dispatched).toEqual([]);
-    expect(run.state().delegation?.stage).toBe("cancelled");
+    expect(run.state().delegation).toMatchObject({ stage: "cancelled", refusal: "operator_cancelled" });
     expect(run.state().lines.at(-1)?.text).toBe("Okay, nothing was sent.");
   });
 
   for (const locale of ["en", "uk"] as const) {
-    test(`${locale}: speaking over the read-back withdraws the preview; Send then sends nothing`, async () => {
+    test(`${locale}: speaking over the question to take the request back withdraws it; Send then sends nothing`, async () => {
       const run = scenario("withdraw", locale);
       await run.adapter.start({ locale, project: "atlas" });
       await run.adapter.finished;
       await run.adapter.command({ type: "confirmation", proposalId: DEMO_IDS.proposalId, decision: "send", via: "tap" });
       expect(delegationTypes(run.events)).toEqual(["delegation.tool.called", "delegation.confirmation.required", "delegation.tool.result"]);
       expect(run.dispatched).toEqual([]);
-      expect(run.state().delegation).toMatchObject({ stage: "cancelled", refusal: "stale_input" });
+      expect(run.state().delegation).toMatchObject({ stage: "cancelled", refusal: "retracted" });
       expect(run.state().lines.at(-1)?.text).toBe(scenarioText(locale).dropped);
     });
   }
@@ -458,10 +574,6 @@ describe("every scenario plays out on the contract", () => {
     test(`${name} (${locale})`, async () => {
       const run = scenario(name, locale);
       await run.adapter.start({ locale, project: "atlas" });
-      if (name === "delegation") {
-        await run.until(() => run.state().delegation?.stage === "awaiting-confirmation");
-        await run.adapter.command({ type: "confirmation", proposalId: DEMO_IDS.proposalId, decision: "send", via: "tap" });
-      }
       await run.adapter.finished;
       expect(run.events.map((event) => event.seq)).toEqual(run.events.map((_, index) => index));
       for (let index = 1; index < run.events.length; index += 1) expect(run.events[index]!.atMs).toBeGreaterThanOrEqual(run.events[index - 1]!.atMs);

@@ -218,7 +218,7 @@ export const VOICE_COMPANION_CSS = `
 .vc-deleg-title { min-width: 0; overflow-wrap: anywhere; }
 .vc-deleg-engine { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; color: var(--color-secondary); white-space: nowrap; }
 .vc-deleg .vc-call-name { font-size: 10.5px; color: var(--color-secondary); }
-/* The whole frozen text the operator confirms: wrapped in full, and scrolled when it is longer than the lane. */
+/* The whole text that is sent: wrapped in full, and scrolled when it is longer than the lane. */
 .vc-instruction, .vc-answer, .vc-deleg-note {
   margin: 0; font-size: 13px; line-height: 18px; color: var(--color-primary); overflow-wrap: anywhere; user-select: text;
   max-height: 162px; overflow-y: auto; overscroll-behavior: contain;

@@ -28,6 +28,7 @@ const { VoiceCompanionHost } = await import("./VoiceCompanionHost");
 const { VoiceCompanionSetting } = await import("./VoiceCompanionSetting");
 const { COMPANION_SETTINGS_EVENT } = await import("./hostSurfaces");
 const { createCompanionStore } = await import("@/hooks/useVoiceCompanion");
+const { translate } = await import("@/lib/i18n/core");
 const { companionErrorMessage } = await import("@/lib/voiceCompanion/errors");
 
 const FAKE_KEY = ["fixture", "voice", "value", "42"].join("-");
@@ -298,16 +299,25 @@ async function liveHarness() {
     if (lost === "after") { failing.command = null; return jsonResponse({ code: "COMPANION_UNAVAILABLE" }, 502); }
     return answer;
   });
-  const propose = async (providerId: string, instruction: string) => {
-    /* Live delegates to the server; its backend proposes, then speaks. */
-    provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output") ? backendResponse(`resp_${index}`, [message("The proposal is on the card.")])
-      : backendResponse(`resp_${index}`, [functionCall(`call-${instruction}`, "request_orchestrator_delegation", { instruction })]);
+  /** `reason` is the model asking the operator first; without it the request goes at once. */
+  const propose = async (providerId: string, instruction: string, reason: string | null = null) => {
+    /* Live delegates to the server; its backend raises the request, then speaks. */
+    provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output") ? backendResponse(`resp_${index}`, [message("The request is on the card.")])
+      : backendResponse(`resp_${index}`, [functionCall(`call-${instruction}`, "request_orchestrator_delegation", { instruction, confirmation_reason: reason })]);
     provider.replay(providerId, delegationCreated(`delegation-${instruction}`, 100));
     /* The adapter reads the Viewer every half second. */
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 700)); });
   };
+  /** The operator's spoken answer to the confirmation that waits, passed on by the backend's second tool. */
+  const answer = async (providerId: string, decision: "send" | "cancel") => {
+    provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output") ? backendResponse(`resp_${index}`, [message("Done.")])
+      : backendResponse(`resp_${index}`, [functionCall(`call-answer-${index}`, "resolve_orchestrator_confirmation", { decision })]);
+    provider.replay(providerId, delegationCreated(`delegation-answer-${decision}`, 4_000));
+    /* The adapter reads the Viewer every half second. */
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 700)); });
+  };
   return {
-    storage, provider, sent, failing, propose, service, trackStops: () => track.stops,
+    storage, provider, sent, failing, propose, answer, service, trackStops: () => track.stops,
     starts: () => harness.calls.filter((call) => (call.body as { action?: string } | null)?.action === "start").length,
     async release() {
       for (const row of Object.values(storage.read().sessions)) if (!row.closed) await service.close(row.id);
@@ -338,7 +348,7 @@ test("another project in view, or none, ends the live conversation: no read, no 
     await pause();
     const [first] = Object.values(live.storage.read().sessions);
     expect([live.starts(), first.project, first.closed]).toEqual([1, "project-a", false]);
-    await live.propose(live.provider.sessions[0].id, "Review the plan");
+    await live.propose(live.provider.sessions[0].id, "Review the plan", "Two plans exist.");
     expect(document.querySelector<HTMLElement>("[data-companion-delegation]")?.dataset.stage).toBe("awaiting-confirmation");
     const proposal = Object.values(live.storage.read().sessions[first.id].proposals)[0].proposal;
 
@@ -356,7 +366,7 @@ test("another project in view, or none, ends the live conversation: no read, no 
     live.provider.replay(live.provider.sessions[0].id, { type: "session.delegation.created", event_id: "late-read", offset_ms: 9_000, delegation: { id: "late", type: "delegation", target: "client" } });
     await pause();
     expect([live.provider.commands.length, live.provider.requests.length]).toEqual([answers, asked]);
-    /* The proposal made in A cannot be sent any more. */
+    /* The confirmation left unanswered in A cannot be sent any more. */
     await live.service.command(first.id, { type: "confirmation", proposalId: proposal.proposalId, decision: "send", via: "tap" }).catch(() => undefined);
     expect(live.sent).toEqual([]);
     expect(live.storage.read().sessions[first.id].proposals[proposal.proposalId].state).toBe("cancelled");
@@ -373,6 +383,51 @@ test("another project in view, or none, ends the live conversation: no read, no 
   } finally { await unmountNow(); await live.release(); }
 });
 
+test("a request to the orchestrator goes out at once with no button; one the model asks about waits with its reason and takes a spoken yes or no", async () => {
+  const live = await liveHarness();
+  try {
+    await mount(<VoiceCompanionHost project="project-a" mobile={false} />);
+    await click(document.querySelector("[data-companion-talk]"));
+    await pause();
+    const cards = () => [...document.querySelectorAll<HTMLElement>("[data-companion-delegation]")];
+    const provider = live.provider.sessions[0].id;
+    /* The default: delivered before the operator could tap anything, and the card says what was sent and where it stands. */
+    await live.propose(provider, "Review the plan");
+    expect(live.sent).toHaveLength(1);
+    expect(cards().map((card) => [card.dataset.stage, card.querySelector("[data-companion-instruction]")?.textContent])).toEqual([["queued", "Review the plan"]]);
+    expect(document.querySelector("[data-companion-send], [data-companion-cancel], [data-companion-confirm-reason]")).toBeNull();
+    expect(cards()[0]!.querySelector(".vc-deleg-title")?.textContent).toBe(translate("en", "voiceCompanion.stage.queued"));
+    /* The exception: the model's reason, both ways to answer, and nothing sent while it waits. */
+    await live.propose(provider, "Delete the old presets", "Deleting cannot be undone.");
+    const waiting = cards().at(-1)!;
+    expect(waiting.dataset.stage).toBe("awaiting-confirmation");
+    expect(waiting.querySelector("[data-companion-confirm-reason]")?.textContent).toBe("Deleting cannot be undone.");
+    expect(waiting.querySelector("[data-companion-confirm-hint]")?.textContent).toBe(translate("en", "voiceCompanion.confirmHint"));
+    expect(waiting.querySelectorAll("[data-companion-send], [data-companion-cancel]")).toHaveLength(2);
+    expect(live.sent).toHaveLength(1);
+    const arrivalOf = (card: HTMLElement) => Number(card.closest<HTMLElement>("[data-floater]")!.dataset.arrival);
+    const asked = arrivalOf(waiting);
+    /* A spoken yes sends it once. The answer is news: the decided card arrives again beside the character, so
+       the talk that went on while it waited cannot have sent it off before it says where the request stands.
+       The asking card leaves from where it was and, as anything leaving the lane does, takes the older ones
+       with it, the first request's card among them. */
+    await live.answer(provider, "send");
+    expect(live.sent).toHaveLength(2);
+    expect(cards().map((card) => [card.dataset.stage, card.querySelector("[data-companion-instruction]")?.textContent])).toEqual([["queued", "Delete the old presets"]]);
+    expect(arrivalOf(cards()[0]!)).toBeGreaterThan(asked);
+    expect(document.querySelector("[data-companion-send]")).toBeNull();
+    /* A spoken no sends nothing, and the card says so in words. */
+    await live.propose(provider, "Stop every agent", "I am not sure this is what you meant.");
+    expect(cards().at(-1)!.dataset.stage).toBe("awaiting-confirmation");
+    const askedAgain = arrivalOf(cards().at(-1)!);
+    await live.answer(provider, "cancel");
+    const declined = cards().at(-1)!;
+    expect(arrivalOf(declined)).toBeGreaterThan(askedAgain);
+    expect([declined.dataset.stage, declined.querySelector("[data-companion-withdrawn]")?.textContent]).toEqual(["cancelled", translate("en", "voiceCompanion.declined")]);
+    expect(live.sent).toHaveLength(2);
+  } finally { await unmountNow(); await live.release(); }
+});
+
 test("a Send whose request or reply is lost says delivery is not confirmed, keeps the card, and another tap delivers once", async () => {
   for (const lost of ["before", "after"] as const) {
     const live = await liveHarness();
@@ -380,7 +435,7 @@ test("a Send whose request or reply is lost says delivery is not confirmed, keep
       await mount(<VoiceCompanionHost project="project-a" mobile={false} />);
       await click(document.querySelector("[data-companion-talk]"));
       await pause();
-      await live.propose(live.provider.sessions[0].id, "Review the plan");
+      await live.propose(live.provider.sessions[0].id, "Review the plan", "Two plans exist.");
       const card = () => document.querySelector<HTMLElement>("[data-companion-delegation]");
       expect(card()?.dataset.stage).toBe("awaiting-confirmation");
       live.failing.command = lost;

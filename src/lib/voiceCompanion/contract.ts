@@ -31,6 +31,8 @@ export type Proposal = {
   sourceItemId: Id;
   instruction: string;
   recipient: Recipient;
+  /** Present when the model asked for the operator's answer before sending, with its short reason. */
+  confirmation?: { reason: string };
 };
 
 export type Delivery = {
@@ -61,6 +63,9 @@ export type Payload =
   | { type: "tool.called"; callId: Id; name: string; summary: string }
   | { type: "tool.result"; callId: Id; status: "done" | "failed"; summary: string }
   | { type: "delegation.tool.called"; callId: Id; sourceItemId: Id; instruction: string }
+  /** The default: the model raised the delegation with no confirmation asked, and delivery starts at once. */
+  | { type: "delegation.sending"; proposal: Proposal }
+  /** The exception: the model asked for the operator's answer first. */
   | { type: "delegation.confirmation.required"; proposal: Proposal }
   | { type: "delegation.confirmed"; proposalId: Id; via: "tap" | "speech"; confirmationItemId?: Id }
   | {
@@ -107,6 +112,6 @@ export interface VoiceCompanionAdapter {
   dispose?(): Promise<void>;
 }
 
-/** The presentation channel a confirmed voice delegation carries into the
+/** The presentation channel a voice delegation carries into the
     orchestrator's conversation. It tints the row and grants no authority. */
 export const VOICE_DELEGATUS_CHANNEL = "voice-delegatus";

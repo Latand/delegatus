@@ -23,9 +23,9 @@
         "border": "color(srgb 0.0509804 0.580392 0.533333 / 0.45)",
         "radius": "14px",
         "width": 280,
-        "height": 180,
+        "height": 221,
         "buttons": 2,
-        "text": "Send to the atlas orchestrator? Claude request_orchestrator_delegation Review the export plan: three presets and one advanced sheet, with the old keys still readable. Cancel Send",
+        "text": "Send to the atlas orchestrator? Claude request_orchestrator_delegation I am not sure which plan is meant. Review the export plan: three presets and one advanced sheet, with the old keys still readable. Say yes or no, or tap. Cancel Send",
         "instruction": "Review the export plan: three presets and one advanced sheet, with the old keys still readable."
       }
     },
@@ -49,9 +49,9 @@
         "border": "color(srgb 0.176471 0.831373 0.74902 / 0.45)",
         "radius": "14px",
         "width": 280,
-        "height": 180,
+        "height": 221,
         "buttons": 2,
-        "text": "Надіслати оркестратору atlas? Claude request_orchestrator_delegation Перевір план експорту: три пресети й один розширений аркуш, старі ключі лишаються читабельними. Скасувати Надіслати",
+        "text": "Надіслати оркестратору atlas? Claude request_orchestrator_delegation Я не певен, про який план мова. Перевір план експорту: три пресети й один розширений аркуш, старі ключі лишаються читабельними. Скажіть «так» чи «ні» або натисніть. Скасувати Надіслати",
         "instruction": "Перевір план експорту: три пресети й один розширений аркуш, старі ключі лишаються читабельними."
       }
     }

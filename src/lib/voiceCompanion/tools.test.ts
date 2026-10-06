@@ -12,7 +12,7 @@ const { CompanionAdmission } = await import("./admission");
 const { COMPANION_TOOL_REGISTRY, COMPANION_TOOLS, runCompanionTool } = await import("./tools");
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
-test("all eight declarations execute through one allowlist, parameter schema and project fence", async () => {
+test("all nine declarations execute through one allowlist, parameter schema and project fence", async () => {
   let ended = false;
   const admission = new CompanionAdmission(new CompanionStorage(), { recipient: () => null, reports: () => [], send: async () => { throw new Error("unexpected delivery"); } });
   const session = admission.create({ project: "fixture", locale: "en", authority: "live-model" });
@@ -21,7 +21,8 @@ test("all eight declarations execute through one allowlist, parameter schema and
     activity: async () => [{ conversationId: "conversation_a", project: "fixture", title: "Agent", lifecycle: "running" }], messages: async () => [{ role: "assistant", text: "Checked it" }] });
   const context = { project: "fixture", sessionId: session.id, callId: "call-a", delegationId: "delegation-a", admission, reads, endConversation: () => { ended = true; } };
   const args: Record<string, Record<string, unknown>> = { list_tasks: {}, get_task: { taskId: "task-a" }, list_pipelines: {}, get_pipeline: { pipelineId: "pipeline-a" },
-    agent_activity: {}, conversation_messages: { conversationId: "conversation_a" }, request_orchestrator_delegation: { instruction: "Review it" }, end_conversation: {} };
+    agent_activity: {}, conversation_messages: { conversationId: "conversation_a" }, request_orchestrator_delegation: { instruction: "Review it", confirmation_reason: null },
+    resolve_orchestrator_confirmation: { decision: "send" }, end_conversation: {} };
   expect(COMPANION_TOOLS.map(row => row.name)).toEqual(COMPANION_TOOL_REGISTRY.map(row => row.name));
   for (const tool of COMPANION_TOOL_REGISTRY) {
     expect(await runCompanionTool(context, tool.name, args[tool.name])).toBeDefined();
@@ -34,6 +35,50 @@ test("all eight declarations execute through one allowlist, parameter schema and
   await expect(runCompanionTool(context, "get_task", {})).rejects.toThrow("INVALID_TOOL_ARGUMENTS");
   admission.retire(session.id);
   await expect(runCompanionTool(context, "end_conversation", {})).rejects.toThrow("SESSION_CLOSED");
+});
+
+test("the delegation tool sends at once; the model's own flag asks first, and the spoken answer resolves it through the second tool", async () => {
+  fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+  const sent: string[] = [];
+  const admission = new CompanionAdmission(new CompanionStorage(), { recipient: () => ({ project: "fixture", conversationId: "conversation_seat", seatEpoch: 1, engine: "claude" }), reports: () => [],
+    send: async ({ text }) => { sent.push(text.split("\n")[0]!); return { status: "delivered", operationId: `operation-${sent.length}` }; } });
+  const session = admission.create({ project: "fixture", locale: "en", authority: "live-model" });
+  const reads = new CompanionBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] });
+  const call = (callId: string, name: string, args: Record<string, unknown>) =>
+    runCompanionTool({ project: "fixture", sessionId: session.id, callId, delegationId: `delegation-${callId}`, admission, reads, endConversation: () => undefined }, name, args);
+  // The default, with the flag null or left out: delivered before the tool answers, and a replayed call adds nothing.
+  expect(await call("c1", "request_orchestrator_delegation", { instruction: "Review the plan", confirmation_reason: null })).toMatchObject({ status: "sent", delivery: "delivered" });
+  expect(await call("c1", "request_orchestrator_delegation", { instruction: "Review the plan", confirmation_reason: null })).toMatchObject({ status: "sent" });
+  expect(await call("c2", "request_orchestrator_delegation", { instruction: "Rerun the checks" })).toMatchObject({ status: "sent" });
+  expect(await call("c3", "request_orchestrator_delegation", { instruction: "Merge the lane", confirmation_reason: "   " })).toMatchObject({ status: "sent" });
+  expect(sent).toEqual(["Review the plan", "Rerun the checks", "Merge the lane"]);
+  // With nothing waiting, an answer resolves nothing.
+  expect(await call("c4", "resolve_orchestrator_confirmation", { decision: "send" })).toMatchObject({ status: "nothing_waiting" });
+  // The exception: the model's reason, nothing sent, then the operator's yes.
+  expect(await call("c5", "request_orchestrator_delegation", { instruction: "Delete the old presets", confirmation_reason: "Deleting cannot be undone." }))
+    .toMatchObject({ status: "awaiting_confirmation", reason: "Deleting cannot be undone." });
+  expect(sent.length).toBe(3);
+  expect(await call("c6", "resolve_orchestrator_confirmation", { decision: "send" })).toMatchObject({ status: "sent", delivery: "delivered" });
+  expect(await call("c7", "resolve_orchestrator_confirmation", { decision: "send" })).toMatchObject({ status: "nothing_waiting" });
+  expect(sent).toEqual(["Review the plan", "Rerun the checks", "Merge the lane", "Delete the old presets"]);
+  // A no sends nothing and the result says so.
+  expect(await call("c8", "request_orchestrator_delegation", { instruction: "Stop every agent", confirmation_reason: "I am not sure this is what you meant." })).toMatchObject({ status: "awaiting_confirmation" });
+  const declined = await call("c9", "resolve_orchestrator_confirmation", { decision: "cancel" }) as { status: string; code: string; speech: string };
+  expect(declined).toMatchObject({ status: "refused", code: "operator_cancelled" });
+  expect(declined.speech).toContain("Nothing was sent");
+  expect(sent.length).toBe(4);
+  for (const args of [{ decision: "maybe" }, { decision: "" }, {}, { decision: "send", proposalId: "x" }])
+    await expect(call("c10", "resolve_orchestrator_confirmation", args)).rejects.toThrow("INVALID_TOOL_ARGUMENTS");
+  await expect(call("c11", "request_orchestrator_delegation", { instruction: "Review", confirmation_reason: "x".repeat(241) })).rejects.toThrow("INVALID_TOOL_ARGUMENTS");
+});
+
+test("asking first is the model's judgment in the schema: an optional reason, and no list of words anywhere in the registry", () => {
+  const tool = COMPANION_TOOLS.find(row => row.name === "request_orchestrator_delegation")!;
+  expect(tool.parameters.properties.confirmation_reason).toMatchObject({ type: ["string", "null"] });
+  expect(tool.parameters.required).toEqual(["instruction", "confirmation_reason"]);
+  expect(tool.description).toContain("delivered at once");
+  expect(tool.description).toContain("your own judgment");
+  expect(COMPANION_TOOLS.find(row => row.name === "resolve_orchestrator_confirmation")!.parameters.properties.decision).toMatchObject({ enum: ["send", "cancel"] });
 });
 
 test("ending the call needs the operator's own explicit request, in English, Ukrainian and Russian", async () => {

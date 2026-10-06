@@ -2,10 +2,10 @@ import type { Id } from "./contract";
 
 /**
  * The explicit-request gate (#2519, design note §5): whether a delegation the
- * model proposed may be put in front of the operator for confirmation. The
- * simulator calls it before it offers a confirmation, the reducer calls it
- * again before it shows one, and a real adapter calls the same function at
- * its admission seam, so a prompt that misfires cannot open a send.
+ * model raised may go to the orchestrator. The simulator calls it before it
+ * sends or asks, the reducer calls it again before it shows a confirmation,
+ * and a real adapter calls the same function at its admission seam, so a
+ * prompt that misfires cannot open a send.
  *
  * It reads only completed operator input. The grammar is bounded on purpose:
  * one English or Ukrainian imperative at the start of its sentence whose
@@ -23,9 +23,10 @@ import type { Id } from "./contract";
  * refuses the input, and so does a retraction or a condition after the request
  * in its own sentence ("…review the plan, but only when the checks pass").
  *
- * Admission is checked again whenever the operator speaks and once more
- * before the send: a proposal lives only while its source is still the
- * operator's last input and still reads as it did when the proposal froze.
+ * An admitted delegation is sent at once. One the model asked to confirm
+ * waits for the operator's answer, and is read again whenever they speak and
+ * once more before the send: it stands while its source still reads as it did
+ * and nothing said since takes the request back.
  */
 
 export type GateRefusal =
@@ -150,19 +151,24 @@ export function explicitDelegationRequest(utterance: string): GateVerdict {
 }
 
 /**
- * Whether a proposal may be offered, kept on screen or sent: its source is the
- * operator's last input in this generation, it is complete, and it is an
- * explicit request. `frozenSourceText` is the source as it read when the
- * proposal froze; a source that reads differently now no longer backs it.
+ * Whether a delegation may be raised, and whether a confirmation that waits
+ * may still stand. Raised: its source is the operator's last input in this
+ * generation, it is complete, and it is an explicit request. `frozenSourceText`
+ * is the source as it read then; a source that reads differently now no longer
+ * backs it. `waiting` reads a confirmation the operator has yet to answer:
+ * they answer it aloud, so later speech leaves it standing unless that speech
+ * takes the request back.
  */
-export function admitDelegationProposal(input: { sourceItemId: Id; instruction: string; inputs: readonly OperatorInput[]; frozenSourceText?: string }): GateVerdict {
+export function admitDelegationProposal(input: { sourceItemId: Id; instruction: string; inputs: readonly OperatorInput[]; frozenSourceText?: string; waiting?: boolean }): GateVerdict {
   const instruction = input.instruction.trim();
   if (!instruction || instruction.length > INSTRUCTION_LIMIT) return { admit: false, reason: "empty_instruction" };
-  const source = input.inputs.find((candidate) => candidate.itemId === input.sourceItemId);
+  const at = input.inputs.findIndex((candidate) => candidate.itemId === input.sourceItemId);
+  const source = input.inputs[at];
   if (!source) return { admit: false, reason: "no_input" };
   if (!source.final) return { admit: false, reason: "not_final" };
-  /* Anything the operator said after it, finished or not, may change or withdraw it. */
-  if (input.inputs.at(-1)?.itemId !== source.itemId) return { admit: false, reason: "stale_input" };
+  if (input.waiting) {
+    if (retractsRequest(input.inputs.slice(at + 1).map((later) => later.text).join(" "))) return { admit: false, reason: "retracted" };
+  } else if (input.inputs.at(-1)?.itemId !== source.itemId) return { admit: false, reason: "stale_input" };
   if (input.frozenSourceText !== undefined && input.frozenSourceText !== source.text) return { admit: false, reason: "source_changed" };
   return explicitDelegationRequest(source.text);
 }

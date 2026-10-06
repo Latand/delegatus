@@ -6,6 +6,105 @@ Originating requirement, 2026-10-05, controller assignment for [issue #2519](htt
 
 # Floating voice companion: research and simulator contract
 
+## Operator requirement change 2026-10-06: send without confirmation
+
+This section overrides every other line of this note, of the specification and
+of the prototype that says a delegation is delivered only when the operator
+taps its card. Relayed requirement change (2026-10-06, voice; the operator's
+words paraphrased from Russian by the orchestrator):
+
+> the voice Delegatus now goes through a confirmation before reaching the
+> orchestrator; I want it to send without confirmation. Confirmation is only
+> for some super-critical action, or when it is not sure. In every other case
+> it sends automatically. I do all of this hands-free, why would I make extra
+> clicks.
+
+The rule as built:
+
+1. **Sending is the default.** When the model raises a delegation and the gate
+   of §5 admits it, the server sends it at once through the existing
+   orchestrator send path, before the tool call returns. The delegation
+   element beside the character shows the request that was sent and its
+   delivery state: sending, queued or delivered, delivery not confirmed, or
+   failed with the existing failure wording. The single send, its delivery
+   key, its recovery after a restart and the `voice-delegatus` provenance that
+   tints the row in the orchestrator's conversation are unchanged.
+2. **Confirmation is the exception, and the model decides it.**
+   `request_orchestrator_delegation` takes an optional `confirmation_reason`
+   (nullable, up to 240 characters, in the operator's language). Its
+   description and the Live and backend instructions describe it as judgment:
+   set it when the action is critical or hard to undo, or when the model is
+   unsure it understood the request; pass null otherwise. Nothing on the
+   server reads the request to force a confirmation: no keyword list, no
+   pattern, no classifier (`admission.test.ts`, "nothing on the server asks for
+   a confirmation the model did not ask for"). The gate of §5 still refuses a
+   request the operator never made; it never turns a request into a question.
+3. **A pending confirmation is answered hands-free.** With a reason set,
+   nothing is sent. The card shows the reason, the whole request, the line
+   "Say yes or no, or tap." and the two buttons. The tool tells the model to
+   ask aloud. The next delegation the voice raises is told what waits, and the
+   operator's spoken answer reaches the server through a second registry entry,
+   `resolve_orchestrator_confirmation` with `decision: "send" | "cancel"`;
+   an unclear answer is asked again and calls nothing. The tap stays as the
+   second way, and whichever answer comes first decides once. The page cannot
+   claim a spoken answer: the session route still accepts only `via: "tap"`.
+4. **A declined or abandoned confirmation sends nothing and says so.** A spoken
+   or tapped no stores the request as cancelled (`operator_cancelled`); speech
+   that takes the request back while it waits withdraws it (`source_changed`,
+   read by the same retraction reading as before, while ordinary speech such as
+   the answer itself leaves it standing); no answer within 120 seconds expires
+   it (`confirmation_expired`, and the companion is asked to say nothing was
+   sent); a closed session cancels it (`session_closed`). The card names which:
+   "You declined", "You took this back" or "No answer came", each followed by
+   "so nothing was sent". An old tap, a late answer, a retry or a restart after
+   any of these sends nothing.
+   **The decided card arrives again.** A confirmation is answered while the
+   conversation goes on: the question read aloud, the operator's yes, the
+   companion's reply. That talk can send the asking card off the far end of
+   the lane (at most four bubbles, and the lane's height), which in the first
+   rendered run took the card away before it could say the request was sent.
+   Once a confirmation is decided, its card is a new element at the character's
+   end (`VoiceCompanion.tsx`, the `:decided` floater key). The asking card
+   leaves from where it was and, as any element leaving the lane does, takes
+   the older ones with it, so the lane never moves toward the character.
+5. **Events.** A request sent with no confirmation emits
+   `delegation.sending { proposal }` after `delegation.tool.called`; one the
+   model asked about emits `delegation.confirmation.required` (the proposal now
+   carries `confirmation: { reason }`), then `delegation.confirmed` with
+   `via: "tap"` or `"speech"`. The stored proposal records what admitted it
+   (`via: "auto" | "tap" | "speech"`) and, when it ended unsent, why
+   (`cancelCode`). The reducer takes a spoken confirmation as it takes a tap.
+6. **Registry and ending.** Both delegation tools are entries of the one
+   registry, class `delegation`; the six board reads and `end_conversation`
+   (class `session-control`), with the hang-up control, are unchanged.
+7. **The demo.** The product's demo now plays a board question, one request
+   sent at once with its answer, and one the model asks about first ("Deleting
+   the old presets cannot be undone.") that the operator confirms by saying
+   "Yes, send it." with no pointer event. The driver scenarios `proposal`,
+   `readThenAsk` and `withdraw` show a confirmation the model asked for because
+   it was unsure which plan was meant; `voiceConfirm` shows one answered aloud.
+
+Rendered evidence, through the existing kanban driver: `proposal.json` adds
+`spokenAnswer`, four runs (1440 and 1000, en and uk, both themes) in which the
+card shows the model's reason and the whole request, nothing is sent while it
+waits, the spoken yes sends it once with no pointer event after Talk, and the
+card that says "Delivered" stands beside the character. `settings.json`
+records the demo through the shell's own mount: the first request went out
+with no button ever shown, the second was asked about with its reason and sent
+by voice. `yield.json` now reads the withdrawn card's own words in all three
+passes, where before it had left the lane. The eight `delegation` runs of
+`scenarios.json` were measured and recorded again
+(`remeasured.changed` names them and why): the driver taps nothing after Talk,
+no button is offered, the events run `delegation.tool.called`,
+`delegation.sending`, `delegation.tool.result`, `delegation.delivery.settled`,
+`orchestrator.answer`, one send each, 40 of 40 animation windows on target with
+no missed frame, no frame toward the character and at most 5.6 % of a rise in
+one frame. As the delegated row appears in the conversation, 37 to 42 % of it
+lies under the companion at 1440 and 55 to 59 % at 1000.
+
+Where the older sections below speak of a proposal waiting for the operator's
+Send tap, read them as describing a confirmation the model asked for.
+
 ## Operator amendment 2026-10-06
 
 Verbatim amendment, overriding point F where they differ:
@@ -161,23 +260,26 @@ or delegations. An ordinary question ("What is on the board?"), a condition, a
 retraction, a negation or a quote refuses, and so does a completed turn that
 asks nothing of the orchestrator, unless up to two turns before it complete the
 request (a backchannel can split one sentence). The model's tool call cannot
-override it. Missing input and a turn still arriving leave the proposal to the
-tap. Speech in a later turn that takes the request back withdraws it, finished
-or still arriving: the gate's own retraction reading ("Never mind.", "Cancel
-that request.", "Забудь.", "Скасуй.", "Передумав.") is applied to everything
-said after the source turn, when the proposal is raised, on every later input
-and again at the tap. A withdrawn proposal is stored as cancelled, so an old
+override it. Missing input and a turn still arriving leave the decision to the
+model: its request is sent at once unless it asked to confirm (see the
+requirement change at the top). Speech in a later turn that takes the request
+back withdraws a confirmation that waits, finished or still arriving: the
+gate's own retraction reading ("Never mind.", "Cancel that request.",
+"Забудь.", "Скасуй.", "Передумав.") is applied to everything said after the
+source turn, when the request is raised, on every later input and again when
+the operator answers. A withdrawn request is stored as cancelled, so an old
 tap, a late backend result, a retry or a restart sends nothing. Ordinary speech
-after the request ("It is in the docs folder") leaves the card standing.
+after the request ("It is in the docs folder", or the spoken answer itself)
+leaves the card standing.
 
-A Send whose request or reply is lost leaves the proposal card as it was, with a
-line saying delivery is not confirmed and both buttons live. The server keeps one
-delivery key per proposal, so a second tap recovers the first send.
+A tapped Send whose request or reply is lost leaves the confirmation card as it
+was, with a line saying delivery is not confirmed and both buttons live. The
+server keeps one delivery key per request, so a second tap recovers the first send.
 
 ### Registry extension
 
 `src/lib/voiceCompanion/tools.ts` declares the six board reads, the delegation
-proposal and `end_conversation`. Each entry owns its name, model description,
+request with its spoken confirmation answer, and `end_conversation`. Each entry owns its name, model description,
 strict parameter schema, class and server handler. Both the provider definitions
 and execution allowlist derive from those entries. Add one entry there to add a
 tool, then test its behavior through `runCompanionTool`; no second allowlist or
@@ -260,7 +362,7 @@ voice rate, with every unanswered backend response at its full reservation, and
 stays marked incomplete, so the month's figure covers what it may have cost. A
 session owned by another living process is left to it. Closing twice changes
 nothing. A Send records its delivery key and an unknown outcome in one commit,
-so a restart between the tap and the recorded result sends that very request
+so a restart between the admission and the recorded result sends that very request
 again with its own key, and the relay's idempotency keeps it one message.
 Confirmed deliveries keep their original send key and recipient across media
 closure, restart and receipt recovery. The existing relay supplies the voice
@@ -293,8 +395,9 @@ Typed interfaces for the visual stage:
   `src/lib/voiceCompanion/liveAdapter.ts` and pass it to
   `useVoiceCompanion(adapter)`. The existing `createSimulatedCompanion` implements
   the same contract for the demo choice. `start({ project, locale })` starts only
-  on operator action; `command` handles mute, interruption and tap-only
-  confirmation; awaited `stop()` is the always-reachable hangup control.
+  on operator action; `command` handles mute, interruption and the tap on a
+  confirmation the model asked for (a spoken answer arrives through the
+  model's tool); awaited `stop()` is the always-reachable hangup control.
   `refresh()` re-reads receipt/report events without opening media; pending
   confirmed deliveries also refresh automatically after hangup. The hook disposes
   the read-only observer on unmount.
@@ -404,7 +507,7 @@ flagged in red while one is shown:
 | Microphone refused, provider error | The adapter's error event of the failed start or the lost session. |
 | No orchestrator | A note as the conversation starts, when the project in view has no seat; a proposal the model still raises is refused by the server and its card says the same sentence. |
 | Delivery not confirmed | A line in the delegation card under the frozen text; no answer is shown for such a request. |
-| Send lost on its way, or its reply lost | A line in the proposal card, which keeps its text and both buttons; another tap on Send checks the first one and sends once. |
+| Send lost on its way, or its reply lost | Only for a tapped confirmation: a line in the card, which keeps its text and both buttons; another tap on Send checks the first one and sends once. |
 | No project in view | The Overview has no project to talk about: Talk says to open one. |
 
 An error the state still holds from the previous conversation is not said again
@@ -422,8 +525,8 @@ nothing and reads nothing. On the desktop it reads the settings once and
 mounts the companion only when they say it is on; mounting starts no call. The
 real backend is one `OfficialVoiceCompanionAdapter`; the demo choice is the
 simulator on the same contract, playing `demo` (a greeting, a board question
-answered from a read call, then a delegation that waits for the tap and is sent
-nowhere) or, for a project with no orchestrator, `demoNoSeat`, which proposes
+answered from a read call, a request sent at once with its answer, then one the
+model asks about first and the operator confirms by voice, all sent nowhere) or, for a project with no orchestrator, `demoNoSeat`, which proposes
 nothing. The shell passes the same three surface values the fixture does
 (`hostSurfaces.ts`), so the product computes the placement the driver measures.
 The component reads the adapter through `createCompanionStore`

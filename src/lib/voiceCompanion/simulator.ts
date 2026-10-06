@@ -8,7 +8,8 @@ import { admitDelegationProposal, type OperatorInput } from "./gate";
  * endpoint, no microphone, no key, no state directory and no orchestrator:
  * the one effect a delegation has is a call to the `dispatch` seam it was
  * given, and that call happens only after the explicit-request gate admitted
- * the proposal and a `confirmation` command said send.
+ * the delegation and, where the model asked to confirm it, the operator said
+ * send by voice or by a tap.
  *
  * Time comes from a clock, so the same script runs on virtual time in a unit
  * test and on `requestAnimationFrame` in a browser capture.
@@ -49,12 +50,16 @@ export type ScriptStep =
   | { kind: "companion"; itemId: Id; responseId: Id; text: string; bargeIn?: { afterMs: number; itemId: Id; text: string } }
   /** Read-only tool calls, started together and finished each on its own time. */
   | { kind: "tools"; calls: readonly ScriptedCall[] }
-  /** The model proposes a delegation; the application gate decides whether
-      the operator is asked to confirm it. */
-  | { kind: "propose"; callId: Id; proposalId: Id; sourceItemId: Id; instruction: string }
-  /** Waits for the `confirmation` command. Send continues the script; cancel
-      plays `cancelled` and ends it. A refused proposal skips this step. */
-  | { kind: "confirm"; clientMessageId: Id; operationId: Id; settleAfterMs: number; cancelled: ScriptStep[];
+  /** The model raises a delegation; the application gate decides whether it
+      stands. `confirm` is the model's own reason for asking the operator first. */
+  | { kind: "propose"; callId: Id; proposalId: Id; sourceItemId: Id; instruction: string; confirm?: string }
+  /** Sends the delegation that stands. With no confirmation asked it goes at
+      once. Otherwise it waits for the operator's answer: `spoken` is that
+      answer said aloud and passed on by the model's tool, and a tap that comes
+      first decides instead. Send continues the script; a decline plays
+      `cancelled` and ends it. A refused or withdrawn delegation skips this step. */
+  | { kind: "deliver"; clientMessageId: Id; operationId: Id; settleAfterMs: number; cancelled: ScriptStep[];
+      spoken?: { itemId: Id; text: string; decision: "send" | "cancel" };
       /** The send's outcome stays unknown: no receipt names its operation, nothing settles and no answer can join it. */
       unconfirmed?: boolean }
   | { kind: "answer"; reportId: Id; status: "progress" | "result" | "question" | "blocked"; text: string; afterMs: number };
@@ -63,7 +68,7 @@ export interface SimulatorOptions {
   script: readonly ScriptStep[];
   recipient: Recipient;
   clock?: SimClock;
-  /** The simulated send seam. Called once per confirmed proposal, never else. */
+  /** The simulated send seam. Called once per sent delegation, never else. */
   dispatch?: (delivery: Delivery, instruction: string) => void;
   sessionId?: Id;
 }
@@ -129,13 +134,13 @@ export function createSimulatedCompanion(options: SimulatorOptions): SimulatedCo
   /* What the gate reads: the operator's inputs of this generation, as heard. */
   let inputs: OperatorInput[] = [];
   const standing = (proposal: Proposal) =>
-    admitDelegationProposal({ sourceItemId: proposal.sourceItemId, instruction: proposal.instruction, inputs, frozenSourceText: pendingSource });
+    admitDelegationProposal({ sourceItemId: proposal.sourceItemId, instruction: proposal.instruction, inputs, frozenSourceText: pendingSource, waiting: true });
   const heard = (itemId: Id, change: Partial<OperatorInput>) => {
     const index = inputs.findIndex((input) => input.itemId === itemId);
     if (index === -1) inputs.push({ itemId, text: "", final: false, ...change });
     else inputs[index] = { ...inputs[index]!, ...change };
-    /* Anything the operator says after the preview, finished or not, withdraws
-       it: the proposal leaves and an earlier or later Send finds nothing. */
+    /* Speech that takes the request back withdraws a waiting confirmation:
+       the card leaves and an earlier or later Send finds nothing. */
     const proposal = pendingProposal;
     if (!proposal) return;
     const verdict = standing(proposal);
@@ -254,39 +259,54 @@ export function createSimulatedCompanion(options: SimulatorOptions): SimulatedCo
       else if (step.kind === "propose") {
         emit({ type: "delegation.tool.called", callId: step.callId, sourceItemId: step.sourceItemId, instruction: step.instruction });
         decided = null;
-        /* The gate, before anything is shown: only an explicit request becomes a proposal. */
+        /* The gate, before anything is sent or asked: only an explicit request stands. */
         const verdict = admitDelegationProposal({ sourceItemId: step.sourceItemId, instruction: step.instruction, inputs });
         if (!verdict.admit) {
           pendingProposal = null;
           emit({ type: "delegation.tool.result", callId: step.callId, result: { status: "refused", code: verdict.reason } });
           continue;
         }
-        pendingProposal = { proposalId: step.proposalId, callId: step.callId, sourceItemId: step.sourceItemId, instruction: step.instruction, recipient: options.recipient };
+        pendingProposal = { proposalId: step.proposalId, callId: step.callId, sourceItemId: step.sourceItemId, instruction: step.instruction, recipient: options.recipient,
+          ...(step.confirm ? { confirmation: { reason: step.confirm } } : {}) };
         pendingSource = inputs.find((input) => input.itemId === step.sourceItemId)?.text ?? "";
-        emit({ type: "delegation.confirmation.required", proposal: pendingProposal });
-      } else if (step.kind === "confirm") {
+        if (step.confirm) emit({ type: "delegation.confirmation.required", proposal: pendingProposal });
+      } else if (step.kind === "deliver") {
         const proposal = pendingProposal;
         if (!proposal) continue;
-        const command = decided ?? await new Promise<Confirmation | null>((resolve) => { decide = resolve; });
-        decide = null;
-        if (gone(mine) || !command) return;
-        pendingProposal = null;
-        if (command.decision === "cancel") {
-          emit({ type: "delegation.tool.result", callId: proposal.callId, proposalId: proposal.proposalId, result: { status: "cancelled", code: "operator_cancelled" } });
-          await play(step.cancelled, mine);
-          return;
+        if (proposal.confirmation) {
+          let command = decided;
+          if (!command && step.spoken) {
+            await speakOperator(step.spoken.itemId, step.spoken.text, mine);
+            if (gone(mine)) return;
+            /* The answer itself took the request back: the gate already withdrew it. */
+            if (pendingProposal !== proposal) { await play(step.cancelled, mine); return; }
+            command = decided ?? { type: "confirmation", proposalId: proposal.proposalId, decision: step.spoken.decision, via: "speech", confirmationItemId: step.spoken.itemId };
+          }
+          command ??= await new Promise<Confirmation | null>((resolve) => { decide = resolve; });
+          decide = null;
+          if (gone(mine) || !command) return;
+          if (pendingProposal !== proposal) continue;
+          pendingProposal = null;
+          if (command.decision === "cancel") {
+            emit({ type: "delegation.tool.result", callId: proposal.callId, proposalId: proposal.proposalId, result: { status: "cancelled", code: "operator_cancelled" } });
+            await play(step.cancelled, mine);
+            return;
+          }
+          emit({ type: "delegation.confirmed", proposalId: proposal.proposalId, via: command.via, ...(command.confirmationItemId ? { confirmationItemId: command.confirmationItemId } : {}) });
+        } else {
+          pendingProposal = null;
+          emit({ type: "delegation.sending", proposal });
         }
-        emit({ type: "delegation.confirmed", proposalId: proposal.proposalId, via: "tap" });
         await clock.sleep(900);
         if (gone(mine)) return;
-        /* Admission, read again at the send: the frozen proposal must still be what the operator last asked for. */
-        const admission = standing(proposal);
+        /* Admission, read again at the send of a confirmed request: nothing said since may have taken it back. */
+        const admission = proposal.confirmation ? standing(proposal) : { admit: true as const };
         if (!admission.admit) {
           emit({ type: "delegation.tool.result", callId: proposal.callId, proposalId: proposal.proposalId, result: { status: "cancelled", code: admission.reason } });
           continue;
         }
         delivery = { proposalId: proposal.proposalId, callId: proposal.callId, clientMessageId: step.clientMessageId, operationId: step.unconfirmed ? null : step.operationId, recipient: proposal.recipient };
-        /* The single send, after the confirmation and nowhere else. */
+        /* The single send, here and nowhere else. */
         options.dispatch?.(delivery, proposal.instruction);
         if (step.unconfirmed) {
           emit({ type: "delegation.tool.result", callId: proposal.callId, proposalId: proposal.proposalId, result: { status: "unknown", delivery } });
@@ -332,13 +352,12 @@ export function createSimulatedCompanion(options: SimulatorOptions): SimulatedCo
       if (!live) return;
       if (command.type === "mute") { muted = command.muted; return; }
       if (command.type === "interrupt") { interrupted = command.responseId; return; }
-      /* A tap is the only confirmation there is. A spoken one has to be a
-         later completed input admitted as consent to the proposal on screen
-         (note §5, step 2), and nothing here admits one: a speech command is
-         dropped whatever item it names, so it neither sends nor cancels. */
+      /* The page can only tap. The spoken answer is the script's own step, as
+         the model's tool is the real session's; a speech command from outside
+         is dropped, so it neither sends nor cancels. */
       if (command.via !== "tap") return;
-      /* Only the proposal on screen can be decided, and only once. */
-      if (!pendingProposal || command.proposalId !== pendingProposal.proposalId || decided) return;
+      /* Only a confirmation that waits can be decided, and only once. */
+      if (!pendingProposal?.confirmation || command.proposalId !== pendingProposal.proposalId || decided) return;
       decided = command;
       /* A tap on the proposal cuts the read-back short: the operator has answered it. */
       if (playing) interrupted = playing;

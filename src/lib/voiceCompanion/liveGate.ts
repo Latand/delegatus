@@ -14,10 +14,11 @@ const words = (rows: readonly OperatorInput[]) => rows.map(row => row.text).join
  * question, a condition, a retraction, a negation or a quote refuses, and so
  * does a completed turn that never asks for the orchestrator, unless the turns
  * just before it complete the request (a backchannel can split one sentence).
- * Missing input, and a turn still arriving, leave the proposal to the
- * operator's tap, which alone sends. Speech in a later turn that takes the
- * request back ("Never mind.", "Cancel that request.", "Забудь.") withdraws
- * it, finished or still arriving, and is read again at the tap.
+ * Missing input, and a turn still arriving, leave the decision to the model,
+ * whose request is sent at once unless it asked the operator to confirm it.
+ * Speech in a later turn that takes the request back ("Never mind.", "Cancel
+ * that request.", "Забудь.") withdraws a confirmation that waits, finished or
+ * still arriving, and is read again when the operator answers it.
  */
 export function liveProposalRefusal(instruction: string, inputs: readonly OperatorInput[], sourceTurn?: number): string | null {
   if (!instruction.trim() || instruction.length > 2_000) return "invalid_instruction";

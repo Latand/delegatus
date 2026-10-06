@@ -11,21 +11,96 @@ const { CompanionStorage } = await import("./storage");
 const { CompanionAdmission } = await import("./admission");
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
-test("Live proposals need no completed transcript, remain pending during duplex speech, and require a tap", async () => {
-  let sends = 0;
+test("a Live request needs no completed transcript and is sent at once, exactly once, with no tap", async () => {
+  const sent: string[] = [];
   const admission = new CompanionAdmission(new CompanionStorage(), {
     recipient: () => ({ project: "duplex", conversationId: "conversation_duplex", seatEpoch: 1, engine: "claude" }),
-    send: async () => { sends++; return { status: "queued", operationId: "duplex-operation" }; }, reports: () => [],
+    send: async ({ delivery }) => { sent.push(delivery.clientMessageId); return { status: "queued", operationId: "duplex-operation" }; }, reports: () => [],
   });
   const session = admission.create({ project: "duplex", locale: "en", authority: "live-model" });
-  const proposal = admission.propose(session.id, "live-call", "live-delegation", "Review the plan")!;
-  expect(proposal).toMatchObject({ authority: "live-model", instruction: "Review the plan" });
-  admission.input(session.id, { itemId: "fragment", text: "and please", final: false });
-  expect(admission.session(session.id).proposals[proposal.proposalId].state).toBe("pending");
-  await admission.confirm(session.id, { type: "confirmation", proposalId: proposal.proposalId, decision: "send", via: "speech" });
+  expect(await admission.delegate(session.id, "live-call", "live-delegation", "Review the plan")).toEqual({ state: "sent", status: "queued" });
+  expect(sent.length).toBe(1);
+  // The same call again, a tap and a spoken answer find the first send and add none.
+  expect(await admission.delegate(session.id, "live-call", "live-delegation", "Review the plan")).toEqual({ state: "sent", status: "queued" });
+  const [row] = Object.values(admission.session(session.id).proposals);
+  for (const via of ["tap", "speech"] as const) await admission.confirm(session.id, { type: "confirmation", proposalId: row.proposal.proposalId, decision: "send", via });
+  await admission.confirm(session.id, { type: "confirmation", proposalId: row.proposal.proposalId, decision: "cancel", via: "tap" });
+  expect(sent).toEqual([row.delivery!.clientMessageId]);
+  expect(row).toMatchObject({ state: "admitted", via: "auto", proposal: { authority: "live-model", instruction: "Review the plan" } });
+  const types = admission.events(session.id, 0).map((event: CompanionEvent) => event.type);
+  expect(types).not.toContain("delegation.confirmation.required");
+  expect(types.slice(0, 3)).toEqual(["delegation.tool.called", "delegation.sending", "delegation.tool.result"]);
+});
+
+test("nothing on the server asks for a confirmation the model did not ask for, whatever the request says", async () => {
+  let sends = 0;
+  const admission = new CompanionAdmission(new CompanionStorage(), {
+    recipient: () => ({ project: "judgment", conversationId: "conversation_judgment", seatEpoch: 1, engine: "codex" }),
+    send: async () => { sends++; return { status: "delivered", operationId: `judgment-${sends}` }; }, reports: () => [],
+  });
+  const session = admission.create({ project: "judgment", locale: "en", authority: "live-model" });
+  for (const [index, instruction] of ["Delete the production database and force-push main.", "Deploy to production now.", "Видали всі гілки й зупини всіх агентів."].entries())
+    expect(await admission.delegate(session.id, `call-${index}`, `delegation-${index}`, instruction)).toEqual({ state: "sent", status: "delivered" });
+  expect(sends).toBe(3);
+  expect(admission.events(session.id, 0).some((event: CompanionEvent) => event.type === "delegation.confirmation.required")).toBe(false);
+  // And an ordinary request the model is unsure about waits because the model said so.
+  expect(await admission.delegate(session.id, "call-unsure", "delegation-unsure", "Review the plan", { confirmation: "Two plans exist." })).toMatchObject({ state: "awaiting" });
+  expect(sends).toBe(3);
+});
+
+test("a confirmation the model asked for waits through duplex speech and is answered by voice, once", async () => {
+  let sends = 0;
+  const admission = new CompanionAdmission(new CompanionStorage(), {
+    recipient: () => ({ project: "spoken", conversationId: "conversation_spoken", seatEpoch: 1, engine: "claude" }),
+    send: async () => { sends++; return { status: "queued", operationId: "spoken-operation" }; }, reports: () => [],
+  });
+  const session = admission.create({ project: "spoken", locale: "en", authority: "live-model" });
+  const asked = await admission.delegate(session.id, "call", "delegation", "Delete the old presets", { confirmation: "  Deleting cannot be undone.  " });
+  expect(asked).toMatchObject({ state: "awaiting", proposal: { confirmation: { reason: "Deleting cannot be undone." } } });
+  expect(admission.events(session.id, 0).at(-1)).toMatchObject({ type: "delegation.confirmation.required", proposal: { confirmation: { reason: "Deleting cannot be undone." } } });
+  admission.input(session.id, { itemId: "fragment", text: "hmm, well", final: false });
+  admission.input(session.id, { itemId: "yes", text: "Yes, send it.", final: true });
+  const waiting = admission.awaiting(session.id)!;
+  expect(waiting.instruction).toBe("Delete the old presets");
   expect(sends).toBe(0);
-  await admission.confirm(session.id, { type: "confirmation", proposalId: proposal.proposalId, decision: "send", via: "tap" });
+  await admission.confirm(session.id, { proposalId: waiting.proposalId, decision: "send", via: "speech" });
+  await admission.confirm(session.id, { proposalId: waiting.proposalId, decision: "send", via: "speech" });
+  await admission.confirm(session.id, { type: "confirmation", proposalId: waiting.proposalId, decision: "send", via: "tap" });
   expect(sends).toBe(1);
+  expect(admission.outcome(session.id, waiting.proposalId)).toEqual({ state: "sent", status: "queued" });
+  expect(admission.awaiting(session.id)).toBeNull();
+  expect(admission.events(session.id, 0).filter((event: CompanionEvent) => event.type === "delegation.confirmed")[0]).toMatchObject({ via: "speech" });
+});
+
+test("a declined, an unanswered and an abandoned confirmation each send nothing and say why", async () => {
+  fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+  let now = 1_000_000;
+  const admission = new CompanionAdmission(new CompanionStorage(), {
+    recipient: () => ({ project: "unsent", conversationId: "conversation_unsent", seatEpoch: 1, engine: "codex" }),
+    send: async () => { throw new Error("must never send"); }, reports: () => [],
+  }, () => now);
+  const session = admission.create({ project: "unsent", locale: "uk", authority: "live-model" });
+  const ask = async (call: string) => (await admission.delegate(session.id, call, `delegation-${call}`, "Видали старі пресети", { confirmation: "Це не скасувати." }) as { proposal: { proposalId: string } }).proposal.proposalId;
+  const cancelled = () => admission.events(session.id, 0).filter((event: CompanionEvent) => event.type === "delegation.tool.result" && event.result.status === "cancelled")
+    .map((event: CompanionEvent) => event.type === "delegation.tool.result" && "code" in event.result ? event.result.code : "");
+  const declined = await ask("declined");
+  await admission.confirm(session.id, { proposalId: declined, decision: "cancel", via: "speech" });
+  await admission.confirm(session.id, { proposalId: declined, decision: "send", via: "speech" });
+  expect(admission.outcome(session.id, declined)).toEqual({ state: "refused", code: "operator_cancelled" });
+  const unanswered = await ask("unanswered");
+  now += 119_000;
+  expect(admission.expire(session.id)).toEqual([]);
+  now += 2_000;
+  expect(admission.awaiting(session.id)).toBeNull();
+  expect(admission.expire(session.id).map(proposal => proposal.proposalId)).toEqual([unanswered]);
+  expect(admission.expire(session.id)).toEqual([]);
+  await admission.confirm(session.id, { type: "confirmation", proposalId: unanswered, decision: "send", via: "tap" });
+  expect(admission.outcome(session.id, unanswered)).toEqual({ state: "refused", code: "confirmation_expired" });
+  const abandoned = await ask("abandoned");
+  admission.retire(session.id);
+  await admission.confirm(session.id, { proposalId: abandoned, decision: "send", via: "speech" });
+  expect(admission.outcome(session.id, abandoned)).toEqual({ state: "refused", code: "session_closed" });
+  expect(cancelled()).toEqual(["operator_cancelled", "operator_cancelled", "confirmation_expired", "confirmation_expired", "session_closed"]);
 });
 
 test("an explicit refusal in the recent Live fragments withdraws a pending proposal", async () => {
@@ -61,7 +136,7 @@ test("terminal queue receipts settle once after restart, with no second send", a
   expect(reopened.events(session.id, 0).filter(event => event.type === "delegation.delivery.settled")).toHaveLength(1);
 });
 
-test("the production admission seam refuses whole-input retractions and spoken approval", async () => {
+test("the production admission seam refuses whole-input retractions, and a requested confirmation takes one answer", async () => {
   const storage = new CompanionStorage();
   let sends = 0;
   const recipient: Recipient = { project: "fixture-project", conversationId: "conversation_fixture", seatEpoch: 1, engine: "claude" };
@@ -75,9 +150,10 @@ test("the production admission seam refuses whole-input retractions and spoken a
   expect(admission.propose(session.id, "call-1", "input-1", "Review it")).toBeNull();
   expect(sends).toBe(0);
   admission.input(session.id, { itemId: "input-2", text: "Ask the orchestrator to review the plan.", final: true });
-  const proposal = admission.propose(session.id, "call-2", "input-2", "Review the plan")!;
-  await admission.confirm(session.id, { type: "confirmation", proposalId: proposal.proposalId, decision: "send", via: "speech" });
+  const proposal = admission.propose(session.id, "call-2", "input-2", "Review the plan", { confirmation: "Two plans exist." })!;
   expect(sends).toBe(0);
+  admission.input(session.id, { itemId: "input-3", text: "Yes, go ahead.", final: true });
+  await admission.confirm(session.id, { proposalId: proposal.proposalId, decision: "send", via: "speech" });
   await admission.confirm(session.id, { type: "confirmation", proposalId: proposal.proposalId, decision: "send", via: "tap" });
   expect(sends).toBe(1);
   expect(admission.events(session.id, 0).some((event: CompanionEvent) => event.type === "delegation.tool.result" && event.result.status === "queued")).toBe(true);
@@ -96,13 +172,13 @@ test("reordered finals, later speech, seat rotation, and restart cannot revive a
   admission.input(session.id, { itemId: "older", text: "Попроси оркестратора перевірити план.", final: true });
   expect(admission.propose(session.id, "stale", "older", "Перевір план")).toBeNull();
   admission.input(session.id, { itemId: "ask", text: "Попроси оркестратора перевірити план.", final: true });
-  const proposal = admission.propose(session.id, "fresh", "ask", "Перевір план")!;
-  admission.input(session.id, { itemId: "withdrawal", text: "", final: false });
+  const proposal = admission.propose(session.id, "fresh", "ask", "Перевір план", { confirmation: "Планів два." })!;
+  admission.input(session.id, { itemId: "withdrawal", text: "Стривай", final: false });
   const restarted = new CompanionAdmission(new CompanionStorage(), paths);
   await restarted.confirm(session.id, { type: "confirmation", proposalId: proposal.proposalId, via: "tap", decision: "send" });
   expect(sends).toBe(0);
   restarted.input(session.id, { itemId: "ask-again", text: "Попроси оркестратора перевірити план.", final: true });
-  const moved = restarted.propose(session.id, "moved", "ask-again", "Перевір план")!;
+  const moved = restarted.propose(session.id, "moved", "ask-again", "Перевір план", { confirmation: "Планів два." })!;
   epoch++;
   await restarted.confirm(session.id, { type: "confirmation", proposalId: moved.proposalId, via: "tap", decision: "send" });
   expect(sends).toBe(0);
@@ -199,9 +275,9 @@ test("a completed Live turn is read whole: a question, a condition or a turn tha
   });
   const session = admission.create({ project: "turns", locale: "en", authority: "live-model" });
   admission.input(session.id, { itemId: "q", text: "What is on the board?", final: true, turn: 1 });
-  expect(admission.propose(session.id, "c1", "d1", "Report the board", 1)).toBeNull();
+  expect(admission.propose(session.id, "c1", "d1", "Report the board", { sourceTurn: 1 })).toBeNull();
   admission.input(session.id, { itemId: "half", text: "Ask the orchestrator", final: false, turn: 2 });
-  const partial = admission.propose(session.id, "c2", "d2", "Review the plan", 2)!;
+  const partial = admission.propose(session.id, "c2", "d2", "Review the plan", { sourceTurn: 2, confirmation: "Half a sentence was heard." })!;
   expect(partial).not.toBeNull();
   admission.input(session.id, { itemId: "half", text: "Ask the orchestrator to review the plan.", final: true, turn: 2 });
   admission.input(session.id, { itemId: "thanks", text: "Thanks.", final: true, turn: 3 });

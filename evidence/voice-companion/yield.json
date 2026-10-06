@@ -106,7 +106,7 @@
   },
   "withdrawn": {
     "en-light": {
-      "note": "left with its element",
+      "note": "You took this back, so nothing was sent. Ask once more and I will send it.",
       "dispatches": 0,
       "block": {
         "x": 760,
@@ -116,7 +116,7 @@
       }
     },
     "uk-light": {
-      "note": "left with its element",
+      "note": "Ви забрали це прохання, тож нічого не надіслано. Попросіть ще раз, і я надішлю.",
       "dispatches": 0,
       "block": {
         "x": 760,
@@ -126,7 +126,7 @@
       }
     },
     "en-dark": {
-      "note": "left with its element",
+      "note": "You took this back, so nothing was sent. Ask once more and I will send it.",
       "dispatches": 0,
       "block": {
         "x": 760,

@@ -8,6 +8,22 @@
       "viewport": "1440x900",
       "lang": "en",
       "scheme": "light",
+      "demo": {
+        "firstRequest": {
+          "buttons": 0,
+          "stages": [
+            "sending",
+            "queued",
+            "delivered"
+          ]
+        },
+        "secondRequest": {
+          "reason": "Deleting the old presets cannot be undone.",
+          "answeredBy": "voice",
+          "pointerEvents": 0,
+          "stage": "delivered"
+        }
+      },
       "mountedBeforeEnable": 0,
       "settingsWrites": [
         {
@@ -54,6 +70,22 @@
       "viewport": "1000x800",
       "lang": "uk",
       "scheme": "dark",
+      "demo": {
+        "firstRequest": {
+          "buttons": 0,
+          "stages": [
+            "sending",
+            "queued",
+            "delivered"
+          ]
+        },
+        "secondRequest": {
+          "reason": "Видалення старих пресетів не можна скасувати.",
+          "answeredBy": "voice",
+          "pointerEvents": 0,
+          "stage": "delivered"
+        }
+      },
       "mountedBeforeEnable": 0,
       "settingsWrites": [
         {
@@ -100,6 +132,22 @@
       "viewport": "1440x900",
       "lang": "uk",
       "scheme": "light",
+      "demo": {
+        "firstRequest": {
+          "buttons": 0,
+          "stages": [
+            "sending",
+            "queued",
+            "delivered"
+          ]
+        },
+        "secondRequest": {
+          "reason": "Видалення старих пресетів не можна скасувати.",
+          "answeredBy": "voice",
+          "pointerEvents": 0,
+          "stage": "delivered"
+        }
+      },
       "mountedBeforeEnable": 0,
       "settingsWrites": [
         {
@@ -146,6 +194,22 @@
       "viewport": "1000x800",
       "lang": "en",
       "scheme": "dark",
+      "demo": {
+        "firstRequest": {
+          "buttons": 0,
+          "stages": [
+            "sending",
+            "queued",
+            "delivered"
+          ]
+        },
+        "secondRequest": {
+          "reason": "Deleting the old presets cannot be undone.",
+          "answeredBy": "voice",
+          "pointerEvents": 0,
+          "stage": "delivered"
+        }
+      },
       "mountedBeforeEnable": 0,
       "settingsWrites": [
         {

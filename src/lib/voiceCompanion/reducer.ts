@@ -18,7 +18,9 @@ import { liveProposalRefusal } from "./liveGate";
  *  - the mouth stays active until playback stops, whenever generation ended;
  *  - input speech interrupts playback and leaves delivered work alone;
  *  - Live proposals carry server admission; optional input refusals veto them.
- *    The simulator retains its completed-input gate. Delivery needs a tap;
+ *    The simulator retains its completed-input gate. An admitted delegation
+ *    is sent at once; one the model asked to confirm waits for the operator's
+ *    spoken answer or a tap, and is withdrawn by speech that takes it back;
  *  - a tool result, a settlement and an answer count only
  *    when they bind the whole frozen delivery: proposal, call, message key,
  *    recipient and operation.
@@ -76,7 +78,7 @@ export interface DelegationView {
   /** The source input as it read when the proposal froze. */
   sourceText: string | null;
   delivery: Delivery | null;
-  /** Why a proposal was refused before it reached the operator, or withdrawn while it waited. */
+  /** Why a delegation was refused, or why a waiting confirmation ended with nothing sent. */
   refusal: GateRefusal | string | null;
   answer: { reportId: Id; status: "progress" | "result" | "question" | "blocked"; text: string } | null;
 }
@@ -190,7 +192,7 @@ function standing(delegation: DelegationView | null, lines: readonly SpeechLine[
     return reason ? { ...delegation, stage: "cancelled", refusal: reason } : delegation;
   }
   const verdict = admitDelegationProposal({
-    sourceItemId: proposal.sourceItemId, instruction: proposal.instruction, inputs: operatorInputs(lines),
+    sourceItemId: proposal.sourceItemId, instruction: proposal.instruction, inputs: operatorInputs(lines), waiting: true,
     ...(delegation.sourceText === null ? {} : { frozenSourceText: delegation.sourceText }),
   });
   return verdict.admit ? delegation : { ...delegation, stage: "cancelled", refusal: verdict.reason };
@@ -319,6 +321,13 @@ function reduceCurrent(state: CompanionState, event: CompanionEvent): CompanionS
       /* A tool call is a candidate and nothing more: it opens no delivery. */
       return next({ delegation: { callId: event.callId, instruction: bounded(event.instruction), stage: "proposed", proposal: null, sourceText: null, delivery: null, refusal: null, answer: null, notice: null } });
     }
+    case "delegation.sending": {
+      const { proposal } = event;
+      if (base.delegation?.callId !== proposal.callId || base.delegation.stage !== "proposed") return next({});
+      /* The send has started where the event came from, so the card says so:
+         a second reading of the gate here could only show a sent request as refused. */
+      return next({ delegation: { ...base.delegation, stage: "sending", proposal, instruction: bounded(proposal.instruction) } });
+    }
     case "delegation.confirmation.required": {
       const { proposal } = event;
       if (base.delegation?.callId !== proposal.callId || base.delegation.stage !== "proposed") return next({});
@@ -335,10 +344,7 @@ function reduceCurrent(state: CompanionState, event: CompanionEvent): CompanionS
     case "delegation.confirmed": {
       const current = base.delegation;
       if (!current?.proposal || current.proposal.proposalId !== event.proposalId || current.stage !== "awaiting-confirmation") return next({});
-      /* Only a tap confirms. Consent by speech is not admitted anywhere yet,
-         so such a confirmation leaves the proposal waiting, and the delivery
-         result an adapter sends after it finds no proposal in "sending". */
-      if (event.via !== "tap") return next({});
+      /* A tap on the card or the operator's spoken answer, which the model passed on through its tool. */
       return next({ delegation: { ...current, stage: "sending" } });
     }
     case "delegation.tool.result": {
@@ -349,7 +355,7 @@ function reduceCurrent(state: CompanionState, event: CompanionEvent): CompanionS
         /* Cancel before admission has zero sends; after admission the work
            is already out and this result cannot recall it. */
         if (current.delivery || current.stage === "answered") return next({});
-        return next({ delegation: { ...current, stage: result.status, refusal: result.status === "refused" ? result.code : current.refusal } });
+        return next({ delegation: { ...current, stage: result.status, refusal: result.code } });
       }
       /* A delivery exists only for the proposal the operator confirmed, to
          the recipient frozen in it, and a queued or delivered one names its operation. */

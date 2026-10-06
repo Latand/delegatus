@@ -49,9 +49,15 @@ export function admittedVoiceBinding(input: { sessionId: string; proposalId: str
     && binding.text === input.text ? binding : null;
 }
 
-/** The server authority seam. Live may raise a proposal without a completed
- * transcript; delivery always consumes the operator's tap. Prototype sessions
+/** The server authority seam. Live may raise a delegation without a completed
+ * transcript. An admitted delegation is sent at once; one the model asked to
+ * confirm waits for the operator's spoken answer or tap. Prototype sessions
  * retain their completed-input policy for deterministic demo fixtures. */
+export type DelegationOutcome =
+  | { state: "awaiting"; proposal: Proposal }
+  | { state: "sent"; status: "delivered" | "queued" | "unknown" | "failed" }
+  | { state: "refused"; code: string };
+type Admit = { proposalId: string; decision: "send" | "cancel"; via: "auto" | "tap" | "speech" };
 export class CompanionAdmission {
   private readonly sending = new Map<string, Promise<void>>();
   private readonly secrets = new Set<string>();
@@ -98,9 +104,10 @@ export class CompanionAdmission {
       session.inputs = session.inputs.slice(-64);
       const removed: StoredProposal[] = [];
       for (const row of Object.values(session.proposals)) {
-        if (row.state === "pending" && (session.authority === "live-model" ? liveProposalRefusal(row.proposal.instruction, session.inputs, row.sourceTurn) !== null
-          : !admitDelegationProposal({ ...row.proposal, inputs: session.inputs, frozenSourceText: row.sourceText }).admit)) {
-          row.state = "cancelled"; removed.push(row);
+        if (row.state === "pending" && this.now() > row.expiresAt) { row.state = "cancelled"; row.cancelCode = "confirmation_expired"; removed.push(row); }
+        else if (row.state === "pending" && (session.authority === "live-model" ? liveProposalRefusal(row.proposal.instruction, session.inputs, row.sourceTurn) !== null
+          : !admitDelegationProposal({ ...row.proposal, inputs: session.inputs, frozenSourceText: row.sourceText, waiting: true }).admit)) {
+          row.state = "cancelled"; row.cancelCode = "source_changed"; removed.push(row);
         }
       }
       return removed;
@@ -109,11 +116,52 @@ export class CompanionAdmission {
       : input.final ? { type: "transcript.final", speaker: "operator", itemId: input.itemId, text: input.text }
       : { type: "input.speech.started", itemId: input.itemId });
     for (const row of cancelled) this.emit(id, { type: "delegation.tool.result", callId: row.proposal.callId, proposalId: row.proposal.proposalId,
-      result: { status: "cancelled", code: "source_changed" } });
+      result: { status: "cancelled", code: row.cancelCode ?? "source_changed" } });
+  }
+  /** A confirmation nobody answered in time sends nothing and says so. */
+  expire(id: string): Proposal[] {
+    const expired = this.storage.change(document => Object.values(document.sessions[id]?.proposals ?? {}).filter(row => {
+      if (row.state !== "pending" || this.now() <= row.expiresAt) return false;
+      row.state = "cancelled"; row.cancelCode = "confirmation_expired";
+      return true;
+    }).map(row => row.proposal));
+    for (const proposal of expired) this.emit(id, { type: "delegation.tool.result", callId: proposal.callId, proposalId: proposal.proposalId,
+      result: { status: "cancelled", code: "confirmation_expired" } });
+    return expired;
+  }
+  /** The delegation tool's whole effect. With no confirmation asked the request
+   * is admitted and sent before this returns; a retry of the same call finds
+   * its first outcome and never sends again. `confirmation` is the model's own
+   * reason for asking first: nothing here reads the request to decide that. */
+  async delegate(id: string, callId: string, sourceItemId: string, instruction: string, options: { sourceTurn?: number; confirmation?: string } = {}): Promise<DelegationOutcome> {
+    const proposal = this.propose(id, callId, sourceItemId, instruction, options);
+    const row = Object.values(this.session(id).proposals).find(held => held.proposal.callId === this.cleaner()(callId));
+    if (!row) {
+      const last = this.events(id, 0).at(-1);
+      return { state: "refused", code: last?.type === "delegation.tool.result" && "code" in last.result ? last.result.code : "not_admitted" };
+    }
+    if (proposal?.confirmation) return { state: "awaiting", proposal };
+    if (row.state === "pending") await this.confirm(id, { proposalId: row.proposal.proposalId, decision: "send", via: "auto" });
+    return this.outcome(id, row.proposal.proposalId);
+  }
+  /** Where a decided delegation stands. */
+  outcome(id: string, proposalId: string): DelegationOutcome {
+    const row = this.session(id).proposals[proposalId];
+    if (!row || row.state === "cancelled") return { state: "refused", code: row?.cancelCode ?? "proposal_unavailable" };
+    return row.state === "pending" ? { state: "awaiting", proposal: row.proposal } : { state: "sent", status: row.status ?? "unknown" };
+  }
+  /** The confirmation a spoken answer resolves: the latest one still waiting. */
+  awaiting(id: string): Proposal | null {
+    return Object.values(this.session(id).proposals).findLast(row => row.state === "pending" && !!row.proposal.confirmation && this.now() <= row.expiresAt)?.proposal ?? null;
+  }
+  /** The confirmation asked last, whatever became of it: a spoken answer that finds none waiting reports this one. */
+  lastAsked(id: string): Proposal | null {
+    return Object.values(this.session(id).proposals).findLast(row => !!row.proposal.confirmation)?.proposal ?? null;
   }
   /** `sourceTurn`: the operator's Live turn when Live delegated, read whole by the gate. */
-  propose(id: string, rawCallId: string, rawSourceItemId: string, rawInstruction: string, sourceTurn?: number): Proposal | null {
-    const [callId, sourceItemId, instruction] = [rawCallId, rawSourceItemId, rawInstruction].map(this.cleaner());
+  propose(id: string, rawCallId: string, rawSourceItemId: string, rawInstruction: string, options: { sourceTurn?: number; confirmation?: string } = {}): Proposal | null {
+    const { sourceTurn } = options;
+    const [callId, sourceItemId, instruction, asked] = [rawCallId, rawSourceItemId, rawInstruction, options.confirmation?.trim().slice(0, 240) ?? ""].map(this.cleaner());
     const existing = Object.values(this.session(id).proposals).find(row => row.proposal.callId === callId);
     if (existing) return existing.state === "pending" ? existing.proposal : null;
     this.emit(id, { type: "delegation.tool.called", callId, sourceItemId, instruction: instruction.slice(0, 2_000) });
@@ -128,17 +176,19 @@ export class CompanionAdmission {
       if (!recipient) { refusal = "no_orchestrator"; return null; }
       if (Object.values(session.proposals).some(row => row.state === "pending" && row.proposal.sourceItemId === sourceItemId)) { refusal = "duplicate_proposal"; return null; }
       const proposal: Proposal = { proposalId: randomUUID(), callId, sourceItemId, instruction: instruction.trim(), recipient,
-        ...(session.authority ? { authority: session.authority } : {}) };
+        ...(session.authority ? { authority: session.authority } : {}), ...(asked ? { confirmation: { reason: asked } } : {}) };
       session.proposals[proposal.proposalId] = { proposal, sourceText: session.inputs.at(-1)?.text ?? "", expiresAt: this.now() + 120_000, state: "pending", reports: [],
         ...(sourceTurn !== undefined ? { sourceTurn } : {}) };
       return proposal;
     });
-    this.emit(id, proposal ? { type: "delegation.confirmation.required", proposal }
-      : { type: "delegation.tool.result", callId, result: { status: "refused", code: refusal } });
+    // With no confirmation asked, the send that follows announces itself.
+    if (proposal?.confirmation) this.emit(id, { type: "delegation.confirmation.required", proposal });
+    else if (!proposal) this.emit(id, { type: "delegation.tool.result", callId, result: { status: "refused", code: refusal } });
     return proposal;
   }
-  async confirm(id: string, command: Extract<CompanionCommand, { type: "confirmation" }>): Promise<void> {
-    if (command.via !== "tap") return;
+  /** Admits or declines one delegation. The page can only tap; the spoken
+   * answer arrives through the model's tool, and "auto" from `delegate`. */
+  async confirm(id: string, command: Extract<CompanionCommand, { type: "confirmation" }> | Admit): Promise<void> {
     let refusal = "proposal_unavailable";
     const binding = this.storage.change(document => {
       const session = document.sessions[id];
@@ -147,13 +197,14 @@ export class CompanionAdmission {
       // Recovery remains available after closure/restart. A retry recovers its
       // original key and target; it cannot admit new work to the current seat.
       if (row.state === "admitted") return row;
-      if (command.decision === "cancel") { row.state = "cancelled"; refusal = "operator_cancelled"; return null; }
+      if (command.decision === "cancel") { row.state = "cancelled"; row.cancelCode = refusal = "operator_cancelled"; return null; }
       const allowed = session.authority === "live-model" ? liveProposalRefusal(row.proposal.instruction, session.inputs, row.sourceTurn) === null
-        : admitDelegationProposal({ ...row.proposal, inputs: session.inputs, frozenSourceText: row.sourceText }).admit;
+        : admitDelegationProposal({ ...row.proposal, inputs: session.inputs, frozenSourceText: row.sourceText, waiting: true }).admit;
       if (session.closed || this.now() > row.expiresAt || !allowed || !sameRecipient(this.paths.recipient(session.project), row.proposal.recipient)) {
-        row.state = "cancelled"; refusal = "proposal_changed"; return null;
+        row.state = "cancelled"; row.cancelCode = refusal = "proposal_changed"; return null;
       }
       row.state = "admitted";
+      row.via = command.via;
       // The outcome is unknown until the send path answers. Recorded with the
       // key in one commit, so a restart in between recovers this very send.
       row.status = "unknown";
@@ -165,7 +216,7 @@ export class CompanionAdmission {
     if (!binding) {
       const row = this.session(id).proposals[command.proposalId];
       if (row) this.emit(id, { type: "delegation.tool.result", callId: row.proposal.callId, proposalId: command.proposalId,
-        result: { status: "cancelled", code: refusal } });
+        result: { status: "cancelled", code: row.cancelCode ?? refusal } });
       return;
     }
     if (command.decision === "cancel") return; // already-admitted work cannot be undone
@@ -179,7 +230,9 @@ export class CompanionAdmission {
   private async deliver(id: string, row: StoredProposal): Promise<void> {
     if (row.status === "failed") return;
     const proposalId = row.proposal.proposalId;
-    this.emit(id, { type: "delegation.confirmed", proposalId, via: "tap" });
+    // A request nobody was asked about announces its own send; a confirmed one names how it was answered.
+    this.emit(id, row.proposal.confirmation ? { type: "delegation.confirmed", proposalId, via: row.via === "speech" ? "speech" : "tap" }
+      : { type: "delegation.sending", proposal: row.proposal });
     let settled = { status: row.status ?? "unknown", operationId: row.delivery!.operationId };
     if (!row.status || row.status === "unknown") {
       try { settled = await this.paths.send({ sessionId: id, proposalId, delivery: row.delivery!, text: row.text! }); }
@@ -247,7 +300,7 @@ export class CompanionAdmission {
       const session = document.sessions[id];
       if (!session) return;
       session.closed = true;
-      for (const row of Object.values(session.proposals)) if (row.state === "pending") row.state = "cancelled";
+      for (const row of Object.values(session.proposals)) if (row.state === "pending") { row.state = "cancelled"; row.cancelCode = "session_closed"; }
     });
   }
 }

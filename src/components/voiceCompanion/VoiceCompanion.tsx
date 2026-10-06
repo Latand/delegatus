@@ -67,8 +67,13 @@ export const CALL_LINGER_MS = 5_000;
 export const DELEGATION_LINGER_MS = 14_000;
 /** A failure said in plain words leaves this long after it appeared. */
 export const NOTICE_LINGER_MS = 12_000;
-/** The delegation proposal's tool. Its lifecycle is the delegation card, so it gets no call card of its own. */
+/** The delegation's tools: the request and the operator's spoken answer to a confirmation. Their lifecycle is the delegation card, so they get no call card of their own. */
 const DELEGATION_TOOL = "request_orchestrator_delegation";
+const DELEGATION_TOOLS = new Set([DELEGATION_TOOL, "resolve_orchestrator_confirmation"]);
+/** Why a confirmation that waited ended with nothing sent, where the card can say more than "taken back". */
+const UNSENT_NOTE: Record<string, "voiceCompanion.declined" | "voiceCompanion.unanswered"> = {
+  operator_cancelled: "voiceCompanion.declined", confirmation_expired: "voiceCompanion.unanswered", session_closed: "voiceCompanion.unanswered",
+};
 /** The registry's tools, for the line a call card shows when the backend summarised a call by its bare name. */
 const TOOL_LINE = {
   list_tasks: "voiceCompanion.tool.list_tasks", get_task: "voiceCompanion.tool.get_task", list_pipelines: "voiceCompanion.tool.list_pipelines",
@@ -396,14 +401,18 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
         });
       }
     }
-    const calls: Floater[] = state.calls.filter((call) => call.name !== DELEGATION_TOOL).map((call) => ({ kind: "call", key: `call:${call.callId}`, call, settled: call.status !== "running" }));
-    /* Every confirmed request keeps its own card and its own answer while a newer proposal is shown. */
+    const calls: Floater[] = state.calls.filter((call) => !DELEGATION_TOOLS.has(call.name)).map((call) => ({ kind: "call", key: `call:${call.callId}`, call, settled: call.status !== "running" }));
+    /* Every sent request keeps its own card and its own answer while a newer one is shown. */
     const current = state.delegation;
     const delegations = [...state.deliveryCards.filter((card) => card.callId !== current?.callId), ...(current ? [current] : [])];
     const deleg: Floater[] = [];
     for (const delegation of delegations) {
-      /* Delivered work stays in view after the conversation ends; a proposal does not. */
-      if (state.phase !== "offline" || ["queued", "delivered", "answered"].includes(delegation.stage)) deleg.push({ kind: "delegation", key: `delegation:${delegation.callId}`, delegation, settled: DELEGATION_SETTLED.has(delegation.stage) });
+      /* Delivered work stays in view after the conversation ends; a confirmation nobody answered does not. */
+      /* A confirmation the model asked for is answered while the conversation goes on, and the talk that
+         follows can send the asking card off the far end. The answer is news, so the decided card arrives
+         again beside the character. */
+      const decided = delegation.proposal?.confirmation && delegation.stage !== "awaiting-confirmation" ? ":decided" : "";
+      if (state.phase !== "offline" || ["queued", "delivered", "answered"].includes(delegation.stage)) deleg.push({ kind: "delegation", key: `delegation:${delegation.callId}${decided}`, delegation, settled: DELEGATION_SETTLED.has(delegation.stage) });
       /* The answer is news of its own: it arrives beside the character, wherever the request has risen to. */
       if (delegation.answer) deleg.push({ kind: "answer", key: `answer:${delegation.callId}:${delegation.answer.reportId}`, delegation, settled: true });
     }
@@ -855,10 +864,13 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
         </div>
         <span className="vc-call-name">{DELEGATION_TOOL}</span>
         {delegation.stage === "refused" ? <p className="vc-deleg-note" data-companion-refused={delegation.refusal ?? ""}>{delegation.refusal === "no_orchestrator" ? companionErrorMessage("no_orchestrator", speechLocaleOf(locale)) : t("voiceCompanion.refused")}</p> : null}
-        {delegation.stage === "cancelled" && delegation.refusal ? <p className="vc-deleg-note" data-companion-withdrawn>{t("voiceCompanion.withdrawn")}</p> : null}
+        {delegation.stage === "cancelled" && delegation.refusal ? <p className="vc-deleg-note" data-companion-withdrawn={delegation.refusal}>{t(UNSENT_NOTE[delegation.refusal] ?? "voiceCompanion.withdrawn")}</p> : null}
+        {/* The model's own reason for asking first, and the two ways to answer. */}
+        {delegation.stage === "awaiting-confirmation" && delegation.proposal?.confirmation ? <p className="vc-deleg-note" data-companion-confirm-reason>{delegation.proposal.confirmation.reason}</p> : null}
         {delegation.stage === "awaiting-confirmation" || delegation.stage === "sending" || delegation.stage === "queued" || delegation.stage === "delivered" || delegation.stage === "unknown" || delegation.stage === "answered" ? (
           <p className="vc-instruction" tabIndex={0} data-companion-instruction>{delegation.instruction}</p>
         ) : null}
+        {delegation.stage === "awaiting-confirmation" ? <p className="vc-deleg-note vc-deleg-wait" data-companion-confirm-hint>{t("voiceCompanion.confirmHint")}</p> : null}
         {delegation.stage === "awaiting-confirmation" ? (
           <div className="vc-acts">
             <button type="button" className="vc-act" data-companion-cancel disabled={decidedFor === delegation.proposal?.proposalId} onClick={() => decide("cancel")}><X size={14} aria-hidden />{t("voiceCompanion.cancel")}</button>
@@ -982,7 +994,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
         {state.lines.filter((line) => line.final || line.playback === "cut").map((line) => <li key={line.key}>{transcriptLine(line)}</li>)}
         {[...state.deliveryCards.filter((card) => card.callId !== state.delegation?.callId), ...(state.delegation ? [state.delegation] : [])].map((card) => (card.answer ? <li key={card.answer.reportId}>{t("voiceCompanion.orchestrator")}: {card.answer.text}</li> : null))}
       </ol>
-      {/* The proposal is a decision the operator must be able to reach without the lane being on screen. */}
+      {/* A confirmation that waits is a decision the operator must be able to reach without the lane being on screen. */}
       {!expanded && stage === "awaiting-confirmation" ? <span className="vc-sr" role="status">{t("voiceCompanion.proposal", { project: state.delegation?.proposal?.recipient.project ?? project ?? "" })}</span> : null}
       {/* A failure is said even when the lane is not on screen to show it. */}
       {!expanded ? floaters.filter((floater) => floater.kind === "notice").map((floater) => <span key={floater.key} className="vc-sr" role="alert">{floater.kind === "notice" ? companionErrorMessage(floater.code, speechLocaleOf(locale)) : null}</span>) : null}
