@@ -14,6 +14,8 @@ process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-hand-laun
 const { createPipelineFromRequest, reportStageCompletion, tickPipelines, patchPipeline } = await import("./engine");
 const { registerPipelineTick } = await import("./controllerSignal");
 const { loadPipelines, savePipelines, pipelineRevision } = await import("./store");
+const { saveTasks } = await import("@/lib/tasks/store");
+const { seatActions } = await import("@/components/kanban/orchestratorArrows");
 type PipelinePorts = import("./engine").PipelinePorts;
 
 registerPipelineTick(async () => {});
@@ -102,10 +104,10 @@ const stage = (id: string, next: string | null) => ({ id, kind: "run", role: { r
 const current = () => loadPipelines()[0]!;
 const attemptsOf = (stageId: string) => current().runs.find((run) => run.stageId === stageId)!.attempts;
 
-async function create(ports: PipelinePorts, autoStart = true): Promise<string> {
+async function create(ports: PipelinePorts, autoStart = true, taskIds: string[] = []): Promise<string> {
   savePipelines([]);
   const created = await createPipelineFromRequest({ task: "Hand launches", publication: "internal", spec: "AC", repoDir: "/repo",
-    stages: [stage("build", "verify"), stage("verify", null)] as never, src: "/codex/creator.jsonl", ...(autoStart ? {} : { autoStart: false }) }, ports);
+    stages: [stage("build", "verify"), stage("verify", null)] as never, src: "/codex/creator.jsonl", ...(autoStart ? {} : { autoStart: false }), ...(taskIds.length ? { taskIds } : {}) }, ports);
   if (!created.pipeline) throw new Error(created.error);
   return created.pipeline.id;
 }
@@ -165,4 +167,30 @@ test("a decision answer launches its continuation under the answering hand", asy
   expect(answered.error).toBeUndefined();
   expect(attemptsOf("build")[1]).toMatchObject({ n: 2, decisionAnswerId: "answer-1", launchedBy: { actor: creator } });
   expect(current().cursor?.launchedBy).toBeUndefined();
+});
+
+test("the board draws the creating seat's wire for its own start and none for a draft the operator started", async () => {
+  /* Draft creation and somebody's start reach the board in one update: the lane is new to it. */
+  const stamp = new Date().toISOString();
+  const boardRead = async (autoStart: boolean, starter: Parameters<typeof patchPipeline>[3] | null) => {
+    saveTasks([{ id: "task-linked", project: "viewer", text: "Linked", status: "assigned", placement: "unplaced", assignments: [], createdAt: stamp, updatedAt: stamp }] as never);
+    const h = harness();
+    const id = await create(h.ports, autoStart, ["task-linked"]);
+    if (starter) expect((await patchPipeline(id, { action: "start" }, h.ports, starter)).error).toBeUndefined();
+    await tickPipelines([], h.ports); // provision
+    await tickPipelines([], h.ports); // spawn the entry stage
+    const lane = current();
+    expect(lane.taskIds).toEqual(["task-linked"]);
+    /* The harness clock runs ahead of the wall clock; read the board at its time. */
+    const now = Date.parse(attemptsOf("build")[0]!.startedAt!) + 1_000;
+    return { lane, actions: seatActions({ tasks: [], pipelines: [] }, { tasks: [], pipelines: [lane] }, ["conversation_creator"], now) };
+  };
+  const operatorStart = await boardRead(false, { kind: "operator" });
+  expect(operatorStart.lane.runs[0]!.attempts[0]!.launchedBy?.actor).toEqual({ kind: "operator" });
+  expect(operatorStart.actions).toEqual([]);
+  const seatStart = await boardRead(false, creator);
+  expect(seatStart.actions).toMatchObject([{ kind: "pipeline", taskId: "task-linked", pipelineId: seatStart.lane.id }]);
+  const immediate = await boardRead(true, null);
+  expect(immediate.lane.runs[0]!.attempts[0]!.launchedBy).toBeUndefined();
+  expect(immediate.actions).toMatchObject([{ kind: "pipeline", taskId: "task-linked", pipelineId: immediate.lane.id }]);
 });

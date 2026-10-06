@@ -141,6 +141,16 @@ function startedAttempts(pipeline: Pipeline): Map<string, StartedAttempt> {
   return started;
 }
 
+/** Whether the lane's start names a hand: its first attempt's, or the cursor's
+    while that attempt is still to come. A lane created to run at once has none. */
+function startedByHand(pipeline: Pipeline, started: ReadonlyMap<string, StartedAttempt>): boolean {
+  let first: StartedAttempt | null = null;
+  for (const attempt of started.values()) {
+    if (!first || Date.parse(attempt.startedAt!) < Date.parse(first.startedAt!)) first = attempt;
+  }
+  return !!(first ? first.launchedBy : pipeline.cursor?.launchedBy);
+}
+
 /**
  * What the seat did between two reads of the board's records. Everything is
  * read from rows the client already has: a new lane the seat made, a newly
@@ -181,19 +191,20 @@ export function seatActions(previous: BoardRecords, next: BoardRecords, seatConv
     for (const pipeline of next.pipelines) {
       const prior = before.get(pipeline.id);
       if (prior === pipeline || pipeline.hiddenAt || pipeline.state === "closed" || pipeline.state === "draft") continue;
-      if (!prior && seatLane(pipeline, seat)) {
+      const started = startedAttempts(pipeline);
+      /* A new lane whose start names a hand was a draft somebody started: the
+         attempts below credit that start, and only to the seat. */
+      if (!prior && seatLane(pipeline, seat) && !startedByHand(pipeline, started)) {
         const at = actedAt(pipeline.createdAt, nowMs);
         if (at !== null) for (const taskId of pipeline.taskIds ?? []) offer({ kind: "pipeline", taskId, pipelineId: pipeline.id, at });
       }
       const known = prior ? startedAttempts(prior) : new Map<string, StartedAttempt>();
-      const started = startedAttempts(pipeline);
+      /* The lane's first attempt is its start: a draft the seat started. */
+      const kind = started.size === 1 ? "pipeline" : "stage";
       for (const [key, attempt] of started) {
         const at = !known.has(key) && bySeat(attempt.launchedBy?.actor, seat) ? actedAt(attempt.startedAt, nowMs) : null;
-        if (at === null) continue;
-        /* The lane's first attempt is its start: a draft the seat started. */
-        const kind = started.size === 1 ? "pipeline" : "stage";
-        for (const taskId of pipeline.taskIds ?? []) offer({ kind, taskId, pipelineId: pipeline.id, at });
-        break;
+        /* Every new seat launch is offered, so the card keeps the latest. */
+        if (at !== null) for (const taskId of pipeline.taskIds ?? []) offer({ kind, taskId, pipelineId: pipeline.id, at });
       }
     }
   }

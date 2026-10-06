@@ -170,6 +170,29 @@ describe("seatActions", () => {
     expect(actions({ pipelines: [draft] }, { pipelines: [startedBy({ kind: "operator" })] })).toEqual([]);
   });
 
+  test("a seat draft somebody else started, read in the same update as its creation, draws nothing; the seat's start does", () => {
+    const fresh = (over: Record<string, unknown>) => lane("p1", ["a"], "running", { createdAt: at(5), ...over });
+    const firstAttempt = (actor: unknown) => ({ runs: [run("build", { startedAt: at(2), ...hand(actor, 3) })] });
+    expect(actions({ pipelines: [] }, { pipelines: [fresh(firstAttempt({ kind: "operator" }))] })).toEqual([]);
+    expect(actions({ pipelines: [] }, { pipelines: [fresh(firstAttempt({ kind: "agent", role: "builder", conversationId: "conversation_worker" }))] })).toEqual([]);
+    /* Started, its first attempt still to come: the hand waits on the cursor. */
+    expect(actions({ pipelines: [] }, { pipelines: [fresh({ state: "provisioning", cursor: { stageId: "build", state: "pending", launchedBy: { actor: { kind: "operator" }, at: at(3) } } })] })).toEqual([]);
+    expect(actions({ pipelines: [] }, { pipelines: [fresh(firstAttempt(seatActor))] })).toEqual([{ kind: "pipeline", taskId: "a", pipelineId: "p1", at: ms(2) }]);
+    /* A lane created to run at once carries no hand and is the seat's start. */
+    expect(actions({ pipelines: [] }, { pipelines: [fresh({ runs: [run("build", { startedAt: at(2) })] })] })).toEqual([{ kind: "pipeline", taskId: "a", pipelineId: "p1", at: ms(5) }]);
+  });
+
+  test("several new seat launches in one update keep the latest; older and other hands do not restart it", () => {
+    const first = { startedAt: at(600), state: "failed" };
+    const before = lane("p1", ["a"], "running", { runs: [run("build", first)] });
+    const after = (third: Record<string, unknown>) => lane("p1", ["a"], "running", { runs: [run("build", first, { startedAt: at(45), state: "failed", ...hand(seatActor, 46) }, { startedAt: at(1), ...third })] });
+    const [latest] = actions({ pipelines: [before] }, { pipelines: [after(hand(seatActor, 2))] });
+    expect(latest).toEqual({ kind: "stage", taskId: "a", pipelineId: "p1", at: ms(1) });
+    expect(ORCHESTRATOR_WIRE_HOLD_MS - (NOW - latest!.at)).toBe(59_000);
+    expect(actions({ pipelines: [before] }, { pipelines: [after(hand({ kind: "operator" }))] })).toEqual([{ kind: "stage", taskId: "a", pipelineId: "p1", at: ms(45) }]);
+    expect(actions({ pipelines: [before] }, { pipelines: [after({})] })).toEqual([{ kind: "stage", taskId: "a", pipelineId: "p1", at: ms(45) }]);
+  });
+
   test("one action per card, a started pipeline before a move, at the later of their times", () => {
     const moved = task("a", "assigned", [], { statusBy: { actor: seatActor, from: "inbox", at: at(1) } });
     expect(actions({ tasks: [task("a", "inbox")] }, { tasks: [moved], pipelines: [lane("p1", ["a"], "running", { createdAt: at(4) })] })).toEqual([{ kind: "pipeline", taskId: "a", pipelineId: "p1", at: ms(1) }]);

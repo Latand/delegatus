@@ -337,7 +337,7 @@ read is where the board stands and holds no action.
 
 | Action | Read from | The seat's when |
 | --- | --- | --- |
-| Starts a pipeline | a `pipelines` row that was not there, or the first attempt of a draft that started | the link rule of §2 holds for the new lane (`srcConversationId` or the deputy is the seat); for a draft, the attempt's `launchedBy.actor` is the seat |
+| Starts a pipeline | a `pipelines` row that was not there, or the first attempt of a draft that started | the link rule of §2 holds for the new lane (`srcConversationId` or the deputy is the seat) and its start names no hand; for a draft, the attempt's `launchedBy.actor` is the seat. A new row whose first attempt, or whose cursor before it, carries `launchedBy` is a draft somebody started in the same read, and only that hand decides |
 | Launches a stage | a newly started attempt | the attempt's `launchedBy.actor` is the seat's conversation |
 | Moves a task | the task row's `statusBy` changed | `statusBy.actor` is the seat's conversation |
 | Creates a task | a `tasks` row that was not there, `statusBy.from` null | `statusBy.actor` is the seat's conversation |
@@ -357,7 +357,8 @@ a create, `createdAt` for a new lane and the attempt's `startedAt` for a launch.
 A delta the board reads late keeps only the rest of that minute, one older than
 the minute draws nothing, and a time ahead of the board's clock reads as now.
 A newer action on a card restarts its minute; an older one read after it
-changes nothing.
+changes nothing. When one read holds several new seat launches on a lane, the
+latest of them times the card.
 
 **`statusBy`.** `{ actor, from, at }` on the task row, `actor` in the
 `PauseResumeActor` shape. `update_task` and `create_task` write the caller (the
