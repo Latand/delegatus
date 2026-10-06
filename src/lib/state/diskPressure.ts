@@ -89,21 +89,36 @@ export function diskVolumes(roots: readonly DiskRoot[], probe: DiskProbe = probe
 /** Every stage writes scratch and agent config. Full-access Claude also
     keeps background-task output on its pre-stage temp destination. Resolve
     config with the same scratch environment the spawn boundary hands it. */
-function stageDiskRoots(source: NodeJS.ProcessEnv): DiskRoot[] {
+function stageDiskRoots(source: NodeJS.ProcessEnv, tempRoots: readonly TempSweepRoot[] = []): DiskRoot[] {
   const scratch = statePath("scratch");
-  return [{ role: "state", directory: scratch, provisioning: true },
+  const roots: DiskRoot[] = [{ role: "state", directory: scratch, provisioning: true },
     { role: "state", directory: agentConfigSandboxRoot({ ...source, TMPDIR: path.join(scratch, "tmp") }), provisioning: true },
     { role: "temp", directory: source.CLAUDE_CODE_TMPDIR || source.TMPDIR || os.tmpdir(), provisioning: true }];
+  // The image's CLI shims enter the host namespace. Their canonical temp
+  // paths can name another volume there; use the same validated views as
+  // cleanup, and include only actual stage destinations in admission.
+  const namespaces = new Set<string>();
+  if (source.LLV_DOCKER_NSENTER_SHIMS === "1") for (const temp of tempRoots) {
+    if (!temp.via || !temp.anchor) continue;
+    if (namespaces.has(temp.anchor.namespace)) continue;
+    try {
+      if (fs.readlinkSync(path.join(path.dirname(temp.via), "ns/mnt")) !== temp.anchor.namespace) continue;
+    } catch { continue; }
+    namespaces.add(temp.anchor.namespace);
+    for (const root of roots.slice(0, 3)) roots.push({ ...root, directory: temp.via + root.directory });
+  }
+  return roots;
 }
 
-function rootsForProvision(repoDir: string, worktreeDir: string, source: NodeJS.ProcessEnv): DiskRoot[] {
+function rootsForProvision(repoDir: string, worktreeDir: string, source: NodeJS.ProcessEnv, tempRoots?: readonly TempSweepRoot[]): DiskRoot[] {
+  const views = tempRoots ?? (source.LLV_DOCKER_NSENTER_SHIMS === "1" ? sweepRoots(scanProcesses(), ownTempRoots(source)) : []);
   return [{ role: "state", directory: stateDir() }, { role: "worktrees", directory: worktreeDir },
-    { role: "repository", directory: repoDir }, ...stageDiskRoots(source)];
+    { role: "repository", directory: repoDir }, ...stageDiskRoots(source, views)];
 }
 
 /** Admission only. A low volume never changes an existing agent's lifecycle. */
-export function worktreeDiskWait(repoDir: string, worktreeDir: string, probe: DiskProbe = probeDisk, source: NodeJS.ProcessEnv = process.env): string | null {
-  const low = diskVolumes(rootsForProvision(repoDir, worktreeDir, source), probe).filter(row => row.level === "critical");
+export function worktreeDiskWait(repoDir: string, worktreeDir: string, probe: DiskProbe = probeDisk, source: NodeJS.ProcessEnv = process.env, tempRoots?: readonly TempSweepRoot[]): string | null {
+  const low = diskVolumes(rootsForProvision(repoDir, worktreeDir, source, tempRoots), probe).filter(row => row.level === "critical");
   return low.length ? `${DISK_SPACE_WAIT_PREFIX} ${low.map(row => `${row.roles.join("/")} has ${formatDiskBytes(row.freeBytes!)} free (needs ${formatDiskBytes(threshold(DISK_CRITICAL_BYTES, row.totalBytes))})`).join("; ")}; retries automatically` : null;
 }
 
@@ -197,7 +212,7 @@ export async function readDiskPressure(ports: {
   const worktrees = ports.worktrees ?? [...new Set([...pipelines.map(row => row.worktreeDir), ...(sweep?.kept ?? []).map(row => row.path)].filter(Boolean))];
   const tempRoots = ports.tempRoots ?? (ports.roots ? [] : sweepRoots(scanProcesses(), [...ownTempRoots(), statePath("scratch")]));
   const accessible = hostTempWorktreeAccess(tempRoots).accessiblePath;
-  const roots: DiskRoot[] = ports.roots ?? [{ role: "state", directory }, ...stageDiskRoots(process.env),
+  const roots: DiskRoot[] = ports.roots ?? [{ role: "state", directory }, ...stageDiskRoots(process.env, tempRoots),
     ...worktrees.map(directory => ({ role: "worktrees", directory: accessible(directory) })),
     ...tempRoots.map(root => ({ role: "temp", directory: root.via + root.path }))];
   const previousEpisode = cached.pressure.episode;
@@ -210,11 +225,12 @@ export async function readDiskPressure(ports: {
     const episode = cached.pressure.episode;
     target.measuring = (async () => {
       const measuredAt = new Date(now()).toISOString();
-      const stateBytes = await exclusiveBytes(directory);
+      const worktreePaths = worktrees.map(accessible);
+      const stateBytes = await exclusiveBytes(directory, worktreePaths);
       let worktreeBytes = 0;
       // Nested linked checkouts must be measured once, through the outer one.
       for (const worktree of worktrees.filter(candidate => !worktrees.some(other => other !== candidate && candidate.startsWith(other + path.sep))))
-        worktreeBytes += await exclusiveBytes(accessible(worktree));
+        worktreeBytes += await exclusiveBytes(accessible(worktree), [directory]);
       let tempBytes = 0;
       const measuredTemp = new Set<string>();
       for (const root of tempRoots) {
@@ -224,12 +240,14 @@ export async function readDiskPressure(ports: {
             if (!entry.isDirectory() || !isOwnedTempName(entry.name)) continue;
             const child = path.join(base, entry.name);
             const canonicalChild = path.join(root.path, entry.name);
-            if (worktrees.some(worktree => worktree === canonicalChild || worktree.startsWith(canonicalChild + path.sep))) continue;
+            // Scratch is part of state. Other owned roots can contain both a
+            // checkout and independent role files; exclude only the checkout.
+            if (canonicalChild === directory || canonicalChild.startsWith(directory + path.sep)) continue;
             const stat = fs.statSync(child);
             const identity = `${stat.dev}:${stat.ino}`;
             if (measuredTemp.has(identity)) continue;
             measuredTemp.add(identity);
-            tempBytes += await exclusiveBytes(child);
+            tempBytes += await exclusiveBytes(child, [directory, ...worktreePaths]);
           }
         } catch { /* An inaccessible root has no attributable consumer count. */ }
       }

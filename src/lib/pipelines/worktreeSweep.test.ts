@@ -1133,19 +1133,23 @@ test("a settled merger state with its captured test corpus releases the batch af
   expect(after.removed).toHaveLength(1);
 });
 
-test("artifact source, reports and media stay while their generated bulk is trimmed", async () => {
+test("artifact source, reports and media stay while root dependencies are trimmed", async () => {
   const root = repository();
   fs.appendFileSync(path.join(root, ".git/info/exclude"), ".artifacts/\n");
   const { dir, tip } = lane(root, path.join(caseDir, "widgets-pipeline-artifacts"), "pipeline/artifacts");
   const artifacts = path.join(dir, ".artifacts");
   fs.mkdirSync(path.join(artifacts, "probe/node_modules/pkg"), { recursive: true });
   fs.writeFileSync(path.join(artifacts, "probe/node_modules/pkg/index.js"), "generated");
+  fs.writeFileSync(path.join(artifacts, "probe/node_modules/unique.log"), "unique evidence");
+  fs.mkdirSync(path.join(artifacts, "probe/.next"));
+  fs.writeFileSync(path.join(artifacts, "probe/.next/unique.log"), "unique evidence");
   for (const name of ["report.md", "patch.ts", "capture.png"]) fs.writeFileSync(path.join(artifacts, name), "retained fixture");
   const owner = pipeline({ id: "artifacts", repoDir: root, worktreeDir: dir, branch: "pipeline/artifacts" });
   const report = await sweepMergedWorktrees(ports({ pipelines: [owner], prs: [merged(121, owner.branch, tip)] }));
   expect(report.kept[0]!.reason).toBe("ignored-files");
-  expect(report.trimmed).toHaveLength(2);
-  expect(fs.existsSync(path.join(artifacts, "probe/node_modules"))).toBe(false);
+  expect(report.trimmed).toHaveLength(1);
+  expect(fs.readFileSync(path.join(artifacts, "probe/node_modules/unique.log"), "utf8")).toBe("unique evidence");
+  expect(fs.readFileSync(path.join(artifacts, "probe/.next/unique.log"), "utf8")).toBe("unique evidence");
   expect(fs.existsSync(path.join(dir, "node_modules"))).toBe(false);
   for (const name of ["report.md", "patch.ts", "capture.png"]) expect(fs.existsSync(path.join(artifacts, name))).toBe(true);
 });
@@ -1207,7 +1211,7 @@ test.each(["remote-proof", "delete-command"])("a branch advanced during %s keeps
     git(["update-ref", "refs/heads/topic/advance-ref", advanced, tip], root);
   };
   const report = await sweepMergedWorktrees({ ...ordinary, git: async (args, cwd) => {
-    if (removed && phase === "delete-command" && args[0] === "update-ref" && args[1] === "-d") advance();
+    if (removed && phase === "delete-command" && args[0] === "update-ref" && args.includes("-d")) advance();
     const result = await ordinary.git(args, cwd);
     if (args[0] === "worktree" && args[1] === "remove" && result.code === 0) removed = true;
     if (removed && phase === "remote-proof" && args[0] === "ls-remote" && !advanced) advance();
@@ -1218,6 +1222,52 @@ test.each(["remote-proof", "delete-command"])("a branch advanced during %s keeps
   expect(git(["rev-parse", "refs/heads/topic/advance-ref"], root)).toBe(advanced);
   expect(git(["rev-list", "--count", `${tip}..topic/advance-ref`], root)).toBe("1");
   expect(report.errors).toContainEqual(expect.stringContaining("retained: its proven tip could not be deleted"));
+});
+
+test("a lane ref made symbolic during deletion cannot delete the checked-out main branch", async () => {
+  const root = repository(); remoteRepository(root);
+  const { dir } = lane(root, path.join(caseDir, "symbolic-ref"), "topic/symbolic-ref");
+  git(["merge", "--ff-only", "topic/symbolic-ref"], root);
+  const main = git(["rev-parse", "refs/heads/main"], root);
+  git(["push", "-q", "origin", "main", "topic/symbolic-ref"], root);
+  const owner = pipeline({ repoDir: root, worktreeDir: dir, branch: "topic/symbolic-ref", closedAt: OLD_TERMINAL });
+  const ordinary = ports({ pipelines: [owner], now: () => RETAIN_NOW });
+  let replaced = false;
+  const report = await sweepMergedWorktrees({ ...ordinary, git: async (args, cwd) => {
+    if (args[0] === "update-ref" && args.includes("-d")) {
+      git(["symbolic-ref", "refs/heads/topic/symbolic-ref", "refs/heads/main"], root);
+      replaced = true;
+    }
+    return ordinary.git(args, cwd);
+  } });
+  expect(replaced).toBe(true);
+  expect(report.removed).toHaveLength(1);
+  expect(git(["rev-parse", "refs/heads/main"], root)).toBe(main);
+  expect(git(["symbolic-ref", "--short", "HEAD"], root)).toBe("main");
+});
+
+test("a detached commit made during the final status read preserves the checkout and source", async () => {
+  const root = repository();
+  const { dir, tip } = lane(root, path.join(caseDir, "final-status-commit"), "topic/final-status-commit");
+  git(["checkout", "--detach", "-q"], dir);
+  const owner = pipeline({ repoDir: root, worktreeDir: dir, branch: "topic/final-status-commit" });
+  const ordinary = ports({ pipelines: [owner], prs: [merged(170, owner.branch, tip)] });
+  let statuses = 0;
+  let local = "";
+  const report = await sweepMergedWorktrees({ ...ordinary, git: async (args, cwd) => {
+    const result = await ordinary.git(args, cwd);
+    if (args[0] === "status" && ++statuses === 2) {
+      fs.writeFileSync(path.join(dir, "unique.txt"), "private detached work");
+      git(["add", "unique.txt"], dir);
+      git(["commit", "-q", "-m", "private detached work"], dir);
+      local = git(["rev-parse", "HEAD"], dir);
+    }
+    return result;
+  } });
+  expect(report.removed).toEqual([]);
+  expect(report.kept[0]!.reason).toBe("unmerged-commits");
+  expect(git(["rev-parse", "HEAD"], dir)).toBe(local);
+  expect(fs.readFileSync(path.join(dir, "unique.txt"), "utf8")).toBe("private detached work");
 });
 
 test("a branch attached to a new checkout after removal is retained", async () => {
@@ -1410,7 +1460,7 @@ test.each(["nested-worktree", "foreign-repository", "locked", "process"])("cache
 });
 
 
-test.each(["test-results", "out", "build", "coverage", "playwright-report"])("an artifact container containing only %s evidence keeps its files", async name => {
+test.each(["test-results", "out", "build", "coverage", "playwright-report", "node_modules", ".next"])("an artifact container containing only %s evidence keeps its files", async name => {
   const root = repository();
   fs.appendFileSync(path.join(root, ".git/info/exclude"), ".artifacts/\n");
   const { dir, tip } = lane(root, path.join(caseDir, "evidence"), "topic/evidence");
@@ -1468,7 +1518,7 @@ test.skipIf(process.platform !== "linux")("host temp role checkouts use namespac
   const namespace = "mnt:[fixture-host]";
   fs.mkdirSync(path.join(proc, "ns"), { recursive: true });
   fs.symlinkSync(namespace, path.join(proc, "ns/mnt"));
-  const canonicalRoot = "/tmp";
+  const canonicalRoot = "/host-temp";
   const canonical = path.join(canonicalRoot, "llv-host-role/checkout");
   const actual = path.join(proc, "root", canonical);
   git(["worktree", "add", "-q", "--detach", actual, "main"], root);

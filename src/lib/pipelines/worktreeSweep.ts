@@ -254,7 +254,7 @@ function rebuildable(ignored: string): boolean {
   const name = segments.at(-1) ?? "";
   // Git can also report an artifact's ignored descendant directly. Output
   // directory names inside evidence do not establish regenerability.
-  if (segments.includes(".artifacts")) return segments.some(segment => segment === "node_modules" || segment === ".next") || name.endsWith(".pyc");
+  if (segments.includes(".artifacts")) return name.endsWith(".pyc");
   if (segments.some((segment) => REBUILDABLE_DIRECTORIES.has(segment) || segment.endsWith(".egg-info"))) return true;
   return REBUILDABLE_FILES.has(name) || name.endsWith(".tsbuildinfo") || name.endsWith(".pyc");
 }
@@ -410,7 +410,14 @@ export function parseWorktreeList(raw: string): ListedWorktree[] {
 
 /** Bytes a removal frees: allocated blocks of entries with a single link,
     without following symlinks; a lower bound past the entry limit. */
-export async function exclusiveBytes(directory: string): Promise<number> {
+export async function exclusiveBytes(directory: string, excludedDirectories: readonly string[] = []): Promise<number> {
+  const excluded = new Set<string>();
+  for (const excludedDirectory of excludedDirectories) {
+    try { const stat = fs.statSync(excludedDirectory); excluded.add(`${stat.dev}:${stat.ino}`); }
+    catch { /* An unavailable directory contributes no measured bytes. */ }
+  }
+  try { const stat = fs.statSync(directory); if (excluded.has(`${stat.dev}:${stat.ino}`)) return 0; }
+  catch { return 0; }
   let bytes = 0;
   let visited = 0;
   const pending = [directory];
@@ -427,6 +434,7 @@ export async function exclusiveBytes(directory: string): Promise<number> {
       const child = path.join(current, entry.name);
       try {
         const stat = await fs.promises.lstat(child);
+        if (entry.isDirectory() && excluded.has(`${stat.dev}:${stat.ino}`)) continue;
         if (entry.isDirectory()) {
           bytes += stat.blocks * 512;
           pending.push(child);
@@ -806,7 +814,7 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
       }
       /** The merged PR whose head contains what the checkout has checked out
           now, or why none does. */
-      const prove = async (): Promise<{ pr: MergedPullRequest | null; anchor: string; preservation: "merged-pr" | "remote-ref" | "base"; branch: string | null } | WorktreeKept> => {
+      const prove = async (): Promise<{ pr: MergedPullRequest | null; anchor: string; head: string; preservation: "merged-pr" | "remote-ref" | "base"; branch: string | null } | WorktreeKept> => {
         const current = await checkedOut(ports.git, worktree);
         if (!current) return { ...base, reason: "unmerged-commits", detail: "HEAD unreadable" };
         const freshOwners = ownersOf(ownershipPipelines(), worktree);
@@ -822,12 +830,12 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
           if (present.code !== 0) continue;
           known = true;
           const ancestor = await ports.git(["merge-base", "--is-ancestor", current.head, pr.headRefOid], root);
-          if (ancestor.code === 0) return { pr, anchor: pr.headRefOid, preservation: "merged-pr", branch: current.branch };
+          if (ancestor.code === 0) return { pr, anchor: pr.headRefOid, head: current.head, preservation: "merged-pr", branch: current.branch };
         }
         if (retained) {
           const remote = await onRemote(current.head);
-          if (remote) return { pr: null, anchor: current.head, preservation: "remote-ref", branch: current.branch };
-          if (freshOwners.some((owner) => owner.baseRef === current.head)) return { pr: null, anchor: current.head, preservation: "base", branch: current.branch };
+          if (remote) return { pr: null, anchor: current.head, head: current.head, preservation: "remote-ref", branch: current.branch };
+          if (freshOwners.some((owner) => owner.baseRef === current.head)) return { pr: null, anchor: current.head, head: current.head, preservation: "base", branch: current.branch };
           return { ...base, reason: "local-only-commits", detail: remote === null
             ? "no remote of the repository answered, so its commits are not proven kept elsewhere"
             : "a commit of HEAD is in no ref a remote advertises, and HEAD is not its pipeline's base" };
@@ -875,6 +883,11 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
       const finalStatus = await ports.git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], worktree);
       const finalClass = classifyStatus(finalStatus.stdout, true);
       if (finalStatus.code !== 0 || finalClass.changed.length) { keep({ ...base, reason: "uncommitted" }); continue; }
+      const finalHead = await ports.git(["rev-parse", "--verify", "HEAD"], worktree);
+      if (finalHead.code !== 0 || finalHead.stdout.trim() !== proof.head) {
+        keep({ ...base, reason: retained ? "local-only-commits" : "unmerged-commits", detail: "HEAD changed after its preservation proof" });
+        continue;
+      }
       const finalIgnored = keptIgnored(accessible(worktree), finalClass.ignored);
       const registration = registrationHold(root, worktree, worktree, accessible);
       if (registration) { keep({ ...registration, ...base }); continue; }
@@ -911,14 +924,14 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
         if (!kept) continue;
         const checkouts = await ports.git(["worktree", "list", "--porcelain", "-z"], root);
         if (checkouts.code !== 0 || parseWorktreeList(checkouts.stdout).some(other => other.branch === branch)) continue;
-        const deleted = await ports.git(["update-ref", "-d", `refs/heads/${branch}`, tip.stdout.trim()], root);
+        const deleted = await ports.git(["update-ref", "--no-deref", "-d", `refs/heads/${branch}`, tip.stdout.trim()], root);
         if (deleted.code !== 0) report.errors.push(`${root}: branch ${branch} retained: its proven tip could not be deleted`);
       }
     }
 
     // Retained, settled pipeline checkouts keep their source and private files.
     // Their own rebuildable .next goes; one kept for its ignored files or its
-    // unpublished commits also loses its dependency trees and the evidence
+    // unpublished commits also loses its root dependency tree and the evidence
     // drivers' fixture bundles under .artifacts, and keeps everything else.
     for (const entry of ordered) {
       const worktree = resolve(entry.path);
@@ -935,8 +948,9 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
       const kept = report.kept.find((row) => row.path === worktree);
       if (kept && ["ignored-files", "unmerged-commits", "local-only-commits"].includes(kept.reason)) {
         candidates.push(path.join(worktree, "node_modules"));
-        // Agent artifacts remain; only dependency trees and build outputs
-        // inside them are reproducible. Do not descend through symlinks.
+        // Agent artifacts remain. Only the drivers' fixture-only bundles
+        // carry a regeneration proof; directory names cannot prove their
+        // dependency or build folders free of unique evidence.
         const pending = [path.join(worktree, ".artifacts")];
         let visited = 0;
         while (pending.length && visited < MEASURE_ENTRY_LIMIT) {
@@ -948,7 +962,8 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
               visited += 1;
               if (!child.isDirectory() || child.name === ".git") continue;
               const directory = path.join(current, child.name);
-              if (child.name === "node_modules" || child.name === ".next" || (child.name === "bundle" && fixtureBundle(accessible(directory)))) candidates.push(directory);
+              if (child.name === "node_modules" || child.name === ".next") continue;
+              if (child.name === "bundle" && fixtureBundle(accessible(directory))) candidates.push(directory);
               else pending.push(directory);
             }
           } catch { /* Missing or unreadable artifacts stay. */ }

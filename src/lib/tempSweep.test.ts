@@ -13,6 +13,7 @@ import {
   sweepRoots,
   sweepStaleTempDirs,
   tempSweepMaxAgeMs,
+  tempSweepStatus,
   writableRoots,
   type ProcessScan,
 } from "./tempSweep";
@@ -252,8 +253,38 @@ test("a sweep is recorded as its report and one journal line per removed directo
       errors: [],
     });
     expect(JSON.parse(fs.readFileSync(path.join(state, "temp-sweep-report.json"), "utf8")).removedBytes).toBe(4096);
+    expect(tempSweepStatus()).toMatchObject({ removed: 1, removedBytes: 4096, heldCounts: {}, heldBytes: {} });
     const journal = fs.readFileSync(path.join(state, "temp-sweep-journal.ndjson"), "utf8").trim().split("\n");
     expect(journal.map((line) => JSON.parse(line).path)).toEqual(["/var/tmp/llv-test-run-a"]);
+  } finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previous;
+  }
+});
+
+test("the resources temp summary names Git and inspection holds with bytes and no paths", () => {
+  const state = tempRoot();
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = state;
+  try {
+    expect(tempSweepStatus()).toBeNull();
+    recordTempSweep({
+      at: "2026-10-06T10:00:00Z", maxAgeHours: 24, roots: ["/var/tmp"], removed: [], removedBytes: 0,
+      kept: { young: 0, inUse: 0, worktree: 3, deferred: 0 }, errors: [],
+      held: [
+        { path: "/var/tmp/llv-repo", via: "", reason: "git-checkout", bytes: 4096 },
+        { path: "/var/tmp/llv-repo-other", via: "/proc/42/root", reason: "git-checkout", bytes: 8192 },
+        { path: "/var/tmp/llv-private", via: "", reason: "unreadable-tree", bytes: 1024 },
+      ],
+    });
+    const summary = tempSweepStatus();
+    expect(summary).toMatchObject({
+      heldCounts: { "git-checkout": 2, "unreadable-tree": 1 },
+      heldBytes: { "git-checkout": 12288, "unreadable-tree": 1024 },
+    });
+    expect(summary?.summary).toContain("held 3 for Git preservation or tree inspection");
+    expect(JSON.stringify(summary)).not.toContain("/var/tmp");
+    expect(JSON.stringify(summary)).not.toContain("/proc");
   } finally {
     if (previous === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previous;

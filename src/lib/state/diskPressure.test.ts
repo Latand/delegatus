@@ -104,6 +104,46 @@ test.skipIf(process.platform !== "linux")("a vanished namespace anchor is unknow
   expect(probeDisk("/proc/2147483647/root/tmp/checkout")).toBeNull();
 });
 
+test.skipIf(process.platform !== "linux")("Docker admission checks actual host config and Claude temp volumes", () => {
+  const previous = process.env.LLV_STATE_DIR;
+  const state = "/srv/delegatus-config/agent-log-viewer/state";
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pressure-host-admission-"));
+  const via = path.join(fixture, "proc/42/root");
+  const namespace = "mnt:[host-admission]";
+  fs.mkdirSync(path.join(fixture, "proc/42/ns"), { recursive: true });
+  fs.symlinkSync(namespace, path.join(fixture, "proc/42/ns/mnt"));
+  const source = { NODE_ENV: "test" as const, XDG_CONFIG_HOME: "/srv/delegatus-config", TMPDIR: os.tmpdir(), CLAUDE_CODE_TMPDIR: "/srv/claude-temp", LLV_DOCKER_NSENTER_SHIMS: "1" };
+  const temp = { path: os.tmpdir(), via, anchor: { pid: 42, namespace } };
+  process.env.LLV_STATE_DIR = state;
+  try {
+    const config = agentConfigSandboxRoot({ ...source, TMPDIR: path.join(state, "scratch/tmp") });
+    for (const destination of [config, source.CLAUDE_CODE_TMPDIR]) {
+      const visited: string[] = [];
+      let freeBytes = GiB;
+      const stub: DiskProbe = directory => {
+        visited.push(directory);
+        return { volume: directory === via + destination ? "host" : "container", freeBytes: directory === via + destination ? freeBytes : 500 * GiB, totalBytes: 1000 * GiB };
+      };
+      expect(worktreeDiskWait("/srv/repo", "/srv/lane", stub, source, [temp])).toContain("1.00 GiB free");
+      expect(visited).toContain(via + destination);
+      freeBytes = 20 * GiB;
+      expect(worktreeDiskWait("/srv/repo", "/srv/lane", stub, source, [temp])).toBeNull();
+    }
+    fs.unlinkSync(path.join(fixture, "proc/42/ns/mnt"));
+    fs.symlinkSync("mnt:[recycled]", path.join(fixture, "proc/42/ns/mnt"));
+    let hostProbe = false;
+    worktreeDiskWait("/srv/repo", "/srv/lane", directory => {
+      if (directory.startsWith(via)) hostProbe = true;
+      return { volume: "healthy", freeBytes: 500 * GiB };
+    }, source, [temp]);
+    expect(hostProbe).toBe(false);
+  } finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
 test("independent readers with a pre-episode cache join the persisted episode across restart", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pressure-readers-"));
   const file = path.join(directory, "disk-pressure-report.json");
@@ -240,4 +280,45 @@ test.skipIf(process.platform !== "linux")("host temp worktrees are probed and me
     expect(measured.consumers.find(row => row.kind === "worktrees")?.bytes).toBe(await exclusiveBytes(reached));
     expect(measured.consumers.find(row => row.kind === "temp")?.bytes).toBe(await exclusiveBytes(other));
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test.skipIf(process.platform === "win32")("scratch, nested worktrees and other role files belong to one consumer category each", async () => {
+  const original = process.env.LLV_STATE_DIR;
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pressure-accounting-"));
+  const state = path.join(fixture, "state");
+  const scratch = path.join(state, "scratch");
+  const worktree = path.join(scratch, "llv-export/checkout");
+  const temp = path.join(fixture, "temp");
+  const other = path.join(temp, "llv-other");
+  const tempWorktree = path.join(other, "checkout");
+  for (const directory of [worktree, tempWorktree]) fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(scratch, "bulk"), Buffer.alloc(256 * 1024, 1));
+  fs.writeFileSync(path.join(worktree, "bulk"), Buffer.alloc(128 * 1024, 1));
+  fs.writeFileSync(path.join(tempWorktree, "bulk"), Buffer.alloc(64 * 1024, 1));
+  fs.writeFileSync(path.join(other, "role.log"), Buffer.alloc(32 * 1024, 1));
+  process.env.LLV_STATE_DIR = state;
+  const caches = new Map();
+  const worktrees = [worktree, tempWorktree];
+  const options = { caches, worktrees, tempRoots: [{ path: scratch, via: "" }, { path: temp, via: "" }],
+    roots: [{ role: "state", directory: state }], now: () => Date.parse("2026-10-06T12:00:00Z"),
+    probe: () => ({ volume: "fixture", freeBytes: GiB }) };
+  try {
+    await readDiskPressure(options);
+    await Promise.all([...caches.values()].map(row => row.measuring));
+    const measured = await readDiskPressure(options);
+    expect(measured.consumers.find(row => row.kind === "worktrees")?.bytes)
+      .toBe(await exclusiveBytes(worktree) + await exclusiveBytes(tempWorktree));
+    expect(measured.consumers.find(row => row.kind === "temp")?.bytes)
+      .toBe(fs.statSync(path.join(other, "role.log")).blocks * 512);
+    // The durable report itself is written during measurement. Its small
+    // allocation does not affect the distinct 256 KiB scratch-file assertion.
+    const stateBytes = measured.consumers.find(row => row.kind === "state")!.bytes;
+    expect(stateBytes).toBeGreaterThanOrEqual(256 * 1024);
+    expect(stateBytes).toBeLessThan(320 * 1024);
+  } finally {
+    await Promise.all([...caches.values()].map(row => row.measuring));
+    if (original === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = original;
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
 });

@@ -444,6 +444,28 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
 const REPORT_FILE = () => statePath("temp-sweep-report.json");
 const JOURNAL_FILE = () => statePath("temp-sweep-journal.ndjson");
 
+function readTempSweepReport(): TempSweepReport | null {
+  try { return JSON.parse(fs.readFileSync(REPORT_FILE(), "utf8")) as TempSweepReport; }
+  catch { return null; }
+}
+
+/** Operator summary for the existing resources surface. Held directories
+    need Git preservation or tree inspection; their paths stay in the file. */
+export function tempSweepStatus(report: TempSweepReport | null = readTempSweepReport()) {
+  if (!report) return null;
+  const heldCounts: Record<string, number> = {};
+  const heldBytes: Record<string, number> = {};
+  for (const hold of report.held ?? []) {
+    heldCounts[hold.reason] = (heldCounts[hold.reason] ?? 0) + 1;
+    heldBytes[hold.reason] = (heldBytes[hold.reason] ?? 0) + hold.bytes;
+  }
+  return {
+    at: report.at, removed: report.removed.length, removedBytes: report.removedBytes,
+    kept: { ...report.kept }, heldCounts, heldBytes, errors: report.errors.length,
+    summary: `[temp sweep] removed ${report.removed.length} directories (${megabytes(report.removedBytes)}); held ${(report.held ?? []).length} for Git preservation or tree inspection; ${report.errors.length} error(s)`,
+  };
+}
+
 /** The last sweep in full, and one journal line per removed directory. */
 export function recordTempSweep(report: TempSweepReport): void {
   fs.mkdirSync(path.dirname(REPORT_FILE()), { recursive: true, mode: 0o700 });
