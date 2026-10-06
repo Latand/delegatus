@@ -1,6 +1,7 @@
 import { domainToASCII } from "node:url";
 
 import { IANA_TOP_LEVEL_DOMAINS } from "@/lib/bridge/topLevelDomains";
+import { mailboxPattern } from "@/lib/privacy/mailbox";
 import { hardenedRedact } from "@/lib/view/compactText";
 
 /*
@@ -156,7 +157,7 @@ export interface PrivateClassOptions {
 const PRIVATE_TLD = new Set(["local", "internal", "lan", "home", "corp", "localdomain", "intranet", "onion", "test", "invalid", "example", "localhost", "alt", "consul", "svc"]);
 /* A single-label hostname is private when the text explicitly names it.
    Merely discussing a hostname field or detector names no machine. */
-const NAMED_HOST = /(?<![\p{L}\p{N}_])(?:host(?:[\s_-]*name)?|(?:machine|node|server)(?:[\s_-]*(?:name|host(?:[\s_-]*name)?))?|хост|машина|вузол|сервер|ім['’]я\s+(?:хоста|машини|вузла|сервера))["'`]?\s*(?:(?:is|was|є|було)\s+|[:=]\s*)["'`“«‹]?[\p{L}\p{N}_][\p{L}\p{N}_.-]*/iu;
+const NAMED_HOST = /(?<![\p{L}\p{N}_])(?:host(?:[\s_-]*name)?|(?:machine|node|server)(?:[\s_-]*(?:name|host(?:[\s_-]*name)?))?|хост|машина|вузол|сервер|ім['’]я\s+(?:хоста|машини|вузла|сервера))["'`]?\s*(?:(?:is|was|named|called|є|було)\s+|[:=]\s*|(?=[`"'“«‹「『]|<code\b))(?:["'`“«‹「『]+|<code\b[^<>]*>)?[\p{L}\p{N}_][\p{L}\p{N}_.-]*/iu;
 /* Explicitly labeled remote identities are private even if this machine
    has never seen that user or account in its local deny list. */
 const NAMED_USER = /(?<![\p{L}\p{N}_])(?:user[\s_-]*name|ім['’]я\s+користувача)["'`]?\s*(?:(?:is|was|є|було)\s+|[:=]\s*)["'`“«‹]?\S/iu;
@@ -185,8 +186,10 @@ const QUOTED_SPACED_PATH = /([`"'])[ \t]*\/[ \t]+[^\r\n]*?\1|[“«‹][ \t]*\/[
    a local path, even when it holds only one component. */
 const NETWORK_ROOT_PATH = /(?<![\p{L}\p{M}\p{N}_\/\\])(?:\/{2}|\\{1,2})[^\s\/\\>*]/u;
 /* Every populated file URI names a local path, including slashless forms
-   such as `file:notes.txt`, which URL readers resolve to an absolute path. */
+   such as `file:notes.txt`. URL readers remove ASCII tabs and newlines before
+   resolving a URI, so this detector receives that same reading. */
 const LOCAL_FILE_URI = /(?<![\p{L}\p{N}_])file:[^\s"'`<>]/iu;
+const STRICT_MAILBOX = mailboxPattern(true);
 const DRIVE_RELATIVE_PATH = /(?<![\p{L}\p{N}_])[a-z]:(?!\/\/)[^\s"'`\/\\]/iu;
 const BARE_HEX_ID = /(?<![\p{L}\p{N}_])[0-9a-f]{8,64}(?![\p{L}\p{N}_])/iu;
 const STRICT_ALLOWED_NAMES = new Set(["delegatus"]);
@@ -224,12 +227,20 @@ const DOTTED_PORT = /(?:\blocalhost|\b[\w-]+\.[\w.-]+|\b\d{1,3}(?:\.\d{1,3}){3})
 const TECHNICAL_NUMBER_LABEL = /(?:\bHTTP\s+status|\bretryAfterMs|\b(?:observed|expected)\s+attempts)$/iu;
 const STRICT_PORT_FIELD = /\b(?:port|listen_?port|server_?port)["'`]?\s*(?:(?:is|was|number|:|=)\s*)?\d{1,5}\b/i;
 
+/* A root file exemption belongs only to a separate reference token. An
+   email domain, hostname suffix or network path cannot borrow it. */
+function rootSourceReference(text: string, start: number, name: string): boolean {
+  return VERIFIED_ROOT_SOURCE_FILES.has(name)
+    && /(?:^|[\s`"'[(])$/u.test(text.slice(0, start))
+    && /^(?=$|[\s`"')\],;.!?]|:\d+(?:$|[\s`"')\],;.!?]))/u.test(text.slice(start + name.length));
+}
+
 function portMatches(text: string, pattern: RegExp): boolean {
   for (const match of text.matchAll(pattern)) {
     const colon = match[0].indexOf(":");
     if (TECHNICAL_NUMBER_LABEL.test(text.slice(0, match.index + colon))) continue;
     const name = match[0].slice(0, colon);
-    if (VERIFIED_ROOT_SOURCE_FILES.has(name)) continue;
+    if (rootSourceReference(text, match.index, name)) continue;
     const extension = name.slice(name.lastIndexOf(".") + 1).toLowerCase();
     if (SOURCE_EXTENSIONS.has(extension) && RELATIVE_SOURCE_PREFIX.test(text.slice(0, match.index))) continue;
     return true;
@@ -249,7 +260,7 @@ function topLevelDomain(ending: string): boolean {
 function strictDomain(text: string): boolean {
   for (const match of text.matchAll(DOTTED_NAME)) {
     if (match[2] && VERIFIED_TLD_CALLS.has(match[0])) continue;
-    if (!match[2] && VERIFIED_ROOT_SOURCE_FILES.has(match[0])) continue;
+    if (!match[2] && rootSourceReference(text, match.index, match[0])) continue;
     if (SOURCE_EXTENSIONS.has(match[1].toLowerCase()) && RELATIVE_SOURCE_PREFIX.test(text.slice(0, match.index))) continue;
     if (topLevelDomain(match[1])) return true;
   }
@@ -265,16 +276,17 @@ function escape(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/* CJK names can touch sentence letters on either side without separators.
+/* CJK and Southeast Asian names can touch sentence letters on either side
+   without separators.
    Script extensions include shared marks such as the Japanese long vowel.
    Relax only their edges in strict reports; Latin name edges stay bounded. */
-const CJK_NAME_CHARACTER = /[\p{Script_Extensions=Han}\p{Script_Extensions=Hiragana}\p{Script_Extensions=Katakana}\p{Script_Extensions=Hangul}]/u;
+const UNSEPARATED_NAME_CHARACTER = /[\p{Script_Extensions=Han}\p{Script_Extensions=Hiragana}\p{Script_Extensions=Katakana}\p{Script_Extensions=Hangul}\p{Script_Extensions=Thai}\p{Script_Extensions=Lao}\p{Script_Extensions=Khmer}\p{Script_Extensions=Myanmar}]/u;
 
 function wholeWord(name: string, strict = false): RegExp {
   const words = name.split(/\s+/u).map(escape).join("\\s+");
   const characters = [...name];
-  const before = strict && CJK_NAME_CHARACTER.test(characters[0]) ? "" : "(?<![\\p{L}\\p{M}\\p{N}_])";
-  const after = strict && CJK_NAME_CHARACTER.test(characters[characters.length - 1]) ? "" : "(?![\\p{L}\\p{M}\\p{N}_])";
+  const before = strict && UNSEPARATED_NAME_CHARACTER.test(characters[0]) ? "" : "(?<![\\p{L}\\p{M}\\p{N}_])";
+  const after = strict && UNSEPARATED_NAME_CHARACTER.test(characters[characters.length - 1]) ? "" : "(?![\\p{L}\\p{M}\\p{N}_])";
   return new RegExp(`${before}${words}${after}`, "iu");
 }
 
@@ -313,8 +325,10 @@ export function privateClasses(text: string, deny: PublicDenyList = EMPTY_DENY_L
   if (options.strict) {
     if (strictDomain(text)) found.add("domain");
     if (NAMED_HOST.test(text)) found.add("host");
+    STRICT_MAILBOX.lastIndex = 0;
+    if (STRICT_MAILBOX.test(text)) found.add("email");
     if (NAMED_USER.test(text) || NAMED_ACCOUNT.test(text)) found.add("account");
-    if (SLASH_OPENED_PATH.test(text) || QUOTED_SPACED_PATH.test(text) || NETWORK_ROOT_PATH.test(text) || LOCAL_FILE_URI.test(text) || DRIVE_RELATIVE_PATH.test(text)) found.add("path");
+    if (SLASH_OPENED_PATH.test(text) || QUOTED_SPACED_PATH.test(text) || NETWORK_ROOT_PATH.test(text) || LOCAL_FILE_URI.test(text.replace(/[\t\r\n]/g, "")) || DRIVE_RELATIVE_PATH.test(text)) found.add("path");
     if (BARE_HEX_ID.test(text)) found.add("id");
     if (STRICT_USAGE.some((pattern) => pattern.test(text))) found.add("usage");
     if (portMatches(text, STRICT_PORT) || STRICT_PORT_FIELD.test(text)) found.add("port");

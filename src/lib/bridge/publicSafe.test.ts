@@ -235,3 +235,51 @@ test("strict local file URIs include slashless spellings", () => {
     expect(privateClasses(line, undefined, { strict: true })).toEqual([]);
   }
 });
+
+
+test("strict named hosts include prose and code spans without populated fields", () => {
+  for (const text of [
+    "The server named remote-worker failed.",
+    "The failure occurred on server `remote-worker`.",
+    "The machine called remote-worker failed.",
+    "The host “remote-worker” failed.",
+    "The server ``remote-worker`` failed.",
+    "The host <code>remote-worker</code> failed.",
+  ]) expect(privateClasses(text, undefined, { strict: true })).toContain("host");
+  expect(privateClasses("The server_name field was missing.", undefined, { strict: true })).toEqual([]);
+});
+
+test("strict names in Southeast Asian scripts need no word separators", () => {
+  for (const [name, text] of [
+    ["สมชาย", "ก่อนสมชายพบข้อผิดพลาด"],
+    ["ສົມຊາຍ", "ກ່ອນສົມຊາຍພົບບັນຫາ"],
+    ["សុខ", "សុខបានរកឃើញបញ្ហា"],
+    ["မောင်", "မောင်တွေ့ရှိခဲ့သည်"],
+  ]) {
+    expect(privateClasses(text, { ...DENY, people: [name] }, { strict: true })).toContain("person");
+  }
+  expect(privateClasses("Adaline reviewed the failure.", { ...DENY, people: ["Ada"] }, { strict: true })).toEqual([]);
+});
+
+test("strict file URIs follow URL reader removal of ASCII tabs and newlines", () => {
+  for (const control of ["\t", "\r", "\n", "\t\r\n"]) {
+    for (const uri of [`file:${control}notes.txt`, `fi${control}le:notes.txt`]) {
+      expect(new URL(uri).href).toBe("file:///notes.txt");
+      expect(privateClasses(`The evidence is ${uri}.`, undefined, { strict: true })).toContain("path");
+    }
+  }
+  for (const text of ["The file: scheme was discussed.", "file:\t", "README.md:12", "src/lib/mcp/bindings.ts"]) {
+    expect(privateClasses(text, undefined, { strict: true })).toEqual([]);
+  }
+});
+
+test("strict quoted and Unicode mailboxes cannot borrow a root source exemption", () => {
+  for (const local of ['"mailbox"', '"mail box"', "пошта", "郵便"]) {
+    const address = [local, "README.md"].join("@");
+    expect(privateClasses(`An email arrived from ${address}.`, undefined, { strict: true })).toContain("email");
+    expect(privateClasses(`An email arrived from ${address}.`, undefined, { strict: true })).toContain("domain");
+  }
+  for (const text of ["See README.md.", "See README.md:12.", "See `README.md:12`."]) {
+    expect(privateClasses(text, undefined, { strict: true })).toEqual([]);
+  }
+});

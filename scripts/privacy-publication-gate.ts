@@ -9,6 +9,7 @@ import { inflateSync } from "node:zlib";
 
 import { preparedPrivacyText } from "./privacy-text-preparation";
 import { canonicalSensitiveText, decodeSensitiveText } from "../src/lib/privacy/canonicalText";
+import { mailboxPattern } from "../src/lib/privacy/mailbox";
 import { staticSensitiveClasses } from "../src/lib/privacy/staticDetectors";
 
 export { canonicalSensitiveText };
@@ -1435,23 +1436,6 @@ type EmailOccurrence = {
   localPart: string;
 };
 
-/* A mailbox the way RFC 5322 spells one. The local part is a dot-atom or a
-   quoted string, and the quoted form may carry spaces, dots and a second `@`
-   inside the quotes — it reaches a person exactly like the plain form, so
-   detection reads both rather than only the shape that is easy to match. */
-const quotedLocalPart = /"(?:[^"\\\r\n]|\\.)*"/;
-const dotAtomLocalPart = /\b[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+/;
-// These contextual code points belong to valid IDNA labels. Detection keeps
-// them; the unit exemption below depends only on its positive ASCII boundary.
-const idnaDomainLabel = String.raw`(?:[A-Z0-9\p{L}\p{M}\p{N}\p{Default_Ignorable_Code_Point}\u00B7\u0375\u05F3\u05F4\u0F0B\u30FB-]|\\x[0-9a-f]{2})+`;
-const idnaDomainSeparator = String.raw`[.\u3002\uFF0E\uFF61]`;
-const emailDomain = new RegExp(
-  `(${idnaDomainLabel}(?:${idnaDomainSeparator}${idnaDomainLabel})+)`,
-  "iu",
-);
-const emailAddressSource =
-  `(${quotedLocalPart.source}|${dotAtomLocalPart.source})@${emailDomain.source}`;
-
 // Only complete RAW package-version tokens earn this exemption. Detection
 // keeps every view intact; source correspondence is checked per occurrence.
 const packageVersionSource = String.raw`[0-9]+(?:\.[0-9]+){1,3}(?:[-+][0-9A-Za-z.-]+)?`;
@@ -1571,7 +1555,7 @@ function rawPackageVersionEnd(text: string, domainStart: number, source?: EmailT
 
 /** Every mailbox in the text that reaches a person, in the order they appear. */
 function* emailOccurrences(text: string, source?: EmailTextView["source"]): Generator<EmailOccurrence> {
-  const pattern = new RegExp(emailAddressSource, "giu");
+  const pattern = mailboxPattern();
   for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
     const following = text[pattern.lastIndex];
     const exemptVersionEnd = !match[1].startsWith('"')

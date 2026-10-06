@@ -76,6 +76,8 @@ const QUOTATION = [
   /(?<![\p{L}\p{N}])"\s*[^"\s]+\s+[^"\s][^"]*"(?![\p{L}\p{N}])/u,
   /[“„«][^“”„«»]*\S\s+\S[^“”„«»]*[”“»]/,
   /‹[^‹›]*\S\s+\S[^‹›]*›/,
+  /「[^「」]*\S\s+\S[^「」]*」/,
+  /『[^『』]*\S\s+\S[^『』]*』/,
   new RegExp(`(?<![\\p{L}\\p{N}])['‘]\\s*${QUOTED_WORD_CHAR}+\\s+${QUOTED_WORD_CHAR}(?:\\s|${QUOTED_WORD_CHAR})*['’](?![\\p{L}\\p{N}])`, "u"),
 ];
 /* A line that opens with who spoke: `Operator: …`, `**User:** …`, `[human] …`. */
@@ -86,8 +88,8 @@ const OPERATOR = "(?:operator|user|human|оператор|користувач|�
 /* Attribution can contain arbitrary intervening words and Markdown soft
    wraps in the same clause. A sentence boundary ends it, so a later
    technical span stays readable. Attribution needs no finite verb list. */
-const SPEECH_CONNECTOR = "[^\x60‹›“”«»\"'‘’<>.!?;:]*";
-const QUOTE_OPEN = "(?:[\x60‹“«\"‘]|(?<![\\p{L}\\p{N}])'|<(?:code|pre|q)\\b[^<>]*>)";
+const SPEECH_CONNECTOR = "[^\x60‹›“”«»「」『』\"'‘’<>.!?;:]*";
+const QUOTE_OPEN = "(?:[\x60‹“«「『\"‘]|(?<![\\p{L}\\p{N}])'|<(?:code|pre|q)\\b[^<>]*>)";
 const ATTRIBUTED_OPERATOR_WORDS = new RegExp([
   `(?<!\\p{L})(?:${OPERATOR}(?![\\p{L}\\p{N}_])\\s*(?:`,
   `[:—]\\s*\\S`,

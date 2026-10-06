@@ -438,3 +438,20 @@ test("spaces just inside the marks do not make a quotation a term", () => {
     "The operator asked for every agent to be restarted at once.",
   ]) expect(classes(line)).toEqual([]);
 });
+
+
+test("Japanese quotation marks protect attributed words and leave technical spans readable", () => {
+  for (const body of [
+    "The operator said 「keep this private」.",
+    "The operator said 『keep this private』.",
+    "The operator said 「private」.",
+    "The operator said 『非公開にしてください』.",
+    "A reply contained 「keep this private」.",
+    "A reply contained 『keep this private』.",
+  ]) {
+    for (const text of [body, encodeURIComponent(body), [...body].map((char) => `&#${char.codePointAt(0)};`).join("")]) {
+      expect(classes(text)).toContain("quote");
+    }
+  }
+  for (const body of ["The state 「delivered」 was shown.", "The error was `connection refused during startup`."]) expect(classes(body)).toEqual([]);
+});

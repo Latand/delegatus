@@ -702,10 +702,25 @@ test.each([
   { kind: "host", text: '{"server":"remote-worker"}' },
   { kind: "path", text: "The evidence is at file:private-notes.txt." },
   { kind: "path", text: "[evidence](file:private-notes.txt)" },
-])("populated servers and slashless file URIs refuse both boundaries: $text", async ({ kind, text }) => {
+  { kind: "quote", text: "The operator said 「keep this private」." },
+  { kind: "quote", text: "The operator said 『keep this private』." },
+  { kind: "quote", text: "The operator said 「private」." },
+  { kind: "quote", text: "The operator said 『非公開にしてください』." },
+  { kind: "host", text: "The server named remote-worker failed to accept the request." },
+  { kind: "host", text: "The failure occurred on server `remote-worker`." },
+  { kind: "host", text: "The server named **remote-worker** failed." },
+  { kind: "host", text: "The failure occurred on server ``remote-worker``." },
+  { kind: "host", text: "The failure occurred on server <code>remote-worker</code>." },
+  ...["\t", "\r", "\n", "\t\r\n"].map((control) => ({ kind: "path", text: `The evidence is file:${control}notes.txt.` })),
+  { kind: "path", text: "[evidence](fi\tle:\nnotes.txt)" },
+  { kind: "email", text: ['"mailbox"', "README.md"].join("@") },
+  { kind: "email", text: ["пошта", "README.md"].join("@") },
+  { kind: "email", text: ['"mail**box**"', "README.md"].join("@") },
+])("private report forms refuse both boundaries: $text", async ({ kind, text }) => {
   const h = harness();
   for (const where of ["title", "body"] as const) {
-    for (const value of [text, encodeURIComponent(text), text.replace(/:/g, "&#58;")]) {
+    for (const value of [text, encodeURIComponent(text), [...text].map((char) => `&#${char.codePointAt(0)};`).join(""), encodeURIComponent(text[0]) + text.slice(1), `&#${text.codePointAt(0)};` + text.slice(1)]) {
+      if (where === "title" && (value.length > 160 || /[\r\n]/.test(value))) continue;
       const report = { ...REPORT, [where]: value };
       const refused = await h.call(REPORTER, { action: "preview", ...report });
       expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
@@ -714,7 +729,8 @@ test.each([
     }
   }
   for (const where of ["title", "body"] as const) {
-    for (const value of [text, encodeURIComponent(text), text.replace(/:/g, "&#58;")]) {
+    for (const value of [text, encodeURIComponent(text), [...text].map((char) => `&#${char.codePointAt(0)};`).join(""), encodeURIComponent(text[0]) + text.slice(1), `&#${text.codePointAt(0)};` + text.slice(1)]) {
+      if (where === "title" && (value.length > 160 || /[\r\n]/.test(value))) continue;
       const { digest } = recordIssueReportPreview({ ...REPORT, [where]: value }, REPORTER.conversationId!, { directory: sandbox });
       h.operatorSays((await shown(h, digest)).en);
       const refused = await h.call(SEAT_CALLER, { action: "publish", digest });
@@ -729,6 +745,7 @@ test.each([
 test.each([
   { name: "李", texts: ["The reviewer 李 failed.", "李看到錯誤。", "李看到錯誤。"] },
   { name: "李雷", texts: ["李雷看到錯誤。", "先請李雷查看。", "李雷看到錯誤。", "李**雷**看到錯誤。", "李<b>雷</b>看到錯誤。"] },
+  { name: "สมชาย", texts: ["สมชายพบข้อผิดพลาดในการเรียกใช้เครื่องมือ", "ก่อนสมชายพบข้อผิดพลาด", "สม**ชาย**พบข้อผิดพลาด", "สม<b>ชาย</b>พบข้อผิดพลาด"] },
   { name: "テネー", texts: ["テネーが確認した。", "先にテネーが確認した。", "テ**ネ**ーが確認した。"] },
 ])("production Telegram catalog protects $name at both report boundaries", async ({ name, texts }) => {
   const transport = new FakeBotTransport();
@@ -757,9 +774,10 @@ test.each([
         ? { ...service.listChats({ includeInactive: true }) }
         : { ...service.readMessages({ chat: params.get("chat")!, limit: 100, maxChars: 1, cursor: params.get("cursor") ?? undefined }) };
     } });
-    const values = texts.flatMap((text) => [text, encodeURIComponent(text), [...text].map((char) => `&#${char.codePointAt(0)};`).join("")]);
+    const values = texts.flatMap((text) => [text, encodeURIComponent(text), [...text].map((char) => `&#${char.codePointAt(0)};`).join(""), encodeURIComponent(text[0]) + text.slice(1), `&#${text.codePointAt(0)};` + text.slice(1)]);
     for (const where of ["title", "body"] as const) {
       for (const value of values) {
+        if (where === "title" && (value.length > 160 || /[\r\n]/.test(value))) continue;
         const refused = await h.call(REPORTER, { action: "preview", ...REPORT, [where]: value });
         expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
         expect((refused.details as { findings: { class: string; where: string }[] }).findings).toEqual(expect.arrayContaining([expect.objectContaining({ class: "person", where })]));
@@ -769,6 +787,7 @@ test.each([
     expect(await h.call(REPORTER, { action: "preview", ...REPORT, body: "Ada observed the failure." })).toMatchObject({ ok: false, code: "issue_report_private_data" });
     for (const where of ["title", "body"] as const) {
       for (const value of values) {
+        if (where === "title" && (value.length > 160 || /[\r\n]/.test(value))) continue;
         const { digest } = recordIssueReportPreview({ ...REPORT, [where]: value }, REPORTER.conversationId!, { directory: sandbox });
         h.operatorSays((await shown(h, digest)).en);
         const refused = await h.call(SEAT_CALLER, { action: "publish", digest });
@@ -778,7 +797,7 @@ test.each([
       }
     }
     expect(h.published).toEqual([]);
-    const safe = { ...REPORT, body: `${REPORT.body}\nAdaline reviewed the failure. The server_name field was missing.` };
+    const safe = { ...REPORT, body: `${REPORT.body}\nAdaline reviewed the failure. The server_name field was missing. The error was \`connection refused during startup\`. README.md and README.md:12 describe the file: scheme.` };
     const digest = await previewed(h, safe);
     h.operatorSays((await shown(h, digest)).en);
     expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
