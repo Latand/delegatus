@@ -5,7 +5,10 @@ import path from "node:path";
 
 import type { RegistryFile } from "@/lib/agent/registry";
 
-import { approvesIssueReport, issueReportApproval, issueReportApprovalReplies, operatorMessagesOf } from "./approval";
+import { MAX_REPLY_LABEL_CHARS } from "@/lib/suggestions/types";
+
+import { approvesIssueReport, issueReportApproval, issueReportApprovalDrafts, issueReportApprovalReplies, operatorMessagesOf } from "./approval";
+import { isIssueReportApprovalReply } from "./approvalReply";
 
 /*
  * #2518: an approval is the operator's own message, read from the seat's
@@ -26,6 +29,21 @@ test("the approving reply carries the whole digest, one reply per language", () 
   expect(replies.en).toContain(DIGEST);
   expect(replies.uk).toContain(DIGEST);
   expect(issueReportApprovalReplies(OTHER)).not.toEqual(replies);
+});
+
+test("the reply draft keeps the approving sentence under a label suggest_replies accepts", () => {
+  const drafts = issueReportApprovalDrafts(DIGEST);
+  const replies = issueReportApprovalReplies(DIGEST);
+  for (const language of ["en", "uk"] as const) {
+    expect(drafts[language].text).toBe(replies[language]);
+    expect(drafts[language].label.length).toBeLessThanOrEqual(MAX_REPLY_LABEL_CHARS);
+    expect(drafts[language].label).not.toContain(DIGEST);
+    expect(approvesIssueReport(drafts[language].text, DIGEST)).toBe(true);
+    expect(isIssueReportApprovalReply(drafts[language].text)).toBe(true);
+  }
+  expect(drafts.en.label).toContain("public");
+  expect(drafts.uk.label).toContain("публічний");
+  for (const other of ["Yes, publish", `Yes, publish report ${DIGEST.slice(0, 8)}`, `No, do not publish report ${DIGEST}`]) expect(isIssueReportApprovalReply(other)).toBe(false);
 });
 
 /* Two real report texts whose digests share their first eight characters,

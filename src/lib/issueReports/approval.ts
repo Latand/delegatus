@@ -3,6 +3,10 @@ import { bodyOf } from "@/lib/activity/humanInput";
 import { operatorRecords, readTranscript, transcriptContext } from "@/lib/activity/transcriptExport";
 import { readOnlyConversationLookupFromSnapshot, type RegistryFile } from "@/lib/agent/registry";
 
+import { issueReportApprovalReplies } from "./approvalReply";
+
+export { issueReportApprovalDrafts, issueReportApprovalReplies } from "./approvalReply";
+
 /*
  * The operator's approval of one Delegatus bug report (#2518).
  *
@@ -31,11 +35,6 @@ export interface OperatorMessage {
   /** When the transcript recorded it, in milliseconds. */
   at: number;
   text: string;
-}
-
-/** The replies that approve this exact preview, one per interface language. */
-export function issueReportApprovalReplies(digest: string): { en: string; uk: string } {
-  return { en: `Yes, publish report ${digest}`, uk: `Так, публікуй звіт ${digest}` };
 }
 
 function normalized(text: string): string {

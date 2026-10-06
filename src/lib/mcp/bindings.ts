@@ -84,7 +84,7 @@ import { seatIdentityResolver } from "@/lib/bridge/seatIdentity";
 import { isBridgeReportClass, type BridgeReportTelegram, type CanonicalSeatConversationId } from "@/lib/bridge/types";
 import { findBridgeReport, recordBridgeReportTelegram, scopedReportId } from "@/lib/bridge/store";
 import { EMPTY_DENY_LIST, type PublicDenyList } from "@/lib/bridge/publicSafe";
-import { issueReportApproval, issueReportApprovalReplies, operatorMessagesOf, type OperatorMessage } from "@/lib/issueReports/approval";
+import { issueReportApproval, issueReportApprovalDrafts, issueReportApprovalReplies, operatorMessagesOf, type OperatorMessage } from "@/lib/issueReports/approval";
 import { delegatusIssueRepository, issueReportFinder, issueReportPublisher, type IssueReportFinder, type IssueReportPublisher } from "@/lib/issueReports/publish";
 import { issueReportPreviewText } from "@/lib/issueReports/previewText";
 import { ISSUE_REPORT_MAX_BODY_CHARS, ISSUE_REPORT_MAX_TITLE_CHARS, scrubIssueReport } from "@/lib/issueReports/scrub";
@@ -1770,6 +1770,8 @@ async function issueReportTool(args: McpToolArgs, control: ViewerControlDependen
     catch { hintWarnings.push("Known-name hints are unavailable; review names and identities yourself."); }
     return { hints: scrubIssueReport(report, deny), hintWarnings };
   };
+  /* The preview's own lines follow the operator's interface language, English while none is known. */
+  const previewLanguage = (dependencies.operatorLocale ? dependencies.operatorLocale() : operatorLocale()) ?? "en";
   const view = (preview: IssueReportPreview): McpToolPayload => ({
     state: preview.state, digest: preview.digest, title: preview.title, body: preview.body,
     privacyJudgment: preview.privacyJudgment ?? {
@@ -1777,7 +1779,7 @@ async function issueReportTool(args: McpToolArgs, control: ViewerControlDependen
       removed: "Unknown.", harmlessHints: "Unknown.", uncertainties: "Review the whole text before approving.",
     },
     hints: preview.hints ?? [], hintWarnings: preview.hintWarnings ?? [],
-    previewText: issueReportPreviewText(preview),
+    previewText: issueReportPreviewText(preview, previewLanguage), previewLanguage,
     ...(preview.publication?.issueUrl ? { issueUrl: preview.publication.issueUrl } : {}),
   });
   if (action === "hints" || action === "preview") {
@@ -1823,8 +1825,8 @@ async function issueReportTool(args: McpToolArgs, control: ViewerControlDependen
     if (!seat) return view(stored);
     return {
       ...view({ ...(markIssueReportShown(digest, seat, { directory }) ?? stored), hints: stored.hints, hintWarnings: stored.hintWarnings }),
-      approvalReplies,
-      next: "Put previewText in chat, keeping its exact title and body with privacyJudgment and the remaining hints as a short list beside it; include hintWarnings. The operator may approve text with hints. Then suggest_replies with the approvalReplies line in the operator's language as the yes, beside a no and an edit. Publication is admitted only when that line is the operator's last message here.",
+      approvalReplies, approvalReplyDrafts: issueReportApprovalDrafts(digest),
+      next: "Put previewText in chat exactly as it is: it marks where the published text starts and ends, and carries privacyJudgment, the remaining hints and hintWarnings after it. The operator may approve text with hints. Then suggest_replies with the approvalReplyDrafts entry in the operator's language (its label and its text, unchanged) as the yes, beside a no and an edit. Publication is admitted only when that text is the operator's last message here.",
     };
   }
   if (action !== "publish") throw refuse("action is hints, preview, show or publish", "issue_report_invalid", { field: "action" });

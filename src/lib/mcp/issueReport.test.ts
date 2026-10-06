@@ -474,7 +474,11 @@ test.each([
     expect(shown.previewText).toContain(report.title);
     expect(shown.previewText).toContain(report.body);
     expect(shown.previewText).toContain(JUDGMENT.assessment);
-    expect(shown.previewText).toContain("Remaining detector hints");
+    expect(shown.previewText).toContain("Detector hints");
+    expect(shown.previewLanguage).toBe("en");
+    const drafts = shown.approvalReplyDrafts as Record<"en" | "uk", { label: string; text: string }>;
+    expect(drafts.en.text).toBe((shown.approvalReplies as { en: string }).en);
+    expect(drafts.uk.text).toBe((shown.approvalReplies as { uk: string }).uk);
     expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, code: "issue_report_approval_required" });
     h.operatorSays((shown.approvalReplies as { en: string }).en);
     expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
