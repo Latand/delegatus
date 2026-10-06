@@ -10414,9 +10414,9 @@ function silentTranscript(name: string): string {
     same reader production uses, so the close is exercised against real records
     rather than a hand-shaped evidence object. */
 function readFixtures(h: ReturnType<typeof harness>, fixtures: Record<string, string>): void {
-  h.ports.durableTurnEvidence = async (engine, transcriptPath, reportAt, startedAt, _readTail, afterCutAt, afterCutKey) => {
+  h.ports.durableTurnEvidence = async (engine, transcriptPath, reportAt, startedAt, _readTail, afterCutAt) => {
     const fixture = fixtures[transcriptPath];
-    return fixture ? await durableStageTurnEvidence(engine, fixture, reportAt, startedAt, undefined, afterCutAt, afterCutKey) : null;
+    return fixture ? await durableStageTurnEvidence(engine, fixture, reportAt, startedAt, undefined, afterCutAt) : null;
   };
 }
 
@@ -10433,18 +10433,6 @@ async function stampPipelinePrompt(file: string, uuid: string, text: string): Pr
   const session = path.basename(file, ".jsonl");
   ledger.recordQueued(session, { id: `controller-${uuid}`, text, origin: { kind: "agent", role: "pipeline" } }, "turn-started");
   ledger.confirmDelivered(session, `controller-${uuid}`, uuid);
-}
-
-/** Confirm the fake transport's exact native row, leaving copied prompts unproven. */
-async function stampCodexPipelinePrompt(file: string, role: "pipeline" | "startup-recovery" = "pipeline"): Promise<void> {
-  const { beginCodexPromptDispatch, confirmCodexPromptDispatch, codexNativeUserPrompt } = await import("@/lib/runtime/codexMessageProvenance");
-  const lines = fs.readFileSync(file, "utf8").trimEnd().split("\n");
-  const index = lines.findIndex(line => codexNativeUserPrompt(JSON.parse(line)) !== null);
-  const wire = codexNativeUserPrompt(JSON.parse(lines[index]!))!.text;
-  fs.writeFileSync(file, lines.slice(0, index).map(line => line + "\n").join(""));
-  const dispatch = beginCodexPromptDispatch(file, wire, "fixture-delivery", { kind: "agent", role });
-  fs.appendFileSync(file, lines.slice(index).map(line => line + "\n").join(""));
-  await confirmCodexPromptDispatch(dispatch, "fixture-turn");
 }
 
 /** The #1589 production tail, in the order the incident wrote it: a
@@ -20065,37 +20053,6 @@ test.each([false, true])("an active unknown limit adopts a newly known future re
   expect(f.h.spawnInputs).toHaveLength(1);
 });
 
-test.each(["stream_disconnected", "usage_limit_exceeded"])("fractional filesystem evidence persists provider recovery and its delivery key, condition=%s", async (errorClass) => {
-  const f = await providerRecoveryHarness("codex", errorClass, "provider cut");
-  const artifact = stageTranscript(`fractional-${errorClass}`, [
-    { timestamp: new Date(f.now() - 1_000).toISOString(), type: "event_msg", payload: { type: "task_started" } },
-    { type: "event_msg", payload: { type: "task_complete", error: { codex_error_info: errorClass } } },
-  ]);
-  fs.utimesSync(artifact, f.now() / 1_000 + 0.123456, f.now() / 1_000 + 0.123456);
-  const evidence = await durableStageTurnEvidence("codex", artifact);
-  const cutAt = evidence!.terminalProviderMessage!.ts;
-  expect(Number.isInteger(cutAt)).toBe(false);
-  readFixtures(f.h, { "/codex/stage-1.jsonl": artifact });
-  await tickPipelines([], f.h.ports);
-  const waiting = loadPipelines()[0]!;
-  expect(waiting.runs[0]!.attempts[0]!.providerWait!.turnTs).toBe(cutAt);
-  if (errorClass === "usage_limit_exceeded") {
-    expect(waiting.runs[0]!.attempts[0]!.usageLimitedAccounts![0]!.limitedAt).toBe(cutAt);
-  }
-  const keys: string[] = [];
-  f.h.ports.resumeSeveredTurn = async input => { keys.push(input.clientMessageId); return keys.length > 1; };
-  f.advance(Date.parse(waiting.runs[0]!.attempts[0]!.providerWait!.resumeAt) - f.now());
-  await tickPipelines([], f.h.ports);
-  f.advance(60_000);
-  await tickPipelines([], f.h.ports);
-  const cutKey = waiting.runs[0]!.attempts[0]!.providerWait!.turnKey;
-  expect(cutKey).toMatch(/^[a-f0-9]{64}$/);
-  const key = `stage-provider-${waiting.id}-plan-1-${cutAt}-${cutKey}`;
-  expect(keys).toEqual([key, key]);
-  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait!.tries).toBe(1);
-  expect(f.h.spawnInputs).toHaveLength(1);
-});
-
 for (const pinned of [false, true]) {
   test(`authentication required with no permitted switch parks with its condition, pinned=${pinned}`, async () => {
     const f = await providerRecoveryHarness("claude", "authentication_failed", "OAuth session expired and could not be refreshed", null, pinned);
@@ -21746,7 +21703,6 @@ for (const engine of ["claude", "codex"] as const) {
       ledger.recordQueued(session, { id: f.sends[0]!, text, origin }, "turn-started");
       ledger.confirmDelivered(session, f.sends[0]!, "continued-prompt");
     }
-    if (engine === "codex" && (author === "pipeline" || author === "startup-recovery")) await stampCodexPipelinePrompt(file, author);
     readFixtures(f.h, { "/codex/stage-1.jsonl": file });
     await tickPipelines([], f.h.ports);
     f.advance(30 * 60_000);
@@ -21890,7 +21846,6 @@ for (const engine of ["claude", "codex"] as const) {
       ledger.recordQueued(session, { id: "parked-automatic-prompt", text, origin }, "turn-started");
       ledger.confirmDelivered(session, "parked-automatic-prompt", "automatic-prompt");
     }
-    if (engine === "codex") await stampCodexPipelinePrompt(file, role);
     readFixtures(f.h, { "/codex/stage-1.jsonl": file });
     f.h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { engine, accountId: LIMITED_ACCOUNT, kind: "managed", home: "/account", transcriptRoot: "/account/sessions", env: { NODE_ENV: "test" } } });
     await tickPipelines([], f.h.ports);
@@ -22048,7 +22003,6 @@ for (const engine of ["claude", "codex"] as const) {
       records.push(nativeNotice(f.now()));
       const file = stageTranscript(`first-provider-tick-${engine}-${author}-${largeTail}`, records);
       if (engine === "claude" && author === "pipeline") await stampPipelinePrompt(file, "first-tick-prompt", text);
-      if (engine === "codex" && author === "pipeline") await stampCodexPipelinePrompt(file);
       readFixtures(f.h, { "/codex/stage-1.jsonl": file });
       expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait).toBeUndefined();
       await tickPipelines([], f.h.ports);
@@ -22181,7 +22135,7 @@ for (const engine of ["claude", "codex"] as const) {
 
 for (const parked of [false, true]) {
   for (const shape of ["UserMessage", "userMessage", "user_message", "response_item"] as const) {
-    test.each(["operator", "pipeline", "startup-recovery", "copied-ref"] as const)(`native Codex ${shape} %s authorship controls quota recovery (parked=${parked})`, async author => {
+    test.each(["operator", "pipeline", "startup-recovery"] as const)(`native Codex ${shape} %s authorship controls quota recovery (parked=${parked})`, async author => {
       const f = await providerRecoveryHarness("codex", "usage_limit_exceeded", "You've hit your usage limit", 120_000, true);
       if (parked) {
         const lane = loadPipelines()[0]!;
@@ -22198,7 +22152,7 @@ for (const parked of [false, true]) {
       const automatic = author === "pipeline" || author === "startup-recovery";
       const wire = encodeCodexStructuredUserText("Continue the same stage", undefined, null,
         { kind: "agent", role: author === "startup-recovery" ? author : "pipeline" });
-      const text = author === "operator" ? "Wait for my answer" : author === "copied-ref" ? wire.split("\n")[0] + "\nWait for my answer" : wire;
+      const text = author === "operator" ? "Wait for my answer" : wire;
       const prompt = shape === "user_message" ? { type: "event_msg", payload: { type: "user_message", message: text } }
         : shape === "response_item" ? { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text }] } }
         : { type: "event_msg", payload: { type: "item_completed", item: { type: shape, content: [{ type: "text", text: text.slice(0, 20) }, { type: "text", text: text.slice(20) }] } } };
@@ -22206,7 +22160,6 @@ for (const parked of [false, true]) {
       const file = stageTranscript(`native-codex-author-${shape}-${author}-${parked}`, [notice(oldCut),
         { ...prompt, timestamp: f.h.ports.now() }, { type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "task_started" } },
         { type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "token_count", info: { rate_limits: { primary: { used_percent: 100, resets_at: f.resetsAt } } } } }, notice(f.now() + 500)]);
-      if (automatic) await stampCodexPipelinePrompt(file, author === "startup-recovery" ? author : "pipeline");
       readFixtures(f.h, { "/codex/stage-1.jsonl": file });
       await tickPipelines([], f.h.ports);
       if (parked && automatic) expect(loadPipelines()[0]!.stateDetail).toMatch(/Automatic retry|Автоповтор/);
@@ -22262,81 +22215,6 @@ for (const mode of ["running", "pinned-park", "pool-park"] as const) {
 }
 
 for (const engine of ["claude", "codex"] as const) {
-  for (const mode of ["first-tick", "running", "parked"] as const) {
-    for (const position of ["before", "after"] as const) {
-      test.each(engine === "claude" ? ["operator", "harness", "pipeline"] as const : ["operator", "startup-recovery", "pipeline"] as const)(`${engine} ${mode} equal-time %s prompt ${position} cut uses transcript order`, async author => {
-        const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded", "You've hit your session limit", 120_000, true);
-        if (mode === "parked") {
-          const lane = loadPipelines()[0]!;
-          lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries: 3, startedAt: f.h.ports.now() };
-          savePipelines([lane]);
-        }
-        if (mode !== "first-tick") await tickPipelines([], f.h.ports);
-        f.h.ports.resolveProjectSpawn = () => f.now() >= f.resetsAt! * 1_000 + 60_000
-          ? { kind: "available", account: { engine, accountId: LIMITED_ACCOUNT, kind: "managed", home: "/account", transcriptRoot: "/account/sessions", env: { NODE_ENV: "test" } } }
-          : { kind: "exhausted", resetsAt: f.resetsAt, allowedAccountIds: [LIMITED_ACCOUNT] };
-        const at = f.h.ports.now();
-        const text = "Wait for my review before continuing";
-        let prompt: Record<string, unknown>;
-        if (engine === "claude") prompt = { type: "user", uuid: "equal-time-prompt", timestamp: at, message: { content: text },
-          ...(author === "harness" ? { origin: { kind: "task-notification" }, promptSource: "system" } : { promptSource: "sdk" }) };
-        else {
-          const { encodeCodexStructuredUserText } = await import("@/lib/runtime/codexStructuredUserText.server");
-          prompt = { type: "event_msg", timestamp: at, payload: { type: "user_message", message: author === "operator" ? text
-            : encodeCodexStructuredUserText(text, undefined, null, { kind: "agent", role: author === "pipeline" ? "pipeline" : "startup-recovery" }) } };
-        }
-        const notice = engine === "claude" ? { type: "assistant", timestamp: at, isApiErrorMessage: true, error: "rate_limit",
-          message: { model: "<synthetic>", stop_reason: "end_turn", content: [{ type: "text", text: "You've hit your session limit" }] } }
-          : { type: "event_msg", timestamp: at, payload: { type: "task_complete", error: { message: "usage limit", codex_error_info: "usage_limit_exceeded" } } };
-        const file = stageTranscript(`equal-time-${engine}-${mode}-${position}-${author}`, position === "before" ? [prompt, notice] : [notice, prompt, notice]);
-        if (engine === "claude" && author === "pipeline") await stampPipelinePrompt(file, "equal-time-prompt", text);
-        if (engine === "codex" && (author === "pipeline" || author === "startup-recovery")) await stampCodexPipelinePrompt(file, author);
-        readFixtures(f.h, { "/codex/stage-1.jsonl": file });
-        await tickPipelines([], f.h.ports);
-        f.advance(31 * 60_000);
-        await tickPipelines([], f.h.ports);
-        await tickPipelines([], f.h.ports);
-        const cancelled = author === "operator" && position === "after";
-        expect(f.sends).toHaveLength(mode !== "parked" && !cancelled ? 1 : 0);
-        expect(f.h.spawnInputs).toHaveLength(mode === "parked" && !cancelled ? 2 : 1);
-        if (cancelled) expect(loadPipelines()[0]!.stateDetail).toContain("newer stage activity");
-      });
-    }
-  }
-}
-
-for (const mode of ["first-tick", "running", "parked"] as const) {
-  test(`Codex ${mode} exact human copy of a delivered continuation cancels quota recovery`, async () => {
-    const f = await providerRecoveryHarness("codex", "usage_limit_exceeded", "You've hit your usage limit", 120_000, true);
-    if (mode === "parked") {
-      const lane = loadPipelines()[0]!;
-      lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries: 3, startedAt: f.h.ports.now() };
-      savePipelines([lane]);
-    }
-    const cutAt = f.now();
-    if (mode !== "first-tick") await tickPipelines([], f.h.ports);
-    f.advance(1_000);
-    const { encodeCodexStructuredUserText } = await import("@/lib/runtime/codexStructuredUserText.server");
-    const wire = encodeCodexStructuredUserText("Continue the same stage", undefined, null, { kind: "agent", role: "pipeline" });
-    const notice = (at: number) => ({ type: "event_msg", timestamp: new Date(at).toISOString(), payload: {
-      type: "task_complete", error: { message: "usage limit", codex_error_info: "usage_limit_exceeded" } } });
-    const prompt = () => ({ type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "user_message", message: wire } });
-    const file = stageTranscript(`exact-human-copy-${mode}`, [notice(cutAt), prompt(),
-      { type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "task_started" } }]);
-    await stampCodexPipelinePrompt(file);
-    f.advance(1_000);
-    fs.appendFileSync(file, [prompt(), notice(f.now() + 500)].map(row => JSON.stringify(row) + "\n").join(""));
-    readFixtures(f.h, { "/codex/stage-1.jsonl": file });
-    await tickPipelines([], f.h.ports);
-    f.advance(31 * 60_000);
-    await tickPipelines([], f.h.ports);
-    expect(f.sends).toHaveLength(0);
-    expect(f.h.spawnInputs).toHaveLength(1);
-    expect(loadPipelines()[0]!.stateDetail).toContain("newer stage activity");
-  });
-}
-
-for (const engine of ["claude", "codex"] as const) {
   test.each(["first-tick", "running", "parked"] as const)(`${engine} %s backdated context after a large native record retains human cancellation`, async mode => {
     const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded", "You've hit your session limit", 120_000, true);
     if (mode === "parked") {
@@ -22364,124 +22242,7 @@ for (const engine of ["claude", "codex"] as const) {
     expect(loadPipelines()[0]!.stateDetail).toContain("newer stage activity");
   });
 }
-
-test.each([false, true])("Claude same-time harness cut keeps its newer named reset (parked=%s)", async parked => {
-  const f = await providerRecoveryHarness("claude", "rate_limit", "You've hit your session limit", null, true);
-  f.advance(Date.parse("2026-10-05T16:54:09Z") - f.now());
-  const reset = Date.parse("2026-10-05T19:00:00Z") / 1000;
-  f.h.ports.claudeAccountReset = () => reset;
-  if (parked) {
-    const lane = loadPipelines()[0]!;
-    lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries: 3, startedAt: f.h.ports.now() };
-    savePipelines([lane]);
-  }
-  const notice = (clock: string) => ({ type: "assistant", timestamp: f.h.ports.now(), isApiErrorMessage: true, error: "rate_limit",
-    message: { model: "<synthetic>", stop_reason: "end_turn", content: [{ type: "text", text: `You've hit your session limit · resets ${clock} (Europe/Kyiv)` }] } });
-  const file = stageTranscript(`same-time-harness-reset-${parked}`, [notice("10pm")]);
-  readFixtures(f.h, { "/codex/stage-1.jsonl": file });
-  await tickPipelines([], f.h.ports);
-  fs.appendFileSync(file, [
-    { type: "user", timestamp: f.h.ports.now(), origin: { kind: "task-notification" }, promptSource: "system", message: { content: "<task-notification>done</task-notification>" } },
-    notice("11pm"),
-  ].map(row => JSON.stringify(row) + "\n").join(""));
-  await tickPipelines([], f.h.ports);
-  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait?.resumeAt).toBe("2026-10-05T20:01:00.000Z");
-});
-
-test("a delivered continuation ending on a same-time native quota cut owns a distinct retry key", async () => {
-  const f = await providerRecoveryHarness("claude", "rate_limit", "You've hit your session limit", null, true);
-  const cutAt = Date.parse("2026-10-05T16:54:09Z");
-  f.advance(cutAt - f.now());
-  f.h.ports.claudeAccountReset = () => Date.parse("2026-10-05T19:00:00Z") / 1000;
-  const notice = (clock: string) => ({ type: "assistant", timestamp: new Date(cutAt).toISOString(), isApiErrorMessage: true, error: "rate_limit",
-    message: { model: "<synthetic>", stop_reason: "end_turn", content: [{ type: "text", text: `You've hit your session limit · resets ${clock} (Europe/Kyiv)` }] } });
-  const file = stageTranscript("same-time-delivered-reset", [notice("10pm")]);
-  readFixtures(f.h, { "/codex/stage-1.jsonl": file });
-  await tickPipelines([], f.h.ports);
-  f.advance(Date.parse("2026-10-05T19:01:01Z") - f.now());
-  await tickPipelines([], f.h.ports);
-  expect(f.sends).toHaveLength(1);
-  const text = "Continue the same stage";
-  fs.appendFileSync(file, [
-    { type: "user", uuid: "same-time-delivered-prompt", timestamp: new Date(cutAt).toISOString(), message: { content: text } }, notice("11pm"),
-  ].map(row => JSON.stringify(row) + "\n").join(""));
-  await stampPipelinePrompt(file, "same-time-delivered-prompt", text);
-  await tickPipelines([], f.h.ports);
-  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait?.resumeAt).toBe("2026-10-05T20:01:00.000Z");
-  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait?.tries).toBe(1);
-  f.advance(Date.parse("2026-10-05T20:01:01Z") - f.now());
-  await tickPipelines([], f.h.ports);
-  expect(f.sends).toHaveLength(2);
-  expect(new Set(f.sends).size).toBe(2);
-});
 for (const engine of ["claude", "codex"] as const) {
-  test.each(["first-tick", "running", "parked"] as const)(`${engine} %s timestamp-less native cuts preserve human cancellation`, async mode => {
-    const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded", "You've hit your session limit", 120_000, true);
-    if (mode === "parked") {
-      const lane = loadPipelines()[0]!;
-      lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries: 3, startedAt: f.h.ports.now() };
-      savePipelines([lane]);
-    }
-    const cutAt = f.now();
-    if (mode !== "first-tick") await tickPipelines([], f.h.ports);
-    const notice = engine === "claude" ? { type: "assistant", isApiErrorMessage: true, error: "rate_limit",
-      message: { stop_reason: "end_turn", content: [{ type: "text", text: "You've hit your session limit" }] } }
-      : { type: "event_msg", payload: { type: "task_complete", error: { message: "usage limit", codex_error_info: "usage_limit_exceeded" } } };
-    const prompt = engine === "claude" ? { type: "user", timestamp: new Date(cutAt - 1).toISOString(), message: { content: "Wait for my review" } }
-      : { type: "event_msg", timestamp: new Date(cutAt - 1).toISOString(), payload: { type: "user_message", message: "Wait for my review" } };
-    const file = stageTranscript(`untimed-engine-${engine}-${mode}`, [notice, prompt, notice]);
-    fs.utimesSync(file, cutAt / 1000 + .123456, cutAt / 1000 + .123456);
-    readFixtures(f.h, { "/codex/stage-1.jsonl": file });
-    f.advance(1000);
-    await tickPipelines([], f.h.ports);
-    f.advance(31 * 60_000);
-    await tickPipelines([], f.h.ports);
-    expect(f.sends).toHaveLength(0);
-    expect(f.h.spawnInputs).toHaveLength(1);
-    expect(loadPipelines()[0]!.stateDetail).toContain("newer stage activity");
-  });
-  test.each([false, true])(`${engine} timestamp-less cut preserves recovery and honors earlier control (control=%s)`, async controlled => {
-    const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded", "You've hit your session limit", 120_000, true);
-    const cutAt = f.now();
-    const notice = engine === "claude" ? { type: "assistant", isApiErrorMessage: true, error: "rate_limit",
-      message: { stop_reason: "end_turn", content: [{ type: "text", text: "You've hit your session limit" }] } }
-      : { type: "event_msg", payload: { type: "task_complete", error: { message: "usage limit", codex_error_info: "usage_limit_exceeded" } } };
-    const file = stageTranscript(`untimed-control-${engine}-${controlled}`, [notice]);
-    fs.utimesSync(file, cutAt / 1000 + .123456, cutAt / 1000 + .123456);
-    readFixtures(f.h, { "/codex/stage-1.jsonl": file });
-    if (controlled) {
-      const lane = loadPipelines()[0]!;
-      lane.pausedAt = new Date(cutAt + 1000).toISOString();
-      lane.resumedAt = new Date(cutAt + 2000).toISOString();
-      savePipelines([lane]);
-      fs.utimesSync(file, cutAt / 1000 + 3, cutAt / 1000 + 3);
-    }
-    f.advance(4000);
-    await tickPipelines([], f.h.ports);
-    fs.appendFileSync(file, JSON.stringify({ type: "queue-operation" }) + "\n");
-    fs.utimesSync(file, cutAt / 1000 + 5, cutAt / 1000 + 5);
-    f.advance(31 * 60_000);
-    await tickPipelines([], f.h.ports);
-    expect(f.sends).toHaveLength(controlled ? 0 : 1);
-    expect(f.h.spawnInputs).toHaveLength(1);
-    if (controlled) expect(loadPipelines()[0]!.stateDetail).toContain("operator control");
-  });
-  test(`${engine} a keyed source cut is scoped to its failover attempt`, async () => {
-    const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded", "You've hit your session limit", 120_000);
-    const source = f.h.durableTurns.get("/codex/stage-1.jsonl")!;
-    source.terminalProviderCutKey = "a".repeat(64);
-    f.h.ports.allowedAccountIds = () => [LIMITED_ACCOUNT, SPARE_ACCOUNT];
-    f.h.setStageHost("conversation_stage_1", { outcome: "stopped" });
-    f.h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { engine, accountId: SPARE_ACCOUNT,
-      kind: "managed", home: "/account", transcriptRoot: "/account/sessions", env: { NODE_ENV: "test" } } });
-    await tickPipelines([], f.h.ports);
-    const attempts = loadPipelines()[0]!.runs[0]!.attempts;
-    expect(attempts).toHaveLength(2);
-    expect(attempts[0]!.providerWait?.turnKey).toBe("a".repeat(64));
-    expect(attempts[1]!.providerWait?.turnTs).toBe(0);
-    expect(attempts[1]!.providerWait?.turnKey).toBeUndefined();
-    expect(attempts[1]!.providerRecoveryBudget?.tries).toBe(1);
-  });
   test.each([false, true])(`${engine} large historical prefix permits named reset recovery (parked=%s)`, async parked => {
     const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded", "You've hit your session limit", 120_000, true);
     const cutAt = Date.parse("2026-10-05T10:00:00Z");
@@ -22509,7 +22270,6 @@ for (const engine of ["claude", "codex"] as const) {
     await tickPipelines([], f.h.ports);
     const wait = loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait!;
     expect(wait.resumeAt).toBe(new Date(reset * 1000 + 60000).toISOString());
-    expect(wait.turnKey).toMatch(/^[a-f0-9]{64}$/);
     if (parked) expect(wait.stageRetry).toBeDefined();
     f.advance(reset * 1000 + 61000 - f.now());
     f.h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { engine, accountId: LIMITED_ACCOUNT,
@@ -22521,44 +22281,8 @@ for (const engine of ["claude", "codex"] as const) {
   });
 }
 
-for (const mode of ["running", "pinned-park", "pool-park"] as const) {
-  test.each([false, true])(`Claude ${mode} native queued task notification preserves reset (human copy=%s)`, async human => {
-    const f = await providerRecoveryHarness("claude", "rate_limit", "You've hit your session limit", 120_000, mode !== "pool-park");
-    const lane = loadPipelines()[0]!;
-    if (mode !== "running") lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries: 3, startedAt: f.h.ports.now(),
-      ...(mode === "pool-park" ? { triedAccounts: [LIMITED_ACCOUNT, SPARE_ACCOUNT] } : {}) };
-    if (mode === "pool-park") f.h.ports.allowedAccountIds = () => [LIMITED_ACCOUNT, SPARE_ACCOUNT];
-    savePipelines([lane]);
-    f.h.ports.resolveProjectSpawn = () => f.now() >= f.resetsAt! * 1_000 + 60_000
-      ? { kind: "available", account: { engine: "claude", accountId: LIMITED_ACCOUNT, kind: "managed", home: "/account", transcriptRoot: "/account/sessions", env: { NODE_ENV: "test" } } }
-      : { kind: "exhausted", resetsAt: f.resetsAt, allowedAccountIds: mode === "pool-park" ? [LIMITED_ACCOUNT, SPARE_ACCOUNT] : [LIMITED_ACCOUNT] };
-    await tickPipelines([], f.h.ports);
-    const initial = f.now();
-    f.advance(1_000);
-    const body = "<task-notification><task-id>background-1</task-id><tool-use-id>tool-background-1</tool-use-id><status>completed</status></task-notification>";
-    const notice = (at: number) => ({ type: "assistant", timestamp: new Date(at).toISOString(), isApiErrorMessage: true, error: "rate_limit",
-      message: { stop_reason: "end_turn", content: [{ type: "text", text: "You've hit your session limit" }] } });
-    const file = stageTranscript(`native-task-queue-${mode}-${human}`, [
-      { type: "assistant", timestamp: new Date(initial - 2_000).toISOString(), message: { content: [{ type: "tool_use", id: "tool-background-1", name: "Bash", input: { run_in_background: true } }] } },
-      { type: "user", timestamp: new Date(initial - 1_000).toISOString(), message: { content: [{ type: "tool_result", tool_use_id: "tool-background-1", content: "started" }] }, toolUseResult: { backgroundTaskId: "background-1" } },
-      notice(initial), { type: "queue-operation", operation: "enqueue", content: body }, { type: "queue-operation", operation: "dequeue" },
-      { type: "user", timestamp: f.h.ports.now(), message: { content: body } },
-      ...(human ? [{ type: "user", timestamp: f.h.ports.now(), message: { content: body } }] : []), notice(f.now() + 500),
-    ]);
-    readFixtures(f.h, { "/codex/stage-1.jsonl": file });
-    await tickPipelines([], f.h.ports);
-    if (mode !== "running" && !human) expect(loadPipelines()[0]!.stateDetail).toMatch(/Automatic retry|Автоповтор/);
-    f.advance(180_000);
-    await tickPipelines([], f.h.ports);
-    await tickPipelines([], f.h.ports);
-    expect(f.sends).toHaveLength(mode === "running" && !human ? 1 : 0);
-    expect(f.h.spawnInputs).toHaveLength(mode !== "running" && !human ? 2 : 1);
-    if (human) expect(loadPipelines()[0]!.stateDetail).toContain("newer stage activity");
-  });
-}
-
 for (const engine of ["claude", "codex"] as const) {
-  test.each(["before-cut", "after-cut", "after-later-cut", "undated", "hostless", "human-before-later-cut"] as const)(`${engine} legacy quota upgrade respects operator control (%s)`, async shape => {
+  test.each(["before-cut", "after-cut", "after-later-cut", "hostless", "human-before-later-cut"] as const)(`${engine} legacy quota upgrade respects operator control (%s)`, async shape => {
     const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded", "You've hit your session limit", 120_000, true);
     const cutAt = f.now();
     const lane = loadPipelines()[0]!;
@@ -22568,12 +22292,11 @@ for (const engine of ["claude", "codex"] as const) {
     const legacy = loadPipelines()[0]!;
     const attempt = legacy.runs[0]!.attempts[0]!;
     delete attempt.providerWait!.stageRetry;
-    delete attempt.providerWait!.turnKey;
     attempt.startedAt = new Date(cutAt - 60_000).toISOString();
     attempt.completedAt = new Date(cutAt + 20_000).toISOString();
     legacy.stateDetail = attempt.error = attempt.providerRecoveries!.at(-1)!.summary;
     legacy.controlGeneration = "operator-resumed-legacy";
-    const controlAt = cutAt + (shape === "before-cut" ? -10_000 : shape === "undated" ? -30_000 : 5_000);
+    const controlAt = cutAt + (shape === "before-cut" ? -10_000 : 5_000);
     legacy.pausedAt = new Date(controlAt).toISOString();
     legacy.resumedAt = new Date(controlAt + 1_000).toISOString();
     if (shape === "human-before-later-cut") { delete legacy.pausedAt; delete legacy.resumedAt; }
@@ -22587,7 +22310,6 @@ for (const engine of ["claude", "codex"] as const) {
       legacy.stateDetail = attempt.error = `stage cut by ${attempt.providerWait!.condition.label}: no account capacity returned; capacity recovery exhausted after 3 due probes`;
     } else {
       const cut = providerQuotaRecord(engine, cutAt);
-      if (shape === "undated") delete cut.timestamp;
       const records = [cut];
       if (shape === "after-later-cut" || shape === "human-before-later-cut") {
         records.push(engine === "claude" ? { type: "user", timestamp: new Date(cutAt + 12_000).toISOString(), ...(shape === "after-later-cut" ? { origin: { kind: "task-notification" } } : { promptSource: "sdk" }), message: { content: "<task-notification>done</task-notification>" } }
@@ -22596,8 +22318,6 @@ for (const engine of ["claude", "codex"] as const) {
         attempt.providerWait!.turnTs = cutAt + 15_000;
       }
       const file = stageTranscript(`legacy-control-${engine}-${shape}`, records);
-      if (engine === "codex" && shape === "after-later-cut") await stampCodexPipelinePrompt(file);
-      if (shape === "undated") fs.utimesSync(file, cutAt / 1_000, cutAt / 1_000);
       readFixtures(f.h, { "/codex/stage-1.jsonl": file });
     }
     savePipelines([legacy]);
@@ -22610,7 +22330,7 @@ for (const engine of ["claude", "codex"] as const) {
 }
 
 for (const engine of ["claude", "codex"] as const) {
-  test.each(["human", "undated-human", "operator-control", "automatic"] as const)(`${engine} zero-time successor preserves its first cut across %s activity`, async author => {
+  test.each(["human", "operator-control", "automatic"] as const)(`${engine} zero-time successor preserves its first cut across %s activity`, async author => {
     const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded", "You've hit your session limit", 120_000);
     const third = "fixture-account-c";
     f.h.ports.allowedAccountIds = () => [LIMITED_ACCOUNT, SPARE_ACCOUNT, third];
@@ -22630,13 +22350,12 @@ for (const engine of ["claude", "codex"] as const) {
     const automatic = author === "automatic" || author === "operator-control";
     const first = providerQuotaRecord(engine, firstAt);
     const latest = providerQuotaRecord(engine, firstAt + 2_000);
-    if (author === "undated-human") { delete first.timestamp; delete latest.timestamp; }
     const prompt = engine === "claude" ? { type: "user", timestamp: new Date(firstAt + 1_000).toISOString(),
       ...(automatic ? { origin: { kind: "task-notification" }, promptSource: "system" } : { promptSource: "sdk" }), message: { content: "Continue the same stage" } }
-      : { type: "event_msg", timestamp: new Date(firstAt + 1_000).toISOString(), payload: { type: "user_message", message: "Continue the same stage" } };
+      : { type: "event_msg", timestamp: new Date(firstAt + 1_000).toISOString(), payload: { type: "user_message", message: automatic
+        ? (await import("@/lib/runtime/codexStructuredUserText.server")).encodeCodexStructuredUserText("Continue the same stage", undefined, null, { kind: "agent", role: "pipeline" })
+        : "Continue the same stage" } };
     const file = stageTranscript(`successor-first-cut-${engine}-${author}`, [first, prompt, latest]);
-    if (engine === "codex" && automatic) await stampCodexPipelinePrompt(file);
-    if (author === "undated-human") fs.utimesSync(file, (firstAt + 2_000) / 1_000, (firstAt + 2_000) / 1_000);
     readFixtures(f.h, { "/codex/stage-2.jsonl": file });
     if (author === "operator-control") {
       // Restored controls from an older controller have no cancellation marker.

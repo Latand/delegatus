@@ -170,7 +170,6 @@ function isProviderWait(value: unknown): boolean {
   const dated = (time: unknown) => typeof time === "string" && Number.isFinite(Date.parse(time));
   return isProviderCondition(wait.condition) && typeof wait.text === "string" && wait.text.length <= 300
     && isNullableString(wait.accountId) && isEvidenceTimestamp(wait.turnTs)
-    && (wait.turnKey === undefined || typeof wait.turnKey === "string" && /^[a-f0-9]{64}$/.test(wait.turnKey))
     && Number.isSafeInteger(wait.tries) && Number(wait.tries) >= 0
     && dated(wait.startedAt) && dated(wait.resumeAt)
     && (wait.resetsAt === null || Number.isSafeInteger(wait.resetsAt) && Number(wait.resetsAt) > 0)

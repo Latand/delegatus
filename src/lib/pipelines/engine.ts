@@ -351,7 +351,7 @@ export interface PipelinePorts {
   /** Confirmed reset of the source account's governing exhausted quota window. */
   claudeAccountReset?(accountId: string, model: string | null): number | null;
   sleep?(milliseconds: number): Promise<void>;
-  durableTurnEvidence(engine: EffectivePipelineRole["engine"], transcriptPath: string, reportAt?: string | null, attemptStartedAt?: string | null, readTail?: Parameters<typeof durableStageTurnEvidence>[4], afterCutAt?: number, afterCutKey?: string): Promise<StageTurnEvidence | null>;
+  durableTurnEvidence(engine: EffectivePipelineRole["engine"], transcriptPath: string, reportAt?: string | null, attemptStartedAt?: string | null, readTail?: Parameters<typeof durableStageTurnEvidence>[4], afterCutAt?: number): Promise<StageTurnEvidence | null>;
   headCwd(transcriptPath: string): string | null;
   lastMessage(entry: FileEntry): { text: string; ts: number } | null;
   pathForConversation(conversationId: string): string | null;
@@ -2114,13 +2114,13 @@ function waitForProviderTransport(pipeline: Pipeline, attempt: PipelineStageAtte
 
 function providerContinuationKey(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt): string {
   const wait = attempt.providerWait!;
-  return `stage-provider-${pipeline.id}-${stage.id}-${attempt.n}-${wait.turnTs}${wait.turnKey ? `-${wait.turnKey}` : ""}`;
+  return `stage-provider-${pipeline.id}-${stage.id}-${attempt.n}-${wait.turnTs}`;
 }
 
 /** Persist before transport. Delivery retries retain a key for this exact cut. */
 async function recoverProviderCut(
   pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
-  notice: { condition: ProviderCondition; text: string; ts: number; resetsAt: number | null; turnKey?: string; automaticCut?: boolean } | null,
+  notice: { condition: ProviderCondition; text: string; ts: number; resetsAt: number | null } | null,
   ports: PipelinePorts, persist: () => void,
 ): Promise<boolean> {
   const now = ports.now();
@@ -2131,8 +2131,7 @@ async function recoverProviderCut(
     persist();
     return true;
   }
-  if (notice && (!wait || notice.ts > wait.turnTs
-    || notice.automaticCut && notice.turnKey && notice.turnKey !== wait.turnKey)) {
+  if (notice && (!wait || notice.ts > wait.turnTs)) {
     const engine = attempt.effectiveRole.engine;
     const current = attempt.agentPath ? ports.accountForTranscript?.(engine, attempt.agentPath) : null;
     const accountId = current?.accountId ?? attempt.accountId ?? attemptStage(stage, attempt).account ?? null;
@@ -2152,7 +2151,7 @@ async function recoverProviderCut(
       : notice.condition.kind === "transient" ? 60_000 * 2 ** tries
       : ["host_death", "turn_cut"].includes(notice.condition.kind) ? 30_000 : 0;
     wait = attempt.providerWait = { condition: notice.condition, text: redactBounded(notice.text, 300), accountId,
-      turnTs: notice.ts, ...(notice.turnKey ? { turnKey: notice.turnKey } : {}), tries, startedAt: budget.startedAt,
+      turnTs: notice.ts, tries, startedAt: budget.startedAt,
       resumeAt: new Date(time + delay).toISOString(), resetsAt,
       ...(same && wait?.failedAccounts ? { failedAccounts: [...wait.failedAccounts] } : {}),
       ...(notice.condition.kind === "auth_required" ? { failedAccounts: [...new Set([...(same ? wait?.failedAccounts ?? [] : []), ...(accountId ? [accountId] : [])])] } : {}) };
@@ -2279,15 +2278,13 @@ async function recoverProviderCut(
   }
   const key = providerContinuationKey(pipeline, stage, attempt);
   const cutTs = wait.turnTs;
-  const cutKey = wait.turnKey;
   const controlGeneration = pipeline.controlGeneration;
   const continuationAllowed = async () => {
-    const latest = await ports.durableTurnEvidence(engine, attempt.agentPath!, undefined, attempt.startedAt, undefined, cutTs, cutKey);
+    const latest = await ports.durableTurnEvidence(engine, attempt.agentPath!, undefined, attempt.startedAt, undefined, cutTs);
     return pipeline.state === "running" && !pipeline.closedAt && !pipeline.hiddenAt
       && pipeline.controlGeneration === controlGeneration && !attempt.report && !attempt.verdict && !wait.retryCancelled
       && latest?.promptHistoryComplete !== false && !newerExternalProviderPrompt(attempt, latest)
-      && latest?.turn === "terminal" && latest.terminalProviderMessage?.ts === cutTs
-      && (!cutKey || latest.terminalProviderCutKey === cutKey);
+      && latest?.turn === "terminal" && latest.terminalProviderMessage?.ts === cutTs;
   };
   let delivered: boolean;
   try {
@@ -2416,7 +2413,6 @@ async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attemp
       retry.providerWait = { ...attempt.providerWait, turnTs: 0, tries: attempt.providerWait.tries + 1, actionAt: now,
         resumeAt: now,
         ...(target ? { switchedAccountId: target } : {}) };
-      delete retry.providerWait.turnKey;
     }
     retry.accountId = target ?? attempt.accountId;
   }
@@ -5412,7 +5408,7 @@ async function tickRunStage(
      verdict settles once — even when the runtime ledger is stale `running`, the
      scan projection transiently lost the transcript, or the host is already
      gone. A busy turn is mid-work: its messages are never verdict candidates. */
-  const durable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, attempt.report?.at, attempt.startedAt, undefined, attempt.providerWait?.turnTs, attempt.providerWait?.turnKey);
+  const durable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, attempt.report?.at, attempt.startedAt, undefined, attempt.providerWait?.turnTs);
   const unregisteredHostDeath = structuredActive === true
     ? null
     : await unregisteredStageHostDeathEvidence(attempt, {
@@ -5431,8 +5427,7 @@ async function tickRunStage(
   const notice = terminalProviderMessage && terminalProviderMessage.ts > unixMs(attempt.startedAt)
     ? { condition: classifyProviderCondition(attempt.effectiveRole.engine, terminalProviderMessage.errorClass
         ?? (terminalProviderMessage.usageLimit ? (attempt.effectiveRole.engine === "claude" ? "rate_limit" : "usage_limit") : null), terminalProviderMessage.text),
-        text: terminalProviderMessage.text, ts: terminalProviderMessage.ts, resetsAt: terminalProviderMessage.usageLimit?.resetsAt ?? null,
-        turnKey: durable?.terminalProviderCutKey, automaticCut: durable?.automaticPromptBeforeProviderCut }
+        text: terminalProviderMessage.text, ts: terminalProviderMessage.ts, resetsAt: terminalProviderMessage.usageLimit?.resetsAt ?? null }
     : null;
   if (!oomDeath && !heldForDeployCut && (notice || attempt.providerWait)) {
     if ((notice || attempt.providerWait && attempt.providerWait.turnTs > 0) && durable?.promptHistoryComplete === false) {
@@ -5474,8 +5469,7 @@ async function tickRunStage(
       && durable.message.ts > attempt.providerWait.turnTs;
     const newerActiveTurn = !notice && attempt.providerWait && durable?.turn === "busy"
       && (durable.lastRecordAt ?? durable.message?.ts ?? 0) > attempt.providerWait.turnTs;
-    const newerProviderNotice = notice && (!attempt.providerWait || notice.ts > attempt.providerWait.turnTs
-      || notice.automaticCut && notice.turnKey && notice.turnKey !== attempt.providerWait.turnKey);
+    const newerProviderNotice = notice && (!attempt.providerWait || notice.ts > attempt.providerWait.turnTs);
     const providerHostLost = (hostUnavailablePastGrace || structuredActive === false || paneActive === false) && attempt.providerWait?.actionAt
       && !newerProviderNotice;
     if (newerNormalTurn || newerStageOutput || newerActiveTurn) {
@@ -6669,16 +6663,13 @@ function newerAutomaticProviderPrompt(attempt: PipelineStageAttempt, durable: St
 function refreshHarnessProviderCut(pipeline: Pipeline, attempt: PipelineStageAttempt, durable: StageTurnEvidence | null, ports: PipelinePorts): boolean {
   const wait = attempt.providerWait;
   const notice = durable?.turn === "terminal" ? durable.terminalProviderMessage : null;
-  const newerOrderedCut = durable?.automaticPromptBeforeProviderCut === true
-    && !!durable.terminalProviderCutKey && durable.terminalProviderCutKey !== wait?.turnKey;
-  if (!wait || wait.condition.kind !== "usage_limit" || !notice || notice.ts <= wait.turnTs && !newerOrderedCut
+  if (!wait || wait.condition.kind !== "usage_limit" || !notice || notice.ts <= wait.turnTs
     || newerExternalProviderPrompt(attempt, durable)
     || durable?.message && durable.message.ts > wait.turnTs && durable.message.ts !== notice.ts
     || !(durable?.automaticPromptBeforeProviderCut
       ?? durable?.prompts?.some(prompt => prompt.ts > wait.turnTs && prompt.ts <= notice.ts && prompt.origin !== "external"))
     || classifyProviderCondition(attempt.effectiveRole.engine, notice.errorClass ?? null, notice.text).kind !== "usage_limit") return false;
   wait.turnTs = notice.ts;
-  if (durable?.terminalProviderCutKey) wait.turnKey = durable.terminalProviderCutKey;
   wait.text = redactBounded(notice.text, 300);
   const reset = knownReset(notice.usageLimit?.resetsAt);
   const limited = usageLimitsOn(attempt, attempt.effectiveRole.engine).find(item => item.accountId === wait.accountId);
@@ -6698,7 +6689,7 @@ async function providerCutActivity(pipeline: Pipeline, attempt: PipelineStageAtt
     const wait = attempt.providerWait;
     if (!wait) return "unknown";
     const durable = attempt.agentPath
-      ? await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, undefined, attempt.startedAt, undefined, wait.turnTs, wait.turnKey) : null;
+      ? await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, undefined, attempt.startedAt, undefined, wait.turnTs) : null;
     if (durable?.promptHistoryComplete === false && wait.turnTs > 0) return "unknown";
     if (newerExternalProviderPrompt(attempt, durable)) return "newer";
     if (refreshHarnessProviderCut(pipeline, attempt, durable, ports)) persist();

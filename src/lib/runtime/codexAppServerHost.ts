@@ -1,4 +1,3 @@
-import { beginCodexPromptDispatch, confirmCodexPromptDispatch, recordCodexPromptDispatchTurn, restoreCodexPromptDispatch } from "./codexMessageProvenance";
 import { memoryKillText } from "./agentMemoryState";
 import type { AgentMemoryCell } from "./agentMemory";
 import { normalizeNativeQueueObservation } from "./nativeQueueContent";
@@ -1837,17 +1836,14 @@ export class CodexAppServerHost implements EngineHost {
         normalized.content.images.length > 0 ? normalized.contentDigest : undefined,
         normalized.selectedContext, normalized.origin, codexDeliveryDedup(normalized.id)) },
     ];
-    const dispatch = beginCodexPromptDispatch(this.identity.path, stringField(record(input.at(-1))!, "text")!, entry.id, entry.origin);
     const result = await this.rpc("turn/steer", {
       threadId: this.identity.threadId, expectedTurnId: currentTurn, input, clientUserMessageId: entry.id,
     });
     const turnId = turnIdFromResult(result, "turn/steer");
-    recordCodexPromptDispatchTurn(dispatch, turnId);
     const observed = this.confirmedDeliveries.get(entry.id);
     if (observed) {
       this.confirmedReceipt(entry, observed);
       observed.receipt = { outcome: "steered", turnId };
-      await confirmCodexPromptDispatch(dispatch, turnId);
       return { turnId, observe: async () => "landed" as const };
     }
     let resolve!: (value: "landed" | "dropped" | "unknown") => void;
@@ -1860,11 +1856,7 @@ export class CodexAppServerHost implements EngineHost {
     } else if (this.terminatedTurnIds.has(turnId)) {
       void this.settleEndedSteers(turnId);
     }
-    const observedPrompt = promise.then(async outcome => {
-      if (outcome === "landed") await confirmCodexPromptDispatch(dispatch, turnId);
-      return outcome;
-    });
-    return { turnId, observe: () => observedPrompt };
+    return { turnId, observe: () => promise };
   }
 
   private async settleEndedSteers(turnId: string): Promise<void> {
@@ -1942,7 +1934,6 @@ export class CodexAppServerHost implements EngineHost {
       },
     ];
     if (currentTurn && this.hasBlockingAttention()) throw new StructuredSendRefusedError("blocking attention must be answered before steering");
-    const dispatch = beginCodexPromptDispatch(this.identity.path, stringField(record(input.at(-1))!, "text")!, entry.id, entry.origin);
     if (currentTurn) {
       try {
         const result = await this.rpc("turn/steer", {
@@ -1952,9 +1943,7 @@ export class CodexAppServerHost implements EngineHost {
           clientUserMessageId: entry.id,
         });
         const turnId = turnIdFromResult(result, "turn/steer");
-        recordCodexPromptDispatchTurn(dispatch, turnId);
         const receipt = await this.awaitDeliveryConfirmation(entry, { outcome: "steered", turnId });
-        await confirmCodexPromptDispatch(dispatch, turnId);
         return receipt;
       } catch (error) {
         if (/expectedTurnId|active turn|stale/i.test(safeError(error))) {
@@ -1971,11 +1960,9 @@ export class CodexAppServerHost implements EngineHost {
       clientUserMessageId: entry.id,
     });
     const turnId = turnIdFromResult(result, "turn/start");
-    recordCodexPromptDispatchTurn(dispatch, turnId);
     this.activeTurnId = turnId;
     this.notifyStateListeners();
     const receipt = await this.awaitDeliveryConfirmation(entry, { outcome: "turn-started", turnId });
-    await confirmCodexPromptDispatch(dispatch, turnId);
     return receipt;
   }
 
@@ -3348,40 +3335,15 @@ export class CodexAppServerHost implements EngineHost {
     }
   }
 
-  private async confirmRecoveredPrompt(entry: QueueEntry, nativeTurnId?: string): Promise<void> {
-    if (entry.origin?.kind !== "agent" || !this.identity.path) return;
-    const normalized = normalizeQueueEntry(entry);
-    const wire = encodeCodexStructuredUserText(normalized.content.text,
-      normalized.content.images.length > 0 ? normalized.contentDigest : undefined,
-      normalized.selectedContext, normalized.origin, codexDeliveryDedup(normalized.id));
-    const dispatch = restoreCodexPromptDispatch(this.identity.path, wire, entry.id, entry.origin);
-    if (!dispatch || nativeTurnId && dispatch.nativeTurnId && nativeTurnId !== dispatch.nativeTurnId) return;
-    let turnId = nativeTurnId ?? dispatch.nativeTurnId;
-    if (!turnId) {
-      // A lost RPC reply leaves intent alone. Native API client identity and
-      // payload agreement must establish success before it becomes authority.
-      const thread = await this.readThreadForDelivery(entry.id, "latest", this.requestTimeoutMs);
-      this.rememberConfirmedDeliveries(thread);
-      const recovered = this.confirmedDeliveries.get(entry.id);
-      if (!recovered) return;
-      const receipt = this.confirmedReceipt(entry, recovered);
-      if (!("turnId" in receipt)) return;
-      turnId = receipt.turnId;
-    }
-    await confirmCodexPromptDispatch(dispatch, turnId);
-  }
-
   private async confirmedDelivery(entry: QueueEntry, firstDispatch = false): Promise<DeliveryReceipt | null> {
     const known = this.confirmedDeliveries.get(entry.id);
     if (known) {
       const receipt = this.confirmedReceipt(entry, known);
-      await this.confirmRecoveredPrompt(entry, "turnId" in receipt ? receipt.turnId : undefined);
       return receipt;
     }
     const persistedRead = rolloutConfirmedDelivery(this.identity.path, entry);
     const persisted = persistedRead instanceof Promise ? await persistedRead : persistedRead;
     if (persisted) {
-      await this.confirmRecoveredPrompt(entry);
       return persisted;
     }
     // The journal already established this operation's first actuation. Keep
@@ -3404,7 +3366,6 @@ export class CodexAppServerHost implements EngineHost {
     const recovered = this.confirmedDeliveries.get(entry.id);
     if (!recovered) return null;
     const receipt = this.confirmedReceipt(entry, recovered);
-    await this.confirmRecoveredPrompt(entry, "turnId" in receipt ? receipt.turnId : undefined);
     return receipt;
   }
 

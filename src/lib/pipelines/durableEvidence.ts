@@ -1,10 +1,9 @@
 import fs from "node:fs";
-import { createHash } from "node:crypto";
 
 import { claudeUserText, isClaudeInterruptSentinelText, isClaudeTurnWindowMeta } from "@/lib/claudeProtocolUser";
 import { claudeMessageProvenance } from "@/lib/runtime/claudeMessageProvenance";
 import { RECOVERY_NOTICE_ORIGIN } from "@/lib/runtime/recoveryNotices";
-import { codexAutomaticPromptRows, codexNativeUserPrompt } from "@/lib/runtime/codexMessageProvenance";
+import { decodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText.server";
 
 import { turnStateFromRecords } from "@/lib/accounts/migration/turnState";
 import type { RuntimeEngine as FlowEngine } from "@/lib/agent/runtimeConfig";
@@ -35,15 +34,11 @@ export type StageTurnEvidence = {
   /** Delivered prompts in this verified tail. Harness wakes and controller
       continuations retain quota recovery; external prompts withdraw it. */
   prompts?: Array<{ ts: number; origin: "external" | "harness" | "pipeline" }>;
-  /** Earliest native provider cut belonging to this attempt; an undated cut
-      uses the attempt's lower time bound for conservative control checks. */
+  /** Earliest native provider cut belonging to this attempt. */
   firstProviderCutAt?: number | null;
-  /** Verified record order after the requested cut (or this attempt's first
-      cut). Preserves ordering when native timestamps share a millisecond. */
+  /** Verified record order after the requested cut (or this attempt's first cut). */
   externalPromptAfterCut?: boolean;
   automaticPromptAfterCut?: boolean;
-  /** Native row identity separates cuts that share a timestamp. */
-  terminalProviderCutKey?: string;
   automaticPromptBeforeProviderCut?: boolean;
   /** False if the bounded verified read could not cover the requested cut. */
   promptHistoryComplete?: boolean;
@@ -286,83 +281,35 @@ function terminalProviderMessageFromRecords(
   return null;
 }
 
-/** Legacy Claude notifications have no origin fields. Their native task
-    receipt and FIFO queue delivery establish authorship for exactly one row.
-    This fold also runs across verified old history without retaining its prose. */
-function claudeQueuedTaskMatcher(): (record: RecordLike) => boolean {
-  const calls = new Map<string, string>();
-  const tasks = new Map<string, string>();
-  type Delivery = { digest: string; trusted: boolean };
-  const queue: Delivery[] = [];
-  let delivered: Delivery | undefined;
-  let queueUncertain = false;
-  const digest = (text: string) => createHash("sha256").update(text.trim()).digest("hex");
-  const remember = (map: Map<string, string>, id: string, value: string) => {
-    // A reused native identity loses authority even if its old receipt matched.
-    if (map.has(id)) map.set(id, "");
-    else map.set(id, value);
-    if (map.size > 500) map.delete(map.keys().next().value!);
-  };
-  return record => {
-    const content = recordValue(record.message)?.content;
-    if (record.type === "assistant") {
-      for (const part of recordsValue(content)) {
-        const id = stringValue(part.id);
-        const name = stringValue(part.name);
-        if (part.type === "tool_use" && id && (name === "Bash" || name === "Monitor")) remember(calls, id, name);
-      }
-    }
-    if (record.type === "user") {
-      const result = recordValue(record.toolUseResult);
-      for (const part of recordsValue(content)) {
-        const id = stringValue(part.tool_use_id);
-        const name = id ? calls.get(id) : undefined;
-        const task = name === "Bash" ? stringValue(result?.backgroundTaskId)
-          : name === "Monitor" ? stringValue(result?.taskId) : null;
-        if (part.type === "tool_result" && id && task) remember(tasks, task, id);
-      }
-      const text = claudeUserText(content).trim();
-      if (!text && !recordsValue(content).some(part => part.type === "image")) return false;
-      const receipt = delivered;
-      delivered = undefined;
-      return receipt?.trusted === true && receipt.digest === digest(text);
-    }
-    if (record.type !== "queue-operation" || queueUncertain) return false;
-    if (record.operation === "dequeue") {
-      if (delivered) { queueUncertain = true; delivered = undefined; queue.length = 0; }
-      else delivered = queue.shift();
-      return false;
-    }
-    if (record.operation !== "enqueue") return false;
-    const text = (stringValue(record.content) ?? "").trim();
-    const ids = [...text.matchAll(/<task-id>([^<]+)<\/task-id>/g)].map(match => match[1]!.trim())
-      .filter(id => !id.startsWith("__orphan_summary__:"));
-    const tools = [...text.matchAll(/<tool-use-id>([^<]+)<\/tool-use-id>/g)].map(match => match[1]!.trim());
-    const trusted = /^<task-notification>[\s\S]*<\/task-notification>$/.test(text)
-      && ids.length > 0 && ids.every(id => !!tasks.get(id))
-      && tools.every(tool => ids.some(id => tasks.get(id) === tool));
-    // Unknown enqueue rows occupy their FIFO position too; they cannot borrow
-    // a later task's dequeue. Overflow discards all pending authority.
-    if (queue.length >= 32) { queueUncertain = true; queue.length = 0; delivered = undefined; }
-    else queue.push({ digest: digest(text), trusted });
-    return false;
-  };
+function codexNativeUserPrompt(record: RecordLike) {
+  const payload = recordValue(record.payload);
+  if (!payload) return null;
+  const item = recordValue(payload.item);
+  const family = payload.type === "user_message" ? "event"
+    : payload.type === "message" && payload.role === "user" ? "response"
+    : payload.type === "item_completed" && (item?.type === "UserMessage" || item?.type === "userMessage") ? "item" : null;
+  if (!family) return null;
+  const user = family === "item" ? item! : payload;
+  const text = stringValue(user.message) ?? stringValue(user.text) ?? stringValue(user.content)
+    ?? (Array.isArray(user.content) ? user.content.map(part => typeof part === "string" ? part
+      : stringValue(recordValue(part)?.text) ?? stringValue(recordValue(part)?.content) ?? "").join("") : "");
+  return { text };
 }
 
 /** Tool results and metadata never stand in for a delivered prompt. SDK
     envelopes need the broker's authorship join: human and controller sends
     share that envelope in production. Missing provenance stays external. */
-function stagePrompts(records: RecordLike[], codex: boolean, transcriptPath: string, verifiedHarnessRows?: Set<number>): Array<NonNullable<StageTurnEvidence["prompts"]>[number] & { recordIndex: number }> {
+function stagePrompts(records: RecordLike[], codex: boolean, transcriptPath: string): Array<NonNullable<StageTurnEvidence["prompts"]>[number] & { recordIndex: number }> {
   const provenance = codex ? {} : claudeMessageProvenance(transcriptPath);
-  const queuedTask = claudeQueuedTaskMatcher();
-  const harnessRows = verifiedHarnessRows ?? new Set(records.flatMap((record, index) => queuedTask(record) ? [index] : []));
-  const automaticRows = codex ? codexAutomaticPromptRows(transcriptPath, records) : new Set<number>();
   return records.flatMap<NonNullable<StageTurnEvidence["prompts"]>[number] & { recordIndex: number }>((record, recordIndex) => {
     const ts = recordTs(record, 0);
     // A native row without time still participates in physical prompt order.
     if (codex) {
-      if (!codexNativeUserPrompt(record)) return [];
-      return [{ ts, recordIndex, origin: automaticRows.has(recordIndex) ? "pipeline" as const : "external" as const }];
+      const prompt = codexNativeUserPrompt(record);
+      if (!prompt) return [];
+      const origin = decodeCodexStructuredUserText(prompt.text).origin;
+      const automatic = origin?.kind === "agent" && (origin.role === "pipeline" || origin.role === RECOVERY_NOTICE_ORIGIN.role);
+      return [{ ts, recordIndex, origin: automatic ? "pipeline" as const : "external" as const }];
     }
     if (record.type !== "user") return [];
     const text = claudeUserText(recordValue(record.message)?.content).trim();
@@ -370,8 +317,8 @@ function stagePrompts(records: RecordLike[], codex: boolean, transcriptPath: str
     const kind = stringValue(record.origin) ?? stringValue(recordValue(record.origin)?.kind);
     const author = provenance[stringValue(record.uuid) ?? ""];
     const human = kind === "human" || kind === "operator" || record.promptSource === "typed" || author?.origin === "operator";
-    if (!human && (kind === "task-notification" || kind === "task" || kind === "wakeup"
-      || record.turnOrigin === "task_notification" || record.turnOrigin === "wakeup" || harnessRows.has(recordIndex))) return [{ ts, recordIndex, origin: "harness" as const }];
+    if (!human && (kind === "task-notification" || kind === "wakeup"
+      || record.turnOrigin === "task_notification" || record.turnOrigin === "wakeup")) return [{ ts, recordIndex, origin: "harness" as const }];
     // Native human rows may have no authorship fields. Their prose alone
     // cannot establish a harness wake or a metadata envelope.
     const metadata = record.isMeta === true || record.isCompactSummary === true || "interruptedMessageId" in record
@@ -398,7 +345,7 @@ function transcriptSnapshot(pathname: string): string | null {
     Older rows are validated too: backdated context cannot hide an earlier cut.
     Both a single row and the retained suffix keep the existing byte bound. */
 async function readRecoveryWindow(pathname: string, codex: boolean, startedAt: number,
-  cutKey: string | undefined, fallbackTs: number, snapshot: string | null): Promise<{ records: RecordLike[]; firstIndex: number; harnessRows: Set<number> } | null> {
+  snapshot: string | null): Promise<{ records: RecordLike[] } | null> {
   if (!snapshot) return null;
   let handle: fs.promises.FileHandle | undefined;
   try {
@@ -408,10 +355,7 @@ async function readRecoveryWindow(pathname: string, codex: boolean, startedAt: n
     const size = Number(stat.size);
     if (!Number.isSafeInteger(size)) return null;
     const records: RecordLike[] = [];
-    const queuedTask = claudeQueuedTaskMatcher();
-    const harnessRows = new Set<number>();
-    let firstIndex = -1;
-    let index = 0;
+    let foundCut = false;
     let retainedBytes = 0;
     let pending = Buffer.alloc(0);
     const consume = (bytes: Buffer): boolean => {
@@ -421,21 +365,17 @@ async function readRecoveryWindow(pathname: string, codex: boolean, startedAt: n
       const value = JSON.parse(text);
       if (!value || typeof value !== "object" || Array.isArray(value)) return false;
       const record = value as RecordLike;
-      if (firstIndex < 0) {
-        const at = recordTs(record, fallbackTs);
-        const notice = terminalProviderMessageFromRecords([record], codex, fallbackTs);
+      if (!foundCut) {
+        const at = recordTs(record, 0);
+        const notice = terminalProviderMessageFromRecords([record], codex, 0);
         if (at > 0 && (!Number.isFinite(startedAt) || at >= startedAt) && notice && notice.errorClass !== "turn_aborted"
-          && turnStateFromRecords([record], codex ? "codex" : "claude").state === "terminal"
-          && (!cutKey || createHash("sha256").update(JSON.stringify([index, record])).digest("hex") === cutKey)) firstIndex = index;
+          && turnStateFromRecords([record], codex ? "codex" : "claude").state === "terminal") foundCut = true;
       }
-      const harness = !codex && queuedTask(record);
-      if (firstIndex >= 0) {
-        if (harness) harnessRows.add(records.length);
+      if (foundCut) {
         retainedBytes += bytes.length + 1;
         if (retainedBytes > MAX_REPORT_EVIDENCE_BYTES) return false;
         records.push(record);
       }
-      index++;
       return true;
     };
     for (let offset = 0; offset < size;) {
@@ -454,9 +394,9 @@ async function readRecoveryWindow(pathname: string, codex: boolean, startedAt: n
     }
     if (pending.length && !consume(pending)) return null;
     const after = await handle.stat({ bigint: true });
-    if (firstIndex < 0 || [after.dev, after.ino, after.size, after.mtimeNs, after.ctimeNs].join(":") !== snapshot
+    if (!foundCut || [after.dev, after.ino, after.size, after.mtimeNs, after.ctimeNs].join(":") !== snapshot
       || transcriptSnapshot(pathname) !== snapshot) return null;
-    return { records, firstIndex, harnessRows };
+    return { records };
   } catch { return null; }
   finally { await handle?.close().catch(() => undefined); }
 }
@@ -468,7 +408,6 @@ export async function durableStageTurnEvidence(
   attemptStartedAt?: string | null,
   readTail: typeof readStableTailRecords = readStableTailRecords,
   afterCutAt?: number,
-  afterCutKey?: string,
 ): Promise<StageTurnEvidence | null> {
   const snapshot = transcriptSnapshot(transcriptPath);
   const read = await readTail(transcriptPath);
@@ -486,8 +425,6 @@ export async function durableStageTurnEvidence(
   const cutTime = afterCutAt && afterCutAt > 0 ? afterCutAt : NaN;
   let promptBoundary = cutTime;
   let evidenceRead = read;
-  let recordIndexBase = 0;
-  let verifiedHarnessRows: Set<number> | undefined;
   let recoveryWindowVerified = false;
   let evidenceBytes = 131_072;
   let reportProse: string | null = null;
@@ -519,10 +456,8 @@ export async function durableStageTurnEvidence(
     const reportCovered = !Number.isFinite(reportTime) || !evidenceRead.prefixTruncated
       || reportProse !== null && message !== null && turn.state !== "unknown"
       || Number.isFinite(startedTime) && oldestAt !== undefined && oldestAt <= startedTime;
-    // A timestamp cannot establish a physical cancellation boundary: native
-    // context can be backdated and several cuts can share its millisecond.
-    // Until a physical cut cursor is available, bounded recovery evidence
-    // must cover the artifact rather than infer coverage from its oldest time.
+    // Backdated context cannot prove coverage of the cancellation boundary.
+    // The verified recovery window must reach the first provider cut.
     const promptsCovered = !Number.isFinite(promptBoundary) || !evidenceRead.prefixTruncated;
     if (reportCovered && promptsCovered) break;
     if (evidenceBytes >= MAX_REPORT_EVIDENCE_BYTES) break;
@@ -537,12 +472,9 @@ export async function durableStageTurnEvidence(
     evidenceRead = expanded;
   }
   if (evidenceRead.prefixTruncated && Number.isFinite(promptBoundary) && readTail === readStableTailRecords) {
-    const window = await readRecoveryWindow(transcriptPath, codex, startedTime,
-      Number.isFinite(cutTime) ? afterCutKey : undefined, fallbackTs, snapshot);
+    const window = await readRecoveryWindow(transcriptPath, codex, startedTime, snapshot);
     if (window) {
       evidenceRead = { integrity: "complete", prefixTruncated: true, records: window.records };
-      recordIndexBase = window.firstIndex;
-      verifiedHarnessRows = window.harnessRows;
       recoveryWindowVerified = true;
       // Terminal and reset evidence stays with the verified tail, which also
       // contains quota observations immediately before the physical cut.
@@ -561,29 +493,15 @@ export async function durableStageTurnEvidence(
     return [{ at, recordIndex }];
   });
   const firstCut = providerCuts[0];
-  // Undated cuts cannot prove that an operator control preceded them. Use the
-  // attempt's lower time bound so a control during that stage withdraws recovery.
-  const firstProviderCutAt = firstCut ? recordTs(evidenceRead.records[firstCut.recordIndex]!, 0)
-    || (Number.isFinite(startedTime) ? startedTime : firstCut.at) : null;
+  const firstProviderCutAt = firstCut?.at ?? null;
   const cutAt = Number.isFinite(cutTime) ? cutTime : firstProviderCutAt;
-  const expectedCutKey = Number.isFinite(cutTime) ? afterCutKey : undefined;
-  const keyFor = (recordIndex: number) => createHash("sha256")
-    .update(JSON.stringify([recordIndexBase + recordIndex, evidenceRead.records[recordIndex]])).digest("hex");
-  // A persisted physical witness survives mtime changes on undated records.
-  // Older waits have no witness; their earliest undated cut retains ordering.
-  const cutIndex = (expectedCutKey ? providerCuts.find(cut => keyFor(cut.recordIndex) === expectedCutKey)
-    : providerCuts.find(cut => cut.at === cutAt)
-      ?? providerCuts.find(cut => !recordTs(evidenceRead.records[cut.recordIndex]!, 0)))?.recordIndex ?? -1;
-  const prompts = stagePrompts(evidenceRead.records, codex, transcriptPath, verifiedHarnessRows);
+  const cutIndex = providerCuts.find(cut => cut.at === cutAt)?.recordIndex ?? -1;
+  const prompts = stagePrompts(evidenceRead.records, codex, transcriptPath);
   // Native prompt rows and their authorship join must describe one snapshot.
   // A raced append cannot turn a confirmed automatic prompt into human input.
   if (snapshot === null || transcriptSnapshot(transcriptPath) !== snapshot) return null;
   const afterCut = cutIndex < 0 ? [] : prompts.filter(prompt => prompt.recordIndex > cutIndex);
   const latestCutIndex = providerCuts.findLast(cut => cut.at === terminalNotice?.ts)?.recordIndex ?? -1;
-  const latestCutKey = latestCutIndex >= 0 && (!evidenceRead.prefixTruncated || recoveryWindowVerified)
-    ? keyFor(latestCutIndex) : undefined;
-  if (terminalNotice && latestCutIndex >= 0 && latestCutIndex === cutIndex && Number.isFinite(cutTime)
-    && !recordTs(evidenceRead.records[latestCutIndex]!, 0)) terminalNotice.ts = cutTime;
   return {
     turn: nativeCut || turn.state === "terminal" ? "terminal" : turn.state === "busy" ? "busy" : "unknown",
     message: nativeCut ? null : message,
@@ -591,7 +509,6 @@ export async function durableStageTurnEvidence(
     // Cancellation evidence must retain that prompt even when terminal evidence does not.
     prompts: prompts.map(prompt => ({ ts: prompt.ts, origin: prompt.origin })),
     firstProviderCutAt,
-    ...(latestCutKey ? { terminalProviderCutKey: latestCutKey } : {}),
     ...(cutIndex < 0 || latestCutIndex < 0 ? {} : {
       automaticPromptBeforeProviderCut: afterCut.some(prompt => prompt.recordIndex < latestCutIndex && prompt.origin !== "external"),
     }),

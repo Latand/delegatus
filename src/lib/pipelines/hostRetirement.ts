@@ -44,7 +44,7 @@ export function providerRecoveryAttempt(
 export async function providerRecoveryTurnProven(attempt: PipelineStageAttempt, ref: RuntimeProviderRecoveryRef): Promise<boolean> {
   if (!attempt.agentPath) return false;
   const evidence = await durableStageTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath,
-    undefined, attempt.startedAt, undefined, ref.turnTs, attempt.providerWait?.turnKey);
+    undefined, attempt.startedAt, undefined, ref.turnTs);
   const notice = evidence?.terminalProviderMessage;
   return evidence?.turn === "terminal" && evidence.promptHistoryComplete === true
     && !!notice && notice.ts === ref.turnTs
