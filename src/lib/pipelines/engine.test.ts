@@ -20743,3 +20743,25 @@ test("transport traversals before a terminal park cannot shorten a later grant",
   expect(continued.state).toBe("needs_decision");
   expect(continued.runs.find(run => run.stageId === "critique")!.attempts.filter(attempt => attempt.verdict)).toHaveLength(completedBefore + 3);
 });
+
+test("critical disk pressure defers new provisioning without parking and automatically resumes", async () => {
+  const h = harness();
+  savePipelines([]);
+  const { scheduled, advance } = provisionRetryClock(h);
+  let low = true;
+  h.ports.worktreeDiskWait = () => low ? "waiting for disk space: worktrees has 0.50 GiB free; retries automatically" : null;
+  await createPipelineFromRequest({ task: "Disk admission", repoDir: "/repo", stages: RUN_STAGES as never }, h.ports);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "provisioning", stateDetail: expect.stringContaining("waiting for disk space:") });
+  expect(h.calls.some(call => call.includes("worktree add"))).toBe(false);
+  expect(scheduled).toContain(60_000);
+  // The wait has no exhausted retry budget, even after days of pressure.
+  advance(7 * 24 * 60 * 60_000);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("provisioning");
+  low = false;
+  advance(60_000);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "running", stateDetail: null });
+  expect(h.calls.some(call => call.includes("worktree add"))).toBe(true);
+});

@@ -8,13 +8,14 @@ import type { ForgeCacheFile } from "@/lib/forge/cache";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { githubRunner, type GithubRunner } from "@/lib/monitor/githubEvidence";
 import { writeJsonDurably } from "@/lib/state/durableJson";
-import { scanProcesses, type ProcessScan } from "@/lib/tempSweep";
+import { ownTempRoots, scanProcesses, type ProcessScan } from "@/lib/tempSweep";
 import type { ExecResult } from "@/lib/workflows/provision";
 
 import { pipelineActivitySettled, type Pipeline } from "./types";
 
 /**
- * Removes the worktrees whose work is merged (#2202).
+ * Removes the worktrees whose work is merged (#2202), and finished ones whose
+ * work is kept elsewhere.
  *
  * Every pipeline gets its own `git worktree add` checkout and nothing removed
  * them: on 2026-09-25 the workstation held about 470 of them, 250 GB, and
@@ -37,8 +38,15 @@ import { pipelineActivitySettled, type Pipeline } from "./types";
  *   close teardown or delivery has not settled, owns it, runs inside it, or
  *   runs its git in it.
  * - `no-merged-pr` — no merged pull request has its branch as head (or is the
- *   one its pipeline delivered). A completed lane whose PR was closed or never
- *   opened stays until someone decides.
+ *   one its pipeline delivered), and no pipeline or temp root makes it a
+ *   finished lane: a checkout the operator made by hand stays.
+ * - `retention` — a finished lane, or a role's temp checkout, that has not yet
+ *   been settled for `FINISHED_WORKTREE_RETENTION_MS`.
+ * - `local-only-commits` — past retention, without a merged PR containing its
+ *   HEAD, and some commit of it is in no ref a remote advertises right now and
+ *   HEAD is not its pipeline's base. Work that exists only here stays.
+ * - `self-update-release` — a release checkout self-update owns and prunes
+ *   itself, keeping the serving and rollback releases.
  * - `in-use` — a live process has its working directory, an open file, or its
  *   `TMPDIR`/`LLV_STATE_DIR`/`XDG_CONFIG_HOME` inside it (the `/proc` scan the
  *   temp sweep uses).
@@ -52,7 +60,8 @@ import { pipelineActivitySettled, type Pipeline } from "./types";
  *   `.worktrees/`. `git worktree remove` deletes ignored files without asking,
  *   and the status read above never lists them.
  * - `unmerged-commits` — its HEAD is not contained in the merged PR's head
- *   commit, so something was committed after the merge or never pushed.
+ *   commit, so something was committed after the merge or never pushed. Past
+ *   retention the remote proof below applies instead.
  * - `pr-head-unknown` — the merged PR's head commit is not in the local
  *   object store, so containment cannot be proven.
  * - `holds-worktree` — another linked worktree that stays is nested in it.
@@ -67,6 +76,15 @@ import { pipelineActivitySettled, type Pipeline } from "./types";
  * plainly busy, and read again immediately before each removal, after the
  * measurement: a sweep can run for minutes, and git refuses a removal only
  * when files changed, never when the directory is in use.
+ *
+ * A finished lane without a merged PR is freed too: a checkout whose
+ * pipelines are all completed or closed with settled teardown and delivery, or
+ * an unowned checkout under a temp root (the merger's batches, review exports,
+ * attribution runs), once it has been settled for the retention period. Its
+ * HEAD must equal its pipeline's base, or every commit of it must be reachable
+ * from a ref one of the repository's remotes advertises at that moment
+ * (`git ls-remote`; a remote-tracking ref can outlive the branch it tracked).
+ * Every other guard above applies unchanged, and the removal is never forced.
  *
  * Before a removal the checkout's worktree→project resolution is written to
  * `state/worktree-map.json`, so the conversations that ran there keep grouping
@@ -94,6 +112,9 @@ export function worktreeSweepMode(env: Readonly<Record<string, string | undefine
 }
 
 const HOUR_MS = 3_600_000;
+/** How long a finished lane, or a role's temp checkout nobody owns, stays
+    settled before the sweep may free it without a merged PR. */
+export const FINISHED_WORKTREE_RETENTION_MS = 4 * 24 * HOUR_MS;
 export const WORKTREE_SWEEP_INTERVAL_MS = HOUR_MS;
 /** Boot is busy enough; the first sweep waits for it to settle. */
 const FIRST_SWEEP_DELAY_MS = 10 * 60_000;
@@ -119,7 +140,10 @@ export type WorktreeKeptReason =
   | "forge-unavailable"
   | "map-write-failed"
   | "remove-failed"
-  | "deferred";
+  | "deferred"
+  | "retention"
+  | "local-only-commits"
+  | "self-update-release";
 
 export type MergedPullRequest = { number: number; url: string; headRefName: string; headRefOid: string };
 
@@ -128,12 +152,13 @@ export type WorktreeRemoval = {
   /** Bytes only this checkout held: files with one link, so a hard-linked
       `node_modules` counts only what removing it actually frees. */
   bytes: number;
-  pr: { number: number; url: string };
+  pr: { number: number; url: string } | null;
+  preservation?: "merged-pr" | "remote-ref" | "base";
   branch: string | null;
   pipelineId?: string;
 };
 
-export type WorktreeKept = { path: string; reason: WorktreeKeptReason; detail?: string; pipelineId?: string };
+export type WorktreeKept = { path: string; reason: WorktreeKeptReason; detail?: string; pipelineId?: string; bytes?: number; firstSettledAt?: string };
 
 export type WorktreeSweepReport = {
   at: string;
@@ -146,13 +171,14 @@ export type WorktreeSweepReport = {
   trimmedBytes: number;
   kept: WorktreeKept[];
   keptCounts: Partial<Record<WorktreeKeptReason, number>>;
+  keptBytes: Partial<Record<WorktreeKeptReason, number>>;
   errors: string[];
 };
 
 export type GitRun = (args: string[], cwd: string) => Promise<ExecResult>;
 
 export type SweptPipeline = Pick<Pipeline, "id" | "state" | "repoDir" | "worktreeDir" | "branch" | "delivery"> &
-  Partial<Pick<Pipeline, "closeTeardown" | "closeReport" | "activationCloseRequested">> & {
+  Partial<Pick<Pipeline, "closeTeardown" | "closeReport" | "activationCloseRequested" | "baseRef" | "closedAt">> & {
     runs?: Pipeline["runs"];
   };
 
@@ -178,7 +204,15 @@ export type WorktreeSweepPorts = {
   measure?: (directory: string) => Promise<number>;
   now?: () => number;
   maxRemovals?: number;
+  /** The previous report, whose `firstSettledAt` carries a retention clock
+      started by observation across sweeps. */
+  previous?: WorktreeSweepReport | null;
+  /** Temp roots: an unowned linked checkout under one is a role's temp
+      checkout and follows the finished-lane retention rule. */
+  tempRoots?: readonly string[];
 };
+
+const BUSY_REASONS: ReadonlySet<WorktreeKeptReason> = new Set(["open-pipeline", "live-conversation", "in-use", "locked", "uncommitted"]);
 
 /* Fails closed: a state added later holds its checkout until it is listed here. */
 const SETTLED_STATES: ReadonlySet<Pipeline["state"]> = new Set(["completed", "closed"]);
@@ -206,12 +240,74 @@ function rebuildable(ignored: string): boolean {
   return REBUILDABLE_FILES.has(name) || name.endsWith(".tsbuildinfo") || name.endsWith(".pyc");
 }
 
+/** Git can collapse an ignored bytecode container to one directory. Prove
+    its entire contents rebuildable, with a bound and without following links. */
+function onlyRebuildableContents(directory: string): boolean {
+  const pending = [directory];
+  let visited = 0;
+  try {
+    while (pending.length) {
+      const current = pending.pop()!;
+      if (!fs.lstatSync(current).isDirectory()) return false;
+      for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+        if (++visited > MEASURE_ENTRY_LIMIT || entry.isSymbolicLink()) return false;
+        const child = path.join(current, entry.name);
+        if (entry.name === ".git") return false;
+        if (entry.isDirectory()) pending.push(child);
+        else if (!rebuildable(path.relative(directory, child))) return false;
+      }
+    }
+    return true;
+  } catch { return false; }
+}
+
 function emptyDirectory(directory: string): boolean {
   try {
     return fs.readdirSync(directory).length === 0;
   } catch {
     return false;
   }
+}
+
+/** A Python virtual environment, whatever its directory is called: its
+    creator writes `pyvenv.cfg` at its root. Seen on this machine as the only
+    ignored content of a merged checkout (`.venv-<lane>`). */
+function insideVirtualenv(worktree: string, ignored: string): boolean {
+  const segments = ignored.replace(/\/+$/, "").split("/");
+  for (let depth = 1; depth <= segments.length; depth += 1) {
+    try {
+      if (fs.lstatSync(path.join(worktree, ...segments.slice(0, depth), "pyvenv.cfg")).isFile()) return true;
+    } catch { /* Not a virtual environment at this depth. */ }
+  }
+  return false;
+}
+
+/** An ignored path a removal may take after all: empty, a virtual
+    environment, or a container holding only rebuildable outputs. */
+function disposableIgnored(worktree: string, ignored: string): boolean {
+  const target = path.join(worktree, ignored);
+  return emptyDirectory(target) || insideVirtualenv(worktree, ignored) || onlyRebuildableContents(target);
+}
+
+/** The browser bundle a rendered-evidence driver writes beside its captures
+    (`serveEvidenceFixture` → `<out>/bundle/<fixture>.js`), which the driver
+    rebuilds on every run: flat, and nothing but `*.fixture.js`. */
+function fixtureBundle(directory: string): boolean {
+  try {
+    const entries = fs.readdirSync(directory, { withFileTypes: true });
+    return entries.length > 0 && entries.every((entry) => entry.isFile() && entry.name.endsWith(".fixture.js"));
+  } catch {
+    return false;
+  }
+}
+
+/** Self-update's release checkouts (`<cache>/self-update/<install>/releases/<sha12>`):
+    `pruneReleaseWorktrees` removes them itself and keeps the release that
+    serves and the one a rollback needs. */
+function selfUpdateRelease(worktree: string): boolean {
+  const releases = path.dirname(worktree);
+  return path.basename(releases) === "releases" && /^[0-9a-f]{12}$/.test(path.basename(worktree))
+    && path.basename(path.dirname(path.dirname(releases))) === "self-update";
 }
 
 /** `git status --porcelain=v1 -z --ignored=matching`: the changed and
@@ -387,12 +483,17 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
     trimmedBytes: 0,
     kept: [],
     keptCounts: {},
+    keptBytes: {},
     errors: [],
   };
   const keep = (kept: WorktreeKept) => {
+    /* Activity restarts the retention clock. */
+    if (BUSY_REASONS.has(kept.reason)) delete kept.firstSettledAt;
     report.kept.push(kept);
     report.keptCounts[kept.reason] = (report.keptCounts[kept.reason] ?? 0) + 1;
   };
+  const previouslySettled = new Map((ports.previous?.kept ?? []).flatMap((kept) => kept.firstSettledAt ? [[kept.path, kept.firstSettledAt] as const] : []));
+  const tempRoots = (ports.tempRoots ?? []).filter(Boolean).map((root) => path.resolve(root));
   const resolve = (entry: string) => path.resolve(entry);
   const currentPipelines = ports.currentPipelines ?? (() => ports.pipelines);
   // The live list omits archived lanes. Preserve their settled ownership,
@@ -401,7 +502,7 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
   /** What a live pipeline, process or conversation holds right now. An open
       pipeline needs its own checkout and the repository it runs git in. */
   const readGuards = () => ({
-    open: currentPipelines().filter(pipelineHoldsCheckout)
+    open: ownershipPipelines().filter(pipelineHoldsCheckout)
       .flatMap((pipeline) => [pipeline.worktreeDir, pipeline.repoDir].filter(Boolean).map(resolve)),
     conversations: ports.conversationCwds().map(resolve),
     scan: ports.scan(),
@@ -416,6 +517,9 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
   };
   /* The first read skips what is plainly busy; each removal reads them again. */
   const initial = readGuards();
+  const ownersAtStart = ownershipPipelines();
+  const ownersOf = (pipelines: readonly SweptPipeline[], worktree: string) =>
+    pipelines.filter((pipeline) => pipeline.worktreeDir && resolve(pipeline.worktreeDir) === worktree);
 
   /* A project registered at a linked checkout, or inside one, is its root. */
   const projectRoots = (ports.repositories ?? []).filter(Boolean).map(resolve);
@@ -448,15 +552,58 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
       list.push(pr);
       byHead.set(pr.headRefName, list);
     }
+    /** The commits this repository's remotes advertise as branch and tag tips,
+        asked once per sweep and only when a retained checkout needs them; null
+        when no remote answered. */
+    let advertised: Promise<string[] | null> | null = null;
+    const remoteTips = () => advertised ??= (async () => {
+      const remotes = await ports.git(["remote"], root);
+      if (remotes.code !== 0) return null;
+      const tips = new Set<string>();
+      let answered = false;
+      for (const name of remotes.stdout.split("\n").map((line) => line.trim()).filter(Boolean)) {
+        const refs = await ports.git(["ls-remote", "--heads", "--tags", "--", name], root);
+        if (refs.code !== 0) continue;
+        answered = true;
+        for (const line of refs.stdout.split("\n")) {
+          const oid = line.split(/\s+/)[0] ?? "";
+          if (/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i.test(oid)) tips.add(oid);
+        }
+      }
+      return answered ? [...tips] : null;
+    })();
+    /** Every commit reachable from `commit` is reachable from an advertised
+        tip held locally. A tip this clone never fetched proves nothing. */
+    const onRemote = async (commit: string): Promise<boolean | null> => {
+      const tips = await remoteTips();
+      if (tips === null) return null;
+      if (tips.length === 0) return false;
+      const outside = await ports.git(["rev-list", "--ignore-missing", "--max-count=1", commit, "--not", ...tips], root);
+      return outside.code === 0 && outside.stdout.trim() === "";
+    };
     /* Nested worktrees first, so an outer one they emptied can go in the same sweep. */
     const remaining = new Set(linked.map((entry) => resolve(entry.path)));
     const ordered = [...linked].sort((a, b) => b.path.length - a.path.length || a.path.localeCompare(b.path));
     for (const entry of ordered) {
       const worktree = resolve(entry.path);
-      const owners = ports.pipelines.filter((pipeline) => pipeline.worktreeDir && resolve(pipeline.worktreeDir) === worktree);
+      const owners = ownersOf(ownersAtStart, worktree);
       const pipelineId = owners[0]?.id;
-      const base = { path: worktree, ...(pipelineId ? { pipelineId } : {}) };
       if (worktree === mainPath || roots.has(worktree) || projectRoots.some((project) => inside(project, worktree))) continue;
+      if (owners.length === 0 && selfUpdateRelease(worktree)) {
+        keep({ path: worktree, reason: "self-update-release" });
+        continue;
+      }
+      /* A finished lane, or a role's temp checkout nobody owns, follows the
+         retention rule; a checkout the operator made by hand never does. */
+      const finished = owners.length > 0 ? !owners.some(pipelineHoldsCheckout) : tempRoots.some((temp) => inside(worktree, temp) && worktree !== temp);
+      const firstSettledAt = finished ? previouslySettled.get(worktree) ?? report.at : undefined;
+      /* A lane's own terminal time dates it on the first pass; otherwise the
+         first sweep that saw it settled starts the clock. */
+      const terminal = owners.flatMap((owner) => [owner.closedAt, ...(owner.runs ?? []).flatMap((run) => run.attempts.map((attempt) => attempt.completedAt))])
+        .map((date) => date ? Date.parse(date) : Number.NaN).filter(Number.isFinite);
+      const settledSince = terminal.length ? Math.max(...terminal) : Date.parse(firstSettledAt ?? report.at);
+      const retained = finished && now() - settledSince >= FINISHED_WORKTREE_RETENTION_MS;
+      const base = { path: worktree, ...(pipelineId ? { pipelineId } : {}), ...(firstSettledAt ? { firstSettledAt } : {}) };
       if (initial.open.some((open) => inside(open, worktree))) {
         keep({ ...base, reason: "open-pipeline" });
         continue;
@@ -469,7 +616,8 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
         keep({ ...base, reason: "missing" });
         continue;
       }
-      if (repository && merged === null) {
+      /* Past retention the remote proof stands without the forge. */
+      if (repository && merged === null && !retained) {
         keep({ ...base, reason: "forge-unavailable", detail: `${repository}: neither the forge cache nor gh listed its merged pull requests` });
         continue;
       }
@@ -481,8 +629,10 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
         const pr = byNumber.get(number);
         if (pr) prs.set(pr.number, pr);
       }
-      if (prs.size === 0) {
-        keep({ ...base, reason: "no-merged-pr", ...(repository ? {} : { detail: "no GitHub origin" }) });
+      if (prs.size === 0 && !retained) {
+        keep(finished
+          ? { ...base, reason: "retention", detail: `eligible after ${new Date(settledSince + FINISHED_WORKTREE_RETENTION_MS).toISOString()}` }
+          : { ...base, reason: "no-merged-pr", ...(repository ? {} : { detail: "no GitHub origin" }) });
         continue;
       }
       const nested = [...remaining].find((other) => other !== worktree && inside(other, worktree));
@@ -504,7 +654,7 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
       const changed = classified.changed;
       /* An ignored container a nested worktree removed earlier in this sweep
          left empty holds nothing. */
-      const ignored = classified.ignored.filter((entry) => !emptyDirectory(path.join(worktree, entry)));
+      const ignored = classified.ignored.filter((entry) => !disposableIgnored(worktree, entry));
       if (changed.length > 0) {
         keep({ ...base, reason: "uncommitted", detail: `${changed.length} path(s)` });
         continue;
@@ -515,7 +665,7 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
       }
       /** The merged PR whose head contains what the checkout has checked out
           now, or why none does. */
-      const prove = async (): Promise<{ pr: MergedPullRequest; branch: string | null } | WorktreeKept> => {
+      const prove = async (): Promise<{ pr: MergedPullRequest | null; anchor: string; preservation: "merged-pr" | "remote-ref" | "base"; branch: string | null } | WorktreeKept> => {
         const current = await checkedOut(ports.git, worktree);
         if (!current) return { ...base, reason: "unmerged-commits", detail: "HEAD unreadable" };
         let known = false;
@@ -524,7 +674,17 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
           if (present.code !== 0) continue;
           known = true;
           const ancestor = await ports.git(["merge-base", "--is-ancestor", current.head, pr.headRefOid], root);
-          if (ancestor.code === 0) return { pr, branch: current.branch };
+          if (ancestor.code === 0) return { pr, anchor: pr.headRefOid, preservation: "merged-pr", branch: current.branch };
+        }
+        if (retained) {
+          const freshOwners = ownersOf(ownershipPipelines(), worktree);
+          if (freshOwners.some(pipelineHoldsCheckout)) return { ...base, reason: "open-pipeline" };
+          const remote = await onRemote(current.head);
+          if (remote) return { pr: null, anchor: current.head, preservation: "remote-ref", branch: current.branch };
+          if (freshOwners.some((owner) => owner.baseRef === current.head)) return { pr: null, anchor: current.head, preservation: "base", branch: current.branch };
+          return { ...base, reason: "local-only-commits", detail: remote === null
+            ? "no remote of the repository answered, so its commits are not proven kept elsewhere"
+            : "a commit of HEAD is in no ref a remote advertises, and HEAD is not its pipeline's base" };
         }
         return { ...base, reason: known ? "unmerged-commits" : "pr-head-unknown", detail: [...prs.keys()].map((n) => `#${n}`).join(", ") };
       };
@@ -533,13 +693,12 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
         keep(proof);
         continue;
       }
-      let contained = proof.pr;
       if (report.removed.length >= maxRemovals) {
         keep({ ...base, reason: "deferred" });
         continue;
       }
       const bytes = await measure(worktree);
-      let removal: WorktreeRemoval = { ...base, bytes, pr: { number: contained.number, url: contained.url }, branch: proof.branch };
+      let removal: WorktreeRemoval = { ...base, bytes, pr: proof.pr ? { number: proof.pr.number, url: proof.pr.url } : null, preservation: proof.preservation, branch: proof.branch };
       if (dryRun) {
         report.removed.push(removal);
         report.removedBytes += bytes;
@@ -564,8 +723,15 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
         keep(proof);
         continue;
       }
-      contained = proof.pr;
-      removal = { ...removal, pr: { number: contained.number, url: contained.url }, branch: proof.branch };
+      removal = { ...removal, pr: proof.pr ? { number: proof.pr.number, url: proof.pr.url } : null, preservation: proof.preservation, branch: proof.branch };
+      const finalStatus = await ports.git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], worktree);
+      const finalClass = classifyStatus(finalStatus.stdout);
+      if (finalStatus.code !== 0 || finalClass.changed.length) { keep({ ...base, reason: "uncommitted" }); continue; }
+      if (finalClass.ignored.some((file) => !disposableIgnored(worktree, file))) {
+        keep({ ...base, reason: "ignored-files" }); continue;
+      }
+      const finalBusy = heldBy(readGuards(), worktree);
+      if (finalBusy) { keep({ ...finalBusy, ...base }); continue; }
       /* Never `--force`: git refuses a checkout that changed since the status read. */
       const removed = await ports.git(["worktree", "remove", worktree], root);
       if (removed.code !== 0) {
@@ -575,69 +741,111 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
       remaining.delete(worktree);
       report.removed.push(removal);
       report.removedBytes += bytes;
-      /* The lane branch goes with it; its tip is contained in the merged head,
-         which is what makes `-D` safe after a squash merge `-d` cannot see. */
+      /* The lane branch goes with it when its tip is contained in the merged
+         head, which is what makes `-D` safe after a squash merge `-d` cannot
+         see, or when the remotes hold every commit of it. A base proof covers
+         the checkout's HEAD only, never a branch tip. */
       const branches = new Set<string>(proof.branch ? [proof.branch] : []);
       for (const owner of owners) if (owner.branch) branches.add(owner.branch);
       for (const branch of branches) {
         const tip = await ports.git(["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], root);
         if (tip.code !== 0) continue;
-        const ancestor = await ports.git(["merge-base", "--is-ancestor", tip.stdout.trim(), contained.headRefOid], root);
-        if (ancestor.code !== 0) continue;
+        const kept = proof.preservation === "merged-pr"
+          ? (await ports.git(["merge-base", "--is-ancestor", tip.stdout.trim(), proof.anchor], root)).code === 0
+          : await onRemote(tip.stdout.trim()) === true;
+        if (!kept) continue;
         const deleted = await ports.git(["branch", "-D", "--", branch], root);
         if (deleted.code !== 0) report.errors.push(`${root}: git branch -D ${branch}: ${(deleted.stderr || deleted.stdout).trim()}`);
       }
     }
 
     // Retained, settled pipeline checkouts keep their source and private files.
-    // Only their own rebuildable .next directory is eligible for this pass.
+    // Their own rebuildable .next goes; one kept for its ignored files or its
+    // unpublished commits also loses its dependency trees and the evidence
+    // drivers' fixture bundles under .artifacts, and keeps everything else.
     for (const entry of ordered) {
       const worktree = resolve(entry.path);
       if (!remaining.has(worktree) || entry.locked || entry.prunable
         || worktree === mainPath || roots.has(worktree)
         || projectRoots.some((project) => inside(project, worktree))) continue;
-      const owners = ownershipPipelines().filter((pipeline) => pipeline.worktreeDir && resolve(pipeline.worktreeDir) === worktree);
+      const owners = ownersOf(ownersAtStart, worktree);
       const owner = owners.find((pipeline) => {
         const source = resolve(pipeline.repoDir);
         return worktree === path.join(path.dirname(source), `${path.basename(source)}-pipeline-${pipeline.id}`);
       });
       if (!owner || owners.some(pipelineHoldsCheckout) || heldBy(readGuards(), worktree)) continue;
-      const next = path.join(worktree, ".next");
-      const safeDirectory = (worktrees = listed) => {
+      const candidates = [path.join(worktree, ".next")];
+      const kept = report.kept.find((row) => row.path === worktree);
+      if (kept && ["ignored-files", "unmerged-commits", "local-only-commits"].includes(kept.reason)) {
+        candidates.push(path.join(worktree, "node_modules"));
+        // Agent artifacts remain; only dependency trees and build outputs
+        // inside them are reproducible. Do not descend through symlinks.
+        const pending = [path.join(worktree, ".artifacts")];
+        let visited = 0;
+        while (pending.length && visited < MEASURE_ENTRY_LIMIT) {
+          const current = pending.pop()!;
+          try {
+            if (!fs.lstatSync(current).isDirectory()) continue;
+            for (const child of fs.readdirSync(current, { withFileTypes: true })) {
+              visited += 1;
+              if (!child.isDirectory() || child.name === ".git") continue;
+              const directory = path.join(current, child.name);
+              if (child.name === "node_modules" || child.name === ".next" || (child.name === "bundle" && fixtureBundle(directory))) candidates.push(directory);
+              else pending.push(directory);
+            }
+          } catch { /* Missing or unreadable artifacts stay. */ }
+        }
+      }
+      for (const next of candidates) {
+        const safeDirectory = (worktrees = listed) => {
+          try {
+            if (!fs.lstatSync(worktree).isDirectory() || !fs.lstatSync(next).isDirectory()) return false;
+            const realWorktree = fs.realpathSync(worktree);
+            const realNext = fs.realpathSync(next);
+            return realNext === path.join(realWorktree, path.relative(worktree, next))
+              && !worktrees.some((other) => inside(resolve(other.path), next));
+          } catch { return false; }
+        };
+        if (!safeDirectory()) continue;
+        const tracked = await ports.git(["ls-files", "-z", "--", path.relative(worktree, next)], worktree);
+        if (tracked.code !== 0 || tracked.stdout.length) continue;
+        const bytes = await measure(next);
+        // The cache measurement yields; Git locks and nested checkouts may have
+        // appeared meanwhile. Unknown metadata cannot authorize recursive removal.
+        let currentListing;
+        try { currentListing = await ports.git(["worktree", "list", "--porcelain", "-z"], root); }
+        catch { continue; }
+        if (currentListing.code !== 0) continue;
+        const currentWorktrees = parseWorktreeList(currentListing.stdout);
+        const currentEntry = currentWorktrees.find((other) => resolve(other.path) === worktree);
+        if (!currentEntry || currentEntry.bare || currentEntry.locked || currentEntry.prunable) continue;
+        // Measurement yields: refresh both activity and directory guards last.
+        const nowOwners = ownersOf(ownershipPipelines(), worktree);
+        if (!nowOwners.some((pipeline) => pipeline.id === owner.id) || nowOwners.some(pipelineHoldsCheckout)
+          || heldBy(readGuards(), worktree) || !safeDirectory(currentWorktrees)) continue;
+        const trackedNow = await ports.git(["ls-files", "-z", "--", path.relative(worktree, next)], worktree);
+        if (trackedNow.code !== 0 || trackedNow.stdout.length) continue;
         try {
-          if (!fs.lstatSync(worktree).isDirectory() || !fs.lstatSync(next).isDirectory()) return false;
-          const realWorktree = fs.realpathSync(worktree);
-          const realNext = fs.realpathSync(next);
-          return realNext === path.join(realWorktree, ".next")
-            && !worktrees.some((other) => inside(resolve(other.path), next));
-        } catch { return false; }
-      };
-      if (!safeDirectory()) continue;
-      const bytes = await measure(next);
-      // The cache measurement yields; Git locks and nested checkouts may have
-      // appeared meanwhile. Unknown metadata cannot authorize recursive removal.
-      let currentListing;
-      try { currentListing = await ports.git(["worktree", "list", "--porcelain", "-z"], root); }
-      catch { continue; }
-      if (currentListing.code !== 0) continue;
-      const currentWorktrees = parseWorktreeList(currentListing.stdout);
-      const currentEntry = currentWorktrees.find((other) => resolve(other.path) === worktree);
-      if (!currentEntry || currentEntry.bare || currentEntry.locked || currentEntry.prunable) continue;
-      // Measurement yields: refresh both activity and directory guards last.
-      const nowOwners = ownershipPipelines().filter((pipeline) => pipeline.worktreeDir && resolve(pipeline.worktreeDir) === worktree);
-      if (!nowOwners.some((pipeline) => pipeline.id === owner.id) || nowOwners.some(pipelineHoldsCheckout)
-        || heldBy(readGuards(), worktree) || !safeDirectory(currentWorktrees)) continue;
-      try {
-        if (!dryRun) await fs.promises.rm(next, { recursive: true });
-        report.trimmed.push({ path: next, bytes, pipelineId: owner.id });
-        report.trimmedBytes += bytes;
-      } catch (error) { report.errors.push(`${next}: build cache trim failed: ${String(error)}`); }
+          if (!dryRun) await fs.promises.rm(next, { recursive: true });
+          report.trimmed.push({ path: next, bytes, pipelineId: owner.id });
+          report.trimmedBytes += bytes;
+        } catch (error) { report.errors.push(`${next}: build cache trim failed: ${String(error)}`); }
+      }
     }
+  }
+  for (const kept of report.kept) {
+    kept.bytes = await exclusiveBytes(kept.path);
+    report.keptBytes[kept.reason] = (report.keptBytes[kept.reason] ?? 0) + kept.bytes;
   }
   return report;
 }
 
 const REPORT_FILE = () => statePath("worktree-sweep-report.json");
+
+export function readWorktreeSweepReport(): WorktreeSweepReport | null {
+  try { return JSON.parse(fs.readFileSync(REPORT_FILE(), "utf8")) as WorktreeSweepReport; }
+  catch { return null; }
+}
 
 function gigabytes(bytes: number): string {
   return `${(bytes / 1_073_741_824).toFixed(2)} GB`;
@@ -645,9 +853,26 @@ function gigabytes(bytes: number): string {
 
 export function summarizeWorktreeSweep(report: WorktreeSweepReport): string {
   const verb = report.mode === "dry-run" ? "would remove" : "removed";
-  const kept = Object.entries(report.keptCounts).map(([reason, count]) => `${count} ${reason}`).join(", ");
+  const kept = Object.entries(report.keptCounts).map(([reason, count]) => `${count} ${reason} (${gigabytes(report.keptBytes?.[reason as WorktreeKeptReason] ?? 0)})`).join(", ");
   return `[worktree sweep] ${verb} ${report.removed.length} worktree(s) (${gigabytes(report.removedBytes)}) across ${report.repositories.length} repositor${report.repositories.length === 1 ? "y" : "ies"};`
     + ` ${report.mode === "dry-run" ? "would trim" : "trimmed"} ${report.trimmed?.length ?? 0} build cache(s) (${gigabytes(report.trimmedBytes ?? 0)}); kept ${report.kept.length}${kept ? ` (${kept})` : ""}; ${report.errors.length} error(s)`;
+}
+
+/** Kept reasons that wait for someone: the sweep will not free them by itself. */
+const DECISION_REASONS: ReadonlySet<WorktreeKeptReason> = new Set(["local-only-commits", "unmerged-commits", "ignored-files", "pr-head-unknown", "remove-failed", "map-write-failed"]);
+
+/** The last report as the resources read surface carries it: counts and
+    bytes per reason, no paths. */
+export function worktreeSweepStatus(report: WorktreeSweepReport | null = readWorktreeSweepReport()) {
+  if (!report) return null;
+  const waiting = report.kept.filter((row) => DECISION_REASONS.has(row.reason));
+  return {
+    at: report.at, mode: report.mode, summary: summarizeWorktreeSweep(report),
+    removed: report.removed.length, removedBytes: report.removedBytes, trimmedBytes: report.trimmedBytes ?? 0,
+    keptCounts: report.keptCounts, keptBytes: report.keptBytes ?? {},
+    waitsForDecision: waiting.length,
+    waitsForDecisionBytes: waiting.reduce((sum, row) => sum + (row.bytes ?? 0), 0),
+  };
 }
 
 /* ── Production ports ───────────────────────────────────────────────────── */
@@ -763,6 +988,7 @@ export async function productionWorktreeSweepPorts(
   ]);
   return {
     mode,
+    previous: readWorktreeSweepReport(),
     git: realGit,
     mergedPullRequests: productionMergedPullRequests({
       cache: forgeCacheMergedPullRequests(() => readForgeCache().data),
@@ -776,6 +1002,7 @@ export async function productionWorktreeSweepPorts(
     conversationCwds: () => liveOrWaitingConversationCwds(agentRegistry().readOnlySnapshot()),
     scan: () => scanProcesses(),
     recordResolution: (worktree) => recordWorktreeResolution(worktree) !== null,
+    tempRoots: [...ownTempRoots(), statePath("scratch")],
   };
 }
 

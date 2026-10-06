@@ -30,7 +30,10 @@ import { OWNED_TEMP_PREFIX } from "@/lib/tempDirs";
  *   working directory, an open file, or its `TMPDIR`/`LLV_STATE_DIR`/
  *   `XDG_CONFIG_HOME`/`CLAUDE_CODE_TMPDIR`. A stage agent whose shell is idle
  *   still carries its scratch directory in `TMPDIR`, so it is kept.
- * - **Never a pipeline worktree**, or a directory holding one.
+ * - **Never a pipeline worktree**, or a directory holding one, or holding any
+ *   git checkout: a merger batch, a review export or an attribution run left
+ *   in a temp root is freed by the worktree sweep, which proves its commits
+ *   kept elsewhere first (`src/lib/pipelines/worktreeSweep.ts`).
  *
  * In the Docker install the Viewer's `/tmp` is the container's own, while the
  * agents run on the host through the nsenter shims and fill the host's. The
@@ -180,7 +183,7 @@ function realDirectory(candidate: string | undefined): string | null {
   }
 }
 
-function ownTempRoots(env: NodeJS.ProcessEnv = process.env): string[] {
+export function ownTempRoots(env: NodeJS.ProcessEnv = process.env): string[] {
   const roots = [os.tmpdir(), env.TMPDIR, "/tmp", "/var/tmp"].map(realDirectory);
   return [...new Set(roots.filter((root): root is string => root !== null && root !== "/"))];
 }
@@ -299,6 +302,46 @@ function namespaceStill(anchor: TempSweepRoot["anchor"], procRoot: string): bool
   return readLink(path.join(procRoot, String(anchor.pid), "ns", "mnt")) === anchor.namespace;
 }
 
+/** A `.git` that makes a checkout: a directory holding `HEAD`, or a file
+    naming its repository with `gitdir:`. An empty `.git` file is a marker
+    some caches write (uv's), and holds nothing. */
+function gitCheckoutMarker(entry: string, directory: boolean): boolean {
+  try {
+    if (directory) return fs.lstatSync(path.join(entry, "HEAD")).isFile();
+    const fd = fs.openSync(entry, "r");
+    try {
+      const head = Buffer.alloc(7);
+      return fs.readSync(fd, head, 0, 7, 0) === 7 && head.toString("utf8") === "gitdir:";
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return false;
+  }
+}
+
+/** A merger batch, a review export or an attribution run can leave a git
+    checkout inside its temp root, with commits nowhere else. A recursive
+    delete cannot prove them kept, so a root holding one stays: a linked
+    checkout of a registered repository is the worktree sweep's to free, under
+    its retention and remote proof. A tree too large to search stays too. */
+function containsGitCheckout(directory: string): boolean {
+  const pending = [directory];
+  let visited = 0;
+  try {
+    while (pending.length) {
+      const current = pending.pop()!;
+      for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+        if (++visited > MEASURE_ENTRY_LIMIT) return true;
+        const child = path.join(current, entry.name);
+        if (entry.name === ".git" && gitCheckoutMarker(child, entry.isDirectory())) return true;
+        if (entry.isDirectory() && entry.name !== "node_modules" && entry.name !== ".git") pending.push(child);
+      }
+    }
+    return false;
+  } catch { return true; }
+}
+
 /** One sweep. Never throws for a single directory; its failure lands in `errors`. */
 export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<TempSweepReport> {
   const now = options.now?.() ?? Date.now();
@@ -346,7 +389,7 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
         report.kept.inUse += 1;
         continue;
       }
-      if (worktrees.some((worktree) => inside(worktree, candidate) || inside(candidate, worktree))) {
+      if (worktrees.some((worktree) => inside(worktree, candidate) || inside(candidate, worktree)) || containsGitCheckout(reachable)) {
         report.kept.worktree += 1;
         continue;
       }
@@ -360,6 +403,11 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
       }
       try {
         const bytes = await measureBytes(reachable);
+        /* The measurement yields; a checkout made meanwhile still keeps it. */
+        if (containsGitCheckout(reachable)) {
+          report.kept.worktree += 1;
+          continue;
+        }
         await fs.promises.rm(reachable, { recursive: true, force: true });
         report.removed.push({ path: candidate, via: root.via, bytes, ageHours: Math.round((now - newest) / HOUR_MS) });
         report.removedBytes += bytes;

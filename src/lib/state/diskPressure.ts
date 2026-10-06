@@ -1,0 +1,172 @@
+import fs from "node:fs";
+import path from "node:path";
+
+import { stateDir, statePath } from "@/lib/configDir";
+import { isOwnedTempName, ownTempRoots, scanProcesses, sweepRoots } from "@/lib/tempSweep";
+import { writeJsonDurably } from "@/lib/state/durableJson";
+
+/**
+ * Free space on the volumes Delegatus writes to: its state directory, the
+ * pipeline worktrees and the temp roots. A server once filled its disk and
+ * every agent on it died mid-run; this sees it coming.
+ *
+ * Below `DISK_WARNING_BYTES` on any of them a pressure episode opens: the
+ * project orchestrator gets one wake item naming the free space and the
+ * largest Delegatus-owned consumers, and the System panel shows it. The
+ * episode closes only once every volume is back above
+ * `DISK_RECOVERY_BYTES`, so free space wobbling around the threshold is one
+ * warning. Below `DISK_CRITICAL_BYTES` a new worktree waits before `git
+ * worktree add` with the reason on its lane, and retries by itself; nothing
+ * that is already running is stopped.
+ */
+export const DISK_WARNING_BYTES = 10 * 1024 ** 3;
+export const DISK_RECOVERY_BYTES = 12 * 1024 ** 3;
+export const DISK_CRITICAL_BYTES = 2 * 1024 ** 3;
+export const DISK_SPACE_RETRY_MS = 60_000;
+export const DISK_SPACE_WAIT_PREFIX = "waiting for disk space:";
+/** The volumes are read at most this often; every resources poll asks. */
+const OBSERVATION_TTL_MS = 30_000;
+/** Consumer sizes walk every checkout; one walk per this long, and only in an episode. */
+const CONSUMER_CACHE_MS = 30 * 60_000;
+/** The wake waits this long for the consumer sizes before it goes without them. */
+const CONSUMER_WAKE_WAIT_MS = 15 * 60_000;
+
+export type DiskVolume = { roles: string[]; freeBytes: number | null; level: "ok" | "warning" | "critical" | "unknown" };
+export type DiskConsumer = { kind: "state" | "worktrees" | "temp"; bytes: number; measuredAt: string };
+export type DiskPressure = { at: string; episode: string | null; volumes: DiskVolume[]; consumers: DiskConsumer[]; warningBytes: number; criticalBytes: number };
+export type DiskRoot = { role: string; directory: string };
+export type DiskProbe = (directory: string) => { volume: string; freeBytes: number } | null;
+
+/** Provisioning may name a checkout that does not exist yet. */
+export const probeDisk: DiskProbe = (directory) => {
+  let current = path.resolve(directory);
+  for (;;) {
+    try {
+      const stat = fs.statSync(current);
+      const disk = fs.statfsSync(current);
+      return { volume: String(stat.dev), freeBytes: disk.bavail * disk.bsize };
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return null;
+      current = parent;
+    }
+  }
+};
+
+/** One row per volume; available bytes are those this user can allocate. */
+export function diskVolumes(roots: readonly DiskRoot[], probe: DiskProbe = probeDisk): DiskVolume[] {
+  const volumes = new Map<string, DiskVolume>();
+  for (const root of roots) {
+    const observation = probe(root.directory);
+    const key = observation?.volume ?? `unknown:${root.role}`;
+    const free = observation?.freeBytes ?? null;
+    const row = volumes.get(key);
+    if (row) {
+      if (!row.roles.includes(root.role)) row.roles.push(root.role);
+      if (free !== null) row.freeBytes = Math.min(row.freeBytes ?? free, free);
+    } else volumes.set(key, { roles: [root.role], freeBytes: free, level: "unknown" });
+  }
+  return [...volumes.values()].map(row => ({ ...row, level: row.freeBytes === null ? "unknown"
+    : row.freeBytes < DISK_CRITICAL_BYTES ? "critical" : row.freeBytes < DISK_WARNING_BYTES ? "warning" : "ok" }));
+}
+
+function rootsForProvision(repoDir: string, worktreeDir: string): DiskRoot[] {
+  return [{ role: "state", directory: stateDir() }, { role: "worktrees", directory: worktreeDir },
+    { role: "repository", directory: repoDir }, ...ownTempRoots().map(directory => ({ role: "temp", directory }))];
+}
+
+/** Admission only. A low volume never changes an existing agent's lifecycle. */
+export function worktreeDiskWait(repoDir: string, worktreeDir: string, probe: DiskProbe = probeDisk): string | null {
+  const low = diskVolumes(rootsForProvision(repoDir, worktreeDir), probe).filter(row => row.level === "critical");
+  return low.length ? `${DISK_SPACE_WAIT_PREFIX} ${low.map(row => `${row.roles.join("/")} has ${formatDiskBytes(row.freeBytes!)} free`).join("; ")}; new checkout needs at least ${formatDiskBytes(DISK_CRITICAL_BYTES)} free; retries automatically` : null;
+}
+
+export function formatDiskBytes(bytes: number): string { return `${(bytes / 1024 ** 3).toFixed(2)} GiB`; }
+export function diskPressureLabel(pressure: DiskPressure): string {
+  const low = pressure.volumes.filter(row => row.level === "warning" || row.level === "critical");
+  const consumers = [...pressure.consumers].sort((a, b) => b.bytes - a.bytes);
+  return `Disk space low: ${low.map(row => `${row.roles.join("/")} ${formatDiskBytes(row.freeBytes!)} free`).join("; ")}`
+    + (consumers.length ? `; largest Delegatus consumers (allocated lower bounds): ${consumers.map(row => `${row.kind} ${formatDiskBytes(row.bytes)}`).join(", ")}` : "; consumer measurement pending");
+}
+
+/** A stable episode makes a changing free-space value one warning. Recovery
+    creates a new episode on the next crossing, including across restarts. */
+export function observeDiskPressure(volumes: DiskVolume[], prior: DiskPressure | null, at: string): DiskPressure {
+  const low = volumes.some(row => row.level === "warning" || row.level === "critical");
+  const unknown = volumes.some(row => row.level === "unknown");
+  const recovering = volumes.some(row => row.freeBytes !== null && row.freeBytes < DISK_RECOVERY_BYTES);
+  const episode = low ? prior?.episode ?? at : unknown || recovering ? prior?.episode ?? null : null;
+  return { at, volumes, consumers: episode && episode === prior?.episode ? prior.consumers : [], warningBytes: DISK_WARNING_BYTES, criticalBytes: DISK_CRITICAL_BYTES, episode };
+}
+
+/** The wake item, once the consumer sizes measured in this episode are in,
+    or once they have been pending too long to wait for. */
+export function diskPressureWakeReady(pressure: DiskPressure, now = Date.now()): boolean {
+  if (!pressure.episode) return false;
+  return pressure.consumers.length > 0 || now - Date.parse(pressure.episode) >= CONSUMER_WAKE_WAIT_MS;
+}
+
+const caches = new Map<string, { pressure: DiskPressure; observedAt: number; consumersAt: number; measuring?: Promise<void> }>();
+/** The current pressure, read from the volumes at most every 30 s. The
+    consumer sizes are walked in the background and arrive on a later read. */
+export async function readDiskPressure(): Promise<DiskPressure> {
+  const directory = stateDir();
+  const file = statePath("disk-pressure-report.json");
+  let cached = caches.get(directory);
+  if (!cached) {
+    let prior: DiskPressure | null = null;
+    try { prior = JSON.parse(fs.readFileSync(file, "utf8")) as DiskPressure; } catch { /* First observation. */ }
+    cached = { pressure: prior ?? observeDiskPressure([], null, new Date().toISOString()), observedAt: 0, consumersAt: 0 };
+    caches.set(directory, cached);
+  }
+  if (Date.now() - cached.observedAt < OBSERVATION_TTL_MS) return structuredClone(cached.pressure);
+  cached.observedAt = Date.now();
+  /* Loaded here: the pipeline engine imports this module for its admission check. */
+  const [{ loadPipelinesForList }, { exclusiveBytes, readWorktreeSweepReport }] = await Promise.all([
+    import("@/lib/pipelines/store"),
+    import("@/lib/pipelines/worktreeSweep"),
+  ]);
+  const pipelines = loadPipelinesForList();
+  const sweep = readWorktreeSweepReport();
+  const worktrees = [...new Set([...pipelines.map(row => row.worktreeDir), ...(sweep?.kept ?? []).map(row => row.path)].filter(Boolean))];
+  const tempRoots = sweepRoots(scanProcesses(), [...ownTempRoots(), statePath("scratch")]);
+  const roots: DiskRoot[] = [{ role: "state", directory },
+    ...worktrees.map(directory => ({ role: "worktrees", directory })),
+    ...tempRoots.map(root => ({ role: "temp", directory: root.via + root.path }))];
+  const previousEpisode = cached.pressure.episode;
+  cached.pressure = observeDiskPressure(diskVolumes(roots), cached.pressure, new Date().toISOString());
+  if (previousEpisode !== cached.pressure.episode) {
+    cached.consumersAt = 0;
+    try { writeJsonDurably(file, cached.pressure); } catch { /* Warning remains visible when writes fail. */ }
+  }
+  if (cached.pressure.episode && Date.now() - cached.consumersAt > CONSUMER_CACHE_MS && !cached.measuring) {
+    const target = cached;
+    const episode = cached.pressure.episode;
+    target.measuring = (async () => {
+      const measuredAt = new Date().toISOString();
+      const stateBytes = await exclusiveBytes(directory);
+      let worktreeBytes = 0;
+      // Nested linked checkouts must be measured once, through the outer one.
+      for (const worktree of worktrees.filter(candidate => !worktrees.some(other => other !== candidate && candidate.startsWith(other + path.sep))))
+        worktreeBytes += await exclusiveBytes(worktree);
+      let tempBytes = 0;
+      for (const root of tempRoots) {
+        const base = root.via + root.path;
+        try {
+          for (const entry of fs.readdirSync(base, { withFileTypes: true })) {
+            if (!entry.isDirectory() || !isOwnedTempName(entry.name)) continue;
+            const child = path.join(base, entry.name);
+            if (worktrees.some(worktree => worktree === child || worktree.startsWith(child + path.sep))) continue;
+            tempBytes += await exclusiveBytes(child);
+          }
+        } catch { /* An inaccessible root has no attributable consumer count. */ }
+      }
+      if (target.pressure.episode !== episode) return;
+      target.pressure.consumers = [{ kind: "state", bytes: stateBytes, measuredAt }, { kind: "worktrees", bytes: worktreeBytes, measuredAt }, { kind: "temp", bytes: tempBytes, measuredAt }];
+      target.consumersAt = Date.now();
+      try { writeJsonDurably(file, target.pressure); } catch { /* Available through the read surface. */ }
+    })().catch((error) => console.warn("[disk pressure] consumer measurement failed", error instanceof Error ? error.message : String(error)))
+      .finally(() => { delete target.measuring; });
+  }
+  return structuredClone(cached.pressure);
+}

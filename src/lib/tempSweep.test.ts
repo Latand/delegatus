@@ -262,3 +262,31 @@ test("the sweep clock starts once, waits for boot, and re-arms only after a swee
   await Bun.sleep(0);
   expect(scheduled.map((entry) => entry.delayMs)).toEqual([300_000, HOUR]);
 });
+
+test.each(["merge-batch", "review-export", "attribution"])("a %s checkout inside an owned temp root stays for Git preservation checks", async role => {
+  const root = tempRoot();
+  const directory = aged(root, "llv-stage-role", 3 * DAY);
+  const checkout = path.join(directory, role, "checkout");
+  fs.mkdirSync(checkout, { recursive: true });
+  fs.writeFileSync(path.join(checkout, ".git"), "gitdir: fixture repository metadata");
+  fs.writeFileSync(path.join(checkout, "local-work.txt"), "unpublished work");
+  const when = new Date(Date.now() - 3 * DAY);
+  fs.utimesSync(path.join(directory, role), when, when); fs.utimesSync(directory, when, when);
+  const report = await sweepStaleTempDirs({ roots: [{ path: root, via: "" }], scan: { ownNamespace: null, processes: [] }, worktrees: [], maxAgeMs: DAY });
+  expect(report.removed).toHaveLength(0);
+  expect(report.kept.worktree).toBe(1);
+  expect(fs.readFileSync(path.join(checkout, "local-work.txt"), "utf8")).toBe("unpublished work");
+});
+
+test("an empty .git marker a cache writes is not a checkout, and its stale root goes", async () => {
+  const root = tempRoot();
+  const directory = aged(root, "llv-stage-cache", 3 * DAY);
+  const cache = path.join(directory, "tmp/uvcache/sdists-v9");
+  fs.mkdirSync(cache, { recursive: true });
+  fs.writeFileSync(path.join(cache, ".git"), "");
+  const when = new Date(Date.now() - 3 * DAY);
+  for (const entry of [cache, path.join(directory, "tmp/uvcache"), path.join(directory, "tmp"), directory]) fs.utimesSync(entry, when, when);
+  const report = await sweepStaleTempDirs({ roots: [{ path: root, via: "" }], scan: { ownNamespace: null, processes: [] }, worktrees: [], maxAgeMs: DAY });
+  expect(report.removed.map((removal) => path.basename(removal.path))).toEqual(["llv-stage-cache"]);
+  expect(fs.existsSync(directory)).toBe(false);
+});

@@ -1890,3 +1890,25 @@ test("cropped outcome bullets leave child, deployment and maintenance obligation
   expect(landed.reportedStalls ?? []).toEqual([]);
   expect(landed.reportsOwed!.map(outcome => outcome.key)).toEqual(["lane:visible-lane:completed"]);
 });
+
+test("disk pressure is shown once per episode despite free-space changes and agenda eviction", () => {
+  const episode = "2026-10-06T10:00:00Z";
+  const check = input({ signals: [{ id: "disk-space", episode, label: "Disk space low: state/worktrees 1.00 GiB free; worktrees 20 GiB" }] });
+  const decision = seatTickDecision(check);
+  expect(decision.verdict.kind).toBe("wake");
+  if (decision.verdict.kind !== "wake") throw new Error("expected a wake");
+  /* With no open work at all, the episode alone wakes the seat, and leads. */
+  expect(decision.verdict.reasons.map(reason => reason.kind)).toEqual(["disk-pressure"]);
+  expect(decision.verdict.items[0]).toMatchObject({ kind: "signal", id: "disk-space", diskPressureEpisode: episode });
+  /* It does not wait for the wake interval. */
+  const recent = seatTickDecision({ ...check, state: { ...emptySeatTickState(), lastWakeAt: new Date(NOW - 60_000).toISOString() } });
+  expect(recent.verdict.kind).toBe("wake");
+  const landed = seatTickWakeCommit(decision.state, plan(decision.verdict, check.changeFingerprint, 0), NOW);
+  expect(landed.diskPressureShown).toBe(episode);
+  const next = input({ now: NOW + 2 * SEAT_TICK_WAKE_INTERVAL_MS, state: { ...landed, itemsShown: [] },
+    signals: [{ id: "disk-space", episode, label: "Disk space low: state/worktrees 0.80 GiB free; worktrees 22 GiB" }] });
+  const repeat = seatTickDecision(next);
+  expect(repeat.verdict.kind).not.toBe("wake");
+  const crossing = seatTickDecision({ ...next, signals: [{ id: "disk-space", episode: "2026-10-07T10:00:00Z", label: "Disk space low again" }] });
+  expect(crossing.verdict.kind).toBe("wake");
+});

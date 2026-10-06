@@ -3,7 +3,8 @@
 import { startTransition, useEffect, useRef, useState } from "react";
 
 import { createFreshAwareCoalescer } from "@/lib/asyncCoalescer";
-import { useLocale } from "@/lib/i18n";
+import { useLocale, type MessageKey } from "@/lib/i18n";
+import type { DiskPressure } from "@/lib/state/diskPressure";
 import type { ResourceSession, ResourcesPayload, ResourcesViewer } from "@/lib/types";
 
 import { X } from "./icons";
@@ -244,6 +245,7 @@ export function ResourcesFooter() {
           <span className="text-[11px] font-semibold text-primary">{t("resources.title")}</span>
         )}
       </button>
+      {snap.data.diskPressure ? <DiskPressureNotice pressure={snap.data.diskPressure} /> : null}
       {open ? (
         <CleanupPanel
           sessions={sessions}
@@ -314,6 +316,28 @@ async function killSession(
 
 /** The "Agent sessions" dialog. Exported for the DOM test, which drives the
     rows and the bulk buttons without waiting on the rail's poll. */
+/** Low free space on a volume Delegatus writes to, while its episode lasts
+    and a volume is still below the warning threshold. */
+export function DiskPressureNotice({ pressure }: { pressure: DiskPressure }) {
+  const { t } = useLocale();
+  const low = pressure.volumes.filter((volume) => volume.level === "warning" || volume.level === "critical");
+  if (!pressure.episode || low.length === 0) return null;
+  const role = (name: string) => t(`resources.diskRole.${name}` as MessageKey);
+  const consumers = [...pressure.consumers].sort((a, b) => b.bytes - a.bytes);
+  return (
+    <div role="status" data-disk-pressure className="px-3.5 pb-2 text-xs leading-relaxed text-warning">
+      <strong className="block">{t("resources.diskLow")}</strong>
+      {low.map((volume) => (
+        <div key={volume.roles.join("/")}>{volume.roles.map(role).join(" / ")}: {t("resources.free", { amount: fmtBytes(volume.freeBytes ?? 0) })}</div>
+      ))}
+      {consumers.length
+        ? <div>{t("resources.diskConsumers")} {consumers.map((consumer) => `${role(consumer.kind)} ${fmtBytes(consumer.bytes)}`).join(", ")}</div>
+        : <div>{t("resources.diskMeasuring")}</div>}
+      {low.some((volume) => volume.level === "critical") ? <div>{t("resources.diskWaiting")}</div> : null}
+    </div>
+  );
+}
+
 export function CleanupPanel({
   sessions,
   now,

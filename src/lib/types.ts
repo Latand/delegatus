@@ -877,6 +877,10 @@ export type ResourcesViewerUnavailable = "not-the-viewer" | "measurement-failed"
 
 /** GET /api/resources response. `system` is null when no platform probe worked. */
 export interface ResourcesPayload {
+  /** Free space on the volumes Delegatus writes to, and the open pressure episode. */
+  diskPressure?: import("./state/diskPressure").DiskPressure;
+  /** The last worktree sweep, counts and bytes per reason. */
+  worktreeSweep?: ReturnType<typeof import("./pipelines/worktreeSweep").worktreeSweepStatus>;
   system: ResourcesSystem | null;
   sessions: ResourceSession[];
   /** When the session table was captured. The system block carries its own

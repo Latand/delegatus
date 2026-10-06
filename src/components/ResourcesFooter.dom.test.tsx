@@ -5,7 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 
 import type { ResourceSession, ResourcesViewer } from "@/lib/types";
 
-import { CleanupPanel, stickySnap } from "./ResourcesFooter";
+import { CleanupPanel, DiskPressureNotice, stickySnap } from "./ResourcesFooter";
 
 const dom = new Window();
 Object.assign(globalThis, {
@@ -340,4 +340,37 @@ test("Delegatus's own processes are listed with their memory and no kill control
 test("the rail keeps the table's stamp and the Viewer section between polls", () => {
   const first = stickySnap(null, { system: null, sessions: [], sessionsStale: true, sessionsCapturedAt: null, viewer: VIEWER }, NOW);
   expect(first.data).toMatchObject({ sessionsStale: true, sessionsCapturedAt: null, viewer: VIEWER });
+});
+
+test("the System panel names the low volume, the largest consumers first, and the waiting checkouts", () => {
+  const GiB = 1024 ** 3;
+  const element = document.createElement("div");
+  document.body.append(element);
+  const root: Root = createRoot(element);
+  mounted.push(() => {
+    flushSync(() => { root.unmount(); });
+    element.remove();
+  });
+  const pressure = {
+    at: "2026-10-06T10:05:00.000Z", episode: "2026-10-06T10:00:00.000Z", warningBytes: 10 * GiB, criticalBytes: 2 * GiB,
+    volumes: [
+      { roles: ["state", "worktrees"], freeBytes: 1.5 * GiB, level: "critical" as const },
+      { roles: ["temp"], freeBytes: 40 * GiB, level: "ok" as const },
+    ],
+    consumers: [
+      { kind: "state" as const, bytes: 2 * GiB, measuredAt: "2026-10-06T10:04:00.000Z" },
+      { kind: "worktrees" as const, bytes: 90 * GiB, measuredAt: "2026-10-06T10:04:00.000Z" },
+    ],
+  };
+  flushSync(() => { root.render(<DiskPressureNotice pressure={pressure} />); });
+  const notice = element.querySelector("[data-disk-pressure]")!;
+  expect(notice.getAttribute("role")).toBe("status");
+  expect(notice.textContent).toContain("Disk space low");
+  expect(notice.textContent).toContain("State / Worktrees: 1.5 GiB free");
+  expect(notice.textContent).not.toContain("Temp:");
+  expect(notice.textContent!.indexOf("Worktrees 90")).toBeLessThan(notice.textContent!.indexOf("State 2"));
+  expect(notice.textContent).toContain("New checkouts wait for space");
+  /* Back above the warning threshold, still inside the episode: nothing shown. */
+  flushSync(() => { root.render(<DiskPressureNotice pressure={{ ...pressure, volumes: [{ ...pressure.volumes[0]!, freeBytes: 11 * GiB, level: "ok" as const }] }} />); });
+  expect(element.querySelector("[data-disk-pressure]")).toBeNull();
 });
