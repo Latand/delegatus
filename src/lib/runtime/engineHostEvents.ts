@@ -1,5 +1,5 @@
 import { isNonblockingCodexQuestion } from "./codexAttention";
-import { runtimeHostKindForEngine, type RuntimeAttentionKind, type RuntimeAttentionRequest, type RuntimeEngine, type RuntimeEventInput } from "./contracts";
+import { RUNTIME_EVENT_PAYLOAD_LIMIT_BYTES, runtimeHostKindForEngine, type RuntimeAttentionKind, type RuntimeAttentionRequest, type RuntimeEngine, type RuntimeEventInput } from "./contracts";
 import type { RuntimeEvent } from "./engineHost";
 import { boundedToolArgs } from "./liveTurn";
 import { isPermissionRequest, permissionCommandExcerpt } from "./permissionRequests";
@@ -289,13 +289,24 @@ const DELTA_TEXT_LIMIT_BYTES = 8 * 1024;
  * stream is never held back. A folded delta names the text length of each
  * delta it joined, so the journal can drop the ones another writer already
  * recorded under the same cursor.
+ *
+ * The journal bounds the serialized payload, and JSON doubles a backslash, a
+ * quote or a newline, so a fold also ends before its projected payload would
+ * pass that budget. The pump retries a refused append with the same event
+ * forever, so one oversized fold would hold back the rest of the turn and its
+ * end. A delta that ends a fold opens the next one with its own sequence.
  */
 export type CoalescedEngineEvent = RuntimeEvent | (Extract<RuntimeEvent, { kind: "delta" }> & { foldedTextLengths: number[] });
 
 export function coalesceReadyEngineDeltas(
   events: AsyncIterator<RuntimeEvent>,
+  conversationId = "",
   maxTextBytes = DELTA_TEXT_LIMIT_BYTES,
+  maxPayloadBytes = RUNTIME_EVENT_PAYLOAD_LIMIT_BYTES,
 ): AsyncIterator<CoalescedEngineEvent> {
+  // Summed per delta, which is exact for whole text and an upper bound when a
+  // surrogate pair is split across two deltas.
+  const serializedTextBytes = (text: string) => Buffer.byteLength(JSON.stringify(text)) - 2;
   type Read = { result: IteratorResult<RuntimeEvent> } | { error: unknown };
   let pending: Promise<Read> | null = null;
   let carried: Read | null = null;
@@ -313,6 +324,8 @@ export function coalesceReadyEngineDeltas(
       if (head.done || head.value.kind !== "delta") return head;
       let merged = head.value;
       let bytes = Buffer.byteLength(merged.text);
+      let payloadBytes = Buffer.byteLength(JSON.stringify({ conversationId, turnId: merged.turnId, text: "" }))
+        + serializedTextBytes(merged.text);
       const lengths = [merged.text.length];
       while (true) {
         const ready = await Promise.race([pull(), new Promise<null>((resolve) => setImmediate(() => resolve(null)))]);
@@ -322,12 +335,15 @@ export function coalesceReadyEngineDeltas(
         const added = value?.kind === "delta" && value.turnId === merged.turnId && value.seq === merged.seq + 1
           ? Buffer.byteLength(value.text)
           : null;
-        if (value?.kind !== "delta" || added === null || bytes + added > maxTextBytes) {
+        const addedPayload = value?.kind === "delta" ? serializedTextBytes(value.text) : 0;
+        if (value?.kind !== "delta" || added === null || bytes + added > maxTextBytes
+          || payloadBytes + addedPayload > maxPayloadBytes) {
           carried = ready;
           break;
         }
         merged = { ...value, text: merged.text + value.text };
         bytes += added;
+        payloadBytes += addedPayload;
         lengths.push(value.text.length);
       }
       return { done: false, value: lengths.length > 1 ? { ...merged, foldedTextLengths: lengths } : merged };

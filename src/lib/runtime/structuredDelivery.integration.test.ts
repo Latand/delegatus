@@ -517,6 +517,78 @@ test("succession replay keeps text a predecessor's late append recorded exactly 
   }
 });
 
+test("a ready burst of escaped text folds within the journal's payload budget and its turn ends", async () => {
+  const directory = path.join(sandbox, "controller-escaped-fold");
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
+  const sessionId = "escaped-fold-session";
+  const artifactPath = path.join(directory, `${sessionId}.jsonl`);
+  const profile = emptyLaunchProfile({ cwd: directory });
+  registry.reconcileConversations([{
+    engine: "codex",
+    path: artifactPath,
+    accountId: "escaped-account",
+    launchProfile: profile,
+    turn: { state: "busy", source: "assistant", terminalAt: null },
+    observedAt: "2026-10-06T12:00:00.000Z",
+  }]);
+  const conversationId = registry.conversationForPath(artifactPath)!.id;
+  const key = { engine: "codex" as const, sessionId };
+  registry.upsert({
+    key,
+    artifactPath,
+    cwd: directory,
+    accountId: "escaped-account",
+    launchProfile: profile,
+    status: "live",
+    host: null,
+    structuredHost: {
+      kind: "codex-app-server",
+      endpoint: "fake:ledger-host",
+      process: null,
+      eventCursor: 0,
+      protocolVersion: "fake-v1",
+      writerClaimEpoch: 0,
+      activeTurnRef: "turn:ledger",
+      pendingAttention: [],
+      activeFlags: [],
+    },
+    claimEpoch: 0,
+    claimOwner: null,
+    pendingAction: null,
+  });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const client = runtimeJournalClient(journal);
+  const ledger = ledgerObservableHost(sessionId);
+  // JSON writes each of these four characters as two bytes, so 8 KiB of this
+  // text is 16 KiB of payload before the identities around it.
+  const fragment = "\\\n\\\n";
+  const count = 2_048;
+
+  try {
+    await bindStructuredDeliveryQueue([{ key, host: ledger.host }], { registry, client });
+    ledger.emit(
+      { kind: "turn-started", turnId: "turn:ledger", seq: 1 },
+      ...Array.from({ length: count }, (_, index): RuntimeEvent => ({ kind: "delta", turnId: "turn:ledger", text: fragment, seq: index + 2 })),
+      { kind: "turn-ended", turnId: "turn:ledger", status: "completed", seq: count + 2 },
+    );
+    const recorded = () => journal.replay(0).events.filter((event) => event.scope.id === conversationId);
+    await waitForCondition(() => recorded().some((event) => event.kind === "turn-ended"));
+    const events = recorded();
+    const deltas = events.filter((event) => event.kind === "delta");
+    expect(deltas.map((event) => String(event.payload.text)).join("")).toBe(fragment.repeat(count));
+    expect(deltas.length).toBeGreaterThan(1);
+    expect(deltas.length).toBeLessThanOrEqual(8);
+    for (const event of deltas) expect(Buffer.byteLength(JSON.stringify(event.payload))).toBeLessThanOrEqual(16 * 1024);
+    // The turn's events keep their order: its start, all of its text, its end.
+    const kinds = events.map((event) => event.kind).filter((kind) => kind === "turn-started" || kind === "delta" || kind === "turn-ended");
+    expect(kinds).toEqual(["turn-started", ...deltas.map(() => "delta"), "turn-ended"]);
+    expect(journal.producerCursor("codex-app-server", `engine-host:codex:${sessionId}:`)).toBe(count + 2);
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close();
+  }
+});
+
 test("a producer-cursor transport failure pauses host registration before ledger replay", async () => {
   const directory = path.join(sandbox, "controller-cursor-transport-failure");
   const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));

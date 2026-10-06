@@ -1520,7 +1520,7 @@ export async function bindStructuredDeliveryQueue(
     const entry = entryForHost(registry, item);
     const conversationId = entry ? conversationIdForEntry(registry, entry) : null;
     if (conversationId) permissionGuard.adopt(key, item.host, conversationId, initialState);
-    const events = coalesceReadyEngineDeltas(item.host.attach(acknowledgedEventCursor)[Symbol.asyncIterator]());
+    const events = coalesceReadyEngineDeltas(item.host.attach(acknowledgedEventCursor)[Symbol.asyncIterator](), conversationId ?? "");
     let eventsStopped = false;
     void (async () => {
       if (!conversationId) return;

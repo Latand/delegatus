@@ -1102,6 +1102,9 @@ export function axesForEvent(current: RuntimeSessionAxes, event: Pick<RuntimeEve
   return next;
 }
 
+/** The serialized payload budget of every event without a canonical voice response. */
+export const RUNTIME_EVENT_PAYLOAD_LIMIT_BYTES = 16 * 1024;
+
 export function assertRuntimeEvent(input: RuntimeEventInput): void {
   if (!input.payload || typeof input.payload !== "object" || Array.isArray(input.payload)) throw new Error("runtime event payload is invalid");
   const normalized = normalizeRuntimeEventInput(input);
@@ -1110,7 +1113,7 @@ export function assertRuntimeEvent(input: RuntimeEventInput): void {
   const carriesCanonicalVoiceResponse = normalized.kind === "item"
     && normalized.payload.voiceResponse !== null
     && typeof normalized.payload.voiceResponse === "object";
-  const payloadLimit = carriesCanonicalVoiceResponse ? 16 * 1024 * 1024 : 16 * 1024;
+  const payloadLimit = carriesCanonicalVoiceResponse ? 16 * 1024 * 1024 : RUNTIME_EVENT_PAYLOAD_LIMIT_BYTES;
   if (payloadBytes > payloadLimit) {
     throw new Error(carriesCanonicalVoiceResponse
       ? "runtime terminal response payload exceeds 16 MiB"

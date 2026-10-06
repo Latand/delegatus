@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
+import { assertRuntimeEvent } from "./contracts";
 import { streamingVoiceDelivery } from "./voiceDelivery";
 import type { RuntimeEvent } from "./engineHost";
 import { coalesceReadyEngineDeltas, projectEngineHostEvent, type CoalescedEngineEvent } from "./engineHostEvents";
@@ -599,6 +600,37 @@ describe("coalesceReadyEngineDeltas", () => {
     ]);
     const projected = projectEngineHostEvent("conversation_gap", "codex:thread-gap", seen[1]);
     expect(projected).toMatchObject({ payload: { text: "cccd" }, foldedTextLengths: [3, 1], producer: { eventKey: "engine-host:codex:thread-gap:5" } });
+  });
+
+  test("text JSON doubles ends a fold before the projected payload passes the journal's budget", async () => {
+    // Every character here costs two serialized bytes, so the raw text bound
+    // alone would admit a payload the journal refuses.
+    const fragment = "\\\n\"\t";
+    const stream = hostStream();
+    stream.push(...Array.from({ length: 4_096 }, (_, index) => delta(index + 1, fragment)));
+    stream.push({ kind: "turn-ended", turnId: "turn-final", status: "completed", seq: 4_097 });
+    stream.end();
+    const conversationId = `codex_${"c".repeat(24)}`;
+    const appended: NonNullable<ReturnType<typeof projectEngineHostEvent>>[] = [];
+    const events = coalesceReadyEngineDeltas(stream.iterator, conversationId);
+    for (let next = await events.next(); !next.done; next = await events.next()) {
+      const projected = projectEngineHostEvent(conversationId, "codex:thread-escaped", next.value)!;
+      expect(() => assertRuntimeEvent(projected)).not.toThrow();
+      appended.push(projected);
+    }
+    const deltas = appended.filter((event) => event.kind === "delta");
+    expect(deltas.map((event) => event.payload.text).join("")).toBe(fragment.repeat(4_096));
+    expect(deltas.length).toBeLessThanOrEqual(4);
+    // Sequence metadata stays whole: each fold names its last sequence and the
+    // length of every delta in it.
+    let seq = 0;
+    for (const event of deltas) {
+      seq += event.foldedTextLengths!.length;
+      expect(event.foldedTextLengths!.every((length) => length === fragment.length)).toBe(true);
+      expect(event.producer?.eventKey).toBe(`engine-host:codex:thread-escaped:${seq}`);
+    }
+    expect(seq).toBe(4_096);
+    expect(appended.at(-1)).toMatchObject({ kind: "turn-ended", producer: { eventKey: "engine-host:codex:thread-escaped:4097" } });
   });
 
   test("a failure read ahead is raised after the text folded before it", async () => {
