@@ -6,6 +6,7 @@ import { readAsksYouSettings, readOpenRouterApiKey } from "@/lib/asks/settings";
 import { mutateOperatorAsks, spendMonth } from "@/lib/asks/store";
 import { projectInfoFromCwd } from "@/lib/scanner/describe";
 import { decodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText";
+import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
 import { FileClaudeDeliveryLedger } from "@/lib/runtime/claudeStreamBrokerHost";
 import { readStructuredUserMetadata } from "@/lib/selection/structuredUserMetadata";
 import { viewerReleaseOwnsTraffic } from "@/lib/viewerInstrumentation";
@@ -54,14 +55,16 @@ export async function offerForHook(request: Request, input: Record<string, unkno
     lastTurn = { project, conversation: conversationId, request: hookId };
     reason = "unprovenOrigin";
     const index = memoryIndex();
-    let prompt = input.prompt, origin = "unknown", requestId = "";
+    let prompt = input.prompt, origin = "unknown", requestId = "", deliveryKey = "";
     if (engine === "codex") {
       const decoded = decodeCodexStructuredUserText(prompt);
       prompt = decoded.text;
       if (decoded.metadataRef) {
-        origin = readStructuredUserMetadata(decoded.metadataRef).origin?.kind ?? "unknown";
+        const metadata = readStructuredUserMetadata(decoded.metadataRef);
+        origin = metadata.origin?.kind ?? "unknown";
+        deliveryKey = metadata.deliveryDedup ?? "";
         requestId = decoded.metadataRef;
-      } else if (decoded.structured) { origin = decoded.origin?.kind ?? "unknown"; requestId = decoded.deliveryDedup ?? ""; }
+      } else if (decoded.structured) { origin = decoded.origin?.kind ?? "unknown"; requestId = deliveryKey = decoded.deliveryDedup ?? ""; }
     } else {
       const ledger = new FileClaudeDeliveryLedger().load(input.session_id);
       if (typeof input.delegatus_delivery_id === "string") {
@@ -69,6 +72,18 @@ export async function offerForHook(request: Request, input: Record<string, unkno
         if (!queued || queued.entry.content.text !== prompt) return "";
         origin = queued.entry.origin?.kind ?? "unknown"; requestId = queued.entry.id;
       }
+    }
+    // Some Codex transports stamp their default operator origin onto launch
+    // scaffolds. The durable admission receipt identifies that machine turn;
+    // later human messages in the same conversation remain eligible.
+    const delivery = deliveryKey ? Object.values(snapshot.deliveryOperationOwners).find(owner =>
+      owner.conversationId === conversationId && deliveryDedupToken(owner.command.operationId) === deliveryKey) : undefined;
+    if (delivery?.command.origin?.kind === "agent") { possibleOperator = false; return ""; }
+    const humanSubmission = delivery?.command.origin?.kind === "operator" && !delivery.command.operationId.startsWith("spawn_message_");
+    const containerLaunch = snapshot.memberships[conversationId]?.some(entry => entry.kind === "pipeline" || entry.kind === "flow");
+    if (!humanSubmission && receipt?.launchDisplay?.echo === prompt && (containerLaunch || (receipt.delegationDepth ?? 0) > 0
+      || receipt.parentConversationId || (receipt.agentRole && receipt.agentRole !== "orchestrator"))) {
+      possibleOperator = false; return "";
     }
     if (requestId && origin !== "operator") { possibleOperator = origin === "unknown"; return ""; }
     const transcript = generation?.path ?? receipt?.artifactPath ?? undefined;

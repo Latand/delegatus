@@ -130,6 +130,8 @@ describe("shared memory settings", () => {
     const { memoryIndex } = await import("@/lib/memory/service");
     const { setSharedMemoryEnabled } = await import("@/lib/memory/settings");
     const { offeredMemoryForTranscript } = await import("@/lib/memory/offers");
+    const { encodeCodexStructuredUserText } = await import("@/lib/runtime/codexStructuredUserText.server");
+    const { messageTextDigest } = await import("@/lib/runtime/messageTextDigest");
     const crypto = await import("node:crypto");
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-seat-browser-")), previous = { ...process.env }, originalFetch = globalThis.fetch;
     process.env.LLV_STATE_DIR = path.join(root, "state"); process.env.OPENROUTER_API_KEY = "fixture"; delete process.env.PORT;
@@ -172,6 +174,22 @@ describe("shared memory settings", () => {
       expect(await offerForHook(new Request("http://localhost/api/memory/inject", { headers }), { hook_event_name: "UserPromptSubmit", session_id: session, cwd: root, prompt, delegatus_delivery_id: "fixture-operator" })).toContain("Widget parser rule");
       await offerForHook(new Request("http://localhost/api/memory/inject", { headers }), { delegatus_confirm: true, delegatus_emitted_at: Date.now() });
       lines.push(line("fixture-current", prompt)); fs.appendFileSync(transcript, lines.at(-1)! + "\n"); ledger.confirmDelivered(session, "fixture-operator", "fixture-current");
+      const stagePrompt = "You are a fresh-context Reviewer. Review widget parser.";
+      const stage = registry.beginSpawnRequest({ engine: "codex", cwd: root, explicitProject: project,
+        role: "reviewer", origin: { kind: "container", container: "pipeline", containerId: "synthetic-stage", creatorConversationId: null }, transport: "structured",
+        launchDisplay: { prompt: stagePrompt, echo: stagePrompt, images: 0 },
+        launchProfile: emptyLaunchProfile({ cwd: root, title: "Synthetic stage conversation" }) });
+      if (stage.kind === "conflict") throw Error("fixture stage conflict");
+      const stageSession = crypto.randomUUID();
+      registry.settleSpawn(stage.receipt.launchId, { key: { engine: "codex", sessionId: stageSession }, artifactPath: path.join(root, stageSession + ".jsonl"), cwd: root,
+        accountId: null, status: "live", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
+      const stageHeaders = { ...headers, "x-llv-spawn-capability": registry.rotateSpawnCapabilityForReceipt(stage.receipt.launchId), "x-llv-memory-hook": crypto.randomUUID() };
+      const activity = memoryIndex().injectionActivity();
+      const stageText = encodeCodexStructuredUserText(stagePrompt, undefined, null, { kind: "operator" }, messageTextDigest("synthetic-stage-start"));
+      expect(await offerForHook(new Request("http://localhost/api/memory/inject", { headers: stageHeaders }),
+        { hook_event_name: "UserPromptSubmit", session_id: stageSession, cwd: root, prompt: stageText })).toBe("");
+      expect(memoryIndex().lastTurn(project)).toBe("delivered");
+      expect(memoryIndex().injectionActivity()).toEqual(activity);
       const memoryOffers = offeredMemoryForTranscript(transcript);
       expect(memoryOffers["fixture-current"]).toEqual(["Widget parser rule"]);
       server = await serveEvidenceFixture(out, "src/components/memory/memoryEvidence.fixture.tsx", {
@@ -184,7 +202,8 @@ describe("shared memory settings", () => {
       browserPid = launched.process().pid; fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid: browserPid, closed: false }));
       browser = await chromium.connect(launched.wsEndpoint());
       for (const lang of ["en", "uk"] as const) for (const width of [1440, 390]) {
-        memoryIndex().recordLastTurn(project, receipt.conversationId, "fixture-operator", Date.now(), "delivered");
+        // Render the real seam's status after the intervening Codex stage.
+        if (measurements.length) memoryIndex().recordLastTurn(project, receipt.conversationId, "fixture-operator", Date.now(), "delivered");
         const { page, context, pageErrors } = await openFixture(browser, server.base + "?seat-memory", { width, height: 900 }, "light", lang, "reduce", width === 390);
         try {
           const offer = page.locator("[data-memory-offer]"); await offer.waitFor();

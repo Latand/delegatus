@@ -21,6 +21,7 @@ import { createFeedSession } from "@/components/feed/parse";
 import { provenanceLookupFor } from "@/components/feed/messageProvenance";
 import { structuredContent } from "@/lib/runtime/structuredContent";
 import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
+import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import type { FileEntry } from "@/lib/types";
 import type { groundedRequest } from "./selection";
@@ -629,6 +630,25 @@ for (const oldKey of ["directory", "local repository", "path", "alias", "unlinke
     const items = feed.feed(fs.readFileSync(transcript, "utf8").trim().split("\n"), 0, false).items.map(e => e.item);
     expect(provenanceLookupFor({ memoryOffers: names }, items).memoryFor!(items.find(i => i.kind === "sysmsg" && i.deliveredMessage?.engineMessageId === "fixture-current")!)).toHaveLength(expectedCandidates);
     expect(memoryIndex().lastTurn(project)).toBe("delivered");
+    // Codex's default operator envelope also occurs on delegated stage starts.
+    // It must leave the seat's last turn and the shared budget untouched.
+    const stagePrompt = "You are a fresh-context Reviewer. Review widget parser delimiter escaping.";
+    const stage = registry.beginSpawnRequest({ engine: "codex", cwd: root, explicitProject: project,
+      role: "reviewer", origin: { kind: "container", container: "pipeline", containerId: "synthetic-stage", creatorConversationId: null }, transport: "structured",
+      launchDisplay: { prompt: stagePrompt, echo: stagePrompt, images: 0 },
+      launchProfile: emptyLaunchProfile({ cwd: root, title: "Synthetic stage conversation" }) });
+    if (stage.kind === "conflict") throw Error("fixture stage conflict");
+    const stageSession = crypto.randomUUID();
+    registry.settleSpawn(stage.receipt.launchId, { key: { engine: "codex", sessionId: stageSession }, artifactPath: path.join(root, stageSession + ".jsonl"), cwd: root,
+      accountId: null, status: "live", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
+    const stageCapability = registry.rotateSpawnCapabilityForReceipt(stage.receipt.launchId);
+    const stageRequest = new Request("http://localhost/api/memory/inject", { headers: { "x-llv-spawn-capability": stageCapability } });
+    const stageText = encodeCodexStructuredUserText(stagePrompt, undefined, null, { kind: "operator" }, messageTextDigest("synthetic-stage-start"));
+    const beforeStage = memoryIndex().injectionActivity();
+    expect(await offerForHook(stageRequest, { hook_event_name: "UserPromptSubmit", session_id: stageSession, cwd: root, prompt: stageText })).toBe("");
+    expect(memoryIndex().lastTurn(project)).toBe("delivered");
+    expect(memoryIndex().injectionActivity()).toEqual(beforeStage);
+    expect(decisionCalls).toBe(1); expect(readOperatorAsks().spend.calls).toBe(1);
     const request = new Request("http://localhost/api/memory/inject", { headers: { "x-llv-spawn-capability": capability } });
     const input = { hook_event_name: "UserPromptSubmit", session_id: session, cwd: root, prompt: relay, delegatus_delivery_id: "fixture-relay-delivery" };
     expect(await offerForHook(request, input)).toBe("");
@@ -651,5 +671,12 @@ for (const oldKey of ["directory", "local repository", "path", "alias", "unlinke
     expect(await offerForHook(request, { ...input, prompt, delegatus_delivery_id: "fixture-failed" })).toBe("");
     expect(memoryIndex().lastTurn(project)).toBe("failed"); expect(decisionCalls).toBe(2);
     expect(readOperatorAsks().spend.usd).toBeCloseTo(.0001, 8);
+    // A real subsequent operator submission may repeat the launch's words.
+    const human = registry.holdDelivery(stage.receipt.conversationId, stagePrompt, "synthetic-human-stage-turn", "text", [],
+      structuredContent(stagePrompt, []).contentDigest, { origin: { kind: "operator" } });
+    const humanText = encodeCodexStructuredUserText(stagePrompt, undefined, null, { kind: "operator" }, deliveryDedupToken(human.command.operationId));
+    delete process.env.OPENROUTER_API_KEY;
+    expect(await offerForHook(stageRequest, { hook_event_name: "UserPromptSubmit", session_id: stageSession, cwd: root, prompt: humanText })).toBe("");
+    expect(memoryIndex().lastTurn(project)).toBe("noKey");
   } finally { hook.kill(); await hook.exited; await pending; hookServer.stop(true); endpoint.stop(true); }
 }, 5000);

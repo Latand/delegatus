@@ -16,6 +16,46 @@ import { projectInfoFromCwd } from "@/lib/scanner/describe";
 
 const roots: string[] = [];
 const previousState = process.env.LLV_STATE_DIR;
+test("one thousand worktree hook lookups retain bounded root scope and readable search", async () => {
+  const index = new MemoryIndex();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-many-worktrees-")); roots.push(root);
+  fs.mkdirSync(path.join(root, ".git")); fs.writeFileSync(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
+  fs.writeFileSync(path.join(root, ".git", "config"), '[remote "origin"]\nurl = https://example.invalid/fixture/widgets.git\n');
+  const project = projectInfoFromCwd(root)!.project;
+  try {
+    await index.refresh([{ path: fixture("topic.md", "---\nname: Widget rule\ndescription: Widget delimiter rule.\ntype: project\n---\nWidget delimiter rule.\n"), engine: "claude", sourceKind: "claude_memory", project: directoryProjectId(root) }]);
+    for (let i = 0; i < 1000; i++) {
+      const cwd = path.join(root, "worktrees", `lane-${i}`); fs.mkdirSync(cwd, { recursive: true });
+      expect(projectInfoFromCwd(cwd)?.project).toBe(project);
+      const start = performance.now();
+      expect(await index.injectionCandidates("widget", project, "claude", `worktree-${i}`, Infinity, { cwd })).toHaveLength(1);
+      expect(performance.now() - start).toBeLessThan(100);
+    }
+    expect((await index.search({ query: "widget", project })).items).toHaveLength(1);
+    const db = new Database(path.join(process.env.LLV_STATE_DIR!, "memory-index.sqlite"));
+    try { expect(db.query<{ count: number }, []>("SELECT count(*) AS count FROM memory_project_scopes").get()!.count).toBeLessThanOrEqual(3); }
+    finally { db.close(); }
+  } finally { index.close(); }
+}, 30_000);
+test("a full scope table refuses new historical ownership and still selects canonical entries", async () => {
+  const index = new MemoryIndex();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-scope-capacity-")); roots.push(root);
+  fs.mkdirSync(path.join(root, ".git")); fs.writeFileSync(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
+  fs.writeFileSync(path.join(root, ".git", "config"), '[remote "origin"]\nurl = https://example.invalid/fixture/widgets.git\n');
+  const project = projectInfoFromCwd(root)!.project;
+  await index.refresh(["current", "previous"].map(name => ({
+    path: fixture(`${name}.md`, `---\nname: Widget ${name}\ndescription: Widget ${name} delimiter rule.\ntype: project\n---\nWidget ${name} delimiter rule.\n`),
+    engine: "claude" as const, sourceKind: "claude_memory" as const, project: name === "current" ? project : directoryProjectId(root),
+  })));
+  const db = new Database(path.join(process.env.LLV_STATE_DIR!, "memory-index.sqlite"));
+  try {
+    db.transaction(() => { for (let i = 0; i < 256; i++) db.query("INSERT INTO memory_project_scopes VALUES (?, ?, ?, NULL)").run(`synthetic-scope-${i}`, `other-${i}`, Number.MAX_SAFE_INTEGER); })();
+    const candidates = await index.injectionCandidates("widget", project, "claude", "scope-capacity", Infinity, { cwd: root });
+    expect(candidates.map(item => item.title)).toEqual(["Widget current"]);
+    expect((await index.search({ query: "widget", project })).items.map(item => item.title)).toEqual(["Widget current"]);
+    expect(db.query<{ count: number }, []>("SELECT count(*) AS count FROM memory_project_scopes").get()!.count).toBe(256);
+  } finally { db.close(); index.close(); }
+});
 test("a resolved shared-store project wins over an earlier unresolved account slug", async () => {
   const index = new MemoryIndex();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-shared-scope-")); roots.push(root);
@@ -123,11 +163,11 @@ test("overlapping candidate calls keep a contended writer inside the retrieval b
     const first = index.injectionCandidates("widget", project, "claude", "first-overlap", Infinity, { cwd: root });
     const second = index.injectionCandidates("widget", project, "claude", "second-overlap", Infinity, { cwd: root });
     expect(await first).toHaveLength(1);
-    const searching = index.search({ query: "widget", project }).then(() => null, error => error);
+    const searching = index.search({ query: "widget", project });
     writer.exec("BEGIN IMMEDIATE"); locked = true;
     const start = performance.now(); release();
-    expect(await second).toEqual([]); expect(performance.now() - start).toBeLessThan(150);
-    expect(await searching).toBeInstanceOf(Error); expect(performance.now() - start).toBeLessThan(150);
+    expect(await second).toHaveLength(1); expect(performance.now() - start).toBeLessThan(150);
+    expect((await searching).items).toHaveLength(1); expect(performance.now() - start).toBeLessThan(150);
   } finally { release(); if (locked) writer.exec("ROLLBACK"); writer.close(); spy.mockRestore(); index.close(); }
 }, 10_000);
 
@@ -254,7 +294,7 @@ for (const shape of ["directory", "local", "slug"]) test(`${shape} predecessor r
     ]);
     const [candidate] = await index.injectionCandidates("widget", project, "claude", "scoped-open", Infinity, { cwd: root });
     expect(candidate).toBeDefined();
-    // A feed can be opened long after recall; reprove lossy scopes on access.
+    // Directory signatures survive elapsed time without another slug walk.
     const now = Date.now;
     const clock = spyOn(Date, "now").mockImplementation(() => now() + 11_000);
     try {
@@ -372,8 +412,17 @@ test("identity proof avoids synchronous directory walks and bounds stalled async
     const start = performance.now();
     expect(await index.injectionCandidates("widget", project, "claude", "nonblocking-proof", Infinity, { cwd: folder })).toHaveLength(1);
     expect(performance.now() - start).toBeLessThan(150); expect(blockingReads).toBe(0);
-    const asynchronous = spyOn(fs.promises, "readdir").mockImplementation(((...args: Parameters<typeof fs.promises.readdir>) => args[0] === root ? new Promise(() => {}) : originalAsync(...args)) as typeof fs.promises.readdir);
+    let stalledReads = 0;
+    const asynchronous = spyOn(fs.promises, "readdir").mockImplementation(((...args: Parameters<typeof fs.promises.readdir>) => {
+      if (args[0] !== root) return originalAsync(...args);
+      stalledReads++; return new Promise(() => {});
+    }) as typeof fs.promises.readdir);
     try {
+      // An unchanged directory signature replays the proof without a walk.
+      expect(await index.injectionCandidates("widget", project, "claude", "replayed-proof", Infinity, { cwd: folder })).toHaveLength(1);
+      expect(stalledReads).toBe(0);
+      const db = new Database(path.join(process.env.LLV_STATE_DIR!, "memory-index.sqlite"));
+      try { db.query("DELETE FROM memory_project_scopes").run(); } finally { db.close(); }
       for (const remaining of [50, 1500]) {
         let reason = ""; const began = performance.now();
         expect(await index.injectionCandidates("widget", project, "claude", `stalled-${remaining}`, began + remaining, { cwd: folder, reason: value => { reason = value; } })).toEqual([]);

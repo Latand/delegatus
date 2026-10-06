@@ -9,7 +9,7 @@ import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import { statePath } from "@/lib/configDir";
 import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
 import { directoryProjectId, localRepositoryProjectId } from "@/lib/projects/identity";
-import { cachedProjectInfoFromCwd, unambiguousProjectForClaudeMemorySlug } from "@/lib/scanner/describe";
+import { cachedProjectInfoFromCwd, claudeMemoryScopeProof, claudeMemoryDirectoryProofCurrent, type ClaudeMemoryDirectoryProof } from "@/lib/scanner/describe";
 import { projectResolutionStateKey } from "@/lib/scanner/projectState";
 import type { MemoryTurnReason } from "./viewTypes";
 import { hardenedRedact } from "@/lib/view/compactText";
@@ -56,52 +56,49 @@ export class MemoryIndex {
   private scopeKeys(project: string, includeSlugProofs = true): Set<string> {
     const canonical = canonicalProject(project), keys = new Set([canonical]);
     for (const key of Object.keys(projectAliasSnapshot().aliases)) if (canonicalProject(key) === canonical) keys.add(key);
-    // First verified ownership survives Viewer replacement. A changed origin
-    // cannot take another repository's predecessor; only trusted aliases move it.
-    for (const proof of this.scopeProofs()) {
-      if (canonicalProject(proof.project) !== canonical || proof.expires < Date.now()) continue;
-      if (!includeSlugProofs && !/^(?:dir|repo)-[0-9a-f]{32}$/.test(proof.key)) continue;
-      const aliased = canonicalProject(proof.key);
-      if (aliased === proof.key || aliased === canonical) keys.add(proof.key);
+    const family = JSON.stringify([...keys]);
+    const proofs = this.database().query<{ key: string; proof: string | null }, [string]>(
+      "SELECT key, proof FROM memory_project_scopes WHERE project IN (SELECT value FROM json_each(?)) LIMIT 6",
+    ).all(family);
+    for (const entry of proofs) {
+      if (entry.proof) {
+        if (!includeSlugProofs) continue;
+        try { if (!claudeMemoryDirectoryProofCurrent(JSON.parse(entry.proof))) continue; }
+        catch { continue; }
+      }
+      const aliased = canonicalProject(entry.key);
+      if (aliased === entry.key || aliased === canonical) keys.add(entry.key);
     }
     return keys;
   }
 
-  private scopeProofs() {
-    return this.database().query<{ key: string; project: string; expires: number }, []>(
-      "SELECT key, project, expires FROM memory_project_scopes",
-    ).all();
-  }
-
-  private rememberScope(project: string, keys: Set<string>, folderIdentities: Set<string>) {
-    // No timeout claim survives an await: another hook can restore the shared
-    // connection while this lookup is paused. Claim zero wait at the write.
-    this.hookDatabase(db => {
-      const claim = db.query("INSERT OR IGNORE INTO memory_project_scopes (key, project, expires) VALUES (?, ?, ?)");
-      const owner = db.query<{ project: string }, [string]>("SELECT project FROM memory_project_scopes WHERE key = ?");
-      for (const key of keys) {
-        if (key === project || canonicalProject(key) === project) continue;
-        const expires = /^(?:dir|repo)-[0-9a-f]{32}$/.test(key) ? Number.MAX_SAFE_INTEGER : Date.now() + 10_000;
-        claim.run(key, project, expires);
-        const previous = canonicalProject(owner.get(key)!.project);
-        // Verified directory/local-path ownership can advance to the folder's
-        // first remote. A bound remote can move only through a trusted alias.
-        if (previous !== project && !folderIdentities.has(previous)) { keys.delete(key); continue; }
-        db.query("UPDATE memory_project_scopes SET project = ?, expires = ? WHERE key = ?").run(project, expires, key);
-      }
-    });
-  }
-
-  private async refreshScopeProofs(project: string, sourceProject?: string | null) {
-    const canonical = canonicalProject(project), deadline = performance.now() + 100;
-    for (const proof of this.scopeProofs()) {
-      if (canonicalProject(proof.project) !== canonical) continue;
-      if (/^(?:dir|repo)-[0-9a-f]{32}$/.test(proof.key) || (sourceProject && sourceProject !== proof.key)) continue;
-      if (canonicalProject(proof.key) === canonical) continue;
-      const verified = await unambiguousProjectForClaudeMemorySlug(proof.key, deadline, true);
-      const expires = canonicalProject(verified ?? "") === canonical ? Date.now() + 10_000 : 0;
-      this.hookDatabase(db => db.query("UPDATE memory_project_scopes SET expires = ? WHERE key = ?").run(expires, proof.key));
+  private rememberScope(project: string, keys: Set<string>, folderIdentities: Set<string>, proofs: Map<string, ClaudeMemoryDirectoryProof>) {
+    // Keep first repository ownership, with at most six root identities per
+    // project and 256 overall. Capacity refusal narrows recall to known keys;
+    // eviction would let a later unrelated origin inherit an old folder.
+    const db = this.database();
+    const owner = db.query<{ project: string; proof: string | null }, [string]>("SELECT project, proof FROM memory_project_scopes WHERE key = ?");
+    const changes: Array<{ key: string; proof: string | null }> = [];
+    for (const key of keys) {
+      if (key === project || canonicalProject(key) === project) continue;
+      const previous = owner.get(key);
+      if (previous && canonicalProject(previous.project) !== project && !folderIdentities.has(canonicalProject(previous.project))) { keys.delete(key); continue; }
+      const proof = proofs.has(key) ? JSON.stringify(proofs.get(key)) : null;
+      if (!previous || previous.project !== project || previous.proof !== proof) changes.push({ key, proof });
     }
+    if (!changes.length) return;
+    this.hookDatabase(db => db.transaction(() => {
+      let total = db.query<{ count: number }, []>("SELECT count(*) AS count FROM memory_project_scopes").get()!.count;
+      let scoped = db.query<{ count: number }, [string]>("SELECT count(*) AS count FROM memory_project_scopes WHERE project = ?").get(project)!.count;
+      for (const change of changes) {
+        const previous = owner.get(change.key);
+        if ((!previous && total >= 256) || (previous?.project !== project && scoped >= 6)) { keys.delete(change.key); continue; }
+        db.query("INSERT OR REPLACE INTO memory_project_scopes (key, project, expires, proof) VALUES (?, ?, ?, ?)")
+          .run(change.key, project, Number.MAX_SAFE_INTEGER, change.proof);
+        if (!previous) total++;
+        if (previous?.project !== project) scoped++;
+      }
+    })());
   }
 
   private normalizeProjects(db: BunDatabase) {
@@ -167,6 +164,19 @@ export class MemoryIndex {
         );
         CREATE TABLE IF NOT EXISTS memory_hook_attempts (conversation TEXT, request TEXT, PRIMARY KEY(conversation, request));
       `);
+      if (!this.db.query<{ name: string }, []>("PRAGMA table_info(memory_project_scopes)").all().some(column => column.name === "proof")) {
+        this.db.transaction(() => {
+          this.db!.exec(`ALTER TABLE memory_project_scopes ADD COLUMN proof TEXT;
+            DELETE FROM memory_project_scopes WHERE expires != ${Number.MAX_SAFE_INTEGER};`);
+          const count = this.db!.query<{ count: number }, []>("SELECT count(*) AS count FROM memory_project_scopes").get()!.count;
+          if (count > 256) {
+            // Preserve a full capacity fence after pruning legacy per-cwd rows:
+            // keys dropped here can never be re-claimed by another origin.
+            this.db!.exec("DELETE FROM memory_project_scopes WHERE key NOT IN (SELECT key FROM memory_project_scopes ORDER BY key LIMIT 256)");
+          }
+        })();
+      }
+      this.db.exec("CREATE INDEX IF NOT EXISTS memory_project_scopes_project ON memory_project_scopes(project)");
       if (!this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_injection_names'").get()) {
         // Migrate once, atomically, without waiting behind a live writer. A hook
         // can abandon a contended first open and retry on a later prompt.
@@ -247,7 +257,6 @@ export class MemoryIndex {
     if (!terms.length) return { items: [], truncated: false };
     const db = this.database();
     this.normalizeProjects(db);
-    if (input.project) await this.refreshScopeProofs(input.project);
     const scope = input.project ? JSON.stringify([...this.scopeKeys(input.project)]) : null;
     const items = db.query<MemoryItem, [string, string | null, string | null, string | null, string | null, number]>(`
       SELECT e.*, bm25(memory_fts, 0, 5, 2, 1) AS score FROM memory_fts JOIN memory_entries e ON e.id = memory_fts.id
@@ -274,10 +283,6 @@ export class MemoryIndex {
   async open(id: string, requestId: string, conversationId: string | null, project?: string, maxBytes = MEMORY_RESPONSE_BYTES) {
     const db = this.database();
     this.normalizeProjects(db);
-    if (project) {
-      const source = db.query<{ project: string | null }, [string]>("SELECT project FROM memory_entries WHERE id = ?").get(id);
-      await this.refreshScopeProofs(project, source?.project);
-    }
     const scope = project ? JSON.stringify([...this.scopeKeys(project)]) : null;
     const item = db.query<MemoryItem, [string, string | null, string | null]>("SELECT * FROM memory_entries WHERE id = ? AND (? IS NULL OR project IN (SELECT value FROM json_each(?)) OR scope = 'global')").get(id, scope, scope);
     if (!item) return null;
@@ -346,6 +351,7 @@ export class MemoryIndex {
     if (!query) return [];
     const db = this.database();
     db.exec("PRAGMA busy_timeout = 50");
+    let incompleteScope = false;
     try {
       check();
       // Alias resolution never rewrites project rows; refresh normalizes the
@@ -360,7 +366,8 @@ export class MemoryIndex {
       // similarity alone cannot establish that its memories belong here.
       const info = options.cwd ? cachedProjectInfoFromCwd(options.cwd) : null;
       if (options.cwd && canonicalProject(info?.project ?? "") === canonical) {
-        const folders = new Set([options.cwd, info?.repo].filter((folder): folder is string => Boolean(folder)));
+        const folders = new Set([info?.repo || options.cwd]);
+        const proofs = new Map<string, ClaudeMemoryDirectoryProof>();
         const physicalFolders = new Map<string, string>();
         for (const folder of [...folders]) {
           try {
@@ -377,10 +384,29 @@ export class MemoryIndex {
           const previous = [directoryProjectId(folder), localRepositoryProjectId(physicalFolders.get(folder) ?? folder, true)];
           for (const key of previous) if (key && (canonicalProject(key) === key || canonicalProject(key) === canonical)) { keys.add(key); folderIdentities.add(key); }
           const slug = folder.replace(/[^a-zA-Z0-9]/g, "-");
-          if (canonicalProject(slug) === canonical || canonicalProject(await unambiguousProjectForClaudeMemorySlug(slug, deadline, true) ?? "") === canonical) keys.add(slug);
+          if (canonicalProject(slug) === canonical) { keys.add(slug); continue; }
+          // An unchanged signature replays the earlier walk. A fresh walk gets
+          // half the remaining budget; an unfinished one only drops the slug.
+          const stored = db.query<{ project: string; proof: string | null }, [string]>("SELECT project, proof FROM memory_project_scopes WHERE key = ?").get(slug);
+          let directories: ClaudeMemoryDirectoryProof | undefined;
+          try { if (stored?.proof && canonicalProject(stored.project) === canonical) directories = JSON.parse(stored.proof); } catch { /* walk again */ }
+          if (directories && claudeMemoryDirectoryProofCurrent(directories)) { keys.add(slug); proofs.set(slug, directories); continue; }
+          const walkDeadline = performance.now() + (deadline - performance.now()) / 2;
+          try {
+            const proof = await claudeMemoryScopeProof(slug, walkDeadline); check();
+            if (canonicalProject(proof.project ?? "") === canonical) { keys.add(slug); proofs.set(slug, proof.directories); }
+            else if (performance.now() >= walkDeadline) incompleteScope = true;
+          } catch (error) { check(); if (!(error instanceof Error && error.message === "slug identity deadline")) throw error; incompleteScope = true; }
+        }
+        check();
+        try { this.rememberScope(canonical, keys, folderIdentities, proofs); }
+        catch {
+          // A failed ownership update cannot authorize historical keys.
+          keys.clear(); keys.add(canonical);
+          for (const key of Object.keys(projectAliasSnapshot().aliases)) if (canonicalProject(key) === canonical) keys.add(key);
         }
       }
-      check(); this.rememberScope(canonical, keys, folderIdentities);
+      check();
       const projectKeys = JSON.stringify([...keys]);
       const hits = db.query<MemoryItem, [string, string, string, number]>(`SELECT e.* FROM memory_fts JOIN memory_entries e ON e.id = memory_fts.id
         WHERE memory_fts MATCH ? AND (e.project IN (SELECT value FROM json_each(?)) OR e.scope = 'global')
@@ -442,6 +468,8 @@ export class MemoryIndex {
         if (page.length < 128) break;
       }
       check();
+      // An unfinished slug walk left part of this folder's history unsearched.
+      if (!kept.length && incompleteScope) options.reason?.("candidateTimeout");
       return kept;
     } catch (error) { options.reason?.(performance.now() >= deadline || (error instanceof Error && ["memory candidate budget", "slug identity deadline"].includes(error.message)) ? "candidateTimeout" : "failed"); return []; }
     finally { db.exec("PRAGMA busy_timeout = 5000"); }

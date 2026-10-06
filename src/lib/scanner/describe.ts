@@ -214,7 +214,25 @@ export async function unambiguousProjectForClaudeMemorySlug(slug: string, deadli
   return proof.cwd ? (cachedOnly ? cachedProjectInfoFromCwd(proof.cwd) : projectInfoFromCwd(proof.cwd))?.project ?? null : null;
 }
 
-async function uniqueClaudeMemoryPath(slug: string, deadline = Infinity): Promise<{ cwd: string | null; absent: boolean }> {
+export type ClaudeMemoryDirectoryProof = Array<{ path: string; identity: string }>;
+
+function directoryProofIdentity(stat: fs.Stats): string {
+  return `${stat.dev}:${stat.ino}:${stat.mtimeMs}:${stat.ctimeMs}`;
+}
+
+/** Validate the directories already examined by a bounded slug proof. No walk. */
+export function claudeMemoryDirectoryProofCurrent(proof: ClaudeMemoryDirectoryProof): boolean {
+  try { return proof.length > 0 && proof.length <= 256 && proof.every(entry => directoryProofIdentity(fs.statSync(entry.path)) === entry.identity); }
+  catch { return false; }
+}
+
+export async function claudeMemoryScopeProof(slug: string, deadline: number): Promise<{ project: string | null; directories: ClaudeMemoryDirectoryProof }> {
+  const directories: ClaudeMemoryDirectoryProof = [];
+  const proof = await uniqueClaudeMemoryPath(slug, deadline, directories);
+  return { project: proof.cwd ? cachedProjectInfoFromCwd(proof.cwd)?.project ?? null : null, directories };
+}
+
+async function uniqueClaudeMemoryPath(slug: string, deadline = Infinity, directories?: ClaudeMemoryDirectoryProof): Promise<{ cwd: string | null; absent: boolean }> {
   const unresolved = { cwd: null, absent: false };
   const drive = process.platform === "win32" ? /^([A-Za-z])--/.exec(slug)?.[1] : undefined;
   if (!slug.startsWith("-") && !drive) return unresolved;
@@ -234,6 +252,7 @@ async function uniqueClaudeMemoryPath(slug: string, deadline = Infinity): Promis
       const next: typeof frontier = [];
       for (const parent of frontier) {
         if (performance.now() >= deadline) return unresolved;
+        const before = directories ? directoryProofIdentity(await read(fs.promises.stat(parent.pathname))) : undefined;
         for (const entry of await read(fs.promises.readdir(parent.pathname, { withFileTypes: true }))) {
           if (performance.now() >= deadline) throw Error("slug identity deadline");
           const encoded = parent.encoded + "-" + entry.name.replace(/[^a-zA-Z0-9]/g, "-");
@@ -243,11 +262,17 @@ async function uniqueClaudeMemoryPath(slug: string, deadline = Infinity): Promis
           if (!directory) continue;
           if (encoded === slug) matches.push(pathname); else next.push({ pathname, encoded });
         }
+        if (directories) {
+          const after = directoryProofIdentity(await read(fs.promises.stat(parent.pathname)));
+          if (before !== after || directories.length >= 256) return unresolved;
+          directories.push({ path: parent.pathname, identity: after });
+        }
       }
       if (next.length > 64) return unresolved;
       frontier = next;
     }
     if (performance.now() >= deadline || frontier.length) return unresolved;
+    if (directories && matches.length === 1) directories.push({ path: matches[0]!, identity: directoryProofIdentity(await read(fs.promises.stat(matches[0]!))) });
     return { cwd: matches.length === 1 ? matches[0]! : null, absent: matches.length === 0 };
   } catch (error) { if (error instanceof Error && error.message === "slug identity deadline") throw error; return unresolved; }
 }
