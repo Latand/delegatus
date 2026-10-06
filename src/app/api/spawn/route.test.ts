@@ -308,7 +308,13 @@ for (const change of ["unrelated refusal", "unrelated refusal with fallback", "p
 });
 
 
-for (const scenario of ["exhausted pin", "unavailable pin", "automatic credential rotation", "pin credential rotation", "pin catalog change", "pin credential removal", "pin unreadable credential", "pin rejected refresh rotation"] as const) test(`Claude selection handles a fallback race with ${scenario}`, async () => {
+for (const scenario of [
+  "exhausted pin", "unavailable pin",
+  "exhausted pin fallback credential rotation", "exhausted pin fallback revision churn",
+  "unavailable pin fallback credential rotation", "unavailable pin fallback revision churn",
+  "automatic credential rotation", "pin credential rotation", "pin catalog change",
+  "pin credential removal", "pin unreadable credential", "pin rejected refresh rotation",
+] as const) test(`Claude selection handles a fallback race with ${scenario}`, async () => {
   const { createManagedClaudeAccount } = await import("@/lib/accounts/claude");
   const { recordSpawnAdmissionRejection } = await import("@/lib/agent/spawnAdmission");
   const { accountManager, resolveHealthySpawnAccount } = await import("@/lib/accounts/manager");
@@ -326,7 +332,7 @@ for (const scenario of ["exhausted pin", "unavailable pin", "automatic credentia
     const second = createManagedClaudeAccount("Account B");
     const firstToken = crypto.randomUUID();
     const secondToken = crypto.randomUUID();
-    const resetAt = new Date(Date.now() + 3600_000).toISOString();
+    const resetAt = new Date(Math.floor(Date.now() / 1000) * 1000 + 3600_000).toISOString();
     const writeCredentials = (home: string, token: string, expiresAt = Date.now() + 3600_000) => fs.writeFileSync(path.join(home, ".credentials.json"), JSON.stringify({ claudeAiOauth: {
       ["access" + "Token"]: token, refreshToken: crypto.randomUUID(), expiresAt,
     } }), { mode: 0o600 });
@@ -343,13 +349,15 @@ for (const scenario of ["exhausted pin", "unavailable pin", "automatic credentia
       const isFirst = new Headers(init?.headers).get("authorization") === `Bearer ${firstToken}` || String(_url).includes("/oauth/token");
       probes.push(isFirst ? "first" : "second");
       if (isFirst && scenario !== "automatic credential rotation") {
-        return scenario === "exhausted pin"
+        return scenario.startsWith("exhausted pin")
           ? Response.json({ five_hour: { utilization: 100, resets_at: resetAt }, seven_day: { utilization: 10 } })
           : Response.json({ error: "invalid_grant" }, { status: 401 });
       }
-      if (!raced) {
+      if (!raced || scenario.endsWith("fallback revision churn")) {
         raced = true;
-        if (scenario === "automatic credential rotation") writeCredentials(second.home, crypto.randomUUID());
+        if (scenario.endsWith("fallback credential rotation")) writeCredentials(second.home, crypto.randomUUID());
+        else if (scenario.endsWith("fallback revision churn")) recordSpawnAdmissionRejection({ clientAttemptId: `fallback-churn-${probes.length}`, requestDigest: "a".repeat(64), status: 400, error: "role is not offered" }, () => null);
+        else if (scenario === "automatic credential rotation") writeCredentials(second.home, crypto.randomUUID());
         else if (scenario === "pin credential rotation" || scenario === "pin rejected refresh rotation") writeCredentials(first.home, crypto.randomUUID());
         else if (scenario === "pin credential removal") fs.unlinkSync(path.join(first.home, ".credentials.json"));
         else if (scenario === "pin unreadable credential") fs.writeFileSync(path.join(first.home, ".credentials.json"), "{invalid json", { mode: 0o600 });
@@ -374,11 +382,11 @@ for (const scenario of ["exhausted pin", "unavailable pin", "automatic credentia
       body: JSON.stringify({ engine: "claude", ...(scenario === "automatic credential rotation" ? {} : { accountId: first.id }), cwd, title: "Fallback race", prompt: "Review", clientAttemptId: "fallback-race-key" }),
     });
     const response = await POST.withDependencies(request(), deps);
-    if (scenario.startsWith("pin ")) {
+    if (scenario.startsWith("pin ") || scenario.startsWith("unavailable pin fallback")) {
       expect(response.status).toBe(503);
       expect(await response.json()).toMatchObject({ code: "account_admission_changed", retryable: true, retrySafe: true });
       expect(Object.values(store.readOnlySnapshot().receipts)).toHaveLength(0);
-      expect(probes).toEqual(scenario === "pin catalog change" ? ["first", "second", "second"] : ["first", "second"]);
+      expect(probes).toEqual(scenario.endsWith("fallback revision churn") ? ["first", "second", "second", "second"] : scenario === "pin catalog change" ? ["first", "second", "second"] : ["first", "second"]);
       return;
     }
     expect({ status: response.status, body: await response.json() }).toMatchObject({ status: 202 });
@@ -386,8 +394,16 @@ for (const scenario of ["exhausted pin", "unavailable pin", "automatic credentia
     expect(receipts).toHaveLength(1);
     // The receipt binds the requested pin even when execution uses a fallback.
     expect(receipts[0].accountId).toBe(first.id);
-    expect(probes).toEqual(scenario === "automatic credential rotation" ? ["first"] : ["first", "second", "second"]);
-    if (scenario !== "exhausted pin") {
+    expect(probes).toEqual(scenario === "automatic credential rotation" ? ["first"]
+      : scenario.endsWith("fallback credential rotation") ? ["first", "second"]
+      : scenario.endsWith("fallback revision churn") ? ["first", "second", "second", "second"]
+      : ["first", "second", "second"]);
+    if (scenario.startsWith("exhausted pin")) {
+      expect(receipts[0]).toMatchObject({
+        accountPin: true, state: "starting",
+        queuedPinnedSpawn: { accountId: first.id, retryAt: resetAt, prompt: "Review" },
+      });
+    } else {
       expect((await POST.withDependencies(request(), deps)).status).toBe(202);
       expect(Object.values(store.readOnlySnapshot().receipts)).toHaveLength(1);
     }

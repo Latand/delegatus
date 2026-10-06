@@ -377,6 +377,9 @@ export async function selectHealthyClaudeAccount(
   if (pinPreferred) await requested?.revalidate?.();
   const refreshedSelection = select(all);
   if (refreshedSelection) return result(refreshedSelection, requested);
+  // A revalidated exhausted pin can queue without using any fallback. Changes
+  // to excluded candidates must not discard that completed retry deadline.
+  if (changedCandidate && pinPreferred && requested?.admission.kind === "retry-at") return result(requested, requested);
   if (changedCandidate) throw changedCandidate;
   if (unknownAccounts.size > 0) throw new ClaudeCredentialUnavailableError();
   throw new NoHealthyClaudeAccountError(accounts);

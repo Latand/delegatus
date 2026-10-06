@@ -23,7 +23,7 @@ the lock.
 
 | Caller | File:line | Foreign holder | Why | Local holder or local waiter |
 | --- | --- | --- | --- | --- |
-| `runIdentityWaveMigrationAtStartup` | `src/lib/agent/identityWaveStartup.ts:196` | 25 ms wait | Boot needs a completed migration result; rerunning the outer startup later remains idempotent. | Safe busy exception aborts startup; the next startup retries the idempotent migration. A synchronous boot cannot yield for its own holder. |
+| `runIdentityWaveMigrationAtStartup` | `src/lib/agent/identityWaveStartup.ts:196` | 25 ms wait | Boot needs a completed migration result; rerunning the outer startup later remains idempotent. | The Viewer startup wrapper (`src/lib/viewerInstrumentation.ts:573`) yields and retries up to three total attempts, with 5 s and 10 s pauses by default. Exhaustion logs diagnostics and leaves the migration for a later startup. The direct synchronous API raises safe AccountMutationBusyError. |
 | `recordSpawnAdmissionRejection` | `src/lib/agent/spawnAdmission.ts:224` | 25 ms foreign wait; async request queue | The refusal fence must commit before its result is returned; deferred writing could race reservation. | Spawn refusal and validation await async admission (2 s), then commit reentrantly; they return only after the durable fence or an explicit unfenced outcome. |
 | `beginSpawnRequest` | `src/lib/agent/registry.ts:5434` | 25 ms wait | Returns a durable reservation or rejection synchronously; request paths already have async admission. | Request paths use beginSpawnRequestAsync / async admission; direct sync API raises safe AccountMutationBusyError, with no reservation. Caller must retry after yielding. |
 | `runIdentityWaveMigration` | `src/lib/agent/registry.ts:5894` | 25 ms wait | The migration and its marker return together; no detached replay may claim completion. | Startup raises safe AccountMutationBusyError and retries on the next startup; no completion marker is written on refusal. |
@@ -69,12 +69,15 @@ has a 2 s budget. A changed pinned catalog row or credential, including external
 replacement during OAuth refresh or its queued post-refresh recheck,
 becoming unreadable during the live probe,
 or a Keychain change while the final recheck queues,
-refuses admission with `account_admission_changed`, as does continuous revision churn after the
-third probe when no other candidate is launchable. A changed fallback candidate
+refuses admission with `account_admission_changed`, as does continuous revision churn in the
+pin after its third probe. A changed fallback candidate
 is excluded from that selection, preserving the requested account's completed
 classification. Automatic selection likewise excludes a changed candidate and
 can launch on an unchanged healthy account. If no healthy candidate remains,
-the admission change retains its retryable `account_admission_changed` fence.
+an admission change in a fallback preserves an unchanged exhausted explicit
+pin's completed retry deadline so the
+spawn command queues on that pin. Otherwise the admission change retains its
+retryable `account_admission_changed` fence.
 The completed pin's catalog/file identity and request-local credential digest
 are revalidated after fallback probes and refreshes, before any result can
 reserve a fallback or queue the exhausted pin. A rejected pin refresh retains
@@ -88,6 +91,11 @@ Focused regression evidence:
   head with 400/500 and pass with queued success or the safe retryable 503.
 - A pinned Claude probe with one unrelated refusal write admits 202 with one
   receipt; changed pinned catalog/credentials and continuous churn admit none.
+- An exhausted pin queues with one receipt when its only fallback rotates its
+  credential or exhausts three revision retries. Both POST regressions and the
+  probe/refresh selection checks fail on the previous head. An unavailable pin
+  with the same fallback changes still refuses with 503 and no receipt; a
+  changed exhausted pin also retains its admission refusal.
 - An exhausted or unavailable pin survives an unrelated refusal write during
   its fallback probe (202, one receipt). Automatic selection survives a sibling
   credential rotation on the unchanged account. Candidate exclusion also covers

@@ -217,6 +217,37 @@ for (const phase of ["probe", "refresh"] as const) {
   });
 }
 
+for (const phase of ["probe", "refresh"] as const) {
+  for (const policy of ["exhausted pin", "unavailable pin", "changed exhausted pin"] as const) test(`a changed fallback ${phase} preserves ${policy}`, async () => {
+    const { AccountAdmissionChangedError } = await import("./accountMutation");
+    const pin = account("pin", NOW + 60_000);
+    const fallback = account("fallback", phase === "probe" ? NOW + 60_000 : NOW - 1);
+    const retryAt = new Date(NOW + 3600_000).toISOString();
+    const admission = policy === "unavailable pin" ? unavailable()
+      : { kind: "retry-at", reason: "hard-limit", stale: false, retryAt } as const;
+    const fallbackChange = new AccountAdmissionChangedError();
+    const pinChange = new AccountAdmissionChangedError();
+    let fallbackEvaluated = false;
+    let rechecks = 0;
+    const evaluate = async (candidate: ClaudeAccount) => {
+      if (candidate.id === pin.id) return { ...admission, revalidate: async () => {
+        rechecks += 1;
+        if (fallbackEvaluated && policy === "changed exhausted pin") throw pinChange;
+      } };
+      fallbackEvaluated = true;
+      throw fallbackChange;
+    };
+    const selection = selectHealthyClaudeAccount([pin, fallback], pin.id, {
+      now: () => NOW, probe: evaluate, refresh: evaluate,
+    });
+    if (policy === "exhausted pin") {
+      expect(await selection).toEqual({ account: pin, admission, requestedAdmission: admission });
+      expect(fallbackEvaluated).toBe(true);
+      expect(rechecks).toBeGreaterThan(0);
+    } else await expect(selection).rejects.toBe(policy === "changed exhausted pin" ? pinChange : fallbackChange);
+  });
+}
+
 test("an expired fallback preserves the pinned selection's bounded revision retry policy", async () => {
   const pin = account("pin", NOW + 60_000);
   const fallback = account("fallback", NOW - 1);
