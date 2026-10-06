@@ -409,12 +409,15 @@ test("a lane whose host call does not answer is reconciled from host evidence an
   await queue.drain();
   time.advance(31_000);
   await queue.tick();
+  /* The watchdog starts the evidence read and waits for none of them. */
+  await sleep(5);
   /* No evidence yet: the send keeps its delivering fence and is not repeated. */
   expect(journal.ops.get("op-held")!.status).toBe("delivering");
   expect(progress.get("op-held")?.detail).toContain("no host evidence");
   arrived = true;
   time.advance(31_000);
   await queue.tick();
+  await sleep(5);
   expect(journal.ops.get("op-held")!.status).toBe("delivered");
   /* The conversation is free for its next message on the same executor. */
   journal.admit("op-after", "conversation-a");
@@ -463,4 +466,159 @@ test("two executors that both read the operation as queued hand it over once", a
   await second.drain().catch(() => undefined);
   expect(target.inputs).toEqual(["op-race"]);
   expect(journal.ops.get("op-race")!.status).toBe("delivered");
+});
+
+test("an evidence read that never answers holds nobody else: another conversation's lost wake is replaced and its stall is marked on time", async () => {
+  const time = clock();
+  const journal = fakeJournal();
+  const progress = new DeliveryProgressStore(null, time.now);
+  const hung = fakeHost(never);
+  const alsoHung = fakeHost(never);
+  const other = fakeHost(delivered);
+  let evidenceReads = 0;
+  journal.admit("op-a", "conversation-a");
+  const queue = queueFor(
+    journal.port({ progress, confirmedDelivery: () => { evidenceReads += 1; return new Promise<boolean>(() => {}); } }),
+    { "conversation-a": hung.engine, "conversation-b": other.engine, "conversation-c": alsoHung.engine },
+    { passBudgetMs: 20, stallMs: 4_000, interruptReconcileMs: 30_000, safetyPassMs: 5_000, reconcileReadMs: 30, now: time.now },
+  );
+  await queue.drain();
+  expect(hung.inputs).toEqual(["op-a"]);
+
+  /* B is admitted and its wake is lost; A's reconciliation starts and its
+     evidence reader never resolves. */
+  journal.admit("op-b", "conversation-b");
+  time.advance(31_000);
+  const started = performance.now();
+  await queue.tick();
+  expect(performance.now() - started).toBeLessThan(1_000);
+  expect(evidenceReads).toBe(1);
+  expect(other.inputs).toEqual(["op-b"]);
+  expect(journal.ops.get("op-b")!.status).toBe("delivered");
+
+  /* Later ticks keep working while that read is still pending: a third
+     conversation's hung send is marked stalled within its own bound. */
+  journal.admit("op-c", "conversation-c");
+  await queue.drain();
+  time.advance(4_000);
+  await queue.tick();
+  expect(progress.get("op-c")?.stalledSince).not.toBeNull();
+  expect(Date.parse(progress.get("op-c")!.stalledSince!) - Date.parse(progress.get("op-c")!.phaseSince)).toBeLessThanOrEqual(10_000);
+  /* One read in flight per lane, and the unanswered one frees its lane at the bound. */
+  expect(evidenceReads).toBe(1);
+  await sleep(60);
+  expect(progress.get("op-a")?.detail).toContain("has not answered");
+  expect(progress.get("op-a")?.attempt).toBe(2);
+  time.advance(31_000);
+  await queue.tick();
+  expect(evidenceReads).toBeGreaterThanOrEqual(2);
+  expect(hung.inputs).toEqual(["op-a"]);
+  expect(journal.ops.get("op-a")!.status).toBe("delivering");
+});
+
+test("evidence that answers after its bound still settles the original operation and writes no second input", async () => {
+  const time = clock();
+  const journal = fakeJournal();
+  const progress = new DeliveryProgressStore(null, time.now);
+  let calls = 0;
+  const target = fakeHost(() => (calls++ === 0 ? never() : delivered()));
+  const evidence = deferred<boolean>();
+  journal.admit("op-late", "conversation-a");
+  const queue = queueFor(journal.port({ progress, confirmedDelivery: () => evidence.promise }), { "conversation-a": target.engine },
+    { passBudgetMs: 20, stallMs: 4_000, interruptReconcileMs: 30_000, safetyPassMs: 600_000, reconcileReadMs: 20, now: time.now });
+  await queue.drain();
+  time.advance(31_000);
+  await queue.tick();
+  await sleep(50);
+  expect(progress.get("op-late")?.detail).toContain("has not answered");
+  expect(journal.ops.get("op-late")!.status).toBe("delivering");
+
+  evidence.resolve(true);
+  await sleep(10);
+  expect(journal.ops.get("op-late")!.status).toBe("delivered");
+  expect(progress.get("op-late")?.terminal?.state).toBe("delivered");
+  /* The conversation moves on, and the original operation reached the host once. */
+  journal.admit("op-next", "conversation-a");
+  await queue.drain();
+  await queue.drain();
+  expect(target.inputs).toEqual(["op-late", "op-next"]);
+});
+
+for (const step of ["status", "health", "claim", "binding", "delivering-write"] as const) {
+  test(`a ${step} step that does not answer is recorded as the step it is, from when it began, and never as a lost wake`, async () => {
+    const time = clock();
+    const journal = fakeJournal();
+    const progress = new DeliveryProgressStore(null, time.now);
+    const hang = <T>(): Promise<T> => new Promise<T>(() => {});
+    const target = fakeHost(delivered);
+    if (step === "health") target.engine.health = () => hang<HostState>();
+    if (step === "delivering-write") journal.delayTransitions((_operationId, status) => status === "delivering" ? hang<void>() : Promise.resolve());
+    const base = journal.port({ progress });
+    const port: StructuredDeliveryQueuePort = {
+      ...base,
+      ...(step === "status" ? { status: () => hang() } : {}),
+      ...(step === "claim" ? { hostClaim: () => hang<string | null>() } : {}),
+      ...(step === "binding" ? { bindDeliveryGeneration: () => hang<boolean>() } : {}),
+    };
+    journal.admit("op-step", "conversation-a");
+    const queue = queueFor(port, { "conversation-a": target.engine },
+      { passBudgetMs: 20, stallMs: 4_000, safetyPassMs: 5_000, interruptReconcileMs: 30_000, now: time.now });
+    const began = time.now();
+    await queue.drain();
+    /* Nothing is written on the ordinary pass. */
+    expect(progress.get("op-step")).toBeNull();
+
+    time.advance(6_000);
+    await queue.tick();
+    const record = progress.get("op-step")!;
+    expect(record.waitReason).toBe("checking");
+    expect(record.detail).toContain({
+      status: "delivery journal status",
+      health: "host state",
+      claim: "host writer claim",
+      binding: "binding the host generation",
+      "delivering-write": "delivering fence",
+    }[step]);
+    expect(Date.parse(record.phaseSince)).toBe(began);
+    expect(Date.parse(record.lastProgressAt)).toBe(began);
+    expect(Date.parse(record.stalledSince!)).toBe(time.now());
+    expect(record.wakeLostAt).toBeNull();
+    expect(record.attempt).toBe(0);
+
+    time.advance(31_000);
+    await queue.tick();
+    time.advance(11_000);
+    await queue.tick();
+    const later = progress.get("op-step")!;
+    expect(later.waitReason).toBe("checking");
+    expect(later.wakeLostAt).toBeNull();
+    expect(Date.parse(later.lastProgressAt)).toBe(began);
+    expect(target.inputs).toEqual([]);
+  });
+}
+
+test("a delivery write refused for a busy record lock defers the message with that reason and is retried once", async () => {
+  const journal = fakeJournal();
+  const progress = new DeliveryProgressStore(null);
+  const target = fakeHost(delivered);
+  let busy = true;
+  journal.admit("op-busy", "conversation-a");
+  let wakes = 0;
+  const queue = queueFor(journal.port({
+    progress,
+    bindDeliveryGeneration: async () => {
+      if (busy) throw new Error("the delivery record's write lock is held by another writer");
+      return true;
+    },
+  }), { "conversation-a": target.engine }, { passBudgetMs: 1_000, safetyPassMs: 60_000 }, () => { wakes += 1; });
+  await queue.drain();
+  expect(target.inputs).toEqual([]);
+  expect(journal.ops.get("op-busy")!.status).toBe("queued");
+  expect(progress.get("op-busy")?.waitReason).toBe("evidence-unreadable");
+  expect(progress.get("op-busy")?.detail).toContain("write lock is held by another writer");
+  expect(wakes).toBeGreaterThan(0);
+  busy = false;
+  await queue.drain();
+  expect(target.inputs).toEqual(["op-busy"]);
+  expect(journal.ops.get("op-busy")!.status).toBe("delivered");
 });

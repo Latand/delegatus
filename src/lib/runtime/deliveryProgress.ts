@@ -73,6 +73,9 @@ export interface DeliveryProgressNote {
   attempted?: boolean;
   /** The delivery advanced even though its reason did not change. */
   progressed?: boolean;
+  /** When this wait began, for one recorded after it started: the phase and
+      the last progress are dated from here. */
+  sinceMs?: number;
   originalKey?: string | null;
   kind?: string;
   admittedAt?: string | null;
@@ -158,6 +161,7 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
     this.load();
     const at = new Date(this.now()).toISOString();
     const current = this.records.get(operationId);
+    const since = note.sinceMs !== undefined ? new Date(Math.min(note.sinceMs, this.now())).toISOString() : at;
     /* A detail belongs to the reason it was written with. */
     const detail = note.detail !== undefined ? boundedDetail(note.detail)
       : current && current.waitReason === note.waitReason ? current.detail : null;
@@ -174,8 +178,8 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
         detail,
         attempt: note.attempted ? 1 : 0,
         admittedAt: note.admittedAt ?? null,
-        phaseSince: at,
-        lastProgressAt: at,
+        phaseSince: since,
+        lastProgressAt: since,
         deadlineAt: null,
         deadlinePolicy: null,
         nextWakeAt,
@@ -208,8 +212,8 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
       detail,
       attempt: current.attempt + (note.attempted ? 1 : 0),
       admittedAt: note.admittedAt ?? current.admittedAt,
-      phaseSince: reasonChanged ? at : current.phaseSince,
-      lastProgressAt: advanced ? at : current.lastProgressAt,
+      phaseSince: reasonChanged ? since : current.phaseSince,
+      lastProgressAt: advanced && since > current.lastProgressAt ? since : current.lastProgressAt,
       nextWakeAt,
       stalledSince: advanced ? null : current.stalledSince,
       wakeLostAt: note.waitReason === "wake-lost" ? at : current.wakeLostAt ?? null,

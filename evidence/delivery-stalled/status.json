@@ -1,0 +1,62 @@
+{
+  "390-uk": {
+    "text": "Без руху вже 6 с: передає це агентові",
+    "stalledLines": 1,
+    "openDetails": 0,
+    "reasonShown": 1,
+    "left": 187.390625,
+    "right": 374,
+    "height": 15,
+    "scrollWidth": 187,
+    "clientWidth": 187,
+    "overflowX": 0,
+    "viewportWidth": 390,
+    "spinner": true,
+    "withinTenSeconds": true
+  },
+  "390-en": {
+    "text": "No progress for 6s: handing this over to the agent",
+    "stalledLines": 1,
+    "openDetails": 0,
+    "reasonShown": 1,
+    "left": 136.1875,
+    "right": 374,
+    "height": 15,
+    "scrollWidth": 238,
+    "clientWidth": 238,
+    "overflowX": 0,
+    "viewportWidth": 390,
+    "spinner": true,
+    "withinTenSeconds": true
+  },
+  "1440-uk": {
+    "text": "Без руху вже 6 с: передає це агентові",
+    "stalledLines": 1,
+    "openDetails": 0,
+    "reasonShown": 1,
+    "left": 1237.390625,
+    "right": 1424,
+    "height": 15,
+    "scrollWidth": 187,
+    "clientWidth": 187,
+    "overflowX": 0,
+    "viewportWidth": 1440,
+    "spinner": true,
+    "withinTenSeconds": true
+  },
+  "1440-en": {
+    "text": "No progress for 6s: handing this over to the agent",
+    "stalledLines": 1,
+    "openDetails": 0,
+    "reasonShown": 1,
+    "left": 1186.1875,
+    "right": 1424,
+    "height": 15,
+    "scrollWidth": 238,
+    "clientWidth": 238,
+    "overflowX": 0,
+    "viewportWidth": 1440,
+    "spinner": true,
+    "withinTenSeconds": true
+  }
+}

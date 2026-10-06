@@ -1961,6 +1961,72 @@ describe("delivery outcome settlement", () => {
   }, 120_000);
 });
 
+describe("a stalled hand-over says so on its message", () => {
+  /*
+   * Incident 2026-10-06: a message whose hand-over hung showed one spinner and
+   * kept its reason behind a hover and a click. The fixture serves the delivery
+   * queue's own record of one hung hand-over on the production poll; this
+   * waits through the bound without touching the page and reads what the
+   * resting row shows.
+   */
+  browserTest("with no hover or click, within ten seconds, at phone and desktop widths in both languages", async () => {
+    const out = path.resolve(".artifacts/delivery-stalled");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    const browser = await chromium.launch(LAUNCH);
+    const evidence: Record<string, unknown> = {};
+    try {
+      for (const width of [390, 1440]) for (const lang of ["uk", "en"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser,
+          `${served.base}?case=delivery-stalled&lang=${lang}`, { width, height: 900 }, "dark", lang,
+          "reduce", width === 390);
+        const key = `${width}-${lang}`;
+        try {
+          await page.waitForSelector("[data-evidence-case=\"delivery-stalled\"] [data-outbox-entry]");
+          /* Before the queue records a stall the row is a moving delivery. */
+          expect(await page.locator("[data-outbox-stalled]").count()).toBe(0);
+          await page.screenshot({ path: path.join(out, `moving-${key}.png`), fullPage: true });
+          const line = page.locator("[data-outbox-stalled-status]");
+          await line.waitFor({ state: "visible", timeout: 10_000 });
+          const reason = translate(lang, "delivery.wait.dispatching");
+          const reading = await line.evaluate((element, reasonText) => {
+            const rect = element.getBoundingClientRect();
+            const fixture = document.querySelector<HTMLElement>("[data-fixture-started]")!;
+            return {
+              elapsedMs: Date.now() - Number(fixture.dataset.fixtureStarted),
+              text: element.textContent ?? "",
+              stalledLines: document.querySelectorAll("[data-outbox-stalled]").length,
+              openDetails: document.querySelectorAll("[data-outbox-detail]").length,
+              /* How many times the page shows the reason to a sighted reader. */
+              reasonShown: document.body.innerText.split(reasonText).length - 1,
+              left: rect.left, right: rect.right, height: rect.height,
+              scrollWidth: element.scrollWidth, clientWidth: element.clientWidth,
+              overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+              viewportWidth: innerWidth,
+              spinner: Boolean(document.querySelector("[data-outbox-entry] .animate-spin")),
+            };
+          }, reason);
+          await page.screenshot({ path: path.join(out, `stalled-${key}.png`), fullPage: true });
+          expect(pageErrors).toEqual([]);
+          expect(reading.elapsedMs).toBeLessThanOrEqual(10_000);
+          expect(reading.text).toContain(reason);
+          expect(reading.text.startsWith(translate(lang, "delivery.stalled.status", { duration: "", reason: "" }).slice(0, 8))).toBe(true);
+          expect(reading.stalledLines).toBe(1);
+          expect(reading.openDetails).toBe(0);
+          expect(reading.reasonShown).toBe(1);
+          expect(reading.overflowX).toBe(0);
+          expect(reading.scrollWidth).toBeLessThanOrEqual(reading.clientWidth);
+          expect(reading.left).toBeGreaterThanOrEqual(0);
+          expect(reading.right).toBeLessThanOrEqual(reading.viewportWidth);
+          evidence[key] = { ...reading, elapsedMs: undefined, withinTenSeconds: true };
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/delivery-stalled", { recursive: true });
+      fs.writeFileSync("evidence/delivery-stalled/status.json", JSON.stringify(evidence, null, 2) + "\n");
+    } finally { await browser.close(); served.stop(); }
+  }, 180_000);
+});
+
 describe("own-message step row", () => {
   /*
    * The row that steps between the operator's own messages

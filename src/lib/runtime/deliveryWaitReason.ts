@@ -43,6 +43,10 @@ export const DELIVERY_WAIT_REASONS = [
   "switch-failed",
   /** Startup has not registered this conversation's host yet. */
   "startup",
+  /** The queue is reading or writing what the hand-over depends on (journal
+      status, host state, writer claim, delivery record) and that step has not
+      answered; the detail names the step. */
+  "checking",
   /** The message is being handed to the agent now. */
   "dispatching",
 ] as const;
@@ -58,6 +62,7 @@ export function isDeliveryWaitReason(value: unknown): value is DeliveryWaitReaso
 /** Reasons where the queue is actively doing something, so a long stay in one
     is recorded as a stall. */
 export const ACTIVE_DELIVERY_PHASES: ReadonlySet<DeliveryWaitReason> = new Set<DeliveryWaitReason>([
+  "checking",
   "dispatching",
   "interrupting",
   "interrupt-reconciling",

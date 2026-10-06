@@ -249,11 +249,8 @@ export function deliveryProgressText(
   waited: string,
 ): string {
   const reason = t(`delivery.wait.${record.waitReason}` as MessageKey);
-  const stalledSince = record.stalledSince ? Date.parse(record.stalledSince) : NaN;
-  const phaseSince = Date.parse(record.phaseSince);
-  const head = Number.isFinite(stalledSince) && Number.isFinite(phaseSince)
-    ? t("delivery.wait.stalled", { duration: formatWaited(t, nowMs - phaseSince), reason })
-    : reason;
+  const stalledFor = deliveryStalledFor(t, record, nowMs);
+  const head = stalledFor ? t("delivery.wait.stalled", { duration: stalledFor, reason }) : reason;
   const parts = [t("delivery.wait.line", { reason: head, waited })];
   if (record.attempt > 1) parts.push(t("delivery.wait.attempt", { n: record.attempt }));
   const nextWake = record.nextWakeAt ? Date.parse(record.nextWakeAt) : NaN;
@@ -263,6 +260,26 @@ export function deliveryProgressText(
       : t("delivery.wait.checkingNow"));
   }
   return parts.join(" · ");
+}
+
+/** How long the recorded phase has run, when the queue marked it stalled. */
+function deliveryStalledFor(t: TFunction, record: DeliveryProgressRecord, nowMs: number): string | null {
+  const stalledSince = record.stalledSince ? Date.parse(record.stalledSince) : NaN;
+  const phaseSince = Date.parse(record.phaseSince);
+  if (record.terminal || !Number.isFinite(stalledSince) || !Number.isFinite(phaseSince)) return null;
+  return formatWaited(t, nowMs - phaseSince);
+}
+
+/**
+ * The short status a stalled delivery shows on its message without being
+ * asked: how long the phase has made no progress and what it is. Null while
+ * the queue has recorded no stall.
+ */
+export function deliveryStalledText(t: TFunction, record: DeliveryProgressRecord, nowMs: number): string | null {
+  const stalledFor = deliveryStalledFor(t, record, nowMs);
+  return stalledFor
+    ? t("delivery.stalled.status", { duration: stalledFor, reason: t(`delivery.wait.${record.waitReason}` as MessageKey) })
+    : null;
 }
 
 /**

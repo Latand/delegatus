@@ -26,7 +26,6 @@ import { readEvidence } from "./evidence";
 import type { EngineHost, HostState } from "./engineHost";
 import { StructuredDeliveryQueue, type StructuredDeliveryQueueTiming } from "./structuredDeliveryQueue";
 import { deliveryProgressStore, type DeliveryProgressSink, type DeliveryProgressStore } from "./deliveryProgress";
-import { withWaitCorrelation } from "@/lib/blockingWaits";
 import { applyStructuredReconfigure, type StructuredReconfigureDependencies } from "./structuredReconfigure";
 import { projectEngineHostEvent } from "./engineHostEvents";
 import { observeCodexSubagentEvent } from "./codexSubagentDetection";
@@ -364,6 +363,9 @@ async function acknowledgeTerminalProjection(
   }
 }
 
+/** The registry write lock stayed held past the asynchronous deadline. */
+const REGISTRY_WRITER_BUSY = "the delivery record's write lock is held by another writer";
+
 /**
  * Carries the outcome of ONE operation whose transition acknowledgement was
  * lost into its durable delivery record (#1612).
@@ -401,14 +403,15 @@ async function projectLostTerminalAcknowledgement(
   const outcome = terminalDeliveryOutcome(registry, result, { conversationId: null, operationId });
   if (!outcome) return true;
   try {
-    registry.recordDeliveryOutcomeForOperation(
+    /* Still owed when the write lock stayed held; the next pass asks again. */
+    if (!await registry.recordDeliveryOutcomeForOperationOffLoop(
       outcome.conversationId,
       outcome.operationId,
       outcome.state,
       outcome.error,
       outcome.disposition,
       outcome.route,
-    );
+    )) return false;
   } catch (error) {
     console.error("[structured delivery] lost terminal acknowledgement could not be projected", {
       operationId,
@@ -857,9 +860,10 @@ export async function bindStructuredDeliveryQueue(
       },
       effects: (kinds, afterEventSeq) => client.effectBatch(kinds, afterEventSeq),
       bindDeliveryGeneration: async (operationId, generationId) => {
-        await registry.awaitWriterAvailable({ label: "delivery.bind-generation", operationId });
-        return withWaitCorrelation({ label: "delivery.bind-generation", operationId },
-          () => registry.bindDeliveryOperationGeneration(operationId, generationId));
+        const bound = await registry.bindDeliveryOperationGenerationOffLoop(operationId, generationId);
+        /* The queue defers the message and comes back; nothing was handed over. */
+        if (bound === null) throw new Error(REGISTRY_WRITER_BUSY);
+        return bound;
       },
       nativeQueueExecute: (command, refusalReason) => nativeQueueExecutor.execute(command, refusalReason),
       nativeQueueReconcile: async () => {
@@ -937,10 +941,11 @@ export async function bindStructuredDeliveryQueue(
         if (!terminal) return;
         const conversationId = result.receipt.conversationId;
         if (!conversationId?.startsWith("conversation_")) return;
-        /* The registry's write lock is waited for off the event loop; the
-           write itself keeps its revision check and runs where it always did. */
-        await registry.awaitWriterAvailable({ label: "delivery.outcome", operationId });
-        withWaitCorrelation({ label: "delivery.outcome", operationId }, () => registry.recordDeliveryOutcomeForOperation(
+        /* The registry's write lock is waited for off the event loop and kept
+           for the write. A lock that stays held leaves the outcome owed: the
+           journal already has it, the queue reads this throw as a lost
+           acknowledgement and projects it on a later pass (#1612). */
+        if (!await registry.recordDeliveryOutcomeForOperationOffLoop(
           conversationId as `conversation_${string}`,
           result.receipt.presentationOperationId ?? operationId,
           status === "uncertain" ? "failed" : status,
@@ -953,7 +958,7 @@ export async function bindStructuredDeliveryQueue(
           /* The journal receipt, not these details: it carries the route the
              delivering transition recorded, whichever executor began it. */
           status === "delivered" ? deliveryRouteOf(result.receipt) : null,
-        ));
+        )) throw new Error(REGISTRY_WRITER_BUSY);
         await acknowledgeTerminalProjection(client, [result.operationId]);
         if (status === "delivered" && operationId.startsWith("spawn_message_")) {
           const launchId = operationId.slice("spawn_message_".length);

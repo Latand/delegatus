@@ -5176,19 +5176,23 @@ export class AgentRegistry {
   }
 
   /**
-   * Waits for the registry's write lock off the event loop before a caller
-   * that runs on the Viewer's delivery path mutates. Answers whether the lock
-   * was free when the wait ended; the mutation after it acquires and checks
-   * revision exactly as it would have, so a `false` costs only the old
-   * synchronous wait. Stores without a SQLite writer answer at once.
+   * Runs one registry mutation with the write lock waited for off the event
+   * loop, for callers on the Viewer's delivery path. `operation` runs in the
+   * synchronous step that acquired the lock and its mutation commits inside
+   * that transaction, so the wait and the write cannot be separated by another
+   * writer. `{ acquired: false }` means the lock stayed held past the deadline
+   * and nothing ran; the caller defers. `operation` must go straight to its
+   * mutation, with no snapshot read before it. Stores without a SQLite writer
+   * run it at once.
    */
-  async awaitWriterAvailable(correlation: { label: string; operationId?: string | null }): Promise<boolean> {
-    if (this.sqliteMode !== "read" && this.sqliteMode !== "sqlite") return true;
-    try {
-      return await withWaitCorrelation(correlation, () => this.sqliteStore!.awaitWriterAvailable());
-    } catch {
-      return false;
+  private async whenWriterHeld<T>(
+    correlation: { label: string; operationId?: string | null },
+    operation: () => T,
+  ): Promise<{ acquired: true; value: T } | { acquired: false }> {
+    if (this.sqliteMode !== "read" && this.sqliteMode !== "sqlite") {
+      return { acquired: true, value: withWaitCorrelation(correlation, operation) };
     }
+    return withWaitCorrelation(correlation, () => this.sqliteStore!.withWriter(operation));
   }
 
   /** Shared process-local snapshot for projections that never mutate registry
@@ -9307,6 +9311,20 @@ export class AgentRegistry {
   bindDeliveryOperationGeneration(operationId: string, generationId: string): boolean {
     if (!operationId || !generationId) return false;
     if (!this.readOnlySnapshot().deliveryOperationOwners[operationId]?.retryOfOperationId) return true;
+    return this.writeDeliveryOperationGeneration(operationId, generationId);
+  }
+
+  /** {@link bindDeliveryOperationGeneration} with the write lock waited for off
+      the event loop. Null when the lock stayed held and nothing was written. */
+  async bindDeliveryOperationGenerationOffLoop(operationId: string, generationId: string): Promise<boolean | null> {
+    if (!operationId || !generationId) return false;
+    if (!this.readOnlySnapshot().deliveryOperationOwners[operationId]?.retryOfOperationId) return true;
+    const write = await this.whenWriterHeld({ label: "delivery.bind-generation", operationId },
+      () => this.writeDeliveryOperationGeneration(operationId, generationId));
+    return write.acquired ? write.value : null;
+  }
+
+  private writeDeliveryOperationGeneration(operationId: string, generationId: string): boolean {
     return this.mutate((file) => {
       const owner = file.deliveryOperationOwners[operationId];
       if (!owner?.retryOfOperationId) return false;
@@ -9396,6 +9414,17 @@ export class AgentRegistry {
       ...(disposition ? { disposition } : {}),
       ...(route ? { route } : {}),
     }])[0] ?? null;
+  }
+
+  /** {@link recordDeliveryOutcomeForOperation} with the write lock waited for
+      off the event loop. False when the lock stayed held and nothing was
+      written: the outcome is still owed to the record. */
+  async recordDeliveryOutcomeForOperationOffLoop(
+    ...outcome: Parameters<AgentRegistry["recordDeliveryOutcomeForOperation"]>
+  ): Promise<boolean> {
+    const write = await this.whenWriterHeld({ label: "delivery.outcome", operationId: outcome[1] },
+      () => this.recordDeliveryOutcomeForOperation(...outcome));
+    return write.acquired;
   }
 
   /** Settles a startup reconciliation page in one storage transaction. A

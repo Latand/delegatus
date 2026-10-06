@@ -13,7 +13,8 @@ import { SqliteAgentRegistryStore } from "./sqliteRegistryStore";
 /*
  * Incident 2026-10-06: registry mutation retries of 1.0–4.1 s ran on the
  * Viewer's event loop, so every request behind them waited too. The delivery
- * path now waits for the write lock asynchronously. These hold the lock from
+ * path now waits for the write lock asynchronously and keeps it for the write,
+ * and a lock it cannot get in time is refused. These hold the lock from
  * another connection or process and measure the caller's event loop. Every
  * database here is a private temporary file.
  */
@@ -50,7 +51,7 @@ async function longestLoopGap<T>(operation: () => Promise<T> | T): Promise<{ val
   }
 }
 
-test("a writer lock held elsewhere is waited out without holding the event loop, and the mutation after it keeps its revision", async () => {
+test("a writer lock held elsewhere is waited out without holding the event loop, and the mutation commits inside the acquisition", async () => {
   const { store: registry, filename } = store("async-wait");
   try {
     const before = registry.snapshot().revision;
@@ -59,37 +60,140 @@ test("a writer lock held elsewhere is waited out without holding the event loop,
     holder.exec("BEGIN IMMEDIATE");
     setTimeout(() => holder.exec("ROLLBACK"), 300);
     const startedAt = performance.now();
-    const { value: free, gapMs } = await longestLoopGap(() => withWaitCorrelation(
+    let lockedOut = false;
+    const { value: write, gapMs } = await longestLoopGap(() => withWaitCorrelation(
       { label: "delivery.outcome", operationId: "operation-wait" },
-      () => registry.awaitWriterAvailable(),
+      () => registry.withWriter(() => {
+        /* The lock is this connection's from the acquisition to the commit:
+           no other writer can get in between the wait and the write. */
+        try { holder.exec("BEGIN IMMEDIATE"); holder.exec("ROLLBACK"); }
+        catch (error) { lockedOut = (error as { code?: string }).code === "SQLITE_BUSY"; }
+        return registry.mutate((file) => { file.conversationAliases.conversation_waited = Object.keys(file.conversations)[0] as `conversation_${string}`; }, false);
+      }),
     ));
     holder.close();
-    expect(free).toBe(true);
+    expect(lockedOut).toBe(true);
+    expect(write.acquired).toBe(true);
     expect(performance.now() - startedAt).toBeGreaterThanOrEqual(250);
     expect(gapMs).toBeLessThan(150);
-    const mutation = registry.mutate((file) => { file.conversationAliases.conversation_waited = Object.keys(file.conversations)[0] as `conversation_${string}`; }, false);
-    expect(mutation.revision).toBe(before + 1);
+    expect(write.acquired && write.value.revision).toBe(before + 1);
+    expect(registry.snapshot().file.conversationAliases.conversation_waited).toBeDefined();
     const sample = blockingWaitDiagnostics().longest.find((candidate) => candidate.site === "registry-lock-async");
     expect(sample).toMatchObject({ synchronous: false, label: "delivery.outcome", operationId: "operation-wait" });
     expect(sample!.durationMs).toBeGreaterThanOrEqual(250);
+    expect(blockingWaitDiagnostics().sites["registry-lock"]).toBeUndefined();
+    /* The connection is back to ordinary mutations afterwards. */
+    expect(registry.mutate((file) => { delete file.conversationAliases.conversation_waited; }, false).revision).toBe(before + 2);
   } finally {
     registry.close();
   }
 });
 
-test("a lock that outlasts the deadline answers false and still never holds the loop", async () => {
+test("a lock another process keeps past the deadline is refused: nothing runs and the synchronous wait is never entered", async () => {
   const { store: registry, filename } = store("async-deadline");
+  /* Another process, as in the incident: nothing in this one could release it
+     while a synchronous acquisition spun. */
+  const child = Bun.spawn([process.execPath, "-e", `
+    const { Database } = require("bun:sqlite");
+    const db = new Database(${JSON.stringify(filename)});
+    db.exec("PRAGMA busy_timeout = 5000");
+    db.exec("BEGIN IMMEDIATE");
+    process.stdout.write("locked\\n");
+    setTimeout(() => { db.exec("ROLLBACK"); db.close(); }, 900);
+  `], { stdout: "pipe", stderr: "inherit" });
+  try {
+    const reader = child.stdout.getReader();
+    const { value } = await reader.read();
+    expect(new TextDecoder().decode(value)).toContain("locked");
+    reader.releaseLock();
+    const before = registry.snapshot().revision;
+    let ran = false;
+    const startedAt = performance.now();
+    const { value: write, gapMs } = await longestLoopGap(() => registry.withWriter(() => { ran = true; }, { deadlineMs: 200 }));
+    expect(write.acquired).toBe(false);
+    expect(ran).toBe(false);
+    expect(performance.now() - startedAt).toBeLessThan(600);
+    expect(gapMs).toBeLessThan(150);
+    expect(blockingWaitDiagnostics().sites["registry-lock"]).toBeUndefined();
+    expect(blockingWaitDiagnostics().sites["registry-lock-async"]?.count).toBe(1);
+    await child.exited;
+    expect(registry.snapshot().revision).toBe(before);
+  } finally {
+    await child.exited;
+    registry.close();
+  }
+});
+
+test("a writer that commits while the delivery write waits is read by it: both changes stand and the loop stays free", async () => {
+  const { store: registry, filename } = store("async-contended");
+  const other = new SqliteAgentRegistryStore(filename, { initialSnapshot: registry.snapshot().file, normalize: normalizeRegistry });
   const holder = new Database(filename);
+  try {
+    const before = registry.snapshot().revision;
+    const conversation = Object.keys(registry.snapshot().file.conversations)[0] as `conversation_${string}`;
+    holder.exec("PRAGMA busy_timeout = 0");
+    holder.exec("BEGIN IMMEDIATE");
+    setTimeout(() => {
+      holder.exec("ROLLBACK");
+      /* Takes the lock the moment it is free, ahead of the waiting write. */
+      other.mutate((file) => { file.conversationAliases.conversation_other = conversation; }, false);
+    }, 120);
+    const { value: write, gapMs } = await longestLoopGap(() => registry.withWriter(
+      () => registry.mutate((file) => {
+        expect(file.conversationAliases.conversation_other).toBe(conversation);
+        file.conversationAliases.conversation_mine = conversation;
+      }, false),
+    ));
+    expect(write.acquired && write.value.revision).toBe(before + 2);
+    expect(gapMs).toBeLessThan(150);
+    const aliases = registry.snapshot().file.conversationAliases;
+    expect(aliases.conversation_other).toBe(conversation);
+    expect(aliases.conversation_mine).toBe(conversation);
+    expect(blockingWaitDiagnostics().sites["registry-revision-retry"]).toBeUndefined();
+  } finally {
+    holder.close();
+    other.close();
+    registry.close();
+  }
+});
+
+test("an acquisition whose operation makes no mutation gives the lock back", async () => {
+  const { store: registry, filename } = store("async-noop");
+  const other = new Database(filename);
+  try {
+    expect(await registry.withWriter(() => "nothing")).toEqual({ acquired: true, value: "nothing" });
+    other.exec("PRAGMA busy_timeout = 0");
+    other.exec("BEGIN IMMEDIATE");
+    other.exec("ROLLBACK");
+    await expect(registry.withWriter(() => { throw new Error("refused inside"); })).rejects.toThrow("refused inside");
+    other.exec("BEGIN IMMEDIATE");
+    other.exec("ROLLBACK");
+  } finally {
+    other.close();
+    registry.close();
+  }
+});
+
+test("the registry's delivery writes wait off the loop in SQLite mode and report a lock they could not get", async () => {
+  const filename = path.join(root, "registry-offloop.json");
+  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+  const holder = new Database(`${filename.replace(/\.json$/, "")}.sqlite`);
   try {
     holder.exec("PRAGMA busy_timeout = 0");
     holder.exec("BEGIN IMMEDIATE");
-    const { value: free, gapMs } = await longestLoopGap(() => registry.awaitWriterAvailable({ deadlineMs: 150 }));
-    expect(free).toBe(false);
-    expect(gapMs).toBeLessThan(120);
-  } finally {
+    setTimeout(() => holder.exec("ROLLBACK"), 250);
+    const { value: written, gapMs } = await longestLoopGap(() => registry.recordDeliveryOutcomeForOperationOffLoop(
+      "conversation_none", "operation-none", "delivered"));
+    expect(written).toBe(true);
+    expect(gapMs).toBeLessThan(150);
+    const sample = blockingWaitDiagnostics().longest.find((candidate) => candidate.site === "registry-lock-async");
+    expect(sample).toMatchObject({ label: "delivery.outcome", operationId: "operation-none" });
+    /* A plain send has no retry owner to bind, and needs no lock at all. */
+    holder.exec("BEGIN IMMEDIATE");
+    expect(await registry.bindDeliveryOperationGenerationOffLoop("operation-none", "generation-one")).toBe(true);
     holder.exec("ROLLBACK");
+  } finally {
     holder.close();
-    registry.close();
   }
 });
 

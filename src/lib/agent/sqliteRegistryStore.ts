@@ -386,6 +386,8 @@ export class SqliteAgentRegistryStore {
   private readonly onWriterWait: ((durationMs: number) => void) | undefined;
   private readonly maxMutationAttempts: number;
   private readonly writerClock: () => number;
+  /** Set while {@link withWriter} holds an open write transaction for the next {@link mutate}. */
+  private writerHeld = false;
   private onSnapshotLoad: (() => void) | undefined;
   private onRowPayloadRead: ((collection: RowCollection, count: number) => void) | undefined;
   private onRowPayloadParse: ((collection: RowCollection, count: number) => void) | undefined;
@@ -983,16 +985,20 @@ export class SqliteAgentRegistryStore {
 
   mutate<T>(operation: (file: RegistryFile) => T, includeSnapshot = true, options: { updateSnapshotCache?: boolean; operationName?: string } = {}): SqliteRegistryMutation<T> {
     let operationName = options.operationName ?? operation.name;
+    /* {@link withWriter} already opened the write transaction for this call. */
+    const writerHeld = this.writerHeld;
+    this.writerHeld = false;
     for (let attempt = 1; attempt <= this.maxMutationAttempts; attempt += 1) {
-      const pessimistic = attempt > 1;
+      const pessimistic = attempt > 1 || writerHeld;
       const waitStartedAt = performance.now();
-      if (pessimistic) this.beginMutationWrite();
+      if (writerHeld) { /* the lock is held and the transaction is open */ }
+      else if (pessimistic) this.beginMutationWrite();
       else this.db.exec("BEGIN");
       let current: LazyRegistrySnapshot;
       let changes: RegistryChanges;
       let result: T;
       try {
-        if (pessimistic) this.noteWriterWait(performance.now() - waitStartedAt, operationName);
+        if (pessimistic && !writerHeld) this.noteWriterWait(performance.now() - waitStartedAt, operationName);
         current = this.loadLazyInTransaction();
         result = operation(current.file);
         changes = current.changes();
@@ -1063,43 +1069,59 @@ export class SqliteAgentRegistryStore {
   }
 
   /**
-   * Waits for the registry write lock without holding the event loop, and
-   * answers whether it was free when the wait ended.
+   * Runs `operation` once this connection holds the registry write lock, having
+   * waited for the lock without holding the event loop. Answers
+   * `{ acquired: false }` and runs nothing when the deadline passes first.
    *
    * The synchronous acquisition in {@link mutate} spins for up to five seconds
    * on the caller's thread, and on 2026-10-06 the Viewer's delivery path spent
-   * up to 4.1 s there with every request behind it. A caller on that path
-   * awaits this first: each probe takes and immediately releases the lock in
-   * one synchronous step with no await inside it, and sleeps between probes, so
-   * a lock another process holds is waited out while the loop serves others.
-   * The mutation that follows is unchanged: it still acquires the lock itself
-   * and still checks its revision, so this only moves where the wait happens.
+   * up to 4.1 s there with every request behind it. Here each attempt asks for
+   * the lock once with no busy wait and sleeps between attempts, so a lock
+   * another process holds is waited out while the loop serves others. The
+   * attempt that gets the lock keeps it: `operation` runs in the same
+   * synchronous step, and the one {@link mutate} it makes reads, writes and
+   * commits inside that transaction, so no writer can pass between the wait
+   * and the write and the mutation cannot lose its revision.
+   *
+   * `operation` must go straight to its mutation: a snapshot read inside it
+   * would open a second transaction.
    */
-  async awaitWriterAvailable(options: { deadlineMs?: number; probeMs?: number } = {}): Promise<boolean> {
+  async withWriter<T>(
+    operation: () => T,
+    options: { deadlineMs?: number; probeMs?: number } = {},
+  ): Promise<{ acquired: true; value: T } | { acquired: false }> {
     const startedAt = performance.now();
     const deadline = this.writerClock() + (options.deadlineMs ?? 5_000);
     const probeMs = options.probeMs ?? 5;
-    let free = false;
-    let probes = 0;
-    for (;;) {
-      probes += 1;
-      free = this.probeWriter();
-      if (free || this.writerClock() >= deadline) break;
+    let attempts = 1;
+    while (!this.tryBeginWrite()) {
+      if (this.writerClock() >= deadline) {
+        recordBlockingWait({ site: "registry-lock-async", durationMs: performance.now() - startedAt, synchronous: false, subject: "agent-registry" });
+        return { acquired: false };
+      }
+      attempts += 1;
       await new Promise<void>((resolve) => setTimeout(resolve, probeMs));
     }
-    if (probes > 1) {
+    if (attempts > 1) {
       recordBlockingWait({ site: "registry-lock-async", durationMs: performance.now() - startedAt, synchronous: false, subject: "agent-registry" });
     }
-    return free;
+    this.writerHeld = true;
+    try {
+      return { acquired: true, value: operation() };
+    } finally {
+      /* An operation that made no mutation leaves the transaction open. */
+      if (this.writerHeld) {
+        this.writerHeld = false;
+        try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+      }
+    }
   }
 
-  private probeWriter(): boolean {
-    /* A transaction this connection already holds means the lock is ours. */
-    if (this.db.inTransaction) return true;
+  /** One request for the write lock that never waits. */
+  private tryBeginWrite(): boolean {
     this.db.exec("PRAGMA busy_timeout = 0");
     try {
       this.db.exec("BEGIN IMMEDIATE");
-      this.db.exec("ROLLBACK");
       return true;
     } catch (error) {
       if (error instanceof Error && (error as { code?: string }).code === "SQLITE_BUSY") return false;

@@ -27,7 +27,7 @@
 
 import type { MessageKey, TFunction } from "@/lib/i18n";
 
-import { deliveryWaitFor, deliveryWaitText, type DeliveryWaitPhase } from "@/components/runtime/deliveryWait";
+import { deliveryStalledText, deliveryWaitFor, deliveryWaitText, type DeliveryWaitPhase } from "@/components/runtime/deliveryWait";
 import type { DeliveryProgressRecord } from "@/lib/runtime/deliveryProgress";
 import { humanReceiptReasonKey, type HostAxis, type TurnAxis } from "@/components/runtime/runtimeModel";
 
@@ -79,6 +79,10 @@ export interface MessageRowModel {
   transport: string;
   /** The wait phase, published on the row for the drivers that read it. */
   wait: DeliveryWaitPhase | "transmitting" | null;
+  /** The delivery queue recorded that this message's hand-over stalled: the
+      short sentence the row shows under the message at rest, with no hover or
+      click. Null for every delivery that is simply moving. */
+  stalled: string | null;
   /** A proven failure's human reason, and the raw sentence behind it. */
   failure: { reason: string; detail: string | null; action: MessageRowAction } | null;
   /** Nothing can confirm this delivery yet: the disclosure offers Check status. */
@@ -329,6 +333,7 @@ function contextRowModel(t: TFunction, entry: OutboxEntry): MessageRowModel {
     status: failure ? failure.reason : transport,
     transport,
     wait: pendingUncertain ? "uncertain" : null,
+    stalled: null,
     failure,
     uncertain: pendingUncertain,
     discardable: false,
@@ -437,6 +442,10 @@ export function messageRowModel(
         : t("outbox.awaitingConfirmation"),
     transport: transport.label,
     wait: transport.wait,
+    /* Under the same conditions the transport line reads the record. */
+    stalled: phase === "pending" && !pendingUncertain && progress && !switchHold
+      && (entry.state === "delivering" || entry.state === "queued")
+      ? deliveryStalledText(t, progress, nowMs) : null,
     failure,
     uncertain: pendingUncertain,
     discardable: operationActionable,

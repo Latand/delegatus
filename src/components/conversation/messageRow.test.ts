@@ -308,6 +308,18 @@ test("incident 2026-10-06: the row's transport says what the queue recorded, whi
     progress: { ...record, waitReason: "dispatching", attempt: 1, stalledSince: new Date(AT + 16_000).toISOString(), nextWakeAt: null },
   });
   expect(stalled.transport).toBe("stalled for 20s: handing this over to the agent · 30s");
+  /* And the row carries the short sentence it shows at rest, in both languages;
+     a delivery that is simply moving carries none. */
+  const stalledRecord = { ...record, waitReason: "checking" as const, stalledSince: new Date(AT + 16_000).toISOString(), nextWakeAt: null };
+  expect(stalled.stalled).toBe("No progress for 20s: handing this over to the agent");
+  expect(messageRowModel(t("uk"), delivering, { nowMs: AT + 30_000, progress: stalledRecord }).stalled)
+    .toBe("Без руху вже 20 с: перевіряє запис доставки й хост перед передаванням");
+  expect(row.stalled).toBeNull();
+  expect(messageRowModel(t("en"), delivering, { nowMs: AT + 30_000, progress: stalledRecord, switchHold: { label: null } }).stalled).toBeNull();
+  expect(messageRowModel(t("en"), delivering, {
+    nowMs: AT + 30_000,
+    progress: { ...stalledRecord, terminal: { state: "delivered", at: new Date(AT + 20_000).toISOString(), reason: null } },
+  }).stalled).toBeNull();
 
   /* A switch hold keeps its own sentence, and a settled record says nothing. */
   expect(messageRowModel(t("en"), delivering, { nowMs: AT + 30_000, progress: record, switchHold: { label: null } }).transport)
