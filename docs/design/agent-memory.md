@@ -554,8 +554,8 @@ read the recorded keys of the alias family and keep a slug key only while a
 stat of each directory its proof recorded still matches the recorded signature.
 A slug whose proof went stale returns to scope at the next hook that walks it
 again. The scope table holds at most six keys per project and 256 overall.
-A key past either limit is refused, never evicted, and recall falls back to
-the keys already recorded. When the write itself fails, the turn keeps the
+A key past either limit is refused. Keys already recorded stay in scope, and
+recall falls back to them. When the write itself fails, the turn keeps the
 keys an earlier turn recorded and drops only the ones it was claiming.
 
 A launch brief reaches the hook with operator origin whatever started it. It
