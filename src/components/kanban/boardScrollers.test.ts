@@ -44,3 +44,20 @@ test("the board frame is not sized against a size container", () => {
   expect(css).not.toMatch(/\d(cqh|cqb)\b/);
   expect(css).not.toMatch(/container-type:\s*size\b/);
 });
+
+/* A card is a flex item of its column, and a card whose contents the browser
+   skips has no content to keep it from shrinking, so it collapsed to its
+   padding above the window and the cards under the pointer jumped by its
+   height. Nothing but a width change may take a column's scroll anchoring
+   away either. The browser half is the kanban driver's "holds still" case. */
+test("a column's cards never shrink, and a column gives up scroll anchoring only for a width change", () => {
+  expect(declarationsFor(".kb .card").get("content-visibility")).toBe("auto");
+  expect(declarationsFor(".kb .col-body > .card").get("flex-shrink")).toBe("0");
+  const unanchored: string[] = [];
+  root.walkDecls("overflow-anchor", (declaration) => {
+    if (declaration.value !== "none") return;
+    const rule = declaration.parent as postcss.Rule;
+    unanchored.push(...rule.selectors.filter((selector) => selector.includes(".col-body")));
+  });
+  expect(unanchored).toEqual([".kb[data-column-layout-active] .board:not(.tabs) .col-body"]);
+});
