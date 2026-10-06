@@ -2723,8 +2723,8 @@ test("a seat whose mandate predates the contract gets its clauses in the wake; a
     ticks.push(rig.sent[0]!.text);
   }
   expect(ticks[1]).toContain("Standing monitor note unchanged since your last wake");
-  // The fallback now also carries the operator-wait shutdown clause.
-  expect(Buffer.byteLength(ticks[1]!)).toBeLessThanOrEqual(2_100);
+  // The short v40 clause adds 169 bytes to the legacy fallback wake.
+  expect(Buffer.byteLength(ticks[1]!)).toBeLessThanOrEqual(1_800);
   console.log(`[#2030] v20 seat tick bytes: note shown ${Buffer.byteLength(ticks[0]!)}, note unchanged ${Buffer.byteLength(ticks[1]!)}`);
   const current = harness({ pipelines: OPEN_LANE, state: OVERDUE, seat: CURRENT_SEAT });
   await runSeatTickCheck(PROJECT, current.deps);
@@ -4475,7 +4475,8 @@ test("435 cold acknowledged children do not delay a new worker or its completion
   const named: string[] = [];
   for (let tick = 0; tick < 100 && fixture.acknowledged().length < cold.length; tick++) {
     const { rig } = await check();
-    for (const message of rig.sent) for (const match of message.text.matchAll(/\[child\] (\S+) /g)) named.push(match[1]!);
+    // A cropped bullet is retried; count only complete delivered outcomes.
+    for (const message of rig.sent) for (const match of message.text.matchAll(/^- \[child\] (\S+) .*outcome unharvested$/gm)) named.push(match[1]!);
   }
   expect(named.length).toBe(435);
   expect(new Set(named)).toEqual(new Set(cold.map((child) => child.id)));
@@ -6901,7 +6902,7 @@ test.each([false, true])("five production-size settlements credit only complete 
   const text = rig.sent[0]!.text;
   expect(text.length).toBeLessThanOrEqual(4_000);
   const complete = ids.filter(id => agendaOf(text).some(line => line.includes(id) && line.endsWith("task waits for 2 open pipelines")));
-  // The v40 fallback contract leaves room for three complete settlements.
+  // Even the short v40 fallback leaves room for three complete settlements.
   expect(complete).toHaveLength(3);
   if (held) {
     expect(rig.written.at(-1)!.announcedLanes).toEqual([]);
@@ -6947,7 +6948,7 @@ test("a legacy retained wake credits three complete settlements and delivers the
   const row = rig.deps.readState!(PROJECT);
   const wake = { ...row.outstandingWake!, commit: legacyCommit };
   const complete = ids.filter(id => agendaOf(wake.text!).some(line => line.includes(id) && line.endsWith("task waits for 2 open pipelines")));
-  // The v40 fallback contract leaves room for three complete settlements.
+  // Even the short v40 fallback leaves room for three complete settlements.
   expect(complete).toHaveLength(3);
   expect(legacyCommit.announcedLanes).toHaveLength(5);
   rig.deps.writeState!(PROJECT, { ...row, outstandingWake: wake });

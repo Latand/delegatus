@@ -178,9 +178,10 @@ const SEAT_TICK_CONTRACT_V30: readonly string[] = [
   SEAT_TICK_REPORT_CLAUSE,
 ];
 
+// Operator-only idle means no change and no lane, CI run, merge or agent in flight.
 export const ORCHESTRATOR_SEAT_TICK_CONTRACT: readonly string[] = [
   ...SEAT_TICK_CONTRACT_V30,
-  "When a wake finds nothing changed and nothing can change until the operator answers (no lane, CI run, merge or agent in flight), file the owed question report and in the same turn call seat_tick_settings with enabled:false and a reason naming what you await. Never answer repeated idle wakes; turn the tick back on, or launch the work, once something is in flight again.",
+  "Operator-only idle: report owed question; seat_tick_settings enabled:false with wait reason this turn; never reply to idle repeats. Work in flight: enable or launch it.",
 ];
 
 /**

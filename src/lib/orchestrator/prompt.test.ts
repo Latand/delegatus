@@ -162,7 +162,7 @@ const PROMPT_FINGERPRINTS: Readonly<Record<number, string>> = {
   37: "354299e815ca8a1bf68cb465bfc935919bb543fdca02a4e1ba5af45e16663e81",
   38: "387a04753adca331c8c0c2d149d75a3be428911cfabf5c8d82a10d6db7af040b",
   39: "2fb23f0ae08fdc4eaccbe7940fa3b9ff91740c6ab9c3b268c96e9b069829ad03",
-  40: "e86b83035c9715b546512c553d09599036e7479ee51fb7c2d20157e4f83a3412",
+  40: "80c92b053252834f02259ec7da089518f05e2147562cfd332d73703a82d9fa8c",
 };
 
 /* #2187 §4.7, decided D1 = A: the setting governs every automatic merge. Off,
@@ -303,10 +303,11 @@ test("delivery upgrades the previous clock section with operator-wait shutdown e
   expect(delivered).toBe(orchestratorMandateForDelivery(ORCHESTRATOR_SYSTEM_PROMPT));
   expect(delivered).not.toContain(V39_CLOCK_SECTION);
   for (const clause of ORCHESTRATOR_SEAT_TICK_CONTRACT) expect(delivered.split(clause)).toHaveLength(2);
-  expect(delivered).toContain("no lane, CI run, merge or agent in flight");
-  expect(delivered).toContain("file the owed question report and in the same turn call seat_tick_settings with enabled:false");
-  expect(delivered).toContain("a reason naming what you await");
-  expect(delivered).toContain("Never answer repeated idle wakes; turn the tick back on, or launch the work, once something is in flight again.");
+  expect(delivered).toContain("Operator-only idle: report owed question;");
+  expect(delivered).toContain("seat_tick_settings enabled:false with wait reason this turn;");
+  expect(delivered).toContain("never reply to idle repeats.");
+  expect(delivered).toContain("Work in flight: enable or launch it.");
+  expect(Buffer.byteLength(ORCHESTRATOR_SEAT_TICK_CONTRACT.at(-1)!)).toBeLessThanOrEqual(170);
   expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
 });
 
@@ -754,8 +755,8 @@ test("the role table keeps the delivered default inside the structured envelope"
      rotation handoff no longer carries (docs/design/board-maintenance-report.md
      §5.5); handoffDigest.test.ts pins what that leaves a rotation's history.
      The scheduled maintainer row uses another 200 bytes of that room.
-     v40 uses another 400 bytes for operator-wait tick shutdown. */
-  expect(Buffer.byteLength(delivered)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 3_500);
+     v40 uses at most 170 bytes for operator-wait tick shutdown. */
+  expect(Buffer.byteLength(delivered)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 3_700);
 });
 
 /* docs/design/model-sizing-tiers.md §4: the seat sizes every lane, reads each
