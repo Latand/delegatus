@@ -225,16 +225,18 @@ guarantees for the 1.x series.
   while the transcript is missing from the current scan. A parked stage
   shows its report summary above retry and skip, and a phone stage row
   lists its earlier attempts ([#2442]).
-- **Update replaces the whole installation.** Checkout and packaged updates
-  replace the resident launcher, Viewer and runtime host together, verify their
-  serving identities, and restore the previous release on failure. Recovery
-  Viewers re-adopt their launcher; manual and older installs receive the exact
-  prerequisite action. Checkout `deploy_exact_sha` uses the same durable apply
-  and settlement path ([#2495]).
-- **Busy installations drain admitted work before an automatic update.** New
-  autonomous work waits while the original cohort finishes. The hold survives
-  recovery, both restart roles and rollback. After six hours the dialog names
-  the blockers and offers **Deploy now** or **Keep waiting** ([#2430]).
+- **Update in the dialog replaces the whole install.** **Update** now
+  restarts every part of Delegatus on the new release, for a git checkout
+  and for a package install alike, and brings the previous release back if
+  the new one fails to start. An install started by hand, or by an older
+  version, gets the one command or restart it needs shown in the dialog,
+  and after that it updates from the dialog again. An agent's
+  `deploy_exact_sha` updates a checkout the same way ([#2495]).
+- **A busy install lets running work finish before an automatic update.**
+  New autonomous work waits while the agents and stages already running
+  finish, and that wait carries on across a restart or a rollback. After six
+  hours the dialog names what is still running and offers **Deploy now** or
+  **Keep waiting** ([#2430]).
 - **Step between your own messages.** A row between the conversation and
   the composer has **Previous mine**, **Next mine** and a count such as
   "Your message 3 of 12"; Alt+Up and Alt+Down do the same in the focused
@@ -390,7 +392,7 @@ guarantees for the 1.x series.
   setting when the browser asks for permission again ([#2505], [#2527]).
 - **Pipelines recover on their own in more cases.** A stage whose report
   was recorded, a usage limit, a transient sign-in failure, a silent host
-  death and a Viewer restart no longer park a lane: the stage continues in
+  death and a Delegatus restart no longer park a lane: the stage continues in
   its conversation or relaunches in the same worktree with its uncommitted
   work, once per boot. A stage that keeps working after its turn ended
   keeps its host. A fix stage that finds another issue in its own review
@@ -413,8 +415,8 @@ guarantees for the 1.x series.
 - **Agent hosts start, resume and end cleanly.** Concurrent retries of a
   launch share one delivery, and a kill ends a launch host that was never
   adopted. Finished stage hosts and orphaned tool processes release their
-  memory. A worker resumed after a runtime-host succession gets its
-  recorded access back, a Claude stage in a worktree behind a symlink finds
+  memory. A worker resumed after Delegatus restarts during an update gets
+  its recorded access back, a Claude stage in a worktree behind a symlink finds
   its transcript, and an account switch never starts while the host is
   inside a turn ([#2440], [#2465], [#2476], [#2484], [#2520]).
 - **A Codex agent launched without sub-agents cannot start native ones.**
@@ -429,27 +431,25 @@ guarantees for the 1.x series.
 - **A token-protected install keeps its web interface after an update.**
   The restart probe asked for the page without the access key, got a 401
   and stopped both the new and the previous web process. Both probes now
-  carry the key the Viewer gates on ([#2474]).
-- **A stopped Viewer answers 503.** While the selected Viewer release is
-  down, the runtime host used to close a browser connection without a
-  reply. It now returns a 503 that names the release. Runtime-host start-up
-  with a large journal is quick again, and an agent's send made during a
-  Viewer restart reconnects ([#2433], [#2437], [#2487]).
-- **Legacy launcher upgrades restore the prior serving release.** If an older
-  launcher already published a candidate and switched only the web process,
-  the one-time bootstrap captures rollback from the verified serving host.
-  A failed host or web start restores both processes on that release; an entry
-  that cannot load is refused before restart ([#2495]).
-- **The host deploy command authenticates on team installations.**
-  `scripts/rebuild.sh` uses the existing controller credential for admission
-  and status polling. The client connects only to a validated loopback address,
-  refuses redirects, and keeps credentials out of arguments and output. Receipt
-  replay and deployment exit codes are preserved ([#2495]).
-- **An automatic update's final check compares admitted work by identity.**
-  Journal writes of a turn that is already running no longer refuse the
-  restart, so **Deploy now** reaches it; a turn or a stage that starts during
-  admission still refuses it. A refused admission keeps the cohort, the
-  operator's decision and the cumulative wait ([#2495]).
+  carry the access key ([#2474]).
+- **The page says when Delegatus is restarting.** While the web interface
+  is down, for example during an update, the browser used to get a
+  dropped connection with no answer. It now gets an error page (HTTP 503)
+  that names the release being started. Delegatus starts quickly again
+  after a long history of agent activity, and a message an agent sends
+  during a restart goes through once it is back ([#2433], [#2437],
+  [#2487]).
+- **Updating from an older version can go back if it fails.** When an
+  older version had already switched only the web interface to a new
+  release, the first update from the dialog now remembers the release that
+  was running before. If either part fails to start, both go back to that
+  release, and a release that cannot load is refused before anything
+  restarts ([#2495]).
+- **Deploy now works while agents are busy.** An agent that was already
+  running when you chose **Deploy now** no longer stops the update just by
+  writing to its log; an agent or a stage that starts at that moment still
+  holds it. When the update is held, it keeps your choice, the list of
+  work it waits for and the time already waited ([#2495]).
 - **An automatic update waits only for turns that are really running.**
   The drain counted turns whose host had died, conversations that were gone
   and ones it could not resolve, 93 on one installation against 3 live
@@ -465,11 +465,8 @@ guarantees for the 1.x series.
 - Two dependencies were updated for published security advisories:
   `proxy-addr` to 2.0.8 (GHSA-jqcg-44mw-7w3h) and `source-map-js` to 1.2.2
   (GHSA-68fv-2mgg-jv7q).
-- The installed `braces` dependency carries the runtime mitigation from
-  upstream tree `28d440b5dd449dbf1fe6f3506cf94ecca4d02660`, with nesting, AST
-  and parent-cycle regressions in the release gates. The locally fixed
-  advisory metadata expires on 2026-10-10; [#2496] tracks removal after an
-  upstream release ([#2495]).
+- The `braces` dependency is patched against its published advisory until
+  an upstream release fixes it ([#2495], [#2496]).
 
 ### Maintainer notes
 - The local hooks now compare with the merge base: touched tests run one
@@ -506,6 +503,16 @@ guarantees for the 1.x series.
   restart no longer reads as a failed deploy. `docs/deploy-checkout.md`
   describes the plan and where the verdicts are kept, and the deployer role
   names the procedure ([#2546]).
+- The host deploy command `scripts/rebuild.sh` authenticates on team
+  installations: it uses the existing controller credential for admission
+  and status polling, connects only to a validated loopback address,
+  refuses redirects, and keeps credentials out of arguments and output.
+  Receipt replay and deployment exit codes are preserved ([#2495]).
+- The `braces` patch is the runtime mitigation from upstream tree
+  `28d440b5dd449dbf1fe6f3506cf94ecca4d02660`, with nesting, AST and
+  parent-cycle regressions in the release gates. Its locally fixed advisory
+  metadata expires on 2026-10-10; [#2496] tracks removal after an upstream
+  release ([#2495]).
 - The macOS newcomer fixture and the hermetic MCP fixtures copy the published
   `bin` directory, platform identity and launcher helpers included, so the
   Bun-only MCP startup checks cover new launcher imports on their own
