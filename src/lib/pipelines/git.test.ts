@@ -2767,3 +2767,42 @@ test("interrupted checkout recovery refuses a locked same-branch worktree owned 
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("publication prepares dependencies and pushes, hooks included, from CPU work scopes", async () => {
+  const { setCpuPortsForTests } = await import("@/lib/runtime/cpuPlacement");
+  const box = await publishSandbox();
+  const previous = process.env.LLV_AGENT_CPU;
+  process.env.LLV_AGENT_CPU = "auto";
+  try {
+    setCpuPortsForTests({ probe: () => ({ kind: "available", systemdVersion: 255 }), workSlice: "test-agents-work.slice", runner: () => "" });
+    fs.writeFileSync(path.join(box.subject.worktreeDir, "package.json"), "{}\n");
+    fs.writeFileSync(path.join(box.subject.worktreeDir, "bun.lock"), "{}\n");
+    const head = await box.commit("accepted.txt", "accepted\n");
+    const launches: string[][] = [];
+    const scoped: ExecPort = async (command, args, cwd, env, options) => {
+      launches.push([command, ...args]);
+      if (command !== "systemd-run") return await realExec(command, args, cwd, env, options);
+      const inner = args.slice(args.indexOf("--") + 1);
+      // The fixture has no dependencies to install.
+      if (inner[0] === "bun") return { code: 0, stdout: "", stderr: "" };
+      return await realExec(inner[0]!, inner.slice(1), cwd, env, options);
+    };
+    expect(await publishPipelineBranch(box.subject, scoped, { acceptedSha: head })).toEqual({ ok: true, sha: head, remote: "published" });
+    const work = launches.filter(([command]) => command === "systemd-run").map((launch) => launch.slice(launch.indexOf("--") + 1, launch.indexOf("--") + 3));
+    expect(work).toEqual([["bun", "install"], ["git", "push"]]);
+    for (const launch of launches.filter(([command]) => command === "systemd-run")) expect(launch).toContain("--slice=test-agents-work.slice");
+    expect(launches.filter(([command, verb]) => command === "git" && verb === "push")).toEqual([]);
+
+    // Where the mechanism should exist and is missing, nothing is pushed and the cause is recorded.
+    setCpuPortsForTests({ probe: () => ({ kind: "missing", reason: "the systemd user manager does not delegate the cpu controller" }), runner: () => "" });
+    const next = await box.commit("next.txt", "next\n");
+    const refused = await publishPipelineBranch(box.subject, scoped, { acceptedSha: next });
+    expect(refused.ok).toBe(false);
+    expect(await box.originHead()).toBe(head);
+    expect(JSON.stringify(refused)).toContain("CPU containment for agent work is unavailable");
+  } finally {
+    setCpuPortsForTests(null);
+    if (previous === undefined) delete process.env.LLV_AGENT_CPU; else process.env.LLV_AGENT_CPU = previous;
+    fs.rmSync(box.root, { recursive: true, force: true });
+  }
+});

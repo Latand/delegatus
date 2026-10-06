@@ -149,6 +149,14 @@ describe("UpdateRunner", () => {
     expect(calls.map(stepOf)).toEqual(["fetch", "checkout"]);
   });
 
+  test("install and build run as work; git steps stay in the service", async () => {
+    const work: (string | undefined)[][] = [];
+    const { runner } = harness({}, { run: async (command, options) => { work.push([command[1], options.work]); return 0; } });
+    await runner.start(TARGET);
+    expect(work).toEqual(expect.arrayContaining([["install", "update-install"], ["run", "update-build"]]));
+    expect(work.filter(([, label]) => label)).toHaveLength(2);
+  });
+
   test("fetch fails when the fetched tip is not the target the check saw", async () => {
     const { runner, calls } = harness({}, { revParse: async () => "f".repeat(40) });
     await runner.start(TARGET);

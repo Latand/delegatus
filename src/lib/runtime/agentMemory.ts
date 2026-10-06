@@ -7,6 +7,7 @@ import { linuxBackend } from "@/lib/proc/linux";
 import { descendantPids, parsePsMemory } from "@/lib/proc/memory";
 
 import { GIB, type AgentMemoryKill, type HostMemoryState } from "./agentMemoryState";
+import { cpuScopeProperties, invalidateCpuContainmentProbe, type AgentCpuPlan } from "./cpuPlacement";
 export { GIB, normalizeHostMemory, memoryKillText, type AgentMemoryKill, type HostMemoryState } from "./agentMemoryState";
 export type MemoryMode = "auto" | "scope" | "watchdog" | "off";
 export type MemoryRunner = (command: string, args: string[]) => string;
@@ -39,7 +40,8 @@ export function viewerUnitFromCgroup(text: string): string | null {
 }
 export function agentOomScore(viewerScore: number): number { return Math.min(1000, Math.max(500, viewerScore + 300)); }
 export interface AgentMemoryPlan {
-  mechanism: "scope" | "watchdog";
+  /** `none`: memory mode off or unmeasurable, kept only to carry a CPU scope. */
+  mechanism: "scope" | "watchdog" | "none";
   mode?: MemoryMode;
   platform: NodeJS.Platform;
   limitBytes: number;
@@ -48,20 +50,24 @@ export interface AgentMemoryPlan {
   totalBytes: number;
   score: number;
   unit: string | null;
+  /** The memory budget slice; a CPU plan may place the scope below it. */
   slice: string;
   viewerUnit: string | null;
   systemdVersion: number;
+  cpu?: AgentCpuPlan | null;
 }
 export function wrapAgentCommand(plan: AgentMemoryPlan | null, command: string, args: string[]): { command: string; args: string[] } {
   if (!plan) return { command, args };
-  const scored = plan.platform === "linux"
+  const scored = plan.platform === "linux" && plan.mechanism !== "none"
     ? ["/bin/sh", "-c", `echo ${plan.score} >/proc/self/oom_score_adj 2>/dev/null; exec "$@"`, "delegatus-agent", command, ...args]
     : [command, ...args];
-  if (plan.mechanism === "watchdog") return { command: scored[0], args: scored.slice(1) };
+  if (plan.mechanism !== "scope" && !plan.cpu) return { command: scored[0], args: scored.slice(1) };
+  const systemdVersion = Math.min(plan.systemdVersion, plan.cpu?.systemdVersion ?? Infinity);
   return { command: "systemd-run", args: ["--user", "--scope", "--quiet", "--collect",
-    ...(plan.systemdVersion >= 254 ? ["--expand-environment=no"] : []),
-    `--unit=${plan.unit}`, `--slice=${plan.slice}`, "--description=Delegatus agent",
-    "-p", `MemoryMax=${plan.limitBytes}`, "-p", "MemorySwapMax=0", "-p", "OOMPolicy=continue",
+    ...(systemdVersion >= 254 ? ["--expand-environment=no"] : []),
+    `--unit=${plan.unit}`, `--slice=${plan.cpu?.slice ?? plan.slice}`, "--description=Delegatus agent",
+    ...(plan.mechanism === "scope" ? ["-p", `MemoryMax=${plan.limitBytes}`, "-p", "MemorySwapMax=0", "-p", "OOMPolicy=continue"] : []),
+    ...(plan.cpu ? cpuScopeProperties(plan.cpu) : []),
     ...(plan.viewerUnit ? ["-p", `BindsTo=${plan.viewerUnit}`, "-p", `After=${plan.viewerUnit}`] : []), "--", ...scored] };
 }
 export function probeAgentScopes(options: { platform: NodeJS.Platform; cgroupRoot: string; uid: number; runner: MemoryRunner; docker: boolean; slice?: string }): number | null {
@@ -79,15 +85,28 @@ export function probeAgentScopes(options: { platform: NodeJS.Platform; cgroupRoo
 let cachedMechanism: { mechanism: "scope" | "watchdog"; version: number } | null = null;
 let sliceConfigured = false;
 export function invalidateAgentScopeProbe(): void { cachedMechanism = null; sliceConfigured = false; }
-export function planAgentMemory(input: { engine: string; sessionKey: string; liveAgents: number }, env = process.env, ports: { totalBytes?: number; probe?: () => number | null; runner?: MemoryRunner } = {}): AgentMemoryPlan | null {
+/** The unit name every agent scope carries; HostMemoryState validates it. */
+function agentScopeUnit(engine: string, sessionKey: string): string {
+  return `delegatus-agent-${engine}-${createHash("sha256").update(sessionKey + randomUUID()).digest("hex").slice(0,12)}.scope`;
+}
+/** A scope that carries only CPU placement: memory is off or cannot be measured. */
+function cpuOnlyPlan(input: { engine: string; sessionKey: string; cpu?: AgentCpuPlan | null }, mode: MemoryMode, totalBytes = 0): AgentMemoryPlan | null {
+  if (!input.cpu) return null;
+  return { mechanism: "none", mode, platform: process.platform, limitBytes: 0, budgetBytes: 0, reserveBytes: 0, totalBytes, score: 0,
+    unit: agentScopeUnit(input.engine, input.sessionKey), slice: "delegatus-agents.slice", viewerUnit: viewerUnitFromCgroup(read("/proc/self/cgroup")),
+    systemdVersion: input.cpu.systemdVersion, cpu: input.cpu };
+}
+/** `input.cpu` comes from planAgentCpu; CPU placement is independent of the memory mode. */
+export function planAgentMemory(input: { engine: string; sessionKey: string; liveAgents: number; cpu?: AgentCpuPlan | null }, env = process.env, ports: { totalBytes?: number; probe?: () => number | null; runner?: MemoryRunner } = {}): AgentMemoryPlan | null {
   const raw = env.DELEGATUS_AGENT_MEMORY ?? env.LLV_AGENT_MEMORY ?? "auto";
   const mode: MemoryMode = ["auto", "scope", "watchdog", "off"].includes(raw) ? raw as MemoryMode : "auto";
   if (raw !== mode) diagnostic("mode", "Invalid agent memory mode; using auto.");
-  if (mode === "off" || process.platform === "win32") return null;
+  if (process.platform === "win32") return null;
+  if (mode === "off") return cpuOnlyPlan(input, mode);
   const config = { LLV_AGENT_MEMORY_MAX: env.DELEGATUS_AGENT_MEMORY_MAX ?? env.LLV_AGENT_MEMORY_MAX, LLV_AGENT_MEMORY_RESERVE: env.DELEGATUS_AGENT_MEMORY_RESERVE ?? env.LLV_AGENT_MEMORY_RESERVE };
   for (const [name, value] of Object.entries(config)) if (value !== undefined && parseMemorySize(value) === null) diagnostic(name, `Invalid ${name}; using the default.`);
   const totalBytes = ports.totalBytes ?? procBackend.systemMemory()?.ramTotal;
-  if (!totalBytes) { diagnostic("total", "Agent memory limits unavailable: cannot read system memory."); return null; }
+  if (!totalBytes) { diagnostic("total", "Agent memory limits unavailable: cannot read system memory."); return cpuOnlyPlan(input, mode); }
   if (!cachedMechanism) {
     const version = mode === "watchdog" ? null : ports.probe ? ports.probe() : probeAgentScopes({ platform: process.platform, cgroupRoot: "/sys/fs/cgroup", uid: process.getuid?.() ?? -1, runner: run, docker: fs.existsSync("/.dockerenv") || env.LLV_DOCKER_NSENTER_SHIMS === "1" });
     cachedMechanism = { mechanism: version ? "scope" : "watchdog", version: version ?? 253 };
@@ -96,8 +115,9 @@ export function planAgentMemory(input: { engine: string; sessionKey: string; liv
   const limits = agentMemoryCeiling(totalBytes, input.liveAgents, config);
   const plan: AgentMemoryPlan = { ...limits, totalBytes, mechanism, mode, platform: process.platform,
     score: agentOomScore(Number(read("/proc/self/oom_score_adj")) || 0),
-    unit: mechanism === "scope" ? `delegatus-agent-${input.engine}-${createHash("sha256").update(input.sessionKey + randomUUID()).digest("hex").slice(0,12)}.scope` : null,
-    slice: "delegatus-agents.slice", viewerUnit: viewerUnitFromCgroup(read("/proc/self/cgroup")), systemdVersion: cachedMechanism.version };
+    unit: mechanism === "scope" || input.cpu ? agentScopeUnit(input.engine, input.sessionKey) : null,
+    slice: "delegatus-agents.slice", viewerUnit: viewerUnitFromCgroup(read("/proc/self/cgroup")),
+    systemdVersion: mechanism === "scope" ? cachedMechanism.version : input.cpu?.systemdVersion ?? cachedMechanism.version, cpu: input.cpu ?? null };
   if (mechanism === "scope" && !sliceConfigured) {
     try { (ports.runner ?? run)("systemctl", ["--user", "set-property", "--runtime", plan.slice, `MemoryMax=${limits.budgetBytes}`]); sliceConfigured = true; }
     catch { diagnostic("slice", "Cannot set the shared agent memory budget; per-agent ceilings still apply."); }
@@ -225,7 +245,7 @@ export function tickAgentMemoryWatchdogs(cells: Iterable<AgentMemoryCell> = watc
 }
 
 export class AgentMemoryCell {
-  private state: HostMemoryState;
+  private state: Omit<HostMemoryState, "mechanism"> & { mechanism: AgentMemoryPlan["mechanism"] };
   private readonly listeners = new Set<() => void>();
   private watcher: fs.FSWatcher | null = null;
   private poll: ReturnType<typeof setInterval> | null = null;
@@ -250,11 +270,17 @@ export class AgentMemoryCell {
   constructor(readonly plan: AgentMemoryPlan, private readonly ports: CellPorts = {}) {
     this.state = { mechanism: plan.mechanism, limitBytes: plan.limitBytes, unit: plan.unit, kills: 0, lastKill: null };
   }
-  snapshot(): HostMemoryState { return { ...this.state, lastKill: this.state.lastKill ? { ...this.state.lastKill } : null }; }
+  /** The memory evidence of a memory plan; memoryState() is the host's field. */
+  snapshot(): HostMemoryState {
+    return { ...this.state, mechanism: this.state.mechanism === "watchdog" ? "watchdog" : "scope", lastKill: this.state.lastKill ? { ...this.state.lastKill } : null };
+  }
+  /** Null when the scope carries only CPU placement. */
+  memoryState(): HostMemoryState | null { return this.state.mechanism === "none" ? null : this.snapshot(); }
   onChange(listener: () => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
   private notify() { for (const listener of this.listeners) listener(); }
   launchFailure(): string | null {
     if (!this.scopeAdmissionError) return null;
+    if (this.plan.cpu?.workload === "work") return `CPU containment for agent work is unavailable: ${this.scopeAdmissionError}`;
     return this.plan.mode === "scope" ? this.scopeAdmissionError : "agent memory scope launch failed before exec; retry shortly";
   }
   wrapSpawn(base = (command: string, args: string[], options: SpawnOptionsWithoutStdio): ChildProcessWithoutNullStreams => spawn(command, args, { ...options, stdio: ["pipe", "pipe", "pipe"] })) {
@@ -266,9 +292,10 @@ export class AgentMemoryCell {
       child.once("close", () => {
         // These pre-exec messages belong to systemd-run, not provider stderr.
         const admission = tail.split("\n").find((line) => /^Failed to (?:create bus (?:connection|message)|connect to (?:(?:user|system) )?bus|start transient scope unit|attach bus to event loop):/.test(line));
-        if (this.plan.mechanism === "scope" && this.pid === null && admission) {
+        if (this.plan.unit && this.pid === null && admission) {
           this.scopeAdmissionError = admission.trim();
           invalidateAgentScopeProbe();
+          if (this.plan.cpu) invalidateCpuContainmentProbe();
         }
       });
       if (child.pid) {
@@ -309,7 +336,11 @@ export class AgentMemoryCell {
     this.pid = pid;
     const root = this.ports.cgroupRoot ?? "/sys/fs/cgroup";
     this.file = path.join(root, group, "memory.events");
-    this.sliceFile = path.join(path.dirname(path.dirname(this.file)), "memory.events");
+    // The shared budget sits on the memory slice, which a work scope's CPU
+    // slice nests below.
+    const parts = group.split("/");
+    const budget = parts.lastIndexOf(this.plan.slice);
+    this.sliceFile = path.join(root, budget > 0 ? parts.slice(0, budget + 1).join("/") : path.dirname(group), "memory.events");
     this.sliceOom = events(this.sliceFile)?.oom ?? 0;
     try { this.eventsFd = fs.openSync(this.file, "r"); } catch { /* Poll and watch can still attach when the file appears. */ }
     this.readEvents();
@@ -323,7 +354,7 @@ export class AgentMemoryCell {
     } catch { poll(); }
   }
   readEvents(): void {
-    if (!this.file) return;
+    if (!this.file || this.plan.mechanism === "none") return;
     const current = events(this.file, this.eventsFd);
     if (!current) return;
     const sliceOom = this.sliceFile ? events(this.sliceFile)?.oom ?? this.sliceOom : this.sliceOom;

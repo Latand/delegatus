@@ -14,6 +14,7 @@ import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifa
 
 import type { Pipeline, PipelinePublicationFailure, PipelinePublicationResult } from "./types";
 import { pathIsDeclaredOutput } from "./stageAccess";
+import { CpuContainmentUnavailable, wrapWorkCommand } from "@/lib/runtime/cpuPlacement";
 import { CONTROLLER_ARTIFACT_GIT_PATHS, CONTROLLER_ARTIFACT_PATHSPECS, protectExistingControllerArtifacts } from "./controllerArtifacts";
 
 export type PreservedProvisionRef = { ref: string; sha: string; unpublishedCommits: number };
@@ -1219,7 +1220,7 @@ export function pipelinePublicationHookEnv(source: NodeJS.ProcessEnv = process.e
   const env: Partial<NodeJS.ProcessEnv> = {};
   for (const key of Object.keys(source)) {
     if (key === "NODE_ENV" || key === "NEXT_PHASE" || key === "NEXT_RUNTIME" || /^__NEXT_/.test(key)
-      || (/^(?:LLV|DELEGATUS)_/.test(key) && !/^(?:LLV_(?:GATE|PRIVACY)_|(?:LLV|DELEGATUS)_PUBLICATION_|LLV_AGENT_GIT_GUARD_DIR$)/.test(key))) env[key] = undefined;
+      || (/^(?:LLV|DELEGATUS)_/.test(key) && !/^(?:LLV_(?:GATE|PRIVACY)_|(?:LLV|DELEGATUS)_PUBLICATION_|LLV_AGENT_GIT_GUARD_DIR$|(?:LLV|DELEGATUS)_(?:AGENT_CPU$|CPU_PRESSURE|WORK_(?:SCOPE_)?CPU_QUOTA$))/.test(key))) env[key] = undefined;
   }
   return env;
 }
@@ -1467,10 +1468,23 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       revalidate();
       if (abort.signal.aborted) return { code: null, stdout: "", stderr: "publication superseded" };
       fs.futimesSync(descriptor, new Date(), new Date());
+      const preparingDependencies = command === "bun" && args[0] === "install";
+      // The push runs the repository's pre-push gates; both leave the
+      // production service for a work scope. Its PID, group and the inherited
+      // lock descriptor stay this command's.
+      let launch = { command, args };
+      if ((command === "git" && args[0] === "push") || preparingDependencies) {
+        try { launch = wrapWorkCommand(command, args, { label: preparingDependencies ? "publish-install" : "publish-push" }); }
+        catch (error) {
+          if (!(error instanceof CpuContainmentUnavailable)) throw error;
+          failureEvidence = { step: preparingDependencies ? "preparing publication dependencies" : "publishing the pipeline branch",
+            code: 1, signal: null, durationMs: 0, outputTail: error.message };
+          return { code: 1, stdout: "", stderr: error.message };
+        }
+      }
       if (command === "git" && args[0] === "push") writeStarted = true;
       const started = performance.now();
-      const executed = await exec(command, args, cwd, pipelineLiteralGitEnv(env), { ...options, signal: abort.signal, inheritFd: descriptor });
-      const preparingDependencies = command === "bun" && args[0] === "install";
+      const executed = await exec(launch.command, launch.args, cwd, pipelineLiteralGitEnv(env), { ...options, signal: abort.signal, inheritFd: descriptor });
       if (executed.code !== 0 && ((command === "git" && args[0] === "push") || preparingDependencies)) {
         // Redact the whole output before taking its tail; clipping first can
         // remove the prefix that identifies a secret to the shared redactor.

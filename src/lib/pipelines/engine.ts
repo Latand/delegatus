@@ -1,5 +1,6 @@
 import { isAccountMutationContention } from "@/lib/accounts/contentionMessage";
 import { agentMemoryHeadroom, memoryKillText, type AgentMemoryKill } from "@/lib/runtime/agentMemory";
+import { CPU_PRESSURE_DETAIL_PREFIXES, cpuPressureHoldDetail, machineCpuPressureGate, type CpuPressureHold } from "@/lib/runtime/cpuPressure";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -251,6 +252,8 @@ export interface PipelinePorts {
   failStageLaunch?(launchId: string, conversationId: string, reason: string): boolean;
   claimSpawnRetry(launchId: string, claimId: string): "claimed" | "settled" | "conflict";
   drainHold?(): DrainLease | null;
+  /** A held stage start waits for CPU pressure to fall; null admits. */
+  cpuPressureHold?(): CpuPressureHold | null;
   /** Whether the ticking process can publish a structured host: `ready` now,
       `rebinding` between publications, `unbound` never at all (#1191). */
   structuredDeliveryPublication?(): "ready" | "rebinding" | "unbound";
@@ -1284,6 +1287,7 @@ export function defaultPipelinePorts(
        structured hosting switched off there is no publication to wait for and
        the spawn must fail in the open, as it always did. */
     drainHold: () => activeDrain(),
+    cpuPressureHold: () => machineCpuPressureGate()?.check() ?? null,
     structuredDeliveryPublication: () => structuredHostsEnabled()
       ? structuredDeliveryPublicationState()
       : "ready",
@@ -4777,7 +4781,21 @@ function holdStageLaunch(pipeline: Pipeline, ports: PipelinePorts, persist: () =
     return true;
   }
   if (pipeline.stateDetail?.startsWith("held for the automatic update to ")) { pipeline.stateDetail = null; persist(); }
+  // Heavy work yields to production under CPU pressure. Only a fresh stage
+  // start asks; recovery and reconciliation of launched work never do.
+  const pressure = ports.cpuPressureHold?.();
+  if (pressure) {
+    const detail = cpuPressureHoldDetail(pressure);
+    if (pipeline.stateDetail !== detail) { pipeline.stateDetail = detail; persist(); }
+    ports.scheduleTick?.(5_000);
+    return true;
+  }
+  if (heldForCpuPressure(pipeline)) { pipeline.stateDetail = null; persist(); }
   return false;
+}
+
+function heldForCpuPressure(pipeline: Pipeline): boolean {
+  return CPU_PRESSURE_DETAIL_PREFIXES.some((prefix) => pipeline.stateDetail?.startsWith(prefix));
 }
 
 async function tickRunStage(
@@ -7432,7 +7450,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     }
     const followUpAt = unixMs(ports.now());
     followUp = followUp || result.pipelines.some((pipeline) => pipeline.state === "running"
-      && ((pipeline.cursor?.state === "pending" && !ports.drainHold?.()) || (settledGitIds.has(pipeline.id)
+      && ((pipeline.cursor?.state === "pending" && !ports.drainHold?.() && !heldForCpuPressure(pipeline)) || (settledGitIds.has(pipeline.id)
         && (pipeline.cursor?.state === "committing" || pipeline.stateDetail === "approved review head verification pending")
         && unixMs(currentAttempt(pipeline, pipeline.cursor?.stageId ?? "")?.remoteHeadWait?.retryAfter ?? "") <= followUpAt))
       && !stageActivationIsWaiting(pipeline, followUpAt));

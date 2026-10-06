@@ -271,10 +271,13 @@ also run the shared supply-chain check; CI audits weekly and by dispatch.
 
 Heavy commands run through `scripts/gate-slot.sh`: six slots by default,
 `LLV_GATE_SLOTS` to change the count, `LLV_GATE_MEM` for the systemd memory cap
-(default `8G`), and a default Node heap of 6144 MB. Without a user systemd
-manager, commands run directly; without flock (macOS), the slot lock is omitted.
-`LLV_GATE_LOCK_DIR=/var/tmp` joins the existing machine gate's lock files.
-Otherwise locks live in a `delegatus-gate` directory under the runtime/temp root.
+(default `8G`), and a default Node heap of 6144 MB. The slot locks live in
+`/var/tmp`, the files the installed `/var/tmp/llv-gate` uses, so both gates
+share one set of slots; `LLV_GATE_LOCK_DIR` overrides the directory. On Linux a
+gate waits while CPU pressure is high, then runs in its own scope in
+`delegatus-agents-work.slice` with a 300% CPU quota; without a reachable user
+systemd manager it refuses with exit 69 unless `DELEGATUS_AGENT_CPU=off`
+(docs/design/cpu-placement.md). Without flock (macOS), the slot lock is omitted.
 An existing `NODE_OPTIONS` is preserved.
 
 `LLV_SKIP_HOOKS=1` skips both hooks for a false positive. A fetch failure uses

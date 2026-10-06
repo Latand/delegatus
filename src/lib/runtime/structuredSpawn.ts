@@ -1,4 +1,5 @@
 import { AgentMemoryCell, planAgentMemory } from "./agentMemory";
+import { planAgentCpu, workloadForMemberships } from "./cpuPlacement";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -1688,8 +1689,10 @@ export async function defaultStartHost(
   } = {},
 ): Promise<SpawnedStructuredHost> {
   input = admittedStructuredLaunchInput(input);
-  const liveAgents = Object.values(input.registry.readOnlySnapshot().entries).filter((entry) => entry.structuredHost && entry.status !== "dead" && entry.status !== "unhosted").length + 1;
-  const plan = planAgentMemory({ engine: input.engine, sessionKey: input.receipt.launchId, liveAgents });
+  const snapshot = input.registry.readOnlySnapshot();
+  const liveAgents = Object.values(snapshot.entries).filter((entry) => entry.structuredHost && entry.status !== "dead" && entry.status !== "unhosted").length + 1;
+  const cpu = planAgentCpu(workloadForMemberships(snapshot.memberships[input.registry.canonicalConversationId(input.receipt.conversationId)]));
+  const plan = planAgentMemory({ engine: input.engine, sessionKey: input.receipt.launchId, liveAgents, cpu });
   const memoryCell = plan ? new AgentMemoryCell(plan) : null;
   if (input.engine === "copilot") return await startCopilotStructuredHost(input, capability, {
     ...(memoryCell ? { memoryCell } : {}),

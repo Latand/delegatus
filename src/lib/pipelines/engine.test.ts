@@ -2279,6 +2279,57 @@ test("automatic-update hold keeps a pending attempt and releases exactly one lau
   expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(1);
 });
 
+test("CPU pressure holds a fresh stage start with a visible reason and releases exactly one launch", async () => {
+  const h = harness();
+  const { CpuPressureGate, DEFAULT_CPU_PRESSURE_POLICY } = await import("@/lib/runtime/cpuPressure");
+  let pressure: number | null = 45;
+  let clock = Date.parse("2026-10-06T12:00:00Z");
+  const gate = new CpuPressureGate(DEFAULT_CPU_PRESSURE_POLICY, { sample: () => pressure, now: () => clock });
+  const wakes: number[] = [];
+  h.ports.cpuPressureHold = () => gate.check();
+  h.ports.scheduleTick = (delayMs) => { wakes.push(delayMs); };
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const held = loadPipelines()[0]!;
+  expect(held.cursor?.state).toBe("pending");
+  expect(held.runs[0]!.attempts[0]!.spawnCalls ?? 0).toBe(0);
+  expect(held.stateDetail).toBe("stage start held for CPU pressure since 2026-10-06T12:00:00.000Z (avg10 45% ≥ 20%)");
+  expect(wakes).toContain(5_000);
+  clock += 120_000;
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.stateDetail).toStartWith("stage start deferred by CPU pressure: held since 2026-10-06T12:00:00.000Z");
+  // Below the release threshold the hold lasts ten seconds more.
+  pressure = 4;
+  await tickPipelines([], h.ports);
+  clock += 9_000;
+  await tickPipelines([], h.ports);
+  expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(0);
+  clock += 1_000;
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const released = loadPipelines()[0]!;
+  expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(1);
+  expect(released.runs[0]!.attempts).toHaveLength(1);
+  expect(released.stateDetail ?? "").not.toContain("CPU pressure");
+  // A launched stage is never held again: pressure returns and nothing respawns.
+  pressure = 80;
+  await tickPipelines([], h.ports);
+  expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(1);
+});
+
+test("a failed CPU pressure sample admits the stage start", async () => {
+  const h = harness();
+  const { CpuPressureGate, DEFAULT_CPU_PRESSURE_POLICY } = await import("@/lib/runtime/cpuPressure");
+  const gate = new CpuPressureGate(DEFAULT_CPU_PRESSURE_POLICY, { sample: () => { throw new Error("EACCES"); }, now: Date.now });
+  h.ports.cpuPressureHold = () => gate.check();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(1);
+  expect(loadPipelines()[0]!.stateDetail ?? "").not.toContain("CPU pressure");
+});
+
 test("automatic drain holds a new embedded legacy review stage and releases once", async () => {
   const h = harness();
   let held = false;

@@ -10,6 +10,7 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, write
 import { join } from "node:path";
 import { setPriority } from "node:os";
 
+import { CpuContainmentUnavailable, wrapWorkCommand } from "@/lib/runtime/cpuPlacement";
 import { runGit, TIP_REF } from "./git";
 import { readStartIdentity, sameProcess, signalGroup, type RecordedPid } from "./pid";
 import { releaseDirFor, type Release } from "./release";
@@ -18,7 +19,11 @@ import { CHECKOUT_STEPS, idleUpdate, pendingSteps, shortSha, type CheckoutStepNa
 export const TAIL_LINES = 40;
 export const MIN_AVAILABLE_MB = 4_096;
 
-export interface RunOptions { cwd: string; env: Record<string, string>; onLine(line: string): void; lowPriority?: boolean }
+export interface RunOptions {
+  cwd: string; env: Record<string, string>; onLine(line: string): void; lowPriority?: boolean;
+  /** Heavy work: the real port runs it in a CPU work scope under this label. */
+  work?: string;
+}
 
 export interface StepPorts {
   /** Runs a command to completion and answers its exit code. */
@@ -232,9 +237,9 @@ export class UpdateRunner {
     const { checkout, remote, branch, bun, env } = this.config;
     const target = this.state.target!;
     const release = this.state.releaseDir!;
-    const command = async (argv: string[], cwd: string): Promise<number> => {
+    const command = async (argv: string[], cwd: string, work?: string): Promise<number> => {
       push(`$ ${argv.join(" ")}   (in ${cwd})`, false);
-      const code = await this.ports.run(argv, { cwd, env, onLine: (line) => push(line), lowPriority: this.state.trigger === "auto" });
+      const code = await this.ports.run(argv, { cwd, env, onLine: (line) => push(line), lowPriority: this.state.trigger === "auto", ...(work ? { work } : {}) });
       push(`exit ${code}`, false);
       if (code !== 0) throw new CommandFailure(code);
       return code;
@@ -276,12 +281,12 @@ export class UpdateRunner {
       case "install":
         if (await reusable()) { push(`${shortSha(target)} is already built in ${release}; its dependencies are kept`, false); return null; }
         guardMemory();
-        return command([bun, "install", "--frozen-lockfile"], release);
+        return command([bun, "install", "--frozen-lockfile"], release, "update-install");
       case "build":
         if (await reusable()) { push(`${shortSha(target)} is already built in ${release}; the build is reused`, false); return null; }
         guardMemory();
         this.ports.markBuilt?.(release, null);
-        return command([bun, "run", "build"], release);
+        return command([bun, "run", "build"], release, "update-build");
       case "ready": {
         const head = (await this.ports.revParse("HEAD", release)).trim();
         if (head !== target) throw new StepError({ kind: "head-mismatch", head: shortSha(head), expected: shortSha(target) }, `HEAD is ${shortSha(head)}, expected ${shortSha(target)}`);
@@ -304,8 +309,19 @@ export interface RealPorts extends StepPorts { abort(): void }
 export function realPorts(publish: (release: Release) => void | Promise<void>): RealPorts {
   let current: RecordedPid | null = null;
   return {
-    async run(command, { cwd, env, onLine, lowPriority }) {
+    async run(command, { cwd, env, onLine, lowPriority, work }) {
       mkdirSync(env.TMPDIR ?? cwd, { recursive: true });
+      if (work) {
+        // The service's own release is never blocked on CPU placement; a
+        // missing mechanism is reported in the update log instead.
+        try {
+          const wrapped = wrapWorkCommand(command[0]!, command.slice(1), { label: work });
+          command = [wrapped.command, ...wrapped.args];
+        } catch (error) {
+          if (!(error instanceof CpuContainmentUnavailable)) throw error;
+          onLine(`${error.message} This build runs in the service's CPU domain.`);
+        }
+      }
       const child = spawn(command[0]!, command.slice(1), { cwd, env: env as NodeJS.ProcessEnv, detached: true, stdio: ["ignore", "pipe", "pipe"] });
       const exited = new Promise<number>((resolve) => {
         child.once("error", (error) => { onLine(error.message); resolve(127); });
