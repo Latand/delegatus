@@ -31,6 +31,7 @@ const NOW = Date.parse("2026-09-10T10:00:00.000Z");
 
 const servers: { stop(): void }[] = [];
 const originalPort = process.env.LLV_VIEWER_PORT;
+const originalControlUrl = process.env.LLV_VIEWER_CONTROL_URL;
 const originalTarget = process.env.LLV_VIEWER_DEPLOY_TARGET;
 
 afterEach(() => {
@@ -38,6 +39,8 @@ afterEach(() => {
   resetVoiceViewBindings();
   if (originalPort === undefined) delete process.env.LLV_VIEWER_PORT;
   else process.env.LLV_VIEWER_PORT = originalPort;
+  if (originalControlUrl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL;
+  else process.env.LLV_VIEWER_CONTROL_URL = originalControlUrl;
   if (originalTarget === undefined) delete process.env.LLV_VIEWER_DEPLOY_TARGET;
   else process.env.LLV_VIEWER_DEPLOY_TARGET = originalTarget;
 });
@@ -79,6 +82,7 @@ function viewer(received: Received[], answer?: (body: Record<string, unknown>) =
   servers.push(server);
   /* The hop resolves its origin from this, exactly as it does in the image. */
   process.env.LLV_VIEWER_PORT = String(server.port);
+  process.env.LLV_VIEWER_CONTROL_URL = `http://127.0.0.1:${server.port}`;
   delete process.env.LLV_VIEWER_DEPLOY_TARGET;
   return server;
 }

@@ -1,3 +1,4 @@
+import { beginCodexFeatureFixture } from "@/lib/agent/codexSpawnPolicyTestFixtures";
 import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -8,6 +9,9 @@ import { captureProcessIdentity } from "@/lib/processIdentity";
 import { CodexAppServerHost } from "../codexAppServerHost";
 import { FileRuntimeEventStore } from "../eventStore";
 import { adoptCodexRegistryHosts, bindCodexHostPersistence } from "../registry";
+
+// This separate process also launches only the fixture interpreter.
+beginCodexFeatureFixture();
 
 const [mode, registryPath, eventsPath, transcriptPath, mcpProofPath, readyPath] = process.argv.slice(2);
 if ((mode !== "incumbent" && mode !== "successor")

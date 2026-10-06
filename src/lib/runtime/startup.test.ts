@@ -746,13 +746,16 @@ test("startup socket recovery retains a partially adopted host and drains its he
     adoptClaude: async () => [],
   };
 
+  let now = Date.now();
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
   try {
     await runStructuredHostStartup(
       () => adoptStructuredHostsAtStartup(dependencies),
       () => {},
       {
-        schedule: (callback) => {
-          scheduled.push(callback);
+        schedule: (callback, delayMs) => {
+          // Firing the timer must also elapse the delivery queue's retry deadline.
+          scheduled.push(() => { now += delayMs; callback(); });
           return { unref() {} };
         },
       },
@@ -800,6 +803,7 @@ test("startup socket recovery retains a partially adopted host and drains its he
       },
     });
   } finally {
+    clock.mockRestore();
     await bindStructuredDeliveryQueue([], { registry, client: null });
     journal.close();
     fs.rmSync(directory, { recursive: true, force: true });
@@ -964,8 +968,11 @@ test("scheduled startup retry continues through the retained Codex host", async 
     expect(structuredStartupHosts()).toMatchObject([{ key, host }]);
     expect(adoptedProcesses).toBe(1);
     expect(continuationAdmissions).toBe(2);
-    /* The Viewer wrote it, so it never carries the operator's marker. */
-    expect(continuationOrigins).toEqual([{ kind: "agent", role: "startup-recovery" }, { kind: "agent", role: "startup-recovery" }]);
+    /* Startup recovery is attributed to the recipient's project on every admission. */
+    expect(continuationOrigins).toEqual([
+      { kind: "agent", role: "startup-recovery", project: path.basename(directory) },
+      { kind: "agent", role: "startup-recovery", project: path.basename(directory) },
+    ]);
     expect(registry.snapshot().entries[`codex:${sessionId}`]!.claimEpoch).toBe(retainedEpoch);
     expect(ledger.writes.map(({ id, text }) => ({ id, text }))).toEqual([
       { id: "queued-draft-before-retained-retry", text: "keep this draft ahead of continuation" },

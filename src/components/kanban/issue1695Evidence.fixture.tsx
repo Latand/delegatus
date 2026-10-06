@@ -2540,6 +2540,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return { ...role, variants, promptPreview: role.promptScaffold, shipped: { config: role.config, variants } };
   }) });
   if (SCENARIO === "service-tier" && url.pathname === "/api/roles") return json({ roles: ROLE_DEFAULTS.map(role => ({ ...role, promptPreview: role.promptScaffold, config: { ...role.config, ...(role.id === "reviewer" ? { serviceTier: "ultrafast" } : {}) }, shipped: { config: role.config } })) });
+  if (SCENARIO === "memory-settings" && ["/api/telemetry", "/api/memory/settings", "/api/asks-you/key", "/api/asks-you"].includes(url.pathname)) return serverFetch(url.pathname + url.search, init);
   if (url.pathname === "/api/task-icons") return serverFetch(url.pathname + url.search);
   /* The tick panel the notice card opens reads these two; the driver answers them. */
   if (TICK_CARDS && (url.pathname === "/api/monitor/seat-tick/settings" || url.pathname === "/api/roles")) return serverFetch(url.pathname + url.search, init);
