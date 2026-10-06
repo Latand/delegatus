@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { stateDir, statePath } from "@/lib/configDir";
-import { isOwnedTempName, ownTempRoots, scanProcesses, sweepRoots } from "@/lib/tempSweep";
+import { isOwnedTempName, ownTempRoots, scanProcesses, sweepRoots, type TempSweepRoot } from "@/lib/tempSweep";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { withFileTransactionSync } from "@/lib/state/fileTransaction";
 
@@ -150,6 +150,8 @@ export async function readDiskPressure(ports: {
   /** Independent reader state and observation seams for sandbox checks. */
   caches?: Map<string, PressureCache>;
   roots?: DiskRoot[];
+  worktrees?: string[];
+  tempRoots?: TempSweepRoot[];
   probe?: DiskProbe;
   now?: () => number;
   readOnly?: boolean;
@@ -172,16 +174,17 @@ export async function readDiskPressure(ports: {
   if (now() - cached.observedAt < OBSERVATION_TTL_MS) return structuredClone(cached.pressure);
   cached.observedAt = now();
   /* Loaded here: the pipeline engine imports this module for its admission check. */
-  const [{ loadPipelinesForList }, { exclusiveBytes, readWorktreeSweepReport }] = await Promise.all([
+  const [{ loadPipelinesForList }, { exclusiveBytes, readWorktreeSweepReport, hostTempWorktreeAccess }] = await Promise.all([
     import("@/lib/pipelines/store"),
     import("@/lib/pipelines/worktreeSweep"),
   ]);
   const pipelines = ports.roots ? [] : loadPipelinesForList();
   const sweep = ports.roots ? null : readWorktreeSweepReport();
-  const worktrees = [...new Set([...pipelines.map(row => row.worktreeDir), ...(sweep?.kept ?? []).map(row => row.path)].filter(Boolean))];
-  const tempRoots = ports.roots ? [] : sweepRoots(scanProcesses(), [...ownTempRoots(), statePath("scratch")]);
+  const worktrees = ports.worktrees ?? [...new Set([...pipelines.map(row => row.worktreeDir), ...(sweep?.kept ?? []).map(row => row.path)].filter(Boolean))];
+  const tempRoots = ports.tempRoots ?? (ports.roots ? [] : sweepRoots(scanProcesses(), [...ownTempRoots(), statePath("scratch")]));
+  const accessible = hostTempWorktreeAccess(tempRoots).accessiblePath;
   const roots: DiskRoot[] = ports.roots ?? [{ role: "state", directory }, { role: "state", directory: statePath("scratch") },
-    ...worktrees.map(directory => ({ role: "worktrees", directory })),
+    ...worktrees.map(directory => ({ role: "worktrees", directory: accessible(directory) })),
     ...tempRoots.map(root => ({ role: "temp", directory: root.via + root.path }))];
   const previousEpisode = cached.pressure.episode;
   cached.pressure = observeDiskPressureReport(file, () => diskVolumes(roots, ports.probe), new Date(now()).toISOString());
@@ -197,15 +200,21 @@ export async function readDiskPressure(ports: {
       let worktreeBytes = 0;
       // Nested linked checkouts must be measured once, through the outer one.
       for (const worktree of worktrees.filter(candidate => !worktrees.some(other => other !== candidate && candidate.startsWith(other + path.sep))))
-        worktreeBytes += await exclusiveBytes(worktree);
+        worktreeBytes += await exclusiveBytes(accessible(worktree));
       let tempBytes = 0;
+      const measuredTemp = new Set<string>();
       for (const root of tempRoots) {
         const base = root.via + root.path;
         try {
           for (const entry of fs.readdirSync(base, { withFileTypes: true })) {
             if (!entry.isDirectory() || !isOwnedTempName(entry.name)) continue;
             const child = path.join(base, entry.name);
-            if (worktrees.some(worktree => worktree === child || worktree.startsWith(child + path.sep))) continue;
+            const canonicalChild = path.join(root.path, entry.name);
+            if (worktrees.some(worktree => worktree === canonicalChild || worktree.startsWith(canonicalChild + path.sep))) continue;
+            const stat = fs.statSync(child);
+            const identity = `${stat.dev}:${stat.ino}`;
+            if (measuredTemp.has(identity)) continue;
+            measuredTemp.add(identity);
             tempBytes += await exclusiveBytes(child);
           }
         } catch { /* An inaccessible root has no attributable consumer count. */ }

@@ -47,7 +47,9 @@ import { pipelineActivitySettled, type Pipeline } from "./types";
  *   HEAD is not its pipeline's base. Work that exists only here stays.
  * - `self-update-release` — a release checkout self-update owns and prunes
  *   itself, keeping the serving and rollback releases.
- * - `in-use` — a live process has its working directory, an open file, or its
+ * - `in-use` — an unfinished merge-batch state still owns it, or a live
+ *   process holds that state, even while running outside the checkout; or
+ *   a live process has its working directory, an open file, or its
  *   `TMPDIR`/`LLV_STATE_DIR`/`XDG_CONFIG_HOME` inside it (the `/proc` scan the
  *   temp sweep uses).
  * - `live-conversation` — a registry conversation that is hosted, starting, or
@@ -116,7 +118,8 @@ export function worktreeSweepMode(env: Readonly<Record<string, string | undefine
 
 const HOUR_MS = 3_600_000;
 /** How long a finished lane, or a role's temp checkout nobody owns, stays
-    settled before the sweep may free it without a merged PR. */
+    settled before the sweep may free it without a merged PR. Merge-batch
+    checkouts retain this period even after their batch PR merges. */
 export const FINISHED_WORKTREE_RETENTION_MS = 4 * 24 * HOUR_MS;
 export const WORKTREE_SWEEP_INTERVAL_MS = HOUR_MS;
 /** Boot is busy enough; the first sweep waits for it to settle. */
@@ -490,6 +493,59 @@ function networkRemote(url: string): boolean {
   return /^(?:[^/@:]+@)?[^/\\:]+:[^:].+/.test(url) && !/^(?:file|[a-z]):/i.test(url);
 }
 
+/** merge-batch.ts keeps its state beside the batch and resolution roots.
+    Landing precedes deferred resolution and closing the original PRs, so a
+    merged batch PR alone cannot release this ownership. Read it again with
+    every guard check, including through the host namespace in Docker. */
+function mergeBatchOwnership(directory: string, branch: string | null, scan: ProcessScan,
+  accessible: (directory: string) => string): { owned: boolean; hold: string | null } {
+  const parent = path.dirname(directory);
+  const checkout = path.basename(directory) === "checkout" && /^merge-(?:batch|resolution)-[^/]+$/.test(path.basename(parent));
+  const privacy = /^privacy-main-[^/]+$/.test(path.basename(directory));
+  const runDirectory = checkout ? path.dirname(parent) : privacy ? parent : null;
+  const batchLayout = checkout && path.basename(parent).startsWith("merge-batch-");
+  let owned = batchLayout && /^merge-batch\/[a-f0-9-]{36}$/.test(branch ?? "");
+  const processes = scan.processes.map(process => ({ pid: process.pid,
+    paths: process.paths.map(target => path.resolve(target.replace(/ \(deleted\)$/, ""))) }));
+  const samePath = (left: string, right: string) => {
+    if (path.resolve(left) === path.resolve(right)) return true;
+    try { return fs.realpathSync(accessible(left)) === fs.realpathSync(accessible(right)); }
+    catch { return false; }
+  };
+  const files = new Set<string>(runDirectory ? [path.join(runDirectory, "merge-batch.json")] : []);
+  for (const process of processes) for (const target of process.paths)
+    if (path.basename(target) === "merge-batch.json") files.add(path.resolve(target));
+  for (const file of files) {
+    const knownLayout = file === (runDirectory ? path.join(runDirectory, "merge-batch.json") : null);
+    const locked = fs.existsSync(accessible(file + ".lock"));
+    let state: { version?: unknown; work?: unknown; branch?: unknown; landed?: unknown;
+      resolving?: { work?: unknown }; rows?: { status?: unknown; detail?: unknown }[] };
+    try {
+      const stat = fs.statSync(accessible(file));
+      if (!stat.isFile() || stat.size > 1024 * 1024) throw new Error("unreadable batch state");
+      state = JSON.parse(fs.readFileSync(accessible(file), "utf8"));
+      if (!state || state.version !== 1 || typeof state.work !== "string" || typeof state.branch !== "string"
+        || !/^merge-batch\/[a-f0-9-]{36}$/.test(state.branch) || !Array.isArray(state.rows)) throw new Error("invalid batch state");
+    } catch (error) {
+      if (knownLayout && (locked || (error as NodeJS.ErrnoException).code !== "ENOENT"))
+        return { owned, hold: "merge batch ownership is unreadable or locked" };
+      continue;
+    }
+    if (!samePath(state.work as string, directory)
+      && (typeof state.resolving?.work !== "string" || !samePath(state.resolving.work, directory))
+      && !(privacy && knownLayout)) continue;
+    owned = true;
+    const holder = processes.find(process => process.paths.some(target =>
+      samePath(target, file) || samePath(target, path.dirname(file)) || inside(target, file + ".lock")));
+    const settled = state.landed === true && !state.resolving && state.rows!.every(row => row
+      && (row.status === "needs-review" || row.status === "head-moved" || row.status === "culprit"
+        || row.status === "merged" && (row.detail === "closed" || row.detail === "head moved after landing; original kept open")));
+    if (!settled || locked || holder) return { owned, hold: holder
+      ? `pid ${holder.pid} holds merge batch state` : "merge batch still owns checkout" };
+  }
+  return { owned, hold: null };
+}
+
 /** One sweep. Never throws for one worktree; its failure is kept with a reason. */
 export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<WorktreeSweepReport> {
   const now = ports.now ?? Date.now;
@@ -531,8 +587,10 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
     conversations: ports.conversationCwds().map(resolve),
     scan: ports.scan(),
   });
-  const heldBy = (guards: ReturnType<typeof readGuards>, directory: string): WorktreeKept | null => {
+  const heldBy = (guards: ReturnType<typeof readGuards>, directory: string, branch: string | null = null): WorktreeKept | null => {
     if (guards.open.some((open) => inside(open, directory))) return { path: directory, reason: "open-pipeline" };
+    const batch = mergeBatchOwnership(directory, branch, guards.scan, accessible);
+    if (batch.hold) return { path: directory, reason: "in-use", detail: batch.hold };
     for (const process of guards.scan.processes) {
       if (process.paths.some((entry) => inside(resolve(entry), directory))) return { path: directory, reason: "in-use", detail: `pid ${process.pid}` };
     }
@@ -613,6 +671,7 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
     for (const entry of ordered) {
       const worktree = resolve(entry.path);
       const owners = ownersOf(ownersAtStart, worktree);
+      const batch = mergeBatchOwnership(worktree, entry.branch, initial.scan, accessible);
       const pipelineId = owners[0]?.id;
       if (worktree === mainPath || roots.has(worktree) || projectRoots.some((project) => inside(project, worktree))) continue;
       if (owners.length === 0 && selfUpdateRelease(worktree)) {
@@ -621,7 +680,7 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
       }
       /* A finished lane, or a role's temp checkout nobody owns, follows the
          retention rule; a checkout the operator made by hand never does. */
-      const finished = owners.length > 0 ? !owners.some(pipelineHoldsCheckout) : tempRoots.some((temp) =>
+      const finished = owners.length > 0 ? !owners.some(pipelineHoldsCheckout) : batch.owned || tempRoots.some((temp) =>
         inside(worktree, temp) && isOwnedTempName(path.relative(temp, worktree).split(path.sep)[0] ?? ""));
       /* A lane's own terminal time dates it on the first pass; otherwise the
          first sweep that saw it settled starts the clock. */
@@ -647,7 +706,7 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
       }
       // Activity also resets retention while a checkout is still young or
       // has no matching PR. It must be observed before either early return.
-      const busy = heldBy(initial, worktree);
+      const busy = heldBy(initial, worktree, entry.branch);
       if (busy) {
         keep({ ...busy, ...base });
         continue;
@@ -665,7 +724,7 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
         const pr = byNumber.get(number);
         if (pr) prs.set(pr.number, pr);
       }
-      if (prs.size === 0 && !retained) {
+      if ((prs.size === 0 || batch.owned) && !retained) {
         keep(finished
           ? { ...base, reason: "retention", detail: `eligible after ${new Date(settledSince + FINISHED_WORKTREE_RETENTION_MS).toISOString()}` }
           : { ...base, reason: "no-merged-pr", ...(repository ? {} : { detail: "no GitHub origin" }) });
@@ -699,6 +758,13 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
       const prove = async (): Promise<{ pr: MergedPullRequest | null; anchor: string; preservation: "merged-pr" | "remote-ref" | "base"; branch: string | null } | WorktreeKept> => {
         const current = await checkedOut(ports.git, worktree);
         if (!current) return { ...base, reason: "unmerged-commits", detail: "HEAD unreadable" };
+        const freshOwners = ownersOf(ownershipPipelines(), worktree);
+        if (retained) {
+          if (freshOwners.some(pipelineHoldsCheckout)) return { ...base, reason: "open-pipeline" };
+          const freshSettled = Math.max(settledSince, latestTerminalTime(freshOwners));
+          if (now() - freshSettled < FINISHED_WORKTREE_RETENTION_MS)
+            return { ...base, reason: "retention", detail: `eligible after ${new Date(freshSettled + FINISHED_WORKTREE_RETENTION_MS).toISOString()}` };
+        }
         let known = false;
         for (const pr of [...prs.values()].sort((a, b) => b.number - a.number)) {
           const present = await ports.git(["cat-file", "-e", `${pr.headRefOid}^{commit}`], root);
@@ -708,11 +774,6 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
           if (ancestor.code === 0) return { pr, anchor: pr.headRefOid, preservation: "merged-pr", branch: current.branch };
         }
         if (retained) {
-          const freshOwners = ownersOf(ownershipPipelines(), worktree);
-          if (freshOwners.some(pipelineHoldsCheckout)) return { ...base, reason: "open-pipeline" };
-          const freshSettled = Math.max(settledSince, latestTerminalTime(freshOwners));
-          if (now() - freshSettled < FINISHED_WORKTREE_RETENTION_MS)
-            return { ...base, reason: "retention", detail: `eligible after ${new Date(freshSettled + FINISHED_WORKTREE_RETENTION_MS).toISOString()}` };
           const remote = await onRemote(current.head);
           if (remote) return { pr: null, anchor: current.head, preservation: "remote-ref", branch: current.branch };
           if (freshOwners.some((owner) => owner.baseRef === current.head)) return { pr: null, anchor: current.head, preservation: "base", branch: current.branch };
@@ -741,7 +802,7 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
       }
       /* The measurement can take a while; what holds the checkout is read
          again now, as close to the removal as it can be. */
-      const busyNow = heldBy(readGuards(), worktree);
+      const busyNow = heldBy(readGuards(), worktree, entry.branch);
       if (busyNow) {
         keep({ ...busyNow, ...base });
         continue;
@@ -764,7 +825,7 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
       if (finalClass.ignored.some((file) => !disposableIgnored(accessible(worktree), file))) {
         keep({ ...base, reason: "ignored-files" }); continue;
       }
-      const finalBusy = heldBy(readGuards(), worktree);
+      const finalBusy = heldBy(readGuards(), worktree, entry.branch);
       if (finalBusy) { keep({ ...finalBusy, ...base }); continue; }
       /* Never `--force`: git refuses a checkout that changed since the status read. */
       const removed = await ports.git(["worktree", "remove", worktree], root);

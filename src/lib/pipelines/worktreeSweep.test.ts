@@ -947,6 +947,116 @@ test.each(["merge-batch", "review-export", "attribution"])("an unowned %s checko
   expect(fs.existsSync(dir)).toBe(false);
 });
 
+function mergerBatch() {
+  const root = repository();
+  const run = path.join(caseDir, "tmp/llv-merger-run");
+  const branch = "merge-batch/11111111-1111-1111-1111-111111111111";
+  const { dir, tip } = lane(root, path.join(run, "merge-batch-fixture/checkout"), branch);
+  const file = path.join(run, "merge-batch.json");
+  const state = { version: 1, repo: root, work: dir, branch, landed: true,
+    rows: [{ status: "merged", detail: "closed" }, { status: "deferred", detail: "" }] };
+  const save = () => fs.writeFileSync(file, JSON.stringify(state));
+  const options = ports({ repositories: [root], prs: [merged(77, branch, tip)], now: () => RETAIN_NOW });
+  return { root, run, branch, dir, tip, file, state, save, options };
+}
+
+test("a merged batch keeps its checkout and branch for four days, including 25 minutes after landing", async () => {
+  const batch = mergerBatch();
+  const first = await sweepMergedWorktrees(batch.options);
+  const young = await sweepMergedWorktrees({ ...batch.options, previous: first, now: () => RETAIN_NOW + 25 * 60_000 });
+  expect(young.kept).toEqual([expect.objectContaining({ path: batch.dir, reason: "retention" })]);
+  expect(young.removed).toHaveLength(0);
+  expect(fs.existsSync(batch.dir)).toBe(true);
+  expect(branchExists(batch.root, batch.branch)).toBe(true);
+  const before = await sweepMergedWorktrees({ ...batch.options, previous: young,
+    now: () => RETAIN_NOW + FINISHED_WORKTREE_RETENTION_MS - 1 });
+  expect(before.kept[0]!.reason).toBe("retention");
+  const after = await sweepMergedWorktrees({ ...batch.options, previous: before,
+    now: () => RETAIN_NOW + FINISHED_WORKTREE_RETENTION_MS });
+  expect(after.removed[0]!.preservation).toBe("merged-pr");
+  expect(fs.existsSync(batch.dir)).toBe(false);
+  expect(branchExists(batch.root, batch.branch)).toBe(false);
+});
+
+test("landed merger state protects deferred resolve work without a process in its checkout", async () => {
+  const batch = mergerBatch();
+  const old = await sweepMergedWorktrees({ ...batch.options, now: () => RETAIN_NOW - FINISHED_WORKTREE_RETENTION_MS });
+  batch.save();
+  const active = await sweepMergedWorktrees({ ...batch.options, previous: old });
+  expect(active.removed).toHaveLength(0);
+  expect(active.kept).toEqual([expect.objectContaining({ path: batch.dir, reason: "in-use", detail: "merge batch still owns checkout" })]);
+  expect(active.kept[0]!.firstSettledAt).toBeUndefined();
+  expect(fs.existsSync(batch.dir)).toBe(true);
+  expect(branchExists(batch.root, batch.branch)).toBe(true);
+  batch.state.rows[1]!.status = "needs-review";
+  batch.save();
+  const settled = await sweepMergedWorktrees({ ...batch.options, previous: active });
+  expect(settled.kept[0]!.reason).toBe("retention");
+  const removed = await sweepMergedWorktrees({ ...batch.options, previous: settled,
+    now: () => RETAIN_NOW + FINISHED_WORKTREE_RETENTION_MS });
+  expect(removed.removed).toHaveLength(1);
+});
+
+test.each(["state-file", "deleted-state-file", "run-directory"])("a process holding a merger's %s keeps a settled batch while running elsewhere", async held => {
+  const batch = mergerBatch();
+  batch.state.rows[1]!.status = "needs-review";
+  batch.save();
+  const old = await sweepMergedWorktrees({ ...batch.options, now: () => RETAIN_NOW - FINISHED_WORKTREE_RETENTION_MS });
+  const report = await sweepMergedWorktrees({ ...batch.options, previous: old,
+    scan: () => ({ ownNamespace: null, processes: [{ pid: 7654321, namespace: null, stamped: true,
+      paths: [batch.root, held === "run-directory" ? batch.run : batch.file + (held === "deleted-state-file" ? " (deleted)" : "")] }] }) });
+  expect(report.kept).toEqual([expect.objectContaining({ path: batch.dir, reason: "in-use", detail: "pid 7654321 holds merge batch state" })]);
+  expect(fs.existsSync(batch.dir)).toBe(true);
+  expect(branchExists(batch.root, batch.branch)).toBe(true);
+});
+
+test.each(["measurement", "final-status"])("merger ownership acquired during %s is rechecked before removal", async phase => {
+  const batch = mergerBatch();
+  batch.state.rows[1]!.status = "needs-review";
+  batch.save();
+  const old = await sweepMergedWorktrees({ ...batch.options, now: () => RETAIN_NOW - FINISHED_WORKTREE_RETENTION_MS });
+  const acquire = () => { batch.state.rows[1]!.status = "deferred"; batch.save(); };
+  let statuses = 0;
+  const report = await sweepMergedWorktrees({ ...batch.options, previous: old,
+    measure: async () => { if (phase === "measurement") acquire(); return 123; },
+    git: async (args, cwd) => {
+      const result = await batch.options.git(args, cwd);
+      if (cwd === batch.dir && args[0] === "status" && ++statuses === 2 && phase === "final-status") acquire();
+      return result;
+    } });
+  expect(report.removed).toHaveLength(0);
+  expect(report.kept[0]!.reason).toBe("in-use");
+  expect(fs.existsSync(batch.dir)).toBe(true);
+  expect(branchExists(batch.root, batch.branch)).toBe(true);
+});
+
+test.each(["closing-originals", "resolution", "locked", "malformed"])("a batch's %s ownership keeps its merged checkout", async phase => {
+  const batch = mergerBatch();
+  const old = await sweepMergedWorktrees({ ...batch.options, now: () => RETAIN_NOW - FINISHED_WORKTREE_RETENTION_MS });
+  batch.state.rows[1]!.status = "needs-review";
+  if (phase === "closing-originals") batch.state.rows[0]!.detail = "";
+  const state = phase === "resolution" ? { ...batch.state, resolving: { number: 78, work: path.join(batch.run, "merge-resolution-fixture/checkout") } } : batch.state;
+  fs.writeFileSync(batch.file, phase === "malformed" ? "{" : JSON.stringify(state));
+  if (phase === "locked") fs.mkdirSync(batch.file + ".lock");
+  const report = await sweepMergedWorktrees({ ...batch.options, previous: old });
+  expect(report.kept[0]!.reason).toBe("in-use");
+  expect(report.removed).toHaveLength(0);
+  expect(fs.existsSync(batch.dir)).toBe(true);
+  expect(branchExists(batch.root, batch.branch)).toBe(true);
+});
+
+test.skipIf(process.platform === "win32")("a merger state written through a symlink keeps the physical batch checkout", async () => {
+  const batch = mergerBatch();
+  const alias = path.join(caseDir, "run-alias");
+  fs.symlinkSync(batch.run, alias);
+  batch.state.work = path.join(alias, "merge-batch-fixture/checkout");
+  batch.save();
+  const report = await sweepMergedWorktrees(batch.options);
+  expect(report.kept[0]!.reason).toBe("in-use");
+  expect(fs.existsSync(batch.dir)).toBe(true);
+  expect(branchExists(batch.root, batch.branch)).toBe(true);
+});
+
 test("artifact source, reports and media stay while their generated bulk is trimmed", async () => {
   const root = repository();
   fs.appendFileSync(path.join(root, ".git/info/exclude"), ".artifacts/\n");

@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { exclusiveBytes } from "@/lib/pipelines/worktreeSweep";
 
 import {
   DISK_CRITICAL_BYTES,
@@ -175,4 +176,37 @@ test("a pending episode wake still names free space in the recovery band", () =>
   expect(diskPressureWakeReady(recovering, Date.parse(recovering.at))).toBe(true);
   expect(diskPressureLabel(recovering)).toContain("state 11.00 GiB free");
   expect(diskPressureLabel(recovering)).toContain("consumer measurement pending");
+});
+
+test.skipIf(process.platform !== "linux")("host temp worktrees are probed and measured through their namespace, once", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pressure-namespace-"));
+  const via = path.join(directory, "proc/123456/root");
+  const namespace = "mnt:[123456]";
+  const worktree = "/tmp/llv-host-role/checkout";
+  const reached = via + worktree;
+  const other = path.join(via, "tmp/llv-other-role");
+  fs.mkdirSync(path.join(directory, "proc/123456/ns"), { recursive: true });
+  fs.symlinkSync(namespace, path.join(directory, "proc/123456/ns/mnt"));
+  fs.mkdirSync(reached, { recursive: true });
+  fs.mkdirSync(other, { recursive: true });
+  fs.writeFileSync(path.join(reached, "bulk"), Buffer.alloc(128 * 1024, 1));
+  fs.writeFileSync(path.join(other, "bulk"), Buffer.alloc(64 * 1024, 1));
+  const caches = new Map();
+  const visited: string[] = [];
+  const temp = { path: "/tmp", via, anchor: { pid: 123456, namespace } };
+  const options = { caches, worktrees: [worktree], tempRoots: [temp, temp],
+    now: () => Date.parse("2026-10-06T12:00:00Z"), probe: (target: string) => {
+      visited.push(target);
+      return { volume: target.startsWith(via) ? "host-temp" : "state", freeBytes: target.startsWith(via) ? GiB : 20 * GiB };
+    } };
+  try {
+    const pressure = await readDiskPressure(options);
+    expect(visited).toContain(reached);
+    expect(visited).not.toContain(worktree);
+    expect(pressure.volumes).toContainEqual({ roles: ["worktrees", "temp"], freeBytes: GiB, level: "critical" });
+    await Promise.all([...caches.values()].map(row => row.measuring));
+    const measured = await readDiskPressure(options);
+    expect(measured.consumers.find(row => row.kind === "worktrees")?.bytes).toBe(await exclusiveBytes(reached));
+    expect(measured.consumers.find(row => row.kind === "temp")?.bytes).toBe(await exclusiveBytes(other));
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
