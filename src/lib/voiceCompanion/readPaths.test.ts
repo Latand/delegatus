@@ -15,6 +15,17 @@ const { createCompanionBoardReadPaths } = await import("./readPaths");
 const { CompanionBoardReads } = await import("./boardReads");
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
+test("a historical lineage attempt does not replace the operational stage state", async () => {
+  const { pipelineCorpus } = await import("@/lib/pipelines/fixtures/corpus");
+  const pipeline = pipelineCorpus(1)[0];
+  const run = pipeline.runs[0];
+  run.attempts.push({ ...run.attempts.at(-1)!, n: 7, historical: true, state: "failed" });
+  savePipelines([pipeline]);
+  const reads = new CompanionBoardReads(createCompanionBoardReadPaths());
+  const result = await reads.call(pipeline.project, "get_pipeline", { pipelineId: pipeline.id });
+  expect(result.item).toMatchObject({ stages: [{ state: "passed" }, { state: "passed" }] });
+});
+
 test("the six voice reads use task/pipeline persistence, liveness projection, and bounded transcript parsing", async () => {
   const now = Date.parse("2026-10-06T12:00:00Z");
   const at = new Date(now).toISOString();

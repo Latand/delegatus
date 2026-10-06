@@ -4,7 +4,7 @@ import { canonicalProject } from "@/lib/projects/aliases";
 export const READ_TOOL_NAMES = ["list_tasks", "get_task", "list_pipelines", "get_pipeline", "agent_activity", "conversation_messages"] as const;
 export type ReadToolName = typeof READ_TOOL_NAMES[number];
 interface TaskRead { id: string; project: string; text: string; status: string; note?: { text: string }; hold?: { note: string }; steps?: Array<{ text: string; state: string }> }
-interface PipelineRead { id: string; project: string; task: string; state: string; stages: Array<{ id: string; kind: string }>; runs: Array<{ stageId: string; attempts: Array<{ state: string; verdict?: string | null }> }> }
+interface PipelineRead { id: string; project: string; task: string; state: string; stages: Array<{ id: string; kind: string }>; runs: Array<{ stageId: string; attempts: Array<{ state: string; verdict?: string | null; historical?: boolean }> }> }
 export interface ActivityRead { conversationId: string; project: string; title?: string | null; lifecycle: string }
 export interface BoardReadPaths {
   tasks(): readonly TaskRead[];
@@ -19,9 +19,10 @@ const short = (value: string | null | undefined, limit = 160) => hardenedRedact(
 const handle = (id: string) => id.length <= 128 ? id : undefined;
 const taskRow = (row: TaskRead) => ({ handle: handle(row.id), title: short(row.text.split("\n")[0]), state: short(row.status, 32) });
 const pipelineRow = (row: PipelineRead) => ({ handle: handle(row.id), title: short(row.task), state: short(row.state, 32),
-  stages: row.stages.slice(0, 12).map((stage, index) => ({ title: `Stage ${index + 1}`, kind: short(stage.kind, 32),
-    state: short(row.runs.find(run => run.stageId === stage.id)?.attempts.at(-1)?.state ?? "pending", 32),
-    verdict: short(row.runs.find(run => run.stageId === stage.id)?.attempts.at(-1)?.verdict, 32) || null })) });
+  stages: row.stages.slice(0, 12).map((stage, index) => {
+    const attempt = row.runs.find(run => run.stageId === stage.id)?.attempts.findLast(attempt => !attempt.historical);
+    return { title: `Stage ${index + 1}`, kind: short(stage.kind, 32), state: short(attempt?.state ?? "pending", 32), verdict: short(attempt?.verdict, 32) || null };
+  }) });
 
 /** The complete server allowlist. No tool inventory is forwarded to this
  * class. Handles let the backend select a row; only speech is read aloud. */

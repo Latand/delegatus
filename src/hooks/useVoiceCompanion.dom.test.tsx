@@ -36,7 +36,7 @@ test("typed hooks start only on request, reset a new session, release ownership,
   }) as typeof fetch;
   const seen: { voice: VoiceCompanionHook | null; settings: VoiceCompanionSettingsHook | null } = { voice: null, settings: null };
   function Harness() { seen.voice = useVoiceCompanion(adapter); seen.settings = useVoiceCompanionSettings(true); return null; }
-  const root = createRoot(dom.document.createElement("div"));
+  const root = createRoot(dom.document.createElement("div") as unknown as HTMLElement);
   try {
     await act(async () => { root.render(<Harness />); });
     expect(starts).toBe(0);
@@ -47,6 +47,13 @@ test("typed hooks start only on request, reset a new session, release ownership,
     await act(async () => { await seen.voice!.start({ project: "another-fixture", locale: "uk" }); });
     expect(seen.voice!.state.generation).toBe(1);
     expect(seen.voice!.state.seen.has("ready-1")).toBe(false);
+    await act(async () => {
+      for (const listener of listeners) listener({ type: "transcript.final", speaker: "operator", itemId: "current-input", text: "Hello",
+        sessionId: "session-2", version: 1, generation: 1, seq: 2, eventId: "current-final", atMs: 1 });
+      for (const listener of listeners) listener({ type: "session.closed", reason: "transport", sessionId: "session-1", version: 1, generation: 1, seq: 3, eventId: "retired-close", atMs: 2 });
+    });
+    expect(seen.voice!.state.phase).toBe("idle");
+    expect(seen.voice!.state.lines).toMatchObject([{ text: "Hello" }]);
     await act(async () => { expect(await seen.settings!.saveKey("synthetic-credential")).toBe(false); });
     expect(seen.settings!.error).toBe("KEY_FROM_ENV");
     expect(JSON.stringify(seen.settings!.settings)).not.toContain("synthetic-credential");
