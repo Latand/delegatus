@@ -3132,3 +3132,460 @@ describe("own-message step row", () => {
   }, 120_000);
 
 });
+
+describe("image viewers: pinch, pan and the right click", () => {
+  /*
+   * The file preview's image pane and the fullscreen viewer under real input:
+   * a mouse at 1280 px and two fingers at 390 px (CDP `Input.dispatchTouchEvent`,
+   * so the viewer's `touch-action` meets Chromium's own gesture recognizer).
+   * Every step reads the picture's box, and a step that leaves it somewhere
+   * the operator did not put it is a failure.
+   *
+   * Headless Chromium draws no context menu, so the menu is played the way a
+   * desktop delivers it: the press of the button, no release (the menu takes
+   * it), then the pointer moving with no button held.
+   *
+   *   IMAGE_VIEWER_STAMP=before records the readings and asserts nothing, for
+   *   a run against the viewers as they were. Frames go to
+   *   `IMAGE_VIEWER_PNG_DIR` (default `.artifacts/image-viewer/`), readings to
+   *   `evidence/image-viewer/<stamp>.json`.
+   */
+
+  const STAMP = process.env.IMAGE_VIEWER_STAMP === "before" ? "before" : "after";
+  const OUT = path.resolve(process.env.IMAGE_VIEWER_PNG_DIR ?? ".artifacts/image-viewer");
+  const EVIDENCE = path.resolve("evidence/image-viewer");
+  const VIEWERS = ["pane", "fullscreen"] as const;
+  type ViewerName = (typeof VIEWERS)[number];
+  type Page = Awaited<ReturnType<typeof openFixture>>["page"];
+  const PICTURE: Record<ViewerName, string> = {
+    pane: '[data-evidence-case="image-viewers"] img',
+    fullscreen: "[role=dialog] img:not([hidden])",
+  };
+
+  interface Reading {
+    /** The picture's drawn box, and the box of the frame that clips it. */
+    x: number; y: number; w: number; h: number;
+    frame: { x: number; y: number; w: number; h: number };
+    /** Drawn width over natural width. */
+    scale: number;
+    position: string | null;
+    closed: boolean;
+    /** What the page itself did under the viewer. */
+    pageScale: number; scrollY: number; innerWidth: number;
+    /** Pointer captures taken and context menus refused since the page loaded. */
+    captures: number; menus: number; menusRefused: number; menuOnPicture: boolean;
+  }
+
+  const read = (page: Page, viewer: ViewerName): Promise<Reading> => page.evaluate((selector) => {
+    const round = (value: number) => Math.round(value * 10) / 10;
+    const img = document.querySelector<HTMLImageElement>(selector);
+    const rect = img?.getBoundingClientRect() ?? new DOMRect();
+    const frame = img?.closest(".overflow-hidden")?.getBoundingClientRect() ?? new DOMRect();
+    const seen = (window as unknown as { viewerInput: { captures: number; menus: number; refused: number; onPicture: boolean } }).viewerInput;
+    return {
+      x: round(rect.x), y: round(rect.y), w: round(rect.width), h: round(rect.height),
+      frame: { x: round(frame.x), y: round(frame.y), w: round(frame.width), h: round(frame.height) },
+      scale: img?.naturalWidth ? Math.round((rect.width / img.naturalWidth) * 10_000) / 10_000 : 0,
+      position: document.querySelector("[data-lightbox-position]")?.textContent?.trim() ?? null,
+      closed: document.querySelector("[data-viewer-closed]") !== null,
+      pageScale: round(window.visualViewport?.scale ?? 1), scrollY: round(window.scrollY), innerWidth: window.innerWidth,
+      captures: seen.captures, menus: seen.menus, menusRefused: seen.refused, menuOnPicture: seen.onPicture,
+    };
+  }, PICTURE[viewer]);
+
+  const WATCH = `window.viewerInput = { captures: 0, menus: 0, refused: 0, onPicture: false };
+    const capture = Element.prototype.setPointerCapture;
+    Element.prototype.setPointerCapture = function (id) { window.viewerInput.captures += 1; return capture.call(this, id); };
+    addEventListener("contextmenu", (event) => { setTimeout(() => {
+      window.viewerInput.menus += 1;
+      if (event.defaultPrevented) window.viewerInput.refused += 1;
+      window.viewerInput.onPicture = event.target instanceof HTMLImageElement;
+    }); }, true);`;
+
+  const centre = (reading: Reading) => ({ x: reading.frame.x + reading.frame.w / 2, y: reading.frame.y + reading.frame.h / 2 });
+  /** How far the picture's centre moved between two readings. */
+  const moved = (from: Reading, to: Reading) => ({ dx: Math.round((to.x + to.w / 2 - from.x - from.w / 2) * 10) / 10, dy: Math.round((to.y + to.h / 2 - from.y - from.h / 2) * 10) / 10 });
+  const far = (delta: { dx: number; dy: number }) => Math.hypot(delta.dx, delta.dy);
+  /** Where the picture's own point that sat under `point` in `from` is drawn in `to`, as a distance from `point`. */
+  const drift = (from: Reading, to: Reading, point: { x: number; y: number }) => {
+    const fx = (point.x - from.x) / from.w;
+    const fy = (point.y - from.y) / from.h;
+    return Math.round(Math.hypot(to.x + fx * to.w - point.x, to.y + fy * to.h - point.y) * 10) / 10;
+  };
+  /** How much of the picture is inside its frame, along each axis. */
+  const overlap = (from: number, size: number, frameFrom: number, frameSize: number) => Math.round(Math.min(from + size, frameFrom + frameSize) - Math.max(from, frameFrom));
+  const inView = ({ x, y, w, h, frame }: Reading) => ({ w: overlap(x, w, frame.x, frame.w), h: overlap(y, h, frame.y, frame.h) });
+  const sameBox = (a: Reading, b: Reading) => Math.abs(a.x - b.x) <= 1 && Math.abs(a.y - b.y) <= 1 && Math.abs(a.w - b.w) <= 1 && Math.abs(a.h - b.h) <= 1;
+  const settle = (page: Page, ms = 180) => page.waitForTimeout(ms);
+
+  async function open(browser: Browser, base: string, viewer: ViewerName, phone: boolean) {
+    const opened = await openFixture(
+      browser, `${base}?case=image-viewers&viewer=${viewer}&lang=en`,
+      phone ? { width: 390, height: 844 } : { width: 1280, height: 800 }, "dark", "en", "reduce", phone, phone ? 2 : 1,
+    );
+    await opened.page.addScriptTag({ content: WATCH });
+    await opened.page.waitForFunction((selector) => {
+      const img = document.querySelector<HTMLImageElement>(selector);
+      return Boolean(img?.complete && img.naturalWidth > 0);
+    }, PICTURE[viewer]);
+    await settle(opened.page, 300);
+    return { ...opened, cdp: await opened.context.newCDPSession(opened.page) };
+  }
+
+  async function desktop(browser: Browser, base: string, viewer: ViewerName, fail: (text: string) => void) {
+    const { context, page, pageErrors, cdp } = await open(browser, base, viewer, false);
+    const out: Record<string, unknown> = {};
+    const mouse = (type: "mousePressed" | "mouseReleased" | "mouseMoved" | "mouseWheel", x: number, y: number, more: Record<string, unknown> = {}) =>
+      cdp.send("Input.dispatchMouseEvent", { type, x, y, button: "none", buttons: 0, ...more } as never);
+    const now = () => read(page, viewer);
+    try {
+      const fit = await now();
+      out.fit = fit;
+      await page.screenshot({ path: path.join(OUT, `${STAMP}-desktop-${viewer}-fit.png`) });
+      const zoomIn = page.locator(`button[aria-label="${translate("en", "lightbox.zoomIn")}"]`);
+      await zoomIn.click();
+      await zoomIn.click();
+      await settle(page);
+      const zoomed = await now();
+      out.zoomed = zoomed;
+      if (!(zoomed.scale > fit.scale)) fail("the zoom-in button did not zoom");
+      const at = centre(zoomed);
+
+      /* A press that is not the primary button: the menu owns the release, and
+         the pointer then moves with no button held. */
+      const presses = [
+        { name: "right", press: { button: "right", buttons: 2 } },
+        { name: "middle", press: { button: "middle", buttons: 4 } },
+        { name: "ctrl-primary", press: { button: "left", buttons: 1, modifiers: 2 } },
+        { name: "shift-primary", press: { button: "left", buttons: 1, modifiers: 8 } },
+      ] as const;
+      for (const { name, press } of presses) {
+        await mouse("mouseMoved", at.x, at.y);
+        const before = await now();
+        if (name === "right") await page.screenshot({ path: path.join(OUT, `${STAMP}-desktop-${viewer}-right-click-1-before.png`) });
+        await mouse("mousePressed", at.x, at.y, { ...press, clickCount: 1 });
+        await settle(page, 60);
+        for (let step = 1; step <= 7; step += 1) await mouse("mouseMoved", at.x + step * 20, at.y + step * 13);
+        await settle(page);
+        const after = await now();
+        if (name === "right") await page.screenshot({ path: path.join(OUT, `${STAMP}-desktop-${viewer}-right-click-2-after-menu.png`) });
+        const follow = moved(before, after);
+        out[`press-${name}`] = { before: { x: before.x, y: before.y }, after: { x: after.x, y: after.y }, follow, captures: after.captures - before.captures, menus: after.menus - before.menus, menusRefused: after.menusRefused, menuOnPicture: after.menuOnPicture };
+        if (far(follow) > 0.5) fail(`${name} press: the picture followed the pointer by ${follow.dx}, ${follow.dy}`);
+        if (after.captures !== before.captures) fail(`${name} press captured the pointer`);
+        if (name === "right" && (after.menus - before.menus !== 1 || after.menusRefused || !after.menuOnPicture)) fail("the picture's own menu did not open on the right press");
+        /* Let go wherever the pointer is, so the next press starts clean. */
+        await mouse("mouseReleased", at.x + 140, at.y + 91, { button: press.button, clickCount: 1 });
+        await settle(page, 60);
+      }
+
+      /* The primary button pans, and the pan ends with the release. */
+      await mouse("mouseMoved", at.x, at.y);
+      const panFrom = await now();
+      await mouse("mousePressed", at.x, at.y, { button: "left", buttons: 1, clickCount: 1 });
+      for (let step = 1; step <= 6; step += 1) await mouse("mouseMoved", at.x - step * 10, at.y + step * 7, { button: "left", buttons: 1 });
+      await settle(page);
+      const panned = await now();
+      await mouse("mouseReleased", at.x - 60, at.y + 42, { button: "left", clickCount: 1 });
+      await mouse("mouseMoved", at.x + 90, at.y + 120);
+      await settle(page);
+      const released = await now();
+      out.pan = { drag: moved(panFrom, panned), afterRelease: moved(panned, released) };
+      if (far({ dx: moved(panFrom, panned).dx + 60, dy: moved(panFrom, panned).dy - 42 }) > 1) fail(`a primary drag of -60, 42 moved the picture by ${JSON.stringify(moved(panFrom, panned))}`);
+      if (far(moved(panned, released)) > 0.5) fail("the picture kept following after the release");
+
+      /* A pan the window loses: its focus, then its capture. */
+      for (const loss of ["blur", "lost-capture"] as const) {
+        await mouse("mouseMoved", at.x, at.y);
+        await mouse("mousePressed", at.x, at.y, { button: "left", buttons: 1, clickCount: 1 });
+        await mouse("mouseMoved", at.x + 20, at.y, { button: "left", buttons: 1 });
+        await settle(page, 60);
+        const held = await now();
+        await page.evaluate((kind) => {
+          if (kind === "blur") { window.dispatchEvent(new Event("blur")); return; }
+          for (const node of document.querySelectorAll("*")) if (node.hasPointerCapture(1)) node.releasePointerCapture(1);
+        }, loss);
+        for (let step = 1; step <= 5; step += 1) await mouse("mouseMoved", at.x + 20 + step * 20, at.y + step * 20, { button: "left", buttons: 1 });
+        await settle(page);
+        const after = await now();
+        out[`pan-${loss}`] = { follow: moved(held, after) };
+        if (far(moved(held, after)) > 0.5) fail(`after ${loss} the picture followed the pointer by ${JSON.stringify(moved(held, after))}`);
+        await mouse("mouseReleased", at.x + 120, at.y + 100, { button: "left", clickCount: 1 });
+        await settle(page, 60);
+      }
+
+      /* The wheel, plain and as a trackpad pinch, zooms about the cursor. */
+      const reset = page.locator(`button[aria-label="${translate("en", viewer === "pane" ? "preview.fitImage" : "lightbox.resetZoom")}"]`);
+      for (const [name, more, delta] of [["wheel", {}, -100], ["ctrl-wheel", { modifiers: 2 }, -30]] as const) {
+        await reset.click();
+        await settle(page);
+        const start = await now();
+        const point = { x: centre(start).x + 120, y: centre(start).y - 70 };
+        await mouse("mouseMoved", point.x, point.y);
+        for (let turn = 0; turn < 3; turn += 1) await mouse("mouseWheel", point.x, point.y, { ...more, deltaX: 0, deltaY: delta });
+        await settle(page);
+        const end = await now();
+        out[name] = { from: start.scale, to: end.scale, drift: drift(start, end, point), pageScale: end.pageScale, innerWidth: end.innerWidth, scrollY: end.scrollY };
+        if (!(end.scale > start.scale * 1.2)) fail(`${name} did not zoom in (${start.scale} to ${end.scale})`);
+        if (drift(start, end, point) > 1.5) fail(`${name} moved the point under the cursor by ${drift(start, end, point)}px`);
+        if (end.innerWidth !== start.innerWidth || end.pageScale !== 1 || end.scrollY !== 0) fail(`${name} zoomed or scrolled the page`);
+      }
+
+      /* Thrown as far as a drag goes, some of the picture stays in the frame. */
+      const edge = await now();
+      const grip = centre(edge);
+      for (let throwAt = 0; throwAt < 4; throwAt += 1) {
+        await mouse("mouseMoved", grip.x, grip.y);
+        await mouse("mousePressed", grip.x, grip.y, { button: "left", buttons: 1, clickCount: 1 });
+        for (let step = 1; step <= 10; step += 1) await mouse("mouseMoved", grip.x + step * 60, grip.y + step * 36, { button: "left", buttons: 1 });
+        await mouse("mouseReleased", grip.x + 600, grip.y + 360, { button: "left", clickCount: 1 });
+      }
+      await settle(page);
+      const thrown = await now();
+      out.thrown = { box: { x: thrown.x, y: thrown.y, w: thrown.w, h: thrown.h }, inView: inView(thrown) };
+      await page.screenshot({ path: path.join(OUT, `${STAMP}-desktop-${viewer}-thrown.png`) });
+      if (inView(thrown).w < 40 || inView(thrown).h < 40) fail(`the picture was thrown out of the frame: ${JSON.stringify(inView(thrown))} left in view`);
+
+      /* Zooming out past fit is fit. */
+      await mouse("mouseMoved", grip.x, grip.y);
+      for (let turn = 0; turn < 40; turn += 1) await mouse("mouseWheel", grip.x, grip.y, { deltaX: 0, deltaY: 100 });
+      await settle(page);
+      const out40 = await now();
+      out.zoomedOut = { scale: out40.scale, fit: fit.scale, box: { x: out40.x, y: out40.y, w: out40.w, h: out40.h } };
+      if (!sameBox(out40, fit)) fail(`zooming out past fit left the picture at ${JSON.stringify(out.zoomedOut)}`);
+
+      /* A double click goes to zoomed and back. */
+      await reset.click();
+      await settle(page);
+      const twice = async () => {
+        for (const clickCount of [1, 2]) {
+          await mouse("mousePressed", grip.x, grip.y, { button: "left", buttons: 1, clickCount });
+          await mouse("mouseReleased", grip.x, grip.y, { button: "left", clickCount });
+        }
+        await settle(page);
+        return now();
+      };
+      const doubled = await twice();
+      const back = await twice();
+      out.doubleClick = { fit: fit.scale, zoomed: doubled.scale, back: back.scale };
+      if (!(doubled.scale > fit.scale * 1.2)) fail("a double click at fit did not zoom");
+      if (!sameBox(back, fit)) fail("a second double click did not return to fit");
+      if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+    } finally {
+      await context.close();
+    }
+    return out;
+  }
+
+  async function phone(browser: Browser, base: string, viewer: ViewerName, fail: (text: string) => void) {
+    const { context, page, pageErrors, cdp } = await open(browser, base, viewer, true);
+    const out: Record<string, unknown> = {};
+    type Finger = { x: number; y: number; id: number };
+    const touch = (type: "touchStart" | "touchMove" | "touchEnd", fingers: Finger[]) =>
+      cdp.send("Input.dispatchTouchEvent", { type, touchPoints: fingers.map(({ x, y, id }) => ({ x, y, id })) });
+    const now = async () => { await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))); return read(page, viewer); };
+    /** One finger from `from` by `dx`, `dy`, lifted at the end. */
+    const drag = async (from: { x: number; y: number }, dx: number, dy: number, steps = 10) => {
+      await touch("touchStart", [{ ...from, id: 0 }]);
+      for (let step = 1; step <= steps; step += 1) {
+        await touch("touchMove", [{ x: from.x + (dx * step) / steps, y: from.y + (dy * step) / steps, id: 0 }]);
+        await page.waitForTimeout(12);
+      }
+      await touch("touchEnd", []);
+    };
+    /** Two fingers about `mid`, from `from` px apart to `to`, each lifted in turn. */
+    const pinch = async (mid: { x: number; y: number }, from: number, to: number, watch?: (reading: Reading) => void) => {
+      const pair = (gap: number): Finger[] => [{ x: mid.x - gap / 2, y: mid.y, id: 0 }, { x: mid.x + gap / 2, y: mid.y, id: 1 }];
+      await touch("touchStart", [pair(from)[0]!]);
+      const one = await now();
+      await touch("touchStart", pair(from));
+      const two = await now();
+      for (let step = 1; step <= 16; step += 1) {
+        await touch("touchMove", pair(from + ((to - from) * step) / 16));
+        if (watch) watch(await now());
+        else await page.waitForTimeout(12);
+      }
+      const spread = await now();
+      await touch("touchEnd", [pair(to)[0]!]);
+      const lifted = await now();
+      await touch("touchEnd", []);
+      const done = await now();
+      return { one, two, spread, lifted, done };
+    };
+    try {
+      const fit = await now();
+      out.fit = fit;
+      await page.screenshot({ path: path.join(OUT, `${STAMP}-phone-390-${viewer}-1-fit.png`) });
+      const mid = { x: centre(fit).x + 30, y: centre(fit).y - 20 };
+      const reset = page.locator(`button[aria-label="${translate("en", viewer === "pane" ? "preview.fitImage" : "lightbox.resetZoom")}"]`);
+
+      /* At fit one finger belongs to the viewer's own navigation. */
+      if (viewer === "fullscreen") {
+        await drag(mid, -190, 6);
+        await settle(page, 350);
+        const next = await now();
+        await drag(mid, 190, -6);
+        await settle(page, 350);
+        const previous = await now();
+        out.fitSwipe = { afterLeft: next.position, afterRight: previous.position, pictureLeftAt: moved(fit, previous) };
+        if (next.position !== "2 / 3" || previous.position !== "1 / 3") fail(`a sideways swipe at fit read ${next.position} then ${previous.position}`);
+        if (!sameBox(previous, fit)) fail(`two sideways swipes at fit left the picture moved by ${JSON.stringify(moved(fit, previous))}`);
+      } else {
+        await drag(mid, -150, 40);
+        await settle(page);
+        const still = await now();
+        out.fitDrag = { moved: moved(fit, still), scrollY: still.scrollY };
+        if (!sameBox(still, fit)) fail(`one finger at fit moved the picture by ${JSON.stringify(moved(fit, still))} and scrolled the page to ${still.scrollY}`);
+        await page.evaluate(() => window.scrollTo(0, 0));
+      }
+
+      /* Zoomed with the button, one finger pans, and a later touch somewhere
+         else finds the picture where that finger left it. */
+      const zoomIn = page.locator(`button[aria-label="${translate("en", "lightbox.zoomIn")}"]`);
+      /* Chromium now and then drops the click of a tap that lands within half
+         a second of the last finger lifting, in either viewer and before this
+         change too, so a button is tapped a second after the gesture. */
+      await settle(page, 1200);
+      await zoomIn.tap();
+      await zoomIn.tap();
+      await settle(page);
+      const byButton = await now();
+      await drag(mid, -50, 60);
+      const dragged = await now();
+      await page.waitForTimeout(400);
+      const elsewhere = { x: mid.x + 60, y: mid.y - 30 };
+      await touch("touchStart", [{ ...elsewhere, id: 0 }]);
+      await touch("touchMove", [{ x: elsewhere.x + 3, y: elsewhere.y, id: 0 }]);
+      const stuck = await now();
+      await touch("touchEnd", []);
+      out.buttonZoomThenTouch = { zoomed: byButton.scale, drag: moved(byButton, dragged), laterTouch: moved(dragged, stuck), scrollY: stuck.scrollY, pageScale: stuck.pageScale };
+      if (!(byButton.scale > fit.scale)) fail("the zoom-in button did not zoom");
+      if (far({ dx: moved(byButton, dragged).dx + 50, dy: moved(byButton, dragged).dy - 60 }) > 1.5) fail(`one finger dragged -50, 60 moved the button-zoomed picture by ${JSON.stringify(moved(byButton, dragged))}`);
+      if (far(moved(dragged, stuck)) > 4) fail(`the picture jumped to a later touch by ${JSON.stringify(moved(dragged, stuck))}`);
+      if (stuck.scrollY !== 0) fail(`a pan of the zoomed picture scrolled the page to ${stuck.scrollY}`);
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await settle(page, 1200);
+      await reset.tap();
+      await settle(page);
+
+      /* Two fingers spread to three times their distance about `mid`. */
+      const scales: number[] = [];
+      const grown = await pinch(mid, 80, 240, (reading) => scales.push(reading.scale));
+      await settle(page);
+      await page.screenshot({ path: path.join(OUT, `${STAMP}-phone-390-${viewer}-2-pinched.png`) });
+      const steps = scales.map((scale, at) => scale / (scales[at - 1] ?? grown.two.scale));
+      out.pinch = {
+        fit: fit.scale, to: grown.spread.scale, ratio: Math.round((grown.spread.scale / fit.scale) * 100) / 100, scales,
+        secondFingerLands: { ...moved(grown.one, grown.two), scale: grown.two.scale / grown.one.scale },
+        midpointDrift: drift(grown.two, grown.spread, mid),
+        firstFingerLifts: { ...moved(grown.spread, grown.lifted), scale: grown.lifted.scale / grown.spread.scale },
+        lastFingerLifts: { ...moved(grown.lifted, grown.done), scale: grown.done.scale / grown.lifted.scale },
+        largestStep: Math.round(Math.max(...steps) * 1000) / 1000, smallestStep: Math.round(Math.min(...steps) * 1000) / 1000,
+        pageScale: grown.done.pageScale, scrollY: grown.done.scrollY,
+      };
+      if (far(moved(grown.one, grown.two)) > 0.5 || grown.two.scale !== grown.one.scale) fail(`the picture jumped when the second finger landed: ${JSON.stringify(moved(grown.one, grown.two))}`);
+      if (Math.abs(grown.spread.scale / fit.scale - 3) > 0.1) fail(`fingers spread to three times their distance scaled the picture ${grown.spread.scale / fit.scale} times`);
+      if (Math.min(...steps) < 0.999 || Math.max(...steps) > 1.2) fail(`the pinch did not grow evenly: steps between ${Math.min(...steps)} and ${Math.max(...steps)}`);
+      if (drift(grown.two, grown.spread, mid) > 2) fail(`the point between the fingers moved by ${drift(grown.two, grown.spread, mid)}px`);
+      if (far(moved(grown.spread, grown.lifted)) > 0.5 || far(moved(grown.lifted, grown.done)) > 0.5 || grown.done.scale !== grown.spread.scale) fail("the picture jumped when a finger lifted");
+      if (grown.done.pageScale !== 1 || grown.done.scrollY !== 0) fail(`the page itself zoomed to ${grown.done.pageScale} or scrolled to ${grown.done.scrollY} under the pinch`);
+
+      /* A later touch somewhere else: the picture stays where the fingers left it. */
+      const later = { x: mid.x - 70, y: mid.y + 130 };
+      await touch("touchStart", [{ ...later, id: 0 }]);
+      const touched = await now();
+      await touch("touchMove", [{ x: later.x + 3, y: later.y, id: 0 }]);
+      const nudged = await now();
+      await touch("touchEnd", []);
+      out.laterTouch = { onTouch: moved(grown.done, touched), onNudge: moved(grown.done, nudged) };
+      if (far(moved(grown.done, touched)) > 0.5 || far(moved(grown.done, nudged)) > 4) fail(`the picture jumped to a later touch: ${JSON.stringify(out.laterTouch)}`);
+
+      /* One finger pans the zoomed picture by what the finger travelled. */
+      const panFrom = await now();
+      await drag(mid, -50, 60);
+      const panned = await now();
+      out.onefingerPan = { drag: moved(panFrom, panned), scale: panned.scale / panFrom.scale, pageScale: panned.pageScale, scrollY: panned.scrollY };
+      if (far({ dx: moved(panFrom, panned).dx + 50, dy: moved(panFrom, panned).dy - 60 }) > 1.5 || panned.scale !== panFrom.scale) fail(`one finger dragged -50, 60 moved the zoomed picture by ${JSON.stringify(moved(panFrom, panned))}`);
+      if (panned.scrollY !== 0) fail("a one-finger pan scrolled the page");
+
+      for (let throwAt = 0; throwAt < 4; throwAt += 1) await drag({ x: 60, y: centre(fit).y - 200 }, 300, 380);
+      await settle(page);
+      const thrown = await now();
+      out.thrown = { box: { x: thrown.x, y: thrown.y, w: thrown.w, h: thrown.h }, inView: inView(thrown), scrollY: thrown.scrollY };
+      await page.screenshot({ path: path.join(OUT, `${STAMP}-phone-390-${viewer}-3-thrown.png`) });
+      if (inView(thrown).w < 40 || inView(thrown).h < 40) fail(`the picture was thrown out of the frame: ${JSON.stringify(inView(thrown))} left in view`);
+
+      /* Fingers closed past fit: fit. */
+      await pinch(centre(fit), 300, 40);
+      const shrunk = await pinch(centre(fit), 300, 40);
+      await settle(page);
+      out.pinchedIn = { scale: shrunk.done.scale, fit: fit.scale, box: { x: shrunk.done.x, y: shrunk.done.y, w: shrunk.done.w, h: shrunk.done.h } };
+      await page.screenshot({ path: path.join(OUT, `${STAMP}-phone-390-${viewer}-4-pinched-in.png`) });
+      if (!sameBox(shrunk.done, fit)) fail(`closing the fingers past fit left the picture at ${JSON.stringify(out.pinchedIn)}`);
+
+      /* A double tap goes to zoomed and back. */
+      const tapTwice = async () => {
+        for (let tap = 0; tap < 2; tap += 1) {
+          await touch("touchStart", [{ ...mid, id: 0 }]);
+          await touch("touchEnd", []);
+          await page.waitForTimeout(90);
+        }
+        await settle(page, 450);
+        return now();
+      };
+      const doubled = await tapTwice();
+      const back = await tapTwice();
+      out.doubleTap = { fit: fit.scale, zoomed: doubled.scale, back: back.scale };
+      if (!(doubled.scale > fit.scale * 1.2)) fail("a double tap at fit did not zoom");
+      if (!sameBox(back, fit)) fail("a second double tap did not return to fit");
+
+      /* A vertical drag at fit closes the fullscreen viewer. */
+      if (viewer === "fullscreen") {
+        const open = await page.locator("[data-viewer-closed]").count() === 0;
+        await drag(mid, 5, 260);
+        await settle(page, 350);
+        const closed = await page.locator("[data-viewer-closed]").count() === 1;
+        out.fitVerticalDrag = { openBefore: open, closed };
+        if (!open) fail("the viewer had closed before the vertical drag");
+        if (!closed) fail("a vertical drag at fit did not close the viewer");
+      }
+      const last = await page.evaluate(() => ({ pageScale: window.visualViewport?.scale ?? 1, scrollY: window.scrollY }));
+      out.page = last;
+      if (last.pageScale !== 1 || last.scrollY !== 0) fail(`the page ended zoomed to ${last.pageScale} or scrolled to ${last.scrollY}`);
+      if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+    } finally {
+      await context.close();
+    }
+    return out;
+  }
+
+  browserTest("the picture goes where the hand put it, and nowhere after the hand lets go", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    const server = await chromium.launchServer(LAUNCH);
+    const browserPid = server.process().pid!;
+    fs.writeFileSync(path.join(OUT, "browser.pid"), `${browserPid}\n`);
+    const browser = await chromium.connect(server.wsEndpoint());
+    const failures: string[] = [];
+    const readings: Record<string, unknown> = {};
+    try {
+      for (const viewer of VIEWERS) for (const surface of ["desktop-1280", "phone-390"] as const) {
+        const key = `${surface}-${viewer}`;
+        const fail = (text: string) => failures.push(`${key}: ${text}`);
+        try {
+          readings[key] = await (surface === "phone-390" ? phone : desktop)(browser, served.base, viewer, fail);
+        } catch (error) {
+          fail(error instanceof Error ? error.message.split("\n")[0]! : String(error));
+        }
+      }
+      fs.writeFileSync(path.join(EVIDENCE, `${STAMP}.json`), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+      if (STAMP === "after") expect(failures).toEqual([]);
+    } finally {
+      await browser.close(); await server.close(); served.stop();
+      let alive = false;
+      try { process.kill(browserPid, 0); alive = true; } catch { /* Recorded browser exited. */ }
+      expect(alive).toBe(false);
+    }
+  }, 600_000);
+});
