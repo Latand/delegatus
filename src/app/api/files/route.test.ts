@@ -1078,6 +1078,30 @@ test("an ordinary resource snapshot reuses the completed scanner generation", as
   expect(files.map((entry) => entry.path)).toEqual([before.path]);
 });
 
+test("an ordinary resource snapshot with no completed generation takes the scan scope and does not wait for enrichment", async () => {
+  const only = file("/sessions/cold-resource.jsonl");
+  let release!: () => void;
+  scanGates.push(new Promise<void>((resolve) => { release = resolve; }));
+  scannedFiles = [only];
+  let settled = false;
+  const handoff = readResourceFileSnapshot(false).then((files) => {
+    settled = true;
+    return files;
+  });
+
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const settledBeforeFullScan = settled;
+  release();
+  const files = await handoff;
+
+  expect(settledBeforeFullScan).toBeTrue();
+  expect(files.map((entry) => entry.path)).toEqual([only.path]);
+  expect(scans).toBe(1);
+  /* The one scan still completes as the process's generation. */
+  expect((await cachedFileScan()).snapshot.files.map((entry) => entry.path)).toEqual([only.path]);
+  expect(scans).toBe(1);
+});
+
 test("a fresh resource handoff publishes the exact scan scope before full file enrichment settles", async () => {
   const before = file("/sessions/resource-stage-before.jsonl");
   const after = file("/sessions/resource-stage-after.jsonl");
