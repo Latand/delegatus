@@ -206,7 +206,16 @@ async function fencedLiveValidityProbe(account: ClaudeAccount, retryUnrelatedRev
     // Only unrelated collection writes may repeat the probe. A changed pin
     // or credential must retain its retryable refusal before any reservation.
     if (snapshot.identity !== original.identity) throw new AccountAdmissionChangedError();
-    const result = await liveValidityProbe(snapshot.account);
+    let result: ClaudeValidityProbeResult;
+    try { result = await liveValidityProbe(snapshot.account); }
+    catch (error) {
+      // The admitted snapshot had readable credentials. Losing that evidence
+      // inside the probe's own read invalidates admission before fallback can
+      // classify an ordinary credential failure and reserve a terminal receipt.
+      if (error instanceof ClaudeCredentialUnavailableError
+        || claudeProbeCredentialIdentity(snapshot.account.home) !== credentialIdentity) throw new AccountAdmissionChangedError();
+      throw error;
+    }
     const currentCredentialIdentity = claudeProbeCredentialIdentity(snapshot.account.home);
     // Becoming unreadable after the snapshot is an admission change too.
     // It must not enter the pinned fallback and burn a failed receipt.
@@ -214,7 +223,7 @@ async function fencedLiveValidityProbe(account: ClaudeAccount, retryUnrelatedRev
     const unchanged = await withAccountMutationLockAsync(() => {
       if (accountProbeIdentity(snapshot.account) !== snapshot.identity) throw new AccountAdmissionChangedError();
       return snapshot.revision === accountsCollectionRevision();
-    }, { holder: "Claude validity recheck", ...(retryUnrelatedRevision ? { caller: "spawn health" } : {}) });
+    }, { holder: "Claude validity recheck", caller: "spawn health" });
     // Keychain rotations have no filesystem metadata for the lease to fence.
     // Re-read outside the lease after waiting for the final revision check.
     if (claudeProbeCredentialIdentity(snapshot.account.home) !== credentialIdentity) throw new AccountAdmissionChangedError();

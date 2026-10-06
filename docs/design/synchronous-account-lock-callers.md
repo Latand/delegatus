@@ -65,7 +65,8 @@ keep their admission policies separate; the OAuth refresh fence still coalesces
 the credential replacement. Each candidate in an explicitly pinned selection repeats its
 live health probe at most three times when only the shared collection revision moves. Each probe retains its
 600 ms network timeout and runs outside the lock; async snapshot/recheck admission
-has a 2 s budget. A changed pinned catalog row or credential, including external
+has a named 2 s budget, including automatic final validity rechecks. A changed
+pinned catalog row or credential, including external
 replacement during OAuth refresh or its queued post-refresh recheck,
 becoming unreadable during the live probe,
 or a Keychain change while the final recheck queues,
@@ -94,6 +95,11 @@ Focused regression evidence:
 - The concurrent startup migration test checks AccountMutationBusyError and
   ACCOUNT_STORE_BUSY_MESSAGE while retaining its unfinished-marker and intact
   orchestrator-seat checks; its complete file passes all 24 tests.
+- Automatic bound-project probe rechecks exhaust the named 2 s admission
+  budget with the safe busy error. A real POST regression that loses Keychain
+  readability at the probe's own credential read returns retryable 503
+  account_admission_changed with no receipt. Both regressions fail before
+  their corrections.
 - All seven account-route catalog branches cover a local 8 ms holder, a foreign
   120 ms holder, a local contender behind a foreign holder and exhausted 2 s
   admission. The 21 local/foreign/timeout cases fail on the previous

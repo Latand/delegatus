@@ -516,7 +516,7 @@ test.each(["revision", "busy"] as const)("automatic bound-project admission pres
   const { createManagedClaudeAccount } = await import("./claude");
   const { bindAccountToProject } = await import("./projectBindings");
   const { resolveHealthySpawnAccount } = await import("./manager");
-  const { ACCOUNT_MUTATION_WAIT_MS, ACCOUNT_STORE_BUSY_MESSAGE } = await import("./accountMutation");
+  const { ACCOUNT_MUTATION_ADMISSION_WAIT_MS, ACCOUNT_STORE_BUSY_MESSAGE } = await import("./accountMutation");
   const { foreignAccountHolder } = await import("./accountMutation.fixture");
   const created = createManagedClaudeAccount("Bound admission fixture");
   fs.writeFileSync(path.join(created.home, ".credentials.json"), JSON.stringify({ claudeAiOauth: { ["access" + "Token"]: crypto.randomUUID(), expiresAt: Date.now() + 60_000 } }), { mode: 0o600 });
@@ -527,17 +527,19 @@ test.each(["revision", "busy"] as const)("automatic bound-project admission pres
     if (failure === "revision") createManagedClaudeAccount("Concurrent bound-project writer");
     else {
       holder = await foreignAccountHolder();
-      holder.releaseAfter(ACCOUNT_MUTATION_WAIT_MS + 150);
+      holder.releaseAfter(ACCOUNT_MUTATION_ADMISSION_WAIT_MS + 150);
     }
     return Response.json({ five_hour: { utilization: 0 }, seven_day: { utilization: 0 } });
   };
   try {
+    const started = performance.now();
     const error = await resolveHealthySpawnAccount("claude", undefined, project).then(() => null, (caught: unknown) => caught);
     expect(error).toMatchObject({
       name: failure === "revision" ? "AccountAdmissionChangedError" : "AccountMutationBusyError",
       message: failure === "revision" ? "The account changed while preparing the launch; try again shortly." : ACCOUNT_STORE_BUSY_MESSAGE,
     });
     expect((error as Error).message).not.toMatch(/pid|claude|codex|held by|account mutation/i);
+    if (failure === "busy") expect(performance.now() - started).toBeLessThan(3_000);
   } finally {
     providerReply = null;
     await holder?.close();
@@ -838,7 +840,9 @@ for (const outcome of ["invalid", "unknown", "queued removal", "queued catalog",
   }
 });
 
-for (const change of ["rotation", "removal", "unreadable"] as const) test(`Keychain ${change} while the final probe recheck queues stays unreserved`, async () => {
+for (const change of ["rotation", "removal", "unreadable", "probe unreadable"] as const) test(change === "probe unreadable"
+  ? "Keychain uncertainty at the live probe credential read stays unreserved"
+  : `Keychain ${change} while the final probe recheck queues stays unreserved`, async () => {
   const { createManagedClaudeAccount } = await import("./claude");
   const store = await import("./claudeCredentials");
   const { accountProbeIdentity } = await import("./accountMutation");
@@ -852,7 +856,14 @@ for (const change of ["rotation", "removal", "unreadable"] as const) test(`Keych
   let credential: ReturnType<typeof store.readClaudeCredentials> = { state: "present", source: "keychain", document: {
     claudeAiOauth: { ["access" + "Token"]: crypto.randomUUID(), expiresAt: Date.now() + 60_000 },
   } };
-  const reader = spyOn(store, "readClaudeCredentials").mockImplementation(home => home === pin.home ? credential : { state: "absent" });
+  let reachedProbe = false;
+  const reader = spyOn(store, "readClaudeCredentials").mockImplementation(home => {
+    if (change === "probe unreadable" && home === pin.home && new Error().stack?.includes("fetchClaudeLimits")) {
+      reachedProbe = true;
+      credential = { state: "unknown" };
+    }
+    return home === pin.home ? credential : { state: "absent" };
+  });
   const cwd = fs.mkdtempSync(path.join(STATE_SANDBOX, "keychain-recheck-"));
   const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
   const previousTransport = process.env.LLV_SPAWN_TRANSPORT;
@@ -883,9 +894,10 @@ for (const change of ["rotation", "removal", "unreadable"] as const) test(`Keych
   try {
     const response = await POST.withDependencies(new NextRequest("http://127.0.0.1/api/spawn", {
       method: "POST", headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" },
-      body: JSON.stringify({ engine: "claude", accountId: pin.id, cwd, title: "Keychain recheck fixture", prompt: "Review", clientAttemptId: `keychain-recheck-${change}` }),
+      body: JSON.stringify({ engine: "claude", accountId: pin.id, cwd, title: "Keychain recheck fixture", prompt: "Review", clientAttemptId: `keychain-recheck-${change.replaceAll(" ", "-")}` }),
     }), { registry: () => registry, runtimeHostClient: () => ({} as never), storeImages: () => [], spawnStructuredConversation: async () => { throw new Error("deferred launch must not run"); }, engineReadiness: () => "connected", assertStructuredRuntime: () => {}, defer: () => {}, resolveHealthySpawnAccount, resolveSpawnAccount: (engine, id) => accountManager.resolveSpawn(engine, id) });
-    expect(before).toBe(after);
+    if (change === "probe unreadable") expect(reachedProbe).toBeTrue();
+    else expect(before).toBe(after);
     expect({ status: response.status, body: await response.json() }).toMatchObject({ status: 503, body: { code: "account_admission_changed", retrySafe: true, retryable: true } });
     expect(Object.keys(registry.readOnlySnapshot().receipts)).toHaveLength(0);
   } finally {
