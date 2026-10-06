@@ -168,11 +168,13 @@ already durable; kept under Deferred.
   receipt, a flow round, or a host this Viewer holds.
 - **Claim**: a statement that work exists which names no process: a journal
   session row, a pipeline stage, a review flow.
-- **Writer epoch**: the structured claim an entry's host columns were written
-  under, `structuredHost.writerClaimEpoch`, and 0 for an entry that records no
-  structured columns or has a tmux host. A journal row's writer epoch is the
-  number its `writerClaim` ends with, and 0 when it carries none (R5,
-  source 3). Epochs count per session key.
+- **Writer**: the structured claim an entry's host columns were written under;
+  its **writer epoch** is `structuredHost.writerClaimEpoch`. An entry with a
+  tmux host has no writer, whatever structured columns it keeps beside that
+  host, and neither has an entry with no structured columns. A journal row
+  names a writer only through a `writerClaim` string, whose epoch is the
+  number the string ends with; a row whose `writerClaim` is `null` or missing
+  names none (R5, source 3). Epochs count per session key.
 - **Binding**: the conversation an owner is shown under and found by. Binding
   is used for display and for custody lookups. It never chooses evidence.
 
@@ -250,16 +252,18 @@ For a live owner in the host role:
 2. **Row reference**: `structuredHost.activeTurnRef` of the owner's own entry,
    for an entry without a tmux host.
 3. **Journal row**: the session row whose `sessionKey` equals the owner's
-   entry key **and whose writer epoch equals the entry's**, when it claims a
-   turn (`sessionClaimsOpenTurn`, `structuredDeliveryController.ts:544`: a
-   running or interrupt-requested turn, an active turn id, a registering or
-   recovering host). A row under another key or at another writer epoch says
-   nothing about this owner. Production rows carry the full key: a host
-   publishes under its entry's key and the fallback under the current
-   generation's. After the build a row's fence always belongs to the row's
-   own key (below), so the key and the epoch together name one writer. When
-   the snapshot omits the conversation, one keyed read fetches it, for live
-   owners only.
+   entry key **and whose fence names the entry's writer**: the entry has a
+   writer, and the row's `writerClaim` is a string ending in that writer's
+   epoch. It counts when it claims a turn (`sessionClaimsOpenTurn`,
+   `structuredDeliveryController.ts:544`: a running or interrupt-requested
+   turn, an active turn id, a registering or recovering host). A row under
+   another key, at another writer epoch, or naming no writer says nothing
+   about this owner, and an owner whose entry has no writer reads no row.
+   Production rows carry the full key: a host publishes under its entry's key
+   and the fallback under the current generation's. After the build a row's
+   fence always belongs to the row's own key (below), so the key and the
+   epoch together name one writer. When the snapshot omits the conversation,
+   one keyed read fetches it, for live owners with a writer only.
 4. **Tail**: the turn state of the owner's own transcript (R3): `busy`, `idle`,
    or unknown when the file is missing, has no turn marker, or its tail was
    torn.
@@ -272,9 +276,24 @@ shares, through another row's key, or through another writer's epoch.
 with that entry's key (`structuredDeliveryController.ts:666`; `null` once the
 claim is released). The journal merges each publication over the row it
 replaces (`src/runtime-host/journal.ts:2480`), so a field that a publication
-omits survives from the row before it. A row whose `writerClaim` is missing
-or null has writer epoch 0, as does every row published before the field
-existed.
+omits survives from the row before it. A row whose `writerClaim` is `null` or
+missing names no writer and is turn evidence for no owner:
+
+- `null` is what every copy of the registry writes after the build (below),
+  and what a host's own publication writes once its claim is released, when
+  its handle speaks for it ("Rows that name no writer", below);
+- a missing field is a legacy row. Every host's own publication has written
+  the field since #1690 (2026-09-14), so a row without it was last written by
+  a copy before the build or before #1690. A turn event that finds no row
+  creates one without the field (`journal.ts:2489`), under a key that names
+  the conversation id and no entry.
+
+The runtime host's own session publications, the operation outcomes and the
+spawn placeholder (`journal.ts:2288`), write no fence and keep the row's.
+The placeholder also writes the key of a resume it admits, under a
+`registering` host; that launch holds through its receipt (R2), and the
+launched host's first publication when this Viewer registers it
+(`structuredDeliveryController.ts:1485`) replaces the placeholder.
 
 On `main`, three publications copy the registry and omit the field: the
 fallback (`registrySessionProjection`, `:497`, published at `:1265`), the
@@ -290,12 +309,15 @@ the epoch cannot tell the two apart.
 publications write `writerClaim: null`, which the merge applies like any other
 field (`baseSession`, `journal.ts:282`, admits `null`). From then on:
 
-- a row carries a fence only while its last session-status is a host's own
-  publication, which wrote the fence together with the row's key. A fence
-  therefore belongs to the row's current key, and the key and the epoch
-  together name one writer;
+- a row carries a fence only after a host's own publication, which wrote it
+  together with the row's key, and loses it at the next copy. What lands in
+  between keeps the fence, and of that only the spawn placeholder writes a
+  key, for the span of a launch its receipt already holds (above). Outside
+  that span a fence belongs to the row's current key, and the key and the
+  epoch together name one writer;
 - a turn event carries no key and no fence, and keeps both. A turn event that
-  lands on a copy of the registry is attributed to no writer;
+  lands on a copy of the registry is attributed to no writer, and holds no
+  owner, whatever its turn id says;
 - the fallback's "already says this" check (`:1250`) also requires the row
   to carry no fence. Each Viewer start runs the fallback for every
   conversation it does not host whose current entry has structured columns
@@ -332,16 +354,37 @@ Under one key, the epoch alone tells writers apart:
   conversation replaces it with one that names no writer. This pass found no
   path that removes an entry, so an epoch is never reused under one key.
 
-**Rows without a fence.** A row without a fence matches only an entry at
-epoch 0, and there it binds by key alone, as before. Three kinds of entry are
-at epoch 0: one with a tmux host, every row published for which is a copy of
-that entry's own status (`:610`); one with no structured columns; and one
-whose columns no claim has written yet. The production paths read for this
-pass record a structured host process only through a claim; the epoch-0
-columns they seed (`pendingColumns`, `structuredSpawn.ts:1505`, and the
-recovery at `:668`) carry no process. A live structured host is therefore at
-epoch 1 or later, and a row without a fence, which after the build includes
-every copy of the registry, never speaks for one.
+**Rows that name no writer, and hosts that have none.** A row that names no
+writer speaks for no owner under any key, and an owner whose entry has no
+writer reads no row. No production host loses its own evidence by this:
+
+- a structured host under a claim publishes its fence, and the turn events
+  that follow keep it;
+- a structured host whose claim was released publishes `null`, and only the
+  Viewer that holds its handle publishes for it, so the handle (source 1)
+  speaks for it;
+- a structured host is recorded with a process only through a claim, at
+  epoch 1 or later (`claimStructuredHost` raises the epoch before it writes
+  the columns); the epoch-0 columns that production seeds
+  (`pendingColumns`, `structuredSpawn.ts:1505`, and the recovery at `:668`)
+  carry no process. Only a test's `upsert` records a structured process at
+  epoch 0; such a host reads only a row fenced at epoch 0, which no
+  production publication writes;
+- a tmux host has no writer. Every row published under its entry is a copy
+  of the registry: the tmux-host publication (`:610`) and the fallback. The
+  copy turns the entry's status `live` into `turn: running`
+  (`registrySessionProjection`, `:513`), and `live` is what the tmux observer
+  writes whenever the pane answers (`src/lib/agent/transcriptHost.ts:718`,
+  `:743`), so the copy's `running` records that the pane answers. A tmux
+  host's turn is read from its tail (source 4). An entry that keeps a
+  predecessor's structured columns beside a tmux host (`upsert` keeps columns
+  a write omits, `registry.ts:6659`) has no writer either, so a
+  predecessor's fence at the epoch of those columns does not reach it.
+
+Binding such a row by key to an entry at epoch 0, as the previous revision
+did, held a finished tmux host with no bound twice over: through a
+predecessor's late turn event on the copy, and through the copy alone,
+because of `live`. Both are in the case map ("The tmux successor").
 
 **An adopted wrapper** is the one case where a new epoch records the same
 process as the old one. The old row then says nothing about it, and the host
@@ -384,7 +427,7 @@ or `unhosted`, is judged by its handle and its tail.
 | alive | setup | not read | holds | `setup` |
 | alive | reviewer | not read | holds | `reviewer` |
 | alive | host | handle busy | holds | `host-turn` |
-| alive | host | no handle, and the row reference or the owner's journal row (R5 source 3: its key and writer epoch) claims a turn | holds | `turn-claimed` |
+| alive | host | no handle, and the row reference or the owner's journal row (R5 source 3: a row whose fence names the owner's writer) claims a turn | holds | `turn-claimed` |
 | alive | host | tail busy | holds | `turn-open` |
 | alive | host | none of the above, tail idle | released | `turn-settled` |
 | alive | host | none of the above, tail unknown | unknown | `turn-unread` |
@@ -394,15 +437,20 @@ stating:
 
 - a handle that says idle supersedes the row reference and the journal row,
   both of which are copies of what the host said earlier. A settled tail
-  under a live host with a claim and no handle still holds, as `main` pins
-  it: only the host that would run the turn can say none was admitted;
+  under a live host whose own writer's row claims a turn, with no handle,
+  still holds, as `main` pins it: only the host that would run the turn can
+  say none was admitted;
 - a busy verdict needs one positive sign from the owner's own sources, and an
   idle verdict needs a settled tail and no sign of a turn. A live process with
   neither is unknown;
 - a row that an earlier writer published, under the same key or under the key
-  a relabel replaced, is no sign of a turn for the host recorded now. A
-  successor host that is idle, with no row reference and a settled tail, is
-  released at once, whatever its predecessor's row still says.
+  a relabel replaced, is no sign of a turn for the host recorded now, and
+  neither is a row that names no writer: a copy of the registry, or a late
+  turn event on one. A successor host that is idle, with no row reference
+  and a settled tail, is released at once, whatever its predecessor's row
+  still says. A tmux host has no row reference and reads no row, so without
+  a handle it is judged on its tail: busy holds, settled releases,
+  unreadable is `turn-unread`.
 
 A reading that throws is no verdict. It holds admission through
 `blockers.unreadable`, as today, and is read again by the next probe.
@@ -442,7 +490,8 @@ as it writes.
 A journal session row does two things and no more:
 
 - it is turn evidence for the host its session key's entry records under the
-  row's writer epoch (R5, source 3), and for no other owner;
+  writer its fence names (R5, source 3), and for no other owner. A row that
+  names no writer is turn evidence for nobody;
 - when it claims a turn and the registry holds nothing it names (no entry
   under its key, no conversation or receipt under its id, no entry or
   generation at its path), it is an unresolved claim, judged by R8.
@@ -450,9 +499,9 @@ A journal session row does two things and no more:
 When the registry does hold what the row names, the census has already asked
 every process recorded there. A row at another writer epoch than its entry's
 did not come from the writer of the host the entry records now, and a row
-with no fence over a structured host is a copy of the registry whose columns
-the census has already read: that host is judged on its own sources, and the
-row, while it still claims a turn, counts in `blockers.discounted`. A
+that names no writer (R5) sits over an entry the census has already read:
+that host is judged on its own sources, and the row, while it still claims a
+turn, counts in `blockers.discounted`. A
 registry row that records no live process and is past its launch grace proves
 that nothing owns the conversation, and the journal's labels do not reopen
 it. The snapshot's inactive cap therefore bounds display only.
@@ -493,12 +542,13 @@ and registry health are unchanged.
 
 The verdict of an owner is a function of the records that name its process
 and artifact, its own transcript, its own handle and the journal row its own
-writer published under its own key at its own writer epoch. Adding, removing
-or changing any record that names a different process leaves it unchanged,
-including records under the same conversation, the same session key or the
-same transcript path, a journal row that an earlier writer of the same entry
-published, and a row that another key's writer published and a relabel moved
-to the owner's key.
+writer published under its own key at its own writer epoch; an owner with no
+writer reads no row. Adding, removing or changing any record that names a
+different process leaves it unchanged, including records under the same
+conversation, the same session key or the same transcript path, a journal
+row that an earlier writer of the same entry published, a row that another
+key's writer published and a relabel moved to the owner's key, and a row
+that names no writer, whatever turn a late event wrote onto it.
 
 This is the property the last fourteen rounds attacked one instance at a
 time. It is checked directly: for a fixture owner, every verdict in R7 is
@@ -506,8 +556,11 @@ recomputed after a sibling row, an earlier generation, a successor generation,
 an alias, a receipt and a foreign journal row are added in turn, and after
 the conversation's journal row is set to a turn claim published under an
 earlier writer epoch of the owner's own entry, or under another key at the
-owner's epoch and then relabelled by the real fallback, in each process
-state, and must equal the verdict without that record.
+owner's epoch and then relabelled by the real fallback, or to a copy of the
+registry that a predecessor's late turn event marks running, in each process
+state, and must equal the verdict without that record. The fixture owners
+include a structured host claimed at epoch 1 and a tmux host, the second
+recorded both under its own key and under its predecessor's.
 
 ### `agent_activity` reads the same primitive
 
@@ -538,13 +591,13 @@ a transcript.
 | collision, dead × 2 | as above with the entry's process killed | quiet | pass | R4 |
 | collision, reused × 2 | as above with the pid under another start identity | quiet | pass | R4 |
 
-The writer epoch of R5 source 3 leaves all fifteen as decided above. Only one
-pair has a journal row that claims a turn, the stale-journal pair, and that
-row is keyed to the first generation, whose owner R4 releases. Every other
-row in the suite is the fallback's relabel, which claims no turn: it writes a
-null turn id and an `unknown` or `idle` turn under a `dead` or `unhosted`
-host. No row in the suite carries a fence, so the copies' `writerClaim: null`
-leaves every row at epoch 0, where it was.
+R5 source 3 leaves all fifteen as decided above. Only one pair has a journal
+row that claims a turn, the stale-journal pair, and that row is keyed to the
+first generation, whose owner R4 releases. Every other row in the suite is
+the fallback's relabel, which claims no turn: it writes a null turn id and an
+`unknown` or `idle` turn under a `dead` or `unhosted` host. No row in the
+suite carries a fence, so no row names a writer, and none of the fifteen
+verdicts rests on one. No case in the suite records a tmux host.
 
 ### The four findings
 
@@ -553,7 +606,7 @@ leaves every row at epoch 0, where it was.
 | 1. Synthesized owner hides the real entry's artifact | R2 (no synthesized owner), R3 (own artifact) |
 | 2. A finished host's own writer claim held as setup | R6a for the reproduced shape, R6b for the production shape |
 | 3. A finished sibling inherits the first row's gone host | R1, R5; the shared record through the `agent_activity` section |
-| 4. A dead generation's journal claim attributed to its successor | R4, R5 source 3, R9; under one session key the writer epoch, and across a relabel to another key the copies' `null` fence (both in R5, "How a journal row names its writer"; next section) |
+| 4. A dead generation's journal claim attributed to its successor | R4, R5 source 3, R9; under one session key the writer epoch, across a relabel to another key the copies' `null` fence, and for a successor with no writer, a tmux host, the rule that such a host reads no row (all in R5; the next two sections) |
 
 ### The successor-epoch case
 
@@ -580,7 +633,7 @@ onto it. Key B and epoch 1 both match B, so the epoch rule alone held B as
 | --- | --- | --- |
 | B idle, no row reference, settled tail, no handle; the row is A's at epoch 1 | released at once, `turn-settled`; the row counts in `blockers.discounted` | R5 source 3: epoch 1 is not B's epoch 2, so the row says nothing about B. R7 releases B. R9 counts the row |
 | as above, with A's turn id written by a later turn event, which carries no fence | released at once | the row carries no fence at B's epoch: epoch 1 while nothing relabelled it, none after a copy; same rules |
-| B under its own key at its first claim, epoch 1, idle, no row reference, settled tail, no handle; the fallback relabels A's row to key B, and a late turn event writes a turn id | released at once, `turn-settled`; the row counts in `blockers.discounted` | R5, "How a journal row names its writer": the copy wrote no fence, so the row is at epoch 0 and B at 1. R7 releases B. R9 counts the row |
+| B under its own key at its first claim, epoch 1, idle, no row reference, settled tail, no handle; the fallback relabels A's row to key B, and a late turn event writes a turn id | released at once, `turn-settled`; the row counts in `blockers.discounted` | R5, "How a journal row names its writer": the copy wrote `null`, so the row names no writer and speaks for no owner. R7 releases B. R9 counts the row |
 | as above, with the row relabelled before the build (key B, A's fence) and the build's Viewer started over it | released at once | the start's fallback pass rewrites a copy that still carries a fence (R5) |
 | B's writer publishes its own row under key B at epoch 1 with a turn id, tail settled | holds, `turn-claimed`, with no bound | R5 source 3: B's own key and epoch |
 | B's own row, then a copy of the registry over it, then a late turn event; B idle, no row reference, settled tail | released at once | the copy names no writer, so B is judged on its handle, row reference and tail (R7). The fence rule alone held B here |
@@ -597,6 +650,39 @@ The four different-key rows and the late-turn-event row above were run
 through the real registry, fallback and journal, on this lane's base and with
 the build's change applied; "What this pass verified" gives the results.
 
+### The tmux successor
+
+Raised by the critique of the third revision, and confirmed there and in this
+pass against the real `AgentRegistry`, fallback and `RuntimeJournal`, with
+the copies' `null` field applied. A publishes a structured running row at
+epoch 1, releases its claim and exits. B is a live tmux host, with no
+structured turn reference and no handle, whose transcript ends in
+`task_complete`. The fallback publishes B's key, a hosted host and a
+`null` fence; a late turn event from A sets `running` and a turn id and keeps
+both. The previous revision read the `null` fence as epoch 0 and gave B, a
+tmux host, epoch 0, so the row held B as `turn-claimed` with no bound. The
+same holds without A: the copy of a live tmux entry already says `running`
+(R5, "Rows that name no writer, and hosts that have none"), and `main` holds
+such a pane for as long as it lives.
+
+| Variant | Expected | Decided by |
+| --- | --- | --- |
+| B a new generation under its own key, recorded with a tmux host at claim epoch 0 as a tmux launch records it (`spawnCommand.ts:1366`), status `idle`; the copy relabels A's row to key B; a late turn event from A; B's tail settled | released at once, `turn-settled`; the row counts in `blockers.discounted` | R5: B has no writer, so it reads no row, and the row names none. R7 on the tail |
+| B recorded under A's key, as the tmux observer's `upsert` records it, which keeps A's structured columns at epoch 1 beside the tmux host, status `idle`; copy, late turn event, settled tail | released at once | R5: an entry with a tmux host has no writer, whatever columns it keeps |
+| either B, with B's entry status `live` as the tmux observer writes it, in place of `idle` | released at once | as above; the copy's `running` comes from `live` and names no writer |
+| a live tmux pane over a settled transcript, no predecessor, only the copy of its own entry | released at once, `turn-settled` | R5, R7. `main` holds it with no bound (probe below) |
+| B under either key with A's fence still on the row (A's own row before any copy, or a copy made before the build), running, settled tail | released at once | R5: B has no writer, so A's fence does not reach it |
+| B's own tail is open, under either key, with or without A's late event | holds, `turn-open` | R5 source 4, R7 |
+| B's transcript has no turn marker | unknown, `turn-unread`, five minutes | R8 |
+| a handle this Viewer holds under B's key reports a turn | holds, `host-turn` | R5 source 1 |
+| control: B structured, claimed at epoch 1 under its own key; copy and A's late turn event | released at once | R5: the copy names no writer |
+| control: B structured at epoch 1 publishes its own row with a turn id, tail settled | holds, `turn-claimed`, with no bound | R5 source 3: B's key and B's writer |
+
+Release of a tmux host over a settled tail is the requirement's own case,
+a finished owner. What it gives up is a message typed into a pane before the
+CLI writes its first record of it: no source shows that turn until the tail
+does. Known limits names it.
+
 ### Earlier rounds and the standing controls
 
 | Case | Rule |
@@ -610,7 +696,8 @@ the build's change applied; "What this pass verified" gives the results.
 | A writer claim with no host process and no receipt | R6: setup owner |
 | An admitted resume with an open receipt over a settled transcript | R2: the receipt's admission owner is a setup owner |
 | A receipt judged before its conversation exists: live, unowned, dead, reused | R2 and R7 for live, dead, reused; R8 for unowned |
-| A turn id on idle journal labels over a settled transcript | R5 source 3, R7 `turn-claimed`. The fixture's row has no fence and its entry is at epoch 0, so the row matches as before; in production the same row carries the epoch of the host that admitted the turn for as long as it is that host's own publication |
+| A turn id on idle journal labels over a settled transcript | R5 source 3, R7 `turn-claimed`, for a row whose fence names the host's writer. In production the same row carries the fence of the host that admitted the turn for as long as it is that host's own publication. The two fixture cases of this shape publish it with no field, one over the copy's `null`, so they gain the fixture host's fence (build step 4) and keep their expectation |
+| A live tmux pane over a settled transcript | R5, R7 `turn-settled`: released. `main` holds it with no bound |
 | A dead or reused owner releases at once | R4 |
 | A settled idle turn stays quiet while its host lives | R7 `turn-settled` |
 | An id nothing resolves releases after five minutes and stays counted | R8, R9 |
@@ -630,7 +717,8 @@ Keep:
   on `main`);
 - `src/lib/selfUpdate/quietFallback.test.ts` whole: 87 cases over the real
   controller and journal. It is the regression oracle for this design, and
-  all of it is expected to stay green;
+  all of it is expected to stay green with its expectations unchanged; its
+  `journalRow` helper gains the fixture host's fence (build step 4);
 - the path-bearing reservation change (`heldReservation`, `quiet.ts:307` at
   #2555 head) and its test;
 - "first row wins" for a pathless stage owner's journal path (`quiet.ts:276`
@@ -680,9 +768,12 @@ against this specification with a fresh one.
 2. **Owner evidence.** In `src/lib/selfUpdate/instance.ts`, an owner reader
    replaces `turnEvidenceReader`: process state first; for live host owners
    only, the handle by session key, the row reference, the journal row
-   matched by key and writer epoch, and the tail. The row's epoch is parsed
-   from the end of its `writerClaim` in one small function beside the reader,
-   0 when the field is missing or null. One three-line accessor in
+   matched by key and writer, and the tail. One small function beside the
+   reader returns a row's writer epoch, the number a `writerClaim` string ends
+   with, or none when the field is `null` or missing; another returns an
+   entry's, `structuredHost.writerClaimEpoch`, or none when the entry has a
+   tmux host or no structured columns. A row matches only when both are
+   numbers and equal. One three-line accessor in
    `structuredDeliveryController.ts` returns the held host for a session key,
    next to `hasStructuredDeliveryHost` (`:1842`).
    The copies of the registry name no writer (R5): `registrySessionProjection`
@@ -700,11 +791,22 @@ against this specification with a fresh one.
    - the fifteen cases of the repro suite, committed beside
      `quietFallback.test.ts` with repository-relative imports, since the
      scratch copy will not survive;
-   - `quietFallback.test.ts` carried over unchanged in its cases; its six
-     sites that wrap or replace the old `turnLiveness` port are pointed at the
-     new one;
-   - the R12 property test, with the earlier-epoch journal row and the row
-     relabelled from another key among its perturbations;
+   - `quietFallback.test.ts` carried over with its cases and expectations
+     unchanged; its six sites that wrap or replace the old `turnLiveness`
+     port are pointed at the new one, and its `journalRow` helper publishes
+     `writerClaim: "fixture:0"`, the fence a host's own publication carries at
+     the writer epoch the fixture entry records. Two cases rest on it, "keyed
+     reads retain a hidden journal turn hint over a settled transcript" and
+     "an active turn id with idle journal labels protects a newly admitted
+     turn over a settled transcript": without it the first row has no field
+     and the second keeps the copy's `null`, both name no writer, and both
+     would release. Every other `journalRow` case keeps its verdict with the
+     fence: its tail is open, its process is gone, a handle reports a turn,
+     or a later copy replaces the row;
+   - the R12 property test, with the earlier-epoch journal row, the row
+     relabelled from another key, and the copy marked running by a late turn
+     event among its perturbations, over a structured owner and a tmux
+     owner;
    - the successor-epoch cases of the case map, built through the real
      `claimStructuredHost`, `setStructuredHostClaimed` and
      `releaseStructuredHostClaim`, with the journal row published in the shape
@@ -721,14 +823,27 @@ against this specification with a fresh one.
      turn id, B holds. A row relabelled the way `main` relabels it (the
      fallback's publication with the field removed) is rewritten by the next
      controller start and then releases;
+   - the tmux successor table, over the real registry, fallback and journal:
+     B recorded with a tmux host as a tmux launch settles it (`settleSpawn`,
+     claim epoch 0) under its own key, and as the tmux observer's `upsert`
+     records it under A's key, keeping A's structured columns; A's own fenced
+     row, then the real fallback, then A's late turn event. The acceptance is
+     that B over a settled tail is released on the first probe under both
+     keys and with B's status `idle` or `live`, that a live tmux pane with
+     only the copy of its own entry is released, and that B's open tail
+     holds. The structured epoch-1 controls keep their verdicts: a copy with
+     A's late event releases, and B's own fenced publication holds;
    - tests that pin the payload of the fallback, the tmux-host publication or
      the failed-spawn projection exactly gain `writerClaim: null`;
-   - the fixtures of `quietFallback.test.ts`, `quiet.test.ts` and
-     `quietDeadHosts.test.ts` publish rows with no `writerClaim` over entries
-     at writer epoch 0, or over claimed entries whose custody comes from setup
-     (R6), which reads no row. They keep their expectations under the epoch
-     rule and the copies' `null` fence. A carried case that would only pass by matching a row across
-     epochs is a defect in that case, and the pull request names it;
+   - the fixtures of `quiet.test.ts` and `quietDeadHosts.test.ts` publish
+     rows with no `writerClaim`. Under R5 those rows name no writer. Every
+     case of `quietDeadHosts.test.ts` that expects a held turn was read for
+     this pass, and each rests on a receipt's admission owner, an open tail,
+     a reviewer process or stage custody, none on such a row;
+     `quiet.test.ts` injects its evidence and reads no row. A carried case
+     that would only pass by reading a row that names no writer, or a row at
+     another epoch, is a defect in that case, and the pull request names it
+     and gives the row the fence its host would publish;
    - one case for R6b that no fixture covers today: a terminal status, a live
      host this Viewer holds, the claim owned by the test process and a
      settled transcript give a release; the same fixture with a handle that
@@ -781,16 +896,17 @@ selection rule in `quiet.ts`.
 | one question per physical process, keyed by pid, start identity and artifact path | R1, R2 |
 | each answered from that owner's own evidence | R3, R4, R5, R12 |
 | deduplication only after verdicts | R11; R1 pools records of the same process and nothing else |
-| a finished or idle owner releases immediately | R4, R7 `process-gone` and `turn-settled` |
+| a finished or idle owner releases immediately | R4, R7 `process-gone` and `turn-settled`; R5 for a tmux host and for a successor under a copy that names no writer |
 | a busy one holds | R7 `host-turn`, `turn-claimed`, `turn-open`, `setup`, `reviewer` |
 | unknown holds with a bounded timeout and a visible reason | R8, reason codes in R11 |
-| every repro case and the four findings mapped to a rule | Case map, including the successor-epoch case |
+| every repro case and the four findings mapped to a rule | Case map, including the successor-epoch and tmux successor cases |
 | what to keep and delete from #2555, and the smallest build | the two sections above |
 | no code changes beyond the document | this file is the only change |
 
 Against #2515: the drain and `agent_activity` share one process rule and one
 turn reading; a dead host never holds; an unresolvable row is counted and
-bounded.
+bounded; a live tmux pane whose transcript settled no longer holds through the
+copy of its registry row, which `agent_activity` already reported as idle.
 
 What this pass verified and how: the code was read at the lane's base commit
 and at #2555 head; the review report and the recorded run of the repro suite
@@ -839,6 +955,41 @@ pass skips a row whose labels it already matches, whatever fence the row
 carries, which is why the check gains the fence. No file in the worktree other
 than this document was written.
 
+The revision for the tmux successor read the tmux observer's registry writes,
+the registry's `upsert`, `claimStructuredHost` and the runtime host's own
+session publications on `main`. It ran one probe under the same isolation,
+against the real `AgentRegistry`, fallback and `RuntimeJournal`, on an export
+of this lane's base and on an export with the four lines of build step 2
+applied, both under the stage's temporary directory. A was claimed by the
+probe at epoch 1, published its own running row with its fence, released its
+claim and exited; B was recorded with a tmux host as described in the tmux
+successor table; the real fallback ran, then A's late turn event. The verdict
+is computed twice, with the rule of the previous revision (a `null` or
+missing fence and a tmux host both at epoch 0) and with this revision's (a
+row names a writer only through a fence, and a tmux host has none). B has no
+handle and no row reference throughout:
+
+| Variant | Row with the change | Previous rule | This revision |
+| --- | --- | --- | --- |
+| B under A's key (its entry keeps A's columns at epoch 1), status `idle`, settled tail | the shared key, `null`, running, A's late turn id | holds, `turn-claimed` | released |
+| the same with status `live` | the shared key, `null`, running, A's late turn id | holds, `turn-claimed` | released |
+| B a new generation under its own key, status `idle`, settled tail | key B, `null`, running, A's late turn id | holds, `turn-claimed` | released |
+| the same with status `live` | key B, `null`, running, A's late turn id | holds, `turn-claimed` | released |
+| a live tmux pane, settled tail, only the copy of its own entry | key B, `null`, running, no turn id | holds, `turn-claimed` | released |
+| B a new generation, tmux, open tail, A's late event | key B, `null`, running | holds, `turn-claimed` | holds, `turn-open` |
+| control: B structured, claimed at epoch 1 under its own key, copy, A's late event | key B, `null`, running | released | released |
+| control: B structured at epoch 1, its own publication with a turn id, settled tail | key B, epoch 1, running | holds, `turn-claimed` | holds, `turn-claimed` |
+
+On the base, where the copies keep A's fence, the four late-event variants
+release under both rules (A's epoch 1 does not equal 0), the copy-only pane
+holds under the previous rule (its row has no field, read as epoch 0), and the
+structured epoch-1 control with A's late event holds under both, which is the
+different-key finding the copies' `null` closes. The copy-only pane was also
+run through `main`'s own `probeQuiet` with the production liveness reader:
+its row read `hosted`/`running`, `agent_activity` reported the host alive and
+idle, and the drain held one turn on the first probe and twelve hours later.
+No file in the worktree other than this document was written.
+
 ## Decisions taken in this pass
 
 - **A live process is released by a clock only when nothing shows work.** The
@@ -847,10 +998,10 @@ than this document was written.
   its process lives, and `main` releases it at once when its journal row
   claims nothing. The bound sits between the two and follows the
   requirement's wording.
-- **The journal row stays as turn evidence, scoped to its own key and writer
-  epoch.** Dropping it would simplify the reader, and `main` pins the opposite
-  since #2532: a settled transcript under a live process proves nothing until
-  the host says it is idle.
+- **The journal row stays as turn evidence, scoped to its own key and the
+  writer its fence names.** Dropping it would simplify the reader, and `main`
+  pins the opposite since #2532: a settled transcript under a live process
+  proves nothing until the host says it is idle.
 - **Under one key, the writer epoch binds a row to its writer.** Comparing
   the whole `writerClaim` string would fail twice: the owner half is the
   controlling Viewer, the same for A and B when one Viewer claims both, and a
@@ -882,6 +1033,25 @@ than this document was written.
   successor table as the epoch rule did until a copy replaces a host's own
   row; from then a late turn event or a `live` status word on that copy no
   longer holds the host on a fence the copy did not write.
+- **A row that names no writer speaks for nobody, and a host with no writer
+  reads no row.** `null` and a missing field are read alike. Two narrower
+  rules were weighed:
+  - `null` names no writer while a missing field keeps binding by key at
+    epoch 0, as a legacy policy. A copy that a live tmux pane received
+    before the build has no field and says `running`; the start's fallback
+    pass skips it while its labels match, because its check reads a missing
+    field as `null`. The pane would then stay held exactly as on `main`;
+  - rows without a fence keep binding at epoch 0 for structured entries and
+    a tmux host reads no row. That spares the two fixture cases their fence,
+    and keeps a rule that only a test's `upsert` exercises, under which a
+    structured host recorded at epoch 0 inherits a predecessor's late event,
+    against R12.
+
+  Each narrower rule reads some fenceless row as a host's own report. The
+  only host report without a fence is the `null` of a host whose claim was
+  released, and its handle speaks for it (R5). The two carried cases that
+  relied on such a reading gain the fence their host would publish (build
+  step 4).
 - **The handle binds by session key.** A health that names another pid makes
   the handle its own owner, which keeps a replacement host visible when the
   registry row lags.
@@ -900,22 +1070,19 @@ Known limits of this specification:
 - The stage rules of R10 keep a stage while any process of its conversation
   lives, idle or busy, as they do today. Narrowing that is the pipeline
   controller's concern and is outside this requirement.
-- A turn event with no fence that lands on a copy holds no structured host.
-  The fallback copies the registry only for a conversation this Viewer does
-  not host, and such a host neither receives deliveries nor publishes events
-  through this Viewer, so the turn events that reach that row are late ones.
-  A turn the host starts anyway, such as a CLI that continues on a
-  background-command notification (Deferred), holds through its open tail
-  from its first transcript record and shows nothing before it.
-- The journal keeps one row per conversation, so a row that a structured host
-  published before a tmux host took over its key keeps that host's fence
-  until the first tmux-host publication, a copy, replaces it. Until then the
-  tmux host, at epoch 0, is judged on its tail alone: busy holds, settled
-  releases, unreadable holds for the five minutes of R8.
-- A row without a fence binds by key alone at epoch 0, so a replacement
-  recorded under the same key at epoch 0 would still inherit it. No production
-  path read for this pass records a process there (R5, "Rows without a
-  fence"); a test fixture that writes one through `upsert` can.
+- A turn event with no fence that lands on a copy holds no host. The
+  fallback copies the registry only for a conversation this Viewer does not
+  host as a structured host, and such a host neither receives deliveries nor
+  publishes events through this Viewer, so the turn events that reach that
+  row are late ones. A tmux host publishes no turn events at all. A turn the
+  host starts anyway, such as a CLI that continues on a background-command
+  notification (Deferred), holds through its open tail from its first
+  transcript record and shows nothing before it.
+- A tmux host shows a turn only through its transcript. A message delivered
+  into a pane holds the drain from the CLI's first transcript record of it;
+  between the pane accepting it and that record nothing shows it, and an
+  idle pane is released. `main` holds every live pane whose row the snapshot
+  carries, idle or busy, with no bound.
 
 ## Deferred — not currently justified
 
@@ -937,6 +1104,10 @@ Known limits of this specification:
 - **Comparing the boot epoch in `identityAlive`.** A reused pid after a reboot
   is already caught by its start identity.
 - **One `agent_activity` record per owner.**
+- **A turn signal for a tmux pane ahead of its transcript.** The Viewer could
+  mark a pane's registry row when it types a message in, until the
+  transcript records the turn. The window it covers is the time a CLI takes
+  to write a prompt it accepted, and the requirement names nothing there.
 - **A Claude CLI that continues on a background-command notification after
   its turn ended** (`docs/design/restart-stage-recovery.md`). The drain
   releases an idle host over a settled transcript at once, as it does today.
@@ -961,3 +1132,11 @@ keys and a registry projection that names no writer found the critique that
 raised the case, whose probe this revision extended, and the previous
 revision's own reasoning; nothing earlier binds a fence to its key. Memory
 held nothing relevant.
+
+For the tmux revision: project-scoped and unscoped searches for a tmux
+successor held by a cleared fence, a `null` writer claim read as epoch 0, and
+a tmux pane counted as a running turn by the drain found the critique that
+raised the case and this lane's earlier revisions, and no earlier decision
+that a live idle tmux pane should hold the drain. The critique's conclusion
+was read in its transcript and checked against the code and the probe above.
+Memory held nothing relevant.
