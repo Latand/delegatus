@@ -44,12 +44,13 @@ export function providerRecoveryAttempt(
 export async function providerRecoveryTurnProven(attempt: PipelineStageAttempt, ref: RuntimeProviderRecoveryRef): Promise<boolean> {
   if (!attempt.agentPath) return false;
   const evidence = await durableStageTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath,
-    undefined, attempt.startedAt, undefined, ref.turnTs);
+    undefined, attempt.startedAt, undefined, ref.turnTs, attempt.providerWait?.turnKey);
   const notice = evidence?.terminalProviderMessage;
   return evidence?.turn === "terminal" && evidence.promptHistoryComplete === true
     && !!notice && notice.ts === ref.turnTs
     && classifyProviderCondition(attempt.effectiveRole.engine, notice.errorClass, notice.text).kind === attempt.providerWait?.condition.kind
-    && Array.isArray(evidence.prompts) && !evidence.prompts.some(prompt => prompt.origin === "external" && prompt.ts > ref.turnTs)
+    && Array.isArray(evidence.prompts)
+    && !(evidence.externalPromptAfterCut ?? evidence.prompts.some(prompt => prompt.origin === "external" && prompt.ts > ref.turnTs))
     && Array.isArray(evidence.backgroundTasks) && liveBackgroundTasks(evidence.backgroundTasks, Date.now()).length === 0;
 }
 

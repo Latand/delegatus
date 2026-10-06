@@ -1042,6 +1042,7 @@ function providerStoreFixture(): Pipeline {
 test("malformed provider waits and histories are rejected at the persistence boundary", async () => isolatedDelivery(() => {
   for (const bad of [{}, { condition: {} }, { ...providerStoreFixture().runs[0]!.attempts[0]!.providerWait, resumeAt: "invalid" },
     { ...providerStoreFixture().runs[0]!.attempts[0]!.providerWait, capacityProbes: -1 },
+    { ...providerStoreFixture().runs[0]!.attempts[0]!.providerWait, turnKey: "invalid" },
     { ...providerStoreFixture().runs[0]!.attempts[0]!.providerWait, stageRetry: {} },
     { ...providerStoreFixture().runs[0]!.attempts[0]!.providerWait, stageRetry: { controlGeneration: 1, detail: "retry" } }]) {
     const lane = providerStoreFixture();
@@ -1063,9 +1064,11 @@ test("provider evidence timestamps accept finite fractional milliseconds and rej
   const lane = providerStoreFixture();
   const attempt = lane.runs[0]!.attempts[0]!;
   attempt.providerWait!.turnTs = 1_790_923_281_585.1626;
+  attempt.providerWait!.turnKey = "a".repeat(64);
   attempt.usageLimitedAccounts = [{ accountId: "account-a", engine: "codex", resetsAt: null, limitedAt: attempt.providerWait!.turnTs }];
   savePipelines([lane]);
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait!.turnTs).toBe(attempt.providerWait!.turnTs);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait!.turnKey).toBe(attempt.providerWait!.turnKey);
   for (const value of [-1, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
     attempt.providerWait!.turnTs = value;
     expect(() => savePipelines([lane])).toThrow("malformed pipeline record");

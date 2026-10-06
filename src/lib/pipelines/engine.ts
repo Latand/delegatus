@@ -41,7 +41,7 @@ import { structuredHostsEnabled, supervisedRuntimeHostUnavailableReason } from "
 import { conversationTurnLiveness, outstandingDeliverySince, type TurnLivenessDependencies } from "@/lib/runtime/liveness";
 import { structuredDeliveryPublicationState } from "@/lib/runtime/structuredDeliveryController";
 import { DELIVERY_UNVERIFIED_BY_EARLIER_EXECUTOR } from "@/lib/runtime/structuredDeliveryQueue";
-import { enqueueStructuredMessage } from "@/lib/runtime/structuredMessageDelivery";
+import { enqueueStructuredMessage, idleContinuationDeliveryRetryable } from "@/lib/runtime/structuredMessageDelivery";
 import { delegatusMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { interruptionObligationDirectory, interruptionObligationStore, submittedContinuationOutcome, type InterruptionObligation } from "@/lib/runtime/interruptionObligations";
 import { StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
@@ -319,8 +319,8 @@ export interface PipelinePorts {
       no transcript was ever created, which proves no turn started (#1750). */
   transcriptPresent?(pathname: string): boolean;
   /** Delivers the controller's one continuation to a stage whose turn a
-      runtime-host succession cut, attributed to the controller. False means
-      nothing was accepted, so the continuation is still owed. */
+      runtime-host succession cut, attributed to the controller. True confirms
+      admission; an unconfirmed reply retains the same durable delivery key. */
   resumeSeveredTurn?(input: {
     conversationId: string;
     transcriptPath: string;
@@ -342,6 +342,8 @@ export interface PipelinePorts {
   conversationMigration?(conversationId: string): { targetId: string; retry: boolean } | null;
   /** Whether the limit continuation's durable send has completed. */
   conversationDeliveryCompleted?(conversationId: string, clientMessageId: string): boolean;
+  /** Journal proof that the accepted continuation was refused before execution. */
+  conversationDeliveryRetryable?(conversationId: string, clientMessageId: string): Promise<boolean>;
   /** Withdraw queued automatic continuations before acknowledging operator control. */
   invalidateProviderContinuation?(conversationId: string): Promise<void>;
   /** A fresh live quota reading after the limit proves the source recovered. */
@@ -349,7 +351,7 @@ export interface PipelinePorts {
   /** Confirmed reset of the source account's governing exhausted quota window. */
   claudeAccountReset?(accountId: string, model: string | null): number | null;
   sleep?(milliseconds: number): Promise<void>;
-  durableTurnEvidence(engine: EffectivePipelineRole["engine"], transcriptPath: string, reportAt?: string | null, attemptStartedAt?: string | null, readTail?: Parameters<typeof durableStageTurnEvidence>[4], afterCutAt?: number): Promise<StageTurnEvidence | null>;
+  durableTurnEvidence(engine: EffectivePipelineRole["engine"], transcriptPath: string, reportAt?: string | null, attemptStartedAt?: string | null, readTail?: Parameters<typeof durableStageTurnEvidence>[4], afterCutAt?: number, afterCutKey?: string): Promise<StageTurnEvidence | null>;
   headCwd(transcriptPath: string): string | null;
   lastMessage(entry: FileEntry): { text: string; ts: number } | null;
   pathForConversation(conversationId: string): string | null;
@@ -1582,6 +1584,7 @@ export function defaultPipelinePorts(
       const evidence = registry.deliveryAdmissionForKey(conversationId, clientMessageId);
       return evidence.outcome === "admitted" && evidence.state === "delivered";
     },
+    conversationDeliveryRetryable: idleContinuationDeliveryRetryable,
     claudeAccountRecovered: (accountId, limitedAt, model) => {
       const observation = registry.quotaObservations("claude").find((item) => item.accountId === accountId);
       if (!observation || Date.parse(observation.observedAt) <= limitedAt) return false;
@@ -2109,10 +2112,15 @@ function waitForProviderTransport(pipeline: Pipeline, attempt: PipelineStageAtte
   persist();
 }
 
+function providerContinuationKey(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt): string {
+  const wait = attempt.providerWait!;
+  return `stage-provider-${pipeline.id}-${stage.id}-${attempt.n}-${wait.turnTs}${wait.turnKey ? `-${wait.turnKey}` : ""}`;
+}
+
 /** Persist before transport. Delivery retries retain a key for this exact cut. */
 async function recoverProviderCut(
   pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
-  notice: { condition: ProviderCondition; text: string; ts: number; resetsAt: number | null } | null,
+  notice: { condition: ProviderCondition; text: string; ts: number; resetsAt: number | null; turnKey?: string; automaticCut?: boolean } | null,
   ports: PipelinePorts, persist: () => void,
 ): Promise<boolean> {
   const now = ports.now();
@@ -2123,7 +2131,8 @@ async function recoverProviderCut(
     persist();
     return true;
   }
-  if (notice && (!wait || notice.ts > wait.turnTs)) {
+  if (notice && (!wait || notice.ts > wait.turnTs
+    || notice.automaticCut && notice.turnKey && notice.turnKey !== wait.turnKey)) {
     const engine = attempt.effectiveRole.engine;
     const current = attempt.agentPath ? ports.accountForTranscript?.(engine, attempt.agentPath) : null;
     const accountId = current?.accountId ?? attempt.accountId ?? attemptStage(stage, attempt).account ?? null;
@@ -2143,7 +2152,7 @@ async function recoverProviderCut(
       : notice.condition.kind === "transient" ? 60_000 * 2 ** tries
       : ["host_death", "turn_cut"].includes(notice.condition.kind) ? 30_000 : 0;
     wait = attempt.providerWait = { condition: notice.condition, text: redactBounded(notice.text, 300), accountId,
-      turnTs: notice.ts, tries, startedAt: budget.startedAt,
+      turnTs: notice.ts, ...(notice.turnKey ? { turnKey: notice.turnKey } : {}), tries, startedAt: budget.startedAt,
       resumeAt: new Date(time + delay).toISOString(), resetsAt,
       ...(same && wait?.failedAccounts ? { failedAccounts: [...wait.failedAccounts] } : {}),
       ...(notice.condition.kind === "auth_required" ? { failedAccounts: [...new Set([...(same ? wait?.failedAccounts ?? [] : []), ...(accountId ? [accountId] : [])])] } : {}) };
@@ -2268,15 +2277,17 @@ async function recoverProviderCut(
       }
     } catch (error) { waitForProviderTransport(pipeline, attempt, condition, `account authorization unavailable: ${String(error)}`, ports, persist); return true; }
   }
-  const key = `stage-provider-${pipeline.id}-${stage.id}-${attempt.n}-${wait.turnTs}`;
+  const key = providerContinuationKey(pipeline, stage, attempt);
   const cutTs = wait.turnTs;
+  const cutKey = wait.turnKey;
   const controlGeneration = pipeline.controlGeneration;
   const continuationAllowed = async () => {
-    const latest = await ports.durableTurnEvidence(engine, attempt.agentPath!, undefined, attempt.startedAt, undefined, cutTs);
+    const latest = await ports.durableTurnEvidence(engine, attempt.agentPath!, undefined, attempt.startedAt, undefined, cutTs, cutKey);
     return pipeline.state === "running" && !pipeline.closedAt && !pipeline.hiddenAt
       && pipeline.controlGeneration === controlGeneration && !attempt.report && !attempt.verdict && !wait.retryCancelled
       && latest?.promptHistoryComplete !== false && !newerExternalProviderPrompt(attempt, latest)
-      && latest?.turn === "terminal" && latest.terminalProviderMessage?.ts === cutTs;
+      && latest?.turn === "terminal" && latest.terminalProviderMessage?.ts === cutTs
+      && (!cutKey || latest.terminalProviderCutKey === cutKey);
   };
   let delivered: boolean;
   try {
@@ -2405,6 +2416,7 @@ async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attemp
       retry.providerWait = { ...attempt.providerWait, turnTs: 0, tries: attempt.providerWait.tries + 1, actionAt: now,
         resumeAt: now,
         ...(target ? { switchedAccountId: target } : {}) };
+      delete retry.providerWait.turnKey;
     }
     retry.accountId = target ?? attempt.accountId;
   }
@@ -5400,7 +5412,7 @@ async function tickRunStage(
      verdict settles once — even when the runtime ledger is stale `running`, the
      scan projection transiently lost the transcript, or the host is already
      gone. A busy turn is mid-work: its messages are never verdict candidates. */
-  const durable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, attempt.report?.at, attempt.startedAt, undefined, attempt.providerWait?.turnTs);
+  const durable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, attempt.report?.at, attempt.startedAt, undefined, attempt.providerWait?.turnTs, attempt.providerWait?.turnKey);
   const unregisteredHostDeath = structuredActive === true
     ? null
     : await unregisteredStageHostDeathEvidence(attempt, {
@@ -5419,16 +5431,17 @@ async function tickRunStage(
   const notice = terminalProviderMessage && terminalProviderMessage.ts > unixMs(attempt.startedAt)
     ? { condition: classifyProviderCondition(attempt.effectiveRole.engine, terminalProviderMessage.errorClass
         ?? (terminalProviderMessage.usageLimit ? (attempt.effectiveRole.engine === "claude" ? "rate_limit" : "usage_limit") : null), terminalProviderMessage.text),
-        text: terminalProviderMessage.text, ts: terminalProviderMessage.ts, resetsAt: terminalProviderMessage.usageLimit?.resetsAt ?? null }
+        text: terminalProviderMessage.text, ts: terminalProviderMessage.ts, resetsAt: terminalProviderMessage.usageLimit?.resetsAt ?? null,
+        turnKey: durable?.terminalProviderCutKey, automaticCut: durable?.automaticPromptBeforeProviderCut }
     : null;
   if (!oomDeath && !heldForDeployCut && (notice || attempt.providerWait)) {
     if ((notice || attempt.providerWait && attempt.providerWait.turnTs > 0) && durable?.promptHistoryComplete === false) {
       waitForProviderTransport(pipeline, attempt, attempt.providerWait?.condition ?? notice!.condition, "delivered prompt history is incomplete", ports, persist);
       return;
     }
-    if (!attempt.providerWait && durable?.firstProviderCutAt
+    if (!(attempt.providerWait?.turnTs && attempt.providerWait.turnTs > 0) && durable?.firstProviderCutAt
       && Math.max(unixMs(pipeline.pausedAt ?? ""), unixMs(pipeline.resumedAt ?? "")) > durable.firstProviderCutAt) {
-      park(pipeline, "provider recovery cancelled by operator control after the cut; waiting for operator decision", attempt);
+      park(pipeline, "provider recovery cancelled by operator control during the stage; waiting for operator decision", attempt);
       persist();
       return;
     }
@@ -5461,20 +5474,32 @@ async function tickRunStage(
       && durable.message.ts > attempt.providerWait.turnTs;
     const newerActiveTurn = !notice && attempt.providerWait && durable?.turn === "busy"
       && (durable.lastRecordAt ?? durable.message?.ts ?? 0) > attempt.providerWait.turnTs;
+    const newerProviderNotice = notice && (!attempt.providerWait || notice.ts > attempt.providerWait.turnTs
+      || notice.automaticCut && notice.turnKey && notice.turnKey !== attempt.providerWait.turnKey);
     const providerHostLost = (hostUnavailablePastGrace || structuredActive === false || paneActive === false) && attempt.providerWait?.actionAt
-      && (!notice || notice.ts <= attempt.providerWait.turnTs);
+      && !newerProviderNotice;
     if (newerNormalTurn || newerStageOutput || newerActiveTurn) {
       if (durable?.message && durable.message.ts > attempt.providerWait!.turnTs) delete attempt.providerRecoveryBudget;
       delete attempt.providerWait;
       pipeline.stateDetail = null;
     } else if (attempt.providerWait?.actionAt && attempt.providerWait.turnTs > 0 && attempt.conversationId
-      && (!notice || notice.ts <= attempt.providerWait.turnTs)
+      && !newerProviderNotice
       && (ports.conversationDeliveryOutstanding?.(attempt.conversationId) === true
         || ports.conversationDeliveryCompleted?.(attempt.conversationId,
-          `stage-provider-${pipeline.id}-${stage.id}-${attempt.n}-${attempt.providerWait.turnTs}`) === false)) {
+          providerContinuationKey(pipeline, stage, attempt)) === false)) {
       // Admission can be held or queued while the recorded host is re-seated.
       // Keep that exact delivery owed before interpreting host loss again.
-      waitForProviderTransport(pipeline, attempt, attempt.providerWait.condition, "accepted continuation delivery is still pending", ports, persist);
+      const wait = attempt.providerWait;
+      if (ports.conversationDeliveryOutstanding?.(attempt.conversationId) !== true
+        && await ports.conversationDeliveryRetryable?.(attempt.conversationId, providerContinuationKey(pipeline, stage, attempt)) === true) {
+        // Refund only the acceptance whose durable effect never began. The
+        // same cut/key still rechecks human input and idle ownership on send.
+        delete wait.actionAt;
+        wait.tries = Math.max(0, wait.tries - 1);
+        if (attempt.providerRecoveryBudget) attempt.providerRecoveryBudget.tries = Math.max(0, attempt.providerRecoveryBudget.tries - 1);
+        persist();
+        await recoverProviderCut(pipeline, stage, attempt, notice, ports, persist);
+      } else waitForProviderTransport(pipeline, attempt, wait.condition, "accepted continuation delivery is still pending", ports, persist);
       return;
     } else if (providerHostLost) {
       await recoverProviderCut(pipeline, stage, attempt, { condition: { kind: "host_death", scope: null, resetLabel: null, label: "stage host died without output" },
@@ -6626,14 +6651,17 @@ async function reconcileParkedDelivery(pipeline: Pipeline, ports: PipelinePorts)
 }
 
 function newerExternalProviderPrompt(attempt: PipelineStageAttempt, durable: StageTurnEvidence | null | undefined): boolean {
-  const cutAt = attempt.providerWait?.turnTs ?? durable?.firstProviderCutAt;
-  return !!cutAt && cutAt > 0 && !!durable?.prompts?.some(prompt => prompt.ts > cutAt && prompt.origin === "external");
+  const savedCut = attempt.providerWait?.turnTs;
+  const cutAt = savedCut && savedCut > 0 ? savedCut : durable?.firstProviderCutAt;
+  return !!cutAt && cutAt > 0 && (durable?.externalPromptAfterCut
+    ?? !!durable?.prompts?.some(prompt => prompt.ts > cutAt && prompt.origin === "external"));
 }
 
 function newerAutomaticProviderPrompt(attempt: PipelineStageAttempt, durable: StageTurnEvidence | null | undefined): boolean {
   const wait = attempt.providerWait;
   return !!wait && !newerExternalProviderPrompt(attempt, durable)
-    && !!durable?.prompts?.some(prompt => prompt.ts > wait.turnTs && prompt.origin !== "external");
+    && (durable?.automaticPromptAfterCut
+      ?? !!durable?.prompts?.some(prompt => prompt.ts > wait.turnTs && prompt.origin !== "external"));
 }
 
 /** A harness wake or controller continuation can hit the same limit without
@@ -6641,12 +6669,16 @@ function newerAutomaticProviderPrompt(attempt: PipelineStageAttempt, durable: St
 function refreshHarnessProviderCut(pipeline: Pipeline, attempt: PipelineStageAttempt, durable: StageTurnEvidence | null, ports: PipelinePorts): boolean {
   const wait = attempt.providerWait;
   const notice = durable?.turn === "terminal" ? durable.terminalProviderMessage : null;
-  if (!wait || wait.condition.kind !== "usage_limit" || !notice || notice.ts <= wait.turnTs
+  const newerOrderedCut = durable?.automaticPromptBeforeProviderCut === true
+    && !!durable.terminalProviderCutKey && durable.terminalProviderCutKey !== wait?.turnKey;
+  if (!wait || wait.condition.kind !== "usage_limit" || !notice || notice.ts <= wait.turnTs && !newerOrderedCut
     || newerExternalProviderPrompt(attempt, durable)
     || durable?.message && durable.message.ts > wait.turnTs && durable.message.ts !== notice.ts
-    || !durable?.prompts?.some(prompt => prompt.ts > wait.turnTs && prompt.ts <= notice.ts && prompt.origin !== "external")
+    || !(durable?.automaticPromptBeforeProviderCut
+      ?? durable?.prompts?.some(prompt => prompt.ts > wait.turnTs && prompt.ts <= notice.ts && prompt.origin !== "external"))
     || classifyProviderCondition(attempt.effectiveRole.engine, notice.errorClass ?? null, notice.text).kind !== "usage_limit") return false;
   wait.turnTs = notice.ts;
+  if (durable?.terminalProviderCutKey) wait.turnKey = durable.terminalProviderCutKey;
   wait.text = redactBounded(notice.text, 300);
   const reset = knownReset(notice.usageLimit?.resetsAt);
   const limited = usageLimitsOn(attempt, attempt.effectiveRole.engine).find(item => item.accountId === wait.accountId);
@@ -6666,7 +6698,7 @@ async function providerCutActivity(pipeline: Pipeline, attempt: PipelineStageAtt
     const wait = attempt.providerWait;
     if (!wait) return "unknown";
     const durable = attempt.agentPath
-      ? await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, undefined, attempt.startedAt, undefined, wait.turnTs) : null;
+      ? await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, undefined, attempt.startedAt, undefined, wait.turnTs, wait.turnKey) : null;
     if (durable?.promptHistoryComplete === false && wait.turnTs > 0) return "unknown";
     if (newerExternalProviderPrompt(attempt, durable)) return "newer";
     if (refreshHarnessProviderCut(pipeline, attempt, durable, ports)) persist();
@@ -6706,8 +6738,19 @@ async function reconcileParkedProviderRetry(pipeline: Pipeline, ports: PipelineP
     && lastRecovery?.action === "park" && (lastRecovery.summary === attempt.error
       || lastRecovery.summary === "account capacity recovery exhausted"
         && attempt.error === `stage cut by ${wait.condition.label}: no account capacity returned; capacity recovery exhausted after ${wait.capacityProbes ?? 0} due probes`)
-    && pipeline.stateDetail === attempt.error && attempt.error?.startsWith(`stage cut by ${wait.condition.label}`)
-    && Math.max(unixMs(pipeline.pausedAt ?? ""), unixMs(pipeline.resumedAt ?? "")) < unixMs(attempt.completedAt)) {
+    && pipeline.stateDetail === attempt.error && attempt.error?.startsWith(`stage cut by ${wait.condition.label}`)) {
+    const controlledAt = Math.max(unixMs(pipeline.pausedAt ?? ""), unixMs(pipeline.resumedAt ?? ""));
+    // Read the first native cut before granting a legacy obligation. A later
+    // cut and the final park cannot erase an earlier human reply or pause.
+    const durable = attempt.agentPath ? await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath,
+      undefined, attempt.startedAt) : null;
+    if (durable?.promptHistoryComplete === false || durable?.externalPromptAfterCut) return false;
+    let boundary = wait.turnTs > 0 ? wait.turnTs : unixMs(attempt.startedAt);
+    if (controlledAt >= unixMs(attempt.startedAt) && attempt.agentPath) {
+      if (durable?.promptHistoryComplete !== true) return false;
+      boundary = durable.firstProviderCutAt ?? unixMs(attempt.startedAt);
+    }
+    if (controlledAt > 0 && controlledAt >= boundary) return false;
     const retryAt = new Date(wait.resetsAt !== null ? wait.resetsAt * 1_000 + 60_000
       : unixMs(attempt.completedAt) + 30 * 60_000).toISOString();
     parkProviderUsageLimit(pipeline, attempt, attempt.error, ports, retryAt);

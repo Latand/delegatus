@@ -825,7 +825,9 @@ export class RuntimeJournal {
           || this.retirementBlocked(command.conversationId, operationId)
           || this.retirementInProgress(command.conversationId)) {
           status = "failed";
-          details = { ...details, reason: "idle-continuation-cancelled" };
+          // Only an unclaimed effect proves that host execution never began.
+          const unclaimed = previous.status === "pending" || previous.status === "queued";
+          details = { ...details, reason: unclaimed ? "idle-continuation-pre-execution-refused" : "idle-continuation-cancelled" };
         }
       }
       const queueing = status === "queued"

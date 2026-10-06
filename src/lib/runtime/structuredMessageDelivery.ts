@@ -857,7 +857,7 @@ export async function deliverHeldStructuredMessage(
       kind: command.kind,
       operationId: command.operationId,
       conversationId: request.runtimeConversationId ?? request.conversationId,
-      idempotencyKey: request.clientMessageId,
+      idempotencyKey: continuationJournalKey(command, request.clientMessageId),
       text: content.content.text,
       ...(refs.length ? { images: refs } : {}),
       contentDigest: content.contentDigest,
@@ -883,6 +883,43 @@ export async function deliverHeldStructuredMessage(
   } catch {
     return "delivery-uncertain";
   }
+}
+
+/* A confirmed admission refusal has no effect to replay. Its replacement
+   reservation owns a fresh journal key, while the caller's key still resolves
+   the durable reservation. Unknown-fate retries keep that reservation intact. */
+const IDLE_CONTINUATION_RETRY_PREFIX = "idle-continuation-retry_";
+
+function continuationJournalKey(command: HeldDeliveryCommand, clientMessageId: string): string {
+  return command.onlyIfIdle && command.operationId.startsWith(IDLE_CONTINUATION_RETRY_PREFIX)
+    ? command.operationId : clientMessageId;
+}
+
+function idleContinuationRefusedBeforeExecution(result: RuntimeOperationResult | null): boolean {
+  if (result?.receipt.kind !== "send") return false;
+  return result?.receipt.status === "rejected" && result.receipt.reason === "idle-continuation-cancelled"
+    || result?.receipt.status === "failed" && result.receipt.reason === "idle-continuation-pre-execution-refused";
+}
+
+/** Positive journal proof for retrying one unchanged automatic continuation.
+    Unknown outcomes and operations that began execution grant no authority. */
+export async function idleContinuationDeliveryRetryable(conversationId: string, clientMessageId: string,
+  dependencies: Pick<StructuredMessageDependencies, "registry" | "client"> = {}): Promise<boolean> {
+  try {
+    const registry = (dependencies.registry ?? agentRegistry)();
+    const evidence = registry.deliveryAdmissionForKey(conversationId, clientMessageId);
+    if (evidence.outcome !== "admitted" || evidence.state !== "failed") return false;
+    const previous = registry.conversationDeliverySnapshot({ conversationId }).heldDeliveries[evidence.deliveryId];
+    const captured = previous?.command.onlyIfIdle;
+    const client = (dependencies.client ?? runtimeHostClient)();
+    if (!client || !previous || !captured || !["idle-continuation-cancelled", "idle-continuation-pre-execution-refused"].includes(previous.error ?? "")) return false;
+    const session = await readRuntimeSession(client, { conversationId });
+    if (!session || captured.writerClaim !== session.writerClaim || previous.generationId !== session.sessionKey.sessionId
+      || captured.revision === session.revision || !runtimeIdleKillMatches(session, session.sessionKey,
+        { revision: session.revision, writerClaim: captured.writerClaim })) return false;
+    const result = await client.operationStatus(previous.command.operationId);
+    return result?.operationId === previous.command.operationId && idleContinuationRefusedBeforeExecution(result);
+  } catch { return false; } // Unconfirmed receipt or owner remains pending.
 }
 
 export async function enqueueStructuredMessage(
@@ -944,8 +981,33 @@ export async function enqueueStructuredMessage(
     if (!session?.writerClaim || !runtimeIdleKillMatches(session, session.sessionKey,
       { revision: session.revision, writerClaim: session.writerClaim })
       || !await dependencies.idleContinuationAllowed()) return continuationRefused();
-    request = { ...request, policy: "queue", turnId: null,
-      onlyIfIdle: { revision: session.revision, writerClaim: session.writerClaim } };
+    let fence = { revision: session.revision, writerClaim: session.writerClaim };
+    const key = request.clientMessageId?.trim();
+    if (key) {
+      const evidence = registry.deliveryAdmissionForKey(session.conversationId, key);
+      if (evidence.outcome === "unknown") return continuationRefused();
+      if (evidence.outcome === "admitted") {
+        const previous = registry.conversationDeliverySnapshot({ conversationId: session.conversationId }).heldDeliveries[evidence.deliveryId];
+        const captured = previous?.command.onlyIfIdle;
+        if (!captured || captured.writerClaim !== session.writerClaim
+          || previous.generationId !== session.sessionKey.sessionId) return continuationRefused();
+        if (previous.state === "failed") {
+          if (!["idle-continuation-cancelled", "idle-continuation-pre-execution-refused"].includes(previous.error ?? "") || captured.revision === session.revision) return continuationRefused();
+          /* The journal proves either admission rejection or refusal before
+             claiming the effect. Other execution failures and missing replies
+             retain their key. Stage evidence is rechecked at actuation. */
+          let rejected: RuntimeOperationResult | null;
+          try { rejected = await client.operationStatus(previous.command.operationId); }
+          catch { return continuationRefused(); }
+          if (rejected?.operationId !== previous.command.operationId || !idleContinuationRefusedBeforeExecution(rejected)) return continuationRefused();
+          request = { ...request, operationId: `${IDLE_CONTINUATION_RETRY_PREFIX}${crypto.randomUUID()}` };
+        } else {
+          fence = captured;
+          request = { ...request, operationId: previous.command.operationId };
+        }
+      }
+    }
+    request = { ...request, policy: "queue", turnId: null, onlyIfIdle: fence };
   }
   recordStructuredRuntimeRecovery(session, dependencies.startupRecovered ?? markStructuredRuntimeSessionRecovered);
   if (!session) {
@@ -1382,7 +1444,7 @@ export async function enqueueStructuredMessage(
         kind: assigned.command.kind,
         operationId: assigned.command.operationId,
         conversationId: assigned.runtimeConversationId,
-        idempotencyKey,
+        idempotencyKey: continuationJournalKey(assigned.command, idempotencyKey),
         text: content.content.text,
         ...(refs.length ? { images: refs } : {}),
         contentDigest: content.contentDigest,

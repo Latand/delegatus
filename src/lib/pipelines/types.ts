@@ -393,6 +393,8 @@ export type PipelineStageAttempt = {
     text: string;
     accountId: string | null;
     turnTs: number;
+    /** Stable native row witness for cuts sharing a timestamp. */
+    turnKey?: string;
     tries: number;
     startedAt: string;
     resumeAt: string;

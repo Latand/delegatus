@@ -4031,7 +4031,7 @@ test.each(["unchanged", "active", "answered", "writer", "queued"] as const)("idl
   const claimed = journal.transitionOperation("automatic", "delivering");
   expect(claimed.receipt.status).toBe(change === "unchanged" ? "delivering" : "failed");
   if (change !== "unchanged") {
-    expect(claimed.receipt.reason).toBe("idle-continuation-cancelled");
+    expect(claimed.receipt.reason).toBe("idle-continuation-pre-execution-refused");
     expect(journal.executeOperation({ ...command, operationId: "later", idempotencyKey: "later" }).receipt.status).toBe("rejected");
     expect(journal.effectBatch(100, ["runtime.send"]).some(effect => effect.payload.operationId === "automatic")).toBe(false);
   }
@@ -4063,4 +4063,30 @@ test("provider recovery authority survives normalized kill cold journal reopen",
     journal.close();
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test.each([false, true])("idle continuation pre-execution proof survives journal reopen (claimed=%s)", claimed => {
+  const dir = sandbox("idle-continuation-proof");
+  const filename = path.join(dir, "events.sqlite");
+  let journal = new RuntimeJournal(filename, { structuredHosts: true });
+  const conversationId = "conversation_continuation_proof";
+  const key = { engine: "codex" as const, sessionId: "continuation-generation" };
+  const publish = () => journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
+    conversationId, sessionKey: key, hostKind: "codex-app-server", host: "hosted", turn: "idle", activeTurnId: null,
+    writerClaim: "fixture:1", attentionIds: [], capabilities: { steer: true, structuredAttention: true, nativeQueue: true },
+  } });
+  publish();
+  const onlyIfIdle = { revision: journal.readSession({ conversationId })!.revision, writerClaim: "fixture:1" };
+  expect(journal.executeOperation({ kind: "send", conversationId, operationId: "automatic", idempotencyKey: "automatic", text: "continue", policy: "queue", turnId: null, onlyIfIdle }).receipt.status).toBe("queued");
+  if (claimed) expect(journal.transitionOperation("automatic", "delivering").receipt.status).toBe("delivering");
+  publish();
+  const reason = claimed ? "idle-continuation-cancelled" : "idle-continuation-pre-execution-refused";
+  const refused = claimed ? journal.transitionOperation("automatic", "failed", { reason }) : journal.transitionOperation("automatic", "delivering");
+  expect(refused.receipt).toMatchObject({ status: "failed", reason });
+  journal.close();
+  journal = new RuntimeJournal(filename, { structuredHosts: true });
+  expect(journal.operationResult("automatic")?.receipt).toMatchObject({ status: "failed", reason });
+  expect(journal.effectBatch(100, ["runtime.send"])).toHaveLength(0);
+  journal.close();
+  fs.rmSync(dir, { recursive: true, force: true });
 });

@@ -221,3 +221,31 @@ test.each(["claude", "codex"] as const)("provider retirement accepts %s fraction
   expect(await f.terminate(recovery)).toBe(true);
   expect(f.signals).toEqual([987001, 987002]);
 });
+
+for (const engine of ["claude", "codex"] as const) {
+  test.each(["before", "after"] as const)(`${engine} retirement orders an equal-time human prompt %s the quota cut`, async position => {
+    const f = fixture(engine);
+    const rows = fs.readFileSync(f.transcript, "utf8").trim().split("\n").map(line => JSON.parse(line));
+    const prompt = engine === "claude" ? { type: "user", timestamp: new Date(cut).toISOString(), message: { content: "Wait for my review" } }
+      : { type: "event_msg", timestamp: new Date(cut).toISOString(), payload: { type: "item_completed", item: { type: "UserMessage", content: [{ type: "text", text: "Wait for my review" }] } } };
+    rows.splice(position === "before" ? 1 : 2, 0, prompt);
+    if (position === "after") rows.push(f.nativeCut(cut));
+    fs.writeFileSync(f.transcript, rows.map(row => JSON.stringify(row)).join("\n") + "\n");
+    expect(await f.terminate()).toBe(position === "before");
+    expect(f.signals).toHaveLength(position === "before" ? 2 : 0);
+  });
+}
+for (const engine of ["claude", "codex"] as const) {
+  test.each([false, true])(`${engine} timestamp-less retirement proof respects human input (human=%s)`, async human => {
+    const f = fixture(engine);
+    const notice = { ...f.nativeCut(cut) } as Record<string, unknown>;
+    delete notice.timestamp;
+    const prompt = engine === "claude" ? { type: "user", message: { content: "Wait for my review" } }
+      : { type: "event_msg", payload: { type: "user_message", message: "Wait for my review" } };
+    fs.writeFileSync(f.transcript, (human ? [notice, prompt, notice] : [notice]).map(row => JSON.stringify(row)).join("\n") + "\n");
+    fs.utimesSync(f.transcript, cut / 1000, cut / 1000);
+    expect(await retirement.providerRecoveryTurnProven(f.attempt, ref)).toBe(!human);
+    expect(await f.terminate()).toBe(!human);
+    expect(f.signals).toHaveLength(human ? 0 : 2);
+  });
+}

@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll, expect, test } from "bun:test";
 
 import { AgentRegistry } from "@/lib/agent/registry";
+import { RuntimeJournal } from "@/runtime-host/journal";
 import { drainHeldDeliveries, reconcileMigrations } from "@/lib/accounts/migration/coordinator";
 import { emptyLaunchProfile, type HeldDelivery } from "@/lib/accounts/migration/contracts";
 import { conversationDeliverabilityFromRecord } from "@/lib/conversation/deliverability";
@@ -14,7 +15,7 @@ import { MAX_STRUCTURED_IMAGE_ENCODED_BYTES, RuntimeImageStore, runtimeImageCapa
 import { structuredContentDigest, type StructuredImageRef } from "./structuredContent";
 
 import { sendReceiptFor } from "./sendSettlement";
-import { deliverHeldStructuredMessage, enqueueStructuredMessage } from "./structuredMessageDelivery";
+import { deliverHeldStructuredMessage, enqueueStructuredMessage, idleContinuationDeliveryRetryable } from "./structuredMessageDelivery";
 import { recoverDeadStructuredConversation } from "./structuredRecovery";
 
 const artifactPath = "/sessions/11111111-1111-\x34111-8111-111111111111.jsonl";
@@ -3996,4 +3997,206 @@ test.each(["unchanged", "active", "reply-during-read", "reply-before-command"] a
     if (scenario === "unchanged") expect(reservations[0]!.command.onlyIfIdle).toEqual({ revision: 1, writerClaim: "fixture:1" });
     if (scenario === "reply-before-command") expect(reservations[0]!.state).toBe("failed");
   });
+});
+
+
+function idleContinuationFixture(options: { republication?: boolean; republicationCount?: number; loseAcknowledgmentAt?: number; queued?: boolean; failAtExecution?: boolean } = {}) {
+  const { registry, conversation } = registryWithConversation();
+  recordStructuredOwner(registry, conversation);
+  const journal = new RuntimeJournal(path.join(sandbox, `continuation-${registryNumber}.sqlite`), { structuredHosts: true });
+  const session = snapshot(conversation.id).sessions[0]!;
+  session.sessionKey.sessionId = conversation.generations.at(-1)!.id;
+  session.writerClaim = "fixture:1";
+  const publish = () => journal.append({ scope: { type: "session", id: conversation.id }, kind: "session-status", payload: { ...session } });
+  publish();
+  const state = { commands: 0, deliveries: 0, eligible: true, statusUnavailable: false, cancelAtActuation: false, guards: 0 };
+  const client = {
+    readSession: async () => journal.readSession({ conversationId: conversation.id }),
+    operationStatus: async (id: string) => state.statusUnavailable ? null : journal.operationResult(id),
+    command: async (command: Parameters<RuntimeHostClient["command"]>[0]) => {
+      state.commands += 1;
+      if (state.commands <= (options.republicationCount ?? 1) && options.republication) publish();
+      let result = journal.executeOperation(command);
+      if (result.receipt.status === "queued" && !options.queued) {
+        result = journal.transitionOperation(result.operationId, "delivering");
+        if (result.receipt.status === "delivering") {
+          state.deliveries += 1;
+          if (options.failAtExecution) {
+            publish();
+            result = journal.transitionOperation(result.operationId, "failed", { reason: "idle-continuation-cancelled" });
+          } else result = journal.transitionOperation(result.operationId, "delivered");
+        }
+      }
+      if (state.commands === options.loseAcknowledgmentAt) throw new Error("fixture lost acknowledgment");
+      return result;
+    },
+  } as unknown as RuntimeHostClient;
+  const send = () => enqueueStructuredMessage({ path: artifactPath, conversationId: conversation.id,
+    clientMessageId: "provider-stable-cut", text: "Continue this stage", origin: { kind: "agent", role: "pipeline" } }, {
+    enabled: () => true, client: () => client,
+    registry: () => new AgentRegistry(registry.filename), // Exercise durable retry after a caller restart.
+    idleContinuationAllowed: () => {
+      state.guards += 1;
+      if (state.cancelAtActuation && state.guards % 3 === 0) state.eligible = false;
+      return state.eligible;
+    },
+    kick: () => {}, requestMigrationTick: () => {},
+  });
+  return { registry, conversation, journal, session, publish, send, state, client };
+}
+
+test("an idle republication rejection retries the stable continuation key exactly once", async () => {
+  const fixture = idleContinuationFixture({ republication: true });
+  const { registry, conversation, journal, publish, send, state } = fixture;
+  try {
+    expect(await send()).toMatchObject({ ok: false, status: 409, receipt: { status: "rejected", reason: "idle-continuation-cancelled" } });
+    expect(journal.effectBatch(100, ["runtime.send"])).toHaveLength(0);
+    expect(state.deliveries).toBe(0);
+    const second = await send();
+    expect(second).toMatchObject({ ok: true, outcome: "delivered" });
+    expect(registry.deliveryAdmissionForKey(conversation.id, "provider-stable-cut"))
+      .toMatchObject({ outcome: "admitted", operationId: second!.operationId, state: "delivered" });
+    expect(sendReceiptFor(registry.readOnlySnapshot(), second!.operationId!))
+      .toMatchObject({ clientMessageId: "provider-stable-cut", state: "delivered", duplicateRisk: false });
+    publish();
+    expect(await send()).toMatchObject({ ok: true, outcome: "delivered", operationId: second!.operationId });
+    expect(state.commands).toBe(2);
+    expect(state.deliveries).toBe(1);
+  } finally { journal.close(); }
+});
+
+test.each(["rejected", "queued", "delivered", "replacement-delivered"] as const)("a lost %s acknowledgment preserves the continuation operation and never duplicates", async outcome => {
+  const { journal, publish, send, state } = idleContinuationFixture({
+    republication: outcome === "rejected" || outcome === "replacement-delivered",
+    loseAcknowledgmentAt: outcome === "replacement-delivered" ? 2 : 1,
+    queued: outcome === "queued",
+  });
+  try {
+    const rejected = outcome === "replacement-delivered" ? await send() : null;
+    if (rejected) expect(rejected).toMatchObject({ ok: false, receipt: { status: "rejected" } });
+    const uncertain = await send();
+    expect(uncertain).toMatchObject({ ok: false, transportUncertain: true });
+    publish();
+    const replay = await send();
+    if (outcome === "queued") {
+      // Its outstanding effect blocks a new continuation. Reconciliation must
+      // keep that operation and must never create a replacement send.
+      expect(replay).toMatchObject({ ok: false, admission: "refused" });
+      expect(journal.operationResult(uncertain!.operationId!)!.receipt.status).toBe("queued");
+    } else {
+      expect(replay).toMatchObject({ operationId: uncertain!.operationId });
+      expect(replay).toMatchObject(outcome === "rejected" ? { ok: false, receipt: { status: "rejected" } }
+        : { ok: true, outcome: "delivered" });
+    }
+    if (outcome === "rejected") expect(await send()).toMatchObject({ ok: true, outcome: "delivered" });
+    expect(state.deliveries).toBe(outcome === "queued" ? 0 : 1);
+    expect(journal.effectBatch(100, ["runtime.send"])).toHaveLength(outcome === "queued" ? 1 : 0);
+    expect(state.commands).toBe(outcome === "queued" ? 1 : outcome === "delivered" ? 2 : 3);
+  } finally { journal.close(); }
+});
+
+test.each(["operator-input", "operator-control", "control-at-actuation", "writer", "generation", "active", "missing-proof", "execution-failure"] as const)("a refused continuation still cancels on %s", async change => {
+  const { journal, conversation, session, publish, send, state } = idleContinuationFixture({
+    republication: change !== "execution-failure", failAtExecution: change === "execution-failure",
+  });
+  try {
+    const first = await send();
+    expect(first).toMatchObject({ ok: false, receipt: { status: change === "execution-failure" ? "failed" : "rejected" } });
+    if (change === "operator-input") {
+      journal.append({ scope: { type: "session", id: conversation.id }, kind: "turn-started", payload: { turnId: "operator-turn" } });
+      journal.append({ scope: { type: "session", id: conversation.id }, kind: "turn-ended", payload: { turnId: "operator-turn" } });
+      state.eligible = false; // The controller's durable cut evidence records the operator prompt.
+    } else if (change === "operator-control") state.eligible = false;
+    else if (change === "control-at-actuation") state.cancelAtActuation = true;
+    else if (change === "writer") { session.writerClaim = "fixture:2"; publish(); }
+    else if (change === "generation") { session.sessionKey = { engine: "codex", sessionId: "replacement-generation" }; publish(); }
+    else if (change === "active") { session.turn = "running"; session.activeTurnId = "operator-turn"; publish(); }
+    else if (change === "missing-proof") state.statusUnavailable = true;
+    else if (change === "execution-failure") publish();
+    expect(await send()).toMatchObject({ ok: false, status: 409, admission: "refused" });
+    expect(state.commands).toBe(1);
+    expect(state.deliveries).toBe(change === "execution-failure" ? 1 : 0);
+    expect(journal.effectBatch(100, ["runtime.send"])).toHaveLength(0);
+  } finally { journal.close(); }
+});
+
+
+test("repeated confirmed idle republication refusals remain retryable without duplicating delivery", async () => {
+  const { journal, send, state } = idleContinuationFixture({ republication: true, republicationCount: 3 });
+  try {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      expect(await send()).toMatchObject({ ok: false, receipt: { status: "rejected", reason: "idle-continuation-cancelled" } });
+      expect(journal.effectBatch(100, ["runtime.send"])).toHaveLength(0);
+    }
+    expect(await send()).toMatchObject({ ok: true, outcome: "delivered" });
+    expect(await send()).toMatchObject({ ok: true, outcome: "delivered" });
+    expect(state.commands).toBe(4);
+    expect(state.deliveries).toBe(1);
+  } finally { journal.close(); }
+});
+
+test("the held drain preserves a replacement continuation's journal key after a lost acknowledgment", async () => {
+  const options = { republication: true, loseAcknowledgmentAt: 2, queued: true };
+  const { registry, conversation, journal, send, state, client } = idleContinuationFixture(options);
+  try {
+    expect(await send()).toMatchObject({ ok: false, receipt: { status: "rejected" } });
+    const uncertain = await send();
+    expect(uncertain).toMatchObject({ ok: false, transportUncertain: true });
+    const reservation = new AgentRegistry(registry.filename).pendingDeliveries(conversation.id)
+      .find(delivery => delivery.command.operationId === uncertain!.operationId)!;
+    options.queued = false;
+    expect(await deliverHeldStructuredMessage({
+      conversationId: conversation.id, path: artifactPath, deliveryId: reservation.command.operationId,
+      clientMessageId: reservation.clientMessageId!, text: reservation.text, command: reservation.command,
+      reconcileUncertain: true,
+    }, { enabled: () => true, registry: () => new AgentRegistry(registry.filename), client: () => client, kick: () => {} })).toBe("delivered");
+    expect(state.commands).toBe(3);
+    expect(state.deliveries).toBe(1);
+    expect(journal.operationResult(uncertain!.operationId!)!.receipt.status).toBe("delivered");
+  } finally { journal.close(); }
+});
+
+test("a proved pre-execution continuation refusal retries after idle republication", async () => {
+  const options = { queued: true };
+  const { registry, conversation, journal, send, state, publish } = idleContinuationFixture(options);
+  try {
+    const first = await send();
+    expect(first).toMatchObject({ ok: true, outcome: "queued" });
+    publish();
+    const refused = journal.transitionOperation(first!.operationId!, "delivering");
+    expect(refused.receipt).toMatchObject({ status: "failed", reason: "idle-continuation-pre-execution-refused" });
+    registry.recordDeliveryOutcomeForOperation(conversation.id, first!.operationId!, "failed", refused.receipt.reason!);
+    expect(state.deliveries).toBe(0);
+    options.queued = false;
+    const retry = await send();
+    expect(retry).toMatchObject({ ok: true, outcome: "delivered" });
+    expect(retry!.operationId).not.toBe(first!.operationId);
+    expect(await send()).toMatchObject({ ok: true, outcome: "delivered", operationId: retry!.operationId });
+    expect(state.deliveries).toBe(1);
+    expect(journal.effectBatch(100, ["runtime.send"])).toHaveLength(0);
+  } finally { journal.close(); }
+});
+
+test.each(["unchanged", "writer", "generation", "active", "missing-proof", "execution-began", "queued-uncertain"] as const)("pre-execution continuation proof preserves %s ownership", async change => {
+  const { registry, conversation, journal, session, publish, send, state, client } = idleContinuationFixture({ queued: true });
+  try {
+    const first = await send();
+    if (change === "execution-began") expect(journal.transitionOperation(first!.operationId!, "delivering").receipt.status).toBe("delivering");
+    publish();
+    if (change !== "queued-uncertain") {
+      const refused = change === "execution-began" ? journal.transitionOperation(first!.operationId!, "failed", { reason: "idle-continuation-cancelled" })
+        : journal.transitionOperation(first!.operationId!, "delivering");
+      expect(refused.receipt).toMatchObject({ status: "failed", reason: change === "execution-began" ? "idle-continuation-cancelled" : "idle-continuation-pre-execution-refused" });
+      registry.recordDeliveryOutcomeForOperation(conversation.id, first!.operationId!, "failed", refused.receipt.reason!);
+    }
+    if (change === "writer") { session.writerClaim = "fixture:2"; publish(); }
+    if (change === "generation") { session.sessionKey = { engine: "codex", sessionId: "replacement-generation" }; publish(); }
+    if (change === "active") { session.turn = "running"; session.activeTurnId = "operator-turn"; publish(); }
+    if (change === "missing-proof") state.statusUnavailable = true;
+    expect(await idleContinuationDeliveryRetryable(conversation.id, "provider-stable-cut", { registry: () => new AgentRegistry(registry.filename), client: () => client }))
+      .toBe(change === "unchanged");
+    state.eligible = false;
+    expect(await send()).toMatchObject({ ok: false, admission: "refused" });
+    expect(state.deliveries).toBe(0);
+  } finally { journal.close(); }
 });
