@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
 
+import { compactSensitiveText } from "../src/lib/privacy/staticDetectors";
+
 function argumentValue(arguments_: string[], flag: string): string | undefined {
   const index = arguments_.indexOf(flag);
   if (index === -1) return undefined;
@@ -8,9 +10,7 @@ function argumentValue(arguments_: string[], flag: string): string | undefined {
   return value && !value.startsWith("--") ? value : undefined;
 }
 
-export function compactSensitiveText(value: string): string {
-  return value.normalize("NFKC").toLocaleLowerCase("en-US").replaceAll(/[^\p{L}\p{N}]/gu, "");
-}
+export { compactSensitiveText };
 
 export type KnownValue = { value: string; exactOnly?: boolean };
 export type KnownValueFingerprint = { length: number; sha256: string; exactOnly?: boolean };

@@ -204,14 +204,29 @@ describe("shipped role defaults rendered evidence", () => {
           const rows: Record<string, unknown>[] = [];
           expect(await page.locator("[data-mapping-nudge]").count()).toBe(0);
           expect(await page.locator("[data-mapping-reset]").count()).toBe(0);
-          expect(await page.locator("[data-mapping-row]").count()).toBe(17);
-          for (const id of ["reviewer", "architect", "prod-auditor", "merger"]) {
+          expect(await page.locator("[data-mapping-row]").count()).toBe(18);
+          for (const [id, expectedEffort, expectedCost] of [
+            ["reviewer", "xhigh", "very-heavy"],
+            ["architect", "xhigh", "very-heavy"],
+            ["prod-auditor", "xhigh", "very-heavy"],
+            ["merger", "high", "heavy"],
+            ["issue-reporter", "high", "moderate"],
+          ]) {
             const row = page.locator(`[data-mapping-row="${id}"]`);
             await row.scrollIntoViewIfNeeded();
             const effort = await row.locator("select").nth(1).inputValue();
             const cost = await row.locator("[data-cost-class]").getAttribute("data-cost-class");
-            expect(effort).toBe(id === "merger" ? "high" : "xhigh");
-            expect(cost).toBe(id === "merger" ? "heavy" : "very-heavy");
+            expect(effort).toBe(expectedEffort);
+            expect(cost).toBe(expectedCost);
+            if (id === "issue-reporter") {
+              expect(await row.innerText()).toContain(translate(locale, "onboarding.agents.role.issueReporter"));
+              expect(await row.locator("select").first().inputValue()).toBe("claude-sonnet-5-5");
+            }
+            const controlsFit = await row.locator("select").evaluateAll((controls) => controls.every((control) => {
+              const rect = control.getBoundingClientRect();
+              return rect.width > 0 && rect.left >= 0 && rect.right <= innerWidth;
+            }));
+            expect(controlsFit).toBe(true);
             expect(await row.locator("[data-mapping-nudge]").count()).toBe(0);
             await page.screenshot({ path: path.join(out, `${locale}-${width}-${id}.png`) });
             rows.push({ id, effort, cost, nudge: false });
@@ -5558,6 +5573,8 @@ describe("#1796 per-model limits", () => {
         try {
           let selector: string;
           if (name === "desktop") {
+            /* The sidebar shows one line per account; every tier's window is behind "All windows". */
+            await page.click("[data-rail-footer-detail]");
             await page.waitForFunction(() => document.querySelector("[data-rail-footer]")?.textContent?.includes("Fable · Week"));
             const footerText = await page.locator("[data-rail-footer]").innerText();
             expect(footerText).toContain("Opus · Week");
@@ -5615,6 +5632,8 @@ describe("#1839 a tier the provider files under a codename", () => {
         try {
           let selector: string;
           if (name === "desktop") {
+            /* The sidebar shows one line per account; every tier's window is behind "All windows". */
+            await page.click("[data-rail-footer-detail]");
             await page.waitForFunction(() => document.querySelector("[data-rail-footer]")?.textContent?.includes("Fable · Week"));
             const footerText = await page.locator("[data-rail-footer]").innerText();
             expect(footerText).toContain("Cedar Ember · Week");
@@ -7357,6 +7376,217 @@ describe("the orchestrator seat's header keeps every element readable and clicka
       server.stop();
     }
     fs.writeFileSync(path.join(EVIDENCE, "geometry.json"), `${JSON.stringify({ widths: WIDTHS, readablePx: READABLE_PX, frames, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 600_000);
+});
+
+describe("the rotation banner says each cause once, in the interface language", () => {
+  /*
+   * The seat's banner over `?scenario=seat-head&seat=gone`: the status read
+   * recommends rotation for two causes, a context past the threshold and an
+   * agent that is not running. The banner used to print the second one twice,
+   * once in its own words and once as the sentence the server writes for an
+   * agent, in English and naming an agent tool.
+   *
+   *   CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "rotation banner says"
+   *
+   * At 390 and 1440 px in en and uk: the banner's lines are exactly the two
+   * causes worded for the operator, none repeats, nothing of the agent's
+   * sentence is drawn, and no line is cut or pushed outside the banner. At
+   * 390 px the phone shell replaces the board, so the lines are read from the
+   * seat's sheet, under its context meter.
+   * `SEAT_ROTATION_PNG_DIR` collects frames (never committed); the readings go
+   * to `evidence/seat-rotation-banner/readings.json`.
+   */
+  const OUT = path.resolve(".artifacts/seat-rotation-banner");
+  const EVIDENCE = path.resolve("evidence/seat-rotation-banner");
+
+  browserTest("at 390 and 1440 px in en and uk", async () => {
+    const pngDir = process.env.SEAT_ROTATION_PNG_DIR ?? null;
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    if (pngDir) fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser = await chromium.launch(LAUNCH);
+    const frames: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const width of [390, 1440] as const) {
+        for (const lang of ["en", "uk"] as const) {
+          const phone = width < 640;
+          const label = `${width}-${lang}`;
+          const number = (value: number) => value.toLocaleString(lang === "uk" ? "uk-UA" : "en-US");
+          const expected = [
+            translate(lang, "orchPanel.rotationContextTokens", { tokens: number(520_825), threshold: number(500_000) }),
+            translate(lang, "orchPanel.rotationDead"),
+          ];
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&seat=gone`, phone ? { width, height: 844 } : { width, height: 900 }, "light", lang, "no-preference", phone);
+          try {
+            const banner = phone ? "[data-mobile2-sheet='seat'] [data-orchestrator-rotation]" : "[data-kanban-seat] [data-orchestrator-rotation]";
+            if (phone) {
+              await page.waitForSelector("[data-mobile2-seat-card]", { timeout: 20_000 });
+              await page.locator("[data-mobile2-open=seat]").first().click();
+            }
+            await page.waitForSelector(`${banner} [data-orchestrator-rotation-cause]`, { timeout: 20_000 });
+            await page.waitForTimeout(600);
+            const reading = await page.evaluate((selector) => {
+              const root = document.querySelector<HTMLElement>(selector)!;
+              const box = root.getBoundingClientRect();
+              const lines = [...root.querySelectorAll<HTMLElement>("[data-orchestrator-rotation-cause]")].map((line) => {
+                const rect = line.getBoundingClientRect();
+                return {
+                  text: line.textContent ?? "",
+                  inside: rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5 && rect.top >= box.top - 0.5 && rect.bottom <= box.bottom + 0.5,
+                  cut: line.scrollWidth > line.clientWidth + 1,
+                  height: Math.round(rect.height),
+                };
+              });
+              return {
+                level: root.getAttribute("data-orchestrator-rotation"),
+                title: root.querySelector("p")?.textContent ?? "",
+                text: root.innerText,
+                lines,
+                width: Math.round(box.width),
+                height: Math.round(box.height),
+                insideViewport: box.left >= 0 && box.right <= window.innerWidth + 0.5,
+                pageOverflow: document.documentElement.scrollWidth > window.innerWidth,
+              };
+            }, banner);
+            frames[label] = reading;
+            if (pngDir) await page.locator(banner).first().screenshot({ path: path.join(pngDir, `rotation-banner-${label}.png`) });
+            const said = reading.lines.map((line) => line.text);
+            if (JSON.stringify(said) !== JSON.stringify(expected)) failures.push(`${label}: the banner reads ${JSON.stringify(said)}; expected ${JSON.stringify(expected)}`);
+            if (new Set(said).size !== said.length) failures.push(`${label}: a cause is said twice`);
+            /* The phone's sheet states the causes under its context meter, with no title of its own. */
+            if (!phone && reading.title !== translate(lang, "orchPanel.rotationStrong")) failures.push(`${label}: the title reads "${reading.title}"`);
+            if (/send_message|designated conversation|host is gone|rotation threshold/i.test(reading.text)) failures.push(`${label}: the agent's sentence is drawn: ${reading.text}`);
+            for (const line of reading.lines) {
+              if (!line.inside) failures.push(`${label}: «${line.text}» is drawn outside the banner`);
+              if (line.cut) failures.push(`${label}: «${line.text}» is cut`);
+            }
+            if (!reading.insideViewport) failures.push(`${label}: the banner leaves the viewport`);
+            if (reading.pageOverflow) failures.push(`${label}: the page scrolls sideways`);
+            if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          } catch (error) {
+            failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "readings.json"), `${JSON.stringify({ frames, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 300_000);
+});
+
+describe("the seat says in one line what Telegram needs from the operator", () => {
+  /*
+   * The seat over `?scenario=seat-head&seat=gone&telegram=<action>`: its agent
+   * is not running, it holds the Telegram tool, and Telegram waits on the
+   * operator. This is the pane that used to answer a message with "Not
+   * delivered" and an English sentence naming an internal connector. The
+   * conversation now starts without the tool, and the seat says once what the
+   * operator has to do.
+   *
+   *   CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "what Telegram needs"
+   *
+   * For each action, at 390 and 1440 px in en and uk: the line is exactly the
+   * one worded for that action, it is drawn once, whole and inside the seat,
+   * and it names no internal tool. At 390 px the phone shell replaces the
+   * board, so the line is read from the seat's sheet.
+   * `SEAT_TELEGRAM_PNG_DIR` collects frames (never committed); the readings go
+   * to `evidence/seat-telegram-line/readings.json`.
+   */
+  const OUT = path.resolve(".artifacts/seat-telegram-line");
+  const EVIDENCE = path.resolve("evidence/seat-telegram-line");
+
+  browserTest("for each action at 390 and 1440 px in en and uk", async () => {
+    const pngDir = process.env.SEAT_TELEGRAM_PNG_DIR ?? null;
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    if (pngDir) fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser = await chromium.launch(LAUNCH);
+    const frames: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const action of ["sign_in", "check", "restart"] as const) {
+        for (const width of [390, 1440] as const) {
+          for (const lang of ["en", "uk"] as const) {
+            const phone = width < 640;
+            const label = `${action}-${width}-${lang}`;
+            const expected = translate(lang, action === "sign_in" ? "orchPanel.telegramSignIn" : action === "check" ? "orchPanel.telegramCheck" : "orchPanel.telegramRestart");
+            const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&seat=gone&telegram=${action}`, phone ? { width, height: 844 } : { width, height: 900 }, "light", lang, "no-preference", phone);
+            try {
+              const seat = phone ? "[data-mobile2-sheet='seat']" : "[data-kanban-seat]";
+              if (phone) {
+                await page.waitForSelector("[data-mobile2-seat-card]", { timeout: 20_000 });
+                await page.locator("[data-mobile2-open=seat]").first().click();
+              }
+              await page.waitForSelector(`${seat} [data-orchestrator-telegram]`, { timeout: 20_000 });
+              await page.waitForTimeout(600);
+              const reading = await page.evaluate((selector) => {
+                const root = document.querySelector<HTMLElement>(selector)!;
+                const box = root.getBoundingClientRect();
+                const lines = [...root.querySelectorAll<HTMLElement>("[data-orchestrator-telegram]")].map((line) => {
+                  const rect = line.getBoundingClientRect();
+                  return {
+                    action: line.getAttribute("data-orchestrator-telegram"),
+                    text: line.textContent ?? "",
+                    inside: rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5,
+                    cut: line.scrollWidth > line.clientWidth + 1 || line.scrollHeight > line.clientHeight + 1,
+                    visible: rect.width > 0 && rect.height > 0 && rect.left >= 0 && rect.right <= window.innerWidth + 0.5,
+                    width: Math.round(rect.width),
+                    height: Math.round(rect.height),
+                  };
+                });
+                return {
+                  lines,
+                  rotationCauses: [...root.querySelectorAll<HTMLElement>("[data-orchestrator-rotation-cause]")].map((line) => line.textContent ?? ""),
+                  buttons: root.querySelectorAll("[data-orchestrator-telegram] button, [data-orchestrator-telegram] a").length,
+                  text: root.innerText,
+                  pageOverflow: document.documentElement.scrollWidth > window.innerWidth,
+                };
+              }, seat);
+              frames[label] = reading;
+              if (pngDir) await page.locator(seat).first().screenshot({ path: path.join(pngDir, `seat-telegram-${label}.png`) });
+              if (reading.lines.length !== 1) failures.push(`${label}: ${reading.lines.length} Telegram lines are drawn`);
+              const line = reading.lines[0];
+              if (line) {
+                if (line.text !== expected) failures.push(`${label}: the line reads "${line.text}"; expected "${expected}"`);
+                if (line.action !== action) failures.push(`${label}: the line is marked ${line.action}`);
+                if (!line.inside || !line.visible) failures.push(`${label}: the line is drawn outside the seat`);
+                if (line.cut) failures.push(`${label}: the line is cut`);
+              }
+              if (reading.buttons !== 0) failures.push(`${label}: the line carries a control`);
+              if (reading.text.split(expected).length !== 2) failures.push(`${label}: the sentence is drawn ${reading.text.split(expected).length - 1} times`);
+              /* The seat's conversation below carries its own tool rows; the
+                 old refusal is what must be gone from the whole seat. */
+              if (/connector is not connected|at launch/i.test(reading.text)) failures.push(`${label}: the old refusal is drawn`);
+              if (line && /MCP|connector|grant|send_message/i.test(line.text)) failures.push(`${label}: the line names an internal part: ${line.text}`);
+              /* The agent that is not running is still said, once, by the rotation line. */
+              if (!reading.rotationCauses.includes(translate(lang, "orchPanel.rotationDead"))) failures.push(`${label}: the seat no longer says its agent is not running`);
+              if (reading.pageOverflow) failures.push(`${label}: the page scrolls sideways`);
+              if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+            } catch (error) {
+              failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+            } finally {
+              await context.close();
+            }
+          }
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "readings.json"), `${JSON.stringify({ frames, failures }, null, 2)}\n`);
     expect(failures).toEqual([]);
   }, 600_000);
 });
@@ -9663,7 +9893,8 @@ describe("#2179 #2185 agent replies wider than the operator's bubble, a seat dra
     const aside = document.querySelector("aside")!;
     const asideBox = w.__box(aside)!;
     const header = aside.querySelector("header");
-    const input = aside.querySelector("input");
+    /* The filter's frame is the label around the field and its glyph. */
+    const input = aside.querySelector("input")?.closest("label") ?? aside.querySelector("input");
     const folder = aside.querySelector('[data-testid="rail-create-project"]');
     const first = aside.querySelector("nav button");
     const menu = aside.querySelector("[data-rail-menu]");
@@ -18331,4 +18562,618 @@ describe("the board holds still under a scroll", () => {
     fs.writeFileSync("evidence/board-scroll-steady/widening.json", `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", viewport: { width: 1440, height: 900 }, wheel: WHEEL, ...reading, failures }, null, 2)}\n`);
     if (failures.length) throw new Error(failures.join("\n"));
   }, 120_000);
+});
+
+describe("the left sidebar: one tidy panel with a compact system block", () => {
+  /*
+   * Rendered evidence for the built sidebar (docs/design/sidebar-redesign.md, variant 1):
+   * the real Viewer over `issue1695Evidence.fixture.tsx?rail=few|many` at 1440x900 and
+   * 1000x700, light and dark, en and uk, in the states few / selected / folded / many /
+   * empty / loading / unreachable / archive, then the states "every function is kept"
+   * rests on, once each.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 SIDEBAR_FRAMES_DIR=<a directory outside the checkout> \
+   *     SIDEBAR_TODAY_DIR=<frames of the sidebar this one replaced> \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "one tidy panel"
+   *
+   * The sidebar this one replaced is gone from the product, so its frames come from
+   * SIDEBAR_TODAY_DIR: the `v0-<state>-<size>-<scheme>-<lang>.png` files the design
+   * lane's block wrote at the commit before the build. With them the run lays every
+   * state out as "today | built"; without them the sheets hold the built side alone.
+   * Frames and sheets go to SIDEBAR_FRAMES_DIR and are never committed; the readings
+   * each frame is judged by go to `evidence/sidebar-redesign/built.json`, beside the
+   * design lane's `measurements.json`, whose readings of the replaced sidebar are the
+   * numbers the built one is compared with. SIDEBAR_FRAMES_ONLY narrows a run to the
+   * frame names a pattern matches and then writes neither sheets nor readings;
+   * SIDEBAR_FRAMES_PARALLEL sets how many frames are shot at once (4).
+   */
+  const OUT = path.resolve(process.env.SIDEBAR_FRAMES_DIR?.trim() || ".artifacts/sidebar-built");
+  const TODAY = process.env.SIDEBAR_TODAY_DIR?.trim() ? path.resolve(process.env.SIDEBAR_TODAY_DIR.trim()) : null;
+  const ONLY = process.env.SIDEBAR_FRAMES_ONLY?.trim() ? new RegExp(process.env.SIDEBAR_FRAMES_ONLY.trim()) : null;
+  /* How many frames are shot at once. */
+  const PARALLEL = Math.max(1, Number(process.env.SIDEBAR_FRAMES_PARALLEL) || 4);
+  /* The design lane printed a variant's number on a strip above the frame; its frames of the replaced sidebar still carry it. */
+  const TODAY_STRIP = 32;
+  const SIZES = [{ width: 1440, height: 900 }, { width: 1000, height: 700 }] as const;
+  const CROP = 320;
+  /* Where every name and label of the sidebar starts. */
+  const EDGE = 19;
+  const RAIL_WIDTH = 248;
+
+  /* `everywhere` states are shot at both sizes, both schemes and both languages; the rest at 1440x900 light, once in `lang` or once per language. */
+  interface State {
+    name: string; query: string; folded?: boolean; detail?: boolean; click?: string; first?: boolean; bare?: boolean; everywhere: boolean; lang?: "en" | "uk" | "both";
+    /** The frame of the replaced sidebar this state stands beside, when its name differs. */
+    today?: string;
+    /** What the state is about: a selector that has to match something drawn inside the window. A click that opens no panel names what it opens here. */
+    shows?: string;
+    /** A row's crown control, reached by the pointer or by the keyboard. */
+    crown?: "hover" | "focus";
+  }
+  const langsOf = (state: State): readonly ("en" | "uk")[] => state.lang === "both" ? ["uk", "en"] : [state.lang ?? "en"];
+  const ACCOUNT = '[data-engine-limits="claude"] button[aria-haspopup="dialog"]';
+  const STATES: readonly State[] = [
+    { name: "few", today: "overview", query: "rail=few&railview=overview", everywhere: true },
+    { name: "selected", query: "rail=few", everywhere: true },
+    { name: "folded", query: "rail=few", folded: true, everywhere: true },
+    { name: "many", query: "rail=many", everywhere: true },
+    /* The list's three states before it has a project, each read at rest. */
+    { name: "empty", query: "rail=few&railstate=empty&railview=overview", everywhere: true, shows: '[data-testid="rail-create-project"] span' },
+    { name: "loading", query: "rail=few&railstate=loading", bare: true, everywhere: true, shows: 'nav [data-skeleton="rows-rail"]' },
+    { name: "unreachable", query: "rail=few&railstate=unreachable", bare: true, everywhere: true, shows: "nav [data-catalog-error] button" },
+    /* Two archived projects under the short list, unfolded by its own control. */
+    { name: "archive", query: "rail=few&railarchive=1", click: "nav [data-rail-archive]", everywhere: true, shows: "nav [data-rail-archived] [data-rail-project]" },
+    /* The states "every function is kept" rests on. */
+    { name: "menu", query: "rail=few", click: "[data-rail-menu]", everywhere: false, lang: "both" },
+    { name: "create", query: "rail=few", click: '[data-testid="rail-create-project"]', everywhere: false, lang: "both", shows: "[data-create-project-form]" },
+    { name: "copilot", query: "rail=few&railstate=copilot", everywhere: false, lang: "both" },
+    { name: "copilot-accounts", query: "rail=few&railstate=copilot", click: '[data-engine-limits="copilot"] button', first: true, everywhere: false, lang: "uk" },
+    { name: "stale", query: "rail=few&railstate=stale", everywhere: false, lang: "both" },
+    { name: "detail", query: "rail=few", detail: true, everywhere: false, lang: "both", shows: "[data-rail-footer] [data-meter-window]" },
+    { name: "detail-copilot", query: "rail=few&railstate=copilot", detail: true, everywhere: false, lang: "uk", shows: '[data-engine-limits="copilot"] [data-meter-window]' },
+    { name: "detail-stale", query: "rail=few&railstate=stale", detail: true, everywhere: false, lang: "uk" },
+    { name: "detail-toggle", query: "rail=few", click: "[data-rail-footer-detail]", everywhere: false, lang: "uk", shows: "[data-rail-footer] [data-meter-window]" },
+    { name: "panel-accounts", query: "rail=few", click: ACCOUNT, first: true, everywhere: false, lang: "uk" },
+    { name: "panel-burndown", query: "rail=few", click: ACCOUNT, everywhere: false, lang: "uk" },
+    { name: "panel-cleanup", query: "rail=few", click: "[data-resources-footer] > button", everywhere: false, lang: "uk" },
+    { name: "panel-telegram", query: "rail=few", click: "[data-rail-footer] button[aria-haspopup='dialog']", everywhere: false, lang: "uk" },
+    { name: "crown-hover", query: "rail=few", crown: "hover", everywhere: false, lang: "uk" },
+    { name: "crown-focus", query: "rail=few", crown: "focus", everywhere: false, lang: "both" },
+  ];
+  /* The fixture's machine: what a memory line's amount is a share of. */
+  const TOTAL_GIB: Record<string, number> = { RAM: 32, Swap: 8 };
+
+  interface Reading {
+    frame: string; state: string; width: number; height: number; scheme: Scheme; lang: "en" | "uk";
+    rail: { width: number; listHeight: number; footerHeight: number; rows: number; rowsInView: number; clippedNames: number; overflowX: boolean };
+    /** The left edge, inside the sidebar, of every name and label, of each mark column, and of every line of the system block: one value each when they line up. */
+    edges: { text: number[]; needs: number[]; live: number[]; system: number[] };
+    /** Each labelled section: its word, the count beside it, and the rows under it. */
+    sections: { label: string; count: number | null; rows: number | null }[];
+    /** Labels, readings and control words that are cut or leave the sidebar's box. */
+    clipped: string[];
+    /** A failed read's reason on an engine line: cut there by design, so the tooltip has to carry all of it. */
+    reasons: { text: string; cut: boolean; inTooltip: boolean }[];
+    /** The small lines behind "All windows": the plan, the resets, the age of the memory reading, a failed read's reason. */
+    notes: string[];
+    /** The account named on each engine line, and whether the line cuts it. */
+    accounts: { name: string; cut: boolean }[];
+    /** A footer line: the share its bar draws, and the reading beside the bar. */
+    meters: { label: string; value: string; bar: number | null }[];
+    /** The archive: where its label starts, whether it is unfolded, and the archived rows inside the list's box. */
+    archive: { labelLeft: number | null; open: boolean; rows: number };
+    /** How many elements the state is about are drawn inside the window; null when the state names none. */
+    shows: number | null;
+    /** A panel opened in this frame, and whether all of it is inside the window. */
+    panel: { width: number; height: number; inside: boolean } | null;
+    /** A row whose crown control is reached: the control and the row's age, and whether one is drawn over the other. */
+    crown: { reached: boolean; crownOpacity: number; ageOpacity: number; ageText: string; overlapsMarks: boolean; elsewhere: { crowns: number; ages: number } } | null;
+    main: { width: number };
+    controls: { inRail: number; smallest: { width: number; height: number } | null };
+    /** What the design lane measured of the replaced sidebar in the same state, size, scheme and language. */
+    today: { listHeight: number; footerHeight: number; rowsInView: number; clippedNames: number; mainWidth: number } | null;
+    pageErrors: string[];
+  }
+
+  const readRail = (page: Page, shows: string | null) => page.evaluate((shows) => {
+    const rail = document.querySelector<HTMLElement>("aside[data-project-rail]")!;
+    const railBox = rail.getBoundingClientRect();
+    const list = rail.querySelector<HTMLElement>("nav");
+    const footer = rail.querySelector<HTMLElement>("[data-rail-footer]");
+    const listBox = list?.getBoundingClientRect() ?? null;
+    const rows = list ? [...list.querySelectorAll<HTMLElement>("[data-flip-key]:not([data-flip-key^='__'])")] : [];
+    const names = list ? [...list.querySelectorAll<HTMLElement>("[data-rail-name]")] : [];
+    const controls = [...rail.querySelectorAll<HTMLElement>("button, a, input")].map((element) => element.getBoundingClientRect()).filter((box) => box.width > 0 && box.height > 0);
+    const smallest = controls.reduce<DOMRect | null>((least, box) => (!least || box.width * box.height < least.width * least.height ? box : least), null);
+    const lefts = (selector: string) => [...new Set([...rail.querySelectorAll<HTMLElement>(selector)].map((element) => element.getBoundingClientRect()).filter((box) => box.width > 0).map((box) => Math.round((box.left - railBox.left) * 2) / 2))].sort((a, b) => a - b);
+    const dialog = [...document.querySelectorAll<HTMLElement>('[role="dialog"], [data-rail-menu-panel], [data-resources-panel]')].map((element) => element.getBoundingClientRect()).find((box) => box.width > 0) ?? null;
+    const SYSTEM = "[data-rail-footer] [data-rail-label], [data-rail-footer] [data-meter-label], [data-rail-footer] [data-meter-name], [data-rail-footer] [data-meter-note]";
+    /* A word is cut when its box hides part of it, or when it runs past the sidebar's right edge. */
+    const WORDS = "[data-rail-label], [data-rail-count], [data-rail-brand], [data-rail-footer-detail], [data-testid='rail-create-project'] span, [data-meter-label], [data-meter-value], [data-meter-note], [data-rail-slot='age'], [data-rail-needs], [data-rail-live]";
+    const sectionRows = (section: HTMLElement) => {
+      /* The pinned rows run from their label to the label of the projects; the projects run to the end of the same list. */
+      const projects = rail.querySelector('[data-flip-key="__projects-label__"]');
+      const all = [...rail.querySelectorAll<HTMLElement>("nav [data-flip-key]:not([data-flip-key^='__'])")].filter((row) => !row.closest("[data-rail-archived]"));
+      if (!projects) return null;
+      const before = all.filter((row) => Boolean(row.compareDocumentPosition(projects) & Node.DOCUMENT_POSITION_FOLLOWING)).length;
+      return projects.contains(section) ? all.length - before : before;
+    };
+    return {
+      edges: { text: lefts(`nav [data-rail-name], nav [data-rail-label], ${SYSTEM}`), needs: lefts('[data-rail-slot="needs"] [data-rail-needs]'), live: lefts('[data-rail-slot="live"] [data-rail-live]'), system: lefts(SYSTEM) },
+      sections: [
+        ...[...rail.querySelectorAll<HTMLElement>("[data-rail-section]")].map((section) => ({ label: section.querySelector("[data-rail-label]")?.textContent ?? "", count: section.querySelector("[data-rail-count]") ? Number(section.querySelector("[data-rail-count]")!.textContent) : null, rows: sectionRows(section) })),
+        ...[...rail.querySelectorAll<HTMLElement>("[data-rail-archive]")].map((fold) => ({ label: fold.querySelector("[data-rail-label]")?.textContent ?? "", count: fold.querySelector("[data-rail-count]") ? Number(fold.querySelector("[data-rail-count]")!.textContent) : null, rows: fold.getAttribute("aria-expanded") === "true" ? rail.querySelectorAll("[data-rail-archived] [data-rail-project]").length : null })),
+      ],
+      clipped: [...rail.querySelectorAll<HTMLElement>(WORDS)].filter((word) => {
+        const box = word.getBoundingClientRect();
+        if (box.width === 0 || !(word.textContent ?? "").trim()) return false;
+        return word.scrollWidth > word.clientWidth + 1 && word.clientWidth > 0 || box.right > railBox.right + 0.5 || box.left < railBox.left - 0.5;
+      }).map((word) => (word.textContent ?? "").trim().slice(0, 40)),
+      notes: [...rail.querySelectorAll<HTMLElement>("[data-rail-footer] [data-meter-note]")].map((note) => (note.textContent ?? "").trim()),
+      reasons: [...rail.querySelectorAll<HTMLElement>("[data-limits-reason]")].map((reason) => ({ text: (reason.textContent ?? "").trim(), cut: reason.scrollWidth > reason.clientWidth + 1, inTooltip: (reason.title || reason.closest("[data-engine-limits]")?.querySelector("button")?.title || "").includes((reason.textContent ?? "").trim()) })),
+      accounts: [...rail.querySelectorAll<HTMLElement>("[data-meter-line] [data-meter-name]")].map((name) => ({ name: name.textContent ?? "", cut: name.scrollWidth > name.clientWidth + 1 })),
+      meters: [...rail.querySelectorAll<HTMLElement>("[data-meter-line]")].map((line) => {
+        const track = line.querySelector<HTMLElement>("[data-meter-bar]");
+        const fill = track?.firstElementChild as HTMLElement | null;
+        return {
+          label: (line.querySelector("[data-meter-value]") ? line.textContent!.replace(line.querySelector("[data-meter-value]")!.textContent!, "") : line.textContent!).trim(),
+          value: line.querySelector("[data-meter-value]")?.textContent?.trim() ?? "",
+          bar: track && fill ? Math.round((1000 * fill.getBoundingClientRect().width) / track.getBoundingClientRect().width) / 10 : null,
+        };
+      }),
+      archive: (() => {
+        const fold = rail.querySelector<HTMLElement>("[data-rail-archive]");
+        const label = fold?.querySelector<HTMLElement>("[data-rail-label]")?.getBoundingClientRect() ?? null;
+        const within = fold?.closest("nav")?.getBoundingClientRect().bottom ?? innerHeight;
+        return {
+          labelLeft: label ? Math.round((label.left - railBox.left) * 2) / 2 : null,
+          open: fold?.getAttribute("aria-expanded") === "true",
+          rows: [...rail.querySelectorAll<HTMLElement>("[data-rail-archived] [data-rail-project]")].map((row) => row.getBoundingClientRect()).filter((box) => box.height > 0 && box.bottom <= within + 1).length,
+        };
+      })(),
+      shows: shows === null ? null : [...rail.querySelectorAll<HTMLElement>(shows)].map((element) => element.getBoundingClientRect()).filter((box) => box.width > 0 && box.height > 0 && box.top >= 0 && box.bottom <= innerHeight).length,
+      panel: dialog ? { width: Math.round(dialog.width), height: Math.round(dialog.height), inside: dialog.left >= 0 && dialog.top >= 0 && dialog.right <= innerWidth && dialog.bottom <= innerHeight } : null,
+      crown: (() => {
+        const opacity = (element: Element | null) => (element ? Number(getComputedStyle(element).opacity) : -1);
+        const reached = rail.querySelector<HTMLElement>("[data-rail-crown]:focus-visible") ?? rail.querySelector<HTMLElement>("[data-flip-key]:hover [data-rail-crown]");
+        if (!reached) return null;
+        const row = reached.closest<HTMLElement>("[data-flip-key]")!;
+        const age = row.querySelector<HTMLElement>('[data-rail-slot="age"]');
+        const box = reached.getBoundingClientRect();
+        const meets = (other: DOMRect) => other.width > 0 && other.left < box.right && other.right > box.left && other.top < box.bottom && other.bottom > box.top;
+        const others = [...rail.querySelectorAll<HTMLElement>("nav [data-flip-key]")].filter((entry) => entry !== row);
+        return {
+          reached: true,
+          crownOpacity: opacity(reached),
+          ageOpacity: opacity(age),
+          ageText: age?.textContent ?? "",
+          overlapsMarks: [...row.querySelectorAll<HTMLElement>("[data-rail-needs], [data-rail-live]")].some((mark) => meets(mark.getBoundingClientRect())),
+          /* Every other row keeps its age and shows no control. */
+          elsewhere: { crowns: others.filter((entry) => opacity(entry.querySelector("[data-rail-crown]")) > 0).length, ages: others.filter((entry) => entry.querySelector('[data-rail-slot="age"]') && opacity(entry.querySelector('[data-rail-slot="age"]')) < 1).length },
+        };
+      })(),
+      rail: {
+        width: Math.round(railBox.width),
+        listHeight: Math.round(listBox?.height ?? 0),
+        footerHeight: Math.round(footer?.getBoundingClientRect().height ?? 0),
+        rows: rows.length,
+        rowsInView: listBox ? rows.filter((row) => { const box = row.getBoundingClientRect(); return box.top >= listBox.top - 1 && box.bottom <= listBox.bottom + 1; }).length : 0,
+        clippedNames: names.filter((name) => name.scrollWidth > name.clientWidth + 1 || name.scrollHeight > name.clientHeight + 1).length,
+        overflowX: rail.scrollWidth > rail.clientWidth + 1,
+      },
+      main: { width: Math.round(document.querySelector<HTMLElement>("main")?.getBoundingClientRect().width ?? 0) },
+      controls: { inRail: controls.length, smallest: smallest ? { width: Math.round(smallest.width), height: Math.round(smallest.height) } : null },
+    };
+  }, shows);
+
+  const caption = (text: string, width: number, height = 26, size = 13) => Buffer.from(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="#262a36"/>`
+    + `<text x="8" y="${Math.round(height * 0.68)}" font-family="Inter, Arial, sans-serif" font-size="${size}" font-weight="600" fill="#fbebdd">${text.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</text></svg>`,
+  );
+
+  /** Lays pictures out in a grid, each under a caption, and writes one sheet. */
+  async function sheet(file: string, columns: number, cells: { label: string; picture: Buffer | null; width: number; height: number }[]) {
+    const GAP = 10;
+    const CAP = 26;
+    const rows: (typeof cells)[] = [];
+    for (let index = 0; index < cells.length; index += columns) rows.push(cells.slice(index, index + columns));
+    const columnWidths = Array.from({ length: columns }, (_, column) => Math.max(0, ...rows.map((row) => row[column]?.width ?? 0)));
+    const rowHeights = rows.map((row) => Math.max(...row.map((cell) => cell.height)) + CAP);
+    const width = columnWidths.reduce((sum, value) => sum + value + GAP, GAP);
+    const height = rowHeights.reduce((sum, value) => sum + value + GAP, GAP);
+    const composite: Parameters<ReturnType<typeof sharp>["composite"]>[0] = [];
+    let top = GAP;
+    rows.forEach((row, rowIndex) => {
+      let left = GAP;
+      row.forEach((cell, column) => {
+        composite.push({ input: caption(cell.label, columnWidths[column]!), left, top });
+        if (cell.picture) composite.push({ input: cell.picture, left, top: top + CAP });
+        left += columnWidths[column]! + GAP;
+      });
+      top += rowHeights[rowIndex]! + GAP;
+    });
+    await sharp({ create: { width, height, channels: 3, background: "#8d8d98" } }).composite(composite).png().toFile(file);
+  }
+
+  browserTest("the built sidebar beside the one it replaced, in the same states, at two sizes, both schemes and both languages", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const server = await serveEvidenceFixture(fs.mkdtempSync(path.join(process.env.TMPDIR ?? os.tmpdir(), "llv-sidebar-")));
+    /* The design lane's readings of the replaced sidebar, by frame. */
+    const before = new Map<string, { rail: { listHeight: number; footerHeight: number; rowsInView: number; clippedNames: number }; main: { width: number } }>();
+    try {
+      const recorded = JSON.parse(fs.readFileSync(path.resolve("evidence/sidebar-redesign/measurements.json"), "utf8")) as { readings: { frame: string; variant: number; rail: { listHeight: number; footerHeight: number; rowsInView: number; clippedNames: number }; main: { width: number } }[] };
+      for (const reading of recorded.readings) if (reading.variant === 0) before.set(reading.frame, reading);
+    } catch { /* a checkout without the design lane's readings compares nothing */ }
+    /* The browser runs as a server of its own so its process id is on record and the run can prove it gone. */
+    const pids: number[] = [];
+    const launch = async () => {
+      const browserServer = await chromium.launchServer(LAUNCH);
+      pids.push(browserServer.process().pid!);
+      fs.writeFileSync(path.join(OUT, "browser.pid"), `${pids.join("\n")}\n`);
+      return { browserServer, browser: await chromium.connect(browserServer.wsEndpoint()) };
+    };
+    let running = await launch();
+    const readings: Reading[] = [];
+    const failures: string[] = [];
+    try {
+      const jobs: { state: State; size: (typeof SIZES)[number]; scheme: Scheme; lang: "en" | "uk"; frame: string }[] = [];
+      for (const state of STATES) for (const size of SIZES) for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) {
+        if (!state.everywhere && !(size.width === 1440 && scheme === "light" && langsOf(state).includes(lang))) continue;
+        const frame = `built-${state.name}-${size.width}x${size.height}-${scheme}-${lang}`;
+        if (!ONLY || ONLY.test(frame)) jobs.push({ state, size, scheme, lang, frame });
+      }
+      let relaunch: Promise<void> | null = null;
+      const shoot = async ({ state, size, scheme, lang, frame }: (typeof jobs)[number]) => {
+        if (!running.browser.isConnected()) {
+          relaunch ??= (async () => {
+            await running.browserServer.close().catch(() => {});
+            running = await launch();
+            relaunch = null;
+          })();
+          await relaunch;
+        }
+        const context = await running.browser.newContext({ viewport: size, colorScheme: scheme, reducedMotion: "reduce" });
+        await context.addInitScript(({ lang, folded, detail }) => {
+          try {
+            localStorage.setItem("llv_lang", lang);
+            localStorage.setItem("llv:rail-footer:v1", folded ? "folded" : "open");
+            localStorage.setItem("llv:rail-footer-detail:v1", detail ? "full" : "line");
+          } catch { /* the page then renders its defaults */ }
+        }, { lang, folded: state.folded === true, detail: state.detail === true });
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        try {
+          await page.goto(`${server.base}?scenario=tier-limits&${state.query}`);
+          await page.waitForSelector("aside[data-project-rail]", { timeout: 20_000 });
+          /* A list that never loads or cannot be reached has no board to wait for. */
+          if (!state.bare) await page.waitForSelector("main", { timeout: 20_000 });
+          /* The resources probe starts 1.5 s after mount by design; an open footer is read once its blocks are drawn. */
+          if (!state.folded) await page.waitForSelector("[data-resources-footer]", { timeout: 20_000 });
+          await page.waitForSelector("[data-engine-limits]", { state: state.folded ? "detached" : "attached", timeout: 20_000 });
+          await page.waitForTimeout(state.folded ? 2_200 : state.bare ? 2_500 : 700);
+          if (state.click) {
+            const target = page.locator(state.click);
+            await (state.first ? target.first() : target.last()).click();
+            await page.waitForTimeout(600);
+          }
+          if (state.crown === "hover") {
+            await page.locator("nav [data-rail-project]").nth(2).hover();
+            await page.waitForTimeout(400);
+          }
+          if (state.crown === "focus") {
+            /* The keyboard alone: Tab from the filter until a row's crown control holds the focus. */
+            await page.locator("[data-rail-filter]").focus();
+            for (let presses = 0; presses < 40; presses += 1) {
+              await page.keyboard.press("Tab");
+              if (await page.evaluate(() => document.activeElement?.hasAttribute("data-rail-crown") === true)) break;
+            }
+            await page.mouse.move(size.width - 200, 400);
+            await page.waitForTimeout(400);
+          }
+          await page.screenshot({ path: path.join(OUT, `${frame}.png`) });
+          const was = before.get(`v0-${state.today ?? state.name}-${size.width}x${size.height}-${scheme}-${lang}`) ?? null;
+          const reading: Reading = {
+            frame, state: state.name, width: size.width, height: size.height, scheme, lang, ...(await readRail(page, state.shows ?? null)),
+            today: was ? { listHeight: was.rail.listHeight, footerHeight: was.rail.footerHeight, rowsInView: was.rail.rowsInView, clippedNames: was.rail.clippedNames, mainWidth: was.main.width } : null,
+            pageErrors,
+          };
+          readings.push(reading);
+          const fail = (text: string) => failures.push(`${frame}: ${text}`);
+          if (pageErrors.length) fail(pageErrors.join(" | "));
+          /* Nothing outside the sidebar moves: it keeps its width, and the board keeps the width it had beside the replaced one. */
+          if (reading.rail.width !== RAIL_WIDTH) fail(`the sidebar is ${reading.rail.width} px wide`);
+          if (reading.today && !state.bare && reading.main.width !== reading.today.mainWidth) fail(`the board is ${reading.main.width} px wide, ${reading.today.mainWidth} px beside the replaced sidebar`);
+          /* One left edge: names, labels and every line of the system block, the windows and resets behind "All windows" included. */
+          for (const [what, values] of Object.entries(reading.edges)) if (values.length > 1) fail(`${what} starts at ${values.join(", ")} px`);
+          for (const what of ["text", "system"] as const) if (reading.edges[what].length === 1 && reading.edges[what][0] !== EDGE) fail(`${what} starts at ${reading.edges[what][0]} px`);
+          /* Every section says how many rows it holds: "Pinned" as "Projects" does, and the archive. */
+          for (const section of reading.sections) {
+            if (section.count === null) fail(`the section "${section.label}" carries no count`);
+            else if (section.rows !== null && section.count !== section.rows) fail(`the section "${section.label}" says ${section.count} over ${section.rows} rows`);
+          }
+          /* No label, reading or control word is cut, and no project name: the fixture's long name fits its two lines in both languages. */
+          if (reading.clipped.length) fail(`cut: ${reading.clipped.join(" | ")}`);
+          if (reading.rail.clippedNames) fail(`${reading.rail.clippedNames} project name(s) cut`);
+          for (const reason of reading.reasons) if (reason.cut && !reason.inTooltip) fail(`the reason "${reason.text}" is cut and its tooltip does not complete it`);
+          /* Behind "All windows" the same reason is on the screen whole. */
+          if (state.detail && reading.reasons.some((reason) => reason.cut) && !reading.notes.some((note) => reading.reasons.some((reason) => note === reason.text))) fail("a failed read's reason is cut and no line under its account says it whole");
+          /* A bar draws the share the reading beside it names. */
+          for (const meter of reading.meters) {
+            if (meter.bar === null) continue;
+            const percent = /(\d+(?:[.,]\d+)?)\s*%/.exec(meter.value);
+            const amount = /(\d+(?:[.,]\d+)?)\s*GiB/.exec(meter.value);
+            const named = percent ? Number(percent[1]!.replace(",", ".")) : amount && TOTAL_GIB[meter.label] ? (100 * Number(amount[1]!.replace(",", "."))) / TOTAL_GIB[meter.label]! : null;
+            if (named === null) fail(`the line "${meter.label}" has a bar and no reading to compare it with: "${meter.value}"`);
+            else if (Math.abs(named - meter.bar) > 2) fail(`"${meter.label} ${meter.value}" stands beside a bar drawn at ${meter.bar}%`);
+          }
+          /* An engine line shows its account whole in every state, an aged or failed reading included. */
+          for (const account of reading.accounts) if (account.cut) fail(`the engine line cuts the account "${account.name}"`);
+          /* A panel lies outside the sidebar's box by design. */
+          if (reading.rail.overflowX && !reading.panel) fail("the sidebar is wider than its box");
+          if (state.click && !state.shows && !reading.panel) fail("nothing opened");
+          if (reading.panel && !reading.panel.inside) fail("the opened panel leaves the window");
+          /* A state is read off the frame: what it is about is drawn inside the window. */
+          if (reading.shows === 0) fail(`the state shows nothing that matches ${state.shows}`);
+          if (state.name === "archive") {
+            if (reading.archive.labelLeft !== EDGE) fail(`the archive label starts at ${reading.archive.labelLeft} px`);
+            if (!reading.archive.open || reading.archive.rows !== 2) fail(`the archive is ${reading.archive.open ? "unfolded" : "folded"} with ${reading.archive.rows} of 2 rows in the frame`);
+          }
+          /* The list has the height the old footer took, and shows no fewer rows than the replaced sidebar did. */
+          if (reading.today && !state.folded && reading.rail.listHeight <= reading.today.listHeight) fail(`the list is ${reading.rail.listHeight} px, ${reading.today.listHeight} px in the replaced sidebar`);
+          if (reading.today && reading.rail.rowsInView < reading.today.rowsInView) fail(`${reading.rail.rowsInView} rows in view, ${reading.today.rowsInView} in the replaced sidebar`);
+          if (state.crown) {
+            /* The control stands in the age's place: while it shows, the age of its row does not, and no mark is under it. */
+            const crown = reading.crown;
+            if (!crown) fail(`no crown control was reached by ${state.crown}`);
+            else {
+              if (crown.crownOpacity !== 1) fail(`the reached crown control is drawn at opacity ${crown.crownOpacity}`);
+              if (crown.ageText && crown.ageOpacity !== 0) fail(`the crown control stands over the age "${crown.ageText}", drawn at opacity ${crown.ageOpacity}`);
+              if (crown.overlapsMarks) fail("the crown control stands over a mark of its row");
+              if (crown.elsewhere.crowns || crown.elsewhere.ages) fail(`${crown.elsewhere.crowns} other row(s) show a crown control and ${crown.elsewhere.ages} hide their age`);
+            }
+          }
+        } catch (error) {
+          failures.push(`${frame}: ${(error as Error).message.split("\n")[0]}`);
+          await page.screenshot({ path: path.join(OUT, `${frame}.failed.png`) }).catch(() => {});
+        } finally {
+          await context.close().catch(() => {});
+        }
+      };
+      /* Each frame has a context of its own, so several are shot at once; the readings keep the order of the states. */
+      let next = 0;
+      await Promise.all(Array.from({ length: Math.min(PARALLEL, jobs.length) }, async () => {
+        while (next < jobs.length) await shoot(jobs[next++]!);
+      }));
+      const order = new Map(jobs.map((job, index) => [job.frame, index]));
+      readings.sort((one, other) => order.get(one.frame)! - order.get(other.frame)!);
+      failures.sort();
+    } finally {
+      await running.browser.close().catch(() => {});
+      await running.browserServer.close().catch(() => {});
+      server.stop();
+      const closed = pids.map((pid) => {
+        let alive = true;
+        try { process.kill(pid, 0); } catch { alive = false; }
+        if (alive) process.kill(pid, "SIGKILL");
+        return `${pid} closed`;
+      });
+      fs.writeFileSync(path.join(OUT, "browser.pid"), `${closed.join("\n")}\n`);
+    }
+
+    if (!ONLY) {
+      /* The left part of a frame at full size, or the whole frame scaled; a frame of the replaced sidebar loses the design lane's strip. */
+      const picture = async (file: string, strip: number, width: number | null, scale: number) => {
+        if (!fs.existsSync(file)) return null;
+        const meta = await sharp(file).metadata();
+        const cut = { left: 0, top: strip, width: Math.min(width ?? meta.width!, meta.width!), height: meta.height! - strip };
+        const data = await sharp(file).extract(cut).resize({ width: Math.round(cut.width * scale) }).png().toBuffer();
+        const sized = await sharp(data).metadata();
+        return { picture: data, width: sized.width!, height: sized.height! };
+      };
+      const cell = async (label: string, file: string | null, strip: number, width: number | null, scale: number) => {
+        const drawn = file ? await picture(file, strip, width, scale) : null;
+        return { label: drawn ? label : `${label} (no frame)`, picture: drawn?.picture ?? null, width: drawn?.width ?? Math.round((width ?? 1440) * scale), height: drawn?.height ?? 60 };
+      };
+      const todayFile = (state: State, combo: string) => (TODAY ? path.join(TODAY, `v0-${state.today ?? state.name}-${combo}.png`) : null);
+      const pair = async (state: State, combo: string, width: number | null, scale: number) => [
+        ...(TODAY ? [await cell(`today · ${state.name}`, todayFile(state, combo), TODAY_STRIP, width, scale)] : []),
+        await cell(`built · ${state.name}`, path.join(OUT, `built-${state.name}-${combo}.png`), 0, width, scale),
+      ];
+      const everywhere = STATES.filter((state) => state.everywhere);
+      const perRow = TODAY ? 8 : 4;
+      /* Every state as "today | built", the sidebars alone at full size: one sheet per size, scheme and language. */
+      for (const size of SIZES) for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) {
+        const combo = `${size.width}x${size.height}-${scheme}-${lang}`;
+        const cells = [];
+        for (const state of everywhere) cells.push(...(await pair(state, combo, CROP, 1)));
+        await sheet(path.join(OUT, `sheet-compare-${combo}.png`), perRow, cells);
+      }
+      /* Whole frames, so what is outside the sidebar can be compared too. */
+      for (const lang of ["en", "uk"] as const) {
+        const whole = [];
+        for (const size of SIZES) for (const state of everywhere.filter((entry) => entry.name === "few" || entry.name === "selected" || entry.name === "many")) whole.push(...(await pair(state, `${size.width}x${size.height}-light-${lang}`, null, 0.5)));
+        await sheet(path.join(OUT, `sheet-compare-whole-light-${lang}.png`), TODAY ? 2 : 3, whole);
+      }
+      /* The states behind "every function is kept": the left part of each frame at full size. */
+      const kept = [];
+      for (const state of STATES.filter((entry) => !entry.everywhere)) for (const lang of langsOf(state)) kept.push(await cell(`built · ${state.name} · ${lang}`, path.join(OUT, `built-${state.name}-1440x900-light-${lang}.png`), 0, 760, 1));
+      await sheet(path.join(OUT, "sheet-built-states.png"), 4, kept);
+      fs.writeFileSync(path.resolve("evidence/sidebar-redesign/built.json"), `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", block: "the left sidebar: one tidy panel with a compact system block", readings, failures }, null, 2)}\n`);
+    }
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 3_600_000);
+});
+
+describe("issue report advisory preview", () => {
+  /* PR #2530: the operator decides on this message, so it has to show which
+     lines become public, that approving publishes them, and what each hint
+     points at, with the replies in reach. */
+  const COPY = {
+    en: { heading: "PREVIEW", from: "PUBLISHED FROM HERE", to: "PUBLISHED UP TO HERE", titleLabel: "Title", below: "Everything below this line stays in this chat.",
+      judgment: "Agent's privacy judgment", legacy: "No agent judgment was recorded for this preview.", hints: "Detector hints", none: "None found.", warning: "Warning: ",
+      port: "a port", closing: ["files exactly the title and body above", "public issue in the Delegatus repository", "readable by anyone"], unprevented: "Hints do not prevent this.",
+      approve: "Yes, publish as a public issue", reply: "Yes, publish report " },
+    uk: { heading: "ПОПЕРЕДНІЙ ПЕРЕГЛЯД", from: "ПУБЛІКУЄТЬСЯ ЗВІДСИ", to: "ПУБЛІКУЄТЬСЯ ДОСЮДИ", titleLabel: "Назва", below: "Усе нижче цього рядка лишається в цьому чаті.",
+      judgment: "Оцінка приватності від агента", legacy: "Для цього перегляду оцінку агента не записано.", hints: "Підказки детекторів", none: "Нічого не знайдено.", warning: "Попередження: ",
+      port: "порт", closing: ["із назви й тексту вище", "публічний issue в репозиторії Delegatus", "може прочитати будь-хто"], unprevented: "Підказки цьому не перешкоджають.",
+      approve: "Так, публікуй як публічний issue", reply: "Так, публікуй звіт " },
+  } as const;
+  const DOTTED = "203.0.113.22:8898";
+
+  browserTest("the preview bounds the published text, quotes hints verbatim, says approving publishes, and keeps the replies in reach", async () => {
+    const out = path.resolve(".artifacts/issue-report-hints/rendered");
+    fs.rmSync(out, { recursive: true, force: true });
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    try {
+      for (const variant of ["many", "none", "long", "legacy"] as const) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const width of [1440, 390]) {
+        const phone = width === 390;
+        const height = phone ? 844 : 900;
+        const copy = COPY[lang];
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=agent-report&report-preview=${variant}`, { width, height }, scheme, lang, "reduce", phone);
+        try {
+          if (phone) await page.locator("[data-mobile2-seat-card]").click();
+          const preview = page.locator("[data-tts-message]").filter({ hasText: copy.heading }).first();
+          await preview.waitFor();
+          const drafts = page.locator("[data-reply-suggestion]");
+          await drafts.first().waitFor();
+          const frame = (position: string) => page.screenshot({ path: path.join(out, `${variant}-${lang}-${scheme}-${width}-${position}.png`) });
+
+          /* The order a reader meets the parts in: the bounded text, the line that ends it, then the review. */
+          const text = await preview.innerText();
+          const lines = text.split("\n").map((line) => line.trim());
+          const at = (needle: string) => lines.findIndex((line) => line.includes(needle));
+          const order = [at(copy.from), at(copy.titleLabel), at("Delegatus refuses a requested launch"), at("The requested agent starts."), at(copy.to), at(copy.below),
+            at(variant === "legacy" ? copy.legacy : copy.judgment), at(copy.hints), at(copy.closing[0])];
+          expect(order.every((index) => index >= 0)).toBe(true);
+          expect(order).toEqual([...order].sort((left, right) => left - right));
+          expect(new Set(order).size).toBe(order.length);
+          for (const marker of [copy.from, copy.to]) expect(lines.filter((line) => line.includes(marker))).toHaveLength(1);
+          expect(lines[at(copy.below)]).toBe(copy.below);
+          const closing = lines.at(-1)!;
+          for (const fact of [...copy.closing, copy.unprevented]) expect(closing).toContain(fact);
+
+          const review = lines.slice(at(copy.hints) + 1, at(copy.closing[0]));
+          const hintLines = review.filter((line) => line.includes(" · "));
+          let dotted: string | null = null;
+          if (variant === "many") {
+            /* A span with dots, a colon and digits reads as the body wrote it. */
+            dotted = hintLines.find((line) => line.endsWith(DOTTED))?.replace(/^•\s*/, "") ?? null;
+            expect(dotted).toBe(`${copy.port} · ${lang === "en" ? "body, line" : "текст, рядок"} 8: ${DOTTED}`);
+            expect(lines.slice(0, at(copy.to)).some((line) => line.includes(DOTTED))).toBe(true);
+            expect(hintLines.length).toBeGreaterThan(6);
+            expect(review.some((line) => line.startsWith(copy.warning))).toBe(true);
+            expect(hintLines.some((line) => line.includes(copy.warning))).toBe(false);
+          }
+          if (variant === "none") expect(review.join(" ")).toContain(copy.none);
+          for (const line of hintLines) {
+            expect(line).not.toContain("\\");
+            expect(line.slice(0, line.indexOf(": "))).not.toMatch(/_|\(written\)/);
+          }
+
+          /* As the chat rests: the end of the message, with the replies under it. */
+          const reach = async () => page.evaluate(() => {
+            const box = (node: Element | null) => { const rect = node?.getBoundingClientRect(); return rect ? { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom } : null; };
+            const row = document.querySelector("[data-reply-suggestions]");
+            const field = [...document.querySelectorAll("textarea")].find((node) => node.getBoundingClientRect().height > 0) ?? null;
+            return { placement: row?.getAttribute("data-reply-suggestions") ?? null, row: box(row), approve: box(row?.querySelector("[data-reply-suggestion]") ?? null), composer: box(field) };
+          });
+          expect(await drafts.allInnerTexts()).toHaveLength(3);
+          expect((await drafts.first().innerText()).trim()).toBe(copy.approve);
+          const resting = await reach();
+          await frame("end");
+          /* Walked by the wheel, as a reader does: the feed follows its own end until the operator moves it. */
+          const walkTo = async (target: ReturnType<typeof preview.locator>, block: "start" | "center") => {
+            const move = await target.evaluate((node, where) => {
+              let feed: HTMLElement | null = node.parentElement;
+              while (feed && !(/auto|scroll/.test(getComputedStyle(feed).overflowY) && feed.scrollHeight > feed.clientHeight + 1)) feed = feed.parentElement;
+              const box = feed!.getBoundingClientRect();
+              const rect = node.getBoundingClientRect();
+              const wanted = where === "start" ? box.top + 12 : box.top + box.height / 2 - rect.height / 2;
+              return { x: box.left + box.width / 2, y: box.top + box.height / 2, by: rect.top - wanted };
+            }, block);
+            await page.mouse.move(move.x, move.y);
+            await page.mouse.wheel(0, move.by);
+            await page.waitForTimeout(250);
+          };
+          await walkTo(preview, "start");
+          const top = await reach();
+          await frame("top");
+          const visible: Record<string, boolean> = {};
+          for (const marker of [copy.from, copy.to]) {
+            const line = preview.locator("b").filter({ hasText: marker });
+            await walkTo(line, "center");
+            /* The marker is drawn inside the feed, clear of the composer and the floating replies. */
+            visible[marker] = await line.evaluate((node) => {
+              const rect = node.getBoundingClientRect();
+              const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+              return hit === node || node.contains(hit) || Boolean(hit?.contains(node));
+            });
+            expect(visible[marker]).toBe(true);
+            await frame(marker === copy.from ? "start" : "boundary");
+          }
+          for (const placed of [resting, top]) {
+            expect(placed.row).not.toBeNull();
+            expect(placed.composer).not.toBeNull();
+            if (phone) {
+              expect(placed.row!.left).toBeGreaterThanOrEqual(0);
+              expect(placed.row!.right).toBeLessThanOrEqual(width);
+              expect(placed.approve!.left).toBeGreaterThanOrEqual(0);
+              expect(placed.approve!.right).toBeLessThanOrEqual(width);
+              expect(placed.row!.top).toBeGreaterThanOrEqual(0);
+              expect(placed.row!.bottom).toBeLessThanOrEqual(placed.composer!.top);
+              expect(placed.composer!.bottom).toBeLessThanOrEqual(height);
+            }
+          }
+
+          const geometry = await preview.evaluate((node) => {
+            const rect = node.getBoundingClientRect();
+            const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+            const boxes: DOMRect[] = [];
+            while (walker.nextNode()) {
+              const range = document.createRange();
+              range.selectNodeContents(walker.currentNode);
+              /* A table and a code block scroll sideways inside their own box. */
+              if (walker.currentNode.parentElement?.closest("table, pre")) continue;
+              boxes.push(...[...range.getClientRects()].filter((box) => box.width > 0));
+            }
+            return { left: rect.left, right: rect.right,
+              textLeft: Math.min(...boxes.map((box) => box.left)),
+              textRight: Math.max(...boxes.map((box) => box.right)) };
+          });
+          expect(geometry.left).toBeGreaterThanOrEqual(0);
+          expect(geometry.right).toBeLessThanOrEqual(width);
+          expect(geometry.textLeft).toBeGreaterThanOrEqual(0);
+          expect(geometry.textRight).toBeLessThanOrEqual(width);
+
+          /* Approving takes two actions on every surface: the draft lands in the field, and nothing is sent. */
+          let approval: { field: string; sent: number; draftsLeft: number } | null = null;
+          if (variant === "many" && scheme === "light") {
+            if (phone) await drafts.first().tap(); else await drafts.first().click();
+            const field = page.locator("textarea").filter({ visible: true }).first();
+            await page.waitForFunction((prefix) => [...document.querySelectorAll("textarea")].some((node) => node.value.startsWith(prefix)), copy.reply);
+            approval = {
+              field: await field.inputValue(),
+              sent: await page.locator("[data-tts-message], [data-outbox-row]").filter({ hasText: copy.reply }).count(),
+              draftsLeft: await drafts.count(),
+            };
+            expect(approval.field).toBe(`${copy.reply}${"a".repeat(64)}`);
+            expect(approval.sent).toBe(0);
+            expect(approval.draftsLeft).toBe(3);
+            await frame("approve-tapped");
+          }
+          expect(pageErrors).toEqual([]);
+          readings.push({ variant, lang, scheme, width, markers: { from: copy.from, to: copy.to, below: copy.below }, order, closing, hintLines: hintLines.length, dotted,
+            replies: await drafts.allInnerTexts(), resting, top, geometry, approval, pageErrors });
+        } finally { await context.close(); }
+      }
+      const evidence = path.resolve("evidence/issue-report-hints/rendered.json");
+      fs.mkdirSync(path.dirname(evidence), { recursive: true });
+      fs.writeFileSync(evidence, JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 900_000);
 });

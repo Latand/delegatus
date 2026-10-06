@@ -24,11 +24,21 @@ export interface IncumbentContext {
   basis: string;
 }
 
+/** One reason the server recommends rotation, as data the interface words in
+    the operator's language. */
+export type IncumbentRotationCause =
+  | { kind: "context"; tokens: number; estimated: boolean; thresholdTokens: number; windowTokens: number }
+  | { kind: "compactions"; count: number; threshold: number }
+  | { kind: "transcript"; megabytes: number; thresholdMegabytes: number }
+  | { kind: "host_gone" };
+
 export interface IncumbentRotation {
   recommended: boolean;
   level: "none" | "recommend" | "strongly_recommend";
-  /** The server's own reasons, in its words. Never re-worded here. */
+  /** The server's reasons as it words them for an agent. They name agent
+      tools, so the interface never prints them: it words {@link causes}. */
   reasons: string[];
+  causes: IncumbentRotationCause[];
   thresholdUnknown: boolean;
 }
 
@@ -70,7 +80,11 @@ export interface OrchestratorIncumbent {
   context: IncumbentContext | null;
   transcriptFacts: IncumbentTranscript | null;
   rotation: IncumbentRotation | null;
+  /** What the operator has to do before this seat's Telegram tool works again. */
+  telegram?: IncumbentTelegramAction | null;
 }
+
+export type IncumbentTelegramAction = "sign_in" | "check" | "restart";
 
 const str = (value: unknown): string | null => (typeof value === "string" && value ? value : null);
 const num = (value: unknown): number | null => (typeof value === "number" && Number.isFinite(value) ? value : null);
@@ -98,6 +112,7 @@ export function parseIncumbent(body: unknown): OrchestratorIncumbent | null {
     context: contextOf(raw.context),
     transcriptFacts: transcriptOf(raw.transcriptFacts),
     rotation: rotationOf(raw.rotation),
+    telegram: raw.telegram === "sign_in" || raw.telegram === "check" || raw.telegram === "restart" ? raw.telegram : null,
   };
 }
 
@@ -141,6 +156,27 @@ function transcriptOf(value: unknown): IncumbentTranscript | null {
   };
 }
 
+function rotationCauseOf(value: unknown): IncumbentRotationCause | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const tokens = num(raw.tokens);
+  const thresholdTokens = num(raw.thresholdTokens);
+  const windowTokens = num(raw.windowTokens);
+  const count = num(raw.count);
+  const threshold = num(raw.threshold);
+  const megabytes = num(raw.megabytes);
+  const thresholdMegabytes = num(raw.thresholdMegabytes);
+  if (raw.kind === "host_gone") return { kind: "host_gone" };
+  if (raw.kind === "context" && tokens !== null && thresholdTokens !== null && windowTokens !== null) {
+    return { kind: "context", tokens, estimated: raw.estimated === true, thresholdTokens, windowTokens };
+  }
+  if (raw.kind === "compactions" && count !== null && threshold !== null) return { kind: "compactions", count, threshold };
+  if (raw.kind === "transcript" && megabytes !== null && thresholdMegabytes !== null) {
+    return { kind: "transcript", megabytes, thresholdMegabytes };
+  }
+  return null;
+}
+
 function rotationOf(value: unknown): IncumbentRotation | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const raw = value as Record<string, unknown>;
@@ -152,6 +188,9 @@ function rotationOf(value: unknown): IncumbentRotation | null {
     recommended: raw.recommended === true,
     level,
     reasons: Array.isArray(raw.reasons) ? raw.reasons.filter((reason): reason is string => typeof reason === "string") : [],
+    causes: Array.isArray(raw.causes)
+      ? raw.causes.map(rotationCauseOf).filter((cause): cause is IncumbentRotationCause => cause !== null)
+      : [],
     thresholdUnknown: raw.thresholdUnknown === true,
   };
 }

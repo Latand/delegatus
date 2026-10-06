@@ -29,6 +29,34 @@ const CAUSE_PATTERNS: ReadonlyArray<readonly [RegExp, MessageKey]> = [
   [/\btimed out\b/i, "receipt.cause.timedOut"],
 ];
 
+/**
+ * Causes recognised anywhere in the sentence. The wrapper in front of them
+ * varies with the path that reported the failure ("structured host recovery
+ * failed: …", "conversation host was reclaimed; …: …"), and read by its first
+ * clause one cause became two rows. Each has a short cause for the one-line
+ * row and the chip, and a sentence saying what to do for the expanded detail,
+ * both in the operator's language, so nothing raw is shown beside them.
+ */
+const SENTENCE_CAUSE_PATTERNS: ReadonlyArray<readonly [RegExp, MessageKey, MessageKey]> = [
+  [/\btelegram\b[\s\S]{0,120}\b(revoked|withdrawn|no longer active)\b/i, "receipt.cause.telegramWithdrawn", "receipt.remedy.telegramWithdrawn"],
+  [/\btelegram\b[\s\S]{0,120}\bnot connected\b/i, "receipt.cause.telegramOff", "receipt.remedy.telegramOff"],
+  [/\btelegram\b[\s\S]{0,120}\bconflicts\b/i, "receipt.cause.telegramNameTaken", "receipt.remedy.telegramNameTaken"],
+];
+
+function sentenceCause(reason: string | null | undefined): { cause: MessageKey; remedy: MessageKey } | null {
+  const trimmed = reason?.trim();
+  if (!trimmed) return null;
+  for (const [pattern, cause, remedy] of SENTENCE_CAUSE_PATTERNS) {
+    if (pattern.test(trimmed)) return { cause, remedy };
+  }
+  return null;
+}
+
+/** The self-explaining cause a failure sentence names, or null. */
+export function sentenceCauseKey(reason: string | null | undefined): MessageKey | null {
+  return sentenceCause(reason)?.cause ?? null;
+}
+
 function splitClauses(reason: string): { head: string; rest: string | null } {
   const index = reason.indexOf(";");
   if (index < 0) return { head: reason.trim(), rest: null };
@@ -54,6 +82,8 @@ export function failureCauseKey(reason: string | null | undefined): string {
   if (!trimmed) return "";
   const known = humanReceiptReasonKey(trimmed);
   if (known) return `key:${known}`;
+  const sentence = sentenceCauseKey(trimmed);
+  if (sentence) return `key:${sentence}`;
   const { head } = splitClauses(trimmed);
   return `verbatim:${patternKey(head) ?? head.replace(/\s+/g, " ").toLowerCase()}`;
 }
@@ -64,8 +94,12 @@ export interface ReceiptFailureDescription {
   /** The whole reason, for hover. */
   full: string | null;
   /** Every verbatim reason stays readable on expand, even if the row clips it.
-      Known reason codes use their short human label and need no detail. */
+      Known reason codes use their short human label and need no detail. A
+      cause with its own wording puts what to do here. */
   detail: { sentence: string; remediation: string | null } | null;
+  /** The detail is the action for this cause, so the row does not offer the
+      general one beside it. */
+  saysWhatToDo?: boolean;
 }
 
 /**
@@ -82,6 +116,14 @@ export function describeReceiptFailure(t: TFunction, reason: string | null | und
   if (known) {
     const sentence = t(known);
     return { cause: sentence, full: sentence, detail: null };
+  }
+  const named = sentenceCause(trimmed);
+  if (named) {
+    /* The row and the chip are one line each and clip on a phone, so they
+       carry the cause alone; what to do is the detail, which wraps. */
+    const cause = t(named.cause);
+    const remedy = t(named.remedy);
+    return { cause, full: `${cause}. ${remedy}`, detail: { sentence: remedy, remediation: null }, saysWhatToDo: true };
   }
   const { head, rest } = splitClauses(trimmed);
   const key = patternKey(head);
