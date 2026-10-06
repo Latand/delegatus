@@ -665,9 +665,9 @@ export class RuntimeJournal {
         this.db.exec("COMMIT");
         return recorded;
       }
-      const actionStatuses: readonly RuntimeReceiptStatus[] = action === "retry"
-        ? ["pending", "queued", "failed", "uncertain", "rejected"]
-        : ["pending", "queued", "failed", "uncertain"];
+      // A host refusal can leave an unverified failure in the Viewer. Either
+      // operator action still needs this same durable retry/discard fence.
+      const actionStatuses: readonly RuntimeReceiptStatus[] = ["pending", "queued", "failed", "uncertain", "rejected"];
       if (!actionStatuses.includes(receipt.status)) {
         throw new Error(`runtime delivery cannot ${action} after its outcome is resolved`);
       }

@@ -199,11 +199,22 @@ test("a rail that has not loaded, or whose catalog failed, is not treated as a f
 });
 
 test("«Nothing found» answers a filter query, never an installation with no projects", () => {
-  const host = renderRail();
-  expect(host.textContent).not.toContain(en["common.nothingFound"]);
+  /* A first run has nothing to filter: the labelled button takes the row, and no field stands beside it. */
+  const empty = renderRail();
+  expect(empty.textContent).not.toContain(en["common.nothingFound"]);
+  expect(empty.querySelector("[data-rail-filter]")).toBeNull();
+  unmount();
 
+  const host = renderRail({ files: [fileEntry()] });
+  expect(host.querySelector("[data-rail-filter]")).not.toBeNull();
+  expect(host.textContent).not.toContain(en["common.nothingFound"]);
   typeFilter(host, "zzz");
   expect(host.textContent).toContain(en["common.nothingFound"]);
+});
+
+test("a rail with no create handler keeps its filter on a first run", () => {
+  const host = renderRail({ onCreateProject: undefined });
+  expect(host.querySelector("[data-rail-filter]")).not.toBeNull();
 });
 
 test("a desktop rail does not open the form until it is asked", () => {

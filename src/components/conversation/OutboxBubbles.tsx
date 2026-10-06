@@ -17,7 +17,7 @@ import { type TFunction, useLocale } from "@/lib/i18n";
 
 import { appendComposerDraft, restoreOutboxDraft } from "@/components/TmuxComposer";
 
-import { messageRowModel, messageRowOperationId, type MessageRowSession, type MessageRowSwitchHold } from "./messageRow";
+import { evidenceRepeats, messageRowModel, messageRowOperationId, type MessageRowSession, type MessageRowSwitchHold } from "./messageRow";
 import { publishRenderedMessageRows } from "./renderedRows";
 import { useMessageRowRecovery } from "./rowRecovery";
 import { cancelOutbox, clearParkedOutbox, editContextOutbox, retryOutbox, type OutboxEntry } from "./outbox";
@@ -288,16 +288,19 @@ export function ConversationMessageRow({
           has always been about. */}
       {/* The transport's own words, and then the runtime's raw sentence — but
           only when they are genuinely two different things. A failure whose
-          transport line IS its raw sentence used to print it twice, one line
-          under the other, which reads as two problems. */}
-      {row.transport !== row.failure?.detail ? (
+          transport line IS its raw sentence, or is that sentence behind a
+          different wrapper, used to print it twice, one line under the other,
+          which reads as two problems. A cause the row already states in full
+          prints no raw sentence at all. */}
+      {!row.failure?.selfExplaining && !evidenceRepeats(row.transport, row.failure?.detail) ? (
         <span data-outbox-transport data-runtime-receipt-status className="min-w-0 whitespace-normal break-words text-right">{row.transport}</span>
       ) : null}
       {row.failure?.detail ? (
         <span data-outbox-raw data-runtime-receipt-status className="min-w-0 whitespace-normal break-words text-right text-muted">{row.failure.detail}</span>
       ) : null}
-      {entry.deliveryReceipt?.reason && entry.deliveryReceipt.reason !== row.failure?.detail
-        && entry.deliveryReceipt.reason !== row.transport ? (
+      {entry.deliveryReceipt?.reason && !row.failure?.selfExplaining
+        && !evidenceRepeats(entry.deliveryReceipt.reason, row.failure?.detail)
+        && !evidenceRepeats(entry.deliveryReceipt.reason, row.transport) ? (
         <span className="min-w-0 whitespace-normal break-words text-right text-muted">{entry.deliveryReceipt.reason}</span>
       ) : null}
       <span className="flex flex-wrap items-center justify-end gap-1.5">

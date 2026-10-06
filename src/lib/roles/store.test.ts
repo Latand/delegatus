@@ -26,6 +26,7 @@ test("fresh installs and config:null resets restore every shipped role and varia
       deployer: codex("gpt-6.1-sol", "medium"),
       merger: codex("gpt-6.1-sol", "high"),
       maintainer: codex("gpt-6.1-sol", "medium"),
+      "issue-reporter": claude("claude-sonnet-5-5", "high"),
     };
     const expectedVariants = {
       builder: {

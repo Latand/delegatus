@@ -480,3 +480,69 @@ test("a hand-over the queue recorded as stalled says so under the message at res
     await act(async () => resetDeliveryProgressPollerForTests());
   }
 });
+
+test("a restart refused for Telegram says its one sentence once, and the disclosure repeats nothing", async () => {
+  /* The queue's sentence is on the row and the send route's differently
+     wrapped copy of it is on the receipt. The operator read the cause twice in
+     the runtime's English inside a Ukrainian interface. */
+  const queued = "structured host recovery failed: telegram MCP connector is not connected at launch";
+  const routed = "conversation host was reclaimed; automatic resume did not establish a deliverable host: telegram MCP connector is not connected at launch";
+  for (const lang of ["en", "uk"] as const) {
+    document.body.replaceChildren();
+    const host = await render(
+      <OutboxBubblesView
+        entries={[entry({
+          state: "failed",
+          error: queued,
+          deliveryReceipt: {
+            operationId: "op-telegram", idempotencyKey: "key-1213", conversationId: "conversation_1213", kind: "send",
+            status: "failed", reason: routed, at: new Date(SUBMITTED_AT).toISOString(), revision: 2,
+          },
+        })]}
+        t={translator(lang)}
+        nowMs={SUBMITTED_AT + 120_000}
+        onCancel={() => {}}
+        onRetry={() => {}}
+        onRetryOperation={() => {}}
+        session={GONE}
+      />,
+    );
+    const sentence = translate(lang, "outbox.failure.telegramOff");
+    expect(status(host)).toBe(sentence);
+    const reasonButton = host.querySelector<HTMLButtonElement>("[data-outbox-reason]")!;
+    expect(reasonButton.getAttribute("title")).toBeNull();
+    await act(async () => reasonButton.click());
+    expect(host.querySelector("[data-outbox-detail]")).not.toBeNull();
+    expect(host.querySelector("[data-outbox-raw]")).toBeNull();
+    expect(host.querySelector("[data-outbox-transport]")).toBeNull();
+    expect(host.textContent!.split(sentence)).toHaveLength(2);
+    expect(host.textContent).not.toMatch(/MCP|connector|reclaimed/);
+  }
+});
+
+test("a raw sentence the receipt repeats behind another wrapper is printed once", async () => {
+  const cause = "the engine closed the stream";
+  document.body.replaceChildren();
+  const host = await render(
+    <OutboxBubblesView
+      entries={[entry({
+        state: "failed",
+        error: cause,
+        deliveryReceipt: {
+          operationId: "op-wrapped", idempotencyKey: "key-1213", conversationId: "conversation_1213", kind: "send",
+          status: "failed", reason: `delivery stopped: ${cause}`, at: new Date(SUBMITTED_AT).toISOString(), revision: 2,
+        },
+      })]}
+      t={translator("en")}
+      nowMs={SUBMITTED_AT + 120_000}
+      onCancel={() => {}}
+      onRetry={() => {}}
+      onRetryOperation={() => {}}
+      session={GONE}
+    />,
+  );
+  await act(async () => host.querySelector<HTMLButtonElement>("[data-outbox-reason]")!.click());
+  expect(host.querySelector("[data-outbox-raw]")?.textContent).toBe(`delivery stopped: ${cause}`);
+  expect(host.querySelector("[data-outbox-transport]")).toBeNull();
+  expect(host.querySelector("[data-outbox-detail]")!.textContent!.split(cause)).toHaveLength(2);
+});

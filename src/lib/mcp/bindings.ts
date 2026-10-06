@@ -5,7 +5,7 @@ import { recordMaintenanceChange, recordMaintenanceLogGap } from "@/lib/boardMai
 import { maintenanceLaneIsOpen } from "@/lib/boardMaintenance/evidence";
 import { boardMaintenanceAnswer } from "@/lib/boardMaintenance/answer";
 import { isMutatingMcpTool } from "./server";
-import { permitMaintainerTool } from "./toolAllowlist";
+import { permitIssueReporterTool, permitMaintainerTool } from "./toolAllowlist";
 import { boardSelection } from "./boardSelection";
 import { budgetPage } from "./budgetPage";
 import crypto from "node:crypto";
@@ -18,9 +18,9 @@ import path from "node:path";
    it deploys (#1321). */
 import viewerPackageManifest from "../../../package.json";
 
-import { activeClaudeAccountId, listClaudeAccounts } from "@/lib/accounts/claude";
-import { activeCodexAccountId, listCodexAccounts } from "@/lib/accounts/codex";
-import { activeCopilotAccountId, listCopilotAccounts } from "@/lib/accounts/copilot";
+import { activeClaudeAccountId, claudeAccountsForPrivacy, listClaudeAccounts } from "@/lib/accounts/claude";
+import { activeCodexAccountId, codexAccountsForPrivacy, listCodexAccounts } from "@/lib/accounts/codex";
+import { activeCopilotAccountId, copilotAccountsForPrivacy, listCopilotAccounts } from "@/lib/accounts/copilot";
 import { projectEngineAccounts } from "@/lib/accounts/projectAccountsView";
 import {
   accountProjectBindings,
@@ -85,7 +85,13 @@ import { bridgeDirectiveBody, bridgeDirectiveId, type BridgeTrailer } from "@/li
 import { seatIdentityResolver } from "@/lib/bridge/seatIdentity";
 import { isBridgeReportClass, type BridgeReportTelegram, type CanonicalSeatConversationId } from "@/lib/bridge/types";
 import { findBridgeReport, recordBridgeReportTelegram, scopedReportId } from "@/lib/bridge/store";
-import { type PublicDenyList } from "@/lib/bridge/publicSafe";
+import { EMPTY_DENY_LIST, type PublicDenyList } from "@/lib/bridge/publicSafe";
+import { issueReportApproval, issueReportApprovalDrafts, issueReportApprovalReplies, operatorMessagesOf, type OperatorMessage } from "@/lib/issueReports/approval";
+import { delegatusIssueRepository, issueReportFinder, issueReportPublisher, type IssueReportFinder, type IssueReportPublisher } from "@/lib/issueReports/publish";
+import { issueReportPreviewText } from "@/lib/issueReports/previewText";
+import { ISSUE_REPORT_MAX_BODY_CHARS, ISSUE_REPORT_MAX_TITLE_CHARS, scrubIssueReport } from "@/lib/issueReports/scrub";
+import { claimIssueReportPublication, markIssueReportShown, readIssueReportPreview, recordIssueReportPreview, releaseIssueReportPublication, settleIssueReportPublication, type IssueReportPreview, type IssueReportPublication } from "@/lib/issueReports/store";
+import { ForgeAppWriteRefused } from "@/lib/forge/appWrite";
 import { renderPlain, renderReport, type TaskChanges } from "@/lib/bridge/reportRender";
 import { SEAT_SECTION_IDS, type SeatSectionId } from "@/lib/bridge/reportWords";
 import { deployTaskChanges, projectSnapshots } from "@/lib/bridge/taskChanges";
@@ -98,7 +104,9 @@ import { forgeCacheView } from "@/lib/forge/cache";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { languageMismatchWarning } from "@/lib/i18n/proseLanguage";
 import { operatorLocale, operatorTimeZone } from "@/lib/operator/settings";
-import { projectAliasSnapshot, recordedProjectRemote } from "@/lib/projects/aliases";
+import { projectAliasSnapshot, recordedProjectRemote, recordedProjectRemotes } from "@/lib/projects/aliases";
+import { projectIdentityFromRemote } from "@/lib/projects/identity";
+import { canonicalSensitiveText } from "@/lib/privacy/canonicalText";
 import {
   applySeatTickNoteLineEdits,
   applySeatTickSettingsChange,
@@ -150,7 +158,7 @@ import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { changeRoleMapping, loadRoleRegistrySnapshotOrDefaults, parseRoleMappingPatch, RoleStoreError, type RoleMappingChange } from "@/lib/roles/store";
 import { conversationRuntime } from "@/lib/agent/conversationRuntime";
 import type { RoleDefinition, RoleParameter } from "@/lib/roles/types";
-import { readSpawnAdmissionFence, spawnTaskProjectError, type SpawnAdmissionFence } from "@/lib/agent/spawnAdmission";
+import { conversationAgentRole, isSpawnDeniedRole, readSpawnAdmissionFence, reviewerOriginSpawnGuidance, spawnTaskProjectError, type SpawnAdmissionFence } from "@/lib/agent/spawnAdmission";
 import type { RuntimeHostRequestHealth } from "@/lib/runtime/client";
 import type { ViewerDeploymentStatus, ViewerDeploymentSummary } from "@/lib/runtime/contracts";
 import { messageOriginRole, type MessageOrigin } from "@/lib/runtime/messageOrigin";
@@ -219,6 +227,7 @@ import {
 } from "./server";
 import { parseSelectedContextRef } from "@/lib/selection/selectedContext";
 import { RETRYABLE_TELEGRAM_BOT_CODES, type TelegramBotErrorCode } from "@/lib/telegram/bot/contracts";
+import { telegramSetUp } from "@/lib/telegram/launchReadiness";
 
 import {
   accountLimitRows,
@@ -865,6 +874,21 @@ export interface ViewerMcpDomainDependencies {
   recoveryPredecessors?(project: string, conversationId: string): readonly string[];
   /** #1582: read one request-bound spawn admission fence. */
   readSpawnAdmissionFence?(clientAttemptId: string): SpawnAdmissionFence | null;
+  /** #2518: files an approved bug report. Absent means production, which
+      goes through the engine's GitHub write seam. */
+  issueReportPublisher?: IssueReportPublisher;
+  /** #2518: `owner/name` the report is filed in. Absent means the repository
+      Delegatus's own manifest names. */
+  issueReportRepository?(): string | null;
+  /** #2518: where previews are stored. Absent means the state directory. */
+  issueReportsDir?(): string;
+  /** #2518: what the operator wrote in one conversation, oldest first. Absent
+      means production, which reads the conversation's own transcript and
+      counts a message only on Delegatus's evidence of who wrote it. */
+  operatorMessages?(conversationId: string): Promise<readonly OperatorMessage[]>;
+  /** #2518: looks for an issue that already carries a report's exact text,
+      for a publication whose outcome nobody recorded. Absent means production. */
+  issueReportFinder?: IssueReportFinder;
 }
 
 /**
@@ -1397,7 +1421,7 @@ export function defaultMcpSpawnRoleParams(
 export function spawnDispatchBody(args: McpToolArgs, clientAttemptId: string, launcherConversationId: string | null = null): Record<string, unknown> {
   /* The launcher is the server's attribution of the caller, never an
      argument: a caller-supplied value is dropped before the route sees it. */
-  const body = withoutKeys(args, ["clientRequestId", "recoveryOnly", "launcherConversationId"]);
+  const body = withoutKeys(args, ["clientRequestId", "recoveryOnly", "launcherConversationId", "crossProjectRequest"]);
   const roleParams = defaultMcpSpawnRoleParams(args);
   return {
     ...body,
@@ -1460,7 +1484,9 @@ async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies,
     throw new McpToolRefusal(error, details);
   }
   validateExplicitMcpLaunchModel(args);
-  if (Array.isArray(args.mcpServers) && args.mcpServers.includes("telegram")) {
+  /* Where Telegram is not set up the launch leaves the server out and grants
+     nothing, so no caller is refused over it. */
+  if (Array.isArray(args.mcpServers) && args.mcpServers.includes("telegram") && telegramSetUp()) {
     const caller = dependencies ? attributionOf(dependencies) : null;
     if (caller?.kind === "manager") {
       if (caller.via?.deputy) {
@@ -1483,6 +1509,7 @@ async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies,
      calls a recoverable spawn with one on each first dispatch, and a replay is
      answered from the receipt without reaching this function. */
   if (dependencies) refuseMcpSpawnSizing(args, dependencies);
+  refuseCrossProjectFromSeat("spawn_agent", () => (text(args.cwd) ? projectForCwd(spawnCwd(args)) : null), args, dependencies);
   /* #1490: the persisted downstream key wins over a recomputation — it is the
      key the claim was bound to and the one recovery will look up. */
   const clientAttemptId = context?.binding?.downstreamKey ?? spawnAttemptId(requestId(args));
@@ -1679,6 +1706,217 @@ function logMaintenanceWrite(caller: MaintainerCaller | null, tool: "create_task
   }
 }
 
+/**
+ * Cross-project work goes seat to seat (#2518).
+ *
+ * A project's designated seat is the one manager that tracks what runs on its
+ * board, so another project's seat does not put a task, a pipeline or an agent
+ * there by itself: it hands the work over with send_message_to_orchestrator.
+ * The call is refused. A warning would arrive with the work already on the
+ * other board and its seat already bypassed; a refusal costs one more call.
+ *
+ * One thing lifts it: the operator asked for exactly this, which the seat
+ * states by quoting the request in `crossProjectRequest`. A target with no
+ * designated seat is refused the same way, and the answer says so:
+ * send_message_to_orchestrator designates one for that project before it
+ * delivers. Only a seat is judged: a worker, a stage and the operator's own
+ * session launch as they did.
+ */
+function refuseCrossProjectFromSeat(
+  tool: "create_task" | "create_pipeline" | "spawn_agent",
+  /* Read only for a seat: resolving a directory's project is not free, and a
+     launch that names none is refused by its own tool. */
+  targetOf: () => string | null,
+  args: McpToolArgs,
+  dependencies: ViewerMcpDomainDependencies | undefined,
+): void {
+  if (!dependencies || text(args.crossProjectRequest)) return;
+  let caller: CallerAttribution;
+  try { caller = attributionOf(dependencies); } catch { return; }
+  if (caller.kind !== "manager" || !caller.conversationId) return;
+  const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
+  const own = seats.find((seat) => seat.conversationId === caller.conversationId)?.project;
+  if (!own) return;
+  let target: string | null = null;
+  try { target = targetOf(); } catch { /* An unreadable target is the tool's own refusal. */ }
+  if (target === null || !target) return;
+  const named: string = target;
+  const seatProject = canonicalOrchestratorProject(own);
+  const targetProject = canonicalOrchestratorProject(named);
+  if (seatProject === targetProject) return;
+  const targetHasSeat = seats.some((seat) => !!seat.project && canonicalOrchestratorProject(seat.project) === targetProject);
+  throw new McpToolRefusal(
+    `${tool} from an orchestrator seat onto another project's board is refused: `
+    + (targetHasSeat
+      ? "that project's own seat manages its board. "
+      : "that project has no orchestrator seat yet, and the handover designates one before it delivers. ")
+    + "Hand the work over with send_message_to_orchestrator, giving that project and the task context. "
+    + "When the operator explicitly asked you to act on that project directly, repeat the call with crossProjectRequest quoting their request.",
+    { code: "cross_project_refused", status: 403, retryable: false, tool, seatProject, targetProject, targetHasSeat, use: "send_message_to_orchestrator" },
+  );
+}
+
+/** The names a Delegatus bug report is checked against: everything a public
+    manager report is, with Delegatus itself as the one project it may name. */
+async function issueReportDenyList(control: ViewerControlDependencies | null, dependencies: ViewerMcpDomainDependencies): Promise<PublicDenyList> {
+  let own: string | null = null;
+  try { own = (dependencies.viewerProjects?.() ?? viewerOwnProjects())[0] ?? null; } catch { /* No project is exempt. */ }
+  try {
+    if (dependencies.publicDenyList) return dependencies.publicDenyList(own);
+    const deny = await productionPublicDenyList(own, control, true, true);
+    const delegatus = delegatusIssueRepository(viewerPackageManifest.repository.url)?.toLowerCase() ?? null;
+    return { ...deny, projects: deny.projects.filter((project) => !delegatus || project.repository?.toLowerCase() !== delegatus) };
+  } catch {
+    throw new Error("Known-name hints are unavailable; review names and identities yourself.");
+  }
+}
+
+/** Advisory hints and an agent judgment accompany the exact report text.
+    Approval remains bound to that text's digest and the operator's conversation. */
+async function issueReportTool(args: McpToolArgs, control: ViewerControlDependencies | null, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
+  const action = text(args.action);
+  const caller = attributionOf(dependencies);
+  const directory = dependencies.issueReportsDir?.();
+  const refuse = (message: string, code: string, extra: McpToolPayload = {}) => new McpToolRefusal(message, { code, status: 400, retryable: false, ...extra });
+  const collectHints = async (report: { title: string; body: string }) => {
+    let deny = EMPTY_DENY_LIST;
+    const hintWarnings: string[] = [];
+    try { deny = await issueReportDenyList(control, dependencies); }
+    catch { hintWarnings.push("Known-name hints are unavailable; review names and identities yourself."); }
+    return { hints: scrubIssueReport(report, deny), hintWarnings };
+  };
+  /* The preview's own lines follow the operator's interface language, English while none is known. */
+  const previewLanguage = (dependencies.operatorLocale ? dependencies.operatorLocale() : operatorLocale()) ?? "en";
+  const view = (preview: IssueReportPreview): McpToolPayload => ({
+    state: preview.state, digest: preview.digest, title: preview.title, body: preview.body,
+    privacyJudgment: preview.privacyJudgment ?? {
+      assessment: "No agent judgment was recorded for this legacy preview.",
+      removed: "Unknown.", harmlessHints: "Unknown.", uncertainties: "Review the whole text before approving.",
+    },
+    hints: preview.hints ?? [], hintWarnings: preview.hintWarnings ?? [],
+    previewText: issueReportPreviewText(preview, previewLanguage), previewLanguage,
+    ...(preview.publication?.issueUrl ? { issueUrl: preview.publication.issueUrl } : {}),
+  });
+  if (action === "hints" || action === "preview") {
+    if (caller.kind === "unidentified" || !caller.conversationId) throw refuse("a report needs an identified calling session", "issue_report_caller_unidentified", { status: 403 });
+    const title = typeof args.title === "string" ? args.title.trim() : "";
+    const body = typeof args.body === "string" ? args.body.trim() : "";
+    if (!title || !body) throw refuse("a report needs a title and a body", "issue_report_invalid");
+    if (/[\r\n]/.test(title) || title.length > ISSUE_REPORT_MAX_TITLE_CHARS) throw refuse(`the title is one line of at most ${ISSUE_REPORT_MAX_TITLE_CHARS} characters`, "issue_report_invalid", { field: "title" });
+    if (body.length > ISSUE_REPORT_MAX_BODY_CHARS) throw refuse(`the body is at most ${ISSUE_REPORT_MAX_BODY_CHARS} characters`, "issue_report_invalid", { field: "body" });
+    const review = await collectHints({ title, body });
+    if (action === "hints") return {
+      ...review,
+      next: "Re-read the whole title and body yourself. A hint may be a false alarm; a clean result proves nothing. Rewrite private content and provide your own privacyJudgment with the preview.",
+    };
+    const judgment = args.privacyJudgment as IssueReportPreview["privacyJudgment"];
+    if (!judgment || !["assessment", "removed", "harmlessHints", "uncertainties"].every((field) => {
+      const value = (judgment as unknown as Record<string, unknown>)[field];
+      return typeof value === "string" && value.trim().length > 0 && value.length <= 3000;
+    })) throw refuse("preview needs your privacyJudgment: assessment, removed, harmlessHints with reasons, and uncertainties", "issue_report_invalid", { field: "privacyJudgment" });
+    const privacyJudgment = {
+      assessment: judgment.assessment, removed: judgment.removed,
+      harmlessHints: judgment.harmlessHints, uncertainties: judgment.uncertainties,
+    };
+    const preview = recordIssueReportPreview({ title, body, privacyJudgment, ...review }, caller.conversationId, { directory });
+    return {
+      ...view(preview),
+      next: "Return PREVIEW with this digest, exact title and body, your privacy judgment and remaining hints as a short list beside the text. The operator decides last and may approve text with hints. Publication is the orchestrator seat's after approval.",
+    };
+  }
+  const digest = text(args.digest);
+  if (!digest) throw refuse(`${action} needs the digest a preview answered`, "issue_report_invalid", { field: "digest" });
+  const stored = readIssueReportPreview(digest, directory);
+  if (!stored) {
+    throw refuse(
+      "no stored preview has this digest, so nothing was published: only the previewed text is ever filed. Preview the report again and ask the operator to approve that text.",
+      "issue_report_digest_mismatch", { status: 409 },
+    );
+  }
+  const seat = caller.kind === "manager" && !caller.via ? caller.conversationId : null;
+  const approvalReplies = issueReportApprovalReplies(digest);
+  if (action === "show") {
+    if (!stored.hints) Object.assign(stored, await collectHints(stored));
+    if (!seat) return view(stored);
+    return {
+      ...view({ ...(markIssueReportShown(digest, seat, { directory }) ?? stored), hints: stored.hints, hintWarnings: stored.hintWarnings }),
+      approvalReplies, approvalReplyDrafts: issueReportApprovalDrafts(digest),
+      next: "Put previewText in chat exactly as it is: it marks where the published text starts and ends, and carries privacyJudgment, the remaining hints and hintWarnings after it. The operator may approve text with hints. Then suggest_replies with the approvalReplyDrafts entry in the operator's language (its label and its text, unchanged) as the yes, beside a no and an edit. Publication is admitted only when that text is the operator's last message here.",
+    };
+  }
+  if (action !== "publish") throw refuse("action is hints, preview, show or publish", "issue_report_invalid", { field: "action" });
+  if (!seat) {
+    throw refuse("only a designated orchestrator seat publishes a report, after the operator approved its preview in that seat's conversation", "issue_report_publish_refused", { status: 403 });
+  }
+  if (stored.state === "published" && stored.publication?.issueUrl) return { ...view(stored), published: true, replay: true };
+  const repository = dependencies.issueReportRepository ? dependencies.issueReportRepository() : delegatusIssueRepository(viewerPackageManifest.repository.url);
+  if (!repository) throw refuse("this Delegatus install names no GitHub repository to file a report in", "issue_report_repository_unknown");
+  const report = { title: stored.title, body: stored.body };
+  /* An unsettled claim is settled only by finding the issue it may have
+     filed. Not finding it proves nothing, so nothing is filed again. */
+  const reconciled = async (claim: IssueReportPublication): Promise<McpToolPayload | null> => {
+    let issueUrl: string | null = null;
+    try { issueUrl = await (dependencies.issueReportFinder ?? issueReportFinder())(report, repository); } catch { /* Still unknown. */ }
+    if (!issueUrl) return null;
+    settleIssueReportPublication(digest, { ...claim, publishedAt: new Date().toISOString(), issueUrl }, directory);
+    return { ...view(readIssueReportPreview(digest, directory) ?? stored), issueUrl, published: true, reconciled: true };
+  };
+  const outcomeUnknown = "a publication of this preview did not report its outcome; the issue may exist, so look for it in the repository and file nothing again. Publishing this digest again looks for it too";
+  if (stored.state === "publishing" && stored.publication) {
+    const found = await reconciled(stored.publication);
+    if (found) return found;
+    throw refuse(outcomeUnknown, "issue_report_outcome_unknown", { status: 409 });
+  }
+  const shownAt = stored.shown.find((row) => row.seat === seat)?.at;
+  if (!shownAt) {
+    throw refuse("read this preview back with action show and show the operator that exact text before you publish it", "issue_report_not_shown", { status: 409 });
+  }
+  /* Keep approval validation and the synchronous claim together, with no
+     asynchronous work between them. Hints never govern publication. */
+  const messages = await (dependencies.operatorMessages
+    ? dependencies.operatorMessages(seat)
+    : operatorMessagesOf(seat, dependencies.registrySnapshot()));
+  const approval = issueReportApproval(messages, digest, Date.parse(shownAt));
+  if (!approval.approved) {
+    throw refuse(
+      approval.reason === "no_operator_message"
+        ? "the operator has not answered since you read this preview back, so nothing was published. Put the exact title and body in chat and offer the approving reply with suggest_replies"
+        : "the operator's last message in this conversation is not the approving reply of this preview, so nothing was published. A no or an edit goes back to the reporter; a yes is the approving reply, sent by the operator",
+      "issue_report_approval_required", { status: 403, reason: approval.reason, approvalReplies },
+    );
+  }
+  const claim: IssueReportPublication = {
+    by: seat, approval: approval.message.text, approvedAt: new Date(approval.message.at).toISOString(), startedAt: new Date().toISOString(),
+  };
+  /* The claim is the one moment a preview turns into a publication. Of any
+     number of seats and processes publishing one digest, one creates it. */
+  if (!claimIssueReportPublication(digest, claim, directory)) {
+    const current = readIssueReportPreview(digest, directory);
+    if (current?.state === "published" && current.publication?.issueUrl) return { ...view(current), published: true, replay: true };
+    throw refuse(outcomeUnknown, "issue_report_outcome_unknown", { status: 409 });
+  }
+  let issueUrl: string;
+  try {
+    issueUrl = await (dependencies.issueReportPublisher ?? issueReportPublisher())(report, repository);
+  } catch (error) {
+    const failure = error as { code?: unknown; message?: unknown };
+    /* Two failures prove no issue exists: the App credential refused before
+       `gh` was started, and a `gh` that could not be started at all. Every
+       other one (a lost answer, a stopped command, an answer with no address)
+       can follow an issue the forge already created, so the claim stays. */
+    if (error instanceof ForgeAppWriteRefused || failure.code === "ENOENT") {
+      releaseIssueReportPublication(digest, directory);
+      const reason = error instanceof ForgeAppWriteRefused ? error.message : "the gh command is not installed";
+      throw refuse(`the report was not published: ${reason}`, "issue_report_publish_failed", { status: 502, retryable: true });
+    }
+    const found = await reconciled(claim);
+    if (found) return found;
+    throw new McpDispatchUncertainError("the publication did not report its outcome and the issue may exist; look for it in the repository and file nothing again");
+  }
+  settleIssueReportPublication(digest, { ...claim, publishedAt: new Date().toISOString(), issueUrl }, directory);
+  return { ...view(readIssueReportPreview(digest, directory) ?? stored), issueUrl, published: true };
+}
+
 async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   /* A new task runs on the machine that creates it (M.4); "here" is the only
      machine a create names. */
@@ -1688,8 +1926,9 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
   const maintainer = dependencies ? maintenanceCaller(dependencies) : null;
   const caller = dependencies ? attributionOf(dependencies) : null;
   assertMaintenanceWrite(maintainer, args, undefined, true);
+  refuseCrossProjectFromSeat("create_task", () => text(args.project) || null, args, dependencies);
   const input: CreateTaskInput = {
-    ...args,
+    ...withoutKeys(args, ["crossProjectRequest"]),
     placement: args.placement ?? "unplaced",
     clientRequestId: requestId(args),
   };
@@ -1833,6 +2072,32 @@ function assertPipelineSeatAuthority(dependencies: ViewerMcpDomainDependencies, 
   if (refusal) throw new McpToolRefusal(refusal, { code: "orchestrator_seat_revoked", status: 403 });
 }
 
+/**
+ * #2518: a role with no child-spawn capability (a reviewer, a verifier, a
+ * maintenance run, an issue reporter) creates no pipeline, and an issue
+ * reporter launches no stage of one either. The HTTP route refuses the same caller on create; this is the
+ * door an agent actually uses, and it stands before any dispatch or write.
+ * The role is the one the server attributed to the calling conversation, or
+ * the registry's for it, or the `src` creator's when no caller is named.
+ */
+function pipelineCallerRoles(dependencies: ViewerMcpDomainDependencies, src?: unknown): (string | null | undefined)[] {
+  const caller = attributionOf(dependencies);
+  let snapshot: RegistrySnapshot | null = null;
+  try { snapshot = dependencies.registrySnapshot?.() ?? null; } catch { /* The attributed role decides alone. */ }
+  const lookup = snapshot ? readOnlyConversationLookupFromSnapshot(snapshot) : null;
+  const source = !caller.conversationId && typeof src === "string" ? lookup?.conversationForPath(src.trim()) ?? null : null;
+  const conversationId = caller.conversationId ?? source?.id ?? null;
+  return [caller.role, snapshot && conversationId ? conversationAgentRole(snapshot, conversationId as `conversation_${string}`) : null];
+}
+
+function refuseSpawnDeniedPipelineCaller(dependencies: ViewerMcpDomainDependencies, src?: unknown, denies: (role: string | null) => boolean = isSpawnDeniedRole): void {
+  const denied = pipelineCallerRoles(dependencies, src).find((role) => denies(role ?? null));
+  if (denied) throw new McpToolRefusal(reviewerOriginSpawnGuidance(denied), { code: "reviewer_origin_spawn", status: 403, retryable: false });
+}
+
+/** The pipeline actions that start a stage's agent. */
+const STAGE_LAUNCHING_PIPELINE_ACTIONS: ReadonlySet<string> = new Set(["start", "retry-stage"]);
+
 /** A capability pins the launch receipt and its exact native generation. */
 function inferredPipelineSource(dependencies: ViewerMcpDomainDependencies): string {
   const authority = dependencies.attentionAuthority();
@@ -1856,8 +2121,12 @@ function inferredPipelineSource(dependencies: ViewerMcpDomainDependencies): stri
 }
 
 async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, dependencies?: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
-  if (dependencies) assertPipelineSeatAuthority(dependencies, args.src);
-  const request = withoutKeys(args, ["clientRequestId", "recoveryOnly"]);
+  if (dependencies) {
+    refuseSpawnDeniedPipelineCaller(dependencies, args.src);
+    assertPipelineSeatAuthority(dependencies, args.src);
+  }
+  refuseCrossProjectFromSeat("create_pipeline", () => (text(args.repoDir) ? projectForCwd(text(args.repoDir)) : null), args, dependencies);
+  const request = withoutKeys(args, ["clientRequestId", "recoveryOnly", "crossProjectRequest"]);
   if (request.src === undefined && dependencies) request.src = inferredPipelineSource(dependencies);
   if (context?.dispatch) context.dispatch.attempted = true;
   /* Every MCP caller is an agent; the sizing rules judge the attributed
@@ -1942,6 +2211,8 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
   assertPipelineSeatAuthority(dependencies);
   const pipelineId = required(args, "pipelineId");
   const action = required(args, "action") as PipelineAction;
+  /* The other roles in the deny list keep the actions their stages rely on. */
+  if (STAGE_LAUNCHING_PIPELINE_ACTIONS.has(action)) refuseSpawnDeniedPipelineCaller(dependencies, undefined, (role) => role === "issue-reporter");
   /* Clearing a lane off the operator's queue is the dismissal service's write
      (docs/design/needs-attention.md §5): the same gate and the same attributed
      record `dismiss_attention` writes. */
@@ -3324,63 +3595,95 @@ function knownPullRequests(project: string): PullRequestLookup {
  * What the scrubber looks for by name (§5.5), read at call time: every account
  * id and label, the OS user name, the home directory's name and the machine's
  * host name, the people the bot has seen in its allowlisted chats, and the
- * other projects in repository form. Every source fails soft to nothing.
+ * other projects in repository form. Public bridge reports retain their soft
+ * reading; issue reports require every source read to complete.
  */
-async function productionPublicDenyList(project: string | null, control: ViewerControlDependencies | null, postsToTelegram: boolean): Promise<PublicDenyList> {
+async function productionPublicDenyList(project: string | null, control: ViewerControlDependencies | null, postsToTelegram: boolean, requireComplete = false): Promise<PublicDenyList> {
   const accounts: string[] = [];
   const collect = (list: () => readonly { id: string; label: string }[]) => {
     try {
       for (const account of list()) accounts.push(account.id, account.label);
-    } catch {
+    } catch (error) {
+      if (requireComplete) throw error;
       // An unreadable registry contributes nothing.
     }
   };
-  collect(listClaudeAccounts);
-  collect(listCodexAccounts);
-  collect(listCopilotAccounts);
+  collect(() => requireComplete ? claudeAccountsForPrivacy() : listClaudeAccounts());
+  collect(() => requireComplete ? codexAccountsForPrivacy() : listCodexAccounts());
+  collect(() => requireComplete ? copilotAccountsForPrivacy() : listCopilotAccounts());
   const local: string[] = [];
   try {
     local.push(os.userInfo().username, path.basename(os.homedir()), os.hostname().split(".")[0] ?? "");
-  } catch {
+  } catch (error) {
+    if (requireComplete) throw error;
     // Nothing to add.
   }
   /* The bot's people are read only for a project that posts to a bot chat:
      a bridge-only project shares nothing with the bot's chats. */
-  const people = control && project && postsToTelegram ? await telegramPeople(control) : [];
+  if (requireComplete && postsToTelegram && !control) throw new Error("Privacy names read is unavailable");
+  const people = control && (project || requireComplete) && postsToTelegram ? await telegramPeople(control, requireComplete) : [];
   const projects: { repository: string | null; names: string[] }[] = [];
   try {
     const own = project ? canonicalOrchestratorProject(project) : null;
     const keys = new Set<string>();
     for (const seat of activeOrchestratorSeats()) keys.add(canonicalOrchestratorProject(seat.project));
-    const aliases = projectAliasSnapshot();
-    for (const key of Object.keys(aliases.displayNames)) keys.add(canonicalOrchestratorProject(key));
+    const aliases = projectAliasSnapshot({ strict: requireComplete });
+    const remotes = requireComplete ? recordedProjectRemotes({ strict: true }) : {};
+    for (const key of Object.keys(aliases.displayNames)) keys.add(requireComplete ? key : canonicalOrchestratorProject(key));
+    for (const key of Object.keys(remotes)) keys.add(key);
     for (const key of keys) {
-      if (key === own) continue;
-      const repository = githubRepositoryOfRemote(recordedProjectRemote(key));
+      if (!requireComplete && key === own) continue;
+      const remote = requireComplete ? remotes[key] ?? null : recordedProjectRemote(key);
+      const repository = githubRepositoryOfRemote(remote);
+      /* Private repository names belong to every forge and local remote.
+         Reuse the project resolver and the report's canonical text decoder. */
+      const remoteName = requireComplete && remote ? projectIdentityFromRemote(remote, process.cwd())?.displayName ?? "" : "";
+      const decodedName = canonicalSensitiveText(remoteName);
+      if (decodedName.error) throw new Error("Privacy repository name is unreadable");
       projects.push({
         repository,
-        names: [repository?.split("/")[1] ?? "", projectDisplayName(key, aliases.displayNames[key])].filter(Boolean),
+        names: [repository?.split("/")[1] ?? "", remoteName, decodedName.text, projectDisplayName(key, aliases.displayNames[key])].filter(Boolean),
       });
     }
-  } catch {
+  } catch (error) {
+    if (requireComplete) throw error;
     // An unreadable catalog contributes nothing.
   }
   return { accounts, people, local, projects };
 }
 
-async function telegramPeople(control: ViewerControlDependencies): Promise<string[]> {
+async function telegramPeople(control: ViewerControlDependencies, requireComplete = false): Promise<string[]> {
   const people = new Set<string>();
   try {
-    const chats = await readViewerControl(control, "/api/telegram/bot/agent?op=chats") as { chats?: { chat?: unknown; postAllowed?: unknown }[] };
-    for (const chat of (chats.chats ?? []).filter((entry) => entry.postAllowed === true && typeof entry.chat === "string").slice(0, 4)) {
-      const page = await readViewerControl(control, `/api/telegram/bot/agent?${new URLSearchParams({ op: "messages", chat: chat.chat as string, limit: "100", maxChars: "1" })}`) as { messages?: { from?: { name?: unknown; username?: unknown } | null; fromName?: unknown; fromUsername?: unknown }[] };
-      for (const message of page.messages ?? []) {
-        for (const value of [message.from?.name, message.from?.username, message.fromName, message.fromUsername]) {
-          if (typeof value === "string" && value.trim()) people.add(value.replace(/^@/, "").trim());
+    const chats = await readViewerControl(control, `/api/telegram/bot/agent?op=chats${requireComplete ? "&includeInactive=1" : ""}`) as { chats?: { chat?: unknown; postAllowed?: unknown }[]; truncated?: number };
+    if (requireComplete && !Array.isArray(chats.chats)) throw new Error("Privacy chats read is malformed");
+    if (requireComplete && chats.truncated) throw new Error("Privacy chats read is incomplete");
+    /* Publication protects retained people in every known chat, including
+       chats the bot has left. The bridge retains its destination-specific reading. */
+    if (requireComplete && chats.chats?.some((entry) => !entry || typeof entry.chat !== "string" || !entry.chat.trim())) throw new Error("Privacy chats read is malformed");
+    const readable = (chats.chats ?? []).filter((entry) => (requireComplete || entry.postAllowed === true) && typeof entry.chat === "string");
+    for (const chat of requireComplete ? readable : readable.slice(0, 4)) {
+      let cursor: string | null = null;
+      const seen = new Set<string>();
+      do {
+        const params = new URLSearchParams({ op: "messages", chat: chat.chat as string, limit: "100", maxChars: "1" });
+        if (cursor) params.set("cursor", cursor);
+        const page = await readViewerControl(control, `/api/telegram/bot/agent?${params}`) as { messages?: { from?: { name?: unknown; username?: unknown } | null; fromName?: unknown; fromUsername?: unknown }[]; hasMore?: boolean; nextCursor?: string | null };
+        if (requireComplete && (!Array.isArray(page.messages) || typeof page.hasMore !== "boolean"
+          || !(page.nextCursor === null || typeof page.nextCursor === "string")
+          || (!page.hasMore && page.nextCursor !== null))) throw new Error("Privacy people read is malformed");
+        for (const message of page.messages ?? []) {
+          for (const value of [message.from?.name, message.from?.username, message.fromName, message.fromUsername]) {
+            if (typeof value === "string" && value.trim()) people.add(value.replace(/^@/, "").trim());
+          }
         }
-      }
+        cursor = requireComplete && page.hasMore ? page.nextCursor ?? null : null;
+        if (requireComplete && page.hasMore && (!cursor?.trim() || seen.has(cursor))) throw new Error("Privacy people read is incomplete");
+        if (cursor) seen.add(cursor);
+      } while (cursor);
     }
-  } catch {
+  } catch (error) {
+    if (requireComplete) throw error;
     // No bot, or no answer: nobody to look for.
   }
   return [...people];
@@ -6232,6 +6535,10 @@ export function viewerMcpToolPolicy(
       // An admitted agent's read surface is independent of role/seat identity.
       // Resolve authority only where the policy uses it. Bindings still verify
       // their own operation authority and recoverable receipts before dispatch.
+      if (!hostHealthProbe && isMutatingMcpTool(tool) && pipelineCallerRoles(domainDependencies, args.src).includes("issue-reporter")) {
+        const verdict = permitIssueReporterTool(tool, args);
+        if (!verdict.allowed) return verdict;
+      }
       if (!hostHealthProbe && isMutatingMcpTool(tool) && maintenanceCaller(domainDependencies)) {
         const verdict = permitMaintainerTool(tool, args);
         if (!verdict.allowed) return verdict;
@@ -6387,6 +6694,7 @@ function bindSpawn(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies)
   const cwd = spawnCwd(args);
   const caller = recoveryCaller(dependencies);
   const project = spawnTargetProject(args, cwd);
+  refuseCrossProjectFromSeat("spawn_agent", () => project, args, dependencies);
   const taskError = spawnTaskProjectError(args.taskId, cwd, dependencies.loadTasks);
   if (taskError) throw new McpToolRefusal(taskError, { code: "invalid_request", status: 400 });
   return {
@@ -6612,9 +6920,13 @@ export function viewerMcpRecoverableTools(
 ): Partial<Record<McpToolName, McpRecoverableTool>> {
   return {
     create_pipeline: {
-      bind: (args) => ({ caller: recoveryCaller(domainDependencies),
-        target: { project: projectForCwd(required(args, "repoDir")), identity: path.resolve(required(args, "repoDir")) },
-        downstreamKey: `create_pipeline:${requestId(args)}` }),
+      bind: (args) => {
+        const project = projectForCwd(required(args, "repoDir"));
+        refuseCrossProjectFromSeat("create_pipeline", () => project, args, domainDependencies);
+        return { caller: recoveryCaller(domainDependencies),
+          target: { project, identity: path.resolve(required(args, "repoDir")) },
+          downstreamKey: `create_pipeline:${requestId(args)}` };
+      },
       recover: async (binding, options): Promise<McpRecoveryEvidence> => {
         if (options.legacy) return { outcome: "unknown", evidence: "legacy-receipt-unbound", reason: "creation has no caller-bound receipt", ids: {}, ownership: "unknown" };
         const pipeline = pipelineDeliveryLookup({ requestKey: binding.downstreamKey });
@@ -6722,5 +7034,6 @@ export function viewerMcpBindings(
     telegram_bot_send_media: (args, context) => telegramBotSendMedia(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_send_document: (args, context) => telegramBotSendDocument(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_messages: (args, context) => telegramBotMessages(args, viewerControlForCall(controlDependencies, context)),
+    issue_report: (args, context) => issueReportTool(args, viewerControlForCall(controlDependencies, context), domainDependencies),
   };
 }

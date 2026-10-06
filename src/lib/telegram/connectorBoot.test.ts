@@ -10,7 +10,6 @@ function bootPorts(overrides: Partial<TelegramConnectorBootPorts> = {}): Telegra
     provisions: 0,
     logs: [] as string[],
     hasCredentialedSession: () => true,
-    reportsEnabled: () => true,
     provision: async () => { state.provisions += 1; },
     connected: () => true,
     log: (code: string) => { state.logs.push(code); },
@@ -19,7 +18,7 @@ function bootPorts(overrides: Partial<TelegramConnectorBootPorts> = {}): Telegra
   return state as TelegramConnectorBootPorts & { provisions: number; logs: string[] };
 }
 
-test("a credentialed account with reports on re-provisions the connector at boot", async () => {
+test("a credentialed account re-provisions the connector at boot", async () => {
   /* #1133: the connector is a child of the viewer container's entrypoint, so a
      restart kills it and nothing brought it back until a consumer tripped over
      its absence — which, for the Daily Report, was the run itself. */
@@ -34,13 +33,6 @@ test("no stored credential provisions nothing", async () => {
   const ports = bootPorts({ hasCredentialedSession: () => false });
 
   await expect(provisionTelegramConnectorAtStartup(ports)).resolves.toBe("no_session");
-  expect(ports.provisions).toBe(0);
-});
-
-test("reports switched off leave the connector to its consumers", async () => {
-  const ports = bootPorts({ reportsEnabled: () => false });
-
-  await expect(provisionTelegramConnectorAtStartup(ports)).resolves.toBe("reports_disabled");
   expect(ports.provisions).toBe(0);
 });
 
