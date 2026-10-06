@@ -1406,7 +1406,7 @@ test.each(["attached", "detached"].flatMap(attachment => ["final-status", "final
     const result = await ordinary.git(args, cwd);
     const inject = phase === "final-status" ? args[0] === "status" && ++statuses === 2
       : phase === "final-head" ? args.join(" ") === "rev-parse --verify HEAD"
-      : args.join(" ") === "ls-files --cached -z";
+      : args.join(" ") === "ls-files --cached -v -z";
     if (inject && !attempted) {
       attempted = true;
       fs.writeFileSync(path.join(dir, "unique.txt"), "private detached work");
@@ -1419,7 +1419,7 @@ test.each(["attached", "detached"].flatMap(attachment => ["final-status", "final
   } });
   expect(report.removed).toEqual([]);
   expect(attempted).toBe(true);
-  expect(report.kept[0]!.reason).toBe(phase === "last-files" ? "ignored-files" : "remove-failed");
+  expect(report.kept[0]!.reason).toBe(phase === "last-files" ? "ignored-files" : "uncommitted");
   expect(git(["rev-parse", "HEAD"], dir)).toBe(tip);
   expect(fs.readFileSync(path.join(dir, "unique.txt"), "utf8")).toBe("private detached work");
   // Releasing the sweep's locks lets retained work be committed normally.
@@ -1440,7 +1440,7 @@ test.each(["final-head", "last-files"])("new ignored evidence during %s survives
   let wrote = false;
   const report = await sweepMergedWorktrees({ ...ordinary, git: async (args, cwd) => {
     const result = await ordinary.git(args, cwd);
-    if (cwd === dir && args.join(" ") === (phase === "final-head" ? "rev-parse --verify HEAD" : "ls-files --cached -z")) {
+    if (cwd === dir && args.join(" ") === (phase === "final-head" ? "rev-parse --verify HEAD" : "ls-files --cached -v -z")) {
       for (const capture of captures) {
         fs.mkdirSync(path.dirname(capture), { recursive: true });
         fs.writeFileSync(capture, "unique evidence");
@@ -2041,4 +2041,98 @@ test.skipIf(process.platform === "win32")("allocated hard links count once while
   expect(await allocatedBytes(first, [], seen)).toBe(bytes);
   expect(await allocatedBytes(second, [], seen)).toBe(0);
   expect(await exclusiveBytes(first)).toBe(0);
+});
+
+
+test.each(["skip-worktree", "assume-unchanged"])("hidden tracked edits under %s retain the finished checkout until restored", async flag => {
+  const root = repository(); remoteRepository(root);
+  const branch = "topic/hidden-edits";
+  const { dir } = lane(root, path.join(caseDir, "hidden-edits"), branch);
+  git(["push", "-q", "origin", branch], root);
+  const file = path.join(dir, "README.md");
+  const original = fs.readFileSync(file, "utf8");
+  git(["update-index", `--${flag}`, "README.md"], dir);
+  fs.writeFileSync(file, "unique hidden tracked edits");
+  expect(git(["status", "--porcelain=v1"], dir)).toBe("");
+  const options = ports({ pipelines: [pipeline({ repoDir: root, worktreeDir: dir, branch, closedAt: OLD_TERMINAL })], now: () => RETAIN_NOW });
+  const held = await sweepMergedWorktrees(options);
+  expect(held.removed).toEqual([]);
+  expect(held.kept[0]!.reason).toBe("uncommitted");
+  expect(fs.readFileSync(file, "utf8")).toBe("unique hidden tracked edits");
+  expect(branchExists(root, branch)).toBe(true);
+  fs.writeFileSync(file, original);
+  git(["update-index", `--no-${flag}`, "README.md"], dir);
+  expect((await sweepMergedWorktrees(options)).removed).toHaveLength(1);
+  expect(branchExists(root, branch)).toBe(false);
+});
+
+test.each(["none", "skip-worktree", "assume-unchanged"].flatMap(flag =>
+  ["final-status", "final-head", "last-files"].map(phase => [flag, phase] as const)))("tracked edits with %s during %s preserve the checkout and branch", async (flag, phase) => {
+  const root = repository();
+  const branch = "topic/late-tracked-edit";
+  const { dir, tip } = lane(root, path.join(caseDir, "late-tracked-edit"), branch);
+  const file = path.join(dir, "README.md");
+  let statuses = 0;
+  let changed = false;
+  const report = await sweepMergedWorktrees(ports({ repositories: [root], prs: [merged(181, branch, tip)],
+    git: async (args, cwd) => {
+      const result = await realGit(args, cwd);
+      if (args[0] === "status") statuses += 1;
+      const target = phase === "final-status" ? args[0] === "status" && statuses === 2
+        : phase === "final-head" ? args.join(" ") === "rev-parse --verify HEAD" && statuses === 2
+        : args[0] === "ls-files" && args.includes("--cached");
+      if (cwd === dir && target && !changed) {
+        changed = true;
+        if (flag !== "none") git(["update-index", `--${flag}`, "README.md"], dir);
+        fs.writeFileSync(file, "unique late tracked edits");
+      }
+      return result;
+    } }));
+  expect(changed).toBe(true);
+  expect(report.removed).toEqual([]);
+  expect(report.kept[0]!.reason).toBe("uncommitted");
+  expect(fs.readFileSync(file, "utf8")).toBe("unique late tracked edits");
+  expect(branchExists(root, branch)).toBe(true);
+});
+
+
+test.each(["initial", "final"])("unreadable %s tracked inventory preserves the checkout", async phase => {
+  const root = repository();
+  const branch = "topic/unreadable-inventory";
+  const { dir, tip } = lane(root, path.join(caseDir, "unreadable-inventory"), branch);
+  const report = await sweepMergedWorktrees(ports({ repositories: [root], prs: [merged(182, branch, tip)],
+    git: async (args, cwd) => {
+      if (cwd === dir && args[0] === "ls-files" && (phase === "initial" ? !args.includes("--cached") : args.includes("--cached")))
+        return { code: 1, stdout: "", stderr: "inventory unavailable" };
+      return realGit(args, cwd);
+    } }));
+  expect(report.removed).toEqual([]);
+  expect(report.kept[0]!.reason).toBe("uncommitted");
+  expect(fs.readFileSync(path.join(dir, "README.md"), "utf8")).toBe("widgets\n");
+  expect(branchExists(root, branch)).toBe(true);
+});
+
+test("same-size hidden tracked edits with restored mtime survive the last Git read", async () => {
+  const root = repository();
+  const branch = "topic/restored-mtime";
+  const { dir, tip } = lane(root, path.join(caseDir, "restored-mtime"), branch);
+  const file = path.join(dir, "README.md");
+  const original = fs.statSync(file);
+  let changed = false;
+  const report = await sweepMergedWorktrees(ports({ repositories: [root], prs: [merged(183, branch, tip)],
+    git: async (args, cwd) => {
+      const result = await realGit(args, cwd);
+      if (cwd === dir && args[0] === "ls-files" && args.includes("--cached")) {
+        changed = true;
+        git(["update-index", "--skip-worktree", "README.md"], dir);
+        fs.writeFileSync(file, "changed\n");
+        fs.utimesSync(file, original.atime, original.mtime);
+      }
+      return result;
+    } }));
+  expect(changed).toBe(true);
+  expect(report.removed).toEqual([]);
+  expect(report.kept[0]!.reason).toBe("uncommitted");
+  expect(fs.readFileSync(file, "utf8")).toBe("changed\n");
+  expect(branchExists(root, branch)).toBe(true);
 });

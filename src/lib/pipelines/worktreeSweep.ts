@@ -636,6 +636,26 @@ function lockCheckoutHead(directory: string, accessible: (directory: string) => 
   } catch { release(); return null; }
 }
 
+/** Tracked files must stay unchanged through the final asynchronous reads.
+    Inode and nanosecond change times also detect writes with restored mtime. */
+function trackedSnapshot(worktree: string, inventory: string): Map<string, string> | null {
+  if (inventory && !inventory.endsWith("\0")) return null;
+  const snapshot = new Map<string, string>();
+  try {
+    for (const file of inventory.split("\0").filter(Boolean)) {
+      if (snapshot.size >= MEASURE_ENTRY_LIMIT) return null;
+      const stat = fs.lstatSync(path.join(worktree, file), { bigint: true });
+      snapshot.set(file, `${stat.dev}:${stat.ino}:${stat.mode}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`);
+    }
+    return snapshot;
+  } catch { return null; }
+}
+
+function sameTrackedFiles(before: Map<string, string> | null, after: Map<string, string> | null): boolean {
+  return before !== null && after !== null && before.size === after.size
+    && [...before].every(([file, identity]) => after.get(file) === identity);
+}
+
 /** Status can precede the arrival of a new ignored file. Inventory the
     filesystem after the last asynchronous read; unknown contents stay. */
 function freshIgnored(worktree: string, tracked: string): string[] {
@@ -951,6 +971,9 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
         if (finalEntry.locked) { keep({ ...base, reason: "locked" }); continue; }
         const finalNested = finalWorktrees.find(other => resolve(other.path) !== worktree && inside(resolve(other.path), worktree));
         if (finalNested) { keep({ ...base, reason: "holds-worktree", detail: finalNested.path }); continue; }
+        const trackedBefore = await ports.git(["ls-files", "-z"], worktree);
+        const originalTracked = trackedBefore.code === 0 ? trackedSnapshot(accessible(worktree), trackedBefore.stdout) : null;
+        if (originalTracked === null) { keep({ ...base, reason: "uncommitted", detail: "tracked contents could not be inspected" }); continue; }
         const finalStatus = await ports.git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], worktree);
         const finalClass = classifyStatus(finalStatus.stdout, true);
         if (finalStatus.code !== 0 || finalClass.changed.length) { keep({ ...base, reason: "uncommitted" }); continue; }
@@ -960,9 +983,19 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
           continue;
         }
         const finalIgnored = keptIgnored(accessible(worktree), finalClass.ignored);
-        const trackedNow = await ports.git(["ls-files", "--cached", "-z"], worktree);
+        const trackedNow = await ports.git(["ls-files", "--cached", "-v", "-z"], worktree);
         if (trackedNow.code !== 0) { keep({ ...base, reason: "uncommitted" }); continue; }
-        const newlyIgnored = freshIgnored(accessible(worktree), trackedNow.stdout);
+        const tagged = trackedNow.stdout.split("\0").filter(Boolean);
+        // Git status and worktree removal trust these index flags. They cannot
+        // establish that a tracked file contains no unique local edits.
+        if (tagged.some(file => !file.startsWith("H "))) {
+          keep({ ...base, reason: "uncommitted", detail: "Git index flags hide tracked contents" }); continue;
+        }
+        const trackedPaths = tagged.map(file => file.slice(2)).join("\0") + (tagged.length ? "\0" : "");
+        if (!sameTrackedFiles(originalTracked, trackedSnapshot(accessible(worktree), trackedPaths))) {
+          keep({ ...base, reason: "uncommitted", detail: "tracked contents changed during cleanup checks" }); continue;
+        }
+        const newlyIgnored = freshIgnored(accessible(worktree), trackedPaths);
         const registration = registrationHold(root, worktree, worktree, accessible);
         if (registration) { keep({ ...registration, ...base }); continue; }
         if (finalIgnored.length || newlyIgnored.length) { keep({ ...base, reason: "ignored-files" }); continue; }
