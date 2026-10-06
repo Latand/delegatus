@@ -17,6 +17,11 @@ const env: NodeJS.ProcessEnv = {
   LLV_CODEX_BINARY: binary,
   LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1",
 };
+// Each nested test enters its own kernel containment service. Preserve only
+// the existing manager connection alongside the private application state.
+for (const key of ["XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"]) {
+  if (process.env[key] !== undefined) env[key] = process.env[key];
+}
 for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "LLV_STATE_DIR", "TMPDIR"]) {
   env[key] = join(roots, key === "TMPDIR" ? "t" : key.toLowerCase()); mkdirSync(env[key]!);
 }
@@ -119,8 +124,8 @@ const batches = selection === "--steering-only"
   ? [["src/lib/runtime/codexSteerDelivery.integration.test.ts"]]
   : [files, ...[...domFiles, ...registryFiles, ...injectionFiles, ...attachmentFiles].map(file => [file])];
 for (const file of batches.flat()) if (!existsSync(file)) throw new Error(`Missing named native runtime check: ${file}`);
-for (const batch of batches) {
-  const result = spawnSync(process.execPath, ["test", ...batch], { env, stdio: "inherit" });
+for (const file of batches.flat()) {
+  const result = spawnSync(process.execPath, ["test", file], { env, stdio: "inherit", timeout: 300_000, killSignal: "SIGKILL" });
   if (result.error) throw result.error;
   if (result.status !== 0) process.exit(result.status ?? 1);
 }

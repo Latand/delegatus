@@ -150,6 +150,15 @@ blocks; an intentional survivor on both sides is reported as pre-existing.
 Both regressions pass, and the full comparison suite passes 42 tests with
 221 assertions.
 
+The next publication attempt reached native Codex verification, whose private
+environment had dropped the user manager connection. Earlier opened design
+discussions established that existing host allowlists carry those connection
+variables; no earlier fix for this verifier failure was found. An executable
+regression through the real verifier was red with the same bus error, then
+green after preserving only the manager connection. Application state stays
+private, unrelated ambient values and old admission tokens are excluded, and
+each named native test now runs separately with a five-minute bound.
+
 ## Process-launch audit
 
 The audit parsed test files and fixture/probe helpers throughout the repository
@@ -167,8 +176,8 @@ readiness report to establish ownership. Disposition **synchronous**: the
 caller waits for the command; the runner contains any descendants if the
 synchronous call or its parent is interrupted.
 
-The syntax census contains 226 files: 152 with asynchronous primitives and
-74 with only synchronous primitives. These dispositions describe the verified
+The syntax census contains 227 files: 152 with asynchronous primitives and
+75 with only synchronous primitives. These dispositions describe the verified
 Linux path.
 
 | File | Async launch sites | Disposition |
@@ -352,6 +361,7 @@ Linux path.
 | `scripts/privacy-media-workflow.test.ts` | 46, 77 | synchronous |
 | `scripts/publish-workflow.test.ts` | 189, 328 | synchronous |
 | `scripts/supply-chain-check.test.ts` | 14 | synchronous |
+| `scripts/verify-native-codex-runtime.test.ts` | 33 | synchronous |
 | `src/app/api/artifact/route.test.ts` | 143 | synchronous |
 | `src/app/api/pipelines/route.test.ts` | 24 | synchronous |
 | `src/components/Viewer.switching.dom.test.tsx` | 299 | synchronous |
@@ -412,6 +422,7 @@ Additional launch wiring checked by text and imports:
 | `src/lib/mcp/ownedFixtureChildren.ts` | Receives existing handles; immediate registration and handle cleanup retained. The preload owns them before any caller can await. |
 | `src/lib/testing/testChildren.ts` | Wraps the real Node primitive and both Bun overloads before spawn returns; supplies the parent identity even without options. |
 | `scripts/local-gate-tests.ts` | Per-file comparison launches the kernel-owned runner and removes the old post-exit group-number kill. |
+| `scripts/verify-native-codex-runtime.ts` | Preserves the existing manager connection for nested containment, with one named file per process and a five-minute bound. |
 | `src/lib/runtime/claudeStreamBrokerHost.integration.test.ts` | Generated launchers and product launch ports remain inside their test service. |
 | `src/lib/runtime/codexAppServerHost.integration.test.ts` | Generated launchers and product launch ports remain inside their test service. |
 | `src/lib/runtime/copilotAcpHost.integration.test.ts` | Calls a product launch port; the preload owns real process creation. |
