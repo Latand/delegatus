@@ -270,7 +270,6 @@ export async function runClaimedRequest(
     if (admission === "duplicate") return null;
     if (admission === "full") return await finish(declined(leaseId, "busy"));
     recorded = true;
-    recorder?.begin(target.engine, target.model, profile);
     markActive(relay, target);
     const selection = accountManager.resolveHeadlessSpawn(
       target.engine,
@@ -326,6 +325,9 @@ export async function runClaimedRequest(
     }
     const launchedRun = run;
     if (!launchedRun) throw new Error("external relay launch unavailable");
+    // Capacity, drain and profile declines never ran an agent. Count only
+    // a launched child, including one still running or destined to fail.
+    if (launchedRun.pid) recorder?.begin(target.engine, target.model, profile);
     changeRun(requestId, (current) => ({
       ...current,
       childPid: launchedRun.pid,

@@ -103,7 +103,7 @@ const expired = (record: RelayAnswerRecord, now: number) =>
 
 /**
  * The record of one claimed request, written as it moves. `begin` marks it
- * running once the run is reserved, so a restart can settle it; `finish`
+ * running once the agent launches, so a restart can settle it; `finish`
  * writes the terminal state. A request whose ids cannot name a file gets no
  * record. A failed write is logged and never stops the run or its cleanup.
  */

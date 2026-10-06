@@ -12,7 +12,7 @@ import { relayActivity } from "./activity";
 import { dropRun, externalRelayFile, readRunLedger, updateRelayStore, type PairedRelay } from "./store";
 import { confirmRelayPairing } from "./pairing";
 import { contextRequest, sampleRequest, serviceClaims } from "./request.fixture";
-import { listAnswerRecords, readAnswerRecord, settleInterruptedAnswer } from "./answers";
+import { countMemberAnswers, listAnswerRecords, readAnswerRecord, settleInterruptedAnswer } from "./answers";
 import { startTestRelay } from "./testRelay";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-runner-test-"));
 process.env.LLV_STATE_DIR = path.join(root, "state");
@@ -114,6 +114,7 @@ test("an unsafe provider home declines as a profile error before launch", async 
       ...sampleRequest, request_id: "rq_unsafe_provider_home",
     }, undefined, { command: stub("throw new Error('should not launch')") });
     expect(outcome).toMatchObject({ outcome: "declined", reason: "profile_error" });
+    expect(readAnswerRecord(paired.id, "target_1", "rq_unsafe_provider_home")?.admitted).toBe(false);
     expect(completions).toHaveLength(1);
     expect(readRunLedger().runs).toEqual([]);
     expect(runningCount(paired.id, "target_1")).toBe(0);
@@ -894,6 +895,76 @@ test("the member limit declines a member past it, per chat, and never counts the
   }
 }, 60_000);
 
+test("pre-launch capacity and drain declines leave the member's allowance available", async () => {
+  const { drainFile, writeDrain, releaseDrain } = await import("@/lib/selfUpdate/drain");
+  const server = await startTestRelay(() => ({ body: { status: "accepted", duplicate: false } }));
+  const paired = relay(`${server.origin}/v1`);
+  paired.id = "relay_admission";
+  paired.targets[0]!.memberLimitPerHour = 2;
+  const requester = { key: "u_member", is_admin: false, can_restrict_members: false, can_delete_messages: false, is_anonymous_admin: false, is_owner: false };
+  const request = (id: string) => ({ ...sampleRequest, request_id: id, chat: { key: "chat_key_admissionaa" }, input: { ...sampleRequest.input, requester } });
+  const command = stub(`const a=process.argv.slice(2);await Bun.stdin.text();await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Done',reply_to:null}));`);
+  const previous = accountManager.resolveHeadlessSpawn;
+  try {
+    accountManager.resolveHeadlessSpawn = (() => ({ kind: "exhausted", resetsAt: null })) as typeof previous;
+    expect(await runClaimedRequest(paired, request("rq_before_capacity"), undefined, { command })).toMatchObject({ outcome: "declined", reason: "no_capacity" });
+    // Acquire the drain after reservation/account selection, exercising the
+    // second check immediately before the profile and child are built.
+    accountManager.resolveHeadlessSpawn = (() => {
+      writeDrain(drainFile(), { id: "admission-hold", target: "a".repeat(40), since: new Date().toISOString(), until: 0, persistent: true });
+      return { kind: "available", account };
+    }) as typeof previous;
+    expect(await runClaimedRequest(paired, request("rq_before_drain"), undefined, { command })).toMatchObject({ outcome: "declined", reason: "busy" });
+    releaseDrain(drainFile(), "admission-hold");
+    accountManager.resolveHeadlessSpawn = previous;
+    for (const id of ["rq_before_capacity", "rq_before_drain"])
+      expect(readAnswerRecord(paired.id, "target_1", id)?.admitted).toBe(false);
+    for (const id of ["rq_after_capacity", "rq_after_drain"])
+      expect(await runClaimedRequest(paired, request(id), undefined, { command })).toMatchObject({ outcome: "answered" });
+    expect(await runClaimedRequest(paired, request("rq_after_allowance"), undefined, { command })).toMatchObject({ outcome: "declined", reason: "member_limit" });
+  } finally {
+    accountManager.resolveHeadlessSpawn = previous;
+    releaseDrain(drainFile(), "admission-hold");
+    await server.close();
+  }
+});
+
+test("launched hand-offs, failed agents and running agents each consume the member limit", async () => {
+  const server = await startTestRelay(() => ({ body: { status: "accepted", duplicate: false } }));
+  const paired = relay(`${server.origin}/v1`);
+  paired.id = "relay_count_launched";
+  paired.targets[0] = { ...paired.targets[0]!, concurrency: 2, memberLimitPerHour: 1 };
+  const requester = { key: "u_member", is_admin: false, can_restrict_members: false, can_delete_messages: false, is_anonymous_admin: false, is_owner: false };
+  const request = (id: string, chatKey: string) => ({ ...contextRequest, request_id: id, chat: { key: chatKey }, input: { ...contextRequest.input, requester } });
+  const handoff = handoffStub(path.join(root, "admission-handoff"));
+  const failure = stub("process.exit(1)");
+  const release = path.join(root, "admission-release");
+  const running = stub(`const a=process.argv.slice(2);await Bun.stdin.text();while(!await Bun.file(${JSON.stringify(release)}).exists())await Bun.sleep(10);await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Done',reply_to:null}));`);
+  let pending: ReturnType<typeof runClaimedRequest> | undefined;
+  try {
+    for (const [kind, command, outcome] of [
+      ["handoff", handoff, "declined"], ["failed", failure, "failed"],
+    ] as const) {
+      const chat = `chat_key_${kind}_aaaaa`;
+      const id = `rq_launched_${kind}`;
+      expect(await runClaimedRequest(paired, request(id, chat), undefined, { command })).toMatchObject({ outcome, reason: kind === "handoff" ? "handoff" : "agent_error" });
+      expect(readAnswerRecord(paired.id, "target_1", id)?.admitted).toBe(true);
+      expect(await runClaimedRequest(paired, request(`${id}_limited`, chat), undefined, { command })).toMatchObject({ outcome: "declined", reason: "member_limit" });
+    }
+    const chat = "chat_key_runningaaaa";
+    pending = runClaimedRequest(paired, request("rq_launched_running", chat), undefined, { command: running });
+    const deadline = Date.now() + 5000;
+    while (!readAnswerRecord(paired.id, "target_1", "rq_launched_running")?.admitted && Date.now() < deadline) await Bun.sleep(10);
+    expect(readAnswerRecord(paired.id, "target_1", "rq_launched_running")).toMatchObject({ state: "running", admitted: true });
+    expect(countMemberAnswers({ relayId: paired.id, targetId: "target_1", chatKey: chat, requesterKey: requester.key, sinceMs: Date.now() - 3600000 }).count).toBe(1);
+    expect(await runClaimedRequest(paired, request("rq_running_limited", chat), undefined, { command: running })).toMatchObject({ outcome: "declined", reason: "member_limit" });
+  } finally {
+    fs.writeFileSync(release, "release");
+    await pending;
+    await server.close();
+  }
+}, 30_000);
+
 test("service-built roles answer and the real runner and poller emit cross-check bodies", async () => {
   const { ensureExternalRelayPollers, stopExternalRelayPollers } = await import("./poller");
   const completions: unknown[] = [];
@@ -941,6 +1012,14 @@ test("service-built roles answer and the real runner and poller emit cross-check
     const deadline = Date.now() + 5000;
     while (!claimBody && Date.now() < deadline) await Bun.sleep(10);
     expect(claimBody).toEqual({ wait_s: 25, kinds: ["answer"], features: ["requester_context"], slots: [{ target_id: "t_target", free: 1 }] });
+    const expected = JSON.parse(fs.readFileSync(path.join(import.meta.dir, "../../../evidence/external-relay/install_completions.json"), "utf8"));
+    expect(handoff).toEqual(expected.handoff);
+    expect(claimBody).toEqual(expected.claim_body);
+    // The absolute retry duration depends on the clock between launches.
+    // Check its range above and compare the stable wire fields here.
+    expect({ ...limited, retry_after_s: expected.member_limit.retry_after_s }).toEqual(expected.member_limit);
+    expect(completions.filter((body) => ["handoff", "member_limit"].includes((body as { reason?: string }).reason ?? "")))
+      .toEqual([handoff, limited]);
     if (process.env.LLV_RELAY_WIRE_OUTPUT) {
       fs.mkdirSync(path.dirname(process.env.LLV_RELAY_WIRE_OUTPUT), { recursive: true });
       fs.writeFileSync(process.env.LLV_RELAY_WIRE_OUTPUT, JSON.stringify({

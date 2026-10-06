@@ -1655,7 +1655,8 @@ the install.
 | 429 | `rate_limited` | Too many calls; `retry_after_s` and `Retry-After` say how long to wait. | Sleeps that long. |
 | 5xx | `server_error` | The relay service failed. | Backs off, doubling from 5 s to 60 s. |
 
-Completion reasons, all of which make the relay service fall back:
+Completion reasons. These follow the target's fallback setting, except
+**[rc]** `handoff`, which always asks the service's own agent to answer (§A.8):
 
 | Outcome | `reason` | When |
 |---|---|---|
@@ -1666,6 +1667,8 @@ Completion reasons, all of which make the relay service fall back:
 | declined | `unsupported_kind` | A request kind the install did not list. |
 | declined | `invalid_request` | The request fails the schema or its limits. |
 | declined | `profile_error` | The locked profile cannot be built for this account (§B.6). |
+| declined | **[rc]** `handoff` | The model chose to hand the request to the service's own agent; that agent answers whatever the target's fallback setting. |
+| declined | **[rc]** `member_limit` | The member reached the target's hourly answer limit in this chat (§B.8); follows the target's fallback setting. |
 | failed | `agent_error` | The CLI exited with an error or reported an error result. |
 | failed | `invalid_answer` | The answer failed the checks of §A.8. |
 | failed | `profile_violation` | A runtime tripwire saw a tool or server the profile excludes (§B.6.5). |
@@ -1810,7 +1813,7 @@ New files:
 | `<state>/external-relay/runs.json` | 0600 | In-flight runs only: request id, lease id, relay id, target id, child pid and process identity, owning Viewer pid and identity, run directory, start time. No chat text. |
 | `<state>/external-relay/codex-homes/<account id>/` | 0700 | The Codex answer home of §B.6.2. |
 | `<os temp root>/llv-external-relay-XXXXXX/` | 0700 (`mkdtemp`) | One run: `cwd/`, `schema.json`, `catalog.json` (Codex), `stdout.log`, `stderr.txt`, `answer.json` (Codex). Removed when the run settles, on every path. |
-| **[rc]** `<state>/external-relay/answers/<relay id>/<target id>/<start ms>_<request id>.json` | 0600 in 0700 directories | One record per claimed request whose ids are valid (`src/lib/externalRelay/answers.ts`): `Request.input` exactly as received (unknown fields included), the chat key, the requester (the six service fields: `key`, `is_admin`, `can_restrict_members`, `can_delete_messages`, `is_anonymous_admin`, `is_owner`), whether the run was admitted, the answer profile it ran with, engine and model, claim, start and end times, duration, `state` (`running` or `finished`), the outcome (`answered`, `declined:<reason>`, `failed:<reason>` or `lease_lost`; hand-off is `declined:handoff`), the answer or hand-off, and whether the service acknowledged the completion (`accepted`, `refused` or `unconfirmed`). No credential, no lease id. Written `running` when the run is reserved and `finished` with the local decision before completion is sent, including early declines. Delivery starts `unconfirmed` and is updated after the receipt; a transport failure can change the outcome, while the locally generated answer or hand-off is preserved. Kept `RELAY_ANSWER_RETENTION_DAYS` (30) after it finished; readers hide an expired record at once and the controller removes it within the hour. |
+| **[rc]** `<state>/external-relay/answers/<relay id>/<target id>/<start ms>_<request id>.json` | 0600 in 0700 directories | One record per claimed request whose ids are valid (`src/lib/externalRelay/answers.ts`): `Request.input` exactly as received (unknown fields included), the chat key, the requester (the six service fields: `key`, `is_admin`, `can_restrict_members`, `can_delete_messages`, `is_anonymous_admin`, `is_owner`), whether the run was admitted, the answer profile it ran with, engine and model, claim, start and end times, duration, `state` (`running` or `finished`), the outcome (`answered`, `declined:<reason>`, `failed:<reason>` or `lease_lost`; hand-off is `declined:handoff`), the answer or hand-off, and whether the service acknowledged the completion (`accepted`, `refused` or `unconfirmed`). No credential, no lease id. Written `running` when the agent launches and `finished` with the local decision before completion is sent, including early declines. Delivery starts `unconfirmed` and is updated after the receipt; a transport failure can change the outcome, while the locally generated answer or hand-off is preserved. Kept `RELAY_ANSWER_RETENTION_DAYS` (30) after it finished; readers hide an expired record at once and the controller removes it within the hour. |
 | **[delta]** `relays.json`, new optional fields | as above | Per relay: `features`, `verify_channel`, `icon` (`{type, sha256, source, fetchedAt}`) and `connected` (`{at, via: "auto" \| "click", acknowledged}`). Per pending pairing: `startedAt` (when the operator clicked Connect, carried across refreshes), `engine` (the setup guide's choice, `claude` or `codex`, absent when the pairing started in settings, carried across refreshes) and the watcher's last status. At the top level, per origin and kept after unpair: `knownOwners` (`{origin, namespace, id, display_name, addedAt}`, at most 20 per origin); `previousOwners` (`{origin, namespace, id, display_name, at}`, one per origin, overwritten by each completion); and `rejectedOwners` (`{origin, namespace, id, display_name, rejectedAt}`, at most 20 per origin, the oldest dropped first). Together they are the stranger check of §A.3 rule 3. Readers accept the file without these fields, so `v` stays 1. |
 | **[delta]** `<state>/external-relay/conversations.json` | 0600 | The chat conversation map (§B.14). Per conversation: id, relay id, target id, chat key, engine, engine session id, the account last used, cwd, turns, created and last-turn times, the ids of messages seen since the last compaction (at most 1 000), the frame digest, the last prompt size, compactions, and `state` (`idle`, `running` with its request id, or `broken`). It holds no chat text. |
 | **[delta]** `<state>/external-relay/conversations/<conversation id>/codex/` | 0700 | A Codex conversation's own `CODEX_HOME`: the `auth.json` link of the account that runs the turn, and the conversation's rollout and CLI state. |
@@ -2337,6 +2340,8 @@ web search and does not inspect or redact its queries.
   never counted, including runs made in those roles before a later role
   change. A request without a requester block is never limited. Hand-offs,
   failed runs and running admissions count toward the member's limit.
+  An admission is counted only after the agent launches; declines during
+  capacity, drain or profile checks consume none of the member's allowance.
   The count reads records, so it survives a restart, and two requests of one
   member that arrive in the same instant can both pass. The setting is the
   target's and applies to every chat of it; a chat of its own can get one
@@ -2789,7 +2794,8 @@ Without a subscription, the dot and the banner are the whole notice.
 
 **[rc] Not implemented.** Nothing in this section runs today. Every request
 is answered one-shot by a fresh, session-less run (§B.5); the claim does not
-list `chat_conversations`; `Request.chat` is ignored; and the run directory
+list `chat_conversations`; `Request.chat.key` is used only for the member
+limit and answer records, and nothing resumes or serializes by it; the run directory
 and the `runs.json` entry are removed when the run settles. What outlives an
 exchange is its read-only answer record (§B.2), which nothing resumes.
 

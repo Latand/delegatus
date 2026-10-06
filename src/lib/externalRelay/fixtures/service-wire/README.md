@@ -14,3 +14,6 @@ runs the four roles with a fake service and emits `install_completions.json`
 when `LLV_RELAY_WIRE_OUTPUT` names an output file. The output captures the
 real hand-off and member-limit completion bodies and the poller's claim body,
 for validation against the service's Completion and ClaimRequest schemas.
+The committed `evidence/external-relay/install_completions.json` is that
+emitted output; the runner test compares its stable fields with the actual
+bodies, while checking the clock-dependent retry duration separately.
