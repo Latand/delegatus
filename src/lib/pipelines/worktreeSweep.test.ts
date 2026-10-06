@@ -1491,6 +1491,44 @@ test.each(["measurement", "last-tracked-check"])("a fixture bundle gaining a uni
   expect(fs.readFileSync(path.join(bundle, "issue1695Evidence.fixture.js"), "utf8")).toBe("bundled");
 });
 
+test.each(["checkout-link", "artifact-link", "checkout-directory", "cache-directory"])("cache trimming preserves redirected %s destinations", async change => {
+  const root = repository();
+  fs.appendFileSync(path.join(root, ".git/info/exclude"), ".next/\n.artifacts/\n");
+  const { dir, tip } = lane(root, `${root}-pipeline-redirect`, "pipeline/redirect");
+  const artifact = change === "artifact-link";
+  const relative = artifact ? ".artifacts/board/bundle" : ".next";
+  const candidate = path.join(dir, relative);
+  fs.mkdirSync(candidate, { recursive: true });
+  fs.writeFileSync(path.join(candidate, artifact ? "case.fixture.js" : "cache.bin"), "generated");
+  fs.mkdirSync(path.join(dir, ".artifacts"), { recursive: true });
+  fs.writeFileSync(path.join(dir, ".artifacts/capture.png"), "retain checkout");
+  const external = path.join(caseDir, "external");
+  const evidence = path.join(external, artifact ? "bundle/external.fixture.js" : ".next/unique.log");
+  fs.mkdirSync(path.dirname(evidence), { recursive: true });
+  fs.writeFileSync(evidence, "external evidence");
+  const owner = pipeline({ id: "redirect", repoDir: root, worktreeDir: dir, branch: "pipeline/redirect" });
+  let checks = 0;
+  const report = await sweepMergedWorktrees(ports({ pipelines: [owner], prs: [merged(132, owner.branch, tip)],
+    git: async (args, cwd) => {
+      const result = await realGit(args, cwd);
+      if (args[0] === "ls-files" && args.at(-1) === relative && ++checks === 2) {
+        const destination = artifact ? path.join(dir, ".artifacts/board") : change === "cache-directory" ? candidate : dir;
+        fs.renameSync(destination, path.join(caseDir, "moved"));
+        if (change.endsWith("link")) fs.symlinkSync(external, destination, "dir");
+        else {
+          const replacement = change === "cache-directory" ? destination : path.join(destination, ".next");
+          fs.mkdirSync(replacement, { recursive: true });
+          fs.renameSync(evidence, path.join(replacement, "unique.log"));
+        }
+      }
+      return result;
+    } }));
+  expect(checks).toBe(2);
+  expect(report.trimmed.map(row => row.path)).not.toContain(candidate);
+  const retained = change.endsWith("link") ? evidence : path.join(candidate, "unique.log");
+  expect(fs.readFileSync(retained, "utf8")).toBe("external evidence");
+});
+
 test("artifact trimming stops at a foreign repository before its dependency trees", async () => {
   const root = repository();
   fs.appendFileSync(path.join(root, ".git/info/exclude"), ".artifacts/\n");

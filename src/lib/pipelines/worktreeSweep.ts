@@ -1063,9 +1063,18 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
         }
       }
       for (const next of candidates) {
+        const identity = (directory: string) => {
+          try {
+            const stat = fs.lstatSync(accessible(directory));
+            return stat.isDirectory() ? `${stat.dev}:${stat.ino}:${fs.realpathSync(accessible(directory))}` : null;
+          } catch { return null; }
+        };
+        const originalWorktree = identity(worktree);
+        const originalNext = identity(next);
+        if (!originalWorktree || !originalNext) continue;
         const safeDirectory = (worktrees = listed) => {
           try {
-            if (!fs.lstatSync(accessible(worktree)).isDirectory() || !fs.lstatSync(accessible(next)).isDirectory()) return false;
+            if (identity(worktree) !== originalWorktree || identity(next) !== originalNext) return false;
             const realWorktree = fs.realpathSync(accessible(worktree));
             const realNext = fs.realpathSync(accessible(next));
             return realNext === path.join(realWorktree, path.relative(worktree, next))
@@ -1096,6 +1105,9 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
         if (path.basename(next) === "bundle" && !fixtureBundle(accessible(next))) continue;
         if (containsGitCheckout(accessible(next))) continue;
         if (registrationHold(root, worktree, next, accessible) || heldBy(readGuards(), worktree)) continue;
+        // The last Git read also yields. Refuse a replaced checkout, cache or
+        // artifact parent before recursive removal can follow its new target.
+        if (!safeDirectory(currentWorktrees)) continue;
         try {
           if (!dryRun) await fs.promises.rm(accessible(next), { recursive: true });
           report.trimmed.push({ path: next, bytes, pipelineId: owner.id });
