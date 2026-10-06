@@ -7,7 +7,7 @@ import {
 import { assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
 import { isStagingMode } from "@/lib/staging";
 import { noteRelayOutcome, relayActivity } from "./activity";
-import { pruneAnswerRecords, relayAnswersRoot, settleInterruptedAnswer } from "./answers";
+import { pruneAnswerRecords, relayAnswersRoot, settleInterruptedAnswer, type RelayAnswerDelivery } from "./answers";
 import { ExternalRelayError, fetchRelayTargets, relayCall } from "./client";
 import {
   advertisedSlots,
@@ -78,6 +78,7 @@ export async function sweepExternalRelayOrphans(): Promise<void> {
     const relay = readRelayStore().relays.find(
       (item) => item.id === run.relayId,
     );
+    let delivery: RelayAnswerDelivery = "unconfirmed";
     if (relay) {
       try {
         await relayCall(
@@ -92,8 +93,12 @@ export async function sweepExternalRelayOrphans(): Promise<void> {
           },
           relay.credential,
         );
-      } catch {
-        /* the lease may already have fallen back */
+        delivery = "accepted";
+      } catch (error) {
+        // A terminal refusal proves this completion was not accepted; a
+        // transient error leaves its delivery uncertain.
+        if (error instanceof ExternalRelayError && [400, 401, 404, 409, 413, 426].includes(error.status))
+          delivery = "refused";
       }
     }
     if (
@@ -101,7 +106,7 @@ export async function sweepExternalRelayOrphans(): Promise<void> {
       path.basename(run.runDir).startsWith("llv-external-relay-")
     )
       fs.rmSync(run.runDir, { recursive: true, force: true });
-    settleInterruptedAnswer(run.relayId, run.targetId, run.requestId);
+    settleInterruptedAnswer(run.relayId, run.targetId, run.requestId, delivery);
     dropRun(run.requestId);
   }
 }
@@ -308,7 +313,7 @@ async function sweepAndRefresh(): Promise<void> {
     mayRunStateStartupMutation(relayAnswersRoot())
   ) {
     controller.prunedAt = Date.now();
-    pruneAnswerRecords();
+    pruneAnswerRecords(Date.now(), () => readRunLedger().runs);
   }
 }
 export function refreshExternalRelayPollers(changedId?: string): void {

@@ -60,6 +60,7 @@ export const relayAnswersRoot = () => statePath("external-relay/answers");
 const targetDir = (relayId: string, targetId: string) =>
   path.join(relayAnswersRoot(), relayId, targetId);
 const recordName = /^(\d+)_([A-Za-z0-9_-]{1,64})\.json$/;
+const recordTempName = /^(\d+)_([A-Za-z0-9_-]{1,64})\.json\.\d+\.[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\.tmp$/;
 /** The record files of one target, newest first, optionally of one request. */
 function recordFiles(dir: string, requestId?: string): string[] {
   let names: string[];
@@ -170,12 +171,22 @@ export function answerRecorder(base: {
         logFailure("write", error);
       }
     },
+    recordDelivery(result: Pick<RelayAnswerRecord, "outcome" | "delivery">) {
+      if (!finished) return;
+      // Keep the locally generated answer even if delivery rejects it.
+      record = { ...record, ...result };
+      try {
+        writeRecord(file, record);
+      } catch (error) {
+        logFailure("write", error);
+      }
+    },
   };
 }
 export type AnswerRecorder = NonNullable<ReturnType<typeof answerRecorder>>;
 
 /** Settles a record a dead owner left running, as the orphan sweep settles its lease. */
-export function settleInterruptedAnswer(relayId: string, targetId: string, requestId: string): void {
+export function settleInterruptedAnswer(relayId: string, targetId: string, requestId: string, delivery: RelayAnswerDelivery): void {
   try {
     for (const file of recordFiles(targetDir(relayId, targetId), requestId)) {
       const record = readRecord(file);
@@ -185,7 +196,7 @@ export function settleInterruptedAnswer(relayId: string, targetId: string, reque
         ...record,
         state: "finished",
         outcome: "failed:install_restarted",
-        delivery: "unconfirmed",
+        delivery,
         finishedAt: new Date(now).toISOString(),
         durationMs: now - Date.parse(record.startedAt),
       });
@@ -195,8 +206,12 @@ export function settleInterruptedAnswer(relayId: string, targetId: string, reque
   }
 }
 
-/** Removes records that ended more than the retention period ago. */
-export function pruneAnswerRecords(now = Date.now()): number {
+/** Removes expired records, and reconciles unfinished records when the owner
+ * supplies the active ledger. Snapshot files before the ledger so a newly
+ * reserved run cannot be mistaken for abandoned work. */
+export function pruneAnswerRecords(now = Date.now(), activeRuns?: () => readonly {
+  relayId: string; targetId: string; requestId: string;
+}[]): number {
   let removed = 0;
   const root = relayAnswersRoot();
   const entries = (dir: string) => {
@@ -206,23 +221,55 @@ export function pruneAnswerRecords(now = Date.now()): number {
       return [];
     }
   };
+  const files: string[] = [];
   for (const relay of entries(root))
     for (const target of entries(path.join(root, relay)))
       for (const name of entries(path.join(root, relay, target))) {
-        if (!name.endsWith(".json")) continue;
-        const file = path.join(root, relay, target, name);
-        try {
-          // A record's last write is its end, so a file changed within the
-          // period cannot have expired and is not read.
-          if (now - fs.statSync(file).mtimeMs <= RETENTION_MS) continue;
-          const record = readRecord(file);
-          if (record && !expired(record, now)) continue;
-          fs.rmSync(file, { force: true });
-          removed += 1;
-        } catch (error) {
-          logFailure("prune", error);
-        }
+        if (!recordName.test(name) && !recordTempName.test(name)) continue;
+        files.push(path.join(root, relay, target, name));
       }
+  let active: Set<string> | null = null;
+  const key = (run: { relayId: string; targetId: string; requestId: string }) =>
+    JSON.stringify([run.relayId, run.targetId, run.requestId]);
+  try {
+    if (activeRuns) active = new Set(activeRuns().map(key));
+  } catch (error) {
+    logFailure("reconcile", error);
+    return removed;
+  }
+  for (const file of files) {
+    try {
+      // Without ledger reconciliation, recent files need no read.
+      const old = now - fs.statSync(file).mtimeMs > RETENTION_MS;
+      if (!active && !old) continue;
+      const temporary = recordTempName.exec(path.basename(file));
+      if (temporary) {
+        const scope = { relayId: path.basename(path.dirname(path.dirname(file))), targetId: path.basename(path.dirname(file)), requestId: temporary[2]! };
+        if (!old || active?.has(key(scope))) continue;
+        fs.rmSync(file, { force: true });
+        removed += 1;
+        continue;
+      }
+      const record = readRecord(file);
+      if (record?.state === "running" && active) {
+        if (active.has(key(record))) continue;
+        if (!old) {
+          writeRecord(file, {
+            ...record, state: "finished", outcome: "failed:install_restarted", delivery: "unconfirmed",
+            finishedAt: new Date(now).toISOString(), durationMs: now - Date.parse(record.startedAt),
+          });
+          continue;
+        }
+        // A failed settlement write must not keep abandoned chat text
+        // forever. An active run above is always preserved.
+      } else if (record && !expired(record, now)) continue;
+      if (!old) continue;
+      fs.rmSync(file, { force: true });
+      removed += 1;
+    } catch (error) {
+      logFailure("prune", error);
+    }
+  }
   return removed;
 }
 

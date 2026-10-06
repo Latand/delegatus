@@ -11,8 +11,8 @@ import { advertisedSlots, HANDOFF_DETAIL, memberLimitDetail, runClaimedRequest, 
 import { relayActivity } from "./activity";
 import { dropRun, externalRelayFile, readRunLedger, updateRelayStore, type PairedRelay } from "./store";
 import { confirmRelayPairing } from "./pairing";
-import { contextRequest, sampleRequest, serviceClaims } from "./protocol.test";
-import { listAnswerRecords, readAnswerRecord } from "./answers";
+import { contextRequest, sampleRequest, serviceClaims } from "./request.fixture";
+import { listAnswerRecords, readAnswerRecord, settleInterruptedAnswer } from "./answers";
 import { startTestRelay } from "./testRelay";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-runner-test-"));
 process.env.LLV_STATE_DIR = path.join(root, "state");
@@ -570,6 +570,51 @@ test("a note arriving during a heartbeat is sent on the next beat", async () => 
     await server.close();
   }
 });
+test("local answers and early declines survive recovery while completion is pending", async () => {
+  for (const earlyDecline of [false, true]) {
+    let received!: () => void;
+    let release!: () => void;
+    const seen = new Promise<void>((resolve) => { received = resolve; });
+    const acknowledgement = new Promise<void>((resolve) => { release = resolve; });
+    const server = await startTestRelay(async (req) => {
+      if (req.url?.endsWith("/complete")) {
+        received();
+        await acknowledgement;
+        return { body: { status: "accepted", duplicate: false } };
+      }
+      return { body: { status: "ok" } };
+    });
+    const paired = relay(`${server.origin}/v1`);
+    paired.paused = earlyDecline;
+    const requestId = earlyDecline ? "rq_pending_decline" : "rq_pending_answer";
+    const pending = runClaimedRequest(paired, { ...sampleRequest, request_id: requestId }, undefined, {
+      command: stub(`const a=process.argv.slice(2);await Bun.stdin.text();await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Done',reply_to:null}));`),
+    });
+    try {
+      await seen;
+      const record = readAnswerRecord(paired.id, "target_1", requestId);
+      expect(record).toMatchObject({
+        state: "finished", delivery: "unconfirmed", input: sampleRequest.input,
+        outcome: earlyDecline ? "declined:disabled" : "answered",
+        answer: earlyDecline ? null : { action: "reply", text: "Done", reply_to: null },
+      });
+      // The recovery path only settles unfinished model work; a persisted
+      // local result keeps its answer and its uncertain original receipt.
+      settleInterruptedAnswer(paired.id, "target_1", requestId, "refused");
+      expect(readAnswerRecord(paired.id, "target_1", requestId)).toEqual(record);
+      release();
+      await pending;
+      expect(readAnswerRecord(paired.id, "target_1", requestId)).toMatchObject({
+        delivery: "accepted", answer: record?.answer, outcome: record?.outcome,
+      });
+    } finally {
+      release();
+      await pending;
+      await server.close();
+    }
+  }
+}, 15_000);
+
 test("413 on an answer completes failed invalid_answer immediately", async () => {
   const completions: any[] = [];
   const server = await startTestRelay((req, body) => {
@@ -588,6 +633,10 @@ test("413 on an answer completes failed invalid_answer immediately", async () =>
       ["answered", undefined], ["failed", "invalid_answer"],
     ]);
     expect(outcome).toMatchObject({ outcome: "failed", reason: "invalid_answer" });
+    expect(readAnswerRecord("relay_1", "target_1", "rq_too_large")).toMatchObject({
+      outcome: "failed:invalid_answer", delivery: "accepted",
+      answer: { action: "reply", text: "Done", reply_to: null },
+    });
   } finally {
     await server.close();
   }

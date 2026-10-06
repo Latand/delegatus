@@ -18,7 +18,6 @@ import {
   requestSchema,
   type ExternalRelayCompletion,
   type ExternalRelayProgress,
-  type ExternalRelayRequest,
 } from "./protocol";
 import { answerPrompt } from "./prompt";
 import { progressForEvent } from "./progress";
@@ -178,19 +177,25 @@ export async function runClaimedRequest(
     input: rawRequest.input,
   });
   const finish = async (body: ExternalRelayCompletion, stallMs = 45_000) => {
-    const sent = await complete(relay, requestId, body, () => heartbeatAt, stallMs);
-    const completion = sent.body;
+    // Persist the local decision before any delivery wait: a restart must
+    // leave the generated answer and early declines inspectable.
     recorder?.finish({
       outcome:
-        completion.outcome === "answered"
+        body.outcome === "answered"
           ? "answered"
-          : `${completion.outcome}:${completion.reason}`,
+          : `${body.outcome}:${body.reason}`,
       answer:
-        completion.outcome === "answered"
-          ? completion.answer
-          : completion.outcome === "declined" && completion.reason === "handoff"
+        body.outcome === "answered"
+          ? body.answer
+          : body.outcome === "declined" && body.reason === "handoff"
             ? { action: "handoff", text: "", reply_to: null }
             : null,
+      delivery: "unconfirmed",
+    });
+    const sent = await complete(relay, requestId, body, () => heartbeatAt, stallMs);
+    const completion = sent.body;
+    recorder?.recordDelivery({
+      outcome: completion.outcome === "answered" ? "answered" : `${completion.outcome}:${completion.reason}`,
       delivery: sent.delivery,
     });
     return completion;

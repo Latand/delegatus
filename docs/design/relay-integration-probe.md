@@ -4,8 +4,9 @@ Originating requirement — requester, 2026-10-06, this stage's pinned instructi
 
 # Relay integration: slice 0 probe and slice 1 design
 
-Design and probe date: 2026-10-06. Current Delegatus source: `fd5b45a98567c6b53ce70a6d34dfe0af79a8424e`.
-This stage changes this document only. Slice 1 below is an implementation design.
+Design and probe date: 2026-10-06. Probe base: `fd5b45a98567c6b53ce70a6d34dfe0af79a8424e`.
+The probe observations below describe that historical base. The slice 1 design
+was subsequently implemented; `relay.md` **[rc]** describes its current behavior.
 The accepted external proposal's sections 1, 8–12 and 15–17, and its predecessor plan,
 were read privately. This document records Delegatus behavior and the generic wire
 contract; it publishes no external service implementation details.
@@ -113,12 +114,12 @@ independent of whether Delegatus used an MCP adapter or a structured loop.
 
 ## Item 4: what is actually retained per chat
 
-**Current Delegatus keeps no persistent relay conversation or inspectable completed
-exchange. The service's observation agrees with current source.** The contract
+**At the probe base, Delegatus kept no persistent relay conversation or inspectable
+completed exchange. The service's observation agreed with that source.** The contract
 already labels the conversation behavior as an unimplemented delta; it does not
 establish that the current claim advertises it.
 
-| Evidence | Current behavior |
+| Evidence at the probe base | Historical behavior |
 |---|---|
 | `docs/design/relay.md:10` | The September revision, including one conversation per chat, explicitly says “specified and not yet implemented.” |
 | `docs/design/relay.md` §A.8, §B.14 | The delta specifies a stable chat key, conversation map, serialization and engine resume. These are future mechanisms. |
@@ -131,10 +132,16 @@ establish that the current claim advertises it.
 | `src/lib/externalRelay/poller.ts:70` | Orphan recovery similarly settles a dead owner's run and removes its ledger/directory. |
 
 A synthetic parser check confirmed that `chat`, requester, memory and tool-index
-additions are discarded today, and `checkedAnswer` rejects `handoff`. Focused
+additions were discarded at the probe base, and `checkedAnswer` rejected `handoff`. Focused
 runner and poller tests confirmed completed-run and orphan cleanup behavior.
 Paired relay settings and a Codex answer-home authentication link can remain;
-neither is a conversation or a completed exchange archive.
+neither was a conversation or a completed exchange archive.
+
+**[rc] Current implementation:** fresh one-shot turns now keep inspectable input,
+answer or hand-off, timing, outcome and delivery records for 30 days. Claims
+advertise `requester_context`; the parser keeps requester, memory, tool index
+and an optional chat key. `chat_conversations` remains unimplemented and
+unadvertised, so these records provide no engine resume or per-chat serialization.
 
 **Documentation correction for slice 1:** state the implemented profile as fresh
 one-shot turns with 30-day inspectable exchange records. Keep `chat_conversations`
@@ -143,7 +150,7 @@ as run metadata for grouping when received; grouping records grants no engine
 resume, compaction or per-chat lease serialization. The new `requester_context`
 claim feature is independent. This corrects the reported premise without adding
 the deferred conversation lifecycle. The authoritative `relay.md` update belongs
-to slice 1; this stage has authority to write this probe document only.
+to slice 1; the probe stage was authorized to write this document only.
 
 ## Wire contract after the service cross-check
 
@@ -205,7 +212,7 @@ schemas are later work; an internal loop-step field is no addition to the answer
 wire. No participant identity, bearer, lease or service-internal identifier is
 put into the model's requester block.
 
-## Slice 1 implementation design against current seams
+## Slice 1 implementation design against the probe base
 
 **Parsing, negotiation and prompt.** Extend `descriptorSchema` and the paired
 relay's stored capabilities; the current descriptor parser also strips features
@@ -312,7 +319,7 @@ The explicit-path publication privacy gate passed with the committed known-value
 fingerprints. Every referenced repository file exists; whitespace checks passed,
 and the worktree change is limited to this declared document.
 
-Slice 1 still owes focused tests for negotiated and legacy parsing/prompt/schema
+At the probe stage, slice 1 still owed focused tests for negotiated and legacy parsing/prompt/schema
 behavior, unknown fields, role/index injection, exact hand-off mapping and retry,
 received-input retention, terminal/crash records, uncertain completion receipts,
 the single 30-day boundary and owner-only record reads. Rendered list/exchange
@@ -330,9 +337,11 @@ their transport prerequisites.
   branch. The common structured loop passed without changing either profile guard.
 - Direct action execution and effect reconciliation. Service-owned hand-off
   supplies the accepted action path; direct reads arrive in slice 2.
-- Local files, shell, SSH, generic Viewer MCP, native web search, subagents,
+- Local files, shell, SSH, generic Viewer MCP, subagents,
   media bytes, a new permission platform or extra key types. The requirement
   requests service context and service-authorized tools.
+- **[rc]** Native web search was granted by the later accepted amendment to
+  every relay answer profile; it is implemented and is no longer deferred.
 - A new probe driver, a new global UI panel and a separate conversation browser.
   Reuse the existing runner, relay card and read-only record storage seam.
 - An ADR. This reversible transport choice adds no hard-to-reverse authority or
@@ -340,5 +349,6 @@ their transport prerequisites.
 
 The originating requirement is covered by the per-engine probe and measured
 fallback, the item 4 source ledger, and the accepted wire contract above.
-The next implementation slice has concrete seams and acceptance checks; no
-operator-only decision is needed to complete this probe stage.
+The probe supplied concrete seams and acceptance checks for the next slice;
+no operator-only decision was needed to complete that stage. Slice 1 is now
+implemented, with its focused checks and rendered evidence listed in `relay.md` §B.11.

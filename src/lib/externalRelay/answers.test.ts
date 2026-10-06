@@ -76,6 +76,40 @@ test("the list is newest first, bounded, and summarises the message and the answ
   expect(rows[0]).not.toHaveProperty("input");
 });
 
+test("reconciliation settles abandoned work, removes old abandoned text and preserves active and newly reserved runs", () => {
+  const begin = (requestId: string) => answerRecorder({ requestId, relayId: "relay", targetId: "reconcile", targetName: null, claimedAt: null, input: input(requestId) })!.begin("codex", "gpt-6-sol", { webSearch: true });
+  for (const requestId of ["abandoned", "old_abandoned", "active"]) begin(requestId);
+  const old = (Date.now() - 40 * DAY) / 1000;
+  for (const requestId of ["old_abandoned", "active"])
+    fs.utimesSync(recordFile("relay", "reconcile", requestId), old, old);
+  const unrelated = path.join(relayAnswersRoot(), "relay", "reconcile", "readme.json");
+  fs.writeFileSync(unrelated, "{}");
+  fs.utimesSync(unrelated, old, old);
+  const temporaryId = crypto.randomUUID();
+  const temporary = (requestId: string) => path.join(relayAnswersRoot(), "relay", "reconcile", `0_${requestId}.json.42.${temporaryId}.tmp`);
+  for (const requestId of ["abandoned", "active", "fresh"]) {
+    fs.writeFileSync(temporary(requestId), "{}");
+    if (requestId !== "fresh") fs.utimesSync(temporary(requestId), old, old);
+  }
+  const removed = pruneAnswerRecords(Date.now(), () => {
+    // Created after the file snapshot: it must wait for a later sweep.
+    begin("newly_reserved");
+    return [
+      { relayId: "relay", targetId: "reconcile", requestId: "active" },
+      { relayId: "relay", targetId: "slow", requestId: "rq_running" },
+    ];
+  });
+  expect(removed).toBe(2);
+  expect(fs.existsSync(unrelated)).toBe(true);
+  expect(fs.existsSync(temporary("abandoned"))).toBe(false);
+  expect(fs.existsSync(temporary("active"))).toBe(true);
+  expect(fs.existsSync(temporary("fresh"))).toBe(true);
+  expect(readAnswerRecord("relay", "reconcile", "old_abandoned")).toBeNull();
+  expect(readAnswerRecord("relay", "reconcile", "abandoned")).toMatchObject({ state: "finished", outcome: "failed:install_restarted", delivery: "unconfirmed" });
+  for (const requestId of ["active", "newly_reserved"])
+    expect(readAnswerRecord("relay", "reconcile", requestId)?.state).toBe("running");
+});
+
 test("ids that cannot name a file read nothing and record nothing", () => {
   expect(answerRecorder({ requestId: "../x", relayId: "relay", targetId: "target", targetName: null, claimedAt: null, input: null })).toBeNull();
   expect(answerRecorder({ requestId: "rq", relayId: "relay", targetId: 7, targetName: null, claimedAt: null, input: null })).toBeNull();

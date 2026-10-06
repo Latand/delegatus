@@ -311,12 +311,12 @@ the code:
 | Pairing | A short code and a link. The relay service resolves the owner's identity and the owner confirms it there; the install shows the same identity and the operator confirms it here. Only then is the credential issued. **[delta]** The install-side confirmation became a fallback (§A.3 rule 3). |
 | Liveness | No answer deadline. The relay service falls back only when the install is not polling, nobody claims, the claim is not acknowledged, the install declines or fails, or heartbeats stop for `stall_window_s` (45 s). |
 | Progress | At most one label per heartbeat: `{kind, label, tool, status, at}`. |
-| Answer | `{action: "reply" \| "ignore", text, reply_to}`, enforced by the CLI's schema option and checked again by the install. |
+| Answer | `{action: "reply" \| "ignore", text, reply_to}`, enforced by the CLI's schema option and checked again by the install. **[rc]** A request with a non-empty tool index also offers `"handoff"` (§A.8). |
 | Launch | A new `runEphemeralAgent` (`src/lib/agent/ephemeral.ts`) on the existing `launchDetached` primitive. |
 | Codex profile | A dedicated `CODEX_HOME` per account that holds only a link to the account's `auth.json`, feature switches, and a per-run model catalog without sub-agent and patch tools. |
-| Claude profile | `--restricted --safe-mode --tools "" --strict-mcp-config`, with no `--settings` and no `--mcp-config`. |
+| **[rc]** Claude profile | `--restricted --safe-mode --tools WebSearch --allowedTools WebSearch --strict-mcp-config`, with no `--settings` and no `--mcp-config`. No agent, command, file or other acting tool is offered. |
 | Names | `src/lib/externalRelay/`, `/api/external-relay/`, `ExternalRelay*`. **[delta]** Code names stay. Text a person reads uses the service's own name (§B.12). |
-| State | Two JSON files and one answer home per account under `<state>/external-relay/`. Chat text lives only in a per-run temp directory that is removed when the run settles. **[delta]** A chat's conversation keeps its chat text in that conversation's engine transcript (§B.14). |
+| State | Two JSON files and one answer home per account under `<state>/external-relay/`. **[rc]** Answer records keep the received chat text and answer for 30 days under `<state>/external-relay/answers/` (§B.2); each run's temp directory is removed when it settles. **[delta]** A chat's conversation keeps its chat text in that conversation's engine transcript (§B.14). |
 | **[delta]** Branding | The descriptor's `name` and a same-origin `icon_url`. The install fetches the icon, checks it and serves its own copy. A monogram stands in when there is none. |
 | **[delta]** One-tap pairing | "Connect in <channel>" and a QR code. The owner confirms once, in the service. A watcher in the Viewer completes the pairing without a click unless the redeemer is a stranger to this service's pairing history on the install (known owners, the previous owner, identities rejected with "Not me"). Codes live up to 30 minutes and refresh while the dialog is open. |
 | **[delta]** Conversations | One engine session per (pairing, target, chat key), resumed once per request by a fresh process in the same locked profile, and compacted by the engine. The service holds a chat's next request until the current turn's lease ends. |
@@ -1810,7 +1810,7 @@ New files:
 | `<state>/external-relay/runs.json` | 0600 | In-flight runs only: request id, lease id, relay id, target id, child pid and process identity, owning Viewer pid and identity, run directory, start time. No chat text. |
 | `<state>/external-relay/codex-homes/<account id>/` | 0700 | The Codex answer home of §B.6.2. |
 | `<os temp root>/llv-external-relay-XXXXXX/` | 0700 (`mkdtemp`) | One run: `cwd/`, `schema.json`, `catalog.json` (Codex), `stdout.log`, `stderr.txt`, `answer.json` (Codex). Removed when the run settles, on every path. |
-| **[rc]** `<state>/external-relay/answers/<relay id>/<target id>/<start ms>_<request id>.json` | 0600 in 0700 directories | One record per claimed request whose ids are valid (`src/lib/externalRelay/answers.ts`): `Request.input` exactly as received (unknown fields included), the chat key, the requester (the six service fields: `key`, `is_admin`, `can_restrict_members`, `can_delete_messages`, `is_anonymous_admin`, `is_owner`), whether the run was admitted, the answer profile it ran with, engine and model, claim, start and end times, duration, `state` (`running` or `finished`), the outcome (`answered`, `declined:<reason>`, `failed:<reason>` or `lease_lost`; hand-off is `declined:handoff`), the answer or hand-off, and whether the service acknowledged the completion (`accepted`, `refused` or `unconfirmed`). No credential, no lease id. Written `running` when the run is reserved and `finished` before the run's ledger entry is dropped. Kept `RELAY_ANSWER_RETENTION_DAYS` (30) after it finished; readers hide an expired record at once and the controller removes it within the hour. |
+| **[rc]** `<state>/external-relay/answers/<relay id>/<target id>/<start ms>_<request id>.json` | 0600 in 0700 directories | One record per claimed request whose ids are valid (`src/lib/externalRelay/answers.ts`): `Request.input` exactly as received (unknown fields included), the chat key, the requester (the six service fields: `key`, `is_admin`, `can_restrict_members`, `can_delete_messages`, `is_anonymous_admin`, `is_owner`), whether the run was admitted, the answer profile it ran with, engine and model, claim, start and end times, duration, `state` (`running` or `finished`), the outcome (`answered`, `declined:<reason>`, `failed:<reason>` or `lease_lost`; hand-off is `declined:handoff`), the answer or hand-off, and whether the service acknowledged the completion (`accepted`, `refused` or `unconfirmed`). No credential, no lease id. Written `running` when the run is reserved and `finished` with the local decision before completion is sent, including early declines. Delivery starts `unconfirmed` and is updated after the receipt; a transport failure can change the outcome, while the locally generated answer or hand-off is preserved. Kept `RELAY_ANSWER_RETENTION_DAYS` (30) after it finished; readers hide an expired record at once and the controller removes it within the hour. |
 | **[delta]** `relays.json`, new optional fields | as above | Per relay: `features`, `verify_channel`, `icon` (`{type, sha256, source, fetchedAt}`) and `connected` (`{at, via: "auto" \| "click", acknowledged}`). Per pending pairing: `startedAt` (when the operator clicked Connect, carried across refreshes), `engine` (the setup guide's choice, `claude` or `codex`, absent when the pairing started in settings, carried across refreshes) and the watcher's last status. At the top level, per origin and kept after unpair: `knownOwners` (`{origin, namespace, id, display_name, addedAt}`, at most 20 per origin); `previousOwners` (`{origin, namespace, id, display_name, at}`, one per origin, overwritten by each completion); and `rejectedOwners` (`{origin, namespace, id, display_name, rejectedAt}`, at most 20 per origin, the oldest dropped first). Together they are the stranger check of §A.3 rule 3. Readers accept the file without these fields, so `v` stays 1. |
 | **[delta]** `<state>/external-relay/conversations.json` | 0600 | The chat conversation map (§B.14). Per conversation: id, relay id, target id, chat key, engine, engine session id, the account last used, cwd, turns, created and last-turn times, the ids of messages seen since the last compaction (at most 1 000), the frame digest, the last prompt size, compactions, and `state` (`idle`, `running` with its request id, or `broken`). It holds no chat text. |
 | **[delta]** `<state>/external-relay/conversations/<conversation id>/codex/` | 0700 | A Codex conversation's own `CODEX_HOME`: the `auth.json` link of the account that runs the turn, and the conversation's rollout and CLI state. |
@@ -1932,10 +1932,22 @@ child's group if the child's own pid and identity still match
 (`terminateHeadlessReviewerGroup`, `headless.ts:118-146` [code]), completes
 the lease as `failed` / `install_restarted` (a 409 is fine), removes the run
 directory and drops the entry. **[rc]** It also finishes that run's answer
-record as `failed:install_restarted`, delivery `unconfirmed`, if it is still
-`running`; the same pass removes expired answer records once an hour. Runs
+record as `failed:install_restarted` if it is still `running`. Delivery is
+`accepted` after a successful completion, `refused` after a terminal refusal,
+and `unconfirmed` after a transient failure or when the pairing is gone;
+an already finished local result keeps its answer and outcome, with delivery
+`unconfirmed` if its original receipt was pending. The same pass removes
+expired answer records once an hour. Runs
 owned by a live Viewer are left alone. A
 new generation does not take over another generation's run; that is deferred.
+**[rc]** The hourly record sweep also reconciles unfinished records without a
+ledger entry, including a failed archive write followed by successful ledger
+cleanup. It snapshots record files before reading the active ledger, preserves
+active runs, and settles recent abandoned records as `failed:install_restarted`
+with delivery `unconfirmed`. Abandoned records whose last write is older than
+the 30-day retention are removed even if settlement could not be written.
+The sweep recognizes the writer's atomic temporary-file names too, removing
+expired abandoned writes while preserving active runs and unrelated files.
 **[delta]** When the swept run was a conversation's turn, the sweep also sets
 that conversation back to `idle`. The transcript keeps whatever the
 interrupted turn wrote, and the next turn resumes it (§B.14).
@@ -2091,8 +2103,8 @@ environment scrub, and keep separate flag sets.
 | No command execution | `--disable shell_tool --disable unified_exec` | `--tools` naming no command tool | [phase 0]; E3 |
 | No apps, plugins or connectors | `--disable apps --disable plugins` | `--strict-mcp-config` with no `--mcp-config` | [phase 0]: without them both engines expose the signed-in account's hosted apps or connectors |
 | **[rc]** The native web search, and no other web tool | `-c web_search=live` | `--tools WebSearch --allowedTools WebSearch` (no `WebFetch`) | E9 |
-| No sub-agent tools | per-run catalog without `multi_agent_version`; `--disable multi_agent` alone does not remove them | `--tools ""` (no agent tool); init tripwire | E2; E6 |
-| No other acting tools | `--disable view_image`, catalog without `apply_patch_tool_type`, `--disable image_generation --disable goals --disable memories --disable browser_use --disable computer_use --disable sleep_tool` | `--tools ""`, `--restricted` | E3; E6 |
+| No sub-agent tools | per-run catalog without `multi_agent_version`; `--disable multi_agent` alone does not remove them | **[rc]** `--tools WebSearch --allowedTools WebSearch` (no agent tool); init tripwire | E2; E6; E8 |
+| No other acting tools | `--disable view_image`, catalog without `apply_patch_tool_type`, `--disable image_generation --disable goals --disable memories --disable browser_use --disable computer_use --disable sleep_tool` | **[rc]** `--tools WebSearch --allowedTools WebSearch`, `--restricted` | E3; E6; E8 |
 | No personal instruction files | a dedicated answer `CODEX_HOME` with no `AGENTS.md`; `-c project_doc_max_bytes=0` blocks project files from the cwd and its ancestors | `--restricted --safe-mode`; cwd outside `$HOME` | E1; E6; test 7 |
 | No hooks | the answer home has no config, where Codex hooks live | `--safe-mode`; no `--settings` | Claude: E7. Codex: follows from the empty home (E1, E4) |
 | No MCP servers | `--ignore-user-config`; the answer home has no config | `--strict-mcp-config` | E4; E6 |
@@ -2294,6 +2306,11 @@ asks for one status line when `answer.progress` is `"notes"`.
 `summarizeTool` (`src/components/feed/tools.ts:319` [code]) is the right
 source for `tool_*` labels once a later phase grants tools; Phase 1 has none
 to summarize.
+
+**[rc]** Native web search sends model-chosen queries to the engine's search
+provider. Chat text or prompt content can appear in those queries, including
+when chat text contains an instruction injection; the tool tripwire admits
+web search and does not inspect or redact its queries.
 
 ## B.8 Concurrency per target, and account capacity
 
@@ -2515,10 +2532,11 @@ No new driver.
   that owns traffic.
 - The answer homes live under `<state>` because they persist per account; the
   Viewer creates them at runtime, as their declared owner.
-- Chat text lives only in run directories under the OS temp root, with the
-  `llv-` prefix the temp sweeper recognizes (`src/lib/tempDirs.ts:27-28`
-  [code]). **[delta]** A chat conversation's transcript is the exception of
-  §B.2.
+- **[rc]** Answer records keep the received chat text and answer for 30 days
+  under `<state>/external-relay/answers/` (§B.2). Run directories under the
+  OS temp root also hold chat text until the run settles, with the `llv-`
+  prefix the temp sweeper recognizes (`src/lib/tempDirs.ts:27-28` [code]).
+  **[delta]** Chat conversations also keep their engine transcripts (§B.2).
 - **[delta]** The pairing watcher, the descriptor refresh, the chat routes
   and conversation turns all run inside the Viewer, which is their declared
   owner. The revision adds no entry point, so there is nothing new for
@@ -3100,7 +3118,7 @@ observations cannot settle is left to tests 15 and 19.
 | "no fixed answer deadline" | §A.6 rules L1–L4; the hard cap is an orphan guard the relay service never sees |
 | "post the final JSON answer" | §A.8, §A.4 complete |
 | "generic, stack-neutral … the first client … not named" | Part A names no platform; `Owner.namespace` and `target` are opaque |
-| Codex: shell, apps, plugins and web search off, no sub-agent tools, settled and proven | §B.6.1, §B.6.2; E2, E3; test 7 |
+| Codex: shell, apps and plugins off, no sub-agent tools; **[rc]** native web search enabled | §B.6.1, §B.6.2; E2, E3, E9; tests 7 and 25 |
 | Claude: restricted tools, `--strict-mcp-config`, no connectors | §B.6.3; E6; [phase 0] |
 | No personal instruction files, one marker probe per engine | E1 and E6 (stub marker probes), tests 7 and 8 |
 | Structured JSON answers; progress before the answer | §B.6.1, §B.7 |

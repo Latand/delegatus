@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { answerPrompt } from "./prompt";
 import { requestSchema } from "./protocol";
-import { contextRequest, sampleRequest } from "./protocol.test";
+import { contextRequest, sampleRequest } from "./request.fixture";
 
 test("a request without requester_context gets the Phase 1 prompt unchanged", () => {
   expect(answerPrompt(requestSchema.parse(sampleRequest))).toBe(
