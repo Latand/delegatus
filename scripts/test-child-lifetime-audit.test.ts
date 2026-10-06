@@ -84,10 +84,15 @@ function discoveredHelpers(): string[] {
  * original-identity fence; teardown uses the shared helpers or child handles.
  */
 function unfencedSignals(file: string, source: string): string[] {
+  // Most tests contain no signal call. Avoid parsing their full syntax trees
+  // so the repository-wide guard stays cheap under the gate's CPU cap.
+  if (!source.includes("kill")) return [];
   const tree = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
   const unsafe: string[] = [];
   const visit = (node: ts.Node) => {
-    if (ts.isCallExpression(node) && node.expression.getText(tree) === "process.kill") {
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
+      && ts.isIdentifier(node.expression.expression) && node.expression.expression.text === "process"
+      && node.expression.name.text === "kill") {
       const [target, signal] = node.arguments;
       const pid = target?.getText(tree);
       const kind = signal?.getText(tree);
@@ -109,7 +114,9 @@ function unfencedSignals(file: string, source: string): string[] {
 }
 
 test("teardown signal audit rejects historical PIDs independently of the launch census", () => {
+  expect(unfencedSignals("helper.test.ts", 'const ordinary = () => 1; ordinary();')).toEqual([]);
   expect(unfencedSignals("helper.test.ts", 'try { process.kill(oldPid, "SIGKILL"); } catch {}')).toHaveLength(1);
+  expect(unfencedSignals("helper.test.ts", 'process /* spacing */ . kill(oldPid, "SIGKILL");')).toHaveLength(1);
   expect(unfencedSignals("helper.test.ts", 'if (processIdentityStatus(identity) === "alive") process.kill(identity.pid, "SIGTERM");')).toEqual([]);
   expect(unfencedSignals("helper.test.ts", 'if (processIdentityStatus(identity) === "alive") {} else process.kill(identity.pid, "SIGKILL");')).toHaveLength(1);
   expect(unfencedSignals("helper.test.ts", 'if (processIdentityStatus(identity) === "alive" || stale) process.kill(identity.pid, "SIGKILL");')).toHaveLength(1);
@@ -124,7 +131,7 @@ test("teardown signal audit rejects historical PIDs independently of the launch 
   };
   walk("src"); walk("scripts");
   expect(unsafe).toEqual([]);
-}, 10_000);
+}, 30_000);
 
 test("the launch audit discovers JavaScript helpers rather than relying on existing row totals", () => {
   const helpers = discoveredHelpers();
