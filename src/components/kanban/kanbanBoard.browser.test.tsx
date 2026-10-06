@@ -17960,13 +17960,19 @@ describe("creating a new agent: today's draft and three numbered looks", () => {
    * look 0 (today's) and looks 1 to 3 (`?newagent=<n>`): the page prints the look's number in a strip around
    * the application's frame. Each look is walked through the same states at 1440x900, 1000x700 and a 390
    * phone, light and dark, en and uk: empty, runtime chosen, a long prompt, an attachment, a refused launch,
-   * the narrowest column, and the draft a task card's own «+ Agent» opens. Design evidence only: the frames and the contact sheets go to `NEW_AGENT_OUT`,
-   * outside the repository, and the block asserts that every look keeps every option of the draft.
+   * the narrowest column, and the draft a task card's own «+ Agent» opens. Five more states are drawn once per
+   * look, at 1440 in the light theme in English: a handoff draft, the reviewer's and the deployer's own
+   * fields, a signed-out account, and an image capability that could not be read. Design evidence only: the
+   * frames and the contact sheets go to `NEW_AGENT_OUT`, outside the repository, and the block asserts that
+   * every look keeps every option of the draft and measures what each look promises about its geometry.
    *
    *   CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 NEW_AGENT_OUT=<dir> \
    *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "creating a new agent"
    *
    * `NEW_AGENT_ONLY` narrows a run while a look is being drawn: `looks=0,1;views=desktop-1440;langs=en;schemes=light`.
+   * A narrowed run keeps what it read beside its frames, so the four looks can be walked side by side
+   * (`looks=0`, `looks=1`, …, into one `NEW_AGENT_OUT`) and `NEW_AGENT_ONLY=merge` then opens no browser: it
+   * gathers the four readings, draws the sheets and writes the committed record.
    */
   const OUT = process.env.NEW_AGENT_OUT ? path.resolve(process.env.NEW_AGENT_OUT) : null;
   const only = new Map((process.env.NEW_AGENT_ONLY ?? "").split(";").filter(Boolean).map((entry) => {
@@ -17981,6 +17987,9 @@ describe("creating a new agent: today's draft and three numbered looks", () => {
     { name: "phone-390", width: 390, height: 844, touch: true },
   ] as const;
   const STATES = ["empty", "chosen", "long", "attachment", "error", "narrow", "task-card"] as const;
+  /* Drawn once per look: what a role or an account adds to the draft, and a draft that continues a conversation. */
+  const EXTRAS = ["handoff", "reviewer", "deployer", "signed-out", "capability"] as const;
+  const SEEDED = new Set<string>(["handoff", "signed-out", "capability"]);
   /* One sheet: a block per caption, a row per state, each cell a frame scaled to one height. */
   const CELL = 380;
   const caption = (text: string, width: number, height: number, size: number) => Buffer.from(
@@ -18026,21 +18035,25 @@ describe("creating a new agent: today's draft and three numbered looks", () => {
     const shots = [path.join(work, "export-before.png"), path.join(work, "export-after.png")];
     await sharp({ create: { width: 320, height: 200, channels: 3, background: "#d9cfbd" } }).png().toFile(shots[0]!);
     await sharp({ create: { width: 320, height: 200, channels: 3, background: "#7f93a8" } }).png().toFile(shots[1]!);
+    const merge = only.has("merge");
+    const readings: Record<string, unknown>[] = [];
+    const walk = async () => {
     const server = await serveEvidenceFixture(work);
     const browser = await chromium.launch(LAUNCH);
-    const readings: Record<string, unknown>[] = [];
     try {
       for (const look of [0, 1, 2, 3]) for (const view of views) for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) {
         if (!wanted("looks", String(look)) || !wanted("views", view.name) || !wanted("schemes", scheme) || !wanted("langs", lang)) continue;
         const tr = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate(lang, key, params);
-        for (const pass of ["walk", "narrow", "task-card"] as const) {
+        for (const pass of ["walk", "narrow", "task-card", ...EXTRAS] as const) {
           if (pass !== "walk" && !wanted("states", pass)) continue;
+          const extra = (EXTRAS as readonly string[]).includes(pass);
+          if (extra && (view.name !== "desktop-1440" || scheme !== "light" || lang !== "en")) continue;
           /* A card's own «+ Agent» is on the desktop board; the phone opens a draft from its menu alone. */
           if (pass === "task-card" && view.touch) continue;
           /* The narrowest column: the desktop at its smallest supported width, the phone at 320. */
           const width = pass !== "narrow" ? view.width : view.touch ? 320 : 760;
           const height = view.height;
-          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=new-agent&newagent=${look}&frame=${width}x${height}`, { width, height: height + STRIP }, scheme, lang, "reduce", view.touch);
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=new-agent&newagent=${look}&frame=${width}x${height}${SEEDED.has(pass) ? `&naseed=${pass}` : ""}`, { width, height: height + STRIP }, scheme, lang, "reduce", view.touch);
           const label = (state: string) => `look${look}-${view.name}-${scheme}-${lang}-${state}`;
           const shoot = async (state: string) => {
             if (!wanted("states", state)) return;
@@ -18058,8 +18071,13 @@ describe("creating a new agent: today's draft and three numbered looks", () => {
             await app.locator("[data-kanban-board] .card[data-id], [data-phone-card]").first().waitFor({ state: "attached", timeout: 30_000 });
             /* An attention toast is another surface's and would lie over the draft. */
             await page.frames()[1]!.addStyleTag({ content: "[data-attention-toast] { display: none !important; }" });
+            let cardTitle = "";
             if (pass === "task-card") {
-              await app.locator("[data-add-agent]:visible").first().click();
+              const add = app.locator("[data-add-agent]:visible").first();
+              cardTitle = await add.evaluate((button) => button.closest(".card")?.querySelector("h3.title")?.textContent?.trim() ?? "");
+              await add.click();
+            } else if (pass === "handoff") {
+              /* The fixture restored this draft the way the product restores a tab's drafts. */
             } else if (view.touch) {
               await app.locator('[data-mobile2-open="menu"]').click();
               await app.locator('[data-mobile2-menu-row="new-agent"]').click();
@@ -18078,14 +18096,95 @@ describe("creating a new agent: today's draft and three numbered looks", () => {
               const opener = draft.locator(`[data-na-open="${group}"][aria-expanded="false"]`).first();
               if (await opener.count()) await opener.click();
             };
-            if (pass === "task-card") {
+            const inner = page.frames()[1]!;
+            const viewport = { width, height };
+            const box = async (target: ReturnType<typeof draft.locator>) => {
+              const rect = await target.first().boundingBox();
+              if (!rect) throw new Error(`${label(pass)}: nothing to measure`);
+              /* A frame locator answers in the page's coordinates; the application starts under the strip. */
+              return { left: Math.round(rect.x), top: Math.round(rect.y - STRIP), right: Math.round(rect.x + rect.width), bottom: Math.round(rect.y - STRIP + rect.height) };
+            };
+            const within = (rect: { left: number; top: number; right: number; bottom: number }) => rect.left >= 0 && rect.top >= 0 && rect.right <= viewport.width && rect.bottom <= viewport.height;
+            /* The four runtime selects of the look, as drawn: where each stands, and whether its chosen value
+               is cut by the box (its text measured in the select's own font against the room the box leaves). */
+            const runtimeSelects = () => inner.evaluate((names) => {
+              const pane = [...document.querySelectorAll<HTMLElement>(`[aria-label="${names.pane}"]`)].find((element) => element.getClientRects().length);
+              const canvas = document.createElement("canvas").getContext("2d")!;
+              return names.selects.flatMap((name) => {
+                const select = pane?.querySelector<HTMLSelectElement>(`select[aria-label="${name}"]`);
+                if (!select || !select.getClientRects().length) return [];
+                const style = getComputedStyle(select);
+                canvas.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+                const text = select.selectedOptions[0]?.textContent ?? "";
+                const room = select.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - 16;
+                const rect = select.getBoundingClientRect();
+                return [{ name, text, top: Math.round(rect.top), cut: Math.ceil(canvas.measureText(text).width) > Math.floor(room) }];
+              });
+            }, { pane: tr("draft.paneAria"), selects: [tr("draft.modelAria"), tr("draft.reasoningAria"), tr("draft.speedAria"), tr("draft.accountAria", { engine: "Codex" })] });
+            /* What the rearranged looks promise about the runtime: no value cut, and no select alone on its row. */
+            const runtimeGeometry = async (state: string) => {
+              const selects = await runtimeSelects();
+              const rows = new Map<number, number>();
+              for (const select of selects) rows.set(select.top, (rows.get(select.top) ?? 0) + 1);
+              const geometry = { cut: selects.filter((select) => select.cut).map((select) => select.text), alone: [...rows.values()].filter((count) => count === 1).length, rows: rows.size };
+              if (look > 0) {
+                expect(selects.length, `${label(state)} runtime selects`).toBe(4);
+                expect(geometry.alone, `${label(state)} a select alone on its row`).toBe(0);
+                /* The phone draws its selects at 16 px, where the product's own «speed: default» is wider than
+                   half a 320 px pane; the desktop widths are the ones the looks answer for. */
+                if (!view.touch) expect(geometry.cut, `${label(state)} values cut`).toEqual([]);
+              }
+              return geometry;
+            };
+            /* Look 2 says the runtime, the folder and the role on one row. */
+            const oneRow = async (state: string) => {
+              if (look !== 2) return null;
+              const tops = await draft.locator("[data-na-open]").evaluateAll((words) => words.map((word) => Math.round(word.getBoundingClientRect().top)));
+              expect(new Set(tops).size, `${label(state)} summary rows`).toBe(1);
+              return tops.length;
+            };
+            if (extra) {
+              const found: Record<string, number> = {};
+              if (pass === "handoff") {
+                const source = tr("draft.handoffLabel", { title: "Worker waiting for a seat" });
+                found.handoff = await draft.getByText(source, { exact: false }).filter({ visible: true }).count();
+              } else if (pass === "reviewer" || pass === "deployer") {
+                await reveal("role");
+                await draft.locator(`select[aria-label="${tr("draft.roleAria")}"]`).first().selectOption(pass);
+                found[pass] = pass === "reviewer"
+                  ? await draft.locator(`select[aria-label="${tr("draft.reviewsAria")}"]`).filter({ visible: true }).count()
+                  : await draft.locator(`input[aria-label="${tr("draft.deployConfirm")}"]`).filter({ visible: true }).count();
+              } else if (pass === "signed-out") {
+                const blocked = draft.locator('[data-testid="composer-send-blocked"]');
+                await blocked.waitFor({ timeout: 10_000 });
+                found.signedOut = await blocked.getByText(tr("launch.accountSignedOut", { label: "Account A", engine: "Claude" })).count();
+                found.signIn = await blocked.getByRole("button", { name: tr("launch.signInFirst", { engine: "Claude" }) }).count();
+              } else {
+                const alert = draft.locator('[role="alert"]').filter({ hasText: tr("composer.imageCapabilityError") });
+                await alert.waitFor({ timeout: 10_000 });
+                found.capability = await alert.count();
+                found.retry = await alert.getByRole("button", { name: tr("composer.imageCapabilityRetry") }).count();
+              }
+              await shoot(pass);
+              readings.push({ look, view: view.name, scheme, lang, state: pass, found, pageErrors });
+              for (const [name, count] of Object.entries(found)) expect(count, `${label(pass)} ${name}`).toBe(1);
+            } else if (pass === "task-card") {
               await shoot("task-card");
+              if (look === 3) {
+                /* The sheet names the card it was opened for, and the button it hangs from says it is open. */
+                const sheetTask = await draft.locator("[data-na-task]").innerText();
+                expect(cardTitle.length, label("card title")).toBeGreaterThan(0);
+                expect(sheetTask, label("task named in the sheet")).toContain(cardTitle);
+                expect(await app.locator("[data-add-agent][data-na-anchor-open]").first().getAttribute("aria-expanded"), label("anchor open")).toBe("true");
+                readings.push({ look, view: view.name, scheme, lang, state: pass, found: { taskInSheet: 1, anchorOpen: 1 }, task: cardTitle, pageErrors });
+              }
             } else if (pass === "narrow") {
               await reveal("runtime");
               await draft.getByRole("radio", { name: "Codex" }).first().click();
               await draft.locator(`select[aria-label="${tr("draft.reasoningAria")}"]`).first().selectOption("high");
               await prompt.fill(SHORT[lang]);
               await shoot("narrow");
+              readings.push({ look, view: view.name, scheme, lang, state: pass, width, geometry: { ...await runtimeGeometry("narrow"), summaryWords: await oneRow("narrow") }, pageErrors });
             } else {
               await shoot("empty");
               /* The role comes first: it sets the runtime its preset names. Then Codex, pressed only when the
@@ -18100,14 +18199,43 @@ describe("creating a new agent: today's draft and three numbered looks", () => {
               await draft.locator(`select[aria-label="${tr("draft.reasoningAria")}"]`).first().selectOption("high");
               await draft.locator(`select[aria-label="${tr("draft.speedAria")}"]`).first().selectOption("fast");
               await shoot("chosen");
+              const chosen = { ...await runtimeGeometry("chosen"), summaryWords: await oneRow("chosen") };
               await prompt.fill(LONG[lang]);
               await shoot("long");
               await prompt.fill(SHORT[lang]);
               await draft.locator('input[type="file"]').first().setInputFiles(shots);
               await shoot("attachment");
-              await draft.getByRole("button", { name: tr("composer.launchAgent") }).first().click();
-              await draft.locator("text=/export-csv/").first().waitFor({ timeout: 10_000 });
+              /* The refusal is read with the long prompt and both images in place: the tallest a draft gets. */
+              await prompt.fill(LONG[lang]);
+              const launchButton = draft.getByRole("button", { name: tr("composer.launchAgent") }).first();
+              await launchButton.click();
+              const refusal = draft.locator('[data-testid="composer-status"]').filter({ hasText: "export-csv" });
+              await refusal.first().waitFor({ timeout: 10_000 });
               await shoot("error");
+              const refused: Record<string, unknown> = { ...chosen };
+              if (!view.touch && look > 0) {
+                await reveal("runtime");
+                const engines = await box(draft.getByRole("radiogroup"));
+                const model = await box(draft.locator(`select[aria-label="${tr("draft.modelAria")}"]`));
+                const message = await box(refusal);
+                if (look === 1) {
+                  /* The model stands directly under the engine it depends on; thumbnails and the refusal come after both. */
+                  refused.engineToModel = model.top - engines.bottom;
+                  expect(model.top - engines.bottom, label("engine and model adjacent")).toBeLessThan(28);
+                  expect(message.top, label("refusal after the runtime")).toBeGreaterThanOrEqual(model.bottom);
+                }
+                if (look === 3) {
+                  /* The sheet starts under the board's bar, and its foot keeps the launch and the refusal in the window. */
+                  const sheetBox = await box(draft);
+                  const bar = await box(app.locator("header.bar"));
+                  const launch = await box(launchButton);
+                  Object.assign(refused, { sheet: sheetBox, bar: bar.bottom, launch, refusal: message });
+                  expect(sheetBox.top, label("sheet under the bar")).toBeGreaterThanOrEqual(bar.bottom);
+                  expect(within(sheetBox), label("sheet in the window")).toBe(true);
+                  expect(within(launch), label("launch in the window")).toBe(true);
+                  expect(within(message), label("refusal in the window")).toBe(true);
+                }
+              }
               /* Every option of the draft, found in this look: a folded group is opened first, as it is for the operator. */
               await reveal("runtime");
               const count = (selector: string) => draft.locator(selector).count();
@@ -18134,7 +18262,7 @@ describe("creating a new agent: today's draft and three numbered looks", () => {
                 cancel: await count(`button[aria-label="${tr("draft.dismiss")}"]`),
                 error: await draft.locator("text=/export-csv/").count(),
               };
-              readings.push({ look, view: view.name, scheme, lang, options, pageErrors });
+              readings.push({ look, view: view.name, scheme, lang, options, geometry: refused, pageErrors });
               expect(options, label("options")).toEqual({ engines: 3, model: 1, effort: 1, speed: 1, account: 1, folder: 1, role: 1, parameters: 3, rolePrompt: 1, images: 1, voice: 1, prompt: 1, launch: 1, cancel: 1, error: 1 });
             }
             expect(pageErrors, `${label(pass)} page errors`).toEqual([]);
@@ -18150,14 +18278,22 @@ describe("creating a new agent: today's draft and three numbered looks", () => {
       await browser.close();
       server.stop();
     }
+    };
+    if (merge) {
+      for (const file of fs.readdirSync(out).filter((name) => /^readings-.*\.json$/.test(name)).sort()) readings.push(...JSON.parse(fs.readFileSync(path.join(out, file), "utf8")) as Record<string, unknown>[]);
+      expect([...new Set(readings.map((reading) => reading.look))].sort(), "the looks that were walked").toEqual([0, 1, 2, 3]);
+    } else {
+      await walk();
+      if (only.size) fs.writeFileSync(path.join(out, `readings-${[...(only.get("looks") ?? ["all"])].join("_")}.json`), `${JSON.stringify(readings)}\n`);
+    }
     const frame = (look: number, view: string, scheme: string, lang: string, state: string) => path.join(out, `look${look}-${view}-${scheme}-${lang}-${state}.png`);
-    const complete = !only.size;
+    const complete = !only.size || merge;
     if (complete || only.has("sheets")) {
       const titles = ["Today", "1 · The composer is the card", "2 · One line, opened where asked", "3 · A sheet at the button"];
       for (const look of [1, 2, 3]) {
         await sheet(path.join(out, `sheet-look${look}.png`), `Creating a new agent — ${titles[look]} — each row: today, then look ${look}, at 1440, 1000 and the phone`, [["light", "en"], ["dark", "uk"]].map(([scheme, lang]) => ({
           name: `${scheme} · ${lang}`,
-          rows: STATES.map((state) => ({
+          rows: [...STATES, ...(scheme === "light" ? EXTRAS : [])].map((state) => ({
             state,
             frames: views.flatMap((view) => [frame(0, view.name, scheme!, lang!, state), frame(look, view.name, scheme!, lang!, state)]),
           })),
@@ -18167,12 +18303,12 @@ describe("creating a new agent: today's draft and three numbered looks", () => {
         ["desktop-1440", "light", "en"], ["desktop-1000", "dark", "uk"], ["phone-390", "light", "uk"],
       ].map(([view, scheme, lang]) => ({
         name: `${view} · ${scheme} · ${lang}`,
-        rows: STATES.map((state) => ({ state, frames: [0, 1, 2, 3].map((look) => frame(look, view!, scheme!, lang!, state)) })),
+        rows: [...STATES, ...(view === "desktop-1440" ? EXTRAS : [])].map((state) => ({ state, frames: [0, 1, 2, 3].map((look) => frame(look, view!, scheme!, lang!, state)) })),
       })));
     }
     if (complete) {
       fs.mkdirSync("evidence/new-agent-redesign", { recursive: true });
       fs.writeFileSync("evidence/new-agent-redesign/options.json", `${JSON.stringify({ viewports: views.map((view) => `${view.width}x${view.height}`), readings }, null, 2)}\n`);
     }
-  }, 3_600_000);
+  }, 7_200_000);
 });

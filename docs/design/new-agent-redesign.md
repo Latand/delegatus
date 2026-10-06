@@ -124,59 +124,103 @@ its recovery, and hands its parts to a layout
 `DirectoryPicker`, `RoleSection`, `DraftLaunchStatus`. No look draws a control
 of its own. Colours, type steps, radii and spacing are the existing tokens.
 
+Three things are shared by every look.
+
+- **The runtime grid.** Model, effort, speed and account are one grid of
+  captioned cells. All cells stand on one row when each gets 150 px, which is
+  what «Account B · active» and «GPT-6-Astra» need; otherwise the grid has two
+  columns, so Codex reads as two rows of two and no select is left alone on a
+  row. An odd last cell (Claude with an account) takes the whole row.
+- **The engine chips at the 32 px step** (`roomy`), the size the orchestrator's
+  create panel uses. On the phone each chip's touch area is 44 px tall.
+- **A caption over every field**: model, effort, speed, account, directory,
+  role. The role block is `RoleSection` without its strip.
+
 ### Look 1. The composer is the card
 
 The draft is the composer the orchestrator conversation already uses, as tall
 as its content. A heading with a 28 px borderless close button; the prompt
-field first; the engine and its account in the composer's own row, where the
-conversation keeps its runtime; then model, effort and speed tiling one row
-edge to edge; the folder; the role. The card's second title and foot are gone,
-and so is the «new agent» chip. An empty draft is about 190 px tall in place
-of 620.
+field; the engine in the composer's own row, where the conversation keeps its
+runtime; the runtime grid directly under the engine, so the model sits beside
+the engine it depends on; then the thumbnails and any message of the composer;
+the directory; the role. The card's second title and foot are gone. An empty
+draft is about 300 px tall in place of 620.
+
+On the phone the pane adds no heading, because the phone's own header already
+says «New agent · draft». The settings gather above the composer, the close
+button ends the engine row, and the composer stays on the bottom edge while the
+settings scroll.
 
 ### Look 2. One line, opened where asked
 
 The prompt field, and under it one row that says in words what the agent will
 run on: «Codex · GPT-6-Astra · high · fast · Account B», the folder, the role.
-Pressing a word opens that group's controls under the composer and nothing
-else; pressing it again folds them. An operator who accepts the defaults sees
-a field and a sentence, about 90 px.
+The row never wraps: when it runs out, the runtime is cut with an ellipsis and
+the folder and the role keep their words. The image picker and the close
+button end the same row, inside the composer's frame, so the draft has no
+gutter of its own. Pressing a word opens that group's controls directly under
+the row and nothing else; pressing it again folds them. The runtime group is
+the engine chips over the runtime grid. A handoff draft names the conversation
+it continues on a line above the field. An operator who accepts the defaults
+sees a field and a sentence, about 110 px.
 
 ### Look 3. A sheet at the button
 
 No card joins a column until an agent exists. The form opens as a sheet under
 the button that was pressed (the header's, or a card's own «+ Agent»), beside
-it when there is no room below. Inside, a labelled column in the manner of the
-orchestrator's create panel: engine, account, reasoning, folder, role, then the
-composer at the foot. On the phone the same column fills the pane.
+it when there is no room below, and never above the bottom edge of the board's
+bar. The button stays marked as open while the sheet is. The sheet's heading
+names the draft, and under it the task whose button opened it. Inside, a
+captioned column that scrolls on its own: engine, the runtime grid, directory,
+role. The composer is the sheet's foot: the prompt (five lines at most, then
+it scrolls), the thumbnails, the launch and every error stay in the window
+whatever the role adds above. On the phone the same column fills the pane.
 
 ## 5. Where each option is
 
 | Option | Today (0) | Look 1 | Look 2 | Look 3 |
 | --- | --- | --- | --- | --- |
 | Engine | header strip | composer's row | «runtime» group; named in the summary | first field |
-| Account | header's left edge, cut | beside the engine | «runtime» group; named in the summary | second field, full width |
-| Model | fourth strip | row under the composer | «runtime» group; named in the summary | «Reasoning» field |
-| Effort | fourth strip | same row | «runtime» group; named in the summary | «Reasoning» field |
-| Speed | fourth strip | same row | «runtime» group; named in the summary | «Reasoning» field |
-| Working folder | second strip | its own row, folder icon | «folder» word opens the picker | «Directory» field |
-| Task | the card holding the draft | the card holding the draft | the card holding the draft | the button the sheet hangs from |
-| Role | third strip | row under the folder | «role» word opens the block | «Role» field |
-| Role parameters, prompt preview, reviewer and deployer fields | under the role | under the role | inside the «role» group | under the role |
-| Handoff source | heading | heading | heading on the phone; the pane’s tooltip on the desktop | heading |
+| Model | fourth strip | runtime grid, under the engine | «runtime» group; named in the summary | runtime grid |
+| Effort | fourth strip | runtime grid | «runtime» group; named in the summary | runtime grid |
+| Speed | fourth strip | runtime grid | «runtime» group; named in the summary | runtime grid |
+| Account | header's left edge, cut | runtime grid | «runtime» group; named in the summary | runtime grid |
+| Working folder | second strip | «Directory» field | «folder» word opens the picker | «Directory» field |
+| Task | the card holding the draft | the card holding the draft | the card holding the draft | named under the sheet's heading; its button marked open |
+| Role | third strip | «Role» field | «role» word opens the block | «Role» field |
+| Role parameters, prompt preview | under the role | under the role | inside the «role» group | under the role |
+| Reviewer's conversation, deployer's confirmation | under the role's parameters | the same | inside the «role» group | the same |
+| Handoff source | heading | heading | a line above the field | heading |
 | Prompt | bottom of the card | top of the card | the card itself | foot of the sheet |
-| Images | composer | composer | composer | composer |
+| Images | composer | composer | composer | composer, in the foot |
 | Voice | composer | composer | composer | composer |
-| Launch | composer | composer | composer | composer |
-| Cancel | bordered cross, header | 28 px close, heading | 28 px close beside the field | 28 px close, heading |
-| Errors | under the composer, bottom of the card | under the composer, above the settings | under the composer | under the composer |
-| Launch in flight | bubble and status in the blank area | bubble and status above the field | the same | the same, above the composer |
+| Launch | composer | composer | composer | composer, in the foot |
+| Cancel | bordered cross, header | 28 px close, heading | 28 px close, end of the summary row | 28 px close, heading |
+| Refused launch | under the composer, bottom of the card | under the runtime grid | under the summary row and whatever it opened | foot of the sheet |
+| Signed-out account and its sign-in | under the composer | under the runtime grid, next to the account | under the summary row | foot of the sheet |
+| Image capability alert with Retry | above the composer | above the field | above the field | foot of the sheet, above the field |
+| Launch in flight | bubble and status in the blank area | bubble and status above the field | the same | the same, in the foot |
 
-The driver asserts this table. For every look, at every size, theme and
-language, it finds three engines, the model, effort, speed and account
-selects, the folder picker, the role select with its three parameters and
-prompt preview, the prompt field, the image input, the microphone, the launch
-button, the cancel button and the launch error
+### What is removed on purpose
+
+| Element today | Where | Looks | Why it can go |
+| --- | --- | --- | --- |
+| The blank area's hint («Choose an engine and a directory, write the first prompt…») and the engine badge above it | `:1002` to `:1008` | 1, 2, 3 | The field's placeholder says the same in six words, and the blank area is gone with the fixed height. |
+| The handoff hint («The new agent will first read the parent conversation's transcript…») | `:1007` | 1, 2, 3 | The seeded prompt of a handoff draft already says which file the agent reads. |
+| The handoff source's path as a line of text | `:1009` to `:1013` | 1, 2, 3 | It stays as the tooltip of the line that names the source. |
+| The «new agent» chip under the field, whose tooltip says whether the launch is structured or a tmux window | `:898` to `:903` | 1, 2 | The heading, the rail and the placeholder say «new agent»; the placeholder also differs between the two kinds of launch. Look 3 keeps the chip. |
+| The card's own title («Untitled task») and foot around the draft | board | 1, 2 | Two titles for one draft. |
+| The draft card itself and its fixed conversation height | board | 3 (card), 1 and 2 (height) | Look 3 seats no card; looks 1 and 2 are as tall as their content. |
+| The 4 px engine-coloured bar and the status dot of the header | `:931`, `:934` | 1, 2, 3 | The chosen engine chip and the launch button carry the engine's colour. |
+
+Nothing else is dropped. The driver asserts the table. For every look, at
+every size, theme and language, it finds three engines, the model, effort,
+speed and account selects, the folder picker, the role select with its three
+parameters and prompt preview, the prompt field, the image input, the
+microphone, the launch button, the cancel button and the refused launch. Once
+per look it also finds the handoff source as visible text, the reviewer's
+conversation select, the deployer's confirmation field, the signed-out message
+with its sign-in button, and the image capability alert with Retry
 (`evidence/new-agent-redesign/options.json`).
 
 ## 6. Costs
@@ -184,34 +228,45 @@ button, the cancel button and the launch error
 **Look 1.** The smallest change. `DraftAgentPane`'s render is rewritten, about
 a hundred lines; the board's fixed height for a draft and the draft card's own
 title and foot go; `RoleSection` gains a variant without its strip, which
-`StagePlaceholderPane` must keep ignoring. No new interaction, no new strings.
-Its weak spot: thumbnails and a launch error appear between the engine row and
-the model row, because both belong to the composer. With a role chosen the
-card is still about 500 px tall, since the role block's helper lines are long;
-shortening them is a change to the role catalog's copy.
+`StagePlaceholderPane` must keep ignoring. `ComposerBar` gains a slot between
+its options row and its thumbnails for the runtime grid (the prototype reorders
+the composer's parts from a style block instead). Six short captions are new
+strings in both languages. No new interaction. With a role chosen the card is
+about 520 px tall, since the role block's helper lines are long; shortening
+them is a change to the role catalog's copy.
 
 **Look 2.** Everything look 1 needs, plus a disclosure with three groups: its
 focus order, its keyboard handling, and summary strings in both languages. An
 option costs one press more than today. A summary is only as good as its
-longest value: a long account label or folder path truncates. The desktop
-heading is gone, so a handoff draft names its source only in a tooltip, which
-a shipped version would have to fix.
+longest value: at 760 px the runtime is cut after the effort, and the full
+value is one press away.
 
 **Look 3.** The largest change. A sheet needs placement, a focus trap, and a
 rule for a press outside it that never loses a long prompt. The board loses the
 draft card, so the «agents open» rail and the draft's persistence across a
-reload need new rules. The sheet covers part of the board, and a draft opened
-from a card is tied to it only by position. In return the columns never move
-when a draft opens.
+reload need new rules. The sheet covers what is under the button while it is
+open: under the header's button that is the right column of the orchestrator's
+conversation, and beside a card's button it is part of the next column. It
+changes nothing in either, and both are back when the sheet closes, but look 1
+and look 2 cover nothing at all. At 1000x700 with a role chosen the field
+column scrolls inside the sheet. In return the columns never move when a draft
+opens.
+
+**All three, on the phone at 320 px.** The phone draws its selects at 16 px.
+In a two-column grid «Account B · active» and the product's own
+«speed: default» are cut by a few letters at 320 px; at 390 px only the
+longest account label is. One column would show them whole and leave every
+select alone on its row.
 
 ## 7. Recommendation
 
 Look 1. It answers each point of section 3 with the component the operator
 already praised, keeps every option in sight, adds no interaction to learn, and
-costs the least to ship. Look 2's summary row is worth keeping in mind as a
-later folded state of look 1 for operators who launch on defaults. Look 3
-solves a problem the operator did not name (columns shifting) at the price of
-a new surface.
+costs the least to ship. Look 2's summary row is the natural folded state of
+look 1 for operators who launch on defaults: the same row the orchestrator's
+conversation shows as «Opus 5.5 · Light». Look 3 solves a problem the operator
+did not name (columns shifting) at the price of a new surface that lies over
+others.
 
 ## 8. Evidence
 
@@ -228,13 +283,33 @@ CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 NEW_AGENT_OUT=<dir> \
 ```
 
 Each look is walked through seven states (empty, engine and model chosen, a
-long prompt, an attachment, a refused launch, the narrowest column, the draft a
-task card's own button opens) at 1440x900, 1000x700 and a 390 px phone, light
-and dark, in English and Ukrainian: 320 frames, one contact sheet per look
-beside today's form, and one sheet comparing all four. The frames and sheets
-are written outside the repository and are not committed.
+long prompt, an attachment, a refused launch with the long prompt and both
+images still in place, the narrowest column, the draft a task card's own button
+opens) at 1440x900, 1000x700 and a 390 px phone, light and dark, in English and
+Ukrainian. Five more states are drawn once per look, at 1440 in the light
+theme in English: a handoff draft, the reviewer's field, the deployer's field,
+a signed-out account, and an image capability that could not be read. That is
+340 frames, one contact sheet per look beside today's form, and one sheet
+comparing all four. The frames and sheets are written outside the repository
+and are not committed.
+
+Beside the options, the driver measures what the looks promise
+(`geometry` in `evidence/new-agent-redesign/options.json`):
+
+- looks 1 to 3, every size: four runtime selects, none alone on its row; on
+  the desktop widths (1440, 1000, 760) no chosen value is cut by its select;
+- look 1: the model starts within 28 px of the engine chips, and the refusal
+  starts below the model;
+- look 2: the three words of the summary share one row at 1440, 1000, 760 and
+  on the phone;
+- look 3: the sheet starts at or below the bottom edge of the board's bar and
+  lies inside the window, and so do the launch button and the refusal, with
+  the Builder role, the long prompt and two images; the sheet opened from a
+  card names that card, and the card's button reports `aria-expanded`.
 
 Limits of the prototypes: a look overrides the board's rules for a draft card
-from a style block of its own, where a shipped look would change those rules;
-the fixture refuses every launch, so the frames show the refusal and no launch
-in flight; look 3's sheet has no focus trap and no outside-press rule.
+and the order of the composer's parts from a style block of its own, where a
+shipped look would change those rules; the fixture refuses every launch, so
+the frames show the refusal and no launch in flight; look 3's sheet has no
+focus trap and no outside-press rule, and it reads the task's title from the
+card it was opened from.

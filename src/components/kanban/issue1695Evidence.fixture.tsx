@@ -321,6 +321,14 @@ const LAUNCH_CLS = SCENARIO === "launch-cls";
 const NEW_AGENT = SCENARIO === "new-agent";
 const NEW_AGENT_LOOK = parseNewAgent(location.search);
 if (NEW_AGENT_LOOK?.inner) installDraftLayout(newAgentLayout(NEW_AGENT_LOOK.look));
+/* Three states no single press reaches (`?naseed=`): a handoff draft, restored the way the product restores
+   a tab's drafts, continuing the conversation «Worker waiting for a seat»; the engine's active account
+   signed out; and an image capability the server fails to answer. */
+const NEW_AGENT_SEED = NEW_AGENT ? NEW_AGENT_LOOK?.seed ?? null : null;
+if (NEW_AGENT_SEED === "handoff" && NEW_AGENT_LOOK?.inner) {
+  sessionStorage.setItem("llvDrafts:atlas", JSON.stringify(["na-handoff"]));
+  sessionStorage.setItem("llvDraftPane:na-handoff:src", "/repo/pending-worker.jsonl");
+}
 const flowOf = (id: string) => (PIPELINES ? { flowId: id } : {});
 const now = Math.floor(Date.now() / 1000);
 const iso = (secondsAgo: number) => new Date((now - secondsAgo) * 1_000).toISOString();
@@ -2538,7 +2546,14 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return json(albumPage(taskId));
   }
   if (NEW_AGENT && url.pathname === "/api/roles") return json({ roles: ROLE_DEFAULTS.map((role) => ({ ...role, variants: ROLE_VARIANT_DEFAULTS[role.id as keyof typeof ROLE_VARIANT_DEFAULTS], promptPreview: role.promptScaffold })) });
-  if (NEW_AGENT && url.pathname === "/api/accounts" && method === "GET") return json(accountsBody);
+  if (NEW_AGENT && url.pathname === "/api/accounts" && method === "GET") {
+    return json(NEW_AGENT_SEED === "signed-out" ? {
+      ...accountsBody,
+      claude: { ...accountsBody.claude, accounts: accountsBody.claude.accounts.map((row, index) => index === 0
+        ? { ...row, authPresent: false, loginState: "signed_out", auth: { ...row.auth, state: "signed_out" } } : row) },
+    } : accountsBody);
+  }
+  if (NEW_AGENT_SEED === "capability" && url.pathname === "/api/spawn" && method === "GET") return json({ error: "the image capability is unavailable in the evidence fixture" }, 500);
   if (NEW_AGENT && url.pathname === "/api/spawn" && method === "GET") {
     const images = { supported: true, reason: null, formats: ["image/png", "image/jpeg"], maxImages: 8, maxRawBytesPerImage: 5_000_000, maxEncodedBytesPerRequest: 20_000_000 };
     return json({ dirs: ["/repo", "/repo/worktrees/export-csv", "/srv/atlas-docs"], cwd: null, spawnTransport: "structured", imageInput: { claude: images, codex: images } });

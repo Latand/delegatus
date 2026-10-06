@@ -20,12 +20,94 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [
+          "Account B · active"
+        ],
+        "alone": 1,
+        "rows": 2,
+        "summaryWords": null
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 0,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "en",
+      "state": "narrow",
+      "width": 760,
+      "geometry": {
+        "cut": [
+          "Account B · active"
+        ],
+        "alone": 2,
+        "rows": 3,
+        "summaryWords": null
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 0,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "en",
+      "state": "handoff",
+      "found": {
+        "handoff": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 0,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "en",
+      "state": "reviewer",
+      "found": {
+        "reviewer": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 0,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "en",
+      "state": "deployer",
+      "found": {
+        "deployer": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 0,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "en",
+      "state": "signed-out",
+      "found": {
+        "signedOut": 1,
+        "signIn": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 0,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "en",
+      "state": "capability",
+      "found": {
+        "capability": 1,
+        "retry": 1
       },
       "pageErrors": []
     },
@@ -44,12 +126,37 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [
+          "Account B · активний"
+        ],
+        "alone": 1,
+        "rows": 2,
+        "summaryWords": null
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 0,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "uk",
+      "state": "narrow",
+      "width": 760,
+      "geometry": {
+        "cut": [
+          "Account B · активний"
+        ],
+        "alone": 2,
+        "rows": 3,
+        "summaryWords": null
       },
       "pageErrors": []
     },
@@ -68,12 +175,37 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [
+          "Account B · active"
+        ],
+        "alone": 1,
+        "rows": 2,
+        "summaryWords": null
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 0,
+      "view": "desktop-1440",
+      "scheme": "dark",
+      "lang": "en",
+      "state": "narrow",
+      "width": 760,
+      "geometry": {
+        "cut": [
+          "Account B · active"
+        ],
+        "alone": 2,
+        "rows": 3,
+        "summaryWords": null
       },
       "pageErrors": []
     },
@@ -92,12 +224,37 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [
+          "Account B · активний"
+        ],
+        "alone": 1,
+        "rows": 2,
+        "summaryWords": null
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 0,
+      "view": "desktop-1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "state": "narrow",
+      "width": 760,
+      "geometry": {
+        "cut": [
+          "Account B · активний"
+        ],
+        "alone": 2,
+        "rows": 3,
+        "summaryWords": null
       },
       "pageErrors": []
     },
@@ -116,12 +273,37 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [
+          "Account B · active"
+        ],
+        "alone": 1,
+        "rows": 2,
+        "summaryWords": null
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 0,
+      "view": "desktop-1000",
+      "scheme": "light",
+      "lang": "en",
+      "state": "narrow",
+      "width": 760,
+      "geometry": {
+        "cut": [
+          "Account B · active"
+        ],
+        "alone": 2,
+        "rows": 3,
+        "summaryWords": null
       },
       "pageErrors": []
     },
@@ -140,12 +322,37 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [
+          "Account B · активний"
+        ],
+        "alone": 1,
+        "rows": 2,
+        "summaryWords": null
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 0,
+      "view": "desktop-1000",
+      "scheme": "light",
+      "lang": "uk",
+      "state": "narrow",
+      "width": 760,
+      "geometry": {
+        "cut": [
+          "Account B · активний"
+        ],
+        "alone": 2,
+        "rows": 3,
+        "summaryWords": null
       },
       "pageErrors": []
     },
@@ -164,12 +371,37 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [
+          "Account B · active"
+        ],
+        "alone": 1,
+        "rows": 2,
+        "summaryWords": null
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 0,
+      "view": "desktop-1000",
+      "scheme": "dark",
+      "lang": "en",
+      "state": "narrow",
+      "width": 760,
+      "geometry": {
+        "cut": [
+          "Account B · active"
+        ],
+        "alone": 2,
+        "rows": 3,
+        "summaryWords": null
       },
       "pageErrors": []
     },
@@ -188,12 +420,37 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [
+          "Account B · активний"
+        ],
+        "alone": 1,
+        "rows": 2,
+        "summaryWords": null
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 0,
+      "view": "desktop-1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "state": "narrow",
+      "width": 760,
+      "geometry": {
+        "cut": [
+          "Account B · активний"
+        ],
+        "alone": 2,
+        "rows": 3,
+        "summaryWords": null
       },
       "pageErrors": []
     },
@@ -212,12 +469,37 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [
+          "Account B · active"
+        ],
+        "alone": 2,
+        "rows": 3,
+        "summaryWords": null
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 0,
+      "view": "phone-390",
+      "scheme": "light",
+      "lang": "en",
+      "state": "narrow",
+      "width": 320,
+      "geometry": {
+        "cut": [
+          "Account B · active"
+        ],
+        "alone": 2,
+        "rows": 3,
+        "summaryWords": null
       },
       "pageErrors": []
     },
@@ -236,12 +518,37 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [
+          "Account B · активний"
+        ],
+        "alone": 2,
+        "rows": 3,
+        "summaryWords": null
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 0,
+      "view": "phone-390",
+      "scheme": "light",
+      "lang": "uk",
+      "state": "narrow",
+      "width": 320,
+      "geometry": {
+        "cut": [
+          "Account B · активний"
+        ],
+        "alone": 4,
+        "rows": 4,
+        "summaryWords": null
       },
       "pageErrors": []
     },
@@ -260,12 +567,37 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [
+          "Account B · active"
+        ],
+        "alone": 2,
+        "rows": 3,
+        "summaryWords": null
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 0,
+      "view": "phone-390",
+      "scheme": "dark",
+      "lang": "en",
+      "state": "narrow",
+      "width": 320,
+      "geometry": {
+        "cut": [
+          "Account B · active"
+        ],
+        "alone": 2,
+        "rows": 3,
+        "summaryWords": null
       },
       "pageErrors": []
     },
@@ -284,12 +616,37 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [
+          "Account B · активний"
+        ],
+        "alone": 2,
+        "rows": 3,
+        "summaryWords": null
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 0,
+      "view": "phone-390",
+      "scheme": "dark",
+      "lang": "uk",
+      "state": "narrow",
+      "width": 320,
+      "geometry": {
+        "cut": [
+          "Account B · активний"
+        ],
+        "alone": 4,
+        "rows": 4,
+        "summaryWords": null
       },
       "pageErrors": []
     },
@@ -308,12 +665,91 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null,
+        "engineToModel": 26
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "en",
+      "state": "narrow",
+      "width": 760,
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "en",
+      "state": "handoff",
+      "found": {
+        "handoff": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "en",
+      "state": "reviewer",
+      "found": {
+        "reviewer": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "en",
+      "state": "deployer",
+      "found": {
+        "deployer": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "en",
+      "state": "signed-out",
+      "found": {
+        "signedOut": 1,
+        "signIn": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "en",
+      "state": "capability",
+      "found": {
+        "capability": 1,
+        "retry": 1
       },
       "pageErrors": []
     },
@@ -332,12 +768,34 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null,
+        "engineToModel": 26
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "uk",
+      "state": "narrow",
+      "width": 760,
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null
       },
       "pageErrors": []
     },
@@ -356,12 +814,34 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null,
+        "engineToModel": 26
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "desktop-1440",
+      "scheme": "dark",
+      "lang": "en",
+      "state": "narrow",
+      "width": 760,
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null
       },
       "pageErrors": []
     },
@@ -380,12 +860,34 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null,
+        "engineToModel": 26
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "desktop-1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "state": "narrow",
+      "width": 760,
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null
       },
       "pageErrors": []
     },
@@ -404,12 +906,34 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 1,
+        "summaryWords": null,
+        "engineToModel": 26
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "desktop-1000",
+      "scheme": "light",
+      "lang": "en",
+      "state": "narrow",
+      "width": 760,
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null
       },
       "pageErrors": []
     },
@@ -428,12 +952,34 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 1,
+        "summaryWords": null,
+        "engineToModel": 26
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "desktop-1000",
+      "scheme": "light",
+      "lang": "uk",
+      "state": "narrow",
+      "width": 760,
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null
       },
       "pageErrors": []
     },
@@ -452,12 +998,34 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 1,
+        "summaryWords": null,
+        "engineToModel": 26
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "desktop-1000",
+      "scheme": "dark",
+      "lang": "en",
+      "state": "narrow",
+      "width": 760,
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null
       },
       "pageErrors": []
     },
@@ -476,12 +1044,34 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 1,
+        "summaryWords": null,
+        "engineToModel": 26
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "desktop-1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "state": "narrow",
+      "width": 760,
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null
       },
       "pageErrors": []
     },
@@ -500,12 +1090,35 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "phone-390",
+      "scheme": "light",
+      "lang": "en",
+      "state": "narrow",
+      "width": 320,
+      "geometry": {
+        "cut": [
+          "Account B · active"
+        ],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null
       },
       "pageErrors": []
     },
@@ -524,12 +1137,38 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [
+          "Account B · активний"
+        ],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "phone-390",
+      "scheme": "light",
+      "lang": "uk",
+      "state": "narrow",
+      "width": 320,
+      "geometry": {
+        "cut": [
+          "швидкість: дефолт",
+          "Account B · активний"
+        ],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null
       },
       "pageErrors": []
     },
@@ -548,12 +1187,35 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "phone-390",
+      "scheme": "dark",
+      "lang": "en",
+      "state": "narrow",
+      "width": 320,
+      "geometry": {
+        "cut": [
+          "Account B · active"
+        ],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null
       },
       "pageErrors": []
     },
@@ -572,12 +1234,38 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [
+          "Account B · активний"
+        ],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 1,
+      "view": "phone-390",
+      "scheme": "dark",
+      "lang": "uk",
+      "state": "narrow",
+      "width": 320,
+      "geometry": {
+        "cut": [
+          "швидкість: дефолт",
+          "Account B · активний"
+        ],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null
       },
       "pageErrors": []
     },
@@ -596,12 +1284,90 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": 3
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 2,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "en",
+      "state": "narrow",
+      "width": 760,
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": 3
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 2,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "en",
+      "state": "handoff",
+      "found": {
+        "handoff": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 2,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "en",
+      "state": "reviewer",
+      "found": {
+        "reviewer": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 2,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "en",
+      "state": "deployer",
+      "found": {
+        "deployer": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 2,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "en",
+      "state": "signed-out",
+      "found": {
+        "signedOut": 1,
+        "signIn": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 2,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "en",
+      "state": "capability",
+      "found": {
+        "capability": 1,
+        "retry": 1
       },
       "pageErrors": []
     },
@@ -620,12 +1386,33 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": 3
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 2,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "uk",
+      "state": "narrow",
+      "width": 760,
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": 3
       },
       "pageErrors": []
     },
@@ -644,12 +1431,33 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": 3
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 2,
+      "view": "desktop-1440",
+      "scheme": "dark",
+      "lang": "en",
+      "state": "narrow",
+      "width": 760,
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": 3
       },
       "pageErrors": []
     },
@@ -668,12 +1476,33 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": 3
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 2,
+      "view": "desktop-1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "state": "narrow",
+      "width": 760,
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": 3
       },
       "pageErrors": []
     },
@@ -692,12 +1521,33 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 1,
+        "summaryWords": 3
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 2,
+      "view": "desktop-1000",
+      "scheme": "light",
+      "lang": "en",
+      "state": "narrow",
+      "width": 760,
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": 3
       },
       "pageErrors": []
     },
@@ -716,12 +1566,33 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 1,
+        "summaryWords": 3
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 2,
+      "view": "desktop-1000",
+      "scheme": "light",
+      "lang": "uk",
+      "state": "narrow",
+      "width": 760,
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": 3
       },
       "pageErrors": []
     },
@@ -740,12 +1611,33 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 1,
+        "summaryWords": 3
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 2,
+      "view": "desktop-1000",
+      "scheme": "dark",
+      "lang": "en",
+      "state": "narrow",
+      "width": 760,
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": 3
       },
       "pageErrors": []
     },
@@ -764,12 +1656,33 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 1,
+        "summaryWords": 3
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 2,
+      "view": "desktop-1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "state": "narrow",
+      "width": 760,
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": 3
       },
       "pageErrors": []
     },
@@ -788,12 +1701,35 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": 3
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 2,
+      "view": "phone-390",
+      "scheme": "light",
+      "lang": "en",
+      "state": "narrow",
+      "width": 320,
+      "geometry": {
+        "cut": [
+          "Account B · active"
+        ],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": 3
       },
       "pageErrors": []
     },
@@ -812,12 +1748,38 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [
+          "Account B · активний"
+        ],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": 3
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 2,
+      "view": "phone-390",
+      "scheme": "light",
+      "lang": "uk",
+      "state": "narrow",
+      "width": 320,
+      "geometry": {
+        "cut": [
+          "швидкість: дефолт",
+          "Account B · активний"
+        ],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": 3
       },
       "pageErrors": []
     },
@@ -836,12 +1798,35 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": 3
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 2,
+      "view": "phone-390",
+      "scheme": "dark",
+      "lang": "en",
+      "state": "narrow",
+      "width": 320,
+      "geometry": {
+        "cut": [
+          "Account B · active"
+        ],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": 3
       },
       "pageErrors": []
     },
@@ -860,12 +1845,38 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [
+          "Account B · активний"
+        ],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": 3
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 2,
+      "view": "phone-390",
+      "scheme": "dark",
+      "lang": "uk",
+      "state": "narrow",
+      "width": 320,
+      "geometry": {
+        "cut": [
+          "швидкість: дефолт",
+          "Account B · активний"
+        ],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": 3
       },
       "pageErrors": []
     },
@@ -884,12 +1895,122 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null,
+        "sheet": {
+          "left": 988,
+          "top": 54,
+          "right": 1428,
+          "bottom": 815
+        },
+        "bar": 48,
+        "launch": {
+          "left": 1376,
+          "top": 643,
+          "right": 1410,
+          "bottom": 677
+        },
+        "refusal": {
+          "left": 1001,
+          "top": 772,
+          "right": 1415,
+          "bottom": 802
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 3,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "en",
+      "state": "narrow",
+      "width": 760,
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 3,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "en",
+      "state": "task-card",
+      "found": {
+        "taskInSheet": 1,
+        "anchorOpen": 1
+      },
+      "task": "Worker waiting for a seat",
+      "pageErrors": []
+    },
+    {
+      "look": 3,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "en",
+      "state": "handoff",
+      "found": {
+        "handoff": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 3,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "en",
+      "state": "reviewer",
+      "found": {
+        "reviewer": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 3,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "en",
+      "state": "deployer",
+      "found": {
+        "deployer": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 3,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "en",
+      "state": "signed-out",
+      "found": {
+        "signedOut": 1,
+        "signIn": 1
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 3,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "en",
+      "state": "capability",
+      "found": {
+        "capability": 1,
+        "retry": 1
       },
       "pageErrors": []
     },
@@ -908,13 +2029,66 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
       },
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null,
+        "sheet": {
+          "left": 988,
+          "top": 54,
+          "right": 1428,
+          "bottom": 815
+        },
+        "bar": 48,
+        "launch": {
+          "left": 1376,
+          "top": 643,
+          "right": 1410,
+          "bottom": 677
+        },
+        "refusal": {
+          "left": 1001,
+          "top": 772,
+          "right": 1415,
+          "bottom": 802
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 3,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "uk",
+      "state": "narrow",
+      "width": 760,
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 3,
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "uk",
+      "state": "task-card",
+      "found": {
+        "taskInSheet": 1,
+        "anchorOpen": 1
+      },
+      "task": "Worker waiting for a seat",
       "pageErrors": []
     },
     {
@@ -932,13 +2106,66 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
       },
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null,
+        "sheet": {
+          "left": 988,
+          "top": 54,
+          "right": 1428,
+          "bottom": 815
+        },
+        "bar": 48,
+        "launch": {
+          "left": 1376,
+          "top": 643,
+          "right": 1410,
+          "bottom": 677
+        },
+        "refusal": {
+          "left": 1001,
+          "top": 772,
+          "right": 1415,
+          "bottom": 802
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 3,
+      "view": "desktop-1440",
+      "scheme": "dark",
+      "lang": "en",
+      "state": "narrow",
+      "width": 760,
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 3,
+      "view": "desktop-1440",
+      "scheme": "dark",
+      "lang": "en",
+      "state": "task-card",
+      "found": {
+        "taskInSheet": 1,
+        "anchorOpen": 1
+      },
+      "task": "Worker waiting for a seat",
       "pageErrors": []
     },
     {
@@ -956,13 +2183,66 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
       },
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null,
+        "sheet": {
+          "left": 988,
+          "top": 54,
+          "right": 1428,
+          "bottom": 815
+        },
+        "bar": 48,
+        "launch": {
+          "left": 1376,
+          "top": 643,
+          "right": 1410,
+          "bottom": 677
+        },
+        "refusal": {
+          "left": 1001,
+          "top": 772,
+          "right": 1415,
+          "bottom": 802
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 3,
+      "view": "desktop-1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "state": "narrow",
+      "width": 760,
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 3,
+      "view": "desktop-1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "state": "task-card",
+      "found": {
+        "taskInSheet": 1,
+        "anchorOpen": 1
+      },
+      "task": "Worker waiting for a seat",
       "pageErrors": []
     },
     {
@@ -980,13 +2260,66 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
       },
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null,
+        "sheet": {
+          "left": 404,
+          "top": 94,
+          "right": 844,
+          "bottom": 688
+        },
+        "bar": 88,
+        "launch": {
+          "left": 792,
+          "top": 516,
+          "right": 826,
+          "bottom": 550
+        },
+        "refusal": {
+          "left": 417,
+          "top": 645,
+          "right": 831,
+          "bottom": 675
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 3,
+      "view": "desktop-1000",
+      "scheme": "light",
+      "lang": "en",
+      "state": "narrow",
+      "width": 760,
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 3,
+      "view": "desktop-1000",
+      "scheme": "light",
+      "lang": "en",
+      "state": "task-card",
+      "found": {
+        "taskInSheet": 1,
+        "anchorOpen": 1
+      },
+      "task": "Repair old links in the release notes",
       "pageErrors": []
     },
     {
@@ -1004,13 +2337,66 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
       },
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null,
+        "sheet": {
+          "left": 404,
+          "top": 94,
+          "right": 844,
+          "bottom": 688
+        },
+        "bar": 88,
+        "launch": {
+          "left": 792,
+          "top": 516,
+          "right": 826,
+          "bottom": 550
+        },
+        "refusal": {
+          "left": 417,
+          "top": 645,
+          "right": 831,
+          "bottom": 675
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 3,
+      "view": "desktop-1000",
+      "scheme": "light",
+      "lang": "uk",
+      "state": "narrow",
+      "width": 760,
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 3,
+      "view": "desktop-1000",
+      "scheme": "light",
+      "lang": "uk",
+      "state": "task-card",
+      "found": {
+        "taskInSheet": 1,
+        "anchorOpen": 1
+      },
+      "task": "Repair old links in the release notes",
       "pageErrors": []
     },
     {
@@ -1028,13 +2414,66 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
       },
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null,
+        "sheet": {
+          "left": 404,
+          "top": 94,
+          "right": 844,
+          "bottom": 688
+        },
+        "bar": 88,
+        "launch": {
+          "left": 792,
+          "top": 516,
+          "right": 826,
+          "bottom": 550
+        },
+        "refusal": {
+          "left": 417,
+          "top": 645,
+          "right": 831,
+          "bottom": 675
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 3,
+      "view": "desktop-1000",
+      "scheme": "dark",
+      "lang": "en",
+      "state": "narrow",
+      "width": 760,
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 3,
+      "view": "desktop-1000",
+      "scheme": "dark",
+      "lang": "en",
+      "state": "task-card",
+      "found": {
+        "taskInSheet": 1,
+        "anchorOpen": 1
+      },
+      "task": "Repair old links in the release notes",
       "pageErrors": []
     },
     {
@@ -1052,13 +2491,66 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
       },
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null,
+        "sheet": {
+          "left": 404,
+          "top": 94,
+          "right": 844,
+          "bottom": 688
+        },
+        "bar": 88,
+        "launch": {
+          "left": 792,
+          "top": 516,
+          "right": 826,
+          "bottom": 550
+        },
+        "refusal": {
+          "left": 417,
+          "top": 645,
+          "right": 831,
+          "bottom": 675
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 3,
+      "view": "desktop-1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "state": "narrow",
+      "width": 760,
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 3,
+      "view": "desktop-1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "state": "task-card",
+      "found": {
+        "taskInSheet": 1,
+        "anchorOpen": 1
+      },
+      "task": "Repair old links in the release notes",
       "pageErrors": []
     },
     {
@@ -1076,12 +2568,35 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 3,
+      "view": "phone-390",
+      "scheme": "light",
+      "lang": "en",
+      "state": "narrow",
+      "width": 320,
+      "geometry": {
+        "cut": [
+          "Account B · active"
+        ],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null
       },
       "pageErrors": []
     },
@@ -1100,12 +2615,38 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [
+          "Account B · активний"
+        ],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 3,
+      "view": "phone-390",
+      "scheme": "light",
+      "lang": "uk",
+      "state": "narrow",
+      "width": 320,
+      "geometry": {
+        "cut": [
+          "швидкість: дефолт",
+          "Account B · активний"
+        ],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null
       },
       "pageErrors": []
     },
@@ -1124,12 +2665,35 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 3,
+      "view": "phone-390",
+      "scheme": "dark",
+      "lang": "en",
+      "state": "narrow",
+      "width": 320,
+      "geometry": {
+        "cut": [
+          "Account B · active"
+        ],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null
       },
       "pageErrors": []
     },
@@ -1148,12 +2712,38 @@
         "role": 1,
         "parameters": 3,
         "rolePrompt": 1,
-        "prompt": 1,
         "images": 1,
         "voice": 1,
+        "prompt": 1,
         "launch": 1,
         "cancel": 1,
         "error": 1
+      },
+      "geometry": {
+        "cut": [
+          "Account B · активний"
+        ],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null
+      },
+      "pageErrors": []
+    },
+    {
+      "look": 3,
+      "view": "phone-390",
+      "scheme": "dark",
+      "lang": "uk",
+      "state": "narrow",
+      "width": 320,
+      "geometry": {
+        "cut": [
+          "швидкість: дефолт",
+          "Account B · активний"
+        ],
+        "alone": 0,
+        "rows": 2,
+        "summaryWords": null
       },
       "pageErrors": []
     }
