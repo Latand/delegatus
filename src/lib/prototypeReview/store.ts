@@ -65,7 +65,8 @@ async function copyMedia(raw: string, staging: string): Promise<PrototypeMedia> 
   const real = await admittedSource(raw);
   let handle;
   try {
-    handle = await fs.open(real, constants.O_RDONLY | constants.O_NOFOLLOW);
+    // Opened before it is known to be a file, so a pipe under that name must not hold the open.
+    handle = await fs.open(real, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     const pinned = await handle.stat();
     // The roots are checked against the file that was opened, never against the path again.
     if (!pinned.isFile() || !await openedAt(handle, real)) throw unreadableSource(raw);

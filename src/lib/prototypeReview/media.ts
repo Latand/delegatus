@@ -22,7 +22,7 @@ export async function prototypeMediaGET(request: NextRequest,taskId: string,revi
     const media = round && !round.mediaRemovedAt ? roundMedia(round).find(m => m.id === mediaId && m.mime.startsWith(`${kind}/`)) : null;
     if (!media) throw new PrototypeError("media not found",404);
     const candidate = storedMediaPath(await fs.realpath(prototypeRoot()),reviewId,media);
-    handle = await fs.open(candidate,constants.O_RDONLY | constants.O_NOFOLLOW);
+    handle = await fs.open(candidate,constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     const pinned = await handle.stat();
     // The open file itself must be the store's copy: a round directory swapped for a link answers from elsewhere.
     if (!pinned.isFile() || pinned.size !== media.bytes || !await openedAt(handle,candidate)) throw new PrototypeError("stored media is unavailable",404);

@@ -63,19 +63,41 @@ async function swapDuringOpen(swapped: string,outside: string,target: string,run
 }
 
 test("a source directory swapped for a link while its picture is opened publishes nothing", async () => {
-  const body = await input("swap-source");
-  const picture = body.variants[0]!.frames![0]!.path;
-  const outside = await directory(os.tmpdir(),"prototype-outside-");
-  await fs.writeFile(path.join(outside,"new.png"),Buffer.concat([PNG,Buffer.from("OUTSIDE!")]));
-  await expect(admittedSource(path.join(outside,"new.png"))).rejects.toThrow("outside what Delegatus reads");
-  await swapDuringOpen(path.dirname(picture),outside,picture,async () => {
-    const response = await publishPOST(request("/api/prototype-reviews",body));
-    expect(response.status).toBe(403);
-    expect((await response.json()).error).toContain("Nothing was published.");
-  });
+  /* A home and a place outside it, whatever the run's own temp directory is under. */
+  const base = await directory(os.tmpdir(),"prototype-roots-");
+  const outside = path.join(base,"outside"); await fs.mkdir(outside);
+  const home = process.env.HOME, evidence = process.env.LLV_EVIDENCE_ROOTS;
+  process.env.HOME = path.join(base,"home"); await fs.mkdir(process.env.HOME);
+  process.env.LLV_EVIDENCE_ROOTS = path.join(base,"evidence");
+  try {
+    const body = await input("swap-source");
+    const picture = body.variants[0]!.frames![0]!.path;
+    await fs.writeFile(path.join(outside,"new.png"),Buffer.concat([PNG,Buffer.from("OUTSIDE!")]));
+    await expect(admittedSource(path.join(outside,"new.png"))).rejects.toThrow("outside what Delegatus reads");
+    await swapDuringOpen(path.dirname(picture),outside,picture,async () => {
+      const response = await publishPOST(request("/api/prototype-reviews",body));
+      expect(response.status).toBe(403);
+      expect((await response.json()).error).toContain("Nothing was published.");
+    });
+    expect(loadTasks()[0]!.prototypeReviews).toBeUndefined();
+    const copies = await fs.readdir(path.join(stateDir(),"prototype-reviews"),{ recursive: true });
+    expect(copies.filter(name => /\.(png|webm)$/.test(name))).toEqual([]);
+  } finally {
+    process.env.HOME = home;
+    if (evidence === undefined) delete process.env.LLV_EVIDENCE_ROOTS; else process.env.LLV_EVIDENCE_ROOTS = evidence;
+  }
+});
+
+test("a pipe named like a picture is refused at once and holds no publication", async () => {
+  const body = await input("pipe");
+  const pipe = path.join(path.dirname(body.variants[0]!.frames![0]!.path),"pipe.png");
+  Bun.spawnSync(["mkfifo",pipe]);
+  expect((await fs.stat(pipe)).isFIFO()).toBe(true);
+  body.variants[0]!.frames![0]!.path = pipe;
+  const started = Date.now();
+  const response = await publishPOST(request("/api/prototype-reviews",body));
+  expect(response.status).toBe(403); expect(Date.now() - started).toBeLessThan(2_000);
   expect(loadTasks()[0]!.prototypeReviews).toBeUndefined();
-  const copies = await fs.readdir(path.join(stateDir(),"prototype-reviews"),{ recursive: true });
-  expect(copies.filter(name => /\.(png|webm)$/.test(name))).toEqual([]);
 });
 
 test("a round directory swapped for a link while a copy is opened serves no outside bytes, picture or video", async () => {
