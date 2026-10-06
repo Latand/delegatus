@@ -4162,6 +4162,12 @@ function restartCutOf(attempt: PipelineStageAttempt, durable: StageTurnEvidence 
   const cut = ports.conversationRestartCut?.(attempt.conversationId);
   if (!cut || unixMs(cut.recordedAt) < unixMs(attempt.startedAt)) return false;
   if (!durable) return true;
+  /* A turn the provider ended keeps its provider recovery, with its wait,
+     budget and class. Only the interruption a dying CLI writes is the
+     restart's own mark. */
+  const provider = durable.turn === "terminal" ? durable.terminalProviderMessage : null;
+  if (provider && provider.ts > unixMs(attempt.startedAt)
+    && classifyProviderCondition(attempt.effectiveRole.engine, provider.errorClass, provider.text).kind !== "turn_cut") return false;
   const worked = durable.lastAgentEventAt !== undefined
     ? durable.lastAgentEventAt
     : Math.max(durable.message?.ts ?? 0, durable.lastRecordAt ?? 0);

@@ -1315,7 +1315,8 @@ test("a Codex agent's restart cut is continued once across repeated boots and Vi
     const cut = incumbentConversation("codex", cutSessionId(37), deadEngine(2_000_001_137));
     const ledger = createFakeDeliveryLedger();
     for (const index of [1, 2, 3]) {
-      if (index > 1) markHosted(cut, "live", "turn-still-open");
+      /* Each later boot finds the row as the cut left it: no turn since. */
+      if (index > 1) markHosted(cut, "live", CUT_TURN);
       expect((await successorBoot(cut.registryFile, journal, ledger, { viewer: OTHER_VIEWER(10 + index) })).error).toBeNull();
       await settle(() => ledger.writes.length > 0, index === 1 ? 400 : 150);
     }
@@ -1398,7 +1399,7 @@ test("Codex exit bookkeeping after a cut owes no second continuation, and a resu
     for (const index of [2, 3]) {
       await Bun.sleep(5);
       appendTranscript(cut, [{ timestamp: new Date().toISOString(), type: "event_msg", payload: { type: "token_count", info: null } }]);
-      markHosted(cut, "live", "turn-still-open");
+      markHosted(cut, "live", CUT_TURN);
       expect((await successorBoot(cut.registryFile, journal, ledger, { viewer: OTHER_VIEWER(30 + index) })).error).toBeNull();
       await settle(() => ledger.writes.length > 1, 150);
     }
@@ -1421,6 +1422,68 @@ test("Codex exit bookkeeping after a cut owes no second continuation, and a resu
     }
     expect(continuationsIn(ledger)).toHaveLength(2);
     expect(obligationsFor(cut.registryFile)).toHaveLength(2);
+  } finally {
+    journal.close();
+  }
+});
+
+/* The continuation of a first cut started its turn, and the next restart cut
+   that turn before the transcript showed a word of it. The registry named the
+   turn; that is the evidence. */
+test.each(["claude", "codex"] as const)("a %s turn a delivered continuation started, cut before its transcript echoed it, gets its own one continuation", async (engine) => {
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  try {
+    const cut = incumbentConversation(engine, cutSessionId(engine === "codex" ? 47 : 48), deadEngine(2_000_001_147));
+    const ledger = createFakeDeliveryLedger();
+    expect((await successorBoot(cut.registryFile, journal, ledger, { viewer: OTHER_VIEWER(61) })).error).toBeNull();
+    await settle(() => ledger.receipts.size > 0);
+    const receipt = [...ledger.receipts.values()].at(-1);
+    if (receipt?.outcome !== "turn-started") throw new Error("the first continuation started no turn");
+    markHosted(cut, "live", receipt.turnId);
+
+    expect((await successorBoot(cut.registryFile, journal, ledger, { viewer: OTHER_VIEWER(62) })).error).toBeNull();
+    await settle(() => ledger.writes.length > 1);
+    expect(continuationsIn(ledger)).toHaveLength(2);
+    const restartCuts = obligationsFor(cut.registryFile).filter((obligation) => obligation.reason === "viewer-restart");
+    expect(restartCuts).toHaveLength(2);
+    expect(restartCuts.map((obligation) => obligation.turnRef)).toEqual([CUT_TURN, receipt.turnId]);
+
+    /* Later boots that find the same row and the same silent transcript, or
+       only exit bookkeeping on it, owe nothing more. */
+    for (const index of [63, 64]) {
+      if (engine === "codex") {
+        appendTranscript(cut, [{ timestamp: new Date().toISOString(), type: "event_msg", payload: { type: "token_count", info: null } }]);
+      }
+      markHosted(cut, "live", receipt.turnId);
+      expect((await successorBoot(cut.registryFile, journal, ledger, { viewer: OTHER_VIEWER(index) })).error).toBeNull();
+      await settle(() => ledger.writes.length > 2, 150);
+    }
+    expect(continuationsIn(ledger)).toHaveLength(2);
+    expect(obligationsFor(cut.registryFile)).toHaveLength(2);
+  } finally {
+    journal.close();
+  }
+});
+
+/* A Claude stage whose provider failed before the restart: the CLI gave up on
+   the turn, and the provider recovery owns it. The shared projection keeps
+   that turn busy, which is no cut. */
+test("a stage whose turn a provider failure ended before the restart records no restart cut", async () => {
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  try {
+    const at = new Date(Date.now() - 30_000).toISOString();
+    const cut = incumbentConversation("claude", cutSessionId(49), deadEngine(2_000_001_149), [
+      ...midToolTranscript("claude"),
+      { type: "user", timestamp: at, message: { content: [{ type: "tool_result", tool_use_id: "tool-cut", content: "ok" }] } },
+      { type: "assistant", timestamp: at, isApiErrorMessage: true, error: "server_error",
+        message: { model: "<synthetic>", stop_reason: "stop_sequence", content: [{ type: "text", text: "Failed to refresh OAuth token: retry in a minute" }] } },
+    ]);
+    asPipelineStage(cut);
+    const ledger = createFakeDeliveryLedger();
+    expect((await successorBoot(cut.registryFile, journal, ledger)).error).toBeNull();
+    await settle(() => ledger.writes.length > 0, 150);
+    expect(continuationsIn(ledger)).toEqual([]);
+    expect(obligationsFor(cut.registryFile)).toEqual([]);
   } finally {
     journal.close();
   }

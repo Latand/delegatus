@@ -4,7 +4,7 @@ import os from "node:os";
 import { turnStateFromRecords } from "@/lib/accounts/migration/turnState";
 import type { AgentRegistry, ProcessIdentity, RegistryFile } from "@/lib/agent/registry";
 import { BACKGROUND_TASK_WAIT_LIMIT_MS, pendingBackgroundTaskNames } from "@/lib/pipelines/backgroundTasks";
-import { lastAgentWorkIndex } from "@/lib/pipelines/durableEvidence";
+import { claudeTurnClosedByProviderFailure, lastAgentWorkIndex } from "@/lib/pipelines/durableEvidence";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { procBackend } from "@/lib/proc";
 import { readStableTailRecords } from "@/lib/scanner/activity";
@@ -384,9 +384,14 @@ export function transcriptCutEvidenceFromRecords(
 ): TranscriptCutEvidence {
   const end = lastAgentWorkIndex(records, engine === "codex");
   const work = end < 0 ? null : transcriptEvidenceFromRecords(records.slice(0, end + 1), engine, null);
+  /* The shared projection keeps a Claude turn the provider failed open, since
+     the CLI may retry it (#1811). One the CLI gave up on had ended before any
+     restart, and its recovery is the provider's. */
   return {
     verified: true,
-    turn: transcriptEvidenceFromRecords(records, engine, null).turn,
+    turn: engine === "claude" && claudeTurnClosedByProviderFailure(records)
+      ? "terminal"
+      : transcriptEvidenceFromRecords(records, engine, null).turn,
     lastWork: work?.lastEventAt != null ? { at: work.lastEventAt, kind: work.kind } : null,
   };
 }

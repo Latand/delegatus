@@ -292,9 +292,72 @@ class InterruptedConversations(unittest.TestCase):
         pending.write_text(json.dumps(obligation("journal", "conversation_journal", "2026-10-06T14:26:00.000Z")) + "\n{\n")
         listed, unreadable = deploy.interrupted_conversations(self.state, "2026-10-06T14:25:15+00:00")
         self.assertEqual([entry["conversationId"] for entry in listed], ["conversation_journal"])
-        self.assertEqual(unreadable, ["interruption-continuation-broken.json:JSONDecodeError",
-                                      "interruption-obligations.pending.jsonl:2",
+        self.assertEqual(unreadable, ["interruption-obligations.pending.jsonl:2",
+                                      "interruption-continuation-broken.json:JSONDecodeError",
                                       "interruption-continuation-undated:recordedAt"])
+
+    def claim(self, suffix, body):
+        claimed = self.state / ("interruption-obligations.pending.jsonl.claim-" + suffix)
+        claimed.write_text(body)
+        return claimed
+
+    def test_records_an_import_holds_in_its_claim_are_listed_and_a_corrupt_claim_is_unreadable(self):
+        # An import in flight, one that died holding its claim, and a claim
+        # whose record also reached the directory, which keeps the directory's.
+        self.claim("123-abcdef123456", json.dumps(obligation("active", "conversation_active", "2026-10-06T14:26:00.000Z",
+                                                             stage={"pipelineId": "lane", "stageId": "build", "attempt": 1})) + "\n")
+        self.claim("77-0123456789ab", json.dumps(obligation("abandoned", "conversation_abandoned", "2026-10-06T14:26:01.000Z")) + "\n{\n")
+        self.claim("88-ba9876543210", json.dumps(obligation("imported", "conversation_imported", "2026-10-06T14:26:02.000Z")) + "\n")
+        self.write(obligation("imported", "conversation_imported", "2026-10-06T14:26:02.000Z", state="delivered"))
+        listed, unreadable = deploy.interrupted_conversations(self.state, "2026-10-06T14:25:15+00:00")
+        self.assertEqual([(entry["conversationId"], entry["state"], entry["stage"]) for entry in listed], [
+            ("conversation_active", "owed", {"pipelineId": "lane", "stageId": "build", "attempt": 1}),
+            ("conversation_abandoned", "owed", None),
+            ("conversation_imported", "delivered", None),
+        ])
+        self.assertEqual(unreadable, ["interruption-obligations.pending.jsonl.claim-77-0123456789ab:2"])
+
+    def test_a_claim_the_inventory_cannot_read_is_unreadable(self):
+        claimed = self.claim("123-abcdef123456", "")
+        claimed.chmod(0)
+        if os.access(claimed, os.R_OK):
+            self.skipTest("this user reads files whatever their mode")
+        listed, unreadable = deploy.interrupted_conversations(self.state, "2026-10-06T14:25:15+00:00")
+        self.assertEqual(listed, [])
+        self.assertEqual(unreadable, ["interruption-obligations.pending.jsonl.claim-123-abcdef123456:PermissionError"])
+
+    def test_a_switch_whose_only_cut_waits_in_an_import_claim_lists_it(self):
+        state = self.state
+
+        class ClaimedSwitch(Switch):
+            def restart(self):
+                pending = state / "interruption-obligations.pending.jsonl"
+                pending.write_text(json.dumps(obligation("claimed", "conversation_claimed", deploy.utc(),
+                                                         stage={"pipelineId": "lane", "stageId": "build", "attempt": 1})) + "\n")
+                pending.rename(state / "interruption-obligations.pending.jsonl.claim-123-abcdef123456")
+
+            def interrupted(self, since, hosts):
+                return deploy.interrupted_conversations(state, since, hosts)
+
+        result = deploy.run_switch(ClaimedSwitch(), TARGET, samples=3, interval=2, timeout=5)
+        self.assertEqual(result["verdict"], "pass")
+        self.assertEqual(result["interruptedUnreadable"], [])
+        self.assertEqual([(entry["conversationId"], entry["stage"]) for entry in result["interrupted"]],
+                         [("conversation_claimed", {"pipelineId": "lane", "stageId": "build", "attempt": 1})])
+
+    def test_a_corrupt_import_claim_keeps_a_healthy_switch_from_passing(self):
+        state = self.state
+
+        class CorruptClaimSwitch(Switch):
+            def restart(self):
+                (state / "interruption-obligations.pending.jsonl.claim-77-0123456789ab").write_text("{\n")
+
+            def interrupted(self, since, hosts):
+                return deploy.interrupted_conversations(state, since, hosts)
+
+        result = deploy.run_switch(CorruptClaimSwitch(), TARGET, samples=3, interval=2, timeout=5)
+        self.assertEqual(result["verdict"], "needs_decision")
+        self.assertEqual(result["interruptedUnreadable"], ["interruption-obligations.pending.jsonl.claim-77-0123456789ab:1"])
 
     def test_a_record_too_incomplete_to_name_its_conversation_is_unreadable(self):
         self.write({"id": "interruption-continuation-bare", "recordedAt": "2026-10-06T23:00:00Z"})

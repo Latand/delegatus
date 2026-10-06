@@ -173,16 +173,60 @@ def obligation_flaw(record):
     return None
 
 
+PENDING_JOURNAL = "interruption-obligations.pending.jsonl"
+
+
+def read_journal(path, records, unreadable):
+    """Adds the records of one pending journal, each id once. A journal gone
+    by the read was taken by an import, which moved its records on first."""
+    try:
+        lines = path.read_text().splitlines()
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        unreadable.append(path.name + ":" + type(error).__name__)
+        return
+    for number, line in enumerate(lines, 1):
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except ValueError:
+            record = None
+        if not isinstance(record, dict) or not isinstance(record.get("id"), str):
+            unreadable.append(path.name + ":" + str(number))
+            continue
+        records.setdefault(record["id"], record)
+
+
 def interrupted_conversations(state, since, hosts=()):
     """The conversations whose turn this switch cut, as the Viewers recorded
     them: an incumbent at release, the booting successor at restart, and the
     records it could not read or that are too incomplete to name a
     conversation. Each conversation names its pipeline stage when it ran one;
     a stage the preflight protected names it from that capture when the record
-    does not. A state with no record directory recorded no cut."""
+    does not. A state with no record directory recorded no cut.
+
+    A record can wait in the pending journal, and an import takes that journal
+    by renaming it to a claim beside it, writes its records into the
+    directory, returns the ones the directory refused to the journal and only
+    then deletes the claim. A claim an import died holding stays until a later
+    import takes it over. So the journal and every claim are read before the
+    directory and the journal once more after it: a record moving between
+    them during the read is found in one of them."""
     directory = pathlib.Path(state) / "interruption-obligations"
-    records = {}
+    pending = directory.with_name(PENDING_JOURNAL)
+    journaled = {}
     unreadable = []
+    read_journal(pending, journaled, unreadable)
+    try:
+        beside = sorted(os.listdir(directory.parent))
+    except FileNotFoundError:
+        beside = []
+    for name in beside:
+        if name.startswith(PENDING_JOURNAL + ".claim-"):
+            read_journal(directory.parent / name, journaled, unreadable)
+    records = {}
     names = sorted(os.listdir(directory)) if os.path.lexists(directory) else []
     for name in names:
         if not (name.startswith("interruption-continuation-") and name.endswith(".json")):
@@ -196,19 +240,10 @@ def interrupted_conversations(state, since, hosts=()):
             unreadable.append(name + ":shape")
             continue
         records[record["id"]] = record
-    pending = directory.with_name(directory.name + ".pending.jsonl")
-    if os.path.lexists(pending):
-        for number, line in enumerate(pending.read_text().splitlines(), 1):
-            if not line.strip():
-                continue
-            try:
-                record = json.loads(line)
-            except ValueError:
-                record = None
-            if not isinstance(record, dict) or not isinstance(record.get("id"), str):
-                unreadable.append(pending.name + ":" + str(number))
-                continue
-            records.setdefault(record["id"], record)
+    read_journal(pending, journaled, unreadable)
+    for identifier, record in journaled.items():
+        records.setdefault(identifier, record)
+    unreadable = list(dict.fromkeys(unreadable))
     boundary = parse_time(since)
     protected = {host.get("conversationId"): host for host in hosts if host.get("conversationId")}
     listed = []

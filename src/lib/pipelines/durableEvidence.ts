@@ -316,6 +316,13 @@ function claudeApiErrorClosedAttempt(records: RecordLike[]): boolean {
   return stop === "end_turn" || stop === "stop_sequence";
 }
 
+/** Whether a Claude transcript's turn ended on a provider failure the CLI gave
+    up on, read past the bookkeeping a shutdown appends after it. A service
+    restart did not cut such a turn: the provider had ended it already. */
+export function claudeTurnClosedByProviderFailure(records: RecordLike[]): boolean {
+  return claudeApiErrorClosedAttempt(providerTurnRecords(records, false));
+}
+
 /** The widest verified read spent looking for a reported attempt's prose. A
     brief is relayed at 60 KiB at most, so a window this size holds it with
     room for the tool output written after the report. */

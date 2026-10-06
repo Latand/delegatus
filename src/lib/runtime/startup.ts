@@ -390,11 +390,15 @@ function recordOrchestratorRestartObligations(
  *    work was a child of the old process, so its completion notice, which is
  *    what would have woken the agent, never arrives;
  *  - a pipeline stage launched moments before, whose transcript holds no
- *    dated event yet. Its controller still has to know the restart took it.
+ *    dated event yet. Its controller still has to know the restart took it;
+ *  - the turn a continuation that arrived after an earlier cut started, which
+ *    the row names as active before its transcript shows a word of it.
  *
- * The capture runs once per boot, before any claim can replace the process, and
- * reads the transcript only: the registry row may still name the old process,
- * alive for a few seconds more, which says nothing about whether it survives.
+ * The capture runs once per boot, before any claim can replace the process.
+ * The transcript decides whether a turn was open; the row's process says
+ * nothing, since the old one may stay alive for a few seconds more. The row's
+ * active turn is what names the turn, so a turn a delivered continuation
+ * started is a cut of its own and the same turn found again is the same cut.
  * A transcript whose tail cannot be read whole proves no turn, so it records
  * no cut: a record is what authorizes a stage's fresh attempt and what the
  * deploy verdict lists, and neither may rest on a guess.
@@ -405,6 +409,8 @@ interface RestartCutTarget {
   hostKey: string;
   path: string;
   claimEpoch: number;
+  /** The turn the row names as active, when it names one. */
+  turnRef: string | null;
   lastEvent: { kind: TranscriptEventKind | null; at: number | null };
   backgroundTasks: string[];
   stage: InterruptionStage | null;
@@ -418,6 +424,7 @@ async function restartCutTargets(
   registry: AgentRegistry,
   seats: readonly OrchestratorSeat[],
   unresolved: readonly InterruptionObligation[],
+  recorded: readonly InterruptionObligation[],
   snapshot: RegistryFile = registry.readOnlySnapshot(),
   now = Date.now(),
 ): Promise<RestartCutTarget[]> {
@@ -457,9 +464,16 @@ async function restartCutTargets(
     /* The same window bounds every adoption a turn claim alone asks for. */
     if (at !== null && now - at > startupTurnMaxAgeMs()) continue;
     const backgroundTasks = await backgroundWorkAwaitedAtCut(conversation.engine, generation.path, evidence, now);
-    const inFlight = live && (at === null
+    const turnRef = live ? entry.structuredHost.activeTurnRef ?? null : null;
+    /* A continuation arrived since a cut whose transcript has not moved, and
+       the row names a turn other than the one that cut was. That turn is the
+       continuation's, open whatever the transcript, which has yet to show it. */
+    const resumedTurn = turnRef !== null && recorded.some((obligation) => obligation.state === "delivered"
+      && registry.canonicalConversationId(obligation.conversationId) === conversationId
+      && obligation.turnRef !== turnRef && obligation.checkpoint.lastEventAt === at);
+    const inFlight = live && (resumedTurn || (at === null
       ? stage !== null && evidence.turn !== "terminal"
-      : evidence.turn === "busy" || (stage !== null && evidence.turn === "unknown"));
+      : evidence.turn === "busy" || (stage !== null && evidence.turn === "unknown")));
     if (!inFlight && backgroundTasks.length === 0) continue;
     const memberships = snapshot.memberships[conversationId] ?? [];
     targets.push({
@@ -468,6 +482,7 @@ async function restartCutTargets(
       hostKey,
       path: generation.path,
       claimEpoch: entry.claimEpoch,
+      turnRef,
       lastEvent: { kind: evidence.lastWork?.kind ?? null, at },
       backgroundTasks,
       stage,
@@ -480,11 +495,12 @@ async function restartCutTargets(
   return targets;
 }
 
-/** Records each cut once. The boundary is the cut itself, the newest record
-    the agent's work wrote, so a later boot that finds the same silent turn
-    lands on the record this boot wrote whatever the CLI appended on its way
-    down, and one the agent resumed and was cut again in gets its own. Every
-    engine's continuation is keyed by that record. */
+/** Records each cut once. The cut is named by the newest record the agent's
+    work wrote and the turn the row names, so a later boot that finds the same
+    silent turn lands on the record this boot wrote whatever the CLI appended
+    on its way down, and a turn the agent resumed and was cut again in gets its
+    own, echoed in the transcript or not yet. Every engine's continuation is
+    keyed by that record. */
 function recordRestartCuts(
   store: InterruptionObligationStore,
   targets: readonly RestartCutTarget[],
@@ -499,7 +515,7 @@ function recordRestartCuts(
       path: target.path,
       owner: null,
       claimEpoch: target.claimEpoch,
-      turnRef: null,
+      turnRef: target.turnRef,
       boundary: `viewer-restart:${target.lastEvent.at ?? "launch"}`,
       reason: "viewer-restart",
       checkpoint: {
@@ -1469,9 +1485,10 @@ async function adoptStructuredHostsPass(
   if (passState && !passState.restartCutsRecorded && !resumeDeferred) {
     /* A continuation that already arrived covers nothing any more: settle it
        first, so a turn the agent resumed and the restart cut again is seen. */
-    recordRestartCuts(interruptions, await restartCutTargets(registry, orchestratorSeats(),
-      settleSubmittedInterruptionObligations(registry, interruptions, interruptions.list().filter(interruptionObligationUnresolved))),
-    passState.recordedCuts ??= new Map());
+    const unresolved = settleSubmittedInterruptionObligations(registry, interruptions,
+      interruptions.list().filter(interruptionObligationUnresolved));
+    recordRestartCuts(interruptions, await restartCutTargets(registry, orchestratorSeats(), unresolved, interruptions.list()),
+      passState.recordedCuts ??= new Map());
     passState.restartCutsRecorded = true;
   }
   const controllerBoundEarly = client !== null;

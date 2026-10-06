@@ -17958,6 +17958,52 @@ test("records a CLI writes as it exits after a restart cut do not count as work"
   expect(loadPipelines()[0]!.runs[0]!.attempts[1]!.restartContext).toMatchObject({ cause: "restart", lastReport: "Almost done." });
 });
 
+/* The provider ended the turn before the restart came: the CLI gave up on a
+   refresh race. The provider recovery keeps its wait, class and budget, and
+   the restart spends nothing. A turn the restart itself cut still retries. */
+test("a provider failure that predates a restart cut keeps its provider recovery and spends no restart attempt", async () => {
+  const h = harness();
+  const attempt = await restartCutStage(h, [{ id: "build", kind: "run", engine: "claude", model: "fable", prompt: "Build", next: null }]);
+  h.advanceWallClock(10 * 60_000);
+  const recordedAt = h.ports.now();
+  cutByRestart(h, h.ports, attempt, recordedAt, "unused");
+  const failedAt = Date.parse(recordedAt) - 30_000;
+  h.durableTurns.set(attempt.agentPath!, {
+    turn: "terminal", message: { text: "Running the suite.", ts: failedAt - 1_000 },
+    lastRecordAt: failedAt, lastAgentEventAt: failedAt - 1_000,
+    terminalProviderMessage: { text: "Failed to refresh OAuth token: retry in a minute", ts: failedAt, errorClass: "server_error" },
+  });
+  h.advanceWallClock(5 * 60_000);
+  await tickPipelines([], h.ports);
+
+  const lane = loadPipelines()[0]!;
+  expect(lane.runs[0]!.attempts).toHaveLength(1);
+  expect(lane.runs[0]!.attempts[0]!.restartRecovery).toBeUndefined();
+  expect(lane.runs[0]!.attempts[0]!.providerWait?.condition).toMatchObject({ kind: "transient", label: "auth refresh race" });
+  expect(lane.stateDetail).toContain("auth refresh race");
+  expect(h.spawnInputs).toHaveLength(1);
+});
+
+test("the interruption a dying CLI writes is the restart's own mark: the cut still retries once", async () => {
+  const h = harness();
+  const attempt = await restartCutStage(h, [{ id: "build", kind: "run", engine: "claude", model: "fable", prompt: "Build", next: null }]);
+  h.advanceWallClock(10 * 60_000);
+  const recordedAt = h.ports.now();
+  cutByRestart(h, h.ports, attempt, recordedAt, "unused");
+  const workedAt = Date.parse(recordedAt) - 30_000;
+  h.durableTurns.set(attempt.agentPath!, {
+    turn: "terminal", message: null, lastRecordAt: Date.parse(recordedAt) + 1_000, lastAgentEventAt: workedAt,
+    terminalProviderMessage: { text: "stage turn interrupted before completion", ts: Date.parse(recordedAt) + 1_000, errorClass: "turn_aborted" },
+  });
+  h.advanceWallClock(5 * 60_000);
+  await tickPipelines([], h.ports);
+
+  const lane = loadPipelines()[0]!;
+  expect(lane.runs[0]!.attempts).toHaveLength(2);
+  expect(lane.runs[0]!.attempts[1]!.restartContext).toMatchObject({ previousAttempt: 1, cause: "restart" });
+  expect(lane.runs[0]!.attempts[0]!.providerWait).toBeUndefined();
+});
+
 test("a restart cut is retried exactly once across repeated restarts and two Viewer generations", async () => {
   const h = harness();
   const attempt = await restartCutStage(h, [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }]);

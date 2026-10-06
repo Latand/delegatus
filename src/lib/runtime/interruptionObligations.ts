@@ -177,6 +177,10 @@ function coversSameCut(existing: InterruptionObligation, input: InterruptionObli
   if (existing.conversationId !== input.conversationId || existing.hostKey !== input.hostKey) return false;
   if (sameOwner(existing.owner, input.owner) && existing.turnRef === input.turnRef) return true;
   if (input.reason !== "viewer-restart") return false;
+  /* A continuation that arrived started a turn of its own. A turn the row
+     names other than the one this record cut is that turn, cut again before
+     its transcript showed it. */
+  if (existing.state === "delivered" && input.turnRef !== null && existing.turnRef !== input.turnRef) return false;
   /* A boot-time severed turn is the same cut as any obligation recorded after
      that turn's last transcript event: the release happened after it. */
   const lastEventAt = input.checkpoint.lastEventAt;
