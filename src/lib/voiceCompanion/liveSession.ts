@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { hardenedRedact } from "@/lib/view/compactText";
 import type { CompanionCommand, CompanionEvent, Locale, Payload } from "./contract";
-import { CompanionStorage } from "./storage";
+import { CompanionStorage, type StoredSession } from "./storage";
 import { CompanionAdmission } from "./admission";
 import { CompanionBoardReads } from "./boardReads";
 import { LiveTranscript } from "./liveTranscript";
@@ -55,6 +55,8 @@ export class CompanionLiveSessions {
   private readonly active = new Map<string, ActiveSession>();
   private readonly minting = new Map<string, Promise<MintedCompanionSession>>();
   private readonly reaping = new Map<string, Promise<void>>();
+  /** Hangups the provider has not confirmed, each asked again on a timer. */
+  private readonly retrying = new Map<string, { attempt: number; pending: boolean }>();
   private readonly instance = randomUUID();
   private readonly now: () => number;
   constructor(readonly storage: CompanionStorage, readonly admission: CompanionAdmission, private readonly reads: CompanionBoardReads,
@@ -63,8 +65,10 @@ export class CompanionLiveSessions {
   async start(input: { project: string; locale: Locale; sdp: string; requestId?: string }): Promise<MintedCompanionSession> {
     const requestId = input.requestId ?? randomUUID();
     if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId)) throw new Error("INVALID_REQUEST");
-    // No new paid session while one that lost its owner is still open.
+    // No new paid session while one that lost its owner is still open, or
+    // while the provider has not confirmed that an earlier one is closed.
     await this.recover();
+    if (this.orphans().some(row => row.remoteOpen)) throw new Error("PROVIDER_ERROR");
     const digest = createHash("sha256").update(JSON.stringify([input.project, input.locale, input.sdp])).digest("hex");
     const previous = Object.values(this.storage.read().sessions).find(row => row.mintRequestId === requestId);
     if (previous) {
@@ -307,14 +311,40 @@ export class CompanionLiveSessions {
    * or the browser forgot its id. Closes the provider session and keeps its
    * reservation as incomplete usage. Admitted deliveries keep their keys. A
    * provider session whose hangup was never confirmed is asked again, here,
-   * at every recovery, until the provider confirms it. */
+   * at every recovery and on a timer, until the provider confirms it. Until
+   * then no new session is minted, and the open one is charged for the time
+   * it may have run. */
   async recover(): Promise<void> {
-    for (const row of Object.values(this.storage.read().sessions)) {
-      if (row.authority !== "live-model" || this.active.has(row.id) || (row.closed && !row.remoteOpen)) continue;
+    for (const row of this.orphans()) await this.reap(row.id);
+  }
+  /** Stored voice sessions this service must close: still open here or at the
+   * provider, and owned by no session in memory and no other living process. */
+  private orphans(): StoredSession[] {
+    return Object.values(this.storage.read().sessions).filter(row => {
+      if (row.authority !== "live-model" || this.active.has(row.id) || (row.closed && !row.remoteOpen)) return false;
       const owner = row.owner;
-      if (owner && owner.instance !== this.instance && owner.pid !== process.pid && processAlive(owner.pid)) continue;
-      await this.reap(row.id);
-    }
+      return !(owner && owner.instance !== this.instance && owner.pid !== process.pid && processAlive(owner.pid));
+    });
+  }
+  /** A provider session that may still be open bills by the second. Its
+   * settled charge covers the time since it was minted, whatever was reserved. */
+  private chargeOpenTime(id: string): void {
+    const session = this.admission.session(id);
+    const usage = session.usage ?? { seconds: 0, responses: {} };
+    this.storage.accrue(id, Math.max(15, usage.seconds, (this.now() - session.createdAt) / 1_000) * LIVE_USD_PER_SECOND
+      + Object.values(usage.responses).reduce((sum, row) => sum + (row.complete && row.usd !== null ? row.usd : BACKEND_RESPONSE_RESERVE_USD), 0));
+  }
+  private retryHangup(id: string): void {
+    if (this.options.timers === false) return;
+    const state = this.retrying.get(id) ?? { attempt: 0, pending: false };
+    if (state.pending) return;
+    state.pending = true;
+    this.retrying.set(id, state);
+    const timer = setTimeout(() => {
+      state.pending = false; state.attempt += 1;
+      void this.reap(id).catch(() => undefined);
+    }, Math.min(60_000, 1_000 * 2 ** Math.min(state.attempt, 6)));
+    (timer as { unref?(): void }).unref?.();
   }
   private reap(id: string): Promise<void> {
     const running = this.reaping.get(id);
@@ -322,16 +352,20 @@ export class CompanionLiveSessions {
     const promise = (async () => {
       const session = this.admission.session(id);
       if (this.active.has(id)) return;
-      if (session.providerId && (session.remoteOpen ?? !session.closed)) {
-        try {
-          await this.provider.hangup(session.providerId, this.options.key?.() ?? this.storage.providerKey());
-          this.storage.change(document => { document.sessions[id].remoteOpen = false; });
-        } catch { this.storage.change(document => { document.sessions[id].remoteOpen = true; }); }
+      const remote = !!session.providerId && (session.remoteOpen ?? !session.closed);
+      if (remote) {
+        let confirmed = false;
+        try { await this.provider.hangup(session.providerId!, this.options.key?.() ?? this.storage.providerKey()); confirmed = true; }
+        catch { /* Asked again below and at the next recovery. */ }
+        this.storage.change(document => { document.sessions[id].remoteOpen = !confirmed; });
+        if (confirmed) this.retrying.delete(id); else this.retryHangup(id);
       }
-      if (this.admission.session(id).closed) return;
-      this.storage.settle(id, null);
-      this.admission.emit(id, { type: "session.closed", reason: "transport", incomplete: true });
-      this.admission.retire(id);
+      if (!this.admission.session(id).closed) {
+        this.storage.settle(id, null);
+        this.admission.emit(id, { type: "session.closed", reason: "transport", incomplete: true });
+        this.admission.retire(id);
+      }
+      if (remote) this.chargeOpenTime(id);
     })();
     this.reaping.set(id, promise);
     return promise.finally(() => { this.reaping.delete(id); });
@@ -432,6 +466,8 @@ export class CompanionLiveSessions {
       for (const timer of active.timers) clearTimeout(timer);
       active.connection?.dispose(); active.resolveClose?.();
       this.active.delete(active.id);
+      // The provider never confirmed this session closed: keep asking.
+      if (active.providerId && !active.providerClosed && !active.hungUp) this.retryHangup(active.id);
     }
   }
 }

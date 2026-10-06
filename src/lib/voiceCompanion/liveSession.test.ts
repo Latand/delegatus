@@ -435,3 +435,223 @@ test("a restart between the Send tap and its recorded outcome recovers that very
     provider.disconnect(s.providerId);
   }
 });
+
+test("a credential said in pieces with separators between them cannot be put back together from anything stored or answered", async () => {
+  const key = `sk-proj-${"Q7vLm2Xr9TbW4nZc8KpY3dHs6FgJ1aE5uR0oNiVx".repeat(2)}`;
+  for (const speaker of ["input", "output"] as const) for (const gap of [" ", "\t", "\n", " \r\n "]) {
+    fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+    const f = fixture(key);
+    const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+    const pieces = key.match(/.{1,10}/g)!;
+    f.provider.replay(s.providerId, ...pieces.map((piece, at) => ({ type: `session.${speaker}_transcript.delta`, event_id: `piece-${at}`, delta: (at ? gap : "") + piece, start_ms: at * 2_300, end_ms: at * 2_300 + 400 })));
+    await f.service.drain(s.sessionId);
+    await f.service.close(s.sessionId);
+    const events = await f.service.events(s.sessionId, 0);
+    const texts = (rows: typeof events) => rows.map(event => event.type === "transcript.snapshot" ? event.text : "").join("");
+    const latest = new Map<string, typeof events[number]>();
+    for (const event of events) if (event.type === "transcript.snapshot") latest.set(event.itemId, event);
+    const stored = f.admission.session(s.sessionId);
+    const surfaces = [stored.inputs.map(row => row.text).join(""), texts([...latest.values()]), texts(events), JSON.stringify(stored), stateFile(), JSON.stringify(events)]
+      .map(surface => surface.replace(/\s|\\[tnr]/gu, ""));
+    for (const surface of surfaces) {
+      expect(surface.includes(key), `${speaker} ${JSON.stringify(gap)}`).toBe(false);
+      for (const piece of pieces.slice(1)) expect(surface.includes(piece), `${speaker} ${JSON.stringify(gap)} ${piece}`).toBe(false);
+    }
+    // The beginning, once withheld, was never shown by a later piece.
+    expect(surfaces[2].includes(pieces[0]), `${speaker} ${JSON.stringify(gap)}`).toBe(false);
+  }
+});
+
+test("documented cache-write receipts never let the month spend past the cap, in parallel, reordered and across a shutdown", async () => {
+  const written = { input_tokens: 1_000_000, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 1_000_000 }, output_tokens: 512 };
+  const official = 1_000_000 * 0.25 / 1_000_000 + 512 * 0.75 / 1_000_000;
+  const cap = 1.40;
+  for (const order of ["serial", "parallel-reordered", "shutdown"] as const) {
+    fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+    const f = fixture();
+    f.provider.autoClose = false;
+    f.storage.updateSettings({ monthlyCapUsd: cap });
+    const waiting: Array<() => void> = [];
+    f.provider.responder = (_request, index) => order === "serial" ? backendResponse(`resp_${index}`, [message("Read.")], written)
+      : new Promise(resolve => { waiting.push(() => resolve(backendResponse(`resp_${index}`, [message("Read.")], written))); });
+    const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+    for (let at = 0; at < 7; at += 1) {
+      f.provider.replay(s.providerId, delegationCreated(`d${at}`, at * 10));
+      if (order === "serial") await f.service.drain(s.sessionId);
+    }
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const asked = f.provider.requests.length;
+    if (order === "parallel-reordered") for (const answer of waiting.reverse()) answer();
+    if (order === "shutdown") await new Promise(resolve => setTimeout(resolve, 60)); // the cap close times out and hangs up
+    else {
+      f.provider.replay(s.providerId, { type: "session.closed", event_id: "closed", reason: "close_requested", usage: { seconds: 300 } });
+      await f.service.drain(s.sessionId);
+    }
+    expect(f.admission.session(s.sessionId).closed, order).toBe(true);
+    // What the provider bills by its documented rates, for every response this server asked.
+    expect(0.25 + asked * official, order).toBeLessThanOrEqual(cap);
+    expect(f.storage.settings().usageUsd, order).toBeLessThanOrEqual(cap);
+    expect(f.storage.settings().reservedUsd, order).toBe(0);
+    if (order !== "shutdown") {
+      expect(f.storage.settings().usageUsd, order).toBeCloseTo(0.25 + asked * official, 6);
+      expect(Object.values(f.admission.session(s.sessionId).usage!.responses).every(row => row.complete && row.usd !== null && Math.abs(row.usd - official) < 1e-9), order).toBe(true);
+    } else expect(f.storage.settings().usageUsd, order).toBeGreaterThanOrEqual(0.25 + asked * official);
+  }
+});
+
+test("a finished withdrawal takes the proposal off: the old tap, a late result, a retry and a restart send nothing", async () => {
+  const withdrawals = [["Never mind. Cancel that request."], ["Never mind."], ["Cancel that request."], ["Забудь."], ["Скасуй."], ["Передумав."], ["Забудь. Скасуй це."]];
+  for (const [withdrawal] of withdrawals) for (const late of [false, true]) {
+    fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+    const f = fixture();
+    let answer!: () => void;
+    const proposal = backendResponse("resp_0", [functionCall("call-a", "request_orchestrator_delegation", { instruction: "Review the plan" })]);
+    f.provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output") ? backendResponse(`resp_${index}`, [message("Shown.")])
+      : late ? new Promise(resolve => { answer = () => resolve(proposal); }) : proposal;
+    const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+    f.provider.replay(s.providerId, said("Ask the orchestrator to review the plan.", 0), delegationCreated("request", 600));
+    if (!late) {
+      await f.service.drain(s.sessionId);
+      expect(Object.values(f.admission.session(s.sessionId).proposals).map(row => row.state), withdrawal).toEqual(["pending"]);
+    } else await new Promise(resolve => setTimeout(resolve, 5));
+    // The withdrawal, then the companion's own next words complete it.
+    f.provider.replay(s.providerId, said(withdrawal, 3_000), said("All right.", 4_000, "output"));
+    if (late) { await new Promise(resolve => setTimeout(resolve, 5)); answer(); }
+    await f.service.drain(s.sessionId);
+    const session = f.admission.session(s.sessionId);
+    expect(session.inputs.at(-1), withdrawal).toMatchObject({ text: withdrawal, final: true });
+    if (late) {
+      expect(Object.values(session.proposals), withdrawal).toEqual([]);
+      expect(f.admission.events(s.sessionId, 0).some(event => event.type === "delegation.confirmation.required"), withdrawal).toBe(false);
+      await f.service.close(s.sessionId);
+      expect(f.sends(), withdrawal).toBe(0);
+      continue;
+    }
+    const [held] = Object.values(session.proposals);
+    expect(held.state, withdrawal).toBe("cancelled");
+    expect(f.admission.events(s.sessionId, 0), withdrawal).toContainEqual(expect.objectContaining({ type: "delegation.tool.result", proposalId: held.proposal.proposalId, result: { status: "cancelled", code: "source_changed" } }));
+    const tap = { type: "confirmation" as const, proposalId: held.proposal.proposalId, decision: "send" as const, via: "tap" as const };
+    await f.service.command(s.sessionId, tap);
+    await f.service.command(s.sessionId, tap);
+    // The model raising the same call again revives nothing.
+    expect(f.admission.propose(s.sessionId, "call-a", "request", "Review the plan", 1)).toBeNull();
+    const storage = new CompanionStorage();
+    const restarted = new CompanionLiveSessions(storage, new CompanionAdmission(storage, { recipient: () => ({ project: "fixture", conversationId: "conversation_fixture", seatEpoch: 1, engine: "claude" }),
+      send: async () => { throw new Error("unexpected delivery"); }, reports: () => [] }), noReads(), f.provider, { key: () => KEY, timers: false, closeTimeoutMs: 20 });
+    await restarted.recover();
+    await restarted.command(s.sessionId, tap);
+    await restarted.events(s.sessionId, 0);
+    expect(storage.read().sessions[s.sessionId].proposals[held.proposal.proposalId].state, withdrawal).toBe("cancelled");
+    expect(f.sends(), withdrawal).toBe(0);
+    f.provider.disconnect(s.providerId);
+  }
+});
+
+test("a withdrawal still arriving takes the proposal off, and ordinary speech after a request leaves it", async () => {
+  for (const [later, state] of [["Never mind, cancel that", "cancelled"], ["Забудь", "cancelled"], ["It is in the docs folder", "pending"]] as const) {
+    fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+    const f = fixture();
+    f.provider.responder = calling(functionCall("call-a", "request_orchestrator_delegation", { instruction: "Review the plan" }));
+    const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+    f.provider.replay(s.providerId, said("Ask the orchestrator to review the plan.", 0), delegationCreated("request", 600));
+    await f.service.drain(s.sessionId);
+    f.provider.replay(s.providerId, said(later, 3_000));
+    await f.service.drain(s.sessionId);
+    const [held] = Object.values(f.admission.session(s.sessionId).proposals);
+    expect(f.admission.session(s.sessionId).inputs.at(-1), later).toMatchObject({ text: later, final: false });
+    expect(held.state, later).toBe(state);
+    await f.service.command(s.sessionId, { type: "confirmation", proposalId: held.proposal.proposalId, decision: "send", via: "tap" });
+    expect(f.sends(), later).toBe(state === "pending" ? 1 : 0);
+    await f.service.close(s.sessionId);
+  }
+});
+
+test("no new session is minted while the provider has not confirmed an earlier one closed; the hangup is asked again until it is", async () => {
+  const f = fixture();
+  f.provider.autoClose = false;
+  f.provider.hangupFailures = 3;
+  const old = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0", requestId: "first" });
+  await f.service.close(old.sessionId); // no session.closed arrives: the close times out and the hangup is refused
+  expect(f.storage.read().sessions[old.sessionId]).toMatchObject({ closed: true, remoteOpen: true });
+  const held = f.storage.settings().usageUsd;
+  expect(held).toBeCloseTo(VOICE_SESSION_RESERVE_USD);
+  // Refused twice more: each start asks the provider again and mints nothing.
+  for (let attempt = 0; attempt < 2; attempt += 1) await expect(f.service.start({ project: "fixture", locale: "en", sdp: "v=1", requestId: "second" })).rejects.toThrow("PROVIDER_ERROR");
+  expect(f.provider.sessions).toHaveLength(1);
+  expect(f.provider.hangups).toEqual([old.providerId, old.providerId, old.providerId]);
+  expect(f.storage.read().sessions[old.sessionId].remoteOpen).toBe(true);
+  expect(Object.values(f.storage.read().sessions)).toHaveLength(1);
+  // A restart keeps the obligation, and the same request then mints once the provider confirms.
+  const storage = new CompanionStorage();
+  const restarted = new CompanionLiveSessions(storage, new CompanionAdmission(storage, { recipient: () => null, send: async () => { throw new Error("unexpected"); }, reports: () => [] }),
+    noReads(), f.provider, { key: () => KEY, timers: false, closeTimeoutMs: 20 });
+  const next = await restarted.start({ project: "fixture", locale: "en", sdp: "v=1", requestId: "second" });
+  expect(f.provider.hangups).toHaveLength(4);
+  expect(f.provider.sessions.map(row => row.id)).toEqual([old.providerId, next.providerId]);
+  expect(storage.read().sessions[old.sessionId]).toMatchObject({ closed: true, remoteOpen: false });
+  expect(storage.read().sessions[old.sessionId].events.filter(event => event.type === "session.closed")).toHaveLength(1);
+  expect(storage.settings().incomplete).toBe(true);
+  await restarted.close(next.sessionId);
+  f.provider.disconnect(next.providerId);
+});
+
+test("a session the provider never confirmed closed is charged for the time it may have run, and the timer asks again by itself", async () => {
+  const storage = new CompanionStorage(); storage.updateSettings({ enabled: true });
+  let now = Date.parse("2026-10-06T12:00:00Z");
+  const admission = new CompanionAdmission(storage, { recipient: () => null, send: async () => { throw new Error("unexpected"); }, reports: () => [] }, () => now);
+  const provider = new FakeLiveProvider();
+  provider.autoClose = false;
+  provider.hangupFailures = 2;
+  const service = new CompanionLiveSessions(new CompanionStorage(() => now), admission, noReads(), provider, { key: () => KEY, now: () => now, closeTimeoutMs: 10 });
+  const s = await service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  await service.close(s.sessionId);
+  expect(storage.read().sessions[s.sessionId]).toMatchObject({ closed: true, remoteOpen: true });
+  now += 20 * 60_000; // twenty minutes with the provider session possibly open
+  await expect(service.start({ project: "fixture", locale: "en", sdp: "v=1" })).rejects.toThrow("PROVIDER_ERROR");
+  expect(storage.read().charges[s.sessionId]).toMatchObject({ reserved: false, incomplete: true });
+  expect(storage.read().charges[s.sessionId].usd).toBeCloseTo(20 * 0.05, 6);
+  // The retry timer of the forced close confirms the hangup with no further call.
+  for (let waited = 0; waited < 40 && storage.read().sessions[s.sessionId].remoteOpen; waited += 1) await new Promise(resolve => setTimeout(resolve, 100));
+  expect(storage.read().sessions[s.sessionId].remoteOpen).toBe(false);
+  expect(provider.hangups).toHaveLength(3);
+  expect(provider.sessions).toHaveLength(1);
+  const next = await service.start({ project: "fixture", locale: "en", sdp: "v=1" });
+  expect(provider.sessions).toHaveLength(2);
+  provider.autoClose = true;
+  await service.close(next.sessionId);
+});
+
+test("end_conversation closes nothing unless the operator asked to end the call; an explicit request and the hang-up close it once", async () => {
+  for (const question of ["What is on the board?", "Що зараз на дошці?", "If the review is done, end the call.", "Заверши завдання.", "Do I say “end the call”?", "Не завершуй розмову."]) {
+    fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+    const f = fixture();
+    f.provider.responder = calling(functionCall("end-call", "end_conversation"));
+    const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+    f.provider.replay(s.providerId, { ...said(question, 0), end_ms: 100 }, delegationCreated("ending", 200));
+    await f.service.drain(s.sessionId);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    expect(f.admission.session(s.sessionId).closed, question).toBe(false);
+    expect(f.provider.commands.some(row => row.type === "session.close"), question).toBe(false);
+    expect(f.admission.events(s.sessionId, 0), question).toContainEqual(expect.objectContaining({ type: "tool.result", callId: "end-call", status: "failed" }));
+    expect(spoken(f), question).toHaveLength(1); // the model still answers the operator
+    await f.service.close(s.sessionId); // the hang-up control
+    await f.service.close(s.sessionId);
+    const closed = f.admission.events(s.sessionId, 0).filter(event => event.type === "session.closed");
+    expect(closed, question).toMatchObject([{ reason: "operator", incomplete: false }]);
+    expect(f.storage.settings(), question).toMatchObject({ reservedUsd: 0, incomplete: false });
+  }
+  for (const request of ["End the call.", "Заверши розмову.", "Закончим."]) {
+    fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+    const f = fixture();
+    f.provider.responder = calling(functionCall("end-call", "end_conversation"));
+    const s = await f.service.start({ project: "fixture", locale: "uk", sdp: "v=0" });
+    f.provider.replay(s.providerId, { ...said(request, 0), end_ms: 100 }, delegationCreated("ending", 200));
+    await f.service.drain(s.sessionId);
+    await f.service.close(s.sessionId);
+    expect(f.admission.events(s.sessionId, 0).filter(event => event.type === "session.closed"), request).toMatchObject([{ reason: "tool", incomplete: false }]);
+    expect(f.provider.commands.filter(row => row.type === "session.close"), request).toHaveLength(1);
+    expect(f.storage.settings(), request).toMatchObject({ reservedUsd: 0, incomplete: false });
+    expect(f.provider.attached).toBe(0);
+    expect(f.sends()).toBe(0);
+  }
+});

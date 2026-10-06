@@ -46,3 +46,21 @@ test("operator speech between two companion answers or delegations is one turn",
   transcript.boundary(6_000);
   expect(transcript.turnOf(transcript.fragment("operator", "Thanks.", 7_000, 7_200).at(-1)!.itemId)).toBe(3);
 });
+
+test("a credential said in pieces with a space, a tab or a line break before each stays masked, and its beginning never shows again", () => {
+  const key = ["sk", "proj", "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"].join("-"); // synthetic, built from parts
+  for (const speaker of ["operator", "companion"] as const) for (const gap of [" ", "\t", "\n", " \r\n ", "\u00a0", "\u200b"]) {
+    const transcript = new LiveTranscript([key]);
+    const shown: Array<{ itemId: string; text: string }> = [];
+    for (const [at, piece] of key.match(/.{1,10}/g)!.entries()) shown.push(...transcript.fragment(speaker, (at ? gap : "") + piece, at * 2_300, at * 2_300 + 400));
+    shown.push(...transcript.finish());
+    const latest = new Map(shown.map(row => [row.itemId, row.text]));
+    const put = (texts: string[]) => texts.join("").replace(/\s|\u200b/gu, "");
+    expect(put([...latest.values()]), JSON.stringify(gap)).not.toContain(key.slice(3, 13));
+    expect(put(shown.map(row => row.text)), JSON.stringify(gap)).not.toContain(key.slice(0, 10));
+    expect(put(transcript.record().map(row => row.text)).replaceAll("[redacted]", ""), JSON.stringify(gap)).toBe("");
+  }
+  // Ordinary words keep their spaces.
+  const plain = new LiveTranscript([key]);
+  expect(plain.fragment("operator", "Ask the orchestrator to review the plan", 0, 400).at(-1)!.text).toBe("Ask the orchestrator to review the plan");
+});

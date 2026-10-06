@@ -50,3 +50,23 @@ test("no read field carries a machine path to the model, the card or speech, and
   expect(task.speech).toContain("https://example.test/a/b");
   await expect(reads.call("project-b", "get_task", { taskId: "task-a" })).rejects.toThrow("PROJECT_REFUSED");
 });
+
+test("an absolute path whose first segment is a number is a machine path in every read", async () => {
+  const numeric = [["", "12345", "private.txt"].join("/"), ["", "12345"].join("/"), ["", "2026", "10", "notes"].join("/"), ["", "0"].join("/")];
+  const text = (label: string) => `${label} read ${numeric.join(" then ")} done, and/or 1/2 of 10/06/2026, 3 / 4, https://example.test/123/456 and src/lib/7/x.ts`;
+  const reads = new CompanionBoardReads({
+    tasks: () => [{ id: "task-a", project: "project-a", text: text("Title"), status: "blocked", note: { text: text("Note") }, hold: { note: text("Hold") }, steps: [{ text: text("Step"), state: "open" }] }],
+    pipelines: () => [{ id: "pipeline-a", project: "project-a", task: text("Pipeline"), state: "running", stages: [{ id: "build", kind: "run" }], runs: [] }],
+    activity: async () => [{ conversationId: "conversation_a", project: "project-a", title: text("Agent"), lifecycle: "working" }],
+    messages: async () => [{ role: "assistant", text: text("Message") }],
+  });
+  for (const name of READ_TOOL_NAMES) {
+    const result = JSON.stringify(await reads.call("project-a", name, { ...(name === "get_task" ? { taskId: "task-a" } : {}),
+      ...(name === "get_pipeline" ? { pipelineId: "pipeline-a" } : {}), ...(name === "conversation_messages" ? { conversationId: "conversation_a" } : {}) }));
+    for (const leak of ["12345", "private.txt", "notes", "/0 "]) expect([name, leak, result.includes(leak)]).toEqual([name, leak, false]);
+    expect(result).toContain("read [path] then [path] then [path] then [path] done, and/or 1/2 of 10/06/2026, 3 / 4, https://example.test/123/456 and src/lib/7/x.ts");
+  }
+  const task = await reads.call("project-a", "get_task", { taskId: "task-a" });
+  expect(task.item).toMatchObject({ note: expect.stringContaining("Note read [path] then"), hold: expect.stringContaining("Hold read [path] then") });
+  expect(task.speech).not.toContain("12345");
+});

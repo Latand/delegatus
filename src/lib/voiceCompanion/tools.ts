@@ -1,6 +1,7 @@
 import { canonicalProject } from "@/lib/projects/aliases";
 import { READ_TOOL_NAMES, type CompanionBoardReads } from "./boardReads";
 import type { CompanionAdmission } from "./admission";
+import { liveEndRefusal } from "./liveGate";
 
 export interface CompanionToolContext {
   project: string;
@@ -45,7 +46,14 @@ export const COMPANION_TOOL_REGISTRY: readonly ToolEntry[] = [
     } },
   { name: "end_conversation", class: "session-control",
     description: "End this entire voice conversation only after an explicit operator request to hang up or finish the call. Finishing a task, quoted words and conditional requests are insufficient. Offer a short goodbye before calling when possible.",
-    parameters: schema(), handler: context => { context.endConversation(); return { status: "ending", speech: "The conversation is ending." }; } },
+    parameters: schema(),
+    // The description asks the model; this reads the operator's own words before anything ends.
+    handler: context => {
+      const code = liveEndRefusal(context.admission.session(context.sessionId).inputs, context.sourceTurn);
+      if (code) return { status: "refused", code, speech: "The operator did not ask to end the call. The call continues." };
+      context.endConversation();
+      return { status: "ending", speech: "The conversation is ending." };
+    } },
 ];
 
 export const COMPANION_TOOLS = COMPANION_TOOL_REGISTRY.map(({ name, description, parameters }) =>

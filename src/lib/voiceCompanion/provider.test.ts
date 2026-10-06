@@ -82,3 +82,15 @@ test("sideband attaches with a server credential, retains early frames and relea
   await expect(failedProvider.attach("live_fake", "synthetic-credential", () => {}, () => {})).rejects.toThrow("PROVIDER_ERROR");
   expect(failing.closed).toBe(1);
 });
+
+test("a hangup is confirmed by success or by a session the provider no longer has, and by nothing else", async () => {
+  const answering = (status: number) => new OpenAILiveProvider((async (url, init) => {
+    expect(url).toBe("https://api.openai.com/v1/live/sessions/live_fake/hangup");
+    expect(init!.method).toBe("POST");
+    return new Response(null, { status });
+  }) as typeof fetch);
+  for (const status of [200, 204, 404, 410]) await answering(status).hangup("live_fake", "synthetic-credential");
+  for (const status of [401, 409, 429, 500, 503]) await expect(answering(status).hangup("live_fake", "synthetic-credential")).rejects.toThrow("PROVIDER_ERROR");
+  const lost = new OpenAILiveProvider((async () => { throw new Error("offline"); }) as unknown as typeof fetch);
+  await expect(lost.hangup("live_fake", "synthetic-credential")).rejects.toThrow("PROVIDER_ERROR");
+});

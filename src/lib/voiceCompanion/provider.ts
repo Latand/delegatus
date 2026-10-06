@@ -25,7 +25,8 @@ export class OpenAILiveProvider implements LiveProvider {
     try {
       const response = await this.http(`https://api.openai.com/v1/live/sessions/${encodeURIComponent(id)}/hangup`, { method: "POST", redirect: "error",
         headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(10_000) });
-      if (!response.ok) throw new Error("PROVIDER_ERROR");
+      // A session the provider no longer has is closed: nothing is left to hang up or to bill.
+      if (!response.ok && response.status !== 404 && response.status !== 410) throw new Error("PROVIDER_ERROR");
     } catch { throw new Error("PROVIDER_ERROR"); }
   }
   async respond(key: string, request: BackendRequest, signal: AbortSignal): Promise<unknown> {

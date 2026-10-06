@@ -128,7 +128,12 @@ value. A transcript is masked before any snapshot of it exists: each speaker's
 segments are read as one stream, so a credential cut into fragments of any
 length across any number of display segments is found whole, a segment whose
 masked text changes is published again, and a beginning still arriving is
-withheld once it is three characters long. At most a credential's first two
+withheld once it is three characters long. The stream is read with its
+separators taken out (spaces, tabs, line breaks, invisible format characters)
+and each find is laid back over the original positions, so a credential said in
+pieces with a space or a line break before each is found whole, and a separator
+that follows a withheld beginning never shows it again. Single texts (a
+proposal, a tool result, a report) are read the same way. At most a credential's first two
 characters can stand in a snapshot, which names a format at most. The backend's
 context is built from the same masked record. The frontend data channel
 receives `session.closed` alone (`allowed_server_events` selects what Live sends
@@ -138,7 +143,8 @@ credential in use, or a 16-character piece of it, is refused and hung up: an
 SDP cannot be cleaned without breaking negotiation, and it is never read for
 credential families because its own ICE password is one by their reading.
 The six board reads share one projection, which also replaces
-machine paths (home-relative, absolute, root and drive files, `file:` URLs) with `[path]`
+machine paths (home-relative, absolute, root and drive files, `file:` URLs, and absolute
+paths whose first segment is a number such as a process or user id directory) with `[path]`
 before length is cut, so no title, note, hold, step, agent title or message
 carries one to the model, a card or speech. An orchestrator report is cleaned
 the same way before it is shown and spoken. Repository-relative paths and URLs
@@ -156,7 +162,13 @@ retraction, a negation or a quote refuses, and so does a completed turn that
 asks nothing of the orchestrator, unless up to two turns before it complete the
 request (a backchannel can split one sentence). The model's tool call cannot
 override it. Missing input and a turn still arriving leave the proposal to the
-tap, and later speech withdraws it only on an explicit refusal.
+tap. Speech in a later turn that takes the request back withdraws it, finished
+or still arriving: the gate's own retraction reading ("Never mind.", "Cancel
+that request.", "Забудь.", "Скасуй.", "Передумав.") is applied to everything
+said after the source turn, when the proposal is raised, on every later input
+and again at the tap. A withdrawn proposal is stored as cancelled, so an old
+tap, a late backend result, a retry or a restart sends nothing. Ordinary speech
+after the request ("It is in the docs folder") leaves the card standing.
 
 A Send whose request or reply is lost leaves the proposal card as it was, with a
 line saying delivery is not confirmed and both buttons live. The server keeps one
@@ -175,7 +187,15 @@ Record-specific board reads also verify the selected record belongs to that
 project. Never add a generic MCP dispatcher or another write path to this registry.
 
 `end_conversation` requires an explicit request to finish the whole call in both
-live and backend instructions. Quoted words, conditions and finishing work are
+live and backend instructions, and its handler reads the operator's own turn
+before anything ends (`liveEndRefusal` in `src/lib/voiceCompanion/liveGate.ts`):
+the turn must name the end of the call in English, Ukrainian or Russian (a verb
+with the call as its object, hanging up, a closing verb standing alone such as
+"заверши" or "закончим", or a goodbye). A question, a quote, a condition, a
+negation, a verb with another object ("finish the task", "заверши завдання")
+and later speech that takes it back refuse; the tool answers `refused`, its
+card shows the failure and the call goes on. With no operator speech on record
+the model's reading stands, as it does for a proposal. Quoted words, conditions and finishing work are
 insufficient. The prompt asks for a short goodbye before calling when possible.
 Live exposes no played-speech-completed event, so the server promises clean
 finalization and never claims that a closing line was heard. The tool returns its
@@ -187,7 +207,9 @@ and settles usage. The browser's explicit `stop()` remains the hangup control.
 Rates verified 2026-10-06: [Live](https://developers.openai.com/api/docs/models/gpt-live-1)
 $0.05/minute, billed per second; [Luna](https://developers.openai.com/api/docs/models/gpt-6-luna)
 $0.10/M input, $0.01/M cached input, $0.50/M output, with the documented large
-input premium. The configuration pins standard service tier, 512 output tokens,
+input premium; a cache write (`input_tokens_details.cache_write_tokens`) is
+billed at 1.25 times the input rate it falls under. Usage whose token details
+cannot be read gives no figure, and its whole reservation stays. The configuration pins standard service tier, 512 output tokens,
 no reasoning effort and no hosted paid tools. Every backend response is accounted
 separately by response ID, including failed/incomplete and uncorrelated responses.
 Voice duration is cumulative, with the documented 15-second WebRTC initialization
@@ -227,7 +249,15 @@ incomplete usage, and its admitted deliveries keep their keys. A stored
 `remoteOpen` marks a provider session that may still bill: it is set at mint and
 cleared only by a confirmed hangup or the provider's own `session.closed`. A
 hangup the provider refused, for an orphan or for a live session's forced close,
-leaves it set, and every later recovery asks again until one is confirmed. A
+leaves it set, and every later recovery asks again until one is confirmed; the
+service also asks again by itself on a timer (1 s doubling to 60 s). While any
+such session is unconfirmed no new session is minted: a start asks the provider
+once more and answers with the provider error until the hangup is confirmed,
+and the same request then mints. A provider answer of 404 or 410 to a hangup
+confirms it, because a session the provider no longer has cannot bill. An
+unconfirmed session's settled charge grows to the time since its mint at the
+voice rate, with every unanswered backend response at its full reservation, and
+stays marked incomplete, so the month's figure covers what it may have cost. A
 session owned by another living process is left to it. Closing twice changes
 nothing. A Send records its delivery key and an unknown outcome in one commit,
 so a restart between the tap and the recorded result sends that very request

@@ -107,6 +107,11 @@ const ADDRESSED = new RegExp(`^(?:${EN_ADDRESS}${EN_POLITE}${EN_REQUEST}|${UK_AD
 const normalize = (text: string) => text.normalize("NFC").replace(/[’ʼ`]/gu, "'").replace(/\s+/gu, " ").trim().toLowerCase();
 const sentences = (text: string) => text.split(/(?<=[.!?…])\s+/u).map((part) => part.trim()).filter(Boolean);
 
+/** The sentences of an utterance as the gate reads them: lower case, one space, plain apostrophes. */
+export const gateSentences = (utterance: string): string[] => sentences(normalize(utterance));
+/** Whether speech takes a request back: "Never mind.", "Cancel that request.", "Забудь.", "Скасуй.", "Передумав." */
+export const retractsRequest = (utterance: string): boolean => gateSentences(utterance).some((sentence) => RETRACTION.test(sentence));
+
 /** Whether one completed utterance, read whole, explicitly asks to reach the orchestrator. */
 export function explicitDelegationRequest(utterance: string): GateVerdict {
   const text = normalize(utterance);

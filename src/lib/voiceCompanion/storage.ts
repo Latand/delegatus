@@ -235,6 +235,16 @@ export class CompanionStorage {
       if (usd !== null) charge.usd = Math.max(0, usd, charge.observedUsd ?? 0);
     });
   }
+  /** A settled charge whose provider session was not confirmed closed: it
+   * grows to what that session may have cost and stays incomplete. */
+  accrue(key: string, usd: number): void {
+    if (!Number.isFinite(usd) || usd < 0) throw new Error("INVALID_USAGE");
+    this.change(document => {
+      const charge = document.charges[key];
+      if (!charge || charge.reserved || usd <= charge.usd) return;
+      charge.usd = usd; charge.incomplete = true;
+    });
+  }
   observe(key: string, usd: number): void {
     if (!Number.isFinite(usd) || usd < 0) throw new Error("INVALID_USAGE");
     this.change(document => {
