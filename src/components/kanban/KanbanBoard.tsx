@@ -1351,7 +1351,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const open = menu.open;
     if (!open) return null;
     if (open.value.kind === "create") {
-      const items: KanbanMenuItem[] = [{ type: "item", label: t("dash.newTask"), icon: <ListPlus className="ico" aria-hidden />, onSelect: () => openNewTask() }];
+      /* The task composer takes focus itself: handing it back to + raced it. */
+      const items: KanbanMenuItem[] = [{ type: "item", label: t("dash.newTask"), icon: <ListPlus className="ico" aria-hidden />, keepFocus: true, onSelect: () => openNewTask() }];
       if (props.onNewAgent) {
         const onNewAgent = props.onNewAgent;
         items.push({ type: "item", label: t("dash.newConvo"), icon: <MessageSquarePlus className="ico" aria-hidden />, disabled: !loaded, onSelect: () => onNewAgent() });

@@ -1,10 +1,10 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect } from "bun:test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
-import { chromium, type Browser, type LaunchOptions, type Page } from "playwright-core";
+import type { Browser, LaunchOptions, Page } from "playwright-core";
 
 import { translate } from "@/lib/i18n";
 import { en } from "@/lib/i18n/en";
@@ -14,7 +14,7 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import { REPORT_LOG_CHAT_MIN_WIDTH, REPORT_LOG_MAX_WIDTH, REPORT_LOG_MIN_WIDTH, REPORT_LOG_SPLIT_WIDTH } from "@/components/orchestrator/OrchestratorPanel";
 
 import { playPath, pointerPath, recordDrag } from "./dragFrameMeter";
-import { captureSeatMandateHandover, openFixture, serveEvidenceFixture } from "./issue1695BrowserHarness";
+import { browserCase, caseChromium as chromium, captureSeatMandateHandover, openFixture, serveEvidenceFixture } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { clipTitle } from "./taskText";
 import { maintenanceCardText } from "@/lib/boardMaintenance/text";
@@ -37,7 +37,10 @@ import { measureStageChain, stageChainFailures, type StageChainLane as Lane } fr
  * own file; only the scaffolding they all repeated is shared below.
  */
 
-const browserTest = process.env.LLV_KANBAN_BROWSER_TEST === "1" ? test : test.skip;
+/* A case's timeout fails that case alone: the harness closes the browsers it
+   opened before the next case starts, and sizes the deadline for a loaded
+   machine. Launch through `chromium` from the harness so the case owns them. */
+const browserTest = browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1");
 const LAUNCH: LaunchOptions = { headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) };
 const PROTOTYPE = process.env.KANBAN_PROTOTYPE_URL?.trim().replace(/\/$/, "") || null;
 const VIEWPORT = { width: 1440, height: 900 } as const;
@@ -439,11 +442,18 @@ describe("linked boards M1 settings", () => {
         const code = page.locator('[data-pair-code]');
         await code.waitFor();
         await page.getByRole("button", { name: "Cancel code" }).click();
-        await page.locator('[data-linked-state="unavailable"]').waitFor();
+        /* Since #2336 each source answers on its own; the failed cancellation
+           answers inside the code block, beside the retry, in view at 390. */
+        const failure = code.locator('[data-pair-code-error="unavailable"]');
+        await failure.waitFor();
+        expect(await failure.textContent()).toBe(translate("en", "links.state.unavailable"));
         expect(await code.textContent()).toContain("ABCDEF-01234-56789");
+        await page.getByRole("button", { name: "Cancel code" }).scrollIntoViewIfNeeded();
+        expect(await page.getByRole("button", { name: "Cancel code" }).isEnabled()).toBe(true);
         failDelete = false;
         await page.getByRole("button", { name: "Cancel code" }).click();
         await code.waitFor({ state: "detached" });
+        expect(await page.locator("[data-pair-code-error]").count()).toBe(0);
         expect(pageErrors).toEqual([]);
       } finally { await context.close(); }
     } finally { await browser.close(); server.stop(); }
@@ -632,7 +642,8 @@ describe("#1695 K1+K2 kanban board", () => {
     { width: 640, height: 720 },
   ] as const;
   const SCHEMES = ["light", "dark"] as const;
-  const EXPECTED_COUNTS = { inbox: 3, assigned: 7, blocked: 2, done: 5 } as const;
+  /* t-queue, done four days ago, has left the board with t-old (8fcf1be0a). */
+  const EXPECTED_COUNTS = { inbox: 3, assigned: 7, blocked: 2, done: 4 } as const;
 
   interface ColumnGeometry { status: string; x: number; width: number; visible: boolean; count: string | null }
   interface BoardGeometry {
@@ -742,7 +753,7 @@ describe("#1695 K1+K2 kanban board", () => {
               const column = production.columns.find((entry) => entry.status === status);
               if (column?.count !== String(count)) failures.push(`production ${label}: ${status} count ${column?.count} != ${count}`);
             }
-            if (production.hiddenCount !== "1") failures.push(`production ${label}: hidden count ${production.hiddenCount} != 1`);
+            if (production.hiddenCount !== "2") failures.push(`production ${label}: hidden count ${production.hiddenCount} != 2`);
             await page.screenshot({ path: path.join(OUT, `production-${label}.png`) });
             let prototype: BoardGeometry | null = null;
             if (PROTOTYPE) {
@@ -866,15 +877,19 @@ describe("#1695 K1+K2 kanban board", () => {
           const wrong = check.tiles.filter((tile) => tile.onScreen !== tile.reported);
           if (!check.posts || wrong.length) failures.push(`presence ${label}: ${JSON.stringify(wrong)} (${check.posts} posts)`);
         }
-        if (!presenceTop.tiles.some((tile) => !tile.onScreen) || !presenceTop.tiles.some((tile) => tile.onScreen)) failures.push("presence: the fixture no longer has tiles both on and off screen");
+        /* Compact cards (#2419) fit every tile in its column at the top, so
+           the off-screen tiles are the ones the scrolled column hides. */
+        const presenceTiles = [...presenceTop.tiles, ...presenceScrolled.tiles];
+        if (!presenceTiles.some((tile) => !tile.onScreen) || !presenceTiles.some((tile) => tile.onScreen)) failures.push("presence: the fixture no longer has tiles both on and off screen");
         flows.presence = { top: presenceTop, scrolled: presenceScrolled };
         if (pageErrors.length) failures.push(`flows: page errors ${pageErrors.join(" | ")}`);
       } finally {
         await context.close();
       }
 
-      /* Undo lives as long as its receipt: U right after a move undoes it; U
-         after the receipt closed by its timer sends nothing. */
+      /* Undo: U is the single-key alias of Ctrl+Z over the board's history
+         (#1856), so it undoes the newest move while its receipt shows and
+         after the receipt closed by its timer alike, with one write each. */
       const undo = await openFixture(browser, base, VIEWPORTS[0], "light");
       try {
         await undo.page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
@@ -898,30 +913,32 @@ describe("#1695 K1+K2 kanban board", () => {
         await undo.page.keyboard.press("u");
         await undo.page.waitForTimeout(800);
         const expired = { column: await columnOf("t-disk"), patchesBefore: beforeLateUndo, patchesAfter: await patches() };
-        if (expired.column !== "blocked" || expired.patchesAfter !== expired.patchesBefore) failures.push(`undo: U after the receipt closed ${JSON.stringify(expired)}`);
+        if (expired.column !== "assigned" || expired.patchesAfter !== expired.patchesBefore + 1) failures.push(`undo: U after the receipt closed ${JSON.stringify(expired)}`);
         flows.undo = { undone, expired };
         if (undo.pageErrors.length) failures.push(`undo: page errors ${undo.pageErrors.join(" | ")}`);
       } finally {
         await undo.context.close();
       }
 
-      /* A card's links look elsewhere without writing a view preference: the
-         elided-conversation link shows the list for this session only, and a
-         stage chip whose conversation left the scheme window opens it by id. */
+      /* A card's links look elsewhere without writing a view preference: a
+         conversation the board did not load opens by id from the one line in
+         Past attempts (#2466; it opened by id since 5b70b5d6b, not the list),
+         and a stage chip whose conversation left the scheme window opens it
+         by id. */
       const links = await openFixture(browser, base, VIEWPORTS[1], "light");
       try {
         await links.page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
         const presentationWrites = () => links.page.evaluate(() => (window as unknown as { evidence: { boardMutations: Array<{ kind: string }> } }).evidence.boardMutations.filter((mutation) => mutation.kind === "set-presentation").length);
-        await links.page.click('.card[data-id="task:t-auth"] .ref.quiet');
-        await links.page.waitForFunction(() => !document.querySelector("[data-kanban-board]"), undefined, { timeout: 10_000 });
-        const afterList = { writes: await presentationWrites(), listTab: await links.page.evaluate(() => document.querySelector('[data-view-tab="list"]')?.getAttribute("aria-pressed") ?? null) };
-        await links.page.click('[data-view-tab="kanban"]');
-        await links.page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 10_000 });
+        await links.page.click('.card[data-id="task:t-auth"] details.history > summary');
+        await links.page.click('.card[data-id="task:t-auth"] [data-elsewhere-toggle]');
+        await links.page.click('.card[data-id="task:t-auth"] [data-elsewhere-row] button');
+        await links.page.waitForTimeout(400);
+        const afterList = { writes: await presentationWrites(), hash: await links.page.evaluate(() => location.hash) };
         const writesBeforeChip = await presentationWrites();
         await links.page.click('.card[data-id="task:t-compact"] [data-stage="build"]');
         await links.page.waitForTimeout(400);
         const afterChip = { writes: await presentationWrites(), hash: await links.page.evaluate(() => location.hash) };
-        if (afterList.writes !== 0 || afterList.listTab !== "true") failures.push(`links: the list link wrote ${afterList.writes} view preferences (list tab ${afterList.listTab})`);
+        if (afterList.writes !== 0 || afterList.hash !== "#c=conversation_auth-earlier") failures.push(`links: the off-board conversation wrote ${afterList.writes} view preferences and navigated to ${afterList.hash}`);
         if (afterChip.writes !== writesBeforeChip) failures.push(`links: the stage chip wrote ${afterChip.writes - writesBeforeChip} view preferences`);
         if (afterChip.hash !== "#c=conversation_compact-build") failures.push(`links: the stage chip navigated to ${afterChip.hash}`);
         flows.links = { afterList, writesBeforeChip, afterChip };
@@ -972,7 +989,14 @@ describe("#1695 K1+K2 kanban board", () => {
       try {
         const { page } = create;
         await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
-        await page.click("[data-new-task]");
+        /* Below its wide tier the bar folds + Task and + Agent into one create menu (#1855). */
+        const barCreate = async (which: "dash.newTask" | "dash.newConvo") => {
+          if (await page.locator("[data-bar-create]").count()) {
+            await page.click("[data-bar-create]");
+            await page.click(`.menu [role="menuitem"]:has-text("${translate("en", which)}")`);
+          } else await page.click(which === "dash.newTask" ? "[data-new-task]" : "[data-new-agent]");
+        };
+        await barCreate("dash.newTask");
         await page.waitForSelector("[data-kanban-new-task] textarea", { timeout: 10_000 });
         const composerFirst = await page.$eval("[data-kanban-new-task]", (node) => ({
           column: node.closest<HTMLElement>(".column")?.dataset.status ?? null,
@@ -988,7 +1012,7 @@ describe("#1695 K1+K2 kanban board", () => {
         const creates = await page.evaluate(() => (window as unknown as { evidence: { taskCreates: Array<Record<string, unknown>> } }).evidence.taskCreates
           .map(({ clientRequestId, ...rest }): Record<string, unknown> => ({ ...rest, clientRequestId: typeof clientRequestId === "string" && clientRequestId.length > 0 ? "present" : clientRequestId })));
 
-        await page.click("[data-new-agent]");
+        await barCreate("dash.newConvo");
         await page.waitForSelector('.card[data-id^="draft:"] [data-kanban-draft] section', { timeout: 10_000 });
         const barDraft = await page.$eval('.card[data-id^="draft:"]', (card) => {
           const pane = card.querySelector<HTMLElement>("[data-kanban-draft]")!.getBoundingClientRect();
@@ -1266,10 +1290,13 @@ describe("#1695 K3 conversations inside cards", () => {
               if (readers.readers.filter((reader) => reader.folded).length !== 1) failures.push(`${label}: expected one folded reader`);
               const mode = kanbanLayoutMode(seat.boardWidth);
               const blocked = readers.columns.blocked ?? 0;
-              /* Reading width: 420–460 px, or a balanced shelf's width where that is wider. */
-              const ceiling = Math.max(460, readers.columns.done ?? 0);
-              if ((mode === "wide" || mode === "narrow") && (blocked < 420 || blocked > ceiling + 1 || !readers.reading)) failures.push(`${label}: Blocked holding a reader is ${blocked}px (reading=${readers.reading})`);
-              if (mode === "scroll" && Math.abs(blocked - 460) > 1) failures.push(`${label}: scroller Blocked holding a reader is ${blocked}px`);
+              /* An open agent conversation keeps its column at `--agent-min`,
+                 clamp(520px, 40vw, 760px) (#2300), or a balanced shelf's
+                 width where that is wider. */
+              const agentMin = Math.min(760, Math.max(520, viewport.width * 0.4));
+              const ceiling = Math.max(agentMin, readers.columns.done ?? 0);
+              if ((mode === "wide" || mode === "narrow") && (blocked < agentMin - 1 || blocked > ceiling + 1 || !readers.reading)) failures.push(`${label}: Blocked holding a reader is ${blocked}px (reading=${readers.reading})`);
+              if (mode === "scroll" && Math.abs(blocked - agentMin) > 1) failures.push(`${label}: scroller Blocked holding a reader is ${blocked}px`);
               await page.screenshot({ path: path.join(OUT, `readers-${label}.png`) });
               await prototypeShot("readers=c-export-1,c-links-1:c,c-auth-1&scrollto=t-export", { width: seat.boardWidth, height: viewport.height }, scheme, `prototype-readers-${label}.png`);
               const conversation = page.locator(readerFor("conversation_export-impl"));
@@ -1379,12 +1406,14 @@ describe("#1695 K3 conversations inside cards", () => {
         await page.evaluate(() => { document.querySelector<HTMLElement>(".kb-page")!.scrollTop = 0; });
         await dismissToast();
         const before = await seatGeometry(page);
-        const grip = await page.locator("[data-seat-grip]").boundingBox();
+        const grip = await page.locator('[data-seat-grip=""]').boundingBox();
         if (!grip) throw new Error("seat grip not rendered");
         await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
         await page.mouse.down();
-        await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2 + 50, { steps: 4 });
-        await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2 + 100, { steps: 4 });
+        /* The seat opens at its largest (75% of the window, since role
+           frames), so the drag that sizes it goes up. */
+        await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2 - 50, { steps: 4 });
+        await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2 - 100, { steps: 4 });
         await page.mouse.up();
         await page.waitForTimeout(200);
         const dragged = await seatGeometry(page);
@@ -1392,7 +1421,7 @@ describe("#1695 K3 conversations inside cards", () => {
         await boardReady(page);
         const afterReload = await seatGeometry(page);
         await dismissToast();
-        await page.focus("[data-seat-grip]");
+        await page.focus('[data-seat-grip=""]');
         await page.keyboard.press("ArrowUp");
         await page.waitForTimeout(200);
         const keyed = await seatGeometry(page);
@@ -1403,7 +1432,7 @@ describe("#1695 K3 conversations inside cards", () => {
         await page.click("[data-orchestrator-toggle]");
         await page.waitForTimeout(200);
         const expanded = await seatGeometry(page);
-        const shrinkGrip = await page.locator("[data-seat-grip]").boundingBox();
+        const shrinkGrip = await page.locator('[data-seat-grip=""]').boundingBox();
         if (!shrinkGrip) throw new Error("seat grip not rendered after expanding");
         await page.mouse.move(shrinkGrip.x + shrinkGrip.width / 2, shrinkGrip.y + shrinkGrip.height / 2);
         await page.mouse.down();
@@ -1415,7 +1444,7 @@ describe("#1695 K3 conversations inside cards", () => {
         await page.screenshot({ path: path.join(OUT, "flow-seat-floor.png") });
         const seatFlow = { before: before.height, dragged: dragged.height, afterReload: afterReload.height, keyed: keyed.height, collapsed: { height: collapsed.height, flag: collapsed.collapsed, conversations: collapsed.conversations }, expanded: { flag: expanded.collapsed, dock: expanded.dock }, floor: { height: floor.height, composer: floor.composerHeight } };
         if (Math.abs(floor.height - 160) > 1) failures.push(`seat: dragged all the way up it is ${floor.height}px, floor 160`);
-        if (Math.abs(dragged.height - before.height - 100) > 3) failures.push(`seat: dragging the grip 100px changed the height by ${dragged.height - before.height}px`);
+        if (Math.abs(before.height - dragged.height - 100) > 3) failures.push(`seat: dragging the grip 100px up changed the height by ${dragged.height - before.height}px`);
         if (Math.abs(afterReload.height - dragged.height) > 1) failures.push(`seat: height after reload ${afterReload.height}, dragged to ${dragged.height}`);
         if (Math.abs(afterReload.height - keyed.height - 40) > 1) failures.push(`seat: ArrowUp changed the height by ${afterReload.height - keyed.height}px`);
         if (!collapsed.collapsed || collapsed.height > 52 || collapsed.conversations !== 1) failures.push(`seat: collapsed ${JSON.stringify(seatFlow.collapsed)}`);
@@ -1458,7 +1487,7 @@ describe("#1695 K3 conversations inside cards", () => {
         }, destination);
         /* The operator drags the orchestrator taller and scrolls back up to it:
            the reader is still mounted and open, below the page's fold. */
-        await page.focus("[data-seat-grip]");
+        await page.focus('[data-seat-grip=""]');
         for (let step = 0; step < 14; step += 1) await page.keyboard.press("ArrowDown");
         await page.waitForTimeout(200);
         const outOfView = await page.evaluate((target) => {
@@ -1552,10 +1581,12 @@ describe("#1695 K3 conversations inside cards", () => {
           return { top: scroller.scrollTop, room: scroller.scrollHeight - scroller.clientHeight };
         }, readerFor("conversation_search-ver-2"));
         const beforeRank = await order();
-        await page.evaluate(() => (window as unknown as { evidence: Evidence }).evidence.touchTask("t-export"));
+        /* Cards rank by their motion first (#2419), so a fresher update no
+           longer passes a card: a decision asked on t-upload's stage does. */
+        await page.evaluate(() => (window as unknown as { evidence: Evidence }).evidence.askDecision("/repo/upload-plan.jsonl"));
         await page.waitForFunction(() => {
           const ids = [...document.querySelectorAll<HTMLElement>('.column[data-status="assigned"] .card[data-id]')].map((node) => node.dataset.id);
-          return ids.indexOf("task:t-export") < ids.indexOf("task:t-search");
+          return ids.indexOf("task:t-upload") < ids.indexOf("task:t-search");
         }, undefined, { timeout: 15_000 });
         const afterRank = await order();
         const kept = await page.evaluate((selector) => {
@@ -1566,27 +1597,22 @@ describe("#1695 K3 conversations inside cards", () => {
         const settledTop = await page.evaluate((selector) => document.querySelector<HTMLElement>(`${selector} [data-log-feed-scroller]`)!.scrollTop, readerFor("conversation_search-ver-2"));
         const rerank = { scrolled, beforeRank, afterRank, kept, settledTop };
         if (scrolled.room - scrolled.top < 40) failures.push(`rerank: the verifier's feed did not leave its tail ${JSON.stringify(scrolled)}`);
-        if (beforeRank.indexOf("task:t-export") < beforeRank.indexOf("task:t-search")) failures.push(`rerank: t-export already led t-search ${JSON.stringify(beforeRank)}`);
+        if (beforeRank.indexOf("task:t-upload") < beforeRank.indexOf("task:t-search")) failures.push(`rerank: t-upload already led t-search ${JSON.stringify(beforeRank)}`);
         if (!kept.sameCard) failures.push("rerank: the reader's card was replaced rather than moved");
         if (Math.abs(kept.top - scrolled.top) > 4 || Math.abs(settledTop - scrolled.top) > 4) failures.push(`rerank: feed scroll ${scrolled.top} became ${kept.top}, then ${settledTop}`);
         await page.screenshot({ path: path.join(OUT, "flow-rerank-scroll.png") });
         flows.rerank = rerank;
 
-        /* The orchestrator's own card: its reader shows the transcript, and the
-           seat keeps the conversation's one composer. */
+        /* The orchestrator's own conversation: since #1841 a seat's
+           conversation leaves the board, so no card draws it, and the seat
+           keeps the conversation's one composer. */
         await page.evaluate(() => { document.querySelector<HTMLElement>(".kb-page")!.scrollTop = 0; });
-        const orchestratorTile = page.locator('.tile[data-member="/repo/orchestrator.jsonl"]');
-        const orchestratorCard = await orchestratorTile.evaluate((tile) => ({ card: tile.closest<HTMLElement>(".card")?.dataset.id ?? null, column: tile.closest<HTMLElement>(".column")?.dataset.status ?? null }));
-        await orchestratorTile.click();
-        await waitSettled(page, "conversation_orchestrator");
-        await page.waitForTimeout(400);
+        const orchestratorTiles = await page.locator('[data-kanban-board] .tile[data-member="/repo/orchestrator.jsonl"]').count();
         const orchestratorComposers = (await seatGeometry(page)).composers;
-        await page.locator(readerFor("conversation_orchestrator")).scrollIntoViewIfNeeded();
-        await page.screenshot({ path: path.join(OUT, "flow-orchestrator-card.png") });
-        if (orchestratorComposers.conversation_orchestrator !== 1) failures.push(`orchestrator card: ${JSON.stringify(orchestratorComposers)} composers with its reader open`);
-        for (const [identity, count] of Object.entries(orchestratorComposers)) if (count > 1 || identity === "outside") failures.push(`orchestrator card: ${count} composer field(s) for ${identity}`);
-        flows.orchestratorCard = { ...orchestratorCard, composers: orchestratorComposers };
-        await page.click(`${readerFor("conversation_orchestrator")} [data-reader-close]`);
+        if (orchestratorTiles !== 0) failures.push(`orchestrator: ${orchestratorTiles} board tile(s) draw the seat's conversation`);
+        if (orchestratorComposers.conversation_orchestrator !== 1) failures.push(`orchestrator seat: ${JSON.stringify(orchestratorComposers)} composers`);
+        for (const [identity, count] of Object.entries(orchestratorComposers)) if (count > 1 || identity === "outside") failures.push(`orchestrator seat: ${count} composer field(s) for ${identity}`);
+        flows.orchestratorCard = { tiles: orchestratorTiles, composers: orchestratorComposers };
 
         /* Stop host from the reader's actions, confirmed by name, then cancelled. */
         await page.click(`${card("t-export")} .tile >> nth=0`);
@@ -3977,10 +4003,12 @@ describe("#1731 the seat anchors the board", () => {
     return { ...state, ...preconditions };
   }
 
-  /** Drag the seat's grip down, the way an operator opens it for a longer answer. */
-  async function dragSeatOpen(page: Page, by: number) {
+  /** Drag the seat's grip by `by` pixels, the way an operator sizes it. The
+      seat opens at its largest (75% of the window, since role frames), so
+      the grip's way to the other size is up. */
+  async function dragSeat(page: Page, by: number) {
     const before = await page.evaluate((seat) => document.querySelector<HTMLElement>(seat)?.getBoundingClientRect().height ?? 0, SEAT);
-    const grip = await page.locator("[data-seat-grip]").boundingBox();
+    const grip = await page.locator('[data-seat-grip=""]').boundingBox();
     if (!grip) throw new Error("no seat grip to drag");
     const x = grip.x + grip.width / 2;
     const y = grip.y + grip.height / 2;
@@ -4031,12 +4059,12 @@ describe("#1731 the seat anchors the board", () => {
         const { context, page, pageErrors } = await openFixture(browser, server.base, viewport, "light");
         try {
           await boardReady(page);
-          for (const seatSize of ["compact", "grip-expanded"] as const) {
+          for (const seatSize of ["default", "grip-shrunk"] as const) {
             const label = `${viewport.width}x${viewport.height} ${seatSize}`;
             let drag: { before: number; after: number } | null = null;
-            if (seatSize === "grip-expanded") {
-              drag = await dragSeatOpen(page, 250);
-              if (drag.after <= drag.before) failures.push(`${label}: the grip did not open the seat (${drag.before} → ${drag.after})`);
+            if (seatSize === "grip-shrunk") {
+              drag = await dragSeat(page, -250);
+              if (drag.after >= drag.before) failures.push(`${label}: the grip did not shrink the seat (${drag.before} → ${drag.after})`);
             }
             const pair = await wrapPair(page);
             await page.click(FIELD);
@@ -4062,7 +4090,7 @@ describe("#1731 the seat anchors the board", () => {
             if (unfixed.fieldHeights.length < 2) failures.push(`${label}: the red path's field never changed height — the control proves nothing`);
             if (unfixed.swings === 0) failures.push(`${label}: the board stood still with anchoring back on, so this check cannot fail`);
 
-            if (seatSize === "compact") await setValue(page, "");
+            if (seatSize === "default") await setValue(page, "");
           }
           if (pageErrors.length) failures.push(`${viewport.width}x${viewport.height}: page errors ${pageErrors.join(" | ")}`);
         } catch (error) {
@@ -6350,7 +6378,7 @@ describe("#1834 the card's collapsed Details row", () => {
 
 
 describe("role evaluation mounted candidate", () => {
-  const candidateTest = process.env.LLV_KANBAN_BROWSER_TEST === "1" && process.env.ROLE_EVAL_CANDIDATE ? test : test.skip;
+  const candidateTest = browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1" && Boolean(process.env.ROLE_EVAL_CANDIDATE));
   candidateTest("executes final-row rejection, reorder, touch and keyboard retry", async () => {
     const { gradeRendered } = await import("../../../evals/roles/graders/rendered");
     await gradeRendered(path.resolve(process.env.ROLE_EVAL_CANDIDATE!), path.resolve(process.env.ROLE_EVAL_OUTPUT!));
@@ -17117,7 +17145,7 @@ describe("whole-card drag rendered evidence", () => {
 
   /* LLV_DRAG_VIDEO=<dir> records the drag as a video (Playwright recordVideo), with a dot where the pointer is. */
   const VIDEO = process.env.LLV_DRAG_VIDEO;
-  (VIDEO ? browserTest : test.skip)("records a desktop drag to a video", async () => {
+  browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1" && Boolean(VIDEO))("records a desktop drag to a video", async () => {
     fs.mkdirSync(VIDEO!, { recursive: true });
     const server = await serveEvidenceFixture(OUT);
     const browser = await chromium.launch(LAUNCH);

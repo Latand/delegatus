@@ -1598,7 +1598,9 @@ const tasks: BoardTask[] = [
   task("t-interrupt", "done", "Universal interrupt and stop for every engine", "", 8 * 60 * MIN),
   task("t-attach", "done", "Finish responsive native attachment delivery", "", 12 * 60 * MIN),
   task("t-compact", "done", "Compact board stages and separate history from live work", "", 2 * 24 * 60 * MIN),
-  task("t-voice", "done", "Keep the orchestrator role when voice is enabled", "", 3 * 24 * 60 * MIN),
+  /* Done three days ago leaves the board (8fcf1be0a): t-voice stays an hour
+     inside that window, t-queue is past it. */
+  task("t-voice", "done", "Keep the orchestrator role when voice is enabled", "", 3 * 24 * 60 * MIN - 60 * MIN),
   task("t-queue", "done", "Preserve native queue recovery through journal compaction", "", 4 * 24 * 60 * MIN),
   task("t-old", "done", "An empty task someone took off the board", "", 9 * 24 * 60 * MIN, [], { board: "hidden" }),
   ...(PIPELINES ? [task("t-rounds", "assigned", "Rework the retry banner until review passes", "", 12 * MIN)] : []),

@@ -1,11 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import { deflateSync } from "node:zlib";
-import { chromium, type Browser, type LaunchOptions } from "playwright-core";
+import type { Browser, LaunchOptions } from "playwright-core";
 
 import { translate } from "@/lib/i18n";
-import { openFixture, serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
+import { browserCase, caseChromium as chromium, openFixture, serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
 
 /*
  * The one rendered-evidence driver for the conversation window. Every case
@@ -21,7 +21,8 @@ import { openFixture, serveEvidenceFixture } from "@/components/kanban/issue1695
  * here rather than as a new file (#1761).
  */
 
-const browserTest = process.env.LLV_CONVERSATION_BROWSER_TEST === "1" ? test : test.skip;
+/* A case's timeout fails that case alone (see `browserCase` in the harness). */
+const browserTest = browserCase(process.env.LLV_CONVERSATION_BROWSER_TEST === "1");
 const LAUNCH: LaunchOptions = {
   headless: true,
   args: ["--no-sandbox"],
