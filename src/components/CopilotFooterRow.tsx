@@ -7,8 +7,10 @@ import { useLocale } from "@/lib/i18n";
 import type { EngineLimits, LimitsProvenance } from "@/lib/types";
 
 import { engineTintOf } from "./utils";
-import { LimitRow, quotaAsOfHint } from "./LimitRow";
+import { barColor, LimitRow, quotaAsOfHint } from "./LimitRow";
+import { GAUGE_BUTTON, MeterGauge, PressureBar, type RailFooterDensity } from "./railFooterDensity";
 import { windowLabel } from "./rateLimit";
+import { Z } from "@/components/layers";
 
 /** GitHub Copilot account switcher and monthly allowance in the footer. */
 
@@ -190,7 +192,9 @@ export function CopilotAccountList({ accounts }: { accounts: CopilotAccounts }) 
   );
 }
 
-export function CopilotFooterRow({ limits, limitsAccountId, now, provenance, onChanged }: {
+export function CopilotFooterRow({ limits, limitsAccountId, now, provenance, onChanged, density = "full" }: {
+  /** `line` and `gauge` are the sidebar design prototypes' compact drawings. */
+  density?: RailFooterDensity;
   limits: EngineLimits | null;
   limitsAccountId: string | null;
   now: number;
@@ -226,6 +230,35 @@ export function CopilotFooterRow({ limits, limitsAccountId, now, provenance, onC
 
   if (!body || (!body.cli.present && body.accounts.length === 0)) return null;
   const active = body.accounts.find((account) => account.active) ?? null;
+
+  if (density !== "full") {
+    const weekly = active?.id === limitsAccountId ? limits?.weekly ?? null : null;
+    const left = weekly ? Math.max(0, Math.min(100, 100 - weekly.usedPercent)) : null;
+    const color = left === null ? tint.color : barColor(left, tint.color);
+    const summary = ["Copilot", active ? active.label : t("copilot.accounts.none"), left === null ? null : `${windowLabel(t, "weekly", weekly?.windowMinutes)} ${t("limits.left")} ${Math.round(left)}%`].filter(Boolean).join(" · ");
+    return (
+      <div ref={containerRef} className="relative" data-engine-limits="copilot">
+        <button type="button" aria-expanded={open} aria-label={t("copilot.accounts.rowAria")} title={summary} onClick={() => setOpen((value) => !value)} className={density === "gauge" ? GAUGE_BUTTON : "flex h-[26px] w-full items-center gap-1.5 px-3 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"}>
+          {density === "gauge" ? (
+            <MeterGauge mark={<span aria-hidden className="h-2 w-2 rounded-full" style={{ backgroundColor: tint.color }} />} percent={left === null ? null : 100 - left} color={color} />
+          ) : (
+            <>
+              <span aria-hidden className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: tint.color }} />
+              <span className="shrink-0 text-[11.5px] font-semibold text-primary">Copilot</span>
+              <span className="min-w-0 flex-1 truncate text-[10.5px] text-muted">{active ? active.label : t("copilot.accounts.none")}</span>
+              {left === null ? null : <span className="shrink-0 text-[11px] tabular-nums text-muted">{t("limits.left")} <span className="font-bold text-primary">{Math.round(left)}%</span></span>}
+              {left === null ? null : <PressureBar percent={100 - left} color={color} />}
+            </>
+          )}
+        </button>
+        {open ? (
+          <div role="dialog" aria-label={t("copilot.accounts.title")} className={`flex flex-col gap-2 bg-sunken px-3.5 py-2.5 text-[11.5px] ${density === "gauge" ? `absolute bottom-0 left-full ml-2 w-[280px] rounded-[12px] border border-border shadow-2 ${Z.popover}` : "border-t border-border"}`}>
+            <CopilotAccountList accounts={accounts} />
+          </div>
+        ) : null}
+      </div>
+    );
+  }
 
   return (
     <div ref={containerRef} className="relative">

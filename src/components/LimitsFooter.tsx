@@ -17,6 +17,8 @@ import { ChevronDown, Loader2 } from "./icons";
 import { formatQuotaAsOf, localeBcp47 as bcp47, windowLabel } from "./rateLimit";
 import { engineTintOf, fmtAge } from "./utils";
 import { barColor, LimitRow } from "./LimitRow";
+import { EngineMark } from "./EngineMark";
+import { GAUGE_BUTTON, MeterGauge, PressureBar, type RailFooterDensity } from "./railFooterDensity";
 
 const POLL_MS = 60_000;
 
@@ -142,7 +144,10 @@ function EngineLimitsBlock({
   receivedAt,
   provenance,
   onSwitched,
+  density = "full",
 }: {
+  /** `line` and `gauge` are the sidebar design prototypes' compact drawings. */
+  density?: RailFooterDensity;
   engine: Engine;
   label: string;
   limits: EngineLimits | null;
@@ -259,6 +264,56 @@ function EngineLimitsBlock({
   const failureReason = fmtLimitsFailureReason(provenance, locale);
   const visibleFailureReason = accounts.status === "loading" || identityPending ? null : failureReason;
 
+  if (density !== "full") {
+    const gauge = density === "gauge";
+    const windows = accountLimits ? [
+      accountLimits.session ? `${windowLabel(t, "session", accountLimits.session.windowMinutes)} ${t("limits.left")} ${Math.round(100 - accountLimits.session.usedPercent)}%` : null,
+      accountLimits.weekly ? `${windowLabel(t, "weekly", accountLimits.weekly.windowMinutes)} ${t("limits.left")} ${Math.round(100 - accountLimits.weekly.usedPercent)}%` : null,
+      ...quota.tiers.map((tier) => `${t("limits.tierWeek", { tier: claudeTierDisplayName(tier.value.tier, tier.value.label) })} ${t("limits.left")} ${Math.round(100 - tier.value.usedPercent)}%`),
+    ].filter(Boolean).join(" · ") : "";
+    const summary = [label, activeLabel, accountLimits?.plan, windows || visibleFailureReason || (accounts.status === "loading" || identityPending ? t("limits.accountLoading") : t("limits.noDataYet")), effectiveStaleHint].filter(Boolean).join(" · ");
+    const spent = effective ? 100 - effective.percent : null;
+    const color = effective ? barColor(effective.percent, tint.color) : tint.color;
+    const panels = (
+      <>
+        {open ? <AccountsPanel state={accounts} onClose={close} focusAccountId={focusAccountId} quotaOverride={{ accountId: accounts.active, quota, now }} /> : null}
+        {chartOpen ? <BurndownPanel key={accounts.active} engine={engine} label={label} plan={accountLimits?.plan ?? null} activeAccountId={accounts.active} onClose={closeChart} /> : null}
+      </>
+    );
+    if (gauge) {
+      return (
+        <div ref={containerRef} className="relative" data-engine-limits={engine}>
+          <button ref={triggerRef} type="button" aria-expanded={open} aria-haspopup="dialog" aria-label={t("accounts.triggerAria", { engine: label })} title={summary} className={`${GAUGE_BUTTON} ${anyStale ? "opacity-60" : ""}`} onClick={() => { setChartOpen(false); setOpen((value) => !value); }}>
+            <MeterGauge mark={<EngineMark engine={engine} size={14} />} percent={spent} color={color} />
+          </button>
+          {panels}
+        </div>
+      );
+    }
+    return (
+      <div ref={containerRef} className="relative" data-engine-limits={engine}>
+        <div className={`flex h-[26px] items-center gap-1 px-1.5 ${anyStale ? "opacity-60" : ""}`}>
+          <button ref={triggerRef} type="button" aria-expanded={open} aria-haspopup="dialog" aria-label={t("accounts.triggerAria", { engine: label })} title={summary} className="flex h-[22px] min-w-0 flex-1 items-center gap-1.5 rounded-[7px] px-1.5 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" onClick={() => { setChartOpen(false); setOpen((value) => !value); }}>
+            {/* The mark names the engine here, as it does on a card; the words go to the account. */}
+            <EngineMark engine={engine} size={12} label={label} />
+            <span className="min-w-0 truncate text-[11.5px] font-semibold text-primary">{activeLabel}</span>
+            {draining ? <Loader2 className="h-3 w-3 shrink-0 animate-spin text-accent motion-reduce:animate-none" aria-hidden /> : null}
+            {stale || visibleFailureReason ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-warning" /> : null}
+          </button>
+          {hasWindows && effective ? (
+            <button ref={chartTriggerRef} type="button" aria-expanded={chartOpen} aria-haspopup="dialog" aria-label={t("burndown.openAria", { engine: label })} title={windows} className="flex h-[22px] shrink-0 items-center gap-2 rounded-[7px] px-1.5 hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" onClick={() => { setOpen(false); setChartOpen((value) => !value); }}>
+              <span className="text-[11px] tabular-nums text-muted">{t("limits.left")} <span className="font-bold" style={{ color: effective.percent <= 30 ? color : "var(--color-primary)" }}>{Math.round(effective.percent)}%</span></span>
+              <PressureBar percent={spent} color={color} />
+            </button>
+          ) : (
+            <span className="shrink-0 truncate px-1.5 text-[10px] text-muted">{accounts.status === "loading" || identityPending ? "…" : t("limits.noDataYet")}</span>
+          )}
+        </div>
+        {panels}
+      </div>
+    );
+  }
+
   return (
     <div ref={containerRef} className="relative">
       <div className={anyStale ? "opacity-60" : ""}>
@@ -341,7 +396,7 @@ function EngineLimitsBlock({
 
 /** Sidebar footer: Claude and Codex plan limits (5h session + weekly). Each
     block is also that engine's account switcher (see {@link EngineLimitsBlock}). */
-export function LimitsFooter() {
+export function LimitsFooter({ density = "full" }: { density?: RailFooterDensity } = {}) {
   const [snap, setSnap] = useState<{ data: LimitsPayload; at: number } | null>(null);
   const [now, setNow] = useState(() => Date.now() / 1000);
   /* A switch busts the account-keyed server cache and immediately schedules a
@@ -372,9 +427,9 @@ export function LimitsFooter() {
   // Each engine's account list governs its switcher visibility. Both remain
   // mounted through empty limits, initial loading, and account refresh failures.
   return (
-    <div className="shrink-0 border-t border-border empty:hidden">
-      <EngineLimitsBlock engine="claude" label="Claude" limits={snap?.data.claude ?? null} payloadAccountId={snap?.data.claudeAccountId ?? null} now={now} receivedAt={snap?.at ?? now} provenance={snap?.data.provenance.claude ?? { source: "unavailable", reason: null, staleSince: null }} onSwitched={invalidateLimits} />
-      <EngineLimitsBlock engine="codex" label="Codex" limits={snap?.data.codex ?? null} payloadAccountId={snap?.data.codexAccountId ?? null} now={now} receivedAt={snap?.at ?? now} provenance={snap?.data.provenance.codex ?? { source: "unavailable", reason: null, staleSince: null }} onSwitched={invalidateLimits} />
+    <div className={density === "gauge" ? "flex shrink-0 flex-col items-center gap-0.5 empty:hidden" : `shrink-0 border-t border-border empty:hidden ${density === "line" ? "py-0.5" : ""}`}>
+      <EngineLimitsBlock engine="claude" label="Claude" limits={snap?.data.claude ?? null} payloadAccountId={snap?.data.claudeAccountId ?? null} now={now} receivedAt={snap?.at ?? now} provenance={snap?.data.provenance.claude ?? { source: "unavailable", reason: null, staleSince: null }} onSwitched={invalidateLimits} density={density} />
+      <EngineLimitsBlock engine="codex" label="Codex" limits={snap?.data.codex ?? null} payloadAccountId={snap?.data.codexAccountId ?? null} now={now} receivedAt={snap?.at ?? now} provenance={snap?.data.provenance.codex ?? { source: "unavailable", reason: null, staleSince: null }} onSwitched={invalidateLimits} density={density} />
       {/* GitHub Copilot accounts and their monthly transcript quota. */}
       <CopilotFooterRow
         limits={snap?.data.copilot ?? null}
@@ -382,10 +437,11 @@ export function LimitsFooter() {
         now={now}
         provenance={snap?.data.provenance.copilot ?? { source: "unavailable", reason: null, staleSince: null }}
         onChanged={invalidateLimits}
+        density={density}
       />
       {/* The personal Telegram connector row (issue #1059) sits beside the
           account controls; the entry point never disappears. */}
-      <TelegramFooterRow />
+      <TelegramFooterRow density={density} />
     </div>
   );
 }

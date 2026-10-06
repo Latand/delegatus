@@ -17953,3 +17953,288 @@ describe("parallel ask idle fallback", () => {
     } finally { await browser.close(); server.stop(); }
   }, 120_000);
 });
+
+describe("the left sidebar, numbered design variants", () => {
+  /*
+   * Rendered evidence for the sidebar design lane (docs/design/sidebar-redesign.md):
+   * today's rail (0) and three variants (1-3) drawn by `sidebarVariants.prototype.tsx`
+   * inside the real Viewer over `issue1695Evidence.fixture.tsx?rail=few|many`. The
+   * variant's number is printed on a strip above the application frame, so the
+   * frame itself is the product at 1440x900 and 1000x700, light and dark, en and uk.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 SIDEBAR_FRAMES_DIR=<a directory outside the checkout> \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "numbered design variants"
+   *
+   * Frames, rail crops and contact sheets go to SIDEBAR_FRAMES_DIR and are never
+   * committed; the readings every frame is judged by go to
+   * `evidence/sidebar-redesign/measurements.json`. SIDEBAR_FRAMES_ONLY narrows a run
+   * to the frame names a pattern matches and then writes neither sheets nor readings.
+   */
+  const OUT = path.resolve(process.env.SIDEBAR_FRAMES_DIR?.trim() || ".artifacts/sidebar-redesign");
+  const ONLY = process.env.SIDEBAR_FRAMES_ONLY?.trim() ? new RegExp(process.env.SIDEBAR_FRAMES_ONLY.trim()) : null;
+  const STRIP = 32;
+  const SIZES = [{ width: 1440, height: 900 }, { width: 1000, height: 700 }] as const;
+  const CROP = 320;
+
+  interface State { name: string; query: string; folded?: boolean; click?: string; variants?: readonly number[]; everywhere: boolean }
+  const STATES: readonly State[] = [
+    { name: "overview", query: "rail=few&railview=overview", everywhere: true },
+    { name: "selected", query: "rail=few", everywhere: true },
+    { name: "folded", query: "rail=few", folded: true, everywhere: true },
+    { name: "many", query: "rail=many", everywhere: true },
+    { name: "open", query: "rail=few&railopen=1", variants: [2], everywhere: true },
+    { name: "open-many", query: "rail=many&railopen=1", variants: [2], everywhere: true },
+    { name: "menu", query: "rail=few&railopen=1", click: "[data-rail-menu]", everywhere: false },
+    { name: "create", query: "rail=few&railopen=1", click: '[data-testid="rail-create-project"]', everywhere: false },
+    { name: "rail-menu", query: "rail=few", click: "[data-rail-menu-slot] [data-rail-menu]", variants: [2], everywhere: false },
+  ];
+
+  interface Reading {
+    frame: string; variant: number; state: string; width: number; height: number; scheme: Scheme; lang: "en" | "uk";
+    rail: { width: number; listHeight: number; footerHeight: number; rows: number; rowsInView: number; clippedNames: number; overflowX: boolean };
+    main: { width: number };
+    controls: { inRail: number; smallest: { width: number; height: number } | null };
+    pageErrors: string[];
+  }
+
+  const readRail = (page: Page) => page.evaluate(() => {
+    const rail = document.querySelector<HTMLElement>("aside:not([data-orchestrator-dock])")!;
+    const list = rail.querySelector<HTMLElement>("nav");
+    const footer = rail.querySelector<HTMLElement>("[data-rail-footer]");
+    const listBox = list?.getBoundingClientRect() ?? null;
+    const rows = list ? [...list.querySelectorAll<HTMLElement>("[data-flip-key]:not([data-flip-key^='__'])")] : [];
+    const names = list ? [...list.querySelectorAll<HTMLElement>(".truncate")] : [];
+    const controls = [...rail.querySelectorAll<HTMLElement>("button, a, input")].map((element) => element.getBoundingClientRect()).filter((box) => box.width > 0 && box.height > 0);
+    const smallest = controls.reduce<DOMRect | null>((least, box) => (!least || box.width * box.height < least.width * least.height ? box : least), null);
+    return {
+      rail: {
+        width: Math.round(rail.getBoundingClientRect().width),
+        listHeight: Math.round(listBox?.height ?? 0),
+        footerHeight: Math.round(footer?.getBoundingClientRect().height ?? 0),
+        rows: rows.length,
+        rowsInView: listBox ? rows.filter((row) => { const box = row.getBoundingClientRect(); return box.top >= listBox.top - 1 && box.bottom <= listBox.bottom + 1; }).length : 0,
+        clippedNames: names.filter((name) => name.scrollWidth > name.clientWidth + 1).length,
+        overflowX: rail.scrollWidth > rail.clientWidth + 1,
+      },
+      main: { width: Math.round(document.querySelector<HTMLElement>("main")?.getBoundingClientRect().width ?? 0) },
+      controls: { inRail: controls.length, smallest: smallest ? { width: Math.round(smallest.width), height: Math.round(smallest.height) } : null },
+    };
+  });
+
+  const caption = (text: string, width: number, height = 26, size = 13) => Buffer.from(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="#262a36"/>`
+    + `<text x="8" y="${Math.round(height * 0.68)}" font-family="Inter, Arial, sans-serif" font-size="${size}" font-weight="600" fill="#fbebdd">${text.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</text></svg>`,
+  );
+
+  /** Lays pictures out in a grid, each under a caption, and writes one sheet. */
+  async function sheet(file: string, columns: number, cells: { label: string; picture: Buffer | null; width: number; height: number }[]) {
+    const GAP = 10;
+    const CAP = 26;
+    const rows: (typeof cells)[] = [];
+    for (let index = 0; index < cells.length; index += columns) rows.push(cells.slice(index, index + columns));
+    const columnWidths = Array.from({ length: columns }, (_, column) => Math.max(0, ...rows.map((row) => row[column]?.width ?? 0)));
+    const rowHeights = rows.map((row) => Math.max(...row.map((cell) => cell.height)) + CAP);
+    const width = columnWidths.reduce((sum, value) => sum + value + GAP, GAP);
+    const height = rowHeights.reduce((sum, value) => sum + value + GAP, GAP);
+    const composite: Parameters<ReturnType<typeof sharp>["composite"]>[0] = [];
+    let top = GAP;
+    rows.forEach((row, rowIndex) => {
+      let left = GAP;
+      row.forEach((cell, column) => {
+        composite.push({ input: caption(cell.label, columnWidths[column]!), left, top });
+        if (cell.picture) composite.push({ input: cell.picture, left, top: top + CAP });
+        left += columnWidths[column]! + GAP;
+      });
+      top += rowHeights[rowIndex]! + GAP;
+    });
+    await sharp({ create: { width, height, channels: 3, background: "#8d8d98" } }).composite(composite).png().toFile(file);
+  }
+
+  /* What is weak in today's rail, as numbered marks on its own frame. The note's critique uses the same numbers. */
+  const MARKS: readonly { selector: string; en: string; uk: string }[] = [
+    { selector: "aside header button, aside header + div input, aside header + div button", en: "Four framed boxes before the first project: two squares, a field, a button", uk: "Чотири рамки до першого проєкту: два квадрати, поле, кнопка" },
+    { selector: "aside nav > button:first-child > span:first-child", en: "Overview is drawn as one more project, with a grey dot that says nothing", uk: "«Огляд» намальовано як ще один проєкт, із сірою крапкою без змісту" },
+    { selector: "aside nav > div.border-t", en: "Sections are split by bare lines; nothing says the first group is pinned", uk: "Розділи відокремлено голими лініями; ніде не сказано, що перша група закріплена" },
+    { selector: "aside nav [data-testid='crown-marker']", en: "The crown sits before the name, so names have two left edges", uk: "Корона стоїть перед назвою, тож назви мають два ліві краї" },
+    { selector: "aside nav [aria-current='page'] > :nth-child(n+3)", en: "Three bare numbers: working, waiting, conversations. Two are the same grey", uk: "Три числа без підписів: працюють, чекають, розмови. Два з них однаково сірі" },
+    { selector: "aside nav [aria-current='page'] span.block", en: "The age takes a second line, so every row is 55 px for one fact", uk: "Вік займає другий рядок, тож кожен рядок має 55 px заради одного факту" },
+    { selector: "aside nav [data-flip-key*='northwind'] .truncate", en: "The long name is cut while the row below it is empty", uk: "Довгу назву обрізано, хоча рядок під нею порожній" },
+    { selector: "[data-rail-footer-toggle]", en: "The footer is taller than the project list it sits under", uk: "Футер вищий за список проєктів, під яким він стоїть" },
+    { selector: "[data-resources-footer] .rounded-full.bg-sunken", en: "This bar fills as memory is used", uk: "Ця смужка заповнюється, коли пам'ять витрачається" },
+    { selector: "[data-rail-footer] button[aria-haspopup='dialog'] .rounded-full.bg-sunken", en: "The same bar here drains as quota is used: one shape, opposite meanings", uk: "Така сама смужка тут спорожнюється, коли квота витрачається: одна форма, протилежні значення" },
+    { selector: "[data-rail-footer] button[aria-haspopup='dialog'] .tabular-nums", en: "A 12% chip with no word beside rows that say «left 88%»", uk: "Позначка 12% без слова поруч із рядками «лишилось 88%»" },
+    { selector: "[data-rail-footer] button[aria-haspopup='dialog'] .mt-1\\.5:nth-child(2) .leading-none", en: "A reset line under every bar: six lines of 10 px text, always on", uk: "Рядок скидання під кожною смужкою: шість рядків тексту 10 px, завжди на екрані" },
+  ];
+
+  async function critique(browser: Browser, base: string, lang: "en" | "uk", scheme: Scheme) {
+    const SCALE = 2;
+    const WIDTH = 270;
+    const LEGEND = 700;
+    const context = await browser.newContext({ viewport: { width: 1440, height: 900 + STRIP }, deviceScaleFactor: SCALE, colorScheme: scheme, reducedMotion: "reduce" });
+    await context.addInitScript(({ lang }) => { try { localStorage.setItem("llv_lang", lang); localStorage.setItem("llv:rail-footer:v1", "open"); } catch { /* defaults */ } }, { lang });
+    const page = await context.newPage();
+    try {
+      await page.goto(`${base}?scenario=tier-limits&railv=0&rail=few`);
+      await page.waitForSelector("[data-resources-footer]", { timeout: 20_000 });
+      await page.waitForTimeout(700);
+      const reading = await page.evaluate((selectors) => {
+        const rail = document.querySelector<HTMLElement>("aside:not([data-orchestrator-dock])")!;
+        const list = rail.querySelector<HTMLElement>("nav")!.getBoundingClientRect();
+        const footer = rail.querySelector<HTMLElement>("[data-rail-footer]")!.getBoundingClientRect();
+        return {
+          /* A mark frames everything its selector matches inside the first container that holds a match. */
+          boxes: selectors.map((selector) => {
+            const first = document.querySelector(selector);
+            if (!first) return null;
+            const all = [...(first.parentElement?.parentElement ?? document).querySelectorAll(selector)].map((element) => element.getBoundingClientRect()).filter((box) => box.width > 0);
+            const x = Math.min(...all.map((box) => box.left)), y = Math.min(...all.map((box) => box.top));
+            return { x, y, w: Math.max(...all.map((box) => box.right)) - x, h: Math.max(...all.map((box) => box.bottom)) - y };
+          }),
+          list: { y: list.y, h: list.height }, footer: { y: footer.y, h: footer.height },
+        };
+      }, MARKS.map((mark) => mark.selector));
+      const rail = await page.screenshot({ clip: { x: 0, y: STRIP, width: WIDTH, height: 900 } });
+      const text = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+      /* The sheet's renderer draws plain SVG text only, so a legend line is broken by hand. */
+      const wrap = (value: string) => value.split(" ").reduce<string[]>((lines, word) => {
+        if (lines.length && `${lines.at(-1)} ${word}`.length <= 44) lines[lines.length - 1] += ` ${word}`;
+        else lines.push(word);
+        return lines;
+      }, []);
+      const marks = reading.boxes.map((box, index) => box ? (
+        `<rect x="${box.x * SCALE - 3}" y="${(box.y - STRIP) * SCALE - 3}" width="${box.w * SCALE + 6}" height="${box.h * SCALE + 6}" rx="6" fill="none" stroke="#d6336c" stroke-width="2.5"/>`
+        + `<circle cx="${Math.max(17, box.x * SCALE - 8)}" cy="${Math.max(17, (box.y - STRIP) * SCALE - 8)}" r="15" fill="#d6336c"/>`
+        + `<text x="${Math.max(17, box.x * SCALE - 8)}" y="${Math.max(17, (box.y - STRIP) * SCALE - 8) + 6}" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="17" font-weight="700" fill="#fff">${index + 1}</text>`
+      ) : "").join("");
+      const bracket = (y: number, h: number, label: string) => `<path d="M ${WIDTH * SCALE + 14} ${(y - STRIP) * SCALE + 4} h 12 v ${h * SCALE - 8} h -12" fill="none" stroke="#262a36" stroke-width="2.5"/>`
+        + `<text x="${WIDTH * SCALE + 36}" y="${(y - STRIP + h / 2) * SCALE + 6}" font-family="Inter, Arial, sans-serif" font-size="19" font-weight="700" fill="#262a36">${text(label)}</text>`;
+      const legend = MARKS.map((mark, index) => `<circle cx="${WIDTH * SCALE + 300}" cy="${70 + index * 58}" r="15" fill="#d6336c"/>`
+        + `<text x="${WIDTH * SCALE + 300}" y="${76 + index * 58}" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="17" font-weight="700" fill="#fff">${index + 1}</text>`
+        + wrap(mark[lang]).map((line, row) => `<text x="${WIDTH * SCALE + 326}" y="${(wrap(mark[lang]).length > 1 ? 66 : 76) + index * 58 + row * 20}" font-family="Inter, Arial, sans-serif" font-size="16" font-weight="600" fill="#1c1c22">${text(line)}</text>`).join("")).join("");
+      const overlay = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${WIDTH * SCALE + LEGEND}" height="${900 * SCALE}">${marks}`
+        + bracket(reading.list.y, reading.list.h, `${lang === "uk" ? "список" : "list"} ${Math.round(reading.list.h)} px`)
+        + bracket(reading.footer.y, reading.footer.h, `${lang === "uk" ? "футер" : "footer"} ${Math.round(reading.footer.h)} px`)
+        + `${legend}</svg>`);
+      await sharp({ create: { width: WIDTH * SCALE + LEGEND, height: 900 * SCALE, channels: 3, background: "#f3f1ec" } })
+        .composite([{ input: rail, left: 0, top: 0 }, { input: overlay, left: 0, top: 0 }]).png().toFile(path.join(OUT, `critique-today-${scheme}-${lang}.png`));
+      return { lang, scheme, list: Math.round(reading.list.h), footer: Math.round(reading.footer.h), missing: MARKS.filter((_, index) => !reading.boxes[index]).map((mark) => mark.selector) };
+    } finally {
+      await context.close();
+    }
+  }
+
+  browserTest("today's rail and three variants, in the same states, at two sizes, both schemes and both languages", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const server = await serveEvidenceFixture(fs.mkdtempSync(path.join(process.env.TMPDIR ?? os.tmpdir(), "llv-sidebar-")));
+    /* The browser runs as a server of its own so its process id is on record and the run can prove it gone. */
+    const browserServer = await chromium.launchServer(LAUNCH);
+    const pid = browserServer.process().pid!;
+    fs.writeFileSync(path.join(OUT, "browser.pid"), `${pid}\n`);
+    const browser = await chromium.connect(browserServer.wsEndpoint());
+    const readings: Reading[] = [];
+    const critiques: Awaited<ReturnType<typeof critique>>[] = [];
+    const failures: string[] = [];
+    try {
+      for (const variant of [0, 1, 2, 3]) for (const state of STATES) for (const size of SIZES) for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) {
+        if (state.variants && !state.variants.includes(variant)) continue;
+        if (!state.everywhere && !(size.width === 1440 && scheme === "light" && lang === "en")) continue;
+        const frame = `v${variant}-${state.name}-${size.width}x${size.height}-${scheme}-${lang}`;
+        if (ONLY && !ONLY.test(frame)) continue;
+        const context = await browser.newContext({ viewport: { width: size.width, height: size.height + STRIP }, colorScheme: scheme, reducedMotion: "reduce" });
+        await context.addInitScript(({ lang, folded }) => {
+          try {
+            localStorage.setItem("llv_lang", lang);
+            localStorage.setItem("llv:rail-footer:v1", folded ? "folded" : "open");
+          } catch { /* the page then renders its defaults */ }
+        }, { lang, folded: state.folded === true });
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        try {
+          await page.goto(`${server.base}?scenario=tier-limits&railv=${variant}&${state.query}`);
+          await page.waitForSelector("aside:not([data-orchestrator-dock])", { timeout: 20_000 });
+          await page.waitForSelector("main", { timeout: 20_000 });
+          /* The resources probe starts 1.5 s after mount by design; an open footer is read once its blocks are drawn. */
+          if (!state.folded) await page.waitForSelector("[data-resources-footer]", { timeout: 20_000 });
+          await page.waitForSelector("[data-engine-limits], [data-rail-footer] button[aria-haspopup='dialog']", { state: state.folded ? "detached" : "attached", timeout: 20_000 });
+          await page.waitForTimeout(state.folded ? 2_200 : 700);
+          if (state.click) {
+            await page.locator(state.click).last().click();
+            await page.waitForTimeout(250);
+          }
+          await page.screenshot({ path: path.join(OUT, `${frame}.png`) });
+          readings.push({ frame, variant, state: state.name, width: size.width, height: size.height, scheme, lang, ...(await readRail(page)), pageErrors });
+          if (pageErrors.length) failures.push(`${frame}: ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          failures.push(`${frame}: ${(error as Error).message.split("\n")[0]}`);
+          await page.screenshot({ path: path.join(OUT, `${frame}.failed.png`) }).catch(() => {});
+        } finally {
+          await context.close();
+        }
+      }
+      if (!ONLY || ONLY.test("critique")) for (const lang of ["en", "uk"] as const) {
+        const read = await critique(browser, server.base, lang, "light");
+        if (read.missing.length) failures.push(`critique ${lang}: nothing matched ${read.missing.join(", ")}`);
+        critiques.push(read);
+      }
+    } finally {
+      await browser.close();
+      await browserServer.close();
+      server.stop();
+      let alive = true;
+      try { process.kill(pid, 0); } catch { alive = false; }
+      if (alive) process.kill(pid, "SIGKILL");
+      fs.writeFileSync(path.join(OUT, "browser.pid"), `${pid} closed\n`);
+    }
+
+    if (!ONLY) {
+      const picture = async (frame: string, scale: number, crop = false) => {
+        const file = path.join(OUT, `${frame}.png`);
+        if (!fs.existsSync(file)) return null;
+        const meta = await sharp(file).metadata();
+        const source = crop ? sharp(file).extract({ left: 0, top: 0, width: Math.min(CROP, meta.width!), height: meta.height! }) : sharp(file);
+        const width = Math.round((crop ? Math.min(CROP, meta.width!) : meta.width!) * scale);
+        const data = await source.resize({ width }).png().toBuffer();
+        const sized = await sharp(data).metadata();
+        return { picture: data, width: sized.width!, height: sized.height! };
+      };
+      const cell = async (label: string, frame: string, scale: number, crop = false) => {
+        const drawn = await picture(frame, scale, crop);
+        return { label, picture: drawn?.picture ?? null, width: drawn?.width ?? Math.round((crop ? CROP : 1440) * scale), height: drawn?.height ?? 60 };
+      };
+      const combos = SIZES.flatMap((size) => (["light", "dark"] as const).flatMap((scheme) => (["en", "uk"] as const).map((lang) => ({ size, scheme, lang }))));
+      /* One contact sheet per drawing: every state down, every size, scheme and language across. */
+      for (const variant of [0, 1, 2, 3]) {
+        const cells = [];
+        for (const state of STATES.filter((entry) => entry.everywhere && (!entry.variants || entry.variants.includes(variant)))) {
+          for (const { size, scheme, lang } of combos) cells.push(await cell(`${variant} · ${state.name} · ${size.width}x${size.height} · ${scheme} · ${lang}`, `v${variant}-${state.name}-${size.width}x${size.height}-${scheme}-${lang}`, 0.4));
+        }
+        await sheet(path.join(OUT, `sheet-variant-${variant}.png`), combos.length, cells);
+        const extras = [];
+        for (const state of STATES.filter((entry) => !entry.everywhere)) extras.push(await cell(`${variant} · ${state.name} · 1440x900 · light · en`, `v${variant}-${state.name}-1440x900-light-en`, 0.6));
+        await sheet(path.join(OUT, `sheet-variant-${variant}-menu-and-create.png`), extras.length, extras);
+      }
+      /* Today beside all three: whole frames for one combination, then the rails alone at full size for every combination. */
+      const columns = [[0, ""], [1, ""], [2, ""], [2, "open"], [3, ""]] as const;
+      const frameOf = (variant: number, open: string, state: string) => `v${variant}-${open ? (state === "many" ? "open-many" : "open") : state}`;
+      const whole = [];
+      for (const state of ["overview", "selected", "folded", "many"]) for (const [variant, open] of columns) {
+        if (open && state !== "selected" && state !== "many") { whole.push({ label: "", picture: null, width: 576, height: 60 }); continue; }
+        whole.push(await cell(`${variant}${open ? " opened" : ""} · ${state}`, `${frameOf(variant, open, state)}-1440x900-light-en`, 0.4));
+      }
+      await sheet(path.join(OUT, "sheet-compare-all.png"), columns.length, whole);
+      for (const { size, scheme, lang } of combos) {
+        const rails = [];
+        for (const state of ["overview", "selected", "folded", "many"]) for (const [variant, open] of columns) {
+          if (open && state !== "selected" && state !== "many") { rails.push({ label: "", picture: null, width: CROP, height: 60 }); continue; }
+          rails.push(await cell(`${variant}${open ? " opened" : ""} · ${state}`, `${frameOf(variant, open, state)}-${size.width}x${size.height}-${scheme}-${lang}`, 1, true));
+        }
+        await sheet(path.join(OUT, `sheet-compare-rails-${size.width}x${size.height}-${scheme}-${lang}.png`), columns.length, rails);
+      }
+      fs.mkdirSync(path.resolve("evidence/sidebar-redesign"), { recursive: true });
+      fs.writeFileSync(path.resolve("evidence/sidebar-redesign/measurements.json"), `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", strip: STRIP, critiques, readings, failures }, null, 2)}\n`);
+    }
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 1_800_000);
+});

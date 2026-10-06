@@ -12,6 +12,7 @@ import { handleOverlayEscape } from "@/lib/overlay";
 import type { TelegramErrorCode, TelegramPhase, TelegramStatusPayload } from "@/lib/telegram/contracts";
 
 import { Loader2, Trash2, X } from "./icons";
+import { GAUGE_BUTTON, type RailFooterDensity } from "./railFooterDensity";
 import { TelegramBotSection } from "./TelegramBot";
 import { ActionButton, ConfirmingAction } from "./TelegramControls";
 import { TelegramReportsSection } from "./TelegramReports";
@@ -410,7 +411,7 @@ export function TelegramPanel({ state, reports, bot, onClose }: { state: Telegra
 }
 
 /** The footer entry point: one quiet row under the engine limits blocks. */
-export function TelegramFooterRow() {
+export function TelegramFooterRow({ density = "full" }: { density?: RailFooterDensity } = {}) {
   const { t } = useLocale();
   const state = useTelegramConnection();
   const [open, setOpen] = useState(false);
@@ -455,13 +456,18 @@ export function TelegramFooterRow() {
         aria-haspopup="dialog"
         aria-label={t("telegram.rowAria")}
         onClick={() => setOpen((value) => !value)}
-        className="flex min-h-[44px] w-full items-center gap-2 px-3.5 py-1.5 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-[36px]"
+        title={density === "full" ? undefined : `${t("telegram.title")} · ${t(statusKey(phase))}`}
+        className={density === "gauge"
+          ? `relative h-9 w-10 ${GAUGE_BUTTON}`
+          : density === "line"
+            ? "flex h-[26px] w-full items-center gap-1.5 px-3 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            : "flex min-h-[44px] w-full items-center gap-2 px-3.5 py-1.5 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:min-h-[36px]"}
       >
-        <Send className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden />
-        <span className="text-[11.5px] font-bold text-primary">{t("telegram.title")}</span>
-        <span className="ml-auto flex shrink-0 items-center gap-1.5">
+        <Send className={`shrink-0 text-muted ${density === "line" ? "h-3 w-3" : "h-3.5 w-3.5"}`} aria-hidden />
+        {density === "gauge" ? null : <span className={density === "line" ? "text-[11.5px] font-semibold text-primary" : "text-[11.5px] font-bold text-primary"}>{t("telegram.title")}</span>}
+        <span className={density === "gauge" ? "absolute right-1.5 top-1.5 flex" : "ml-auto flex shrink-0 items-center gap-1.5"}>
           {state.status?.login ? <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none text-accent" aria-hidden /> : null}
-          <span className="text-[10px] font-semibold text-muted">{t(statusKey(phase))}</span>
+          {density === "gauge" ? null : <span className={density === "line" ? "text-[11px] text-muted" : "text-[10px] font-semibold text-muted"}>{t(statusKey(phase))}</span>}
           <span
             aria-hidden
             className="h-2 w-2 rounded-full"

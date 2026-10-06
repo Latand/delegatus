@@ -7,6 +7,7 @@ import { useLocale } from "@/lib/i18n";
 import type { ResourceSession, ResourcesPayload, ResourcesViewer } from "@/lib/types";
 
 import { X } from "./icons";
+import { GAUGE_BUTTON, MeterGauge, MeterLine, type RailFooterDensity } from "./railFooterDensity";
 import { AttachControls } from "./resources/AttachControls";
 import { bulkKillTargets, idleKillTargets, isStructuredHost, resourceCounts } from "./resources/hostSelection";
 import { activityDot, engineTintOf, fmtAge } from "./utils";
@@ -116,7 +117,7 @@ export function stickySnap(prev: ResourcesSnap | null, next: ResourcesPayload, a
 
 /** Rail block above LimitsFooter: RAM/swap pressure bars; clicking it opens
     the per-session cleanup list. */
-export function ResourcesFooter() {
+export function ResourcesFooter({ density = "full" }: { density?: RailFooterDensity } = {}) {
   const { t } = useLocale();
   const [snap, setSnap] = useState<ResourcesSnap | null>(null);
   const [open, setOpen] = useState(false);
@@ -189,6 +190,50 @@ export function ResourcesFooter() {
   const ramUsedPct = system ? (100 * (system.ramTotal - system.ramAvailable)) / system.ramTotal : 0;
   const ramAvailPct = system ? (100 * system.ramAvailable) / system.ramTotal : 100;
   const swapUsedPct = system && system.swapTotal > 0 ? (100 * system.swapUsed) / system.swapTotal : 0;
+
+  /* The share of memory spent, so a compact bar reads like every other compact bar: fuller is worse. */
+  const reading = system
+    ? `${t("resources.ram")} ${t("resources.free", { amount: fmtBytes(system.ramAvailable) })}${system.swapTotal > 0 ? ` · ${t("resources.swap")} ${t("resources.used", { amount: fmtBytes(system.swapUsed) })}` : ""}${viewer ? ` · ${t("resources.viewer")} ${viewerAmount(viewer, t)}` : ""} · ${t("resources.captured", { age: fmtAge(Date.parse(system.capturedAt) / 1000) })}`
+    : t("resources.title");
+  const cleanup = open ? (
+    <CleanupPanel
+      sessions={sessions}
+      now={snap.at}
+      sessionsStale={sessionsStale}
+      sessionsCapturedAt={sessionsCapturedAt}
+      viewer={viewer}
+      onRefresh={() => loadRef.current(true)}
+      onClose={() => setOpen(false)}
+    />
+  ) : null;
+  if (density !== "full") {
+    const gauge = density === "gauge";
+    return (
+      <div ref={panelRef} className={`relative shrink-0 ${gauge ? "" : "border-t border-border"}`} data-resources-footer>
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-label={t("resources.openAria")}
+          title={reading}
+          onClick={() => setOpen((value) => !value)}
+          className={gauge ? GAUGE_BUTTON : "block w-full px-3 py-1 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"}
+        >
+          {gauge ? (
+            <MeterGauge mark={t("resources.ram")} percent={system ? ramUsedPct : null} color={ramColor(ramAvailPct)} second={system && system.swapTotal > 0 ? { percent: swapUsedPct, color: swapColor(swapUsedPct) } : undefined} />
+          ) : system ? (
+            <>
+              <MeterLine label={t("resources.ram")} value={t("resources.free", { amount: fmtBytes(system.ramAvailable) })} percent={ramUsedPct} color={ramColor(ramAvailPct)} />
+              {system.swapTotal > 0 ? <MeterLine label={t("resources.swap")} value={t("resources.used", { amount: fmtBytes(system.swapUsed) })} percent={swapUsedPct} color={swapColor(swapUsedPct)} /> : null}
+            </>
+          ) : (
+            <MeterLine label={t("resources.title")} value={sessions.length} percent={null} color="var(--color-muted)" />
+          )}
+          {snap.staleSince || sessionsStale ? <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-warning" data-testid="resources-stale-dot" /> : null}
+        </button>
+        {cleanup}
+      </div>
+    );
+  }
 
   return (
     <div ref={panelRef} className="relative shrink-0 border-t border-border" data-resources-footer>

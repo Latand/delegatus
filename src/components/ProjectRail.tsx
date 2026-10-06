@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 
 import { DelegatusMark } from "@/components/brand/BrandMark";
 import { Badge } from "@/components/ui/Badge";
@@ -43,7 +43,7 @@ import { useTeamView } from "@/components/team/teamClient";
  * inside it.
  */
 
-interface Props {
+export interface ProjectRailProps {
   files: FileEntry[];
   projectCatalog: ProjectCatalogEntry[];
   projectDisplayNames?: Readonly<Record<string, string>>;
@@ -76,7 +76,20 @@ interface Props {
 
 const EMPTY_CROWNS: ReadonlySet<string> = new Set();
 
-export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, pipelines, workflows, archivedProjects, crownedProjects = EMPTY_CROWNS, selected, loaded, catalogFailures = 0, now, needsYouCounts, onHide, onSelect, onToggleCrown, onCreateProject }: Props) {
+/**
+ * A design prototype's own drawing of the rail (docs/design/sidebar-redesign.md).
+ * Nothing in the product provides it, so the Viewer draws today's rail; the
+ * kanban evidence fixture provides one of the numbered variants, which then
+ * receives exactly what today's rail receives.
+ */
+export const RailPrototypeContext = createContext<ComponentType<ProjectRailProps> | null>(null);
+
+export function ProjectRail(props: ProjectRailProps) {
+  const Prototype = useContext(RailPrototypeContext);
+  return Prototype ? createElement(Prototype, props) : <ProjectRailToday {...props} />;
+}
+
+function ProjectRailToday({ files, projectCatalog, projectDisplayNames = {}, pipelines, workflows, archivedProjects, crownedProjects = EMPTY_CROWNS, selected, loaded, catalogFailures = 0, now, needsYouCounts, onHide, onSelect, onToggleCrown, onCreateProject }: ProjectRailProps) {
   const { t } = useLocale();
   const isMobile = useIsMobile();
   const [query, setQuery] = useState("");
@@ -376,7 +389,7 @@ async function signOutMember(): Promise<void> {
   }
 }
 
-function RailHeaderMenu() {
+export function RailHeaderMenu() {
   const { t, locale } = useLocale();
   const [open, setOpen] = useState(false);
   /* Passive: the app's session guard loads the team view once per page. */

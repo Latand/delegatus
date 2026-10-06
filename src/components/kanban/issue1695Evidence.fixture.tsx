@@ -18,6 +18,7 @@ import { runFocusTransaction } from "@/components/attention/navigate";
 import { asksYouFixtureLines, asksYouFixtureSetting, reportLogFixturePage } from "@/components/orchestrator/reportLog/reportLogEvidence.fixture";
 import { writeProfile } from "@/components/runtimeProfile";
 import { Viewer } from "@/components/Viewer";
+import { parseRailVariant, RailPrototypeFrame } from "@/components/kanban/sidebarVariants.prototype";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import { resolvePipelineLinks, resolveTaskLinks, type CachedPullRequest, type FilesWorkLinks, type ForgeCacheView, type ForgeRepositoryView, type ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -547,6 +548,41 @@ const ledgerBuild = OVERVIEW_SCOPE ? add(conversation("ledger-build", "Reconcili
 const ledgerQuiet = OVERVIEW_SCOPE ? add(conversation("ledger-quiet", "Archived last quarter", { project: LEDGER, mtime: now - 4 * 60 * MIN, lastTurn: { startedAt: (now - 5 * 60 * MIN) * 1_000, endedAt: (now - 4 * 60 * MIN) * 1_000 } })) : null;
 const meshAsk = OVERVIEW_SCOPE ? add(conversation("mesh-ask", "Which of the two meshes keeps the old ids?", { project: MESH, engine: "codex", model: "gpt-5.6", mtime: now - 11 * MIN, waitingInput: { since: now - 11 * MIN } })) : null;
 const meshQuiet = OVERVIEW_SCOPE ? add(conversation("mesh-quiet", "Wrote the migration notes", { project: MESH, mtime: now - 6 * 60 * MIN })) : null;
+/* The sidebar design lane (docs/design/sidebar-redesign.md): `?rail=few|many` fills the project list with invented
+   projects in every state a row has (waiting on the operator, working, quiet, known to the catalog only, crowned,
+   archived, a name longer than the row), and `?railv=1|2|3` draws that list in one of the numbered variants. */
+const RAIL = new URLSearchParams(location.search).get("rail");
+const RAIL_VARIANT = parseRailVariant(location.search);
+const railCatalog: { project: string; displayName: string; conversations: number; smt: number }[] = [];
+const RAIL_LONG = "northwind-customer-data-platform-migration";
+if (RAIL) {
+  const named = (project: string, displayName: string, conversations: number, age: number) => railCatalog.push({ project, displayName, conversations, smt: now - age });
+  const talk = (id: string, project: string, title: string, over: Record<string, unknown> = {}) => add(conversation(`rail-${id}`, title, { project, projectName: railCatalog.find((entry) => entry.project === project)?.displayName, ...over }));
+  named(MESH, "River Mesh", 9, 11 * MIN);
+  named(LEDGER, "Acme Ledger", 31, 30);
+  named("harbor-docs", "Harbor Docs", 14, 3 * 60 * MIN);
+  named(RAIL_LONG, L("Northwind customer data platform migration", "Міграція платформи клієнтських даних Northwind"), 58, 2 * MIN);
+  named("paper-kite", "Paper Kite", 12, 6 * 24 * 60 * MIN);
+  talk("mesh-ask", MESH, L("Which of the two meshes keeps the old ids?", "Яка з двох сіток зберігає старі ідентифікатори?"), { engine: "codex", model: "gpt-5.6", mtime: now - 11 * MIN, waitingInput: { since: now - 11 * MIN } });
+  talk("mesh-quiet", MESH, "Wrote the migration notes", { mtime: now - 6 * 60 * MIN });
+  talk("ledger-build", LEDGER, "Reconciling the ledger export", working({ pid: 4_511 }));
+  talk("ledger-review", LEDGER, "Reviewing the bank file parser", working({ pid: 4_512, engine: "codex", model: "gpt-5.6" }));
+  talk("ledger-ask", LEDGER, L("Ship the export with the rounding fix or without it?", "Випускати експорт з виправленням округлення чи без нього?"), { mtime: now - 4 * MIN, waitingInput: { since: now - 4 * MIN } });
+  talk("harbor-quiet", "harbor-docs", "Indexed the handbook", { mtime: now - 3 * 60 * MIN });
+  talk("northwind-build", RAIL_LONG, "Copying the customer tables", working({ pid: 4_513, mtime: now - 2 * MIN }));
+  if (RAIL === "many") {
+    const quiet: [string, string, number, number][] = [
+      ["tidal-forecast", "Tidal Forecast", 22, 40 * MIN], ["lantern-api", "Lantern API", 47, 95 * MIN], ["copper-relay", "Copper Relay", 6, 5 * 60 * MIN],
+      ["marble-index", "Marble Index", 19, 9 * 60 * MIN], ["delta-sync", "Delta Sync", 103, 26 * 60 * MIN], ["ember-cli", "Ember CLI", 8, 2 * 24 * 60 * MIN],
+      ["juniper-mail", "Juniper Mail", 15, 3 * 24 * 60 * MIN], ["slate-board", "Slate Board", 4, 5 * 24 * 60 * MIN], ["willow-auth", "Willow Auth", 27, 8 * 24 * 60 * MIN],
+      ["onyx-queue", "Onyx Queue", 11, 12 * 24 * 60 * MIN], ["quiet-orchard", "Quiet Orchard", 3, 20 * 24 * 60 * MIN], ["birch-notes", "Birch Notes", 7, 31 * 24 * 60 * MIN],
+    ];
+    for (const [project, displayName, conversations, age] of quiet) named(project, displayName, conversations, age);
+    talk("tidal-build", "tidal-forecast", "Fitting the harbour gauge model", working({ pid: 4_514, mtime: now - 40 }));
+    talk("lantern-ask", "lantern-api", L("Keep the v1 routes for another release?", "Залишити маршрути v1 ще на один випуск?"), { engine: "codex", model: "gpt-5.6", mtime: now - 95 * MIN, waitingInput: { since: now - 95 * MIN } });
+    localStorage.setItem("llvArchivedProjects", JSON.stringify(["quiet-orchard", "birch-notes"]));
+  } else localStorage.removeItem("llvArchivedProjects");
+}
 
 const searchHelper = PIPELINES ? add(conversation("search-helper", "Helper: profile the index warm-up", { mtime: now - 50 * MIN })) : null;
 const roundsBuild = PIPELINES ? add(conversation("rounds-build", "Builder: rework the retry banner", { mtime: now - 3 * 60 * MIN })) : null;
@@ -2605,10 +2641,11 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       ? { files: SEAT_CLS ? files : [], projectCatalog: [{ project: PROJECT, conversations: SEAT_CLS ? files.length : 0, smt: now }], projectCwds: { [PROJECT]: "/repo/atlas" }, flows: [], pipelines: [], tasks: [] }
       : {
         files: shown,
-        projectCatalog: [...new Set(shown.map((file) => file.project))].map((project) => {
+        projectCatalog: [...new Set(shown.map((file) => file.project))].filter((project) => !railCatalog.some((entry) => entry.project === project)).map((project) => {
           const own = shown.filter((file) => file.project === project);
           return { project, conversations: own.length, smt: Math.max(...own.map((file) => file.mtime)) };
-        }),
+        }).concat(railCatalog),
+        ...(RAIL ? { crownedProjects: [LEDGER, "harbor-docs"] } : {}),
         flows: OVERVIEW_QUIET ? [] : flows,
         pipelines: OVERVIEW_QUIET ? [] : pipelines,
         tasks,
@@ -3068,7 +3105,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 
 /* #1820's scenarios ARE the Overview, which is the view with no project
    selected; every other scenario opens on `atlas`'s own board. */
-const OVERVIEW_VIEW = OVERVIEW_SCOPE || OVERVIEW_EMPTY;
+const OVERVIEW_VIEW = OVERVIEW_SCOPE || OVERVIEW_EMPTY || new URLSearchParams(location.search).get("railview") === "overview";
 if (OVERVIEW_VIEW) localStorage.removeItem("llvProject");
 else localStorage.setItem("llvProject", PROJECT);
 /* The harness may seed a language before this module runs (`openFixture`), so
@@ -3095,4 +3132,4 @@ createRoot(document.getElementById("root")!).render(SCENARIO === "task-queue-pre
   new URLSearchParams(location.search).has("mapping") ? <div className="p-6"><AgentMappingTable statuses={{ claude: { connected: true, account: null }, codex: { connected: true, account: null } }} layout={innerWidth < 640 ? "card" : "table"} onConnect={() => {}} /></div> : <div className="p-6" style={{ paddingTop: 400 }}>
     <RuntimePill file={{ ...searchVer2, engine: "codex", root: "codex-sessions", model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast" }} surface="structured" runtimeSettings={{ perTurnEffort: true, perTurnModel: false }} />
   </div>
-) : <Viewer />);
+) : RAIL_VARIANT !== null ? <RailPrototypeFrame variant={RAIL_VARIANT}><Viewer /></RailPrototypeFrame> : <Viewer />);

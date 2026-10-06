@@ -1,0 +1,4460 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "strip": 32,
+  "critiques": [
+    {
+      "lang": "en",
+      "scheme": "light",
+      "list": 336,
+      "footer": 480,
+      "missing": []
+    },
+    {
+      "lang": "uk",
+      "scheme": "light",
+      "list": 336,
+      "footer": 480,
+      "missing": []
+    }
+  ],
+  "readings": [
+    {
+      "frame": "v0-overview-1440x900-light-en",
+      "variant": 0,
+      "state": "overview",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 336,
+        "footerHeight": 480,
+        "rows": 6,
+        "rowsInView": 4,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 24,
+        "smallest": {
+          "width": 24,
+          "height": 24
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v0-overview-1440x900-light-uk",
+      "variant": 0,
+      "state": "overview",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 336,
+        "footerHeight": 480,
+        "rows": 6,
+        "rowsInView": 4,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 24,
+        "smallest": {
+          "width": 24,
+          "height": 24
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v0-overview-1440x900-dark-en",
+      "variant": 0,
+      "state": "overview",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 336,
+        "footerHeight": 480,
+        "rows": 6,
+        "rowsInView": 4,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 24,
+        "smallest": {
+          "width": 24,
+          "height": 24
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v0-overview-1440x900-dark-uk",
+      "variant": 0,
+      "state": "overview",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 336,
+        "footerHeight": 480,
+        "rows": 6,
+        "rowsInView": 4,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 24,
+        "smallest": {
+          "width": 24,
+          "height": 24
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v0-overview-1000x700-light-en",
+      "variant": 0,
+      "state": "overview",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 136,
+        "footerHeight": 480,
+        "rows": 6,
+        "rowsInView": 1,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 24,
+        "smallest": {
+          "width": 24,
+          "height": 24
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v0-overview-1000x700-light-uk",
+      "variant": 0,
+      "state": "overview",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 136,
+        "footerHeight": 480,
+        "rows": 6,
+        "rowsInView": 1,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 24,
+        "smallest": {
+          "width": 24,
+          "height": 24
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v0-overview-1000x700-dark-en",
+      "variant": 0,
+      "state": "overview",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 136,
+        "footerHeight": 480,
+        "rows": 6,
+        "rowsInView": 1,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 24,
+        "smallest": {
+          "width": 24,
+          "height": 24
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v0-overview-1000x700-dark-uk",
+      "variant": 0,
+      "state": "overview",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 136,
+        "footerHeight": 480,
+        "rows": 6,
+        "rowsInView": 1,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 24,
+        "smallest": {
+          "width": 24,
+          "height": 24
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v0-selected-1440x900-light-en",
+      "variant": 0,
+      "state": "selected",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 336,
+        "footerHeight": 480,
+        "rows": 6,
+        "rowsInView": 4,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 24,
+        "smallest": {
+          "width": 24,
+          "height": 24
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v0-selected-1440x900-light-uk",
+      "variant": 0,
+      "state": "selected",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 336,
+        "footerHeight": 480,
+        "rows": 6,
+        "rowsInView": 4,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 24,
+        "smallest": {
+          "width": 24,
+          "height": 24
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v0-selected-1440x900-dark-en",
+      "variant": 0,
+      "state": "selected",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 336,
+        "footerHeight": 480,
+        "rows": 6,
+        "rowsInView": 4,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 24,
+        "smallest": {
+          "width": 24,
+          "height": 24
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v0-selected-1440x900-dark-uk",
+      "variant": 0,
+      "state": "selected",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 336,
+        "footerHeight": 480,
+        "rows": 6,
+        "rowsInView": 4,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 24,
+        "smallest": {
+          "width": 24,
+          "height": 24
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v0-selected-1000x700-light-en",
+      "variant": 0,
+      "state": "selected",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 136,
+        "footerHeight": 480,
+        "rows": 6,
+        "rowsInView": 1,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 24,
+        "smallest": {
+          "width": 24,
+          "height": 24
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v0-selected-1000x700-light-uk",
+      "variant": 0,
+      "state": "selected",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 136,
+        "footerHeight": 480,
+        "rows": 6,
+        "rowsInView": 1,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 24,
+        "smallest": {
+          "width": 24,
+          "height": 24
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v0-selected-1000x700-dark-en",
+      "variant": 0,
+      "state": "selected",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 136,
+        "footerHeight": 480,
+        "rows": 6,
+        "rowsInView": 1,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 24,
+        "smallest": {
+          "width": 24,
+          "height": 24
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v0-selected-1000x700-dark-uk",
+      "variant": 0,
+      "state": "selected",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 136,
+        "footerHeight": 480,
+        "rows": 6,
+        "rowsInView": 1,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 24,
+        "smallest": {
+          "width": 24,
+          "height": 24
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v0-folded-1440x900-light-en",
+      "variant": 0,
+      "state": "folded",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 787,
+        "footerHeight": 30,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 18,
+        "smallest": {
+          "width": 24,
+          "height": 24
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v0-folded-1440x900-light-uk",
+      "variant": 0,
+      "state": "folded",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 787,
+        "footerHeight": 30,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 18,
+        "smallest": {
+          "width": 24,
+          "height": 24
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v0-folded-1440x900-dark-en",
+      "variant": 0,
+      "state": "folded",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 787,
+        "footerHeight": 30,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 18,
+        "smallest": {
+          "width": 24,
+          "height": 24
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v0-folded-1440x900-dark-uk",
+      "variant": 0,
+      "state": "folded",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 787,
+        "footerHeight": 30,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 18,
+        "smallest": {
+          "width": 24,
+          "height": 24
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v0-folded-1000x700-light-en",
+      "variant": 0,
+      "state": "folded",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 587,
+        "footerHeight": 30,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 18,
+        "smallest": {
+          "width": 24,
+          "height": 24
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v0-folded-1000x700-light-uk",
+      "variant": 0,
+      "state": "folded",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 587,
+        "footerHeight": 30,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 18,
+        "smallest": {
+          "width": 24,
+          "height": 24
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v0-folded-1000x700-dark-en",
+      "variant": 0,
+      "state": "folded",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 587,
+        "footerHeight": 30,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 18,
+        "smallest": {
+          "width": 24,
+          "height": 24
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v0-folded-1000x700-dark-uk",
+      "variant": 0,
+      "state": "folded",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 587,
+        "footerHeight": 30,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 18,
+        "smallest": {
+          "width": 24,
+          "height": 24
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v0-many-1440x900-light-en",
+      "variant": 0,
+      "state": "many",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 336,
+        "footerHeight": 480,
+        "rows": 16,
+        "rowsInView": 4,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 45,
+        "smallest": {
+          "width": 24,
+          "height": 24
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v0-many-1440x900-light-uk",
+      "variant": 0,
+      "state": "many",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 336,
+        "footerHeight": 480,
+        "rows": 16,
+        "rowsInView": 4,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 45,
+        "smallest": {
+          "width": 24,
+          "height": 24
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v0-many-1440x900-dark-en",
+      "variant": 0,
+      "state": "many",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 336,
+        "footerHeight": 480,
+        "rows": 16,
+        "rowsInView": 4,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 45,
+        "smallest": {
+          "width": 24,
+          "height": 24
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v0-many-1440x900-dark-uk",
+      "variant": 0,
+      "state": "many",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 336,
+        "footerHeight": 480,
+        "rows": 16,
+        "rowsInView": 4,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 45,
+        "smallest": {
+          "width": 24,
+          "height": 24
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v0-many-1000x700-light-en",
+      "variant": 0,
+      "state": "many",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 136,
+        "footerHeight": 480,
+        "rows": 16,
+        "rowsInView": 1,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 45,
+        "smallest": {
+          "width": 24,
+          "height": 24
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v0-many-1000x700-light-uk",
+      "variant": 0,
+      "state": "many",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 136,
+        "footerHeight": 480,
+        "rows": 16,
+        "rowsInView": 1,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 45,
+        "smallest": {
+          "width": 24,
+          "height": 24
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v0-many-1000x700-dark-en",
+      "variant": 0,
+      "state": "many",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 136,
+        "footerHeight": 480,
+        "rows": 16,
+        "rowsInView": 1,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 45,
+        "smallest": {
+          "width": 24,
+          "height": 24
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v0-many-1000x700-dark-uk",
+      "variant": 0,
+      "state": "many",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 136,
+        "footerHeight": 480,
+        "rows": 16,
+        "rowsInView": 1,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 45,
+        "smallest": {
+          "width": 24,
+          "height": 24
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v0-menu-1440x900-light-en",
+      "variant": 0,
+      "state": "menu",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 336,
+        "footerHeight": 480,
+        "rows": 6,
+        "rowsInView": 4,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 37,
+        "smallest": {
+          "width": 24,
+          "height": 24
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v0-create-1440x900-light-en",
+      "variant": 0,
+      "state": "create",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 212,
+        "footerHeight": 480,
+        "rows": 6,
+        "rowsInView": 2,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 28,
+        "smallest": {
+          "width": 24,
+          "height": 24
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-overview-1440x900-light-en",
+      "variant": 1,
+      "state": "overview",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-overview-1440x900-light-uk",
+      "variant": 1,
+      "state": "overview",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-overview-1440x900-dark-en",
+      "variant": 1,
+      "state": "overview",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-overview-1440x900-dark-uk",
+      "variant": 1,
+      "state": "overview",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-overview-1000x700-light-en",
+      "variant": 1,
+      "state": "overview",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 449,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-overview-1000x700-light-uk",
+      "variant": 1,
+      "state": "overview",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 449,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-overview-1000x700-dark-en",
+      "variant": 1,
+      "state": "overview",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 449,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-overview-1000x700-dark-uk",
+      "variant": 1,
+      "state": "overview",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 449,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-selected-1440x900-light-en",
+      "variant": 1,
+      "state": "selected",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-selected-1440x900-light-uk",
+      "variant": 1,
+      "state": "selected",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-selected-1440x900-dark-en",
+      "variant": 1,
+      "state": "selected",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-selected-1440x900-dark-uk",
+      "variant": 1,
+      "state": "selected",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-selected-1000x700-light-en",
+      "variant": 1,
+      "state": "selected",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 449,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-selected-1000x700-light-uk",
+      "variant": 1,
+      "state": "selected",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 449,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-selected-1000x700-dark-en",
+      "variant": 1,
+      "state": "selected",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 449,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-selected-1000x700-dark-uk",
+      "variant": 1,
+      "state": "selected",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 449,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-folded-1440x900-light-en",
+      "variant": 1,
+      "state": "folded",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 789,
+        "footerHeight": 29,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 18,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-folded-1440x900-light-uk",
+      "variant": 1,
+      "state": "folded",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 789,
+        "footerHeight": 29,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 18,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-folded-1440x900-dark-en",
+      "variant": 1,
+      "state": "folded",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 789,
+        "footerHeight": 29,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 18,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-folded-1440x900-dark-uk",
+      "variant": 1,
+      "state": "folded",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 789,
+        "footerHeight": 29,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 18,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-folded-1000x700-light-en",
+      "variant": 1,
+      "state": "folded",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 589,
+        "footerHeight": 29,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 18,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-folded-1000x700-light-uk",
+      "variant": 1,
+      "state": "folded",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 589,
+        "footerHeight": 29,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 18,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-folded-1000x700-dark-en",
+      "variant": 1,
+      "state": "folded",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 589,
+        "footerHeight": 29,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 18,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-folded-1000x700-dark-uk",
+      "variant": 1,
+      "state": "folded",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 589,
+        "footerHeight": 29,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 18,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-many-1440x900-light-en",
+      "variant": 1,
+      "state": "many",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 16,
+        "rowsInView": 16,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 46,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-many-1440x900-light-uk",
+      "variant": 1,
+      "state": "many",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 16,
+        "rowsInView": 16,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 46,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-many-1440x900-dark-en",
+      "variant": 1,
+      "state": "many",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 16,
+        "rowsInView": 16,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 46,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-many-1440x900-dark-uk",
+      "variant": 1,
+      "state": "many",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 16,
+        "rowsInView": 16,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 46,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-many-1000x700-light-en",
+      "variant": 1,
+      "state": "many",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 449,
+        "footerHeight": 169,
+        "rows": 16,
+        "rowsInView": 10,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 46,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-many-1000x700-light-uk",
+      "variant": 1,
+      "state": "many",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 449,
+        "footerHeight": 169,
+        "rows": 16,
+        "rowsInView": 10,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 46,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-many-1000x700-dark-en",
+      "variant": 1,
+      "state": "many",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 449,
+        "footerHeight": 169,
+        "rows": 16,
+        "rowsInView": 10,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 46,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-many-1000x700-dark-uk",
+      "variant": 1,
+      "state": "many",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 248,
+        "listHeight": 449,
+        "footerHeight": 169,
+        "rows": 16,
+        "rowsInView": 10,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 752
+      },
+      "controls": {
+        "inRail": 46,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-menu-1440x900-light-en",
+      "variant": 1,
+      "state": "menu",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 38,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v1-create-1440x900-light-en",
+      "variant": 1,
+      "state": "create",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 248,
+        "listHeight": 525,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 1,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1192
+      },
+      "controls": {
+        "inRail": 29,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-overview-1440x900-light-en",
+      "variant": 2,
+      "state": "overview",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 56,
+        "listHeight": 518,
+        "footerHeight": 193,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1384
+      },
+      "controls": {
+        "inRail": 16,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-overview-1440x900-light-uk",
+      "variant": 2,
+      "state": "overview",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 56,
+        "listHeight": 518,
+        "footerHeight": 193,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1384
+      },
+      "controls": {
+        "inRail": 16,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-overview-1440x900-dark-en",
+      "variant": 2,
+      "state": "overview",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 56,
+        "listHeight": 518,
+        "footerHeight": 193,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1384
+      },
+      "controls": {
+        "inRail": 16,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-overview-1440x900-dark-uk",
+      "variant": 2,
+      "state": "overview",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 56,
+        "listHeight": 518,
+        "footerHeight": 193,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1384
+      },
+      "controls": {
+        "inRail": 16,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-overview-1000x700-light-en",
+      "variant": 2,
+      "state": "overview",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 56,
+        "listHeight": 318,
+        "footerHeight": 193,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "main": {
+        "width": 944
+      },
+      "controls": {
+        "inRail": 16,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-overview-1000x700-light-uk",
+      "variant": 2,
+      "state": "overview",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 56,
+        "listHeight": 318,
+        "footerHeight": 193,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "main": {
+        "width": 944
+      },
+      "controls": {
+        "inRail": 16,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-overview-1000x700-dark-en",
+      "variant": 2,
+      "state": "overview",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 56,
+        "listHeight": 318,
+        "footerHeight": 193,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "main": {
+        "width": 944
+      },
+      "controls": {
+        "inRail": 16,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-overview-1000x700-dark-uk",
+      "variant": 2,
+      "state": "overview",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 56,
+        "listHeight": 318,
+        "footerHeight": 193,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "main": {
+        "width": 944
+      },
+      "controls": {
+        "inRail": 16,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-selected-1440x900-light-en",
+      "variant": 2,
+      "state": "selected",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 56,
+        "listHeight": 518,
+        "footerHeight": 193,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1384
+      },
+      "controls": {
+        "inRail": 16,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-selected-1440x900-light-uk",
+      "variant": 2,
+      "state": "selected",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 56,
+        "listHeight": 518,
+        "footerHeight": 193,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1384
+      },
+      "controls": {
+        "inRail": 16,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-selected-1440x900-dark-en",
+      "variant": 2,
+      "state": "selected",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 56,
+        "listHeight": 518,
+        "footerHeight": 193,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1384
+      },
+      "controls": {
+        "inRail": 16,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-selected-1440x900-dark-uk",
+      "variant": 2,
+      "state": "selected",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 56,
+        "listHeight": 518,
+        "footerHeight": 193,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1384
+      },
+      "controls": {
+        "inRail": 16,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-selected-1000x700-light-en",
+      "variant": 2,
+      "state": "selected",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 56,
+        "listHeight": 318,
+        "footerHeight": 193,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "main": {
+        "width": 944
+      },
+      "controls": {
+        "inRail": 16,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-selected-1000x700-light-uk",
+      "variant": 2,
+      "state": "selected",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 56,
+        "listHeight": 318,
+        "footerHeight": 193,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "main": {
+        "width": 944
+      },
+      "controls": {
+        "inRail": 16,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-selected-1000x700-dark-en",
+      "variant": 2,
+      "state": "selected",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 56,
+        "listHeight": 318,
+        "footerHeight": 193,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "main": {
+        "width": 944
+      },
+      "controls": {
+        "inRail": 16,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-selected-1000x700-dark-uk",
+      "variant": 2,
+      "state": "selected",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 56,
+        "listHeight": 318,
+        "footerHeight": 193,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "main": {
+        "width": 944
+      },
+      "controls": {
+        "inRail": 16,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-folded-1440x900-light-en",
+      "variant": 2,
+      "state": "folded",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 56,
+        "listHeight": 674,
+        "footerHeight": 37,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1384
+      },
+      "controls": {
+        "inRail": 12,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-folded-1440x900-light-uk",
+      "variant": 2,
+      "state": "folded",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 56,
+        "listHeight": 674,
+        "footerHeight": 37,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1384
+      },
+      "controls": {
+        "inRail": 12,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-folded-1440x900-dark-en",
+      "variant": 2,
+      "state": "folded",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 56,
+        "listHeight": 674,
+        "footerHeight": 37,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1384
+      },
+      "controls": {
+        "inRail": 12,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-folded-1440x900-dark-uk",
+      "variant": 2,
+      "state": "folded",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 56,
+        "listHeight": 674,
+        "footerHeight": 37,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1384
+      },
+      "controls": {
+        "inRail": 12,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-folded-1000x700-light-en",
+      "variant": 2,
+      "state": "folded",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 56,
+        "listHeight": 474,
+        "footerHeight": 37,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "main": {
+        "width": 944
+      },
+      "controls": {
+        "inRail": 12,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-folded-1000x700-light-uk",
+      "variant": 2,
+      "state": "folded",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 56,
+        "listHeight": 474,
+        "footerHeight": 37,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "main": {
+        "width": 944
+      },
+      "controls": {
+        "inRail": 12,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-folded-1000x700-dark-en",
+      "variant": 2,
+      "state": "folded",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 56,
+        "listHeight": 474,
+        "footerHeight": 37,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "main": {
+        "width": 944
+      },
+      "controls": {
+        "inRail": 12,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-folded-1000x700-dark-uk",
+      "variant": 2,
+      "state": "folded",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 56,
+        "listHeight": 474,
+        "footerHeight": 37,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "main": {
+        "width": 944
+      },
+      "controls": {
+        "inRail": 12,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-many-1440x900-light-en",
+      "variant": 2,
+      "state": "many",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 56,
+        "listHeight": 518,
+        "footerHeight": 193,
+        "rows": 16,
+        "rowsInView": 11,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1384
+      },
+      "controls": {
+        "inRail": 27,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-many-1440x900-light-uk",
+      "variant": 2,
+      "state": "many",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 56,
+        "listHeight": 518,
+        "footerHeight": 193,
+        "rows": 16,
+        "rowsInView": 11,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1384
+      },
+      "controls": {
+        "inRail": 27,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-many-1440x900-dark-en",
+      "variant": 2,
+      "state": "many",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 56,
+        "listHeight": 518,
+        "footerHeight": 193,
+        "rows": 16,
+        "rowsInView": 11,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1384
+      },
+      "controls": {
+        "inRail": 27,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-many-1440x900-dark-uk",
+      "variant": 2,
+      "state": "many",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 56,
+        "listHeight": 518,
+        "footerHeight": 193,
+        "rows": 16,
+        "rowsInView": 11,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1384
+      },
+      "controls": {
+        "inRail": 27,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-many-1000x700-light-en",
+      "variant": 2,
+      "state": "many",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 56,
+        "listHeight": 318,
+        "footerHeight": 193,
+        "rows": 16,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "main": {
+        "width": 944
+      },
+      "controls": {
+        "inRail": 27,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-many-1000x700-light-uk",
+      "variant": 2,
+      "state": "many",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 56,
+        "listHeight": 318,
+        "footerHeight": 193,
+        "rows": 16,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "main": {
+        "width": 944
+      },
+      "controls": {
+        "inRail": 27,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-many-1000x700-dark-en",
+      "variant": 2,
+      "state": "many",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 56,
+        "listHeight": 318,
+        "footerHeight": 193,
+        "rows": 16,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "main": {
+        "width": 944
+      },
+      "controls": {
+        "inRail": 27,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-many-1000x700-dark-uk",
+      "variant": 2,
+      "state": "many",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 56,
+        "listHeight": 318,
+        "footerHeight": 193,
+        "rows": 16,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": false
+      },
+      "main": {
+        "width": 944
+      },
+      "controls": {
+        "inRail": 27,
+        "smallest": {
+          "width": 26,
+          "height": 26
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-open-1440x900-light-en",
+      "variant": 2,
+      "state": "open",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 56,
+        "listHeight": 518,
+        "footerHeight": 193,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": true
+      },
+      "main": {
+        "width": 1384
+      },
+      "controls": {
+        "inRail": 42,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-open-1440x900-light-uk",
+      "variant": 2,
+      "state": "open",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 56,
+        "listHeight": 518,
+        "footerHeight": 193,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": true
+      },
+      "main": {
+        "width": 1384
+      },
+      "controls": {
+        "inRail": 42,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-open-1440x900-dark-en",
+      "variant": 2,
+      "state": "open",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 56,
+        "listHeight": 518,
+        "footerHeight": 193,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": true
+      },
+      "main": {
+        "width": 1384
+      },
+      "controls": {
+        "inRail": 42,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-open-1440x900-dark-uk",
+      "variant": 2,
+      "state": "open",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 56,
+        "listHeight": 518,
+        "footerHeight": 193,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": true
+      },
+      "main": {
+        "width": 1384
+      },
+      "controls": {
+        "inRail": 42,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-open-1000x700-light-en",
+      "variant": 2,
+      "state": "open",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 56,
+        "listHeight": 318,
+        "footerHeight": 193,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": true
+      },
+      "main": {
+        "width": 944
+      },
+      "controls": {
+        "inRail": 42,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-open-1000x700-light-uk",
+      "variant": 2,
+      "state": "open",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 56,
+        "listHeight": 318,
+        "footerHeight": 193,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": true
+      },
+      "main": {
+        "width": 944
+      },
+      "controls": {
+        "inRail": 42,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-open-1000x700-dark-en",
+      "variant": 2,
+      "state": "open",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 56,
+        "listHeight": 318,
+        "footerHeight": 193,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": true
+      },
+      "main": {
+        "width": 944
+      },
+      "controls": {
+        "inRail": 42,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-open-1000x700-dark-uk",
+      "variant": 2,
+      "state": "open",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 56,
+        "listHeight": 318,
+        "footerHeight": 193,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": true
+      },
+      "main": {
+        "width": 944
+      },
+      "controls": {
+        "inRail": 42,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-open-many-1440x900-light-en",
+      "variant": 2,
+      "state": "open-many",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 56,
+        "listHeight": 518,
+        "footerHeight": 193,
+        "rows": 16,
+        "rowsInView": 11,
+        "clippedNames": 0,
+        "overflowX": true
+      },
+      "main": {
+        "width": 1384
+      },
+      "controls": {
+        "inRail": 74,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-open-many-1440x900-light-uk",
+      "variant": 2,
+      "state": "open-many",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 56,
+        "listHeight": 518,
+        "footerHeight": 193,
+        "rows": 16,
+        "rowsInView": 11,
+        "clippedNames": 0,
+        "overflowX": true
+      },
+      "main": {
+        "width": 1384
+      },
+      "controls": {
+        "inRail": 74,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-open-many-1440x900-dark-en",
+      "variant": 2,
+      "state": "open-many",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 56,
+        "listHeight": 518,
+        "footerHeight": 193,
+        "rows": 16,
+        "rowsInView": 11,
+        "clippedNames": 0,
+        "overflowX": true
+      },
+      "main": {
+        "width": 1384
+      },
+      "controls": {
+        "inRail": 74,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-open-many-1440x900-dark-uk",
+      "variant": 2,
+      "state": "open-many",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 56,
+        "listHeight": 518,
+        "footerHeight": 193,
+        "rows": 16,
+        "rowsInView": 11,
+        "clippedNames": 0,
+        "overflowX": true
+      },
+      "main": {
+        "width": 1384
+      },
+      "controls": {
+        "inRail": 74,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-open-many-1000x700-light-en",
+      "variant": 2,
+      "state": "open-many",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 56,
+        "listHeight": 318,
+        "footerHeight": 193,
+        "rows": 16,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": true
+      },
+      "main": {
+        "width": 944
+      },
+      "controls": {
+        "inRail": 74,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-open-many-1000x700-light-uk",
+      "variant": 2,
+      "state": "open-many",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 56,
+        "listHeight": 318,
+        "footerHeight": 193,
+        "rows": 16,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": true
+      },
+      "main": {
+        "width": 944
+      },
+      "controls": {
+        "inRail": 74,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-open-many-1000x700-dark-en",
+      "variant": 2,
+      "state": "open-many",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 56,
+        "listHeight": 318,
+        "footerHeight": 193,
+        "rows": 16,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": true
+      },
+      "main": {
+        "width": 944
+      },
+      "controls": {
+        "inRail": 74,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-open-many-1000x700-dark-uk",
+      "variant": 2,
+      "state": "open-many",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 56,
+        "listHeight": 318,
+        "footerHeight": 193,
+        "rows": 16,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": true
+      },
+      "main": {
+        "width": 944
+      },
+      "controls": {
+        "inRail": 74,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-menu-1440x900-light-en",
+      "variant": 2,
+      "state": "menu",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 56,
+        "listHeight": 518,
+        "footerHeight": 193,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": true
+      },
+      "main": {
+        "width": 1384
+      },
+      "controls": {
+        "inRail": 55,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-create-1440x900-light-en",
+      "variant": 2,
+      "state": "create",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 56,
+        "listHeight": 518,
+        "footerHeight": 193,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": true
+      },
+      "main": {
+        "width": 1384
+      },
+      "controls": {
+        "inRail": 46,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v2-rail-menu-1440x900-light-en",
+      "variant": 2,
+      "state": "rail-menu",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 56,
+        "listHeight": 518,
+        "footerHeight": 193,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 0,
+        "overflowX": true
+      },
+      "main": {
+        "width": 1384
+      },
+      "controls": {
+        "inRail": 54,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v3-overview-1440x900-light-en",
+      "variant": 3,
+      "state": "overview",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 264,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 4,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1176
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v3-overview-1440x900-light-uk",
+      "variant": 3,
+      "state": "overview",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 264,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 4,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1176
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v3-overview-1440x900-dark-en",
+      "variant": 3,
+      "state": "overview",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 264,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 4,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1176
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v3-overview-1440x900-dark-uk",
+      "variant": 3,
+      "state": "overview",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 264,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 4,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1176
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v3-overview-1000x700-light-en",
+      "variant": 3,
+      "state": "overview",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 264,
+        "listHeight": 449,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 4,
+        "overflowX": false
+      },
+      "main": {
+        "width": 736
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v3-overview-1000x700-light-uk",
+      "variant": 3,
+      "state": "overview",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 264,
+        "listHeight": 449,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 4,
+        "overflowX": false
+      },
+      "main": {
+        "width": 736
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v3-overview-1000x700-dark-en",
+      "variant": 3,
+      "state": "overview",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 264,
+        "listHeight": 449,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 4,
+        "overflowX": false
+      },
+      "main": {
+        "width": 736
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v3-overview-1000x700-dark-uk",
+      "variant": 3,
+      "state": "overview",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 264,
+        "listHeight": 449,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 4,
+        "overflowX": false
+      },
+      "main": {
+        "width": 736
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v3-selected-1440x900-light-en",
+      "variant": 3,
+      "state": "selected",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 264,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 4,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1176
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v3-selected-1440x900-light-uk",
+      "variant": 3,
+      "state": "selected",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 264,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 4,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1176
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v3-selected-1440x900-dark-en",
+      "variant": 3,
+      "state": "selected",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 264,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 4,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1176
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v3-selected-1440x900-dark-uk",
+      "variant": 3,
+      "state": "selected",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 264,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 4,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1176
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v3-selected-1000x700-light-en",
+      "variant": 3,
+      "state": "selected",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 264,
+        "listHeight": 449,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 4,
+        "overflowX": false
+      },
+      "main": {
+        "width": 736
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v3-selected-1000x700-light-uk",
+      "variant": 3,
+      "state": "selected",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 264,
+        "listHeight": 449,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 4,
+        "overflowX": false
+      },
+      "main": {
+        "width": 736
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v3-selected-1000x700-dark-en",
+      "variant": 3,
+      "state": "selected",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 264,
+        "listHeight": 449,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 4,
+        "overflowX": false
+      },
+      "main": {
+        "width": 736
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v3-selected-1000x700-dark-uk",
+      "variant": 3,
+      "state": "selected",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 264,
+        "listHeight": 449,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 4,
+        "overflowX": false
+      },
+      "main": {
+        "width": 736
+      },
+      "controls": {
+        "inRail": 25,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v3-folded-1440x900-light-en",
+      "variant": 3,
+      "state": "folded",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 264,
+        "listHeight": 789,
+        "footerHeight": 29,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 4,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1176
+      },
+      "controls": {
+        "inRail": 18,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v3-folded-1440x900-light-uk",
+      "variant": 3,
+      "state": "folded",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 264,
+        "listHeight": 789,
+        "footerHeight": 29,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 4,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1176
+      },
+      "controls": {
+        "inRail": 18,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v3-folded-1440x900-dark-en",
+      "variant": 3,
+      "state": "folded",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 264,
+        "listHeight": 789,
+        "footerHeight": 29,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 4,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1176
+      },
+      "controls": {
+        "inRail": 18,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v3-folded-1440x900-dark-uk",
+      "variant": 3,
+      "state": "folded",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 264,
+        "listHeight": 789,
+        "footerHeight": 29,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 4,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1176
+      },
+      "controls": {
+        "inRail": 18,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v3-folded-1000x700-light-en",
+      "variant": 3,
+      "state": "folded",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 264,
+        "listHeight": 589,
+        "footerHeight": 29,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 4,
+        "overflowX": false
+      },
+      "main": {
+        "width": 736
+      },
+      "controls": {
+        "inRail": 18,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v3-folded-1000x700-light-uk",
+      "variant": 3,
+      "state": "folded",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 264,
+        "listHeight": 589,
+        "footerHeight": 29,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 4,
+        "overflowX": false
+      },
+      "main": {
+        "width": 736
+      },
+      "controls": {
+        "inRail": 18,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v3-folded-1000x700-dark-en",
+      "variant": 3,
+      "state": "folded",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 264,
+        "listHeight": 589,
+        "footerHeight": 29,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 4,
+        "overflowX": false
+      },
+      "main": {
+        "width": 736
+      },
+      "controls": {
+        "inRail": 18,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v3-folded-1000x700-dark-uk",
+      "variant": 3,
+      "state": "folded",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 264,
+        "listHeight": 589,
+        "footerHeight": 29,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 4,
+        "overflowX": false
+      },
+      "main": {
+        "width": 736
+      },
+      "controls": {
+        "inRail": 18,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v3-many-1440x900-light-en",
+      "variant": 3,
+      "state": "many",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 264,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 16,
+        "rowsInView": 11,
+        "clippedNames": 5,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1176
+      },
+      "controls": {
+        "inRail": 46,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v3-many-1440x900-light-uk",
+      "variant": 3,
+      "state": "many",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 264,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 16,
+        "rowsInView": 11,
+        "clippedNames": 5,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1176
+      },
+      "controls": {
+        "inRail": 46,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v3-many-1440x900-dark-en",
+      "variant": 3,
+      "state": "many",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 264,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 16,
+        "rowsInView": 11,
+        "clippedNames": 5,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1176
+      },
+      "controls": {
+        "inRail": 46,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v3-many-1440x900-dark-uk",
+      "variant": 3,
+      "state": "many",
+      "width": 1440,
+      "height": 900,
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 264,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 16,
+        "rowsInView": 11,
+        "clippedNames": 5,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1176
+      },
+      "controls": {
+        "inRail": 46,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v3-many-1000x700-light-en",
+      "variant": 3,
+      "state": "many",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 264,
+        "listHeight": 449,
+        "footerHeight": 169,
+        "rows": 16,
+        "rowsInView": 5,
+        "clippedNames": 5,
+        "overflowX": false
+      },
+      "main": {
+        "width": 736
+      },
+      "controls": {
+        "inRail": 46,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v3-many-1000x700-light-uk",
+      "variant": 3,
+      "state": "many",
+      "width": 1000,
+      "height": 700,
+      "scheme": "light",
+      "lang": "uk",
+      "rail": {
+        "width": 264,
+        "listHeight": 449,
+        "footerHeight": 169,
+        "rows": 16,
+        "rowsInView": 5,
+        "clippedNames": 5,
+        "overflowX": false
+      },
+      "main": {
+        "width": 736
+      },
+      "controls": {
+        "inRail": 46,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v3-many-1000x700-dark-en",
+      "variant": 3,
+      "state": "many",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "en",
+      "rail": {
+        "width": 264,
+        "listHeight": 449,
+        "footerHeight": 169,
+        "rows": 16,
+        "rowsInView": 5,
+        "clippedNames": 5,
+        "overflowX": false
+      },
+      "main": {
+        "width": 736
+      },
+      "controls": {
+        "inRail": 46,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v3-many-1000x700-dark-uk",
+      "variant": 3,
+      "state": "many",
+      "width": 1000,
+      "height": 700,
+      "scheme": "dark",
+      "lang": "uk",
+      "rail": {
+        "width": 264,
+        "listHeight": 449,
+        "footerHeight": 169,
+        "rows": 16,
+        "rowsInView": 5,
+        "clippedNames": 5,
+        "overflowX": false
+      },
+      "main": {
+        "width": 736
+      },
+      "controls": {
+        "inRail": 46,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v3-menu-1440x900-light-en",
+      "variant": 3,
+      "state": "menu",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 264,
+        "listHeight": 649,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 4,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1176
+      },
+      "controls": {
+        "inRail": 38,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    },
+    {
+      "frame": "v3-create-1440x900-light-en",
+      "variant": 3,
+      "state": "create",
+      "width": 1440,
+      "height": 900,
+      "scheme": "light",
+      "lang": "en",
+      "rail": {
+        "width": 264,
+        "listHeight": 525,
+        "footerHeight": 169,
+        "rows": 6,
+        "rowsInView": 6,
+        "clippedNames": 4,
+        "overflowX": false
+      },
+      "main": {
+        "width": 1176
+      },
+      "controls": {
+        "inRail": 29,
+        "smallest": {
+          "width": 22,
+          "height": 22
+        }
+      },
+      "pageErrors": []
+    }
+  ],
+  "failures": []
+}
