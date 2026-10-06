@@ -97,40 +97,64 @@
       "high": "Top of the Inbox",
       "low": "Bottom of the Inbox"
     },
+    "built/1440-light-en conversation": {
+      "link": "To task: nothing is sent to the agent"
+    },
     "built/1440-light-uk": {
       "hide": "Сховати: нічого не зупиняється",
       "high": "Угорі Вхідних",
       "low": "Унизу Вхідних"
+    },
+    "built/1440-light-uk conversation": {
+      "link": "До задачі: агентові нічого не надсилається"
     },
     "built/1440-dark-en": {
       "hide": "Hide: nothing stops",
       "high": "Top of the Inbox",
       "low": "Bottom of the Inbox"
     },
+    "built/1440-dark-en conversation": {
+      "link": "To task: nothing is sent to the agent"
+    },
     "built/1440-dark-uk": {
       "hide": "Сховати: нічого не зупиняється",
       "high": "Угорі Вхідних",
       "low": "Унизу Вхідних"
+    },
+    "built/1440-dark-uk conversation": {
+      "link": "До задачі: агентові нічого не надсилається"
     },
     "built/1000-light-en": {
       "hide": "Hide: nothing stops",
       "high": "Top of the Inbox",
       "low": "Bottom of the Inbox"
     },
+    "built/1000-light-en conversation": {
+      "link": "To task: nothing is sent to the agent"
+    },
     "built/1000-light-uk": {
       "hide": "Сховати: нічого не зупиняється",
       "high": "Угорі Вхідних",
       "low": "Унизу Вхідних"
+    },
+    "built/1000-light-uk conversation": {
+      "link": "До задачі: агентові нічого не надсилається"
     },
     "built/1000-dark-en": {
       "hide": "Hide: nothing stops",
       "high": "Top of the Inbox",
       "low": "Bottom of the Inbox"
     },
+    "built/1000-dark-en conversation": {
+      "link": "To task: nothing is sent to the agent"
+    },
     "built/1000-dark-uk": {
       "hide": "Сховати: нічого не зупиняється",
       "high": "Угорі Вхідних",
       "low": "Унизу Вхідних"
+    },
+    "built/1000-dark-uk conversation": {
+      "link": "До задачі: агентові нічого не надсилається"
     },
     "built/390-light-en phone-task": {
       "hide": "Hide: nothing stops"
@@ -254,8 +278,8 @@
       "maxShift": 0,
       "covered": 0,
       "sides": {
-        "below": 44,
-        "beside": 20
+        "below": 45,
+        "beside": 19
       }
     },
     "built/1000-light-uk": {
@@ -710,7 +734,7 @@
         963,
         371,
         300,
-        162.4
+        176.4
       ],
       "scrolls": false,
       "inside": true,
@@ -730,7 +754,7 @@
         963,
         371,
         300,
-        332.6
+        346.6
       ],
       "scrolls": false,
       "inside": true,
@@ -1116,7 +1140,7 @@
         963,
         371,
         300,
-        162.4
+        176.4
       ],
       "scrolls": false,
       "inside": true,
@@ -1136,7 +1160,7 @@
         963,
         371,
         300,
-        332.6
+        346.6
       ],
       "scrolls": false,
       "inside": true,
@@ -1522,7 +1546,7 @@
         963,
         371,
         300,
-        162.4
+        176.4
       ],
       "scrolls": false,
       "inside": true,
@@ -1542,7 +1566,7 @@
         963,
         371,
         300,
-        332.6
+        346.6
       ],
       "scrolls": false,
       "inside": true,
@@ -1928,7 +1952,7 @@
         963,
         371,
         300,
-        162.4
+        176.4
       ],
       "scrolls": false,
       "inside": true,
@@ -1948,7 +1972,7 @@
         963,
         371,
         300,
-        332.6
+        346.6
       ],
       "scrolls": false,
       "inside": true,
@@ -2334,7 +2358,7 @@
         619,
         273,
         300,
-        162.4
+        176.4
       ],
       "scrolls": false,
       "inside": true,
@@ -2354,7 +2378,7 @@
         619,
         273,
         300,
-        332.6
+        346.6
       ],
       "scrolls": false,
       "inside": true,
@@ -2740,7 +2764,7 @@
         619,
         273,
         300,
-        162.4
+        176.4
       ],
       "scrolls": false,
       "inside": true,
@@ -2760,7 +2784,7 @@
         619,
         273,
         300,
-        332.6
+        346.6
       ],
       "scrolls": false,
       "inside": true,
@@ -3146,7 +3170,7 @@
         619,
         273,
         300,
-        162.4
+        176.4
       ],
       "scrolls": false,
       "inside": true,
@@ -3166,7 +3190,7 @@
         619,
         273,
         300,
-        332.6
+        346.6
       ],
       "scrolls": false,
       "inside": true,
@@ -3552,7 +3576,7 @@
         619,
         273,
         300,
-        162.4
+        176.4
       ],
       "scrolls": false,
       "inside": true,
@@ -3572,7 +3596,7 @@
         619,
         273,
         300,
-        332.6
+        346.6
       ],
       "scrolls": false,
       "inside": true,
