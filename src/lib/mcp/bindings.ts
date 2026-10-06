@@ -1689,7 +1689,7 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
     clientRequestId: requestId(args),
   };
   const result = mutateTasksFile((state) => {
-    const outcome = createTask(state.tasks, input, state.recentCreates, { explicit: true, actor: "agent", conversationId: caller?.conversationId ?? undefined, seatHolding: taskSeatHoldingSnapshot() });
+    const outcome = createTask(state.tasks, input, state.recentCreates, { explicit: true, actor: "agent", conversationId: caller?.conversationId ?? undefined, seatHolding: taskSeatHoldingSnapshot(), ...(dependencies ? { statusActor: pauseResumeActorOf(dependencies) } : {}) });
     return {
       state: outcome.ok && !outcome.replay ? { tasks: outcome.tasks, recentCreates: outcome.recentCreates } : undefined,
       result: outcome,
@@ -1778,7 +1778,7 @@ async function updateBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
     const noteAuthor = caller.kind === "manager"
       ? { kind: "orchestrator" as const, conversationId: caller.conversationId }
       : { kind: "agent" as const, conversationId: caller.conversationId };
-    const outcome = patchTask(tasks, taskId, patch as PatchTaskInput, undefined, { requirePlacementGuards: true, actor: "agent", conversationId: caller.conversationId ?? undefined, noteAuthor, seatHolding: taskSeatHoldingSnapshot(), explicit: true,
+    const outcome = patchTask(tasks, taskId, patch as PatchTaskInput, undefined, { requirePlacementGuards: true, actor: "agent", conversationId: caller.conversationId ?? undefined, noteAuthor, statusActor: pauseResumeActorOf(dependencies), seatHolding: taskSeatHoldingSnapshot(), explicit: true,
       workLinks: taskWorkLinkContext(() => dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? []) });
     if (outcome.ok) changedFields = changedFieldNames(before, outcome.task);
     return { tasks: outcome.ok ? outcome.tasks : undefined, result: outcome };
