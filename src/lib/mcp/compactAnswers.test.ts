@@ -364,7 +364,7 @@ test("agent_activity compact rows drop paths, host detail and the reports (#1845
     stalledCount: 1,
     stalledConfirmedCount: 1,
     conversations: Array.from({ length: 20 }, () => row),
-    selection: { scope: "project", scanned: 900, matched: 20, selected: 20, recovered: 0, recoveryTruncated: false, hydrated: 20, unreadable: 0, projected: 0, generation: 12, cacheStatus: "hit", freshScan: false, evidenceBytes: 400_000, budget: "complete" },
+    selection: { scope: "project", scanned: 900, matched: 20, selected: 20, recovered: 0, recoveryTruncated: false, recoveryPending: 0, hydrated: 20, unreadable: 0, projected: 0, generation: 12, cacheStatus: "hit", freshScan: false, evidenceBytes: 400_000, budget: "complete" },
     timings: { inventorySelectionMs: 3, journalProjectionMs: 5, evidenceReadMs: 40, serializationMs: 1, totalMs: 49 },
   };
   const compact = compactLiveness(snapshot as never);

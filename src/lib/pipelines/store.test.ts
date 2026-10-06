@@ -43,6 +43,38 @@ async function isolatedDelivery(run: (root: string) => Promise<void> | void): Pr
   }
 }
 
+test.each([false, true])("a closed stageless draft round-trips and archives (pinned base: %s)", async (pinned) => isolatedDelivery(async () => {
+  const pipeline = buildPipeline({ id: "empty-closed", task: "Discard empty draft", project: "fixture", repoDir: "/repo",
+    stages: [], srcPath: null, srcConversationId: null, now: "2026-07-01T00:00:00.000Z", state: "draft" });
+  if (pinned) {
+    pipeline.baseBranch = "main";
+    pipeline.baseRef = "a".repeat(40);
+    pipeline.lastPassedCommit = pipeline.baseRef;
+  }
+  savePipelines([pipeline]);
+  expect(loadPipelines()).toEqual([pipeline]);
+  pipeline.state = "closed";
+  pipeline.closedAt = "2026-07-02T00:00:00.000Z";
+  pipeline.hiddenAt = pipeline.closedAt;
+  savePipelines([pipeline]);
+  expect(findPipelineRecord(pipeline.id)).toEqual(pipeline);
+  expect(loadPipelinesForStartup()).toEqual([pipeline]);
+  expect(await archiveSettledPipelines(Date.parse("2026-07-10T00:00:00.000Z"))).toBe(1);
+  expect(loadPipelines()).toEqual([]);
+  expect(loadArchivedPipelines()).toEqual([pipeline]);
+  expect(findPipelineRecord(pipeline.id)).toEqual(pipeline);
+}));
+
+test.each(["provisioning", "running", "needs_decision", "needs_review", "paused", "completed"] as const)(
+  "a stageless pipeline still cannot be stored as %s", async (state) => isolatedDelivery(() => {
+    const pipeline = buildPipeline({ id: "empty-invalid", task: "Empty graph", project: "fixture", repoDir: "/repo",
+      stages: [], srcPath: null, srcConversationId: null, now: "2026-07-01T00:00:00.000Z", state: "draft" });
+    pipeline.state = state;
+    expect(() => savePipelines([pipeline])).toThrow("malformed pipeline record");
+    expect(loadPipelines()).toEqual([]);
+  }),
+);
+
 test("promoted Viewer loads historical severity-only verdicts before hot-state activation", async () => isolatedDelivery(async (root) => {
   const pipeline = deliveryFixture("legacy-verdict");
   pipeline.state = "running";
