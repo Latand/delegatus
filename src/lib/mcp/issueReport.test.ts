@@ -440,6 +440,10 @@ const additionalPrivateReports: [string, string][] = [
   ["quote", "The operator wrote <q>restart every agent now</q>."],
   ["quote", "Оператор написав у своєму повідомленні `перезапусти всіх агентів зараз`."],
   ["quote", "Користувач сказала мені <q>перезапусти всіх агентів зараз</q>."],
+  ["quote", "The operator wrote in\nthe chat `restart every agent now`."],
+  ["quote", "The operator told me in\r\nthe chat <q>restart every agent now</q>."],
+  ["quote", "Оператор написав у\nсвоєму повідомленні `перезапусти всіх агентів зараз`."],
+  ["quote", "Користувач сказала мені у\r\nповідомленні <q>перезапусти всіх агентів зараз</q>."],
   ["host", "Machine: remote-worker"],
   ["host", "node = remote-worker"],
   ["host", '{"machine":"remote-worker"}'],
@@ -474,7 +478,7 @@ test.each(additionalPrivateForms)("legacy private report $index form $form is re
 
 test("unpopulated machine fields and technical spans after a speech sentence stay publishable", async () => {
   const h = harness({ deny: { accounts: [], people: [], local: [], projects: [] } });
-  const report = { title: REPORT.title, body: "The machine field and node field were missing. The operator asked for an investigation. The error was `connection refused during startup`; see src/lib/mcp/bindings.ts:1767." };
+  const report = { title: REPORT.title, body: "The machine field and node field were missing. The operator asked for an investigation.\nThe error was `connection refused during startup`; see src/lib/mcp/bindings.ts:1767." };
   const digest = await previewed(h, report);
   h.operatorSays((await shown(h, digest)).uk);
   expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });

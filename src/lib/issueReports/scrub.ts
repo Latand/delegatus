@@ -82,9 +82,10 @@ const SPEAKER_LINE = /(?:^|\n)\s*(?:[-*+]\s+)?[*_[(<]{0,3}(?:user|operator|human
    Technical code spans without that attribution stay readable. */
 const OPERATOR_SPEECH = "(?:wrote|said|told|replied|asked|написа[вл]а?|сказа[вл]а?|відпові[вл]а?|попроси[вл]а?)";
 const OPERATOR = "(?:operator|user|human|оператор|користувач|людина)";
-/* Attribution can contain arbitrary intervening words in the same clause.
-   A sentence boundary ends it, so a later technical span stays readable. */
-const SPEECH_CONNECTOR = "[^\x60‹›“”«»\"'‘’<>.!?;:\\r\\n]*";
+/* Attribution can contain arbitrary intervening words and Markdown soft
+   wraps in the same clause. A sentence boundary ends it, so a later
+   technical span stays readable. */
+const SPEECH_CONNECTOR = "[^\x60‹›“”«»\"'‘’<>.!?;:]*";
 const QUOTE_OPEN = "(?:[\x60‹“«\"'‘]|<(?:code|q)\\b[^<>]*>)";
 const ATTRIBUTED_OPERATOR_WORDS = new RegExp([
   `(?<!\\p{L})(?:${OPERATOR}\\s*(?:`,
