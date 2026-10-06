@@ -127,10 +127,16 @@ of its own. Colours, type steps, radii and spacing are the existing tokens.
 Three things are shared by every look.
 
 - **The runtime grid.** Model, effort, speed and account are one grid of
-  captioned cells. All cells stand on one row when each gets 150 px, which is
-  what «Account B · active» and «GPT-6-Astra» need; otherwise the grid has two
-  columns, so Codex reads as two rows of two and no select is left alone on a
-  row. An odd last cell (Claude with an account) takes the whole row.
+  captioned cells of equal width. All cells stand on one row when a cell holds
+  the widest chosen value whole, arrow included, and is at least 150 px, with
+  the 6 px gaps between cells counted. The width a value needs is the
+  browser's own: the grid reads it from a copy of the select that holds that
+  one option. Otherwise the grid has two columns, so Codex reads as two rows
+  of two and no select is left alone on a row. An odd last cell (Claude with
+  an account) takes the whole row. Look 2 at 1000x700 is the case that
+  decided this: its open «runtime» group gave each of four cells about 145 px,
+  and «Account B · активний» lost its last letter under the arrow. The group
+  now stands as two rows of two there.
 - **The engine chips at the 32 px step** (`roomy`), the size the orchestrator's
   create panel uses. On the phone each chip's touch area is 44 px tall.
 - **A caption over every field**: model, effort, speed, account, directory,
@@ -263,10 +269,12 @@ more piece of chrome (the chip over the cut edge). In return the columns never m
 opens.
 
 **All three, on the phone at 320 px.** The phone draws its selects at 16 px.
-In a two-column grid «Account B · active» and the product's own
-«speed: default» are cut by a few letters at 320 px; at 390 px only the
-longest account label is. One column would show them whole and leave every
-select alone on its row.
+In a two-column grid the account label is cut there: «Account B · active» by
+18 to 26 px at 320 px, and «Account B · активний» by 9 to 17 px at 390 px and
+by 44 to 52 px at 320 px, where the product's own «швидкість: дефолт» is cut
+as well. The driver records each of these under `cut`; at 390 px in English
+nothing is cut. One column would show them whole and leave every select alone
+on its row.
 
 ## 7. Recommendation
 
@@ -308,7 +316,12 @@ Beside the options, the driver measures what the looks promise
 (`geometry` in `evidence/new-agent-redesign/options.json`):
 
 - looks 1 to 3, every size: four runtime selects, none alone on its row; on
-  the desktop widths (1440, 1000, 760) no chosen value is cut by its select;
+  the desktop widths (1440, 1000, 760) no chosen value is cut by its select.
+  A value is cut when the select is narrower than the browser draws the same
+  select around that one value (`spare` is the smallest difference, in px,
+  among the four). The earlier measure compared the text's width with the box
+  less 16 px for the arrow, which is less than Chrome's arrow takes, and it
+  passed the cut select of look 2 at 1000x700 in Ukrainian;
 - look 1: the model starts within 28 px of the engine chips, and the refusal
   starts below the model;
 - look 2: the three words of the summary share one row at 1440, 1000, 760 and

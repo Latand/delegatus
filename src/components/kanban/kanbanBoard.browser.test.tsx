@@ -18107,19 +18107,24 @@ describe("creating a new agent: today's draft and three numbered looks", () => {
             };
             const within = (rect: { left: number; top: number; right: number; bottom: number }) => rect.left >= 0 && rect.top >= 0 && rect.right <= viewport.width && rect.bottom <= viewport.height;
             /* The four runtime selects of the look, as drawn: where each stands, and whether its chosen value
-               is cut by the box (its text measured in the select's own font against the room the box leaves). */
+               is cut by the box (the width the browser gives that value alone against the width the box has). */
             const runtimeSelects = () => inner.evaluate((names) => {
               const pane = [...document.querySelectorAll<HTMLElement>(`[aria-label="${names.pane}"]`)].find((element) => element.getClientRects().length);
-              const canvas = document.createElement("canvas").getContext("2d")!;
               return names.selects.flatMap((name) => {
                 const select = pane?.querySelector<HTMLSelectElement>(`select[aria-label="${name}"]`);
                 if (!select || !select.getClientRects().length) return [];
-                const style = getComputedStyle(select);
-                canvas.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
                 const text = select.selectedOptions[0]?.textContent ?? "";
-                const room = select.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - 16;
                 const rect = select.getBoundingClientRect();
-                return [{ name, text, top: Math.round(rect.top), cut: Math.ceil(canvas.measureText(text).width) > Math.floor(room) }];
+                /* The browser's own answer, arrow included: the same select holding that one option at its natural width. */
+                const probe = select.cloneNode(false) as HTMLSelectElement;
+                probe.removeAttribute("id");
+                probe.removeAttribute("aria-label");
+                probe.append(new Option(text));
+                probe.style.cssText = "position:absolute;visibility:hidden;width:max-content;min-width:0;max-width:none;";
+                select.parentElement!.append(probe);
+                const needs = Math.ceil(probe.getBoundingClientRect().width);
+                probe.remove();
+                return [{ name, text, top: Math.round(rect.top), has: Math.round(rect.width), needs, cut: needs > Math.round(rect.width) }];
               });
             }, { pane: tr("draft.paneAria"), selects: [tr("draft.modelAria"), tr("draft.reasoningAria"), tr("draft.speedAria"), tr("draft.accountAria", { engine: "Codex" })] });
             /* What the rearranged looks promise about the runtime: no value cut, and no select alone on its row. */
@@ -18127,7 +18132,7 @@ describe("creating a new agent: today's draft and three numbered looks", () => {
               const selects = await runtimeSelects();
               const rows = new Map<number, number>();
               for (const select of selects) rows.set(select.top, (rows.get(select.top) ?? 0) + 1);
-              const geometry = { cut: selects.filter((select) => select.cut).map((select) => select.text), alone: [...rows.values()].filter((count) => count === 1).length, rows: rows.size };
+              const geometry = { cut: selects.filter((select) => select.cut).map((select) => select.text), alone: [...rows.values()].filter((count) => count === 1).length, rows: rows.size, spare: selects.length ? Math.min(...selects.map((select) => select.has - select.needs)) : null };
               if (look > 0) {
                 expect(selects.length, `${label(state)} runtime selects`).toBe(4);
                 expect(geometry.alone, `${label(state)} a select alone on its row`).toBe(0);

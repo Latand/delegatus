@@ -179,12 +179,30 @@ function Engines({ parts }: { parts: DraftLayoutParts }) {
   return <EngineRadioGroup engine={parts.launch.engine} engines={AGENT_LAUNCH_ENGINES} roomy disabled={parts.fieldsDisabled} onChange={parts.launch.setEngine} />;
 }
 
-/** A cell that fits «Account B · active» and «GPT-6-Astra» without cutting either. */
+/** The narrowest a runtime cell stands in one row, and the gap between two cells (`gap-x-1.5`). */
 const RUNTIME_CELL = 150;
+const RUNTIME_GAP = 6;
 
 /**
- * Model, effort, speed and account as one grid of captioned cells: one row when every cell fits, two columns
- * otherwise, and an odd last cell takes the whole row. The selects are the product's own, in the order
+ * The width a select needs to draw its chosen value whole, arrow included: the browser's own answer, read
+ * from a copy of the select that holds that one option and takes its natural width.
+ */
+function chosenValueWidth(select: HTMLSelectElement): number {
+  const probe = select.cloneNode(false) as HTMLSelectElement;
+  probe.removeAttribute("id");
+  probe.removeAttribute("aria-label");
+  probe.setAttribute("aria-hidden", "true");
+  probe.append(new Option(select.selectedOptions[0]?.textContent ?? ""));
+  probe.style.cssText = "position:absolute;visibility:hidden;width:max-content;min-width:0;max-width:none;";
+  select.parentElement?.append(probe);
+  const width = probe.getBoundingClientRect().width;
+  probe.remove();
+  return Math.ceil(width);
+}
+
+/**
+ * Model, effort, speed and account as one grid of captioned cells: one row when the widest chosen value fits
+ * a cell (never under 150 px each, gaps counted), two columns otherwise, and an odd last cell takes the whole row. The selects are the product's own, in the order
  * `ReasoningControls` and `LaunchAccountSelect` render them; the grid only seats each under its caption.
  */
 function RuntimeGrid({ parts, roomy }: { parts: DraftLayoutParts; roomy?: boolean }) {
@@ -195,15 +213,26 @@ function RuntimeGrid({ parts, roomy }: { parts: DraftLayoutParts; roomy?: boolea
   const cells = [captions.model, captions.effort, ...(launch.engine === "codex" ? [captions.speed] : []), ...(launch.accounts.length ? [captions.account] : [])];
   const count = cells.length;
   const [wide, setWide] = useState(false);
+  const chosen = `${launch.engine}/${launch.model}/${launch.effort}/${launch.speed}/${launch.accountId ?? ""}/${captions.account}`;
   useLayoutEffect(() => {
     const element = grid.current;
     if (!element) return;
-    const measure = () => setWide(element.clientWidth >= count * RUNTIME_CELL);
+    let live = true;
+    /* One row only when the widest chosen value fits a cell: the cells are equal, and the gaps take their share. */
+    const measure = () => {
+      if (!live) return;
+      const cell = Math.max(RUNTIME_CELL, ...[...element.querySelectorAll<HTMLSelectElement>(":scope > select")].map(chosenValueWidth));
+      setWide(element.clientWidth >= count * cell + (count - 1) * RUNTIME_GAP);
+    };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(element);
-    return () => observer.disconnect();
-  }, [count]);
+    void document.fonts?.ready.then(measure);
+    return () => {
+      live = false;
+      observer.disconnect();
+    };
+  }, [count, chosen]);
   const columns = wide ? count : Math.min(2, count);
   const order = (index: number, select: boolean) => Math.floor(index / columns) * 2 * columns + (select ? columns : 0) + (index % columns);
   const whole = (index: number) => columns === 2 && count % 2 === 1 && index === count - 1;
