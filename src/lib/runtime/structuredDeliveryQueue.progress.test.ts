@@ -776,3 +776,157 @@ test("two live executors that both read an injection as queued insert it once", 
   expect(injections).toEqual(["op-inject"]);
   expect(op.status).toBe("delivered");
 });
+
+test("a lost terminal acknowledgement whose repair hangs holds no other conversation's delivery, and its projection still converges", async () => {
+  const journal = fakeJournal();
+  const progress = new DeliveryProgressStore(null);
+  const first = fakeHost(delivered);
+  const second = fakeHost(delivered);
+  journal.loseAcknowledgements((operationId, status) => operationId === "op-a" && status === "delivered");
+  const repairs: string[] = [];
+  const hung = deferred<boolean>();
+  /* Owed after the first repair; the second never answers; the third writes it. */
+  const projectTerminal = async (operationId: string) => {
+    repairs.push(operationId);
+    if (repairs.length === 1) return false;
+    if (repairs.length === 2) return hung.promise;
+    return true;
+  };
+  journal.admit("op-a", "conversation-a");
+  const queue = queueFor(journal.port({ progress, projectTerminal }), { "conversation-a": first.engine, "conversation-b": second.engine },
+    { passBudgetMs: 20, safetyPassMs: 60_000, reconcileReadMs: 30 });
+  await queue.drain();
+  await sleep(1);
+  expect(journal.ops.get("op-a")!.status).toBe("delivered");
+  expect(repairs).toEqual(["op-a"]);
+
+  /* The next pass restarts the repair, which hangs; B is delivered regardless. */
+  journal.admit("op-b", "conversation-b");
+  const started = performance.now();
+  await queue.drain();
+  expect(performance.now() - started).toBeLessThan(250);
+  expect(repairs).toHaveLength(2);
+  expect(second.inputs).toEqual(["op-b"]);
+  expect(progress.get("op-b")?.terminal?.state).toBe("delivered");
+  /* Within its bound the hung attempt is the only one. */
+  journal.admit("op-b2", "conversation-b");
+  await queue.drain();
+  expect(repairs).toHaveLength(2);
+  expect(second.inputs).toEqual(["op-b", "op-b2"]);
+
+  /* Past it, the next pass makes a fresh attempt, and once that one writes
+     the projection nothing asks again, the abandoned attempt's late answer
+     included. */
+  await sleep(50);
+  await queue.drain();
+  await sleep(1);
+  expect(repairs).toHaveLength(3);
+  hung.resolve(false);
+  await sleep(1);
+  await queue.drain();
+  await queue.drain();
+  expect(repairs).toHaveLength(3);
+  expect(first.inputs).toEqual(["op-a"]);
+});
+
+test("an interrupt reconciliation whose evidence read never answers lets its lane go at the bound: the send goes out once the turn ends, without a browser, and the late answer writes nothing", async () => {
+  const time = clock();
+  const journal = fakeJournal();
+  const progress = new DeliveryProgressStore(null, time.now);
+  let turn: string | null = "turn-stuck";
+  const target = fakeHost(delivered, () => idleState(turn));
+  const evidence = deferred<boolean>();
+  let reads = 0;
+  journal.admit("op-interrupt", "conversation-a", "interrupt-active");
+  const queue = queueFor(journal.port({ progress, confirmedDelivery: () => { reads += 1; return evidence.promise; } }),
+    { "conversation-a": target.engine },
+    { passBudgetMs: 1_000, stallMs: 4_000, safetyPassMs: 5_000, interruptReconcileMs: 30_000, reconcileReadMs: 10, now: time.now });
+  await queue.drain();
+  expect(target.interrupts).toEqual(["turn-stuck"]);
+
+  /* Thirty seconds without progress: the evidence read starts and never answers. */
+  time.advance(31_000);
+  const started = performance.now();
+  await queue.drain();
+  expect(performance.now() - started).toBeLessThan(500);
+  expect(reads).toBe(1);
+  const reconciling = progress.get("op-interrupt")!;
+  expect(reconciling.waitReason).toBe("interrupt-reconciling");
+  expect(reconciling.detail).toContain("unanswered");
+
+  /* The turn ends; only the watchdog runs. */
+  turn = null;
+  time.advance(31_000);
+  await queue.tick();
+  expect(target.inputs).toEqual(["op-interrupt"]);
+  expect(journal.ops.get("op-interrupt")!.status).toBe("delivered");
+
+  evidence.resolve(true);
+  await sleep(5);
+  for (let tick = 0; tick < 3; tick += 1) {
+    time.advance(6_000);
+    await queue.tick();
+  }
+  expect(target.inputs).toEqual(["op-interrupt"]);
+  expect(journal.ops.get("op-interrupt")!.status).toBe("delivered");
+});
+
+test("an acknowledged interrupt whose turn keeps running shows a truthful stall within ten seconds after its lane ended, and nothing is sent", async () => {
+  const time = clock();
+  const journal = fakeJournal();
+  const progress = new DeliveryProgressStore(null, time.now);
+  const target = fakeHost(delivered, () => idleState("turn-long"));
+  journal.admit("op-interrupt", "conversation-a", "interrupt-active");
+  const queue = queueFor(journal.port({ progress }), { "conversation-a": target.engine },
+    { passBudgetMs: 1_000, stallMs: 4_000, safetyPassMs: 5_000, interruptReconcileMs: 30_000, now: time.now });
+  await queue.drain();
+  expect(target.interrupts).toEqual(["turn-long"]);
+  const progressedAt = progress.get("op-interrupt")!.lastProgressAt;
+  for (let second = 0; second < 9; second += 1) {
+    time.advance(1_000);
+    await queue.tick();
+  }
+  const record = progress.get("op-interrupt")!;
+  expect(record.waitReason).toBe("interrupting");
+  expect(record.lastProgressAt).toBe(progressedAt);
+  expect(record.stalledSince).not.toBeNull();
+  expect(Date.parse(record.stalledSince!) - Date.parse(record.phaseSince)).toBeLessThanOrEqual(10_000);
+  expect(record.wakeLostAt).toBeNull();
+  for (const lang of ["en", "uk"] as const) {
+    const text = deliveryStalledText((key, params) => translate(lang, key, params), record, time.now());
+    expect(text).toContain(translate(lang, "delivery.wait.interrupting"));
+  }
+  expect(target.interrupts).toEqual(["turn-long"]);
+  expect(target.inputs).toEqual([]);
+});
+
+test("an inherited delivering fence shows a truthful stall under the successor within ten seconds and is never handed over again", async () => {
+  const time = clock();
+  const journal = fakeJournal();
+  const progress = new DeliveryProgressStore(null, time.now);
+  const target = fakeHost(never);
+  journal.admit("op-hung", "conversation-a");
+  const timing = { passBudgetMs: 20, stallMs: 4_000, safetyPassMs: 5_000, interruptReconcileMs: 30_000, now: time.now };
+  const predecessor = queueFor(journal.port({ progress }), { "conversation-a": target.engine }, timing);
+  await predecessor.drain();
+  expect(journal.ops.get("op-hung")!.status).toBe("delivering");
+  const progressedAt = progress.get("op-hung")!.lastProgressAt;
+  /* Retired before its first stall tick; the writer claim stays the same. */
+  predecessor.retire();
+  const successor = queueFor(journal.port({ progress }), { "conversation-a": target.engine }, timing);
+  for (let second = 0; second < 12; second += 1) {
+    time.advance(1_000);
+    await successor.tick();
+  }
+  const record = progress.get("op-hung")!;
+  expect(record.waitReason).toBe("dispatching");
+  expect(record.lastProgressAt).toBe(progressedAt);
+  expect(record.stalledSince).not.toBeNull();
+  expect(Date.parse(record.stalledSince!) - Date.parse(record.phaseSince)).toBeLessThanOrEqual(10_000);
+  expect(record.wakeLostAt).toBeNull();
+  for (const lang of ["en", "uk"] as const) {
+    const text = deliveryStalledText((key, params) => translate(lang, key, params), record, time.now());
+    expect(text).toContain(translate(lang, "delivery.wait.dispatching"));
+  }
+  expect(target.inputs).toEqual(["op-hung"]);
+});
