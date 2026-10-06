@@ -72,15 +72,29 @@ phone: the board menu 390×743, scrolling, 29 controls; a conversation's menu
 
 Each one lays out the entries the board builds today, with their own labels
 and handlers (`compactMenus.prototype.model.ts`). New words are only the
-section names. Three rules hold in all three:
+section names. Six rules hold in all three:
 
 - **No state is taller than 360 px**, on a card with one pipeline, a waiting
   card and a card holding five pipelines. The tallest state measured is
   342 px.
-- **Opening a section moves nothing.** The menu is placed once, for its
-  tallest state, so its top edge and its side stay where they opened and the
-  row under the pointer stays under it. Where the tallest state has no room
-  below the ⋯, the menu opens above it and low enough to grow down.
+- **Opening a section moves nothing under the pointer.** The menu is placed
+  once, for its tallest state, and the edge that faces its ⋯ never moves, so
+  the row that was pressed stays where it was.
+- **No state covers the menu's own ⋯.** Below the button while the tallest
+  state fits there. Otherwise above it, with the bottom edge held: the
+  resting list sits right over the button, a page grows upward, and a section
+  that opens in place puts its rows above its own row. Where the tallest
+  state fits on neither side, the menu stands beside the button
+  (`menuPlacement` in `compactMenus.prototype.model.ts`).
+- **The arrow says what a row will do.** A row that replaces the list with a
+  page carries the arrow to the right. A row that opens in place carries the
+  arrow down (up in a menu that grows upward), and it turns over once open.
+- **A double click reaches nothing.** A press that swaps the whole list for a
+  page, or a page for the list, leaves another row under the pointer: "Skip
+  stage" where "Pipeline actions" stood, a column where "Back" stood. A press
+  on that same spot is dropped until the pointer has moved 4 px or a second
+  has passed, inside the menu and outside it. A press from the keyboard is
+  never dropped.
 - **A card's pipelines are one row**, however many it holds. One pipeline
   opens its actions as a page; several open their list first, each row with
   the pipeline mark, its whole title and its state. A page keeps every
@@ -148,11 +162,26 @@ A card holding five pipelines (`t-many`):
 | The list of pipelines | | 300×286 | 300×286 | 300×286 |
 | One pipeline's page (five read) | | 300×303–342 | 300×303–342 | 300×303–342 |
 
-**Steadiness.** On every card of the fixture (32 to 34 cards, each where it
-stands and scrolled to the bottom of the window), at 1440×900 and 1000×700,
-the driver opens every section and compares the menu's corner and the pressed
-row before and after: 164 openings in variant 1, 220 in variant 2 and 28 in
-variant 3 at each size, the largest shift 0 px.
+**Steadiness and the ⋯.** On every card of the fixture (32 to 34 cards, each
+where it stands and scrolled to the bottom of the window), at 1440×900 and
+1000×700, the driver opens every section, and every pipeline of a card that
+holds several, and compares the pressed row and the edge of the menu that
+faces the ⋯ before and after: 174 and 170 openings in variant 1, 230 and 230
+in variant 2, 38 and 38 in variant 3, the largest shift 0 px. In each of
+those states and at rest it also checks that the menu does not lie over its
+own ⋯: 0 cases. At 1440×900 about two menus in three open below the button
+and one in three above it; at 1000×700, where the board is one column, all of
+them open above it.
+
+**Double clicks.** On every card of the fixture at both sizes the driver
+double-clicks each row that opens a page and each page's back row with a real
+pointer: 38 double clicks in variants 1 and 3 and 230 in variant 2 at each
+size, 14 of the cards holding a pipeline. Every second press was dropped, the
+menu stayed on the page the first press opened, and the fixture's server
+received no write: no pipeline action, no task change, no board move. With
+the guard switched off the same pass fails on the first card: a pipeline write
+goes out for `t-links`. The board's and the header's pages get the same pass
+(16, 48 and 8 double clicks in variants 1, 2 and 3; no switch flipped).
 
 ### Taps to eight frequent actions
 
@@ -180,19 +209,65 @@ the ⋯.
 
 ### The family
 
-The same grammar on the other menus, uk at 1440×900 and the phone at 390×844,
-at rest:
+The same grammar on the other menus. A section opens in place where the menu
+then stays inside its bound, and as a page where it would not; variant 2 opens
+every section as a page. The bound is 360 px on the desktop, and on the phone
+today's height of the same sheet, with nothing scrolling. The driver fails on
+either. Sizes are identical at 1440×900 and 1000×700 and in light and dark; a
+range is en to uk. "page" marks a state that replaces the list.
 
-| Menu | Today | 1 | 2 | 3 |
-|---|---|---|---|---|
-| Column ⋯ | 215–377 × 78 | 300×56–69 | 300×88–101 | 300×56–69 |
-| Conversation ⋯ | 476×277 | 300×162 | 300×187 | 300×251 |
-| Board ⋯ | 256×491 | 256×138 | 256×106 | 256×321 |
-| Header ⋯ | 232×437 | 232×190 | 232×190 | 232×278 |
-| Phone: card sheet | 390×445 | 390×357 | 390×333 | 390×357 |
-| Phone: task ⋯ | 390×401 | 390×234 | 390×388 | 390×344 |
-| Phone: board menu | 390×743, scrolls | 390×484 | 390×468 | 390×484 |
-| Phone: conversation menu | 390×706 | 390×372 | 390×372 | 390×460 |
+Desktop:
+
+| Menu | State | Today | 1 | 2 | 3 |
+|---|---|---|---|---|---|
+| Column ⋯ | In progress | 346–376×78 | 300×69 | 300×101 | 300×69 |
+| | Done | 215–218×78 | 300×56 | 300×88 | 300×56 |
+| Conversation ⋯ | at rest | 428–476×277 | 300×162 | 300×187 | 300×251 |
+| | More | | 300×335 | | |
+| | Task link | | | page 300×127 | |
+| | Close or stop | | | page 300×127–140 | |
+| Board ⋯ | at rest | 256×440–491 | 256×170 | 256×138 | 256×300–321 |
+| | Sound | | at rest | page 256×110 | at rest |
+| | Merging and syncing | | page 256×178–214 | page 256×178–214 | at rest |
+| | Orchestrator | | page 256×221–236 | page 256×221–236 | at rest |
+| | Rarely used | | | | 256×332–353 |
+| Header ⋯ | at rest | 232×437 | 232×190 | 232×190 | 232×278 |
+| | This device | | 232×308 | page 232×163 | at rest |
+| | Guides | | 232×310 | page 232×165 | |
+| | Installation | | 232×280 | page 232×135 | |
+| | Rarely used | | | | page 232×225 |
+
+The board's four project switches with their explanations were one section,
+"Project rules", 444–495 px tall once open in variant 1 and 403 px as a page
+in variant 2. They are two sections now: "Merging and syncing" (merge when
+review passes, share with linked machines) and "Orchestrator" (its reports,
+"Asks you"). In variant 3 the header's "Rarely used" was 458 px open in
+place and is a page.
+
+Phone, 390×844:
+
+| Sheet | State | Today | 1 | 2 | 3 |
+|---|---|---|---|---|---|
+| Card, long press | at rest | 390×445 | 390×343–357 | 390×333 | 390×343–357 |
+| | Move to | | at rest | page 390×308 | at rest |
+| Task ⋯ | at rest | 390×401 | 390×234 | 390×388 | 390×344 |
+| Board menu | at rest | 390×743, scrolls | 390×484 | 390×468 | 390×528 |
+| | New… | | at rest | page 390×252 | at rest |
+| | View and places | | page 390×384 | page 390×384 | at rest |
+| | This device | | 390×593 | page 390×229 | at rest |
+| | Project rules | | page 390×451–466 | page 390×451–466 | page 390×369–384 |
+| | Guides | | 390×660 | page 390×296 | |
+| | Installation | | 390×660 | page 390×296 | |
+| | Rarely used | | | | page 390×669 |
+| Conversation menu | at rest | 390×706 | 390×372 | 390×372 | 390×460 |
+| | This turn | | 390×460 | page 390×244 | at rest |
+| | Conversation | | 390×636 | page 390×420 | |
+| | Close or stop | | 390×460 | page 390×244 | |
+| | Rarely used | | | | page 390×420 |
+
+No phone state scrolls. In variant 3 the board menu's "Rarely used" held
+nineteen rows and scrolled; the project's switches and its archive rows are
+their own page, "Project rules", and the rest is the "Rarely used" page.
 
 In a conversation's ⋯, variant 1 keeps Full pane, Copy link and To task as
 icon cells and draws "Remove from the board" as a full row with its
@@ -229,8 +304,12 @@ drawn.
   tallest at rest. The colours are 20 px targets with no label beside them.
 - **All three**: a pipeline's page is the densest state, its rows closer than
   the board's own so seven actions keep their second lines inside 360 px. A
-  menu that opens above its ⋯ rests up to 85 px away from it, the room its
-  tallest state needs. On the phone the sheets rise from the bottom edge, so
+  menu that opens above its ⋯ grows upward, so a section opened in place
+  there shows its rows above its own row, the reverse of the same menu
+  opened below a button. A deliberate second press on the very spot of a row
+  that just opened a page waits out one second. A family menu mixes rows that
+  open in place with rows that open a page, told apart by the arrow. On the
+  phone the sheets rise from the bottom edge, so
   a section opened in place still lifts the rows above it; only the desktop
   menus are held still. The family prototype re-orders the product's own rows
   in place, so it shows layout and reach; a build would move the grouping
@@ -248,10 +327,11 @@ a page (from 2), and the two prunings of the family with a visible second home
 
 ## Evidence
 
-`evidence/compact-card-menu/measurements.json` holds every reading: 696 states
+`evidence/compact-card-menu/measurements.json` holds every reading: 706 states
 over today and three variants, at 1440×900, 1000×700 and 390×844, light and
-dark, en and uk, with the taps, the acted checks, the steadiness tallies and
-the per-row sizes of today's menus. The driver is one `describe` block in
+dark, en and uk, with the taps, the acted checks, the steadiness and
+double-click tallies, the side of the button each card menu opened on and the
+per-row sizes of today's menus. The driver is one `describe` block in
 `src/components/kanban/kanbanBoard.browser.test.tsx`:
 
 ```
@@ -261,12 +341,19 @@ CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 LLV_COMPACT_MENUS_OUT=<dir> \
 
 It writes the frames (each with its variant number in a strip above the
 application frame) and four contact sheets to `<dir>`; they are not committed.
-It fails when any state of a card's menu is over 300×360 or scrolls, when
-opening a section moves the menu or the pressed row, when a state leaves the
-window or cuts a label, and when an entry is lost without a named home.
+It fails when any state of a card's menu is over 300×360 or scrolls; when any
+state of a column's, a conversation's, the board's or the header's menu is
+over 360 px tall or scrolls; when any state of a phone sheet is taller than
+today's sheet or scrolls; when opening a section moves the pressed row or the
+edge that faces the ⋯; when any state lies over its own ⋯; when a double
+click on a row that opens a page, or on a back row, sends a write or lands on
+another row; when a row that opens in place and a row that opens a page carry
+the same arrow; when a state leaves the window or cuts a label; and when an
+entry is lost without a named home.
 `compactMenus.prototype.model.test.ts` holds that no layout loses an entry
-without naming where it went and that the resting list does not grow with the
-number of pipelines. `compactMenus.prototype.test.tsx` reads the one state the
+without naming where it went, that the resting list does not grow with the
+number of pipelines, and that no placement puts the tallest state over the
+button, for a button anywhere in either desktop window. `compactMenus.prototype.test.tsx` reads the one state the
 fixture cannot reach: no card of the fixture holds the orchestrator's
 conversation, so the refused Hide and its reason are read from the rendered
 markup.

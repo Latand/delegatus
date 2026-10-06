@@ -40,3 +40,16 @@ test("a pipeline's page keeps what Close and Pause stop on their second lines", 
     expect(markup).toContain('Pause<span class="why">The pipeline does not move on.</span>');
   }
 });
+
+test("a row that opens in place points down and only a row that opens a page points right", () => {
+  const lane = (label: string): KanbanMenuItem => ({ type: "item", label, group: "lane:a", onSelect: () => {} });
+  const items: KanbanMenuItem[] = [item("hold", "Set waiting reason"), item("collapse", "Collapse card"), { type: "head", label: "Pipeline actions", group: "lane:a", note: "Running" }, lane("Pause")];
+  const shown = render(1, "card", items);
+  const row = (section: string) => shown.match(new RegExp(`<button[^>]*data-cm-section="${section}"[^]*?</button>`))?.[0] ?? "";
+  expect(row("more")).toContain('data-cm-opens="expand"');
+  expect(row("more")).toContain("lucide-chevron-down");
+  expect(row("more")).not.toContain("lucide-chevron-right");
+  expect(row("lane:a")).toContain('data-cm-opens="drill"');
+  expect(row("lane:a")).toContain("lucide-chevron-right");
+  expect(row("lane:a")).not.toContain("lucide-chevron-down");
+});

@@ -1,13 +1,13 @@
 "use client";
 
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { AlignLeft, ArrowDown, ArrowUp, ChevronDown, ChevronLeft, ChevronRight, Copy, EyeOff, Link2, ListPlus, Maximize2, Minus, Pencil, Smile, Workflow } from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { AlignLeft, ArrowDown, ArrowUp, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Copy, EyeOff, Link2, ListPlus, Maximize2, Minus, Pencil, Smile, Workflow } from "lucide-react";
 
 import { useLocale } from "@/lib/i18n";
 import { TASK_COLORS } from "@/lib/tasks/types";
 
-import { compactLayout, layoutStates, sectionAt, type CompactLayout, type MenuAction, type MenuEntry, type MenuNode, type MenuSection, type MenuVariant, type MenuWords } from "./compactMenus.prototype.model";
-import { CheckGlyph, KanbanMenuList as KanbanMenuToday, popoverLeft, useMenuDismiss, type KanbanMenuProps } from "./kanbanMenus";
+import { compactLayout, layoutStates, menuPlacement, sectionAt, SWAP_GUARD_MS, SWAP_GUARD_PX, type CompactLayout, type MenuAction, type MenuEntry, type MenuNode, type MenuSection, type MenuSide, type MenuVariant, type MenuWords } from "./compactMenus.prototype.model";
+import { CheckGlyph, KanbanMenuList as KanbanMenuToday, useMenuDismiss, type KanbanMenuProps } from "./kanbanMenus";
 
 /* Design prototype, three numbered layouts of the board's menus
    (docs/design/compact-card-menu.md). The entries, their handlers and their
@@ -133,7 +133,7 @@ function Swatches({ entry, onClose }: { entry: Extract<MenuEntry, { type: "swatc
 }
 
 /** The row that opens a section. A pipeline's carries the pipeline mark, its whole title and its state. */
-function SectionRow({ section, opens, expanded, value, onOpen }: { section: MenuSection; opens: "expand" | "drill"; expanded: boolean; value: ReactNode; onOpen: () => void }) {
+function SectionRow({ section, opens, expanded, up, value, onOpen }: { section: MenuSection; opens: "expand" | "drill"; expanded: boolean; up: boolean; value: ReactNode; onOpen: (event: React.MouseEvent) => void }) {
   const lane = section.lane && section.value;
   return (
     <button
@@ -152,27 +152,35 @@ function SectionRow({ section, opens, expanded, value, onOpen }: { section: Menu
         {lane ? <span className="why">{section.value}</span> : null}
       </span>
       {lane ? null : value}
-      {opens === "expand" && expanded ? <ChevronDown className="cm-chev" aria-hidden /> : <ChevronRight className="cm-chev" aria-hidden />}
+      {/* A page is the arrow to the right; a section that opens in place points where its rows will appear. */}
+      {opens === "drill" ? <ChevronRight className="cm-chev" aria-hidden /> : expanded !== up ? <ChevronUp className="cm-chev" aria-hidden /> : <ChevronDown className="cm-chev" aria-hidden />}
     </button>
   );
 }
 
-interface ViewProps { layout: CompactLayout; path: readonly string[]; words: (typeof WORDS)["en"]; onPick: (action: MenuAction) => void; onClose: (refocus: boolean) => void; onPath: (path: string[]) => void }
+interface ViewProps {
+  layout: CompactLayout; path: readonly string[]; words: (typeof WORDS)["en"];
+  /** The menu stands above its button and grows upward: a section's rows open above its row. */
+  up: boolean;
+  onPick: (action: MenuAction) => void; onClose: (refocus: boolean) => void;
+  /** `swap` carries the press that replaced the whole list. */
+  onPath: (path: string[], swap?: React.MouseEvent) => void;
+}
 
 /** One state of a menu: the resting list with at most one section opened in place, or the page a path of sections leads to. */
-function MenuView({ layout, path, words, onPick, onClose, onPath }: ViewProps) {
+function MenuView({ layout, path, words, up, onPick, onClose, onPath }: ViewProps) {
   const top = layout.nodes.find((node) => node.node === "section" && node.section.id === path[0]);
   const page = top?.node === "section" && top.open === "drill" ? sectionAt(layout, path) : null;
   const entries = (list: MenuEntry[], hints: boolean, at: readonly string[]) => list.map((entry, index) => {
     if (entry.type === "sep") return <div key={`sep-${index}`} className="sep" role="separator" />;
     if (entry.type === "swatches") return <Swatches key="swatches" entry={entry} onClose={onClose} />;
-    if (entry.type === "section") return <SectionRow key={entry.section.id} section={entry.section} opens="drill" expanded={false} value={null} onOpen={() => onPath([...at, entry.section.id])} />;
+    if (entry.type === "section") return <SectionRow key={entry.section.id} section={entry.section} opens="drill" expanded={false} up={false} value={null} onOpen={(event) => onPath([...at, entry.section.id], event)} />;
     return <Row key={`${index}-${entry.label}`} action={entry} hint={hints} onPick={onPick} />;
   });
   if (page) {
     return (
       <div className="cm-page" role="group" aria-label={page.title} data-cm-page={page.id}>
-        <button type="button" role="menuitem" className="cm-back" aria-label={`${words.back}: ${page.title}`} data-cm-back="" onClick={() => onPath(path.slice(0, -1))}>
+        <button type="button" role="menuitem" className="cm-back" aria-label={`${words.back}: ${page.title}`} data-cm-back="" onClick={(event) => onPath(path.slice(0, -1), event)}>
           <ChevronLeft aria-hidden />
           <span className="cm-title">{page.title}</span>
         </button>
@@ -238,14 +246,44 @@ function MenuView({ layout, path, words, onPick, onClose, onPath }: ViewProps) {
     }
     const section = entry.section;
     const expanded = entry.open === "expand" && path[0] === section.id;
+    const body = expanded ? <div className="cm-body" role="group" aria-label={section.title} data-cm-body={section.id}>{entries(section.entries, section.hints, [section.id])}</div> : null;
     return (
       <div key={section.id} role="none">
-        <SectionRow section={section} opens={entry.open} expanded={expanded} value={value(section)} onOpen={() => onPath(expanded ? [] : [section.id])} />
-        {expanded ? <div className="cm-body" role="group" aria-label={section.title} data-cm-body={section.id}>{entries(section.entries, section.hints, [section.id])}</div> : null}
+        {up ? body : null}
+        <SectionRow section={section} opens={entry.open} expanded={expanded} up={up} value={value(section)} onOpen={(event) => onPath(expanded ? [] : [section.id], entry.open === "drill" ? event : undefined)} />
+        {up ? null : body}
       </div>
     );
   };
   return <>{layout.nodes.map(node)}</>;
+}
+
+/** A press that swaps a whole list for another (into a page, or back out of
+    one) leaves a different row, or the board, under the pointer. The second
+    press of a double click lands there before anyone has read it, so until
+    the pointer moves or a moment passes a press on that spot reaches nothing:
+    no row, and no dismissal either. Returns what records such a press; one
+    from the keyboard has no place and is never recorded. */
+export function useSwapGuard(): (press?: React.MouseEvent) => void {
+  const swapped = useRef<{ x: number; y: number; at: number } | null>(null);
+  useEffect(() => {
+    const kinds = ["pointermove", "pointerdown", "mousedown", "pointerup", "mouseup", "click"] as const;
+    const guard = (event: MouseEvent) => {
+      const last = swapped.current;
+      if (!last) return;
+      const held = performance.now() - last.at < SWAP_GUARD_MS && Math.abs(event.clientX - last.x) < SWAP_GUARD_PX && Math.abs(event.clientY - last.y) < SWAP_GUARD_PX;
+      /* The pointer left the spot, or the moment passed: what is pressed next was aimed at. */
+      if (!held) { if (event.type === "pointermove" || event.type === "pointerdown") swapped.current = null; return; }
+      if (event.type === "pointermove") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      /* How many presses were dropped, for the driver that double-clicks every such row. */
+      if (event.type === "click") document.documentElement.dataset.cmDropped = String(Number(document.documentElement.dataset.cmDropped ?? 0) + 1);
+    };
+    for (const kind of kinds) window.addEventListener(kind, guard, true);
+    return () => { for (const kind of kinds) window.removeEventListener(kind, guard, true); };
+  }, []);
+  return (press) => { swapped.current = press && press.detail > 0 ? { x: press.clientX, y: press.clientY, at: performance.now() } : null; };
 }
 
 function CompactMenu({ variant, layout, anchor, label, onClose }: { variant: MenuVariant; layout: CompactLayout } & Pick<KanbanMenuProps, "anchor" | "label" | "onClose">) {
@@ -255,9 +293,11 @@ function CompactMenu({ variant, layout, anchor, label, onClose }: { variant: Men
   /* The sections opened to reach what is shown; empty at rest. */
   const [path, setPath] = useState<string[]>([]);
   /* Placed once, for its tallest state: opening a section never moves the
-     menu's top edge or its side, so the row under the pointer stays there.
-     Every state is laid out unseen on the first pass to learn that height. */
-  const [placed, setPlaced] = useState(false);
+     edge of the menu that faces its button, nor its side, so the row that was
+     pressed stays under the pointer and no state covers the button. Every
+     state is laid out unseen on the first pass to learn that height. */
+  const [placed, setPlaced] = useState<MenuSide | null>(null);
+  const swapped = useSwapGuard();
   useMenuDismiss(ref, anchor, onClose);
   const states = layoutStates(layout);
   const noop = () => {};
@@ -270,17 +310,18 @@ function CompactMenu({ variant, layout, anchor, label, onClose }: { variant: Men
     const cap = parseFloat(getComputedStyle(menu).maxHeight) || window.innerHeight - 16;
     const probes = [...menu.querySelectorAll<HTMLElement>("[data-cm-probe]")].map((probe) => probe.offsetHeight + chrome);
     const tallest = Math.min(cap, Math.max(rest, ...probes));
-    const rect = anchor.getBoundingClientRect();
-    const room = window.innerHeight - 8;
-    let top = rect.bottom + 6;
-    /* No room below for the tallest state: above the anchor, and low enough to grow down into. */
-    if (top + tallest > room) top = Math.min(rect.top - rest - 6, room - tallest);
-    menu.style.left = `${Math.round(popoverLeft(rect, menu.offsetWidth, window.innerWidth))}px`;
-    menu.style.top = `${Math.round(Math.max(8, top))}px`;
+    const spot = menuPlacement(anchor.getBoundingClientRect(), menu.offsetWidth, tallest, { width: window.innerWidth, height: window.innerHeight });
+    menu.style.left = `${Math.round(spot.left)}px`;
+    menu.style.top = spot.top === null ? "auto" : `${Math.round(spot.top)}px`;
+    menu.style.bottom = spot.bottom === null ? "auto" : `${Math.round(spot.bottom)}px`;
     menu.dataset.cmTallest = String(Math.round(tallest));
     /* The unseen states are dropped before the first paint. */
-    setPlaced(true);
+    setPlaced(spot.side);
   }, [anchor]);
+  const go = (next: string[], swap?: React.MouseEvent) => {
+    swapped(swap);
+    setPath(next);
+  };
   const from = useRef<string[]>([]);
   useLayoutEffect(() => {
     const menu = ref.current;
@@ -303,7 +344,7 @@ function CompactMenu({ variant, layout, anchor, label, onClose }: { variant: Men
     const active = document.activeElement as HTMLElement | null;
     const inRow = Boolean(active?.closest(".cm-seg, .cm-quick, .swatches"));
     const paged = Boolean(ref.current?.querySelector(".cm-page"));
-    if (paged && (event.key === "Backspace" || (event.key === "ArrowLeft" && !inRow))) { event.preventDefault(); setPath(path.slice(0, -1)); return; }
+    if (paged && (event.key === "Backspace" || (event.key === "ArrowLeft" && !inRow))) { event.preventDefault(); go(path.slice(0, -1)); return; }
     if (event.key === "ArrowRight" && active?.dataset.cmOpens === "drill") { event.preventDefault(); active.click(); return; }
     if (event.key === "ArrowDown" || event.key === "ArrowRight") { event.preventDefault(); list[(index + 1) % list.length]?.focus(); }
     else if (event.key === "ArrowUp" || event.key === "ArrowLeft") { event.preventDefault(); list[(index - 1 + list.length) % list.length]?.focus(); }
@@ -319,15 +360,16 @@ function CompactMenu({ variant, layout, anchor, label, onClose }: { variant: Men
       aria-label={label}
       data-cm-variant={variant}
       data-cm-view={path.length ? path.join("/") : "rest"}
+      data-cm-side={placed ?? undefined}
       style={{ "--cm-width": `${layout.width}px` } as React.CSSProperties}
       onKeyDown={onKeyDown}
     >
       <style>{COMPACT_MENU_CSS}</style>
-      <div data-cm-shown="" role="none"><MenuView layout={layout} path={path} words={words} onPick={pick} onClose={onClose} onPath={setPath} /></div>
+      <div data-cm-shown="" role="none"><MenuView layout={layout} path={path} words={words} up={placed === "above"} onPick={pick} onClose={onClose} onPath={go} /></div>
       {placed ? null : (
         <div className="cm-probe" aria-hidden inert>
           {states.filter((state) => state.length).map((state) => (
-            <div key={state.join("/")} data-cm-probe={state.join("/")}><MenuView layout={layout} path={state} words={words} onPick={noop} onClose={noop} onPath={noop} /></div>
+            <div key={state.join("/")} data-cm-probe={state.join("/")}><MenuView layout={layout} path={state} words={words} up={false} onPick={noop} onClose={noop} onPath={noop} /></div>
           ))}
         </div>
       )}

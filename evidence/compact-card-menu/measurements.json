@@ -361,33 +361,242 @@
   "stability": {
     "v1/1440-light-uk": {
       "cards": 34,
-      "openings": 164,
-      "maxShift": 0
+      "openings": 174,
+      "maxShift": 0,
+      "covered": 0,
+      "sides": {
+        "below": 46,
+        "above": 22
+      }
     },
     "v1/1000-light-uk": {
-      "cards": 34,
-      "openings": 164,
-      "maxShift": 0
+      "cards": 33,
+      "openings": 170,
+      "maxShift": 0,
+      "covered": 0,
+      "sides": {
+        "above": 66
+      }
     },
     "v2/1440-light-uk": {
       "cards": 32,
-      "openings": 220,
-      "maxShift": 0
+      "openings": 230,
+      "maxShift": 0,
+      "covered": 0,
+      "sides": {
+        "below": 46,
+        "above": 18
+      }
     },
     "v2/1000-light-uk": {
       "cards": 32,
-      "openings": 220,
-      "maxShift": 0
+      "openings": 230,
+      "maxShift": 0,
+      "covered": 0,
+      "sides": {
+        "above": 64
+      }
     },
     "v3/1440-light-uk": {
       "cards": 34,
-      "openings": 28,
-      "maxShift": 0
+      "openings": 38,
+      "maxShift": 0,
+      "covered": 0,
+      "sides": {
+        "below": 46,
+        "above": 22
+      }
     },
     "v3/1000-light-uk": {
       "cards": 34,
-      "openings": 28,
-      "maxShift": 0
+      "openings": 38,
+      "maxShift": 0,
+      "covered": 0,
+      "sides": {
+        "above": 68
+      }
+    }
+  },
+  "doubles": {
+    "v1/1440-light-en board": {
+      "cards": 0,
+      "rows": 4,
+      "dropped": 4,
+      "sent": 0
+    },
+    "v1/1440-light-en header": {
+      "cards": 0,
+      "rows": 0,
+      "dropped": 0,
+      "sent": 0
+    },
+    "v1/1440-light-uk board": {
+      "cards": 0,
+      "rows": 4,
+      "dropped": 4,
+      "sent": 0
+    },
+    "v1/1440-light-uk header": {
+      "cards": 0,
+      "rows": 0,
+      "dropped": 0,
+      "sent": 0
+    },
+    "v1/1000-light-en board": {
+      "cards": 0,
+      "rows": 4,
+      "dropped": 4,
+      "sent": 0
+    },
+    "v1/1000-light-en header": {
+      "cards": 0,
+      "rows": 0,
+      "dropped": 0,
+      "sent": 0
+    },
+    "v1/1000-light-uk board": {
+      "cards": 0,
+      "rows": 4,
+      "dropped": 4,
+      "sent": 0
+    },
+    "v1/1000-light-uk header": {
+      "cards": 0,
+      "rows": 0,
+      "dropped": 0,
+      "sent": 0
+    },
+    "v1/1440-light-uk": {
+      "cards": 14,
+      "rows": 38,
+      "dropped": 38,
+      "sent": 0
+    },
+    "v1/1000-light-uk": {
+      "cards": 14,
+      "rows": 38,
+      "dropped": 38,
+      "sent": 0
+    },
+    "v2/1440-light-en board": {
+      "cards": 0,
+      "rows": 6,
+      "dropped": 6,
+      "sent": 0
+    },
+    "v2/1440-light-en header": {
+      "cards": 0,
+      "rows": 6,
+      "dropped": 6,
+      "sent": 0
+    },
+    "v2/1440-light-uk board": {
+      "cards": 0,
+      "rows": 6,
+      "dropped": 6,
+      "sent": 0
+    },
+    "v2/1440-light-uk header": {
+      "cards": 0,
+      "rows": 6,
+      "dropped": 6,
+      "sent": 0
+    },
+    "v2/1000-light-en board": {
+      "cards": 0,
+      "rows": 6,
+      "dropped": 6,
+      "sent": 0
+    },
+    "v2/1000-light-en header": {
+      "cards": 0,
+      "rows": 6,
+      "dropped": 6,
+      "sent": 0
+    },
+    "v2/1000-light-uk board": {
+      "cards": 0,
+      "rows": 6,
+      "dropped": 6,
+      "sent": 0
+    },
+    "v2/1000-light-uk header": {
+      "cards": 0,
+      "rows": 6,
+      "dropped": 6,
+      "sent": 0
+    },
+    "v2/1440-light-uk": {
+      "cards": 14,
+      "rows": 230,
+      "dropped": 230,
+      "sent": 0
+    },
+    "v2/1000-light-uk": {
+      "cards": 14,
+      "rows": 230,
+      "dropped": 230,
+      "sent": 0
+    },
+    "v3/1440-light-en board": {
+      "cards": 0,
+      "rows": 0,
+      "dropped": 0,
+      "sent": 0
+    },
+    "v3/1440-light-en header": {
+      "cards": 0,
+      "rows": 2,
+      "dropped": 2,
+      "sent": 0
+    },
+    "v3/1440-light-uk board": {
+      "cards": 0,
+      "rows": 0,
+      "dropped": 0,
+      "sent": 0
+    },
+    "v3/1440-light-uk header": {
+      "cards": 0,
+      "rows": 2,
+      "dropped": 2,
+      "sent": 0
+    },
+    "v3/1000-light-en board": {
+      "cards": 0,
+      "rows": 0,
+      "dropped": 0,
+      "sent": 0
+    },
+    "v3/1000-light-en header": {
+      "cards": 0,
+      "rows": 2,
+      "dropped": 2,
+      "sent": 0
+    },
+    "v3/1000-light-uk board": {
+      "cards": 0,
+      "rows": 0,
+      "dropped": 0,
+      "sent": 0
+    },
+    "v3/1000-light-uk header": {
+      "cards": 0,
+      "rows": 2,
+      "dropped": 2,
+      "sent": 0
+    },
+    "v3/1440-light-uk": {
+      "cards": 14,
+      "rows": 38,
+      "dropped": 38,
+      "sent": 0
+    },
+    "v3/1000-light-uk": {
+      "cards": 14,
+      "rows": 38,
+      "dropped": 38,
+      "sent": 0
     }
   },
   "reach": {
@@ -6266,6 +6475,7 @@
       "controls": 14,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-light-en-card-rest.png"
     },
     {
@@ -6286,6 +6496,7 @@
       "controls": 24,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-light-en-card-open_appearance.png",
       "shift": 0
     },
@@ -6307,6 +6518,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-light-en-card-open_pipeline.png",
       "shift": 0
     },
@@ -6328,6 +6540,7 @@
       "controls": 16,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-light-en-card-open_more.png",
       "shift": 0
     },
@@ -6349,6 +6562,7 @@
       "controls": 1,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-light-en-column-assigned.png"
     },
     {
@@ -6369,6 +6583,7 @@
       "controls": 1,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-light-en-column-done.png"
     },
     {
@@ -6382,11 +6597,11 @@
         948,
         43.5,
         256,
-        138
+        170
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 4,
+      "controls": 5,
       "clipped": [],
       "rows": [
         "dash-search",
@@ -6406,28 +6621,57 @@
       "scheme": "light",
       "lang": "en",
       "surface": "board",
-      "state": "open policy",
+      "state": "open merging",
       "box": [
         948,
         43.5,
         256,
-        444.4
+        177.6
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 9,
+      "controls": 4,
       "clipped": [],
       "rows": [
-        "dash-search",
-        "sound-toggle",
-        "sound-settings-trigger",
+        "dash-search@",
+        "sound-toggle@",
+        "sound-settings-trigger@",
         "merge-on-review",
         "share-project",
         "share-project",
+        "bridge-reports@",
+        "asks-you@"
+      ],
+      "file": "v1/1440-light-en-board-open_merging.png"
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "board",
+      "state": "open seat",
+      "box": [
+        948,
+        43.5,
+        256,
+        220.8
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 3,
+      "clipped": [],
+      "rows": [
+        "dash-search@",
+        "sound-toggle@",
+        "sound-settings-trigger@",
+        "merge-on-review@",
+        "share-project@",
+        "share-project@",
         "bridge-reports",
         "asks-you"
       ],
-      "file": "v1/1440-light-en-board-open_policy.png"
+      "file": "v1/1440-light-en-board-open_seat.png"
     },
     {
       "variant": 1,
@@ -6574,7 +6818,7 @@
       "state": "bottom card",
       "box": [
         520,
-        551,
+        609,
         300,
         257
       ],
@@ -6583,6 +6827,7 @@
       "controls": 14,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1440-light-en-card-bottom_card.png"
     },
     {
@@ -6594,7 +6839,7 @@
       "state": "bottom card, pipeline open",
       "box": [
         520,
-        551,
+        576,
         300,
         290
       ],
@@ -6603,6 +6848,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1440-light-en-card-bottom_card_pipeline_open.png",
       "shift": 0
     },
@@ -6624,6 +6870,7 @@
       "controls": 14,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-light-en-card-right_edge_card.png"
     },
     {
@@ -6644,6 +6891,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-light-en-card-right_edge_card_pipeline_open.png",
       "shift": 0
     },
@@ -6665,6 +6913,7 @@
       "controls": 5,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-light-en-conversation-rest.png"
     },
     {
@@ -6685,6 +6934,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-light-en-conversation-open_more.png",
       "shift": 0
     },
@@ -6706,6 +6956,7 @@
       "controls": 14,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-light-uk-card-rest.png"
     },
     {
@@ -6726,6 +6977,7 @@
       "controls": 24,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-light-uk-card-open_appearance.png",
       "shift": 0
     },
@@ -6747,6 +6999,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-light-uk-card-open_pipeline.png",
       "shift": 0
     },
@@ -6768,6 +7021,7 @@
       "controls": 16,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-light-uk-card-open_more.png",
       "shift": 0
     },
@@ -6789,6 +7043,7 @@
       "controls": 1,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-light-uk-column-assigned.png"
     },
     {
@@ -6809,6 +7064,7 @@
       "controls": 1,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-light-uk-column-done.png"
     },
     {
@@ -6822,11 +7078,11 @@
         948,
         43.5,
         256,
-        138
+        170
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 4,
+      "controls": 5,
       "clipped": [],
       "rows": [
         "dash-search",
@@ -6846,28 +7102,57 @@
       "scheme": "light",
       "lang": "uk",
       "surface": "board",
-      "state": "open policy",
+      "state": "open merging",
       "box": [
         948,
         43.5,
         256,
-        495.3
+        213.5
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 9,
+      "controls": 4,
       "clipped": [],
       "rows": [
-        "dash-search",
-        "sound-toggle",
-        "sound-settings-trigger",
+        "dash-search@",
+        "sound-toggle@",
+        "sound-settings-trigger@",
         "merge-on-review",
         "share-project",
         "share-project",
+        "bridge-reports@",
+        "asks-you@"
+      ],
+      "file": "v1/1440-light-uk-board-open_merging.png"
+    },
+    {
+      "variant": 1,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "board",
+      "state": "open seat",
+      "box": [
+        948,
+        43.5,
+        256,
+        235.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 3,
+      "clipped": [],
+      "rows": [
+        "dash-search@",
+        "sound-toggle@",
+        "sound-settings-trigger@",
+        "merge-on-review@",
+        "share-project@",
+        "share-project@",
         "bridge-reports",
         "asks-you"
       ],
-      "file": "v1/1440-light-uk-board-open_policy.png"
+      "file": "v1/1440-light-uk-board-open_seat.png"
     },
     {
       "variant": 1,
@@ -7014,7 +7299,7 @@
       "state": "bottom card",
       "box": [
         520,
-        551,
+        609,
         300,
         257
       ],
@@ -7023,6 +7308,7 @@
       "controls": 14,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1440-light-uk-card-bottom_card.png"
     },
     {
@@ -7034,7 +7320,7 @@
       "state": "bottom card, pipeline open",
       "box": [
         520,
-        551,
+        563.5,
         300,
         302.5
       ],
@@ -7043,6 +7329,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1440-light-uk-card-bottom_card_pipeline_open.png",
       "shift": 0
     },
@@ -7064,6 +7351,7 @@
       "controls": 14,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-light-uk-card-right_edge_card.png"
     },
     {
@@ -7084,6 +7372,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-light-uk-card-right_edge_card_pipeline_open.png",
       "shift": 0
     },
@@ -7105,6 +7394,7 @@
       "controls": 5,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-light-uk-conversation-rest.png"
     },
     {
@@ -7125,6 +7415,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-light-uk-conversation-open_more.png",
       "shift": 0
     },
@@ -7146,6 +7437,7 @@
       "controls": 14,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-dark-en-card-rest.png"
     },
     {
@@ -7166,6 +7458,7 @@
       "controls": 24,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-dark-en-card-open_appearance.png",
       "shift": 0
     },
@@ -7187,6 +7480,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-dark-en-card-open_pipeline.png",
       "shift": 0
     },
@@ -7208,6 +7502,7 @@
       "controls": 16,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-dark-en-card-open_more.png",
       "shift": 0
     },
@@ -7229,6 +7524,7 @@
       "controls": 1,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-dark-en-column-assigned.png"
     },
     {
@@ -7249,6 +7545,7 @@
       "controls": 1,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-dark-en-column-done.png"
     },
     {
@@ -7262,11 +7559,11 @@
         948,
         43.5,
         256,
-        138
+        170
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 4,
+      "controls": 5,
       "clipped": [],
       "rows": [
         "dash-search",
@@ -7323,7 +7620,7 @@
       "state": "bottom card",
       "box": [
         520,
-        551,
+        609,
         300,
         257
       ],
@@ -7332,6 +7629,7 @@
       "controls": 14,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1440-dark-en-card-bottom_card.png"
     },
     {
@@ -7343,7 +7641,7 @@
       "state": "bottom card, pipeline open",
       "box": [
         520,
-        551,
+        576,
         300,
         290
       ],
@@ -7352,6 +7650,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1440-dark-en-card-bottom_card_pipeline_open.png",
       "shift": 0
     },
@@ -7373,6 +7672,7 @@
       "controls": 14,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-dark-en-card-right_edge_card.png"
     },
     {
@@ -7393,6 +7693,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-dark-en-card-right_edge_card_pipeline_open.png",
       "shift": 0
     },
@@ -7414,6 +7715,7 @@
       "controls": 5,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-dark-en-conversation-rest.png"
     },
     {
@@ -7434,6 +7736,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-dark-en-conversation-open_more.png",
       "shift": 0
     },
@@ -7455,6 +7758,7 @@
       "controls": 14,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-dark-uk-card-rest.png"
     },
     {
@@ -7475,6 +7779,7 @@
       "controls": 24,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-dark-uk-card-open_appearance.png",
       "shift": 0
     },
@@ -7496,6 +7801,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-dark-uk-card-open_pipeline.png",
       "shift": 0
     },
@@ -7517,6 +7823,7 @@
       "controls": 16,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-dark-uk-card-open_more.png",
       "shift": 0
     },
@@ -7538,6 +7845,7 @@
       "controls": 1,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-dark-uk-column-assigned.png"
     },
     {
@@ -7558,6 +7866,7 @@
       "controls": 1,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-dark-uk-column-done.png"
     },
     {
@@ -7571,11 +7880,11 @@
         948,
         43.5,
         256,
-        138
+        170
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 4,
+      "controls": 5,
       "clipped": [],
       "rows": [
         "dash-search",
@@ -7632,7 +7941,7 @@
       "state": "bottom card",
       "box": [
         520,
-        551,
+        609,
         300,
         257
       ],
@@ -7641,6 +7950,7 @@
       "controls": 14,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1440-dark-uk-card-bottom_card.png"
     },
     {
@@ -7652,7 +7962,7 @@
       "state": "bottom card, pipeline open",
       "box": [
         520,
-        551,
+        563.5,
         300,
         302.5
       ],
@@ -7661,6 +7971,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1440-dark-uk-card-bottom_card_pipeline_open.png",
       "shift": 0
     },
@@ -7682,6 +7993,7 @@
       "controls": 14,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-dark-uk-card-right_edge_card.png"
     },
     {
@@ -7702,6 +8014,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-dark-uk-card-right_edge_card_pipeline_open.png",
       "shift": 0
     },
@@ -7723,6 +8036,7 @@
       "controls": 5,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-dark-uk-conversation-rest.png"
     },
     {
@@ -7743,6 +8057,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-dark-uk-conversation-open_more.png",
       "shift": 0
     },
@@ -7755,7 +8070,7 @@
       "state": "rest",
       "box": [
         668,
-        351,
+        409,
         300,
         257
       ],
@@ -7764,6 +8079,7 @@
       "controls": 14,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-en-card-rest.png"
     },
     {
@@ -7775,7 +8091,7 @@
       "state": "open appearance",
       "box": [
         668,
-        351,
+        325,
         300,
         341
       ],
@@ -7784,6 +8100,7 @@
       "controls": 24,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-en-card-open_appearance.png",
       "shift": 0
     },
@@ -7796,7 +8113,7 @@
       "state": "open pipeline",
       "box": [
         668,
-        351,
+        363.5,
         300,
         302.5
       ],
@@ -7805,6 +8122,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-en-card-open_pipeline.png",
       "shift": 0
     },
@@ -7817,7 +8135,7 @@
       "state": "open more",
       "box": [
         668,
-        351,
+        339,
         300,
         327
       ],
@@ -7826,6 +8144,7 @@
       "controls": 16,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-en-card-open_more.png",
       "shift": 0
     },
@@ -7838,7 +8157,7 @@
       "state": "assigned",
       "box": [
         675,
-        548,
+        547.6,
         300,
         69.4
       ],
@@ -7847,6 +8166,7 @@
       "controls": 1,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-en-column-assigned.png"
     },
     {
@@ -7858,7 +8178,7 @@
       "state": "done",
       "box": [
         675,
-        561,
+        560.6,
         300,
         56.4
       ],
@@ -7867,6 +8187,7 @@
       "controls": 1,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-en-column-done.png"
     },
     {
@@ -7880,11 +8201,11 @@
         353,
         84,
         256,
-        138
+        170
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 4,
+      "controls": 5,
       "clipped": [],
       "rows": [
         "dash-search",
@@ -7904,28 +8225,57 @@
       "scheme": "light",
       "lang": "en",
       "surface": "board",
-      "state": "open policy",
+      "state": "open merging",
       "box": [
         353,
         84,
         256,
-        444.4
+        177.6
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 9,
+      "controls": 4,
       "clipped": [],
       "rows": [
-        "dash-search",
-        "sound-toggle",
-        "sound-settings-trigger",
+        "dash-search@",
+        "sound-toggle@",
+        "sound-settings-trigger@",
         "merge-on-review",
         "share-project",
         "share-project",
+        "bridge-reports@",
+        "asks-you@"
+      ],
+      "file": "v1/1000-light-en-board-open_merging.png"
+    },
+    {
+      "variant": 1,
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "board",
+      "state": "open seat",
+      "box": [
+        353,
+        84,
+        256,
+        220.8
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 3,
+      "clipped": [],
+      "rows": [
+        "dash-search@",
+        "sound-toggle@",
+        "sound-settings-trigger@",
+        "merge-on-review@",
+        "share-project@",
+        "share-project@",
         "bridge-reports",
         "asks-you"
       ],
-      "file": "v1/1000-light-en-board-open_policy.png"
+      "file": "v1/1000-light-en-board-open_seat.png"
     },
     {
       "variant": 1,
@@ -8072,7 +8422,7 @@
       "state": "bottom card",
       "box": [
         668,
-        351,
+        409,
         300,
         257
       ],
@@ -8081,6 +8431,7 @@
       "controls": 14,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-en-card-bottom_card.png"
     },
     {
@@ -8092,7 +8443,7 @@
       "state": "bottom card, pipeline open",
       "box": [
         668,
-        351,
+        376,
         300,
         290
       ],
@@ -8101,6 +8452,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-en-card-bottom_card_pipeline_open.png",
       "shift": 0
     },
@@ -8122,6 +8474,7 @@
       "controls": 14,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-en-card-right_edge_card.png"
     },
     {
@@ -8133,7 +8486,7 @@
       "state": "right-edge card, pipeline open",
       "box": [
         668,
-        134,
+        101,
         300,
         290
       ],
@@ -8142,6 +8495,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-en-card-right_edge_card_pipeline_open.png",
       "shift": 0
     },
@@ -8163,6 +8517,7 @@
       "controls": 5,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1000-light-en-conversation-rest.png"
     },
     {
@@ -8183,6 +8538,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1000-light-en-conversation-open_more.png",
       "shift": 0
     },
@@ -8195,7 +8551,7 @@
       "state": "rest",
       "box": [
         668,
-        351,
+        409,
         300,
         257
       ],
@@ -8204,6 +8560,7 @@
       "controls": 14,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-uk-card-rest.png"
     },
     {
@@ -8215,7 +8572,7 @@
       "state": "open appearance",
       "box": [
         668,
-        351,
+        325,
         300,
         341
       ],
@@ -8224,6 +8581,7 @@
       "controls": 24,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-uk-card-open_appearance.png",
       "shift": 0
     },
@@ -8236,7 +8594,7 @@
       "state": "open pipeline",
       "box": [
         668,
-        351,
+        338.5,
         300,
         327.5
       ],
@@ -8245,6 +8603,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-uk-card-open_pipeline.png",
       "shift": 0
     },
@@ -8257,7 +8616,7 @@
       "state": "open more",
       "box": [
         668,
-        351,
+        339,
         300,
         327
       ],
@@ -8266,6 +8625,7 @@
       "controls": 16,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-uk-card-open_more.png",
       "shift": 0
     },
@@ -8278,7 +8638,7 @@
       "state": "assigned",
       "box": [
         675,
-        548,
+        547.6,
         300,
         69.4
       ],
@@ -8287,6 +8647,7 @@
       "controls": 1,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-uk-column-assigned.png"
     },
     {
@@ -8298,7 +8659,7 @@
       "state": "done",
       "box": [
         675,
-        561,
+        560.6,
         300,
         56.4
       ],
@@ -8307,6 +8668,7 @@
       "controls": 1,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-uk-column-done.png"
     },
     {
@@ -8320,11 +8682,11 @@
         353,
         84,
         256,
-        138
+        170
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 4,
+      "controls": 5,
       "clipped": [],
       "rows": [
         "dash-search",
@@ -8344,28 +8706,57 @@
       "scheme": "light",
       "lang": "uk",
       "surface": "board",
-      "state": "open policy",
+      "state": "open merging",
       "box": [
         353,
         84,
         256,
-        495.3
+        213.5
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 9,
+      "controls": 4,
       "clipped": [],
       "rows": [
-        "dash-search",
-        "sound-toggle",
-        "sound-settings-trigger",
+        "dash-search@",
+        "sound-toggle@",
+        "sound-settings-trigger@",
         "merge-on-review",
         "share-project",
         "share-project",
+        "bridge-reports@",
+        "asks-you@"
+      ],
+      "file": "v1/1000-light-uk-board-open_merging.png"
+    },
+    {
+      "variant": 1,
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "board",
+      "state": "open seat",
+      "box": [
+        353,
+        84,
+        256,
+        235.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 3,
+      "clipped": [],
+      "rows": [
+        "dash-search@",
+        "sound-toggle@",
+        "sound-settings-trigger@",
+        "merge-on-review@",
+        "share-project@",
+        "share-project@",
         "bridge-reports",
         "asks-you"
       ],
-      "file": "v1/1000-light-uk-board-open_policy.png"
+      "file": "v1/1000-light-uk-board-open_seat.png"
     },
     {
       "variant": 1,
@@ -8512,7 +8903,7 @@
       "state": "bottom card",
       "box": [
         668,
-        351,
+        409,
         300,
         257
       ],
@@ -8521,6 +8912,7 @@
       "controls": 14,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-uk-card-bottom_card.png"
     },
     {
@@ -8532,7 +8924,7 @@
       "state": "bottom card, pipeline open",
       "box": [
         668,
-        351,
+        363.5,
         300,
         302.5
       ],
@@ -8541,6 +8933,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-uk-card-bottom_card_pipeline_open.png",
       "shift": 0
     },
@@ -8562,6 +8955,7 @@
       "controls": 14,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-uk-card-right_edge_card.png"
     },
     {
@@ -8573,7 +8967,7 @@
       "state": "right-edge card, pipeline open",
       "box": [
         668,
-        134,
+        88.5,
         300,
         302.5
       ],
@@ -8582,6 +8976,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-uk-card-right_edge_card_pipeline_open.png",
       "shift": 0
     },
@@ -8603,6 +8998,7 @@
       "controls": 5,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1000-light-uk-conversation-rest.png"
     },
     {
@@ -8623,6 +9019,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1000-light-uk-conversation-open_more.png",
       "shift": 0
     },
@@ -8635,7 +9032,7 @@
       "state": "rest",
       "box": [
         668,
-        351,
+        409,
         300,
         257
       ],
@@ -8644,6 +9041,7 @@
       "controls": 14,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-dark-en-card-rest.png"
     },
     {
@@ -8655,7 +9053,7 @@
       "state": "open appearance",
       "box": [
         668,
-        351,
+        325,
         300,
         341
       ],
@@ -8664,6 +9062,7 @@
       "controls": 24,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-dark-en-card-open_appearance.png",
       "shift": 0
     },
@@ -8676,7 +9075,7 @@
       "state": "open pipeline",
       "box": [
         668,
-        351,
+        363.5,
         300,
         302.5
       ],
@@ -8685,6 +9084,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-dark-en-card-open_pipeline.png",
       "shift": 0
     },
@@ -8697,7 +9097,7 @@
       "state": "open more",
       "box": [
         668,
-        351,
+        339,
         300,
         327
       ],
@@ -8706,6 +9106,7 @@
       "controls": 16,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-dark-en-card-open_more.png",
       "shift": 0
     },
@@ -8718,7 +9119,7 @@
       "state": "assigned",
       "box": [
         675,
-        548,
+        547.6,
         300,
         69.4
       ],
@@ -8727,6 +9128,7 @@
       "controls": 1,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-dark-en-column-assigned.png"
     },
     {
@@ -8738,7 +9140,7 @@
       "state": "done",
       "box": [
         675,
-        561,
+        560.6,
         300,
         56.4
       ],
@@ -8747,6 +9149,7 @@
       "controls": 1,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-dark-en-column-done.png"
     },
     {
@@ -8760,11 +9163,11 @@
         353,
         84,
         256,
-        138
+        170
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 4,
+      "controls": 5,
       "clipped": [],
       "rows": [
         "dash-search",
@@ -8821,7 +9224,7 @@
       "state": "bottom card",
       "box": [
         668,
-        351,
+        409,
         300,
         257
       ],
@@ -8830,6 +9233,7 @@
       "controls": 14,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-dark-en-card-bottom_card.png"
     },
     {
@@ -8841,7 +9245,7 @@
       "state": "bottom card, pipeline open",
       "box": [
         668,
-        351,
+        376,
         300,
         290
       ],
@@ -8850,6 +9254,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-dark-en-card-bottom_card_pipeline_open.png",
       "shift": 0
     },
@@ -8871,6 +9276,7 @@
       "controls": 14,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-dark-en-card-right_edge_card.png"
     },
     {
@@ -8882,7 +9288,7 @@
       "state": "right-edge card, pipeline open",
       "box": [
         668,
-        134,
+        101,
         300,
         290
       ],
@@ -8891,6 +9297,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-dark-en-card-right_edge_card_pipeline_open.png",
       "shift": 0
     },
@@ -8912,6 +9319,7 @@
       "controls": 5,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1000-dark-en-conversation-rest.png"
     },
     {
@@ -8932,6 +9340,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1000-dark-en-conversation-open_more.png",
       "shift": 0
     },
@@ -8944,7 +9353,7 @@
       "state": "rest",
       "box": [
         668,
-        351,
+        409,
         300,
         257
       ],
@@ -8953,6 +9362,7 @@
       "controls": 14,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-dark-uk-card-rest.png"
     },
     {
@@ -8964,7 +9374,7 @@
       "state": "open appearance",
       "box": [
         668,
-        351,
+        325,
         300,
         341
       ],
@@ -8973,6 +9383,7 @@
       "controls": 24,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-dark-uk-card-open_appearance.png",
       "shift": 0
     },
@@ -8985,7 +9396,7 @@
       "state": "open pipeline",
       "box": [
         668,
-        351,
+        338.5,
         300,
         327.5
       ],
@@ -8994,6 +9405,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-dark-uk-card-open_pipeline.png",
       "shift": 0
     },
@@ -9006,7 +9418,7 @@
       "state": "open more",
       "box": [
         668,
-        351,
+        339,
         300,
         327
       ],
@@ -9015,6 +9427,7 @@
       "controls": 16,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-dark-uk-card-open_more.png",
       "shift": 0
     },
@@ -9027,7 +9440,7 @@
       "state": "assigned",
       "box": [
         675,
-        548,
+        547.6,
         300,
         69.4
       ],
@@ -9036,6 +9449,7 @@
       "controls": 1,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-dark-uk-column-assigned.png"
     },
     {
@@ -9047,7 +9461,7 @@
       "state": "done",
       "box": [
         675,
-        561,
+        560.6,
         300,
         56.4
       ],
@@ -9056,6 +9470,7 @@
       "controls": 1,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-dark-uk-column-done.png"
     },
     {
@@ -9069,11 +9484,11 @@
         353,
         84,
         256,
-        138
+        170
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 4,
+      "controls": 5,
       "clipped": [],
       "rows": [
         "dash-search",
@@ -9130,7 +9545,7 @@
       "state": "bottom card",
       "box": [
         668,
-        351,
+        409,
         300,
         257
       ],
@@ -9139,6 +9554,7 @@
       "controls": 14,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-dark-uk-card-bottom_card.png"
     },
     {
@@ -9150,7 +9566,7 @@
       "state": "bottom card, pipeline open",
       "box": [
         668,
-        351,
+        363.5,
         300,
         302.5
       ],
@@ -9159,6 +9575,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-dark-uk-card-bottom_card_pipeline_open.png",
       "shift": 0
     },
@@ -9180,6 +9597,7 @@
       "controls": 14,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-dark-uk-card-right_edge_card.png"
     },
     {
@@ -9191,7 +9609,7 @@
       "state": "right-edge card, pipeline open",
       "box": [
         668,
-        134,
+        88.5,
         300,
         302.5
       ],
@@ -9200,6 +9618,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-dark-uk-card-right_edge_card_pipeline_open.png",
       "shift": 0
     },
@@ -9221,6 +9640,7 @@
       "controls": 5,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1000-dark-uk-conversation-rest.png"
     },
     {
@@ -9241,6 +9661,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1000-dark-uk-conversation-open_more.png",
       "shift": 0
     },
@@ -9327,21 +9748,21 @@
       "state": "open view",
       "box": [
         0,
-        101.3,
+        460,
         390,
-        742.7
+        384
       ],
-      "scrolls": true,
+      "scrolls": false,
       "inside": true,
-      "controls": 18,
+      "controls": 8,
       "clipped": [],
       "rows": [
-        "new-agent",
-        "new-task",
-        "new-pipeline",
-        "tasks",
-        "pipelines",
-        "hidden",
+        "new-agent@",
+        "new-task@",
+        "new-pipeline@",
+        "tasks@",
+        "pipelines@",
+        "hidden@",
         "view-board",
         "view-catalog",
         "accounts",
@@ -9421,21 +9842,21 @@
       "state": "open policy",
       "box": [
         0,
-        101.3,
+        393.3,
         390,
-        742.7
+        450.8
       ],
-      "scrolls": true,
+      "scrolls": false,
       "inside": true,
-      "controls": 17,
+      "controls": 7,
       "clipped": [],
       "rows": [
-        "new-agent",
-        "new-task",
-        "new-pipeline",
-        "tasks",
-        "pipelines",
-        "hidden",
+        "new-agent@",
+        "new-task@",
+        "new-pipeline@",
+        "tasks@",
+        "pipelines@",
+        "hidden@",
         "view-board@",
         "view-catalog@",
         "accounts@",
@@ -9799,21 +10220,21 @@
       "state": "open view",
       "box": [
         0,
-        101.3,
+        460,
         390,
-        742.7
+        384
       ],
-      "scrolls": true,
+      "scrolls": false,
       "inside": true,
-      "controls": 18,
+      "controls": 8,
       "clipped": [],
       "rows": [
-        "new-agent",
-        "new-task",
-        "new-pipeline",
-        "tasks",
-        "pipelines",
-        "hidden",
+        "new-agent@",
+        "new-task@",
+        "new-pipeline@",
+        "tasks@",
+        "pipelines@",
+        "hidden@",
         "view-board",
         "view-catalog",
         "accounts",
@@ -9893,21 +10314,21 @@
       "state": "open policy",
       "box": [
         0,
-        101.3,
+        378.1,
         390,
-        742.7
+        465.9
       ],
-      "scrolls": true,
+      "scrolls": false,
       "inside": true,
-      "controls": 17,
+      "controls": 7,
       "clipped": [],
       "rows": [
-        "new-agent",
-        "new-task",
-        "new-pipeline",
-        "tasks",
-        "pipelines",
-        "hidden",
+        "new-agent@",
+        "new-task@",
+        "new-pipeline@",
+        "tasks@",
+        "pipelines@",
+        "hidden@",
         "view-board@",
         "view-catalog@",
         "accounts@",
@@ -10476,6 +10897,7 @@
       "controls": 14,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-light-en-card-waiting-rest.png"
     },
     {
@@ -10496,6 +10918,7 @@
       "controls": 24,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-light-en-card-waiting-open_appearance.png",
       "shift": 0
     },
@@ -10517,6 +10940,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-light-en-card-waiting-open_pipeline.png",
       "shift": 0
     },
@@ -10538,6 +10962,7 @@
       "controls": 16,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-light-en-card-waiting-open_more.png",
       "shift": 0
     },
@@ -10559,6 +10984,7 @@
       "controls": 14,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1440-light-en-card-many-rest.png"
     },
     {
@@ -10570,7 +10996,7 @@
       "state": "open appearance",
       "box": [
         716,
-        531,
+        447,
         300,
         341
       ],
@@ -10579,6 +11005,7 @@
       "controls": 24,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1440-light-en-card-many-open_appearance.png",
       "shift": 0
     },
@@ -10591,7 +11018,7 @@
       "state": "open pipelines",
       "box": [
         716,
-        531,
+        502,
         300,
         286
       ],
@@ -10600,6 +11027,7 @@
       "controls": 6,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1440-light-en-card-many-open_pipelines.png",
       "shift": 0
     },
@@ -10612,7 +11040,7 @@
       "state": "open pipelines, pipeline 1",
       "box": [
         716,
-        531,
+        458.9,
         300,
         329.1
       ],
@@ -10621,6 +11049,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1440-light-en-card-many-open_pipelines_pipeline_1.png",
       "shift": 0
     },
@@ -10633,7 +11062,7 @@
       "state": "open pipelines, pipeline 2",
       "box": [
         716,
-        531,
+        471.4,
         300,
         316.6
       ],
@@ -10642,6 +11071,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1440-light-en-card-many-open_pipelines_pipeline_2.png",
       "shift": 0
     },
@@ -10654,7 +11084,7 @@
       "state": "open pipelines, pipeline 3",
       "box": [
         716,
-        531,
+        458.9,
         300,
         329.1
       ],
@@ -10663,6 +11093,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1440-light-en-card-many-open_pipelines_pipeline_3.png",
       "shift": 0
     },
@@ -10675,7 +11106,7 @@
       "state": "open pipelines, pipeline 4",
       "box": [
         716,
-        531,
+        485.5,
         300,
         302.5
       ],
@@ -10684,6 +11115,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1440-light-en-card-many-open_pipelines_pipeline_4.png",
       "shift": 0
     },
@@ -10696,7 +11128,7 @@
       "state": "open pipelines, pipeline 5",
       "box": [
         716,
-        531,
+        458.9,
         300,
         329.1
       ],
@@ -10705,6 +11137,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1440-light-en-card-many-open_pipelines_pipeline_5.png",
       "shift": 0
     },
@@ -10717,7 +11150,7 @@
       "state": "open more",
       "box": [
         716,
-        531,
+        461,
         300,
         327
       ],
@@ -10726,6 +11159,7 @@
       "controls": 16,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1440-light-en-card-many-open_more.png",
       "shift": 0
     },
@@ -10747,6 +11181,7 @@
       "controls": 14,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-light-uk-card-waiting-rest.png"
     },
     {
@@ -10767,6 +11202,7 @@
       "controls": 24,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-light-uk-card-waiting-open_appearance.png",
       "shift": 0
     },
@@ -10788,6 +11224,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-light-uk-card-waiting-open_pipeline.png",
       "shift": 0
     },
@@ -10809,6 +11246,7 @@
       "controls": 16,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v1/1440-light-uk-card-waiting-open_more.png",
       "shift": 0
     },
@@ -10830,6 +11268,7 @@
       "controls": 14,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1440-light-uk-card-many-rest.png"
     },
     {
@@ -10841,7 +11280,7 @@
       "state": "open appearance",
       "box": [
         716,
-        531,
+        447,
         300,
         341
       ],
@@ -10850,6 +11289,7 @@
       "controls": 24,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1440-light-uk-card-many-open_appearance.png",
       "shift": 0
     },
@@ -10862,7 +11302,7 @@
       "state": "open pipelines",
       "box": [
         716,
-        531,
+        502,
         300,
         286
       ],
@@ -10871,6 +11311,7 @@
       "controls": 6,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1440-light-uk-card-many-open_pipelines.png",
       "shift": 0
     },
@@ -10883,7 +11324,7 @@
       "state": "open pipelines, pipeline 1",
       "box": [
         716,
-        531,
+        458.9,
         300,
         329.1
       ],
@@ -10892,6 +11333,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1440-light-uk-card-many-open_pipelines_pipeline_1.png",
       "shift": 0
     },
@@ -10904,7 +11346,7 @@
       "state": "open pipelines, pipeline 2",
       "box": [
         716,
-        531,
+        446.4,
         300,
         341.6
       ],
@@ -10913,6 +11355,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1440-light-uk-card-many-open_pipelines_pipeline_2.png",
       "shift": 0
     },
@@ -10925,7 +11368,7 @@
       "state": "open pipelines, pipeline 3",
       "box": [
         716,
-        531,
+        458.9,
         300,
         329.1
       ],
@@ -10934,6 +11377,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1440-light-uk-card-many-open_pipelines_pipeline_3.png",
       "shift": 0
     },
@@ -10946,7 +11390,7 @@
       "state": "open pipelines, pipeline 4",
       "box": [
         716,
-        531,
+        460.5,
         300,
         327.5
       ],
@@ -10955,6 +11399,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1440-light-uk-card-many-open_pipelines_pipeline_4.png",
       "shift": 0
     },
@@ -10967,7 +11412,7 @@
       "state": "open pipelines, pipeline 5",
       "box": [
         716,
-        531,
+        458.9,
         300,
         329.1
       ],
@@ -10976,6 +11421,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1440-light-uk-card-many-open_pipelines_pipeline_5.png",
       "shift": 0
     },
@@ -10988,7 +11434,7 @@
       "state": "open more",
       "box": [
         716,
-        531,
+        461,
         300,
         327
       ],
@@ -10997,6 +11443,7 @@
       "controls": 16,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1440-light-uk-card-many-open_more.png",
       "shift": 0
     },
@@ -11009,7 +11456,7 @@
       "state": "rest",
       "box": [
         668,
-        351,
+        409,
         300,
         257
       ],
@@ -11018,6 +11465,7 @@
       "controls": 14,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-en-card-waiting-rest.png"
     },
     {
@@ -11029,7 +11477,7 @@
       "state": "open appearance",
       "box": [
         668,
-        351,
+        325,
         300,
         341
       ],
@@ -11038,6 +11486,7 @@
       "controls": 24,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-en-card-waiting-open_appearance.png",
       "shift": 0
     },
@@ -11050,7 +11499,7 @@
       "state": "open pipeline",
       "box": [
         668,
-        351,
+        363.5,
         300,
         302.5
       ],
@@ -11059,6 +11508,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-en-card-waiting-open_pipeline.png",
       "shift": 0
     },
@@ -11071,7 +11521,7 @@
       "state": "open more",
       "box": [
         668,
-        351,
+        339,
         300,
         327
       ],
@@ -11080,6 +11530,7 @@
       "controls": 16,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-en-card-waiting-open_more.png",
       "shift": 0
     },
@@ -11092,7 +11543,7 @@
       "state": "rest",
       "box": [
         668,
-        351,
+        409,
         300,
         257
       ],
@@ -11101,6 +11552,7 @@
       "controls": 14,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-en-card-many-rest.png"
     },
     {
@@ -11112,7 +11564,7 @@
       "state": "open appearance",
       "box": [
         668,
-        351,
+        325,
         300,
         341
       ],
@@ -11121,6 +11573,7 @@
       "controls": 24,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-en-card-many-open_appearance.png",
       "shift": 0
     },
@@ -11133,7 +11586,7 @@
       "state": "open pipelines",
       "box": [
         668,
-        351,
+        380,
         300,
         286
       ],
@@ -11142,6 +11595,7 @@
       "controls": 6,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-en-card-many-open_pipelines.png",
       "shift": 0
     },
@@ -11154,7 +11608,7 @@
       "state": "open pipelines, pipeline 1",
       "box": [
         668,
-        351,
+        336.9,
         300,
         329.1
       ],
@@ -11163,6 +11617,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-en-card-many-open_pipelines_pipeline_1.png",
       "shift": 0
     },
@@ -11175,7 +11630,7 @@
       "state": "open pipelines, pipeline 2",
       "box": [
         668,
-        351,
+        349.4,
         300,
         316.6
       ],
@@ -11184,6 +11639,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-en-card-many-open_pipelines_pipeline_2.png",
       "shift": 0
     },
@@ -11196,7 +11652,7 @@
       "state": "open pipelines, pipeline 3",
       "box": [
         668,
-        351,
+        336.9,
         300,
         329.1
       ],
@@ -11205,6 +11661,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-en-card-many-open_pipelines_pipeline_3.png",
       "shift": 0
     },
@@ -11217,7 +11674,7 @@
       "state": "open pipelines, pipeline 4",
       "box": [
         668,
-        351,
+        363.5,
         300,
         302.5
       ],
@@ -11226,6 +11683,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-en-card-many-open_pipelines_pipeline_4.png",
       "shift": 0
     },
@@ -11238,7 +11696,7 @@
       "state": "open pipelines, pipeline 5",
       "box": [
         668,
-        351,
+        336.9,
         300,
         329.1
       ],
@@ -11247,6 +11705,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-en-card-many-open_pipelines_pipeline_5.png",
       "shift": 0
     },
@@ -11259,7 +11718,7 @@
       "state": "open more",
       "box": [
         668,
-        351,
+        339,
         300,
         327
       ],
@@ -11268,6 +11727,7 @@
       "controls": 16,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-en-card-many-open_more.png",
       "shift": 0
     },
@@ -11280,7 +11740,7 @@
       "state": "rest",
       "box": [
         668,
-        351,
+        409,
         300,
         257
       ],
@@ -11289,6 +11749,7 @@
       "controls": 14,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-uk-card-waiting-rest.png"
     },
     {
@@ -11300,7 +11761,7 @@
       "state": "open appearance",
       "box": [
         668,
-        351,
+        325,
         300,
         341
       ],
@@ -11309,6 +11770,7 @@
       "controls": 24,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-uk-card-waiting-open_appearance.png",
       "shift": 0
     },
@@ -11321,7 +11783,7 @@
       "state": "open pipeline",
       "box": [
         668,
-        351,
+        338.5,
         300,
         327.5
       ],
@@ -11330,6 +11792,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-uk-card-waiting-open_pipeline.png",
       "shift": 0
     },
@@ -11342,7 +11805,7 @@
       "state": "open more",
       "box": [
         668,
-        351,
+        339,
         300,
         327
       ],
@@ -11351,6 +11814,7 @@
       "controls": 16,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-uk-card-waiting-open_more.png",
       "shift": 0
     },
@@ -11363,7 +11827,7 @@
       "state": "rest",
       "box": [
         668,
-        348,
+        409,
         300,
         257
       ],
@@ -11372,6 +11836,7 @@
       "controls": 14,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-uk-card-many-rest.png"
     },
     {
@@ -11383,7 +11848,7 @@
       "state": "open appearance",
       "box": [
         668,
-        348,
+        325,
         300,
         341
       ],
@@ -11392,6 +11857,7 @@
       "controls": 24,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-uk-card-many-open_appearance.png",
       "shift": 0
     },
@@ -11404,7 +11870,7 @@
       "state": "open pipelines",
       "box": [
         668,
-        348,
+        380,
         300,
         286
       ],
@@ -11413,6 +11879,7 @@
       "controls": 6,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-uk-card-many-open_pipelines.png",
       "shift": 0
     },
@@ -11425,7 +11892,7 @@
       "state": "open pipelines, pipeline 1",
       "box": [
         668,
-        348,
+        336.9,
         300,
         329.1
       ],
@@ -11434,6 +11901,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-uk-card-many-open_pipelines_pipeline_1.png",
       "shift": 0
     },
@@ -11446,7 +11914,7 @@
       "state": "open pipelines, pipeline 2",
       "box": [
         668,
-        348,
+        324.4,
         300,
         341.6
       ],
@@ -11455,6 +11923,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-uk-card-many-open_pipelines_pipeline_2.png",
       "shift": 0
     },
@@ -11467,7 +11936,7 @@
       "state": "open pipelines, pipeline 3",
       "box": [
         668,
-        348,
+        336.9,
         300,
         329.1
       ],
@@ -11476,6 +11945,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-uk-card-many-open_pipelines_pipeline_3.png",
       "shift": 0
     },
@@ -11488,7 +11958,7 @@
       "state": "open pipelines, pipeline 4",
       "box": [
         668,
-        348,
+        338.5,
         300,
         327.5
       ],
@@ -11497,6 +11967,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-uk-card-many-open_pipelines_pipeline_4.png",
       "shift": 0
     },
@@ -11509,7 +11980,7 @@
       "state": "open pipelines, pipeline 5",
       "box": [
         668,
-        348,
+        336.9,
         300,
         329.1
       ],
@@ -11518,6 +11989,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-uk-card-many-open_pipelines_pipeline_5.png",
       "shift": 0
     },
@@ -11530,7 +12002,7 @@
       "state": "open more",
       "box": [
         668,
-        348,
+        339,
         300,
         327
       ],
@@ -11539,6 +12011,7 @@
       "controls": 16,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v1/1000-light-uk-card-many-open_more.png",
       "shift": 0
     },
@@ -11560,6 +12033,7 @@
       "controls": 9,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-light-en-card-rest.png"
     },
     {
@@ -11580,6 +12054,7 @@
       "controls": 6,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-light-en-card-open_status.png",
       "shift": 0
     },
@@ -11601,6 +12076,7 @@
       "controls": 4,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-light-en-card-open_priority.png",
       "shift": 0
     },
@@ -11622,6 +12098,7 @@
       "controls": 11,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-light-en-card-open_appearance.png",
       "shift": 0
     },
@@ -11643,6 +12120,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-light-en-card-open_pipeline.png",
       "shift": 0
     },
@@ -11664,6 +12142,7 @@
       "controls": 2,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-light-en-column-assigned.png"
     },
     {
@@ -11684,6 +12163,7 @@
       "controls": 2,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-light-en-column-done.png"
     },
     {
@@ -11697,11 +12177,11 @@
         948,
         43.5,
         256,
-        106
+        138
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 3,
+      "controls": 4,
       "clipped": [],
       "rows": [
         "dash-search",
@@ -11750,16 +12230,16 @@
       "scheme": "light",
       "lang": "en",
       "surface": "board",
-      "state": "open policy",
+      "state": "open merging",
       "box": [
         948,
         43.5,
         256,
-        352.4
+        177.6
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 6,
+      "controls": 4,
       "clipped": [],
       "rows": [
         "dash-search@",
@@ -11768,10 +12248,39 @@
         "merge-on-review",
         "share-project",
         "share-project",
+        "bridge-reports@",
+        "asks-you@"
+      ],
+      "file": "v2/1440-light-en-board-open_merging.png"
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "board",
+      "state": "open seat",
+      "box": [
+        948,
+        43.5,
+        256,
+        220.8
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 3,
+      "clipped": [],
+      "rows": [
+        "dash-search@",
+        "sound-toggle@",
+        "sound-settings-trigger@",
+        "merge-on-review@",
+        "share-project@",
+        "share-project@",
         "bridge-reports",
         "asks-you"
       ],
-      "file": "v2/1440-light-en-board-open_policy.png"
+      "file": "v2/1440-light-en-board-open_seat.png"
     },
     {
       "variant": 2,
@@ -11927,6 +12436,7 @@
       "controls": 9,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1440-light-en-card-bottom_card.png"
     },
     {
@@ -11938,7 +12448,7 @@
       "state": "bottom card, pipeline open",
       "box": [
         520,
-        551,
+        576,
         300,
         290
       ],
@@ -11947,6 +12457,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1440-light-en-card-bottom_card_pipeline_open.png",
       "shift": 0
     },
@@ -11968,6 +12479,7 @@
       "controls": 9,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-light-en-card-right_edge_card.png"
     },
     {
@@ -11988,6 +12500,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-light-en-card-right_edge_card_pipeline_open.png",
       "shift": 0
     },
@@ -12009,6 +12522,7 @@
       "controls": 5,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-light-en-conversation-rest.png"
     },
     {
@@ -12029,6 +12543,7 @@
       "controls": 3,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-light-en-conversation-open_task.png",
       "shift": 0
     },
@@ -12050,6 +12565,7 @@
       "controls": 3,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-light-en-conversation-open_closing.png",
       "shift": 0
     },
@@ -12071,6 +12587,7 @@
       "controls": 9,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-light-uk-card-rest.png"
     },
     {
@@ -12091,6 +12608,7 @@
       "controls": 6,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-light-uk-card-open_status.png",
       "shift": 0
     },
@@ -12112,6 +12630,7 @@
       "controls": 4,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-light-uk-card-open_priority.png",
       "shift": 0
     },
@@ -12133,6 +12652,7 @@
       "controls": 11,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-light-uk-card-open_appearance.png",
       "shift": 0
     },
@@ -12154,6 +12674,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-light-uk-card-open_pipeline.png",
       "shift": 0
     },
@@ -12175,6 +12696,7 @@
       "controls": 2,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-light-uk-column-assigned.png"
     },
     {
@@ -12195,6 +12717,7 @@
       "controls": 2,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-light-uk-column-done.png"
     },
     {
@@ -12208,11 +12731,11 @@
         948,
         43.5,
         256,
-        106
+        138
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 3,
+      "controls": 4,
       "clipped": [],
       "rows": [
         "dash-search",
@@ -12261,16 +12784,16 @@
       "scheme": "light",
       "lang": "uk",
       "surface": "board",
-      "state": "open policy",
+      "state": "open merging",
       "box": [
         948,
         43.5,
         256,
-        403.3
+        213.5
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 6,
+      "controls": 4,
       "clipped": [],
       "rows": [
         "dash-search@",
@@ -12279,10 +12802,39 @@
         "merge-on-review",
         "share-project",
         "share-project",
+        "bridge-reports@",
+        "asks-you@"
+      ],
+      "file": "v2/1440-light-uk-board-open_merging.png"
+    },
+    {
+      "variant": 2,
+      "frame": "1440",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "board",
+      "state": "open seat",
+      "box": [
+        948,
+        43.5,
+        256,
+        235.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 3,
+      "clipped": [],
+      "rows": [
+        "dash-search@",
+        "sound-toggle@",
+        "sound-settings-trigger@",
+        "merge-on-review@",
+        "share-project@",
+        "share-project@",
         "bridge-reports",
         "asks-you"
       ],
-      "file": "v2/1440-light-uk-board-open_policy.png"
+      "file": "v2/1440-light-uk-board-open_seat.png"
     },
     {
       "variant": 2,
@@ -12438,6 +12990,7 @@
       "controls": 9,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1440-light-uk-card-bottom_card.png"
     },
     {
@@ -12449,7 +13002,7 @@
       "state": "bottom card, pipeline open",
       "box": [
         520,
-        551,
+        563.5,
         300,
         302.5
       ],
@@ -12458,6 +13011,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1440-light-uk-card-bottom_card_pipeline_open.png",
       "shift": 0
     },
@@ -12479,6 +13033,7 @@
       "controls": 9,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-light-uk-card-right_edge_card.png"
     },
     {
@@ -12499,6 +13054,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-light-uk-card-right_edge_card_pipeline_open.png",
       "shift": 0
     },
@@ -12520,6 +13076,7 @@
       "controls": 5,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-light-uk-conversation-rest.png"
     },
     {
@@ -12540,6 +13097,7 @@
       "controls": 3,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-light-uk-conversation-open_task.png",
       "shift": 0
     },
@@ -12561,6 +13119,7 @@
       "controls": 3,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-light-uk-conversation-open_closing.png",
       "shift": 0
     },
@@ -12582,6 +13141,7 @@
       "controls": 9,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-dark-en-card-rest.png"
     },
     {
@@ -12602,6 +13162,7 @@
       "controls": 6,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-dark-en-card-open_status.png",
       "shift": 0
     },
@@ -12623,6 +13184,7 @@
       "controls": 4,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-dark-en-card-open_priority.png",
       "shift": 0
     },
@@ -12644,6 +13206,7 @@
       "controls": 11,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-dark-en-card-open_appearance.png",
       "shift": 0
     },
@@ -12665,6 +13228,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-dark-en-card-open_pipeline.png",
       "shift": 0
     },
@@ -12686,6 +13250,7 @@
       "controls": 2,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-dark-en-column-assigned.png"
     },
     {
@@ -12706,6 +13271,7 @@
       "controls": 2,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-dark-en-column-done.png"
     },
     {
@@ -12719,11 +13285,11 @@
         948,
         43.5,
         256,
-        106
+        138
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 3,
+      "controls": 4,
       "clipped": [],
       "rows": [
         "dash-search",
@@ -12789,6 +13355,7 @@
       "controls": 9,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1440-dark-en-card-bottom_card.png"
     },
     {
@@ -12800,7 +13367,7 @@
       "state": "bottom card, pipeline open",
       "box": [
         520,
-        551,
+        576,
         300,
         290
       ],
@@ -12809,6 +13376,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1440-dark-en-card-bottom_card_pipeline_open.png",
       "shift": 0
     },
@@ -12830,6 +13398,7 @@
       "controls": 9,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-dark-en-card-right_edge_card.png"
     },
     {
@@ -12850,6 +13419,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-dark-en-card-right_edge_card_pipeline_open.png",
       "shift": 0
     },
@@ -12871,6 +13441,7 @@
       "controls": 5,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-dark-en-conversation-rest.png"
     },
     {
@@ -12891,6 +13462,7 @@
       "controls": 3,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-dark-en-conversation-open_task.png",
       "shift": 0
     },
@@ -12912,6 +13484,7 @@
       "controls": 3,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-dark-en-conversation-open_closing.png",
       "shift": 0
     },
@@ -12933,6 +13506,7 @@
       "controls": 9,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-dark-uk-card-rest.png"
     },
     {
@@ -12953,6 +13527,7 @@
       "controls": 6,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-dark-uk-card-open_status.png",
       "shift": 0
     },
@@ -12974,6 +13549,7 @@
       "controls": 4,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-dark-uk-card-open_priority.png",
       "shift": 0
     },
@@ -12995,6 +13571,7 @@
       "controls": 11,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-dark-uk-card-open_appearance.png",
       "shift": 0
     },
@@ -13016,6 +13593,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-dark-uk-card-open_pipeline.png",
       "shift": 0
     },
@@ -13037,6 +13615,7 @@
       "controls": 2,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-dark-uk-column-assigned.png"
     },
     {
@@ -13057,6 +13636,7 @@
       "controls": 2,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-dark-uk-column-done.png"
     },
     {
@@ -13070,11 +13650,11 @@
         948,
         43.5,
         256,
-        106
+        138
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 3,
+      "controls": 4,
       "clipped": [],
       "rows": [
         "dash-search",
@@ -13140,6 +13720,7 @@
       "controls": 9,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1440-dark-uk-card-bottom_card.png"
     },
     {
@@ -13151,7 +13732,7 @@
       "state": "bottom card, pipeline open",
       "box": [
         520,
-        551,
+        563.5,
         300,
         302.5
       ],
@@ -13160,6 +13741,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1440-dark-uk-card-bottom_card_pipeline_open.png",
       "shift": 0
     },
@@ -13181,6 +13763,7 @@
       "controls": 9,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-dark-uk-card-right_edge_card.png"
     },
     {
@@ -13201,6 +13784,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-dark-uk-card-right_edge_card_pipeline_open.png",
       "shift": 0
     },
@@ -13222,6 +13806,7 @@
       "controls": 5,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-dark-uk-conversation-rest.png"
     },
     {
@@ -13242,6 +13827,7 @@
       "controls": 3,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-dark-uk-conversation-open_task.png",
       "shift": 0
     },
@@ -13263,6 +13849,7 @@
       "controls": 3,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-dark-uk-conversation-open_closing.png",
       "shift": 0
     },
@@ -13284,6 +13871,7 @@
       "controls": 9,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-en-card-rest.png"
     },
     {
@@ -13295,7 +13883,7 @@
       "state": "open status",
       "box": [
         668,
-        351,
+        479,
         300,
         187
       ],
@@ -13304,6 +13892,7 @@
       "controls": 6,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-en-card-open_status.png",
       "shift": 0
     },
@@ -13316,7 +13905,7 @@
       "state": "open priority",
       "box": [
         668,
-        351,
+        535,
         300,
         131
       ],
@@ -13325,6 +13914,7 @@
       "controls": 4,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-en-card-open_priority.png",
       "shift": 0
     },
@@ -13337,7 +13927,7 @@
       "state": "open appearance",
       "box": [
         668,
-        351,
+        549,
         300,
         117
       ],
@@ -13346,6 +13936,7 @@
       "controls": 11,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-en-card-open_appearance.png",
       "shift": 0
     },
@@ -13358,7 +13949,7 @@
       "state": "open pipeline",
       "box": [
         668,
-        351,
+        363.5,
         300,
         302.5
       ],
@@ -13367,6 +13958,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-en-card-open_pipeline.png",
       "shift": 0
     },
@@ -13379,7 +13971,7 @@
       "state": "assigned",
       "box": [
         675,
-        516,
+        515.6,
         300,
         101.4
       ],
@@ -13388,6 +13980,7 @@
       "controls": 2,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-en-column-assigned.png"
     },
     {
@@ -13399,7 +13992,7 @@
       "state": "done",
       "box": [
         675,
-        529,
+        528.6,
         300,
         88.4
       ],
@@ -13408,6 +14001,7 @@
       "controls": 2,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-en-column-done.png"
     },
     {
@@ -13421,11 +14015,11 @@
         353,
         84,
         256,
-        106
+        138
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 3,
+      "controls": 4,
       "clipped": [],
       "rows": [
         "dash-search",
@@ -13474,16 +14068,16 @@
       "scheme": "light",
       "lang": "en",
       "surface": "board",
-      "state": "open policy",
+      "state": "open merging",
       "box": [
         353,
         84,
         256,
-        352.4
+        177.6
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 6,
+      "controls": 4,
       "clipped": [],
       "rows": [
         "dash-search@",
@@ -13492,10 +14086,39 @@
         "merge-on-review",
         "share-project",
         "share-project",
+        "bridge-reports@",
+        "asks-you@"
+      ],
+      "file": "v2/1000-light-en-board-open_merging.png"
+    },
+    {
+      "variant": 2,
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "board",
+      "state": "open seat",
+      "box": [
+        353,
+        84,
+        256,
+        220.8
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 3,
+      "clipped": [],
+      "rows": [
+        "dash-search@",
+        "sound-toggle@",
+        "sound-settings-trigger@",
+        "merge-on-review@",
+        "share-project@",
+        "share-project@",
         "bridge-reports",
         "asks-you"
       ],
-      "file": "v2/1000-light-en-board-open_policy.png"
+      "file": "v2/1000-light-en-board-open_seat.png"
     },
     {
       "variant": 2,
@@ -13651,6 +14274,7 @@
       "controls": 9,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-en-card-bottom_card.png"
     },
     {
@@ -13662,7 +14286,7 @@
       "state": "bottom card, pipeline open",
       "box": [
         668,
-        351,
+        376,
         300,
         290
       ],
@@ -13671,6 +14295,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-en-card-bottom_card_pipeline_open.png",
       "shift": 0
     },
@@ -13692,6 +14317,7 @@
       "controls": 9,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-en-card-right_edge_card.png"
     },
     {
@@ -13703,7 +14329,7 @@
       "state": "right-edge card, pipeline open",
       "box": [
         668,
-        76,
+        101,
         300,
         290
       ],
@@ -13712,6 +14338,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-en-card-right_edge_card_pipeline_open.png",
       "shift": 0
     },
@@ -13733,6 +14360,7 @@
       "controls": 5,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1000-light-en-conversation-rest.png"
     },
     {
@@ -13753,6 +14381,7 @@
       "controls": 3,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1000-light-en-conversation-open_task.png",
       "shift": 0
     },
@@ -13774,6 +14403,7 @@
       "controls": 3,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1000-light-en-conversation-open_closing.png",
       "shift": 0
     },
@@ -13795,6 +14425,7 @@
       "controls": 9,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-uk-card-rest.png"
     },
     {
@@ -13806,7 +14437,7 @@
       "state": "open status",
       "box": [
         668,
-        351,
+        479,
         300,
         187
       ],
@@ -13815,6 +14446,7 @@
       "controls": 6,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-uk-card-open_status.png",
       "shift": 0
     },
@@ -13827,7 +14459,7 @@
       "state": "open priority",
       "box": [
         668,
-        351,
+        535,
         300,
         131
       ],
@@ -13836,6 +14468,7 @@
       "controls": 4,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-uk-card-open_priority.png",
       "shift": 0
     },
@@ -13848,7 +14481,7 @@
       "state": "open appearance",
       "box": [
         668,
-        351,
+        549,
         300,
         117
       ],
@@ -13857,6 +14490,7 @@
       "controls": 11,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-uk-card-open_appearance.png",
       "shift": 0
     },
@@ -13869,7 +14503,7 @@
       "state": "open pipeline",
       "box": [
         668,
-        351,
+        338.5,
         300,
         327.5
       ],
@@ -13878,6 +14512,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-uk-card-open_pipeline.png",
       "shift": 0
     },
@@ -13890,7 +14525,7 @@
       "state": "assigned",
       "box": [
         675,
-        516,
+        515.6,
         300,
         101.4
       ],
@@ -13899,6 +14534,7 @@
       "controls": 2,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-uk-column-assigned.png"
     },
     {
@@ -13910,7 +14546,7 @@
       "state": "done",
       "box": [
         675,
-        529,
+        528.6,
         300,
         88.4
       ],
@@ -13919,6 +14555,7 @@
       "controls": 2,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-uk-column-done.png"
     },
     {
@@ -13932,11 +14569,11 @@
         353,
         84,
         256,
-        106
+        138
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 3,
+      "controls": 4,
       "clipped": [],
       "rows": [
         "dash-search",
@@ -13985,16 +14622,16 @@
       "scheme": "light",
       "lang": "uk",
       "surface": "board",
-      "state": "open policy",
+      "state": "open merging",
       "box": [
         353,
         84,
         256,
-        403.3
+        213.5
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 6,
+      "controls": 4,
       "clipped": [],
       "rows": [
         "dash-search@",
@@ -14003,10 +14640,39 @@
         "merge-on-review",
         "share-project",
         "share-project",
+        "bridge-reports@",
+        "asks-you@"
+      ],
+      "file": "v2/1000-light-uk-board-open_merging.png"
+    },
+    {
+      "variant": 2,
+      "frame": "1000",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "board",
+      "state": "open seat",
+      "box": [
+        353,
+        84,
+        256,
+        235.9
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 3,
+      "clipped": [],
+      "rows": [
+        "dash-search@",
+        "sound-toggle@",
+        "sound-settings-trigger@",
+        "merge-on-review@",
+        "share-project@",
+        "share-project@",
         "bridge-reports",
         "asks-you"
       ],
-      "file": "v2/1000-light-uk-board-open_policy.png"
+      "file": "v2/1000-light-uk-board-open_seat.png"
     },
     {
       "variant": 2,
@@ -14162,6 +14828,7 @@
       "controls": 9,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-uk-card-bottom_card.png"
     },
     {
@@ -14173,7 +14840,7 @@
       "state": "bottom card, pipeline open",
       "box": [
         668,
-        351,
+        363.5,
         300,
         302.5
       ],
@@ -14182,6 +14849,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-uk-card-bottom_card_pipeline_open.png",
       "shift": 0
     },
@@ -14203,6 +14871,7 @@
       "controls": 9,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-uk-card-right_edge_card.png"
     },
     {
@@ -14214,7 +14883,7 @@
       "state": "right-edge card, pipeline open",
       "box": [
         668,
-        76,
+        88.5,
         300,
         302.5
       ],
@@ -14223,6 +14892,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-uk-card-right_edge_card_pipeline_open.png",
       "shift": 0
     },
@@ -14244,6 +14914,7 @@
       "controls": 5,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1000-light-uk-conversation-rest.png"
     },
     {
@@ -14264,6 +14935,7 @@
       "controls": 3,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1000-light-uk-conversation-open_task.png",
       "shift": 0
     },
@@ -14285,6 +14957,7 @@
       "controls": 3,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1000-light-uk-conversation-open_closing.png",
       "shift": 0
     },
@@ -14306,6 +14979,7 @@
       "controls": 9,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-dark-en-card-rest.png"
     },
     {
@@ -14317,7 +14991,7 @@
       "state": "open status",
       "box": [
         668,
-        351,
+        479,
         300,
         187
       ],
@@ -14326,6 +15000,7 @@
       "controls": 6,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-dark-en-card-open_status.png",
       "shift": 0
     },
@@ -14338,7 +15013,7 @@
       "state": "open priority",
       "box": [
         668,
-        351,
+        535,
         300,
         131
       ],
@@ -14347,6 +15022,7 @@
       "controls": 4,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-dark-en-card-open_priority.png",
       "shift": 0
     },
@@ -14359,7 +15035,7 @@
       "state": "open appearance",
       "box": [
         668,
-        351,
+        549,
         300,
         117
       ],
@@ -14368,6 +15044,7 @@
       "controls": 11,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-dark-en-card-open_appearance.png",
       "shift": 0
     },
@@ -14380,7 +15057,7 @@
       "state": "open pipeline",
       "box": [
         668,
-        351,
+        363.5,
         300,
         302.5
       ],
@@ -14389,6 +15066,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-dark-en-card-open_pipeline.png",
       "shift": 0
     },
@@ -14401,7 +15079,7 @@
       "state": "assigned",
       "box": [
         675,
-        516,
+        515.6,
         300,
         101.4
       ],
@@ -14410,6 +15088,7 @@
       "controls": 2,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-dark-en-column-assigned.png"
     },
     {
@@ -14421,7 +15100,7 @@
       "state": "done",
       "box": [
         675,
-        529,
+        528.6,
         300,
         88.4
       ],
@@ -14430,6 +15109,7 @@
       "controls": 2,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-dark-en-column-done.png"
     },
     {
@@ -14443,11 +15123,11 @@
         353,
         84,
         256,
-        106
+        138
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 3,
+      "controls": 4,
       "clipped": [],
       "rows": [
         "dash-search",
@@ -14513,6 +15193,7 @@
       "controls": 9,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-dark-en-card-bottom_card.png"
     },
     {
@@ -14524,7 +15205,7 @@
       "state": "bottom card, pipeline open",
       "box": [
         668,
-        351,
+        376,
         300,
         290
       ],
@@ -14533,6 +15214,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-dark-en-card-bottom_card_pipeline_open.png",
       "shift": 0
     },
@@ -14554,6 +15236,7 @@
       "controls": 9,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-dark-en-card-right_edge_card.png"
     },
     {
@@ -14565,7 +15248,7 @@
       "state": "right-edge card, pipeline open",
       "box": [
         668,
-        76,
+        101,
         300,
         290
       ],
@@ -14574,6 +15257,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-dark-en-card-right_edge_card_pipeline_open.png",
       "shift": 0
     },
@@ -14595,6 +15279,7 @@
       "controls": 5,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1000-dark-en-conversation-rest.png"
     },
     {
@@ -14615,6 +15300,7 @@
       "controls": 3,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1000-dark-en-conversation-open_task.png",
       "shift": 0
     },
@@ -14636,6 +15322,7 @@
       "controls": 3,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1000-dark-en-conversation-open_closing.png",
       "shift": 0
     },
@@ -14657,6 +15344,7 @@
       "controls": 9,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-dark-uk-card-rest.png"
     },
     {
@@ -14668,7 +15356,7 @@
       "state": "open status",
       "box": [
         668,
-        351,
+        479,
         300,
         187
       ],
@@ -14677,6 +15365,7 @@
       "controls": 6,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-dark-uk-card-open_status.png",
       "shift": 0
     },
@@ -14689,7 +15378,7 @@
       "state": "open priority",
       "box": [
         668,
-        351,
+        535,
         300,
         131
       ],
@@ -14698,6 +15387,7 @@
       "controls": 4,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-dark-uk-card-open_priority.png",
       "shift": 0
     },
@@ -14710,7 +15400,7 @@
       "state": "open appearance",
       "box": [
         668,
-        351,
+        549,
         300,
         117
       ],
@@ -14719,6 +15409,7 @@
       "controls": 11,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-dark-uk-card-open_appearance.png",
       "shift": 0
     },
@@ -14731,7 +15422,7 @@
       "state": "open pipeline",
       "box": [
         668,
-        351,
+        338.5,
         300,
         327.5
       ],
@@ -14740,6 +15431,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-dark-uk-card-open_pipeline.png",
       "shift": 0
     },
@@ -14752,7 +15444,7 @@
       "state": "assigned",
       "box": [
         675,
-        516,
+        515.6,
         300,
         101.4
       ],
@@ -14761,6 +15453,7 @@
       "controls": 2,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-dark-uk-column-assigned.png"
     },
     {
@@ -14772,7 +15465,7 @@
       "state": "done",
       "box": [
         675,
-        529,
+        528.6,
         300,
         88.4
       ],
@@ -14781,6 +15474,7 @@
       "controls": 2,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-dark-uk-column-done.png"
     },
     {
@@ -14794,11 +15488,11 @@
         353,
         84,
         256,
-        106
+        138
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 3,
+      "controls": 4,
       "clipped": [],
       "rows": [
         "dash-search",
@@ -14864,6 +15558,7 @@
       "controls": 9,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-dark-uk-card-bottom_card.png"
     },
     {
@@ -14875,7 +15570,7 @@
       "state": "bottom card, pipeline open",
       "box": [
         668,
-        351,
+        363.5,
         300,
         302.5
       ],
@@ -14884,6 +15579,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-dark-uk-card-bottom_card_pipeline_open.png",
       "shift": 0
     },
@@ -14905,6 +15601,7 @@
       "controls": 9,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-dark-uk-card-right_edge_card.png"
     },
     {
@@ -14916,7 +15613,7 @@
       "state": "right-edge card, pipeline open",
       "box": [
         668,
-        76,
+        88.5,
         300,
         302.5
       ],
@@ -14925,6 +15622,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-dark-uk-card-right_edge_card_pipeline_open.png",
       "shift": 0
     },
@@ -14946,6 +15644,7 @@
       "controls": 5,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1000-dark-uk-conversation-rest.png"
     },
     {
@@ -14966,6 +15665,7 @@
       "controls": 3,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1000-dark-uk-conversation-open_task.png",
       "shift": 0
     },
@@ -14987,6 +15687,7 @@
       "controls": 3,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1000-dark-uk-conversation-open_closing.png",
       "shift": 0
     },
@@ -16374,6 +17075,7 @@
       "controls": 9,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-light-en-card-waiting-rest.png"
     },
     {
@@ -16394,6 +17096,7 @@
       "controls": 6,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-light-en-card-waiting-open_status.png",
       "shift": 0
     },
@@ -16415,6 +17118,7 @@
       "controls": 4,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-light-en-card-waiting-open_priority.png",
       "shift": 0
     },
@@ -16436,6 +17140,7 @@
       "controls": 11,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-light-en-card-waiting-open_appearance.png",
       "shift": 0
     },
@@ -16457,6 +17162,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-light-en-card-waiting-open_pipeline.png",
       "shift": 0
     },
@@ -16478,6 +17184,7 @@
       "controls": 9,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1440-light-en-card-many-rest.png"
     },
     {
@@ -16489,7 +17196,7 @@
       "state": "open status",
       "box": [
         716,
-        473,
+        601,
         300,
         187
       ],
@@ -16498,6 +17205,7 @@
       "controls": 6,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1440-light-en-card-many-open_status.png",
       "shift": 0
     },
@@ -16510,7 +17218,7 @@
       "state": "open priority",
       "box": [
         716,
-        473,
+        657,
         300,
         131
       ],
@@ -16519,6 +17227,7 @@
       "controls": 4,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1440-light-en-card-many-open_priority.png",
       "shift": 0
     },
@@ -16531,7 +17240,7 @@
       "state": "open appearance",
       "box": [
         716,
-        473,
+        671,
         300,
         117
       ],
@@ -16540,6 +17249,7 @@
       "controls": 11,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1440-light-en-card-many-open_appearance.png",
       "shift": 0
     },
@@ -16552,7 +17262,7 @@
       "state": "open pipelines",
       "box": [
         716,
-        473,
+        502,
         300,
         286
       ],
@@ -16561,6 +17271,7 @@
       "controls": 6,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1440-light-en-card-many-open_pipelines.png",
       "shift": 0
     },
@@ -16573,7 +17284,7 @@
       "state": "open pipelines, pipeline 1",
       "box": [
         716,
-        473,
+        458.9,
         300,
         329.1
       ],
@@ -16582,6 +17293,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1440-light-en-card-many-open_pipelines_pipeline_1.png",
       "shift": 0
     },
@@ -16594,7 +17306,7 @@
       "state": "open pipelines, pipeline 2",
       "box": [
         716,
-        473,
+        471.4,
         300,
         316.6
       ],
@@ -16603,6 +17315,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1440-light-en-card-many-open_pipelines_pipeline_2.png",
       "shift": 0
     },
@@ -16615,7 +17328,7 @@
       "state": "open pipelines, pipeline 3",
       "box": [
         716,
-        473,
+        458.9,
         300,
         329.1
       ],
@@ -16624,6 +17337,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1440-light-en-card-many-open_pipelines_pipeline_3.png",
       "shift": 0
     },
@@ -16636,7 +17350,7 @@
       "state": "open pipelines, pipeline 4",
       "box": [
         716,
-        473,
+        485.5,
         300,
         302.5
       ],
@@ -16645,6 +17359,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1440-light-en-card-many-open_pipelines_pipeline_4.png",
       "shift": 0
     },
@@ -16657,7 +17372,7 @@
       "state": "open pipelines, pipeline 5",
       "box": [
         716,
-        473,
+        458.9,
         300,
         329.1
       ],
@@ -16666,6 +17381,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1440-light-en-card-many-open_pipelines_pipeline_5.png",
       "shift": 0
     },
@@ -16687,6 +17403,7 @@
       "controls": 9,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-light-uk-card-waiting-rest.png"
     },
     {
@@ -16707,6 +17424,7 @@
       "controls": 6,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-light-uk-card-waiting-open_status.png",
       "shift": 0
     },
@@ -16728,6 +17446,7 @@
       "controls": 4,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-light-uk-card-waiting-open_priority.png",
       "shift": 0
     },
@@ -16749,6 +17468,7 @@
       "controls": 11,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-light-uk-card-waiting-open_appearance.png",
       "shift": 0
     },
@@ -16770,6 +17490,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v2/1440-light-uk-card-waiting-open_pipeline.png",
       "shift": 0
     },
@@ -16791,6 +17512,7 @@
       "controls": 9,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1440-light-uk-card-many-rest.png"
     },
     {
@@ -16802,7 +17524,7 @@
       "state": "open status",
       "box": [
         716,
-        473,
+        601,
         300,
         187
       ],
@@ -16811,6 +17533,7 @@
       "controls": 6,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1440-light-uk-card-many-open_status.png",
       "shift": 0
     },
@@ -16823,7 +17546,7 @@
       "state": "open priority",
       "box": [
         716,
-        473,
+        657,
         300,
         131
       ],
@@ -16832,6 +17555,7 @@
       "controls": 4,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1440-light-uk-card-many-open_priority.png",
       "shift": 0
     },
@@ -16844,7 +17568,7 @@
       "state": "open appearance",
       "box": [
         716,
-        473,
+        671,
         300,
         117
       ],
@@ -16853,6 +17577,7 @@
       "controls": 11,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1440-light-uk-card-many-open_appearance.png",
       "shift": 0
     },
@@ -16865,7 +17590,7 @@
       "state": "open pipelines",
       "box": [
         716,
-        473,
+        502,
         300,
         286
       ],
@@ -16874,6 +17599,7 @@
       "controls": 6,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1440-light-uk-card-many-open_pipelines.png",
       "shift": 0
     },
@@ -16886,7 +17612,7 @@
       "state": "open pipelines, pipeline 1",
       "box": [
         716,
-        473,
+        458.9,
         300,
         329.1
       ],
@@ -16895,6 +17621,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1440-light-uk-card-many-open_pipelines_pipeline_1.png",
       "shift": 0
     },
@@ -16907,7 +17634,7 @@
       "state": "open pipelines, pipeline 2",
       "box": [
         716,
-        473,
+        446.4,
         300,
         341.6
       ],
@@ -16916,6 +17643,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1440-light-uk-card-many-open_pipelines_pipeline_2.png",
       "shift": 0
     },
@@ -16928,7 +17656,7 @@
       "state": "open pipelines, pipeline 3",
       "box": [
         716,
-        473,
+        458.9,
         300,
         329.1
       ],
@@ -16937,6 +17665,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1440-light-uk-card-many-open_pipelines_pipeline_3.png",
       "shift": 0
     },
@@ -16949,7 +17678,7 @@
       "state": "open pipelines, pipeline 4",
       "box": [
         716,
-        473,
+        460.5,
         300,
         327.5
       ],
@@ -16958,6 +17687,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1440-light-uk-card-many-open_pipelines_pipeline_4.png",
       "shift": 0
     },
@@ -16970,7 +17700,7 @@
       "state": "open pipelines, pipeline 5",
       "box": [
         716,
-        473,
+        458.9,
         300,
         329.1
       ],
@@ -16979,6 +17709,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1440-light-uk-card-many-open_pipelines_pipeline_5.png",
       "shift": 0
     },
@@ -17000,6 +17731,7 @@
       "controls": 9,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-en-card-waiting-rest.png"
     },
     {
@@ -17011,7 +17743,7 @@
       "state": "open status",
       "box": [
         668,
-        351,
+        479,
         300,
         187
       ],
@@ -17020,6 +17752,7 @@
       "controls": 6,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-en-card-waiting-open_status.png",
       "shift": 0
     },
@@ -17032,7 +17765,7 @@
       "state": "open priority",
       "box": [
         668,
-        351,
+        535,
         300,
         131
       ],
@@ -17041,6 +17774,7 @@
       "controls": 4,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-en-card-waiting-open_priority.png",
       "shift": 0
     },
@@ -17053,7 +17787,7 @@
       "state": "open appearance",
       "box": [
         668,
-        351,
+        549,
         300,
         117
       ],
@@ -17062,6 +17796,7 @@
       "controls": 11,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-en-card-waiting-open_appearance.png",
       "shift": 0
     },
@@ -17074,7 +17809,7 @@
       "state": "open pipeline",
       "box": [
         668,
-        351,
+        363.5,
         300,
         302.5
       ],
@@ -17083,6 +17818,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-en-card-waiting-open_pipeline.png",
       "shift": 0
     },
@@ -17104,6 +17840,7 @@
       "controls": 9,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-en-card-many-rest.png"
     },
     {
@@ -17115,7 +17852,7 @@
       "state": "open status",
       "box": [
         668,
-        351,
+        479,
         300,
         187
       ],
@@ -17124,6 +17861,7 @@
       "controls": 6,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-en-card-many-open_status.png",
       "shift": 0
     },
@@ -17136,7 +17874,7 @@
       "state": "open priority",
       "box": [
         668,
-        351,
+        535,
         300,
         131
       ],
@@ -17145,6 +17883,7 @@
       "controls": 4,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-en-card-many-open_priority.png",
       "shift": 0
     },
@@ -17157,7 +17896,7 @@
       "state": "open appearance",
       "box": [
         668,
-        351,
+        549,
         300,
         117
       ],
@@ -17166,6 +17905,7 @@
       "controls": 11,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-en-card-many-open_appearance.png",
       "shift": 0
     },
@@ -17178,7 +17918,7 @@
       "state": "open pipelines",
       "box": [
         668,
-        351,
+        380,
         300,
         286
       ],
@@ -17187,6 +17927,7 @@
       "controls": 6,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-en-card-many-open_pipelines.png",
       "shift": 0
     },
@@ -17199,7 +17940,7 @@
       "state": "open pipelines, pipeline 1",
       "box": [
         668,
-        351,
+        336.9,
         300,
         329.1
       ],
@@ -17208,6 +17949,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-en-card-many-open_pipelines_pipeline_1.png",
       "shift": 0
     },
@@ -17220,7 +17962,7 @@
       "state": "open pipelines, pipeline 2",
       "box": [
         668,
-        351,
+        349.4,
         300,
         316.6
       ],
@@ -17229,6 +17971,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-en-card-many-open_pipelines_pipeline_2.png",
       "shift": 0
     },
@@ -17241,7 +17984,7 @@
       "state": "open pipelines, pipeline 3",
       "box": [
         668,
-        351,
+        336.9,
         300,
         329.1
       ],
@@ -17250,6 +17993,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-en-card-many-open_pipelines_pipeline_3.png",
       "shift": 0
     },
@@ -17262,7 +18006,7 @@
       "state": "open pipelines, pipeline 4",
       "box": [
         668,
-        351,
+        363.5,
         300,
         302.5
       ],
@@ -17271,6 +18015,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-en-card-many-open_pipelines_pipeline_4.png",
       "shift": 0
     },
@@ -17283,7 +18028,7 @@
       "state": "open pipelines, pipeline 5",
       "box": [
         668,
-        351,
+        336.9,
         300,
         329.1
       ],
@@ -17292,6 +18037,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-en-card-many-open_pipelines_pipeline_5.png",
       "shift": 0
     },
@@ -17313,6 +18059,7 @@
       "controls": 9,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-uk-card-waiting-rest.png"
     },
     {
@@ -17324,7 +18071,7 @@
       "state": "open status",
       "box": [
         668,
-        351,
+        479,
         300,
         187
       ],
@@ -17333,6 +18080,7 @@
       "controls": 6,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-uk-card-waiting-open_status.png",
       "shift": 0
     },
@@ -17345,7 +18093,7 @@
       "state": "open priority",
       "box": [
         668,
-        351,
+        535,
         300,
         131
       ],
@@ -17354,6 +18102,7 @@
       "controls": 4,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-uk-card-waiting-open_priority.png",
       "shift": 0
     },
@@ -17366,7 +18115,7 @@
       "state": "open appearance",
       "box": [
         668,
-        351,
+        549,
         300,
         117
       ],
@@ -17375,6 +18124,7 @@
       "controls": 11,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-uk-card-waiting-open_appearance.png",
       "shift": 0
     },
@@ -17387,7 +18137,7 @@
       "state": "open pipeline",
       "box": [
         668,
-        351,
+        338.5,
         300,
         327.5
       ],
@@ -17396,6 +18146,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-uk-card-waiting-open_pipeline.png",
       "shift": 0
     },
@@ -17408,7 +18159,7 @@
       "state": "rest",
       "box": [
         668,
-        350,
+        351,
         300,
         315
       ],
@@ -17417,6 +18168,7 @@
       "controls": 9,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-uk-card-many-rest.png"
     },
     {
@@ -17428,7 +18180,7 @@
       "state": "open status",
       "box": [
         668,
-        350,
+        479,
         300,
         187
       ],
@@ -17437,6 +18189,7 @@
       "controls": 6,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-uk-card-many-open_status.png",
       "shift": 0
     },
@@ -17449,7 +18202,7 @@
       "state": "open priority",
       "box": [
         668,
-        350,
+        535,
         300,
         131
       ],
@@ -17458,6 +18211,7 @@
       "controls": 4,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-uk-card-many-open_priority.png",
       "shift": 0
     },
@@ -17470,7 +18224,7 @@
       "state": "open appearance",
       "box": [
         668,
-        350,
+        549,
         300,
         117
       ],
@@ -17479,6 +18233,7 @@
       "controls": 11,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-uk-card-many-open_appearance.png",
       "shift": 0
     },
@@ -17491,7 +18246,7 @@
       "state": "open pipelines",
       "box": [
         668,
-        350,
+        380,
         300,
         286
       ],
@@ -17500,6 +18255,7 @@
       "controls": 6,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-uk-card-many-open_pipelines.png",
       "shift": 0
     },
@@ -17512,7 +18268,7 @@
       "state": "open pipelines, pipeline 1",
       "box": [
         668,
-        350,
+        336.9,
         300,
         329.1
       ],
@@ -17521,6 +18277,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-uk-card-many-open_pipelines_pipeline_1.png",
       "shift": 0
     },
@@ -17533,7 +18290,7 @@
       "state": "open pipelines, pipeline 2",
       "box": [
         668,
-        350,
+        324.4,
         300,
         341.6
       ],
@@ -17542,6 +18299,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-uk-card-many-open_pipelines_pipeline_2.png",
       "shift": 0
     },
@@ -17554,7 +18312,7 @@
       "state": "open pipelines, pipeline 3",
       "box": [
         668,
-        350,
+        336.9,
         300,
         329.1
       ],
@@ -17563,6 +18321,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-uk-card-many-open_pipelines_pipeline_3.png",
       "shift": 0
     },
@@ -17575,7 +18334,7 @@
       "state": "open pipelines, pipeline 4",
       "box": [
         668,
-        350,
+        338.5,
         300,
         327.5
       ],
@@ -17584,6 +18343,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-uk-card-many-open_pipelines_pipeline_4.png",
       "shift": 0
     },
@@ -17596,7 +18356,7 @@
       "state": "open pipelines, pipeline 5",
       "box": [
         668,
-        350,
+        336.9,
         300,
         329.1
       ],
@@ -17605,6 +18365,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v2/1000-light-uk-card-many-open_pipelines_pipeline_5.png",
       "shift": 0
     },
@@ -17626,6 +18387,7 @@
       "controls": 22,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v3/1440-light-en-card-rest.png"
     },
     {
@@ -17646,6 +18408,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v3/1440-light-en-card-open_pipeline.png",
       "shift": 0
     },
@@ -17667,6 +18430,7 @@
       "controls": 1,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v3/1440-light-en-column-assigned.png"
     },
     {
@@ -17687,6 +18451,7 @@
       "controls": 1,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v3/1440-light-en-column-done.png"
     },
     {
@@ -17792,26 +18557,26 @@
         7,
         36.5,
         232,
-        458
+        225
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 14,
+      "controls": 7,
       "clipped": [],
       "rows": [
-        "language",
-        "qr",
-        "push",
+        "language@",
+        "qr@",
+        "push@",
         "rail-menu-setup-guide",
         "rail-menu-interface-walk",
         "rail-menu-agent-mapping",
         "rail-menu-dictation",
-        "rail-menu-settings",
+        "rail-menu-settings@",
         "rail-menu-linked-settings",
         "rail-menu-external-relay",
-        "rail-menu-update",
-        "rail-menu-activity",
-        "rail-menu-team"
+        "rail-menu-update@",
+        "rail-menu-activity@",
+        "rail-menu-team@"
       ],
       "file": "v3/1440-light-en-header-open_rare.png"
     },
@@ -17824,7 +18589,7 @@
       "state": "bottom card",
       "box": [
         520,
-        542,
+        541.6,
         300,
         324.4
       ],
@@ -17833,6 +18598,7 @@
       "controls": 22,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1440-light-en-card-bottom_card.png"
     },
     {
@@ -17844,7 +18610,7 @@
       "state": "bottom card, pipeline open",
       "box": [
         520,
-        542,
+        576,
         300,
         290
       ],
@@ -17853,6 +18619,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1440-light-en-card-bottom_card_pipeline_open.png",
       "shift": 0
     },
@@ -17874,6 +18641,7 @@
       "controls": 22,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v3/1440-light-en-card-right_edge_card.png"
     },
     {
@@ -17894,6 +18662,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v3/1440-light-en-card-right_edge_card_pipeline_open.png",
       "shift": 0
     },
@@ -17915,6 +18684,7 @@
       "controls": 7,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v3/1440-light-en-conversation-rest.png"
     },
     {
@@ -17935,6 +18705,7 @@
       "controls": 22,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v3/1440-light-uk-card-rest.png"
     },
     {
@@ -17955,6 +18726,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v3/1440-light-uk-card-open_pipeline.png",
       "shift": 0
     },
@@ -17976,6 +18748,7 @@
       "controls": 1,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v3/1440-light-uk-column-assigned.png"
     },
     {
@@ -17996,6 +18769,7 @@
       "controls": 1,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v3/1440-light-uk-column-done.png"
     },
     {
@@ -18101,26 +18875,26 @@
         7,
         36.5,
         232,
-        458
+        225
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 14,
+      "controls": 7,
       "clipped": [],
       "rows": [
-        "language",
-        "qr",
-        "push",
+        "language@",
+        "qr@",
+        "push@",
         "rail-menu-setup-guide",
         "rail-menu-interface-walk",
         "rail-menu-agent-mapping",
         "rail-menu-dictation",
-        "rail-menu-settings",
+        "rail-menu-settings@",
         "rail-menu-linked-settings",
         "rail-menu-external-relay",
-        "rail-menu-update",
-        "rail-menu-activity",
-        "rail-menu-team"
+        "rail-menu-update@",
+        "rail-menu-activity@",
+        "rail-menu-team@"
       ],
       "file": "v3/1440-light-uk-header-open_rare.png"
     },
@@ -18133,7 +18907,7 @@
       "state": "bottom card",
       "box": [
         520,
-        542,
+        541.6,
         300,
         324.4
       ],
@@ -18142,6 +18916,7 @@
       "controls": 22,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1440-light-uk-card-bottom_card.png"
     },
     {
@@ -18153,7 +18928,7 @@
       "state": "bottom card, pipeline open",
       "box": [
         520,
-        542,
+        563.5,
         300,
         302.5
       ],
@@ -18162,6 +18937,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1440-light-uk-card-bottom_card_pipeline_open.png",
       "shift": 0
     },
@@ -18183,6 +18959,7 @@
       "controls": 22,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v3/1440-light-uk-card-right_edge_card.png"
     },
     {
@@ -18203,6 +18980,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v3/1440-light-uk-card-right_edge_card_pipeline_open.png",
       "shift": 0
     },
@@ -18224,6 +19002,7 @@
       "controls": 7,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v3/1440-light-uk-conversation-rest.png"
     },
     {
@@ -18244,6 +19023,7 @@
       "controls": 22,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v3/1440-dark-en-card-rest.png"
     },
     {
@@ -18264,6 +19044,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v3/1440-dark-en-card-open_pipeline.png",
       "shift": 0
     },
@@ -18285,6 +19066,7 @@
       "controls": 1,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v3/1440-dark-en-column-assigned.png"
     },
     {
@@ -18305,6 +19087,7 @@
       "controls": 1,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v3/1440-dark-en-column-done.png"
     },
     {
@@ -18379,7 +19162,7 @@
       "state": "bottom card",
       "box": [
         520,
-        542,
+        541.6,
         300,
         324.4
       ],
@@ -18388,6 +19171,7 @@
       "controls": 22,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1440-dark-en-card-bottom_card.png"
     },
     {
@@ -18399,7 +19183,7 @@
       "state": "bottom card, pipeline open",
       "box": [
         520,
-        542,
+        576,
         300,
         290
       ],
@@ -18408,6 +19192,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1440-dark-en-card-bottom_card_pipeline_open.png",
       "shift": 0
     },
@@ -18429,6 +19214,7 @@
       "controls": 22,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v3/1440-dark-en-card-right_edge_card.png"
     },
     {
@@ -18449,6 +19235,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v3/1440-dark-en-card-right_edge_card_pipeline_open.png",
       "shift": 0
     },
@@ -18470,6 +19257,7 @@
       "controls": 7,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v3/1440-dark-en-conversation-rest.png"
     },
     {
@@ -18490,6 +19278,7 @@
       "controls": 22,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v3/1440-dark-uk-card-rest.png"
     },
     {
@@ -18510,6 +19299,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v3/1440-dark-uk-card-open_pipeline.png",
       "shift": 0
     },
@@ -18531,6 +19321,7 @@
       "controls": 1,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v3/1440-dark-uk-column-assigned.png"
     },
     {
@@ -18551,6 +19342,7 @@
       "controls": 1,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v3/1440-dark-uk-column-done.png"
     },
     {
@@ -18625,7 +19417,7 @@
       "state": "bottom card",
       "box": [
         520,
-        542,
+        541.6,
         300,
         324.4
       ],
@@ -18634,6 +19426,7 @@
       "controls": 22,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1440-dark-uk-card-bottom_card.png"
     },
     {
@@ -18645,7 +19438,7 @@
       "state": "bottom card, pipeline open",
       "box": [
         520,
-        542,
+        563.5,
         300,
         302.5
       ],
@@ -18654,6 +19447,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1440-dark-uk-card-bottom_card_pipeline_open.png",
       "shift": 0
     },
@@ -18675,6 +19469,7 @@
       "controls": 22,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v3/1440-dark-uk-card-right_edge_card.png"
     },
     {
@@ -18695,6 +19490,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v3/1440-dark-uk-card-right_edge_card_pipeline_open.png",
       "shift": 0
     },
@@ -18716,6 +19512,7 @@
       "controls": 7,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v3/1440-dark-uk-conversation-rest.png"
     },
     {
@@ -18727,7 +19524,7 @@
       "state": "rest",
       "box": [
         668,
-        329,
+        328.6,
         300,
         337.4
       ],
@@ -18736,6 +19533,7 @@
       "controls": 22,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-light-en-card-rest.png"
     },
     {
@@ -18747,7 +19545,7 @@
       "state": "open pipeline",
       "box": [
         668,
-        329,
+        363.5,
         300,
         302.5
       ],
@@ -18756,6 +19554,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-light-en-card-open_pipeline.png",
       "shift": 0
     },
@@ -18768,7 +19567,7 @@
       "state": "assigned",
       "box": [
         675,
-        548,
+        547.6,
         300,
         69.4
       ],
@@ -18777,6 +19576,7 @@
       "controls": 1,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-light-en-column-assigned.png"
     },
     {
@@ -18788,7 +19588,7 @@
       "state": "done",
       "box": [
         675,
-        561,
+        560.6,
         300,
         56.4
       ],
@@ -18797,6 +19597,7 @@
       "controls": 1,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-light-en-column-done.png"
     },
     {
@@ -18902,26 +19703,26 @@
         7,
         36.5,
         232,
-        458
+        225
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 14,
+      "controls": 7,
       "clipped": [],
       "rows": [
-        "language",
-        "qr",
-        "push",
+        "language@",
+        "qr@",
+        "push@",
         "rail-menu-setup-guide",
         "rail-menu-interface-walk",
         "rail-menu-agent-mapping",
         "rail-menu-dictation",
-        "rail-menu-settings",
+        "rail-menu-settings@",
         "rail-menu-linked-settings",
         "rail-menu-external-relay",
-        "rail-menu-update",
-        "rail-menu-activity",
-        "rail-menu-team"
+        "rail-menu-update@",
+        "rail-menu-activity@",
+        "rail-menu-team@"
       ],
       "file": "v3/1000-light-en-header-open_rare.png"
     },
@@ -18934,7 +19735,7 @@
       "state": "bottom card",
       "box": [
         668,
-        342,
+        341.6,
         300,
         324.4
       ],
@@ -18943,6 +19744,7 @@
       "controls": 22,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-light-en-card-bottom_card.png"
     },
     {
@@ -18954,7 +19756,7 @@
       "state": "bottom card, pipeline open",
       "box": [
         668,
-        342,
+        376,
         300,
         290
       ],
@@ -18963,6 +19765,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-light-en-card-bottom_card_pipeline_open.png",
       "shift": 0
     },
@@ -18975,7 +19778,7 @@
       "state": "right-edge card",
       "box": [
         668,
-        67,
+        66.6,
         300,
         324.4
       ],
@@ -18984,6 +19787,7 @@
       "controls": 22,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-light-en-card-right_edge_card.png"
     },
     {
@@ -18995,7 +19799,7 @@
       "state": "right-edge card, pipeline open",
       "box": [
         668,
-        67,
+        101,
         300,
         290
       ],
@@ -19004,6 +19808,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-light-en-card-right_edge_card_pipeline_open.png",
       "shift": 0
     },
@@ -19025,6 +19830,7 @@
       "controls": 7,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v3/1000-light-en-conversation-rest.png"
     },
     {
@@ -19036,7 +19842,7 @@
       "state": "rest",
       "box": [
         668,
-        329,
+        328.6,
         300,
         337.4
       ],
@@ -19045,6 +19851,7 @@
       "controls": 22,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-light-uk-card-rest.png"
     },
     {
@@ -19056,7 +19863,7 @@
       "state": "open pipeline",
       "box": [
         668,
-        329,
+        338.5,
         300,
         327.5
       ],
@@ -19065,6 +19872,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-light-uk-card-open_pipeline.png",
       "shift": 0
     },
@@ -19077,7 +19885,7 @@
       "state": "assigned",
       "box": [
         675,
-        548,
+        547.6,
         300,
         69.4
       ],
@@ -19086,6 +19894,7 @@
       "controls": 1,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-light-uk-column-assigned.png"
     },
     {
@@ -19097,7 +19906,7 @@
       "state": "done",
       "box": [
         675,
-        561,
+        560.6,
         300,
         56.4
       ],
@@ -19106,6 +19915,7 @@
       "controls": 1,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-light-uk-column-done.png"
     },
     {
@@ -19211,26 +20021,26 @@
         7,
         36.5,
         232,
-        458
+        225
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 14,
+      "controls": 7,
       "clipped": [],
       "rows": [
-        "language",
-        "qr",
-        "push",
+        "language@",
+        "qr@",
+        "push@",
         "rail-menu-setup-guide",
         "rail-menu-interface-walk",
         "rail-menu-agent-mapping",
         "rail-menu-dictation",
-        "rail-menu-settings",
+        "rail-menu-settings@",
         "rail-menu-linked-settings",
         "rail-menu-external-relay",
-        "rail-menu-update",
-        "rail-menu-activity",
-        "rail-menu-team"
+        "rail-menu-update@",
+        "rail-menu-activity@",
+        "rail-menu-team@"
       ],
       "file": "v3/1000-light-uk-header-open_rare.png"
     },
@@ -19243,7 +20053,7 @@
       "state": "bottom card",
       "box": [
         668,
-        342,
+        341.6,
         300,
         324.4
       ],
@@ -19252,6 +20062,7 @@
       "controls": 22,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-light-uk-card-bottom_card.png"
     },
     {
@@ -19263,7 +20074,7 @@
       "state": "bottom card, pipeline open",
       "box": [
         668,
-        342,
+        363.5,
         300,
         302.5
       ],
@@ -19272,6 +20083,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-light-uk-card-bottom_card_pipeline_open.png",
       "shift": 0
     },
@@ -19284,7 +20096,7 @@
       "state": "right-edge card",
       "box": [
         668,
-        67,
+        66.6,
         300,
         324.4
       ],
@@ -19293,6 +20105,7 @@
       "controls": 22,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-light-uk-card-right_edge_card.png"
     },
     {
@@ -19304,7 +20117,7 @@
       "state": "right-edge card, pipeline open",
       "box": [
         668,
-        67,
+        88.5,
         300,
         302.5
       ],
@@ -19313,6 +20126,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-light-uk-card-right_edge_card_pipeline_open.png",
       "shift": 0
     },
@@ -19334,6 +20148,7 @@
       "controls": 7,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v3/1000-light-uk-conversation-rest.png"
     },
     {
@@ -19345,7 +20160,7 @@
       "state": "rest",
       "box": [
         668,
-        329,
+        328.6,
         300,
         337.4
       ],
@@ -19354,6 +20169,7 @@
       "controls": 22,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-dark-en-card-rest.png"
     },
     {
@@ -19365,7 +20181,7 @@
       "state": "open pipeline",
       "box": [
         668,
-        329,
+        363.5,
         300,
         302.5
       ],
@@ -19374,6 +20190,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-dark-en-card-open_pipeline.png",
       "shift": 0
     },
@@ -19386,7 +20203,7 @@
       "state": "assigned",
       "box": [
         675,
-        548,
+        547.6,
         300,
         69.4
       ],
@@ -19395,6 +20212,7 @@
       "controls": 1,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-dark-en-column-assigned.png"
     },
     {
@@ -19406,7 +20224,7 @@
       "state": "done",
       "box": [
         675,
-        561,
+        560.6,
         300,
         56.4
       ],
@@ -19415,6 +20233,7 @@
       "controls": 1,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-dark-en-column-done.png"
     },
     {
@@ -19489,7 +20308,7 @@
       "state": "bottom card",
       "box": [
         668,
-        342,
+        341.6,
         300,
         324.4
       ],
@@ -19498,6 +20317,7 @@
       "controls": 22,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-dark-en-card-bottom_card.png"
     },
     {
@@ -19509,7 +20329,7 @@
       "state": "bottom card, pipeline open",
       "box": [
         668,
-        342,
+        376,
         300,
         290
       ],
@@ -19518,6 +20338,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-dark-en-card-bottom_card_pipeline_open.png",
       "shift": 0
     },
@@ -19530,7 +20351,7 @@
       "state": "right-edge card",
       "box": [
         668,
-        67,
+        66.6,
         300,
         324.4
       ],
@@ -19539,6 +20360,7 @@
       "controls": 22,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-dark-en-card-right_edge_card.png"
     },
     {
@@ -19550,7 +20372,7 @@
       "state": "right-edge card, pipeline open",
       "box": [
         668,
-        67,
+        101,
         300,
         290
       ],
@@ -19559,6 +20381,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-dark-en-card-right_edge_card_pipeline_open.png",
       "shift": 0
     },
@@ -19580,6 +20403,7 @@
       "controls": 7,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v3/1000-dark-en-conversation-rest.png"
     },
     {
@@ -19591,7 +20415,7 @@
       "state": "rest",
       "box": [
         668,
-        329,
+        328.6,
         300,
         337.4
       ],
@@ -19600,6 +20424,7 @@
       "controls": 22,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-dark-uk-card-rest.png"
     },
     {
@@ -19611,7 +20436,7 @@
       "state": "open pipeline",
       "box": [
         668,
-        329,
+        338.5,
         300,
         327.5
       ],
@@ -19620,6 +20445,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-dark-uk-card-open_pipeline.png",
       "shift": 0
     },
@@ -19632,7 +20458,7 @@
       "state": "assigned",
       "box": [
         675,
-        548,
+        547.6,
         300,
         69.4
       ],
@@ -19641,6 +20467,7 @@
       "controls": 1,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-dark-uk-column-assigned.png"
     },
     {
@@ -19652,7 +20479,7 @@
       "state": "done",
       "box": [
         675,
-        561,
+        560.6,
         300,
         56.4
       ],
@@ -19661,6 +20488,7 @@
       "controls": 1,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-dark-uk-column-done.png"
     },
     {
@@ -19735,7 +20563,7 @@
       "state": "bottom card",
       "box": [
         668,
-        342,
+        341.6,
         300,
         324.4
       ],
@@ -19744,6 +20572,7 @@
       "controls": 22,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-dark-uk-card-bottom_card.png"
     },
     {
@@ -19755,7 +20584,7 @@
       "state": "bottom card, pipeline open",
       "box": [
         668,
-        342,
+        363.5,
         300,
         302.5
       ],
@@ -19764,6 +20593,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-dark-uk-card-bottom_card_pipeline_open.png",
       "shift": 0
     },
@@ -19776,7 +20606,7 @@
       "state": "right-edge card",
       "box": [
         668,
-        67,
+        66.6,
         300,
         324.4
       ],
@@ -19785,6 +20615,7 @@
       "controls": 22,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-dark-uk-card-right_edge_card.png"
     },
     {
@@ -19796,7 +20627,7 @@
       "state": "right-edge card, pipeline open",
       "box": [
         668,
-        67,
+        88.5,
         300,
         302.5
       ],
@@ -19805,6 +20636,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-dark-uk-card-right_edge_card_pipeline_open.png",
       "shift": 0
     },
@@ -19826,6 +20658,7 @@
       "controls": 7,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v3/1000-dark-uk-conversation-rest.png"
     },
     {
@@ -19864,13 +20697,13 @@
       "state": "rest",
       "box": [
         0,
-        360,
+        316,
         390,
-        484
+        528
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 13,
+      "controls": 14,
       "clipped": [],
       "rows": [
         "new-agent",
@@ -19908,31 +20741,78 @@
       "scheme": "light",
       "lang": "en",
       "surface": "phone-board",
+      "state": "open policy",
+      "box": [
+        0,
+        474.9,
+        390,
+        369.1
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 7,
+      "clipped": [],
+      "rows": [
+        "new-agent@",
+        "new-task@",
+        "new-pipeline@",
+        "tasks@",
+        "pipelines@",
+        "hidden@",
+        "view-board@",
+        "view-catalog@",
+        "accounts@",
+        "host@",
+        "activity@",
+        "team@",
+        "sound-settings-trigger@",
+        "keep-awake-row@",
+        "setup-guide@",
+        "interface-walk@",
+        "agent-mapping@",
+        "dictation@",
+        "settings@",
+        "linked-settings@",
+        "external-relay@",
+        "self-update@",
+        "merge-on-review",
+        "share-project",
+        "bridge-reports",
+        "asks-you"
+      ],
+      "file": "v3/390-light-en-phone-board-open_policy.png"
+    },
+    {
+      "variant": 3,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "en",
+      "surface": "phone-board",
       "state": "open rare",
       "box": [
         0,
-        101.3,
+        174.9,
         390,
-        742.7
+        669.1
       ],
-      "scrolls": true,
+      "scrolls": false,
       "inside": true,
-      "controls": 30,
+      "controls": 14,
       "clipped": [],
       "rows": [
-        "new-agent",
-        "new-task",
-        "new-pipeline",
-        "tasks",
-        "pipelines",
-        "hidden",
-        "view-board",
-        "view-catalog",
-        "accounts",
+        "new-agent@",
+        "new-task@",
+        "new-pipeline@",
+        "tasks@",
+        "pipelines@",
+        "hidden@",
+        "view-board@",
+        "view-catalog@",
+        "accounts@",
         "host",
         "activity",
         "team",
-        "sound-settings-trigger",
+        "sound-settings-trigger@",
         "keep-awake-row",
         "setup-guide",
         "interface-walk",
@@ -19942,10 +20822,10 @@
         "linked-settings",
         "external-relay",
         "self-update",
-        "merge-on-review",
-        "share-project",
-        "bridge-reports",
-        "asks-you"
+        "merge-on-review@",
+        "share-project@",
+        "bridge-reports@",
+        "asks-you@"
       ],
       "file": "v3/390-light-en-phone-board-open_rare.png"
     },
@@ -20019,27 +20899,27 @@
       "state": "open rare",
       "box": [
         0,
-        120,
+        424,
         390,
-        724
+        420
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 15,
+      "controls": 8,
       "clipped": [],
       "rows": [
-        "pipeline",
-        "attention",
-        "rename",
+        "pipeline@",
+        "attention@",
+        "rename@",
         "crown",
         "handoff",
-        "stop",
-        "compact",
+        "stop@",
+        "compact@",
         "host",
         "terminal",
         "recheck",
-        "project",
-        "close",
+        "project@",
+        "close@",
         "kill"
       ],
       "file": "v3/390-light-en-phone-conversation-open_rare.png"
@@ -20080,13 +20960,13 @@
       "state": "rest",
       "box": [
         0,
-        360,
+        316,
         390,
-        484
+        528
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 13,
+      "controls": 14,
       "clipped": [],
       "rows": [
         "new-agent",
@@ -20124,31 +21004,78 @@
       "scheme": "light",
       "lang": "uk",
       "surface": "phone-board",
+      "state": "open policy",
+      "box": [
+        0,
+        459.8,
+        390,
+        384.3
+      ],
+      "scrolls": false,
+      "inside": true,
+      "controls": 7,
+      "clipped": [],
+      "rows": [
+        "new-agent@",
+        "new-task@",
+        "new-pipeline@",
+        "tasks@",
+        "pipelines@",
+        "hidden@",
+        "view-board@",
+        "view-catalog@",
+        "accounts@",
+        "host@",
+        "activity@",
+        "team@",
+        "sound-settings-trigger@",
+        "keep-awake-row@",
+        "setup-guide@",
+        "interface-walk@",
+        "agent-mapping@",
+        "dictation@",
+        "settings@",
+        "linked-settings@",
+        "external-relay@",
+        "self-update@",
+        "merge-on-review",
+        "share-project",
+        "bridge-reports",
+        "asks-you"
+      ],
+      "file": "v3/390-light-uk-phone-board-open_policy.png"
+    },
+    {
+      "variant": 3,
+      "frame": "390",
+      "scheme": "light",
+      "lang": "uk",
+      "surface": "phone-board",
       "state": "open rare",
       "box": [
         0,
-        101.3,
+        174.9,
         390,
-        742.7
+        669.1
       ],
-      "scrolls": true,
+      "scrolls": false,
       "inside": true,
-      "controls": 30,
+      "controls": 14,
       "clipped": [],
       "rows": [
-        "new-agent",
-        "new-task",
-        "new-pipeline",
-        "tasks",
-        "pipelines",
-        "hidden",
-        "view-board",
-        "view-catalog",
-        "accounts",
+        "new-agent@",
+        "new-task@",
+        "new-pipeline@",
+        "tasks@",
+        "pipelines@",
+        "hidden@",
+        "view-board@",
+        "view-catalog@",
+        "accounts@",
         "host",
         "activity",
         "team",
-        "sound-settings-trigger",
+        "sound-settings-trigger@",
         "keep-awake-row",
         "setup-guide",
         "interface-walk",
@@ -20158,10 +21085,10 @@
         "linked-settings",
         "external-relay",
         "self-update",
-        "merge-on-review",
-        "share-project",
-        "bridge-reports",
-        "asks-you"
+        "merge-on-review@",
+        "share-project@",
+        "bridge-reports@",
+        "asks-you@"
       ],
       "file": "v3/390-light-uk-phone-board-open_rare.png"
     },
@@ -20235,27 +21162,27 @@
       "state": "open rare",
       "box": [
         0,
-        120,
+        424,
         390,
-        724
+        420
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 15,
+      "controls": 8,
       "clipped": [],
       "rows": [
-        "pipeline",
-        "attention",
-        "rename",
+        "pipeline@",
+        "attention@",
+        "rename@",
         "crown",
         "handoff",
-        "stop",
-        "compact",
+        "stop@",
+        "compact@",
         "host",
         "terminal",
         "recheck",
-        "project",
-        "close",
+        "project@",
+        "close@",
         "kill"
       ],
       "file": "v3/390-light-uk-phone-conversation-open_rare.png"
@@ -20296,13 +21223,13 @@
       "state": "rest",
       "box": [
         0,
-        360,
+        316,
         390,
-        484
+        528
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 13,
+      "controls": 14,
       "clipped": [],
       "rows": [
         "new-agent",
@@ -20431,13 +21358,13 @@
       "state": "rest",
       "box": [
         0,
-        360,
+        316,
         390,
-        484
+        528
       ],
       "scrolls": false,
       "inside": true,
-      "controls": 13,
+      "controls": 14,
       "clipped": [],
       "rows": [
         "new-agent",
@@ -20548,6 +21475,7 @@
       "controls": 22,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v3/1440-light-en-card-waiting-rest.png"
     },
     {
@@ -20568,6 +21496,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v3/1440-light-en-card-waiting-open_pipeline.png",
       "shift": 0
     },
@@ -20580,7 +21509,7 @@
       "state": "rest",
       "box": [
         716,
-        464,
+        463.6,
         300,
         324.4
       ],
@@ -20589,6 +21518,7 @@
       "controls": 22,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1440-light-en-card-many-rest.png"
     },
     {
@@ -20600,7 +21530,7 @@
       "state": "open pipelines",
       "box": [
         716,
-        464,
+        502,
         300,
         286
       ],
@@ -20609,6 +21539,7 @@
       "controls": 6,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1440-light-en-card-many-open_pipelines.png",
       "shift": 0
     },
@@ -20621,7 +21552,7 @@
       "state": "open pipelines, pipeline 1",
       "box": [
         716,
-        464,
+        458.9,
         300,
         329.1
       ],
@@ -20630,6 +21561,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1440-light-en-card-many-open_pipelines_pipeline_1.png",
       "shift": 0
     },
@@ -20642,7 +21574,7 @@
       "state": "open pipelines, pipeline 2",
       "box": [
         716,
-        464,
+        471.4,
         300,
         316.6
       ],
@@ -20651,6 +21583,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1440-light-en-card-many-open_pipelines_pipeline_2.png",
       "shift": 0
     },
@@ -20663,7 +21596,7 @@
       "state": "open pipelines, pipeline 3",
       "box": [
         716,
-        464,
+        458.9,
         300,
         329.1
       ],
@@ -20672,6 +21605,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1440-light-en-card-many-open_pipelines_pipeline_3.png",
       "shift": 0
     },
@@ -20684,7 +21618,7 @@
       "state": "open pipelines, pipeline 4",
       "box": [
         716,
-        464,
+        485.5,
         300,
         302.5
       ],
@@ -20693,6 +21627,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1440-light-en-card-many-open_pipelines_pipeline_4.png",
       "shift": 0
     },
@@ -20705,7 +21640,7 @@
       "state": "open pipelines, pipeline 5",
       "box": [
         716,
-        464,
+        458.9,
         300,
         329.1
       ],
@@ -20714,6 +21649,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1440-light-en-card-many-open_pipelines_pipeline_5.png",
       "shift": 0
     },
@@ -20735,6 +21671,7 @@
       "controls": 22,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v3/1440-light-uk-card-waiting-rest.png"
     },
     {
@@ -20755,6 +21692,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "below",
       "file": "v3/1440-light-uk-card-waiting-open_pipeline.png",
       "shift": 0
     },
@@ -20767,7 +21705,7 @@
       "state": "rest",
       "box": [
         716,
-        464,
+        463.6,
         300,
         324.4
       ],
@@ -20776,6 +21714,7 @@
       "controls": 22,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1440-light-uk-card-many-rest.png"
     },
     {
@@ -20787,7 +21726,7 @@
       "state": "open pipelines",
       "box": [
         716,
-        464,
+        502,
         300,
         286
       ],
@@ -20796,6 +21735,7 @@
       "controls": 6,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1440-light-uk-card-many-open_pipelines.png",
       "shift": 0
     },
@@ -20808,7 +21748,7 @@
       "state": "open pipelines, pipeline 1",
       "box": [
         716,
-        464,
+        458.9,
         300,
         329.1
       ],
@@ -20817,6 +21757,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1440-light-uk-card-many-open_pipelines_pipeline_1.png",
       "shift": 0
     },
@@ -20829,7 +21770,7 @@
       "state": "open pipelines, pipeline 2",
       "box": [
         716,
-        464,
+        446.4,
         300,
         341.6
       ],
@@ -20838,6 +21779,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1440-light-uk-card-many-open_pipelines_pipeline_2.png",
       "shift": 0
     },
@@ -20850,7 +21792,7 @@
       "state": "open pipelines, pipeline 3",
       "box": [
         716,
-        464,
+        458.9,
         300,
         329.1
       ],
@@ -20859,6 +21801,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1440-light-uk-card-many-open_pipelines_pipeline_3.png",
       "shift": 0
     },
@@ -20871,7 +21814,7 @@
       "state": "open pipelines, pipeline 4",
       "box": [
         716,
-        464,
+        460.5,
         300,
         327.5
       ],
@@ -20880,6 +21823,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1440-light-uk-card-many-open_pipelines_pipeline_4.png",
       "shift": 0
     },
@@ -20892,7 +21836,7 @@
       "state": "open pipelines, pipeline 5",
       "box": [
         716,
-        464,
+        458.9,
         300,
         329.1
       ],
@@ -20901,6 +21845,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1440-light-uk-card-many-open_pipelines_pipeline_5.png",
       "shift": 0
     },
@@ -20913,7 +21858,7 @@
       "state": "rest",
       "box": [
         668,
-        329,
+        328.6,
         300,
         337.4
       ],
@@ -20922,6 +21867,7 @@
       "controls": 22,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-light-en-card-waiting-rest.png"
     },
     {
@@ -20933,7 +21879,7 @@
       "state": "open pipeline",
       "box": [
         668,
-        329,
+        363.5,
         300,
         302.5
       ],
@@ -20942,6 +21888,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-light-en-card-waiting-open_pipeline.png",
       "shift": 0
     },
@@ -20954,7 +21901,7 @@
       "state": "rest",
       "box": [
         668,
-        342,
+        341.6,
         300,
         324.4
       ],
@@ -20963,6 +21910,7 @@
       "controls": 22,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-light-en-card-many-rest.png"
     },
     {
@@ -20974,7 +21922,7 @@
       "state": "open pipelines",
       "box": [
         668,
-        342,
+        380,
         300,
         286
       ],
@@ -20983,6 +21931,7 @@
       "controls": 6,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-light-en-card-many-open_pipelines.png",
       "shift": 0
     },
@@ -20995,7 +21944,7 @@
       "state": "open pipelines, pipeline 1",
       "box": [
         668,
-        342,
+        336.9,
         300,
         329.1
       ],
@@ -21004,6 +21953,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-light-en-card-many-open_pipelines_pipeline_1.png",
       "shift": 0
     },
@@ -21016,7 +21966,7 @@
       "state": "open pipelines, pipeline 2",
       "box": [
         668,
-        342,
+        349.4,
         300,
         316.6
       ],
@@ -21025,6 +21975,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-light-en-card-many-open_pipelines_pipeline_2.png",
       "shift": 0
     },
@@ -21037,7 +21988,7 @@
       "state": "open pipelines, pipeline 3",
       "box": [
         668,
-        342,
+        336.9,
         300,
         329.1
       ],
@@ -21046,6 +21997,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-light-en-card-many-open_pipelines_pipeline_3.png",
       "shift": 0
     },
@@ -21058,7 +22010,7 @@
       "state": "open pipelines, pipeline 4",
       "box": [
         668,
-        342,
+        363.5,
         300,
         302.5
       ],
@@ -21067,6 +22019,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-light-en-card-many-open_pipelines_pipeline_4.png",
       "shift": 0
     },
@@ -21079,7 +22032,7 @@
       "state": "open pipelines, pipeline 5",
       "box": [
         668,
-        342,
+        336.9,
         300,
         329.1
       ],
@@ -21088,6 +22041,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-light-en-card-many-open_pipelines_pipeline_5.png",
       "shift": 0
     },
@@ -21100,7 +22054,7 @@
       "state": "rest",
       "box": [
         668,
-        329,
+        328.6,
         300,
         337.4
       ],
@@ -21109,6 +22063,7 @@
       "controls": 22,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-light-uk-card-waiting-rest.png"
     },
     {
@@ -21120,7 +22075,7 @@
       "state": "open pipeline",
       "box": [
         668,
-        329,
+        338.5,
         300,
         327.5
       ],
@@ -21129,6 +22084,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-light-uk-card-waiting-open_pipeline.png",
       "shift": 0
     },
@@ -21141,7 +22097,7 @@
       "state": "rest",
       "box": [
         668,
-        342,
+        341.6,
         300,
         324.4
       ],
@@ -21150,6 +22106,7 @@
       "controls": 22,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-light-uk-card-many-rest.png"
     },
     {
@@ -21161,7 +22118,7 @@
       "state": "open pipelines",
       "box": [
         668,
-        342,
+        380,
         300,
         286
       ],
@@ -21170,6 +22127,7 @@
       "controls": 6,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-light-uk-card-many-open_pipelines.png",
       "shift": 0
     },
@@ -21182,7 +22140,7 @@
       "state": "open pipelines, pipeline 1",
       "box": [
         668,
-        342,
+        336.9,
         300,
         329.1
       ],
@@ -21191,6 +22149,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-light-uk-card-many-open_pipelines_pipeline_1.png",
       "shift": 0
     },
@@ -21203,7 +22162,7 @@
       "state": "open pipelines, pipeline 2",
       "box": [
         668,
-        342,
+        324.4,
         300,
         341.6
       ],
@@ -21212,6 +22171,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-light-uk-card-many-open_pipelines_pipeline_2.png",
       "shift": 0
     },
@@ -21224,7 +22184,7 @@
       "state": "open pipelines, pipeline 3",
       "box": [
         668,
-        342,
+        336.9,
         300,
         329.1
       ],
@@ -21233,6 +22193,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-light-uk-card-many-open_pipelines_pipeline_3.png",
       "shift": 0
     },
@@ -21245,7 +22206,7 @@
       "state": "open pipelines, pipeline 4",
       "box": [
         668,
-        342,
+        338.5,
         300,
         327.5
       ],
@@ -21254,6 +22215,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-light-uk-card-many-open_pipelines_pipeline_4.png",
       "shift": 0
     },
@@ -21266,7 +22228,7 @@
       "state": "open pipelines, pipeline 5",
       "box": [
         668,
-        342,
+        336.9,
         300,
         329.1
       ],
@@ -21275,6 +22237,7 @@
       "controls": 8,
       "clipped": [],
       "rows": [],
+      "side": "above",
       "file": "v3/1000-light-uk-card-many-open_pipelines_pipeline_5.png",
       "shift": 0
     }

@@ -17969,14 +17969,20 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
    * the window and every label it had to cut. A variant fails when any state
    * of a card's menu is wider than 300 px, taller than 360 px or scrolls (read
    * on a card with one pipeline, a waiting card and a card holding five
-   * pipelines), when opening a
-   * section moves the menu or the row that was pressed (read on every card of
-   * the fixture, where it stands and at the bottom of the window), when a
-   * state leaves the window, when a label is cut, or when an entry of today's
-   * menu is neither in the variant nor on its named list of removals. The
-   * taps to eight frequent actions are counted by walking the menu, and on
-   * one frame per variant four of them are carried out and read back from the
-   * board.
+   * pipelines); when any state of a column's, a conversation's, the board's
+   * or the header's menu is taller than 360 px or scrolls; when any state of
+   * a phone sheet is taller than today's sheet or scrolls; when opening a
+   * section moves the row that was pressed or the edge of the menu that faces
+   * its button, or when any state covers that button (both read on every card
+   * of the fixture, where it stands and at the bottom of the window); when a
+   * double click on a row that swaps the list for a page, or on the page's
+   * back row, sends a write or lands on another row (every card of the
+   * fixture); when a row that opens in place and a row that opens a page
+   * carry the same arrow; when a state leaves the window, when a label is
+   * cut, or when an entry of today's menu is neither in the variant nor on
+   * its named list of removals. The taps to eight frequent actions are
+   * counted by walking the menu, and on one frame per variant four of them
+   * are carried out and read back from the board.
    *
    * Frames carry their variant number in a strip above the application
    * frame. They and the contact sheets go to `LLV_COMPACT_MENUS_OUT` (default
@@ -18020,8 +18026,10 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
     /** Each row of the surface as it is drawn: its label and its box. */
     items: [label: string, width: number, height: number][];
     file: string;
-    /** How far opening this state moved the menu's corner or the row that was pressed, in px. */
+    /** How far opening this state moved the row that was pressed or the edge of the menu that faces its button, in px. */
     shift?: number;
+    /** Where the menu stands by its button. */
+    side?: string;
   }
 
   /** The open surface: its box, whether anything in it scrolls, the controls a pointer meets and the labels it cut. */
@@ -18036,7 +18044,16 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
     const clipped = [...surface.querySelectorAll<HTMLElement>(".cm-cap, .cm-val, .cm-title, .cmf-title, .lbl")].filter(shown)
       .filter((element) => element.scrollWidth > element.clientWidth + 1).map((element) => (element.textContent ?? "").trim().slice(0, 40));
     const label = (element: HTMLElement) => (element.querySelector(".lbl")?.firstChild?.textContent ?? element.getAttribute("aria-label") ?? element.textContent ?? "").trim();
+    /* A row that opens a page carries the arrow to the right, and a row that opens in place never does. */
+    const arrows = [...surface.querySelectorAll<HTMLElement>("[data-cm-opens], [data-cmf-opens]")].filter(shown).flatMap((row) => {
+      const pages = row.dataset.cmOpens === "drill" || row.dataset.cmfOpens === "page";
+      const right = Boolean(row.querySelector(":scope > svg.lucide-chevron-right"));
+      const vertical = Boolean(row.querySelector(":scope > svg.lucide-chevron-down, :scope > svg.lucide-chevron-up"));
+      return pages === right && pages !== vertical ? [] : [label(row).slice(0, 40)];
+    });
     return {
+      arrows,
+      side: surface.dataset.cmSide ?? null,
       box: [round(rect.left), round(rect.top), round(rect.width), round(rect.height)] as [number, number, number, number],
       scrolls,
       inside: rect.left >= -0.5 && rect.top >= -0.5 && rect.right <= innerWidth + 0.5 && rect.bottom <= innerHeight + 0.5,
@@ -18072,7 +18089,11 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
     const failures: string[] = [];
     const taps: Record<string, Record<string, number | string>> = {};
     const acted: Record<string, Record<string, boolean>> = {};
-    const stability: Record<string, { cards: number; openings: number; maxShift: number }> = {};
+    const stability: Record<string, { cards: number; openings: number; maxShift: number; covered: number; sides: Record<string, number> }> = {};
+    /* Double clicks on the rows that swap the list: how many were made, how many second presses were dropped, how many writes went out. */
+    const doubles: Record<string, { cards: number; rows: number; dropped: number; sent: number }> = {};
+    /* The ⋯ of the card whose menu is open. */
+    let cardButton: string | null = null;
     const url = (variant: number, scenario = "stages") => `${server.base}?scenario=${scenario}${variant ? `&menus=${variant}` : ""}`;
 
     type Where = { variant: number; frame: (typeof FRAMES)[number]; scheme: Scheme; lang: "en" | "uk" };
@@ -18082,33 +18103,43 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
       if (!reading) { failures.push(`${keyOf(where)} ${surface} ${state}: the surface did not open`); return null; }
       const file = `${keyOf(where)}-${surface}-${state.replace(/[^a-z0-9]+/gi, "_")}.png`;
       fs.mkdirSync(path.dirname(path.join(OUT, file)), { recursive: true });
+      const { arrows, side, ...measured } = reading;
       const text = `${NAMES[where.variant]}  ·  ${where.frame.width}×${where.frame.height} ${where.lang} ${where.scheme}  ·  ${surface}: ${state}  ·  ${Math.round(reading.box[2])}×${Math.round(reading.box[3])}${reading.scrolls ? " scrolls" : ""}`;
       fs.writeFileSync(path.join(OUT, file), await frameWithStrip(await page.screenshot(), where.frame.width, text, where.variant));
-      const entry: Reading = { variant: where.variant, frame: where.frame.name, scheme: where.scheme, lang: where.lang, surface, state, ...reading, file };
+      const entry: Reading = { variant: where.variant, frame: where.frame.name, scheme: where.scheme, lang: where.lang, surface, state, ...measured, ...(side ? { side } : {}), file };
       readings.push(entry);
       if (where.variant) {
         if (!reading.inside) failures.push(`${keyOf(where)} ${surface} ${state}: leaves the window ${JSON.stringify(reading.box)}`);
         if (reading.clipped.length) failures.push(`${keyOf(where)} ${surface} ${state}: cut labels ${JSON.stringify(reading.clipped)}`);
+        if (arrows.length) failures.push(`${keyOf(where)} ${surface} ${state}: a row that opens in place and a row that opens a page carry the same arrow ${JSON.stringify(arrows)}`);
+        if (cardButton && surface.startsWith("card") && await covers(page, cardButton)) failures.push(`${keyOf(where)} ${surface} ${state}: the menu covers its own ⋯ ${JSON.stringify(reading.box)}`);
       }
       return entry;
     }
 
-    /** Where the open menu's corner is and where the row that opens `id` sits. */
+    /** Whether the open menu lies over this button. */
+    const covers = (page: Page, button: string) => page.evaluate((selector) => {
+      const menu = document.querySelector<HTMLElement>(".kb .menu")?.getBoundingClientRect();
+      const anchor = document.querySelector<HTMLElement>(selector)?.getBoundingClientRect();
+      return Boolean(menu && anchor && menu.left < anchor.right && menu.right > anchor.left && menu.top < anchor.bottom && menu.bottom > anchor.top);
+    }, button);
+    /** Where the open menu stands and where the row that opens `id` sits. The held edge is the one that faces the button: the bottom of a menu above it, the top otherwise. */
     const corner = (page: Page, id: string | null) => page.evaluate((section) => {
       const menu = document.querySelector<HTMLElement>(".kb .menu");
       if (!menu) return null;
       const box = menu.getBoundingClientRect();
       const row = section ? menu.querySelector<HTMLElement>(`[data-cm-section="${CSS.escape(section)}"]`)?.getBoundingClientRect() ?? null : null;
-      return { left: box.left, top: box.top, row: row ? row.top : null, paged: Boolean(menu.querySelector("[data-cm-back]")) };
+      const side = menu.dataset.cmSide ?? "below";
+      return { left: box.left, edge: side === "above" ? box.bottom : box.top, side, row: row ? row.top : null, paged: Boolean(menu.querySelector("[data-cm-back]")) };
     }, id);
-    /** Opens one section of the open card-style menu and says how far that moved the menu's corner, or the pressed row where it is still drawn. */
+    /** Opens one section of the open card-style menu and says how far that moved the menu's held edge, or the pressed row where it is still drawn. */
     async function openSection(page: Page, id: string): Promise<number> {
       const before = await corner(page, id);
       await jsClick(page, `${MENU} [data-cm-section="${id}"]`);
       await page.waitForTimeout(100);
       const after = await corner(page, id);
       if (!before || !after) return Number.NaN;
-      const moved = Math.max(Math.abs(after.left - before.left), Math.abs(after.top - before.top));
+      const moved = Math.max(Math.abs(after.left - before.left), Math.abs(after.edge - before.edge));
       return Math.round(Math.max(moved, before.row !== null && after.row !== null ? Math.abs(after.row - before.row) : 0) * 10) / 10;
     }
     const leaveSection = async (page: Page, id: string) => {
@@ -18152,6 +18183,32 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
       }
       return out;
     }
+    /** A double click on each row of a family menu that opens a page: the second press reaches none of the product's rows under it. */
+    async function doubledFamily(page: Page, where: Where, selector: string, surface: string) {
+      const switches = () => page.evaluate((target) => [...document.querySelectorAll<HTMLElement>(`${target} [role="switch"]`)].map((element) => element.getAttribute("aria-checked")).join(","), selector);
+      const view = () => page.evaluate((target) => document.querySelector<HTMLElement>(target)?.getAttribute("data-cmf-view") ?? null, selector);
+      const ids = await page.evaluate((target) => [...document.querySelectorAll<HTMLElement>(`${target} [data-cmf-head="section"][data-cmf-opens="page"]`)].map((element) => element.getAttribute("data-cmf-section")!), selector);
+      const tally = doubles[`${keyOf(where)} ${surface}`] = { cards: 0, rows: 0, dropped: 0, sent: 0 };
+      for (const id of ids) {
+        for (const target of [`${selector} [data-cmf-head="section"][data-cmf-section="${id}"]`, `${selector} [data-cmf-head="back"]`]) {
+          const before = await switches();
+          const dropped = await droppedPresses(page);
+          const box = await page.locator(target).first().boundingBox();
+          if (!box) { failures.push(`${keyOf(where)} ${surface} ${id}: no row to double-click`); break; }
+          await page.mouse.move(2, 2);
+          await page.mouse.dblclick(box.x + box.width / 2, box.y + box.height / 2);
+          await page.waitForTimeout(200);
+          tally.rows += 1;
+          tally.dropped += await droppedPresses(page) - dropped;
+          const wanted = target.endsWith('"back"]') ? "rest" : id;
+          const now = await view();
+          if (now !== wanted) failures.push(`${keyOf(where)} ${surface} ${id}: a double click left the menu at ${now}, expected ${wanted}`);
+          if (await switches() !== before) { tally.sent += 1; failures.push(`${keyOf(where)} ${surface} ${id}: a double click flipped a switch`); }
+        }
+      }
+      await page.mouse.move(2, 2);
+    }
+    const droppedPresses = (page: Page) => page.evaluate(() => Number(document.documentElement.dataset.cmDropped ?? 0));
     /** No state of a card's menu is over 300×360 or scrolls. */
     const bounded = (where: Where, states: (Reading | null)[]) => {
       for (const state of states) {
@@ -18185,8 +18242,9 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
       await page.locator(`${card(id)} [data-menu]`).click();
       await page.waitForSelector(MENU, { timeout: 10_000 });
       await page.waitForTimeout(120);
+      cardButton = `${card(id)} [data-menu]`;
     };
-    const closeMenu = async (page: Page) => { await page.keyboard.press("Escape"); await page.waitForTimeout(80); };
+    const closeMenu = async (page: Page) => { cardButton = null; await page.keyboard.press("Escape"); await page.waitForTimeout(80); };
 
     /** Where an entry with this label sits in the open card menu: 2 taps at rest, 3 behind a section. */
     const findEntry = (page: Page, label: string) => page.evaluate((wanted) => {
@@ -18261,7 +18319,10 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
           await page.waitForSelector(panel, { timeout: 10_000 });
           await page.waitForTimeout(150);
           await capture(page, where, panel, surface, "rest");
-          if (variant && scheme === "light") await walk(page, where, panel, surface, "data-cmf-section");
+          if (variant && scheme === "light") {
+            await walk(page, where, panel, surface, "data-cmf-section");
+            await doubledFamily(page, where, panel, surface);
+          }
           await page.locator(trigger).first().click();
           await page.waitForTimeout(80);
         }
@@ -18383,7 +18444,7 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
       if (!lang) return;
       for (const frame of FRAMES.filter((entry) => !entry.phone)) {
         const where: Where = { variant, frame, scheme: "light", lang };
-        const tally = { cards: 0, openings: 0, maxShift: 0 };
+        const tally = { cards: 0, openings: 0, maxShift: 0, covered: 0, sides: {} as Record<string, number> };
         for (const scenario of ["stages", "work-links"]) {
           await alive();
           const { context, page } = await openFixture(browser, url(variant, scenario), frame, "light", lang, "reduce");
@@ -18399,13 +18460,30 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
                 if (!(await page.locator(`${card(id)} [data-menu]`).first().isVisible().catch(() => false))) break;
                 if (block === "center") tally.cards += 1;
                 await openCardMenu(page, id);
-                for (const section of await sectionIds(page)) {
+                const button = `${card(id)} [data-menu]`;
+                const side = (await corner(page, null))?.side ?? "below";
+                tally.sides[side] = (tally.sides[side] ?? 0) + 1;
+                /* One state: it stays in the window and off its own ⋯. */
+                const stands = async (name: string) => {
+                  const inside = await read(page, MENU);
+                  if (inside && !inside.inside) failures.push(`${keyOf(where)} ${scenario} ${id} (${block}) ${name}: leaves the window ${JSON.stringify(inside.box)}`);
+                  if (await covers(page, button)) { tally.covered += 1; failures.push(`${keyOf(where)} ${scenario} ${id} (${block}) ${name}: the menu covers its own ⋯ ${JSON.stringify(inside?.box ?? null)}`); }
+                };
+                /* False once the card has left the board under the walk (a Done card ages off it), which takes its menu along. */
+                const opens = async (section: string, name: string): Promise<boolean> => {
                   const shift = await openSection(page, section);
+                  if (Number.isNaN(shift) && !(await page.locator(button).first().isVisible().catch(() => false))) return false;
                   tally.openings += 1;
                   if (!(shift <= tally.maxShift)) tally.maxShift = shift;
-                  if (!(shift <= 0.5)) failures.push(`${keyOf(where)} ${scenario} ${id} (${block}) ${section}: opening it moved the menu or the pressed row by ${shift} px`);
-                  const inside = await read(page, MENU);
-                  if (inside && !inside.inside) failures.push(`${keyOf(where)} ${scenario} ${id} (${block}) ${section}: leaves the window ${JSON.stringify(inside.box)}`);
+                  if (!(shift <= 0.5)) failures.push(`${keyOf(where)} ${scenario} ${id} (${block}) ${name}: opening it moved the menu or the pressed row by ${shift} px`);
+                  await stands(name);
+                  return true;
+                };
+                await stands("rest");
+                for (const section of await sectionIds(page)) {
+                  if (!(await opens(section, section))) break;
+                  /* The list of a card's pipelines: each of them is one more page. */
+                  if ((await corner(page, null))?.paged) for (const lane of await sectionIds(page)) { if (await opens(lane, `${section}/${lane}`)) await leaveSection(page, lane); }
                   await leaveSection(page, section);
                 }
                 await closeMenu(page);
@@ -18418,6 +18496,77 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
           }
         }
         stability[keyOf(where)] = tally;
+      }
+    }
+
+    /** Every card of the fixture: a double click on each row that swaps the list for a page, and on that page's back row. The second press lands where another row now is, and reaches nothing. */
+    async function doubled(variant: number) {
+      if (!variant || !SCHEMES.includes("light")) return;
+      const lang = LANGS.includes("uk") ? "uk" : LANGS[0];
+      if (!lang) return;
+      for (const frame of FRAMES.filter((entry) => !entry.phone)) {
+        const where: Where = { variant, frame, scheme: "light", lang };
+        const tally = { cards: 0, rows: 0, dropped: 0, sent: 0 };
+        for (const scenario of ["stages", "work-links"]) {
+          await alive();
+          const { context, page } = await openFixture(browser, url(variant, scenario), frame, "light", lang, "reduce");
+          try {
+            await settleBoard(page);
+            /* Everything the fixture's server was asked to write: a pipeline's actions, a task's fields, the board's moves. */
+            const writes = () => page.evaluate(() => {
+              const log = (window as unknown as { evidence: Record<string, unknown> }).evidence;
+              return ["pipelinePatches", "taskPatches", "taskWrites", "boardMutations", "assignments"].map((name) => (Array.isArray(log[name]) ? (log[name] as unknown[]).length : 0)).join(",");
+            });
+            const viewNow = () => page.evaluate(() => document.querySelector<HTMLElement>(".kb .menu")?.dataset.cmView ?? null);
+            const pages = () => page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.kb .menu [data-cm-opens="drill"]')].map((element) => element.dataset.cmSection!));
+            const ids = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-kanban-board] .card[data-id^='task:']")].filter((element) => element.querySelector("[data-menu]")).map((element) => element.dataset.id!.slice(5)));
+            for (const id of ids) {
+              await showCard(page, id);
+              await page.evaluate((selector) => document.querySelector(selector)?.scrollIntoView({ block: "center" }), `${card(id)} [data-menu]`);
+              await page.waitForTimeout(60);
+              if (!(await page.locator(`${card(id)} [data-menu]`).first().isVisible().catch(() => false))) continue;
+              await openCardMenu(page, id);
+              const press = async (target: string, wanted: string, name: string) => {
+                const before = await writes();
+                const dropped = await droppedPresses(page);
+                const box = await page.locator(`${MENU} ${target}`).first().boundingBox();
+                if (!box) { failures.push(`${keyOf(where)} ${scenario} ${id} ${name}: no row to double-click`); return; }
+                /* Each double click arrives from elsewhere, as a hand does: a back row can stand where the row that opened its page stood. */
+                await page.mouse.move(2, 2);
+                await page.mouse.dblclick(box.x + box.width / 2, box.y + box.height / 2);
+                /* The fixture's server answers a pipeline write after 300 ms; the request itself is logged at once. */
+                await page.waitForTimeout(200);
+                tally.rows += 1;
+                tally.dropped += await droppedPresses(page) - dropped;
+                const after = await writes();
+                if (after !== before) { tally.sent += 1; failures.push(`${keyOf(where)} ${scenario} ${id} ${name}: a double click sent a write (${before} → ${after})`); }
+                const now = await viewNow();
+                if (now !== wanted) failures.push(`${keyOf(where)} ${scenario} ${id} ${name}: a double click left the menu at ${now}, expected ${wanted}`);
+              };
+              const tops = await pages();
+              if (tops.some((section) => section === "pipelines" || section.startsWith("lane:"))) tally.cards += 1;
+              for (const section of tops) {
+                await press(`[data-cm-section="${section}"]`, section, section);
+                if (await viewNow() !== section) break;
+                for (const lane of await pages()) {
+                  await press(`[data-cm-section="${lane}"]`, `${section}/${lane}`, `${section}/${lane}`);
+                  if (await viewNow() !== `${section}/${lane}`) break;
+                  await press("[data-cm-back]", section, `${section}/${lane} back`);
+                }
+                await press("[data-cm-back]", "rest", `${section} back`);
+                if (await viewNow() !== "rest") break;
+              }
+              await page.mouse.move(2, 2);
+              if (await page.locator(MENU).count()) await closeMenu(page); else cardButton = null;
+            }
+          } catch (error) {
+            failures.push(`${keyOf(where)} double clicks in ${scenario}: ${brief(error)}`);
+          } finally {
+            await context.close();
+          }
+        }
+        doubles[keyOf(where)] = tally;
+        if (tally.cards && tally.dropped < tally.rows) failures.push(`${keyOf(where)}: ${tally.rows} double clicks, only ${tally.dropped} second presses were dropped`);
       }
     }
 
@@ -18497,6 +18646,7 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
         await act(variant);
         await stretched(variant);
         await steady(variant);
+        await doubled(variant);
       }
     } finally {
       await browser.close();
@@ -18520,9 +18670,24 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
       }
     }
 
-    /* ── Contact sheets ─────────────────────────────────────────────────── */
     const find = (variant: number, frame: string, scheme: Scheme, lang: string, surface: string, state: string) =>
       readings.find((entry) => entry.variant === variant && entry.frame === frame && entry.scheme === scheme && entry.lang === lang && entry.surface === surface && entry.state === state) ?? null;
+    /* The family: on the desktop no state is taller than 360 px or scrolls; on the phone no state is taller than today's sheet or scrolls. */
+    const TODAY_SHEET: Record<string, number> = { "phone-card": 445, "phone-task": 401, "phone-board": 742.7, "phone-conversation": 706 };
+    for (const entry of readings.filter((reading) => reading.variant > 0)) {
+      const at = `v${entry.variant}/${entry.frame}-${entry.scheme}-${entry.lang} ${entry.surface} ${entry.state}`;
+      if (["column", "conversation", "board", "header"].includes(entry.surface)) {
+        if (entry.box[3] > 360.5) failures.push(`${at}: ${entry.box[3]} px is taller than 360`);
+        if (entry.scrolls) failures.push(`${at}: scrolls`);
+      } else if (entry.surface.startsWith("phone-")) {
+        /* Today's own reading where this run took one; a narrowed run falls back to the recorded heights. */
+        const today = find(0, entry.frame, entry.scheme, entry.lang, entry.surface, "rest")?.box[3] ?? TODAY_SHEET[entry.surface]!;
+        if (entry.box[3] > today + 0.5) failures.push(`${at}: ${entry.box[3]} px is taller than today's ${today}`);
+        if (entry.scrolls) failures.push(`${at}: scrolls`);
+      }
+    }
+
+    /* ── Contact sheets ─────────────────────────────────────────────────── */
     const text = (value: string, width: number, size = 13, fill = "#222", weight = 600) => Buffer.from(
       `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${size + 10}"><text x="2" y="${size + 2}" font-family="DejaVu Sans, Arial, sans-serif" font-size="${size}" font-weight="${weight}" fill="${fill}">${value.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</text></svg>`);
     /** One tile: the surface cut out of its frame with a margin (or the whole frame, scaled), under a caption. */
@@ -18638,7 +18803,7 @@ describe("compact card menu and overflow menus, numbered design variants", () =>
       if (fs.existsSync(path.join(OUT, file))) sheets.push(file);
     }
 
-    const summary = { driver: "src/components/kanban/kanbanBoard.browser.test.tsx", variants: NAMES, taps, acted, stability, reach, sheets, failures, readings: readings.map(({ labels, items, ...entry }) => { void labels; return entry.variant === 0 && entry.state === "rest" ? { ...entry, items } : entry; }) };
+    const summary = { driver: "src/components/kanban/kanbanBoard.browser.test.tsx", variants: NAMES, taps, acted, stability, doubles, reach, sheets, failures, readings: readings.map(({ labels, items, ...entry }) => { void labels; return entry.variant === 0 && entry.state === "rest" ? { ...entry, items } : entry; }) };
     fs.writeFileSync(path.join(OUT, "measurements.json"), `${JSON.stringify(summary, null, 2)}\n`);
     if (!NARROWED) {
       fs.mkdirSync(EVIDENCE, { recursive: true });

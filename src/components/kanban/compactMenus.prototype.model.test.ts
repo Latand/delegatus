@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { compactLayout, layoutActions, layoutStates, MENU_VARIANTS, sectionAt, type MenuAction, type MenuWords } from "./compactMenus.prototype.model";
+import { compactLayout, layoutActions, layoutStates, MENU_GAP, MENU_VARIANTS, menuPlacement, sectionAt, type MenuAction, type MenuWords } from "./compactMenus.prototype.model";
 import type { KanbanMenuItem } from "./kanbanMenus";
 
 const WORDS: MenuWords = { appearance: "Appearance", more: "More", move: "Move to", priority: "Priority", task: "Task link", closing: "Close or stop", none: "No colour", pipelines: "Pipelines" };
@@ -105,4 +105,44 @@ describe("compact menu layouts", () => {
       expect(one.nodes.find((node) => node.node === "section" && node.section.lane)).toMatchObject({ open: "drill", section: { hints: true } });
     });
   }
+});
+
+describe("where a compact menu stands", () => {
+  const WIDTH = 300;
+  /** The box the tallest state takes, from the placement. */
+  const tallestBox = (spot: ReturnType<typeof menuPlacement>, tallest: number, view: { height: number }) => {
+    const top = spot.top ?? view.height - spot.bottom! - tallest;
+    return { left: spot.left, right: spot.left + WIDTH, top, bottom: top + tallest };
+  };
+
+  test("below its button while the tallest state fits there, above it with the bottom edge held otherwise", () => {
+    const view = { width: 1440, height: 900 };
+    const high = { left: 700, right: 724, top: 200, bottom: 224 };
+    expect(menuPlacement(high, WIDTH, 342, view)).toMatchObject({ side: "below", top: 224 + MENU_GAP, bottom: null });
+    const low = { left: 700, right: 724, top: 800, bottom: 824 };
+    /* The bottom edge is what is held: every shorter state rests on it and grows upward. */
+    expect(menuPlacement(low, WIDTH, 342, view)).toMatchObject({ side: "above", top: null, bottom: 900 - (800 - MENU_GAP) });
+  });
+
+  test("beside its button where the tallest state fits neither below nor above", () => {
+    const view = { width: 1000, height: 700 };
+    const middle = { left: 940, right: 964, top: 340, bottom: 364 };
+    const spot = menuPlacement(middle, WIDTH, 342, view);
+    expect(spot).toMatchObject({ side: "beside", left: 940 - MENU_GAP - WIDTH, bottom: null });
+    /* At the left edge there is no room before the button, so the menu goes after it. */
+    expect(menuPlacement({ left: 20, right: 44, top: 340, bottom: 364 }, WIDTH, 342, view)).toMatchObject({ side: "beside", left: 44 + MENU_GAP });
+  });
+
+  test("no state covers the button, wherever the button is in a window that has room on one side of it", () => {
+    for (const view of [{ width: 1440, height: 900 }, { width: 1000, height: 700 }]) {
+      for (let top = 0; top <= view.height - 24; top += 7) for (const left of [8, 300, view.width - 40]) for (const tallest of [117, 257, 328, 342, 360]) {
+        const anchor = { left, right: left + 24, top, bottom: top + 24 };
+        const box = tallestBox(menuPlacement(anchor, WIDTH, tallest, view), tallest, view);
+        const covers = box.left < anchor.right && box.right > anchor.left && box.top < anchor.bottom && box.bottom > anchor.top;
+        expect([view.height, top, left, tallest, covers]).toEqual([view.height, top, left, tallest, false]);
+        expect(box.top).toBeGreaterThanOrEqual(8);
+        expect(box.bottom).toBeLessThanOrEqual(view.height - 8);
+      }
+    }
+  });
 });

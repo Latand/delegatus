@@ -2,10 +2,11 @@
 
 import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp } from "lucide-react";
 
 import { useLocale } from "@/lib/i18n";
 
+import { useSwapGuard } from "./compactMenus.prototype";
 import type { MenuVariant } from "./compactMenus.prototype.model";
 
 /* Design prototype (docs/design/compact-card-menu.md): the grammar of each
@@ -14,10 +15,17 @@ import type { MenuVariant } from "./compactMenus.prototype.model";
    stays the product's own element with its own handler; this only orders the
    rows, hides the ones behind a closed section and adds the section rows. A
    row no rule names stays with the row before it, so nothing can drop out
-   unnamed. The evidence fixture mounts it under `?menus=1|2|3`. */
+   unnamed. A section opens in place where the menu then stays inside its
+   bound (360 px on the desktop, today's height without scrolling on the
+   phone) and as a page where it would not; variant 2 opens every one as a
+   page. The evidence fixture mounts it under `?menus=1|2|3`. */
 
 type Words = { en: string; uk: string };
-interface Section { id: string; title: Words; rows: readonly string[] }
+interface Section {
+  id: string; title: Words; rows: readonly string[];
+  /** Opens as a page with a back row: in place it would pass the menu's bound. */
+  page?: boolean;
+}
 type Placement =
   | { rows: readonly string[]; cells?: boolean }
   | { section: Section };
@@ -35,10 +43,18 @@ interface FamilySpec {
   layouts: Record<MenuVariant, { placements: readonly Placement[]; removed?: readonly Removal[] }>;
 }
 
-const sec = (id: string, en: string, uk: string, rows: readonly string[]): Placement => ({ section: { id, title: { en, uk }, rows } });
+const sec = (id: string, en: string, uk: string, rows: readonly string[], page = false): Placement => ({ section: { id, title: { en, uk }, rows, page } });
+const PAGE = true;
 const RARE: Words = { en: "Rarely used", uk: "Рідко потрібне" };
 
-const BAR_POLICY = ["merge-on-review", "share-project", "bridge-reports", "asks-you"];
+/* The four project switches with their explanations are taller than a menu
+   may be, so they are two sections: what merges and syncs, what the
+   orchestrator tells the operator. */
+const BAR_MERGING = ["merge-on-review", "share-project"];
+const BAR_SEAT = ["bridge-reports", "asks-you"];
+const BAR_POLICY = [...BAR_MERGING, ...BAR_SEAT];
+const merging = sec("merging", "Merging and syncing", "Мердж і синхронізація", BAR_MERGING, PAGE);
+const seat = sec("seat", "Orchestrator", "Оркестратор", BAR_SEAT, PAGE);
 const BAR_PROJECT = ["project-archive", "project-unarchive", "project-delete"];
 const RAIL_DEVICE = ["language", "qr", "push"];
 const RAIL_GUIDES = ["rail-menu-setup-guide", "rail-menu-interface-walk", "rail-menu-agent-mapping", "rail-menu-dictation"];
@@ -58,8 +74,8 @@ export const FAMILY_SPECS: readonly FamilySpec[] = [
     flatten: "[data-bar-menu-group]",
     sample: "button[data-testid='dash-search'], button",
     layouts: {
-      1: { placements: [{ rows: ["dash-search", "sound-toggle", "sound-settings-trigger"] }, sec("accounts", "Accounts", "Акаунти", ["accounts"]), sec("policy", "Project rules", "Правила проєкту", BAR_POLICY), sec("project", "Archive or delete", "Архів і видалення", BAR_PROJECT)] },
-      2: { placements: [{ rows: ["dash-search"] }, sec("sound", "Sound", "Звук", ["sound-toggle", "sound-settings-trigger"]), sec("accounts", "Accounts", "Акаунти", ["accounts"]), sec("policy", "Project rules", "Правила проєкту", BAR_POLICY), sec("project", "Archive or delete", "Архів і видалення", BAR_PROJECT)] },
+      1: { placements: [{ rows: ["dash-search", "sound-toggle", "sound-settings-trigger"] }, sec("accounts", "Accounts", "Акаунти", ["accounts"]), merging, seat, sec("project", "Archive or delete", "Архів і видалення", BAR_PROJECT)] },
+      2: { placements: [{ rows: ["dash-search"] }, sec("sound", "Sound", "Звук", ["sound-toggle", "sound-settings-trigger"]), sec("accounts", "Accounts", "Акаунти", ["accounts"]), merging, seat, sec("project", "Archive or delete", "Архів і видалення", BAR_PROJECT)] },
       3: { placements: [{ rows: ["dash-search", "sound-toggle", "accounts", ...BAR_POLICY] }, { section: { id: "rare", title: RARE, rows: ["sound-settings-trigger", ...BAR_PROJECT] } }] },
     },
   },
@@ -71,7 +87,7 @@ export const FAMILY_SPECS: readonly FamilySpec[] = [
     layouts: {
       1: { placements: [{ rows: ["rail-menu-settings", "rail-menu-activity", "rail-menu-team"] }, sec("device", "This device", "Цей пристрій", RAIL_DEVICE), sec("guides", "Guides", "Посібники", RAIL_GUIDES), sec("install", "Installation", "Інсталяція", RAIL_INSTALL)] },
       2: { placements: [{ rows: ["rail-menu-settings", "rail-menu-activity", "rail-menu-team"] }, sec("device", "This device", "Цей пристрій", RAIL_DEVICE), sec("guides", "Guides", "Посібники", RAIL_GUIDES), sec("install", "Installation", "Інсталяція", RAIL_INSTALL)] },
-      3: { placements: [{ rows: [...RAIL_DEVICE, "rail-menu-settings", "rail-menu-activity", "rail-menu-team", "rail-menu-update"] }, { section: { id: "rare", title: RARE, rows: [...RAIL_GUIDES, "rail-menu-linked-settings", "rail-menu-external-relay"] } }] },
+      3: { placements: [{ rows: [...RAIL_DEVICE, "rail-menu-settings", "rail-menu-activity", "rail-menu-team", "rail-menu-update"] }, { section: { id: "rare", title: RARE, rows: [...RAIL_GUIDES, "rail-menu-linked-settings", "rail-menu-external-relay"], page: true } }] },
     },
   },
   {
@@ -79,9 +95,9 @@ export const FAMILY_SPECS: readonly FamilySpec[] = [
     container: "[data-mobile2-sheet='menu'] [role='menu']:has([data-mobile2-menu-row='new-task'])",
     sample: "button[data-mobile2-menu-row='tasks']",
     layouts: {
-      1: { placements: [{ rows: PHONE_CREATE, cells: true }, { rows: ["tasks", "pipelines", "hidden"] }, sec("view", "View and places", "Вигляд і розділи", ["view-board", "view-catalog", "accounts", "host", "activity", "team"]), sec("device", "This device", "Цей пристрій", ["sound-settings-trigger", "sound-toggle", "keep-awake-row"]), sec("policy", "Project rules", "Правила проєкту", [...BAR_POLICY, ...BAR_PROJECT]), sec("guides", "Guides", "Посібники", PHONE_GUIDES), sec("install", "Installation", "Інсталяція", PHONE_INSTALL)] },
+      1: { placements: [{ rows: PHONE_CREATE, cells: true }, { rows: ["tasks", "pipelines", "hidden"] }, sec("view", "View and places", "Вигляд і розділи", ["view-board", "view-catalog", "accounts", "host", "activity", "team"], PAGE), sec("device", "This device", "Цей пристрій", ["sound-settings-trigger", "sound-toggle", "keep-awake-row"]), sec("policy", "Project rules", "Правила проєкту", [...BAR_POLICY, ...BAR_PROJECT], PAGE), sec("guides", "Guides", "Посібники", PHONE_GUIDES), sec("install", "Installation", "Інсталяція", PHONE_INSTALL)] },
       2: { placements: [sec("create", "New…", "Створити…", PHONE_CREATE), { rows: ["tasks", "pipelines", "hidden"] }, sec("view", "View and places", "Вигляд і розділи", ["view-board", "view-catalog", "accounts", "host", "activity", "team"]), sec("device", "This device", "Цей пристрій", ["sound-settings-trigger", "sound-toggle", "keep-awake-row"]), sec("policy", "Project rules", "Правила проєкту", [...BAR_POLICY, ...BAR_PROJECT]), sec("guides", "Guides", "Посібники", PHONE_GUIDES), sec("install", "Installation", "Інсталяція", PHONE_INSTALL)] },
-      3: { placements: [{ rows: PHONE_CREATE, cells: true }, { rows: ["tasks", "pipelines", "hidden", "view-board", "view-catalog", "accounts", "sound-settings-trigger", "sound-toggle"] }, { section: { id: "rare", title: RARE, rows: ["host", "activity", "team", "keep-awake-row", ...BAR_POLICY, ...BAR_PROJECT, ...PHONE_GUIDES, ...PHONE_INSTALL] } }] },
+      3: { placements: [{ rows: PHONE_CREATE, cells: true }, { rows: ["tasks", "pipelines", "hidden", "view-board", "view-catalog", "accounts", "sound-settings-trigger", "sound-toggle"] }, sec("policy", "Project rules", "Правила проєкту", [...BAR_POLICY, ...BAR_PROJECT], PAGE), { section: { id: "rare", title: RARE, rows: ["host", "activity", "team", "keep-awake-row", ...PHONE_GUIDES, ...PHONE_INSTALL], page: true } }] },
     },
   },
   {
@@ -92,7 +108,7 @@ export const FAMILY_SPECS: readonly FamilySpec[] = [
       1: { placements: [{ rows: ["attention", "reports", "pipeline", "seat", "pinned", "background", "stop"] }, sec("subagents", "Subagents", "Субагенти", ["subagent"]), sec("turn", "This turn", "Цей хід", CHAT_TURN), sec("manage", "Conversation", "Розмова", [...CHAT_MANAGE, "predecessor", "search", "project"]), sec("end", "Close or stop", "Закрити або зупинити", ["close", "kill"])] },
       2: { placements: [{ rows: ["attention", "reports", "pipeline", "seat", "pinned", "background", "stop"] }, sec("subagents", "Subagents", "Субагенти", ["subagent"]), sec("turn", "This turn", "Цей хід", CHAT_TURN), sec("manage", "Conversation", "Розмова", [...CHAT_MANAGE, "predecessor", "search", "project"]), sec("end", "Close or stop", "Закрити або зупинити", ["close", "kill"])] },
       3: {
-        placements: [{ rows: ["attention", "pipeline", "seat", "pinned", "background", "stop", "compact", "rename", "search", "project", "close"] }, sec("subagents", "Subagents", "Субагенти", ["subagent"]), { section: { id: "rare", title: RARE, rows: ["recheck", "crown", "handoff", "terminal", "host", "predecessor", "kill"] } }],
+        placements: [{ rows: ["attention", "pipeline", "seat", "pinned", "background", "stop", "compact", "rename", "search", "project", "close"] }, sec("subagents", "Subagents", "Субагенти", ["subagent"]), { section: { id: "rare", title: RARE, rows: ["recheck", "crown", "handoff", "terminal", "host", "predecessor", "kill"], page: true } }],
         removed: [{ row: "reports", home: { en: "the Reports control in the conversation's header", uk: "кнопка «Звіти» в шапці розмови" } }],
       },
     },
@@ -171,6 +187,9 @@ export const FAMILY_CSS = `
 
 interface Laid { row: HTMLElement; key: string }
 
+/* Variant 2 opens every section as a page; the others only the ones marked. */
+const paged = (variant: MenuVariant, section: Section) => variant === 2 || Boolean(section.page);
+
 function rowsOf(container: HTMLElement, spec: FamilySpec): Laid[] {
   const direct = [...container.children].filter((child): child is HTMLElement => child instanceof HTMLElement && !child.hasAttribute("data-cmf-chrome"));
   const rows = direct.flatMap((child) => {
@@ -202,7 +221,6 @@ function FamilyMenu({ container, spec, variant }: { container: HTMLElement; spec
   const [open, setOpen] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const layout = spec.layouts[variant];
-  const drill = variant === 2;
   const chrome = useMemo(() => {
     const host = document.createElement("div");
     host.setAttribute("data-cmf-chrome", "");
@@ -222,7 +240,12 @@ function FamilyMenu({ container, spec, variant }: { container: HTMLElement; spec
     const first = container.querySelector<HTMLElement>(spec.sample)?.firstElementChild;
     return first && (first.tagName.toLowerCase() === "svg" || first.querySelector("svg")) ? first.getBoundingClientRect().width : 0;
   }, [container, spec.sample]);
-  const [heads, setHeads] = useState<{ id: string; title: string; order: number; count: number }[]>([]);
+  const [heads, setHeads] = useState<{ id: string; title: string; order: number; count: number; page: boolean }[]>([]);
+  const swapped = useSwapGuard();
+  const swap = (next: string | null, event: React.MouseEvent) => {
+    swapped(event);
+    setOpen(next);
+  };
   useLayoutEffect(() => {
     if (!chrome.isConnected) container.appendChild(chrome);
     container.setAttribute("data-cmf", spec.id);
@@ -235,13 +258,13 @@ function FamilyMenu({ container, spec, variant }: { container: HTMLElement; spec
     let cells = false;
     const next: typeof heads = [];
     const sections = layout.placements.flatMap((placement) => ("section" in placement ? [placement.section] : []));
-    const inside = drill && open ? sections.find((section) => section.id === open) ?? null : null;
+    const inside = open ? sections.find((section) => section.id === open && paged(variant, section)) ?? null : null;
     const put = (entry: Laid, shown: boolean, cell: number | null, within: boolean) => {
       taken.add(entry);
       entry.row.style.order = String(order++);
       entry.row.setAttribute("data-cmf-row", entry.key);
       entry.row.toggleAttribute("data-cmf-hidden", !shown);
-      entry.row.toggleAttribute("data-cmf-in", within && shown && !drill);
+      entry.row.toggleAttribute("data-cmf-in", within && shown && !inside);
       if (cell) { entry.row.setAttribute("data-cmf-cell", ""); entry.row.style.gridColumn = `span ${cell}`; }
       else { entry.row.removeAttribute("data-cmf-cell"); entry.row.style.gridColumn = ""; }
     };
@@ -251,7 +274,7 @@ function FamilyMenu({ container, spec, variant }: { container: HTMLElement; spec
       if ("section" in placement) {
         if (!members.length) return;
         const section = placement.section;
-        next.push({ id: section.id, title: section.title[lang], order: order++, count: members.length });
+        next.push({ id: section.id, title: section.title[lang], order: order++, count: members.length, page: paged(variant, section) });
         for (const entry of members) put(entry, open === section.id, null, true);
         return;
       }
@@ -266,14 +289,14 @@ function FamilyMenu({ container, spec, variant }: { container: HTMLElement; spec
     /* The section rows are counted from the rows the product drew, which only the laid-out DOM knows. */
     /* eslint-disable-next-line react-hooks/set-state-in-effect */
     setHeads((current) => (JSON.stringify(current) === JSON.stringify(next) ? current : next));
-  }, [chrome, container, spec, variant, layout, open, drill, lang, tick]);
+  }, [chrome, container, spec, variant, layout, open, lang, tick]);
   useEffect(() => () => { chrome.remove(); }, [chrome]);
-  const inside = drill && open ? heads.find((head) => head.id === open) ?? null : null;
+  const inside = open ? heads.find((head) => head.id === open && head.page) ?? null : null;
   return createPortal(
     <>
       <style>{FAMILY_CSS}</style>
       {inside ? (
-        <button type="button" className={sample} data-cmf-head="back" data-cmf-section={inside.id} style={{ order: -1 }} onClick={() => setOpen(null)}>
+        <button type="button" className={sample} data-cmf-head="back" data-cmf-section={inside.id} style={{ order: -1 }} onClick={(event) => swap(null, event)}>
           <ChevronLeft aria-hidden />
           <span className="cmf-title">{inside.title}</span>
         </button>
@@ -284,14 +307,17 @@ function FamilyMenu({ container, spec, variant }: { container: HTMLElement; spec
           className={sample}
           data-cmf-head="section"
           data-cmf-section={head.id}
-          aria-expanded={drill ? undefined : open === head.id}
+          data-cmf-opens={head.page ? "page" : "place"}
+          aria-haspopup={head.page ? "menu" : undefined}
+          aria-expanded={head.page ? undefined : open === head.id}
           style={{ order: head.order }}
-          onClick={() => setOpen(open === head.id ? null : head.id)}
+          onClick={(event) => (head.page ? swap(head.id, event) : setOpen(open === head.id ? null : head.id))}
         >
           {lead ? <span aria-hidden style={{ width: lead, flexShrink: 0 }} /> : null}
           <span className="cmf-title">{head.title}</span>
           <span className="cmf-count">{head.count}</span>
-          {drill ? <ChevronRight aria-hidden /> : open === head.id ? <ChevronDown aria-hidden /> : <ChevronRight aria-hidden />}
+          {/* A page is the arrow to the right; a section that opens in place points down, and up once it is open. */}
+          {head.page ? <ChevronRight aria-hidden /> : open === head.id ? <ChevronUp aria-hidden /> : <ChevronDown aria-hidden />}
         </button>
       ))}
     </>,

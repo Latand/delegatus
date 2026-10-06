@@ -1,4 +1,4 @@
-import type { KanbanMenuItem } from "./kanbanMenus";
+import { popoverLeft, type KanbanMenuItem } from "./kanbanMenus";
 
 /* The three numbered layouts of the board's menus (docs/design/compact-card-menu.md),
    as data: each takes the entries the board builds today, marked by `id` and
@@ -239,4 +239,22 @@ export function sectionAt(layout: CompactLayout, path: readonly string[]): MenuS
     entries = found.entries.flatMap((entry) => (entry.type === "section" ? [entry.section] : []));
   }
   return found;
+}
+
+export const MENU_GAP = 6;
+/* A second press on the spot that just swapped the list is the tail of a
+   double click: it is dropped for this long unless the pointer moved this far. */
+export const SWAP_GUARD_MS = 1000;
+export const SWAP_GUARD_PX = 4;
+export type MenuSide = "below" | "above" | "beside";
+
+/** Where a menu goes so that no state of it covers its own button: below it
+    while the tallest state fits there, else above it with its bottom edge held
+    (it grows upward), else beside it. */
+export function menuPlacement(anchor: { left: number; right: number; top: number; bottom: number }, width: number, tallest: number, view: { width: number; height: number }): { side: MenuSide; left: number; top: number | null; bottom: number | null } {
+  const left = popoverLeft(anchor, width, view.width);
+  if (anchor.bottom + MENU_GAP + tallest <= view.height - 8) return { side: "below", left, top: anchor.bottom + MENU_GAP, bottom: null };
+  if (anchor.top - MENU_GAP - tallest >= 8) return { side: "above", left, top: null, bottom: view.height - (anchor.top - MENU_GAP) };
+  const before = anchor.left - MENU_GAP - width;
+  return { side: "beside", left: before >= 8 ? before : Math.min(anchor.right + MENU_GAP, view.width - width - 8), top: Math.max(8, Math.min(anchor.top, view.height - 8 - tallest)), bottom: null };
 }
