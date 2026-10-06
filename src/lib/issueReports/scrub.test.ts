@@ -124,6 +124,8 @@ test("attributed operator words remain a quotation inside code spans or single g
   ]) for (const form of [body, entity(body), encodeURIComponent(body)]) expect(classes(form)).toContain("quote");
   expect(classes("The tool returned `connection refused during startup`.")).toEqual([]);
   expect(classes("The operator asked for the tool to be restarted.")).toEqual([]);
+  expect(classes("The userId field contains `missing required value`.")).toEqual([]);
+  expect(classes("The operator requested an investigation. The tool returned <pre>connection refused during startup</pre>.")).toEqual([]);
 });
 
 test("a domain gets no blanket call or source-extension exemption", () => {

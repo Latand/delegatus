@@ -148,8 +148,13 @@ function legacyAccount(): CopilotAccount | null {
   };
 }
 
-export function listCopilotAccounts(options: { strict?: boolean } = {}): CopilotAccount[] {
-  const managed = readRegistry(options.strict).accounts.map((stored): CopilotAccount => ({
+/** Stored names for publication checks without opening account credentials. */
+export function copilotAccountsForPrivacy(): readonly { id: string; label: string }[] {
+  return [{ id: COPILOT_LEGACY_ACCOUNT_ID, label: "Default" }, ...readRegistry(true).accounts];
+}
+
+export function listCopilotAccounts(): CopilotAccount[] {
+  const managed = readRegistry().accounts.map((stored): CopilotAccount => ({
     id: stored.id,
     label: stored.label,
     kind: "managed",

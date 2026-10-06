@@ -17,9 +17,9 @@ import path from "node:path";
    it deploys (#1321). */
 import viewerPackageManifest from "../../../package.json";
 
-import { activeClaudeAccountId, listClaudeAccounts } from "@/lib/accounts/claude";
-import { activeCodexAccountId, listCodexAccounts } from "@/lib/accounts/codex";
-import { activeCopilotAccountId, listCopilotAccounts } from "@/lib/accounts/copilot";
+import { activeClaudeAccountId, claudeAccountsForPrivacy, listClaudeAccounts } from "@/lib/accounts/claude";
+import { activeCodexAccountId, codexAccountsForPrivacy, listCodexAccounts } from "@/lib/accounts/codex";
+import { activeCopilotAccountId, copilotAccountsForPrivacy, listCopilotAccounts } from "@/lib/accounts/copilot";
 import { projectEngineAccounts } from "@/lib/accounts/projectAccountsView";
 import {
   accountProjectBindings,
@@ -3518,9 +3518,9 @@ async function productionPublicDenyList(project: string | null, control: ViewerC
       // An unreadable registry contributes nothing.
     }
   };
-  collect(() => listClaudeAccounts({ strict: requireComplete }));
-  collect(() => listCodexAccounts({ strict: requireComplete }));
-  collect(() => listCopilotAccounts({ strict: requireComplete }));
+  collect(() => requireComplete ? claudeAccountsForPrivacy() : listClaudeAccounts());
+  collect(() => requireComplete ? codexAccountsForPrivacy() : listCodexAccounts());
+  collect(() => requireComplete ? copilotAccountsForPrivacy() : listCopilotAccounts());
   const local: string[] = [];
   try {
     local.push(os.userInfo().username, path.basename(os.homedir()), os.hostname().split(".")[0] ?? "");
@@ -3562,8 +3562,11 @@ async function telegramPeople(control: ViewerControlDependencies, requireComplet
     const chats = await readViewerControl(control, "/api/telegram/bot/agent?op=chats") as { chats?: { chat?: unknown; postAllowed?: unknown }[]; truncated?: number };
     if (requireComplete && !Array.isArray(chats.chats)) throw new Error("Privacy chats read is malformed");
     if (requireComplete && chats.truncated) throw new Error("Privacy chats read is incomplete");
-    const allowed = (chats.chats ?? []).filter((entry) => entry.postAllowed === true && typeof entry.chat === "string");
-    for (const chat of requireComplete ? allowed : allowed.slice(0, 4)) {
+    /* Publication protects people in every known chat, even if posting is
+       disabled. The bridge retains its destination-specific reading. */
+    if (requireComplete && chats.chats?.some((entry) => !entry || typeof entry.chat !== "string" || !entry.chat.trim())) throw new Error("Privacy chats read is malformed");
+    const readable = (chats.chats ?? []).filter((entry) => (requireComplete || entry.postAllowed === true) && typeof entry.chat === "string");
+    for (const chat of requireComplete ? readable : readable.slice(0, 4)) {
       let cursor: string | null = null;
       const seen = new Set<string>();
       do {

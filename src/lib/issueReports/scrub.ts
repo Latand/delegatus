@@ -82,17 +82,16 @@ const QUOTATION = [
 const SPEAKER_LINE = /(?:^|\n)\s*(?:[-*+]\s+)?[*_[(<]{0,3}(?:user|operator|human|assistant|agent|orchestrator|оператор|користувач|людина|асистент|агент|оркестратор)[*_\])>]{0,3}\s*(?::|—|\]|\))\s*[*_]{0,3}\s*\S/iu;
 /* Explicit attribution remains a conversation quote inside a code span.
    Technical code spans without that attribution stay readable. */
-const OPERATOR_SPEECH = "(?:wrote|said|told|replied|asked|написа[вл]а?|сказа[вл]а?|відпові[вл]а?|попроси[вл]а?)";
 const OPERATOR = "(?:operator|user|human|оператор|користувач|людина)";
 /* Attribution can contain arbitrary intervening words and Markdown soft
    wraps in the same clause. A sentence boundary ends it, so a later
-   technical span stays readable. */
+   technical span stays readable. Attribution needs no finite verb list. */
 const SPEECH_CONNECTOR = "[^\x60‹›“”«»\"'‘’<>.!?;:]*";
 const QUOTE_OPEN = "(?:[\x60‹“«\"'‘]|<(?:code|pre|q)\\b[^<>]*>)";
 const ATTRIBUTED_OPERATOR_WORDS = new RegExp([
-  `(?<!\\p{L})(?:${OPERATOR}\\s*(?:`,
-  `(?:${OPERATOR_SPEECH}\\s*)?[:—]\\s*\\S`,
-  `|${OPERATOR_SPEECH}\\s+${SPEECH_CONNECTOR}[:—]?\\s*${QUOTE_OPEN}`,
+  `(?<!\\p{L})(?:${OPERATOR}(?![\\p{L}\\p{N}_])\\s*(?:`,
+  `[:—]\\s*\\S`,
+  `|${SPEECH_CONNECTOR}[:—]?\\s*${QUOTE_OPEN}`,
   `|['’]s\\s+(?:exact\\s+)?(?:reply|response|words|message)\\s*(?:(?:was|were|is|are)\\s*)?[:—]?\\s*${QUOTE_OPEN})`,
   `|(?:точна\\s+)?(?:відповідь|слова|повідомлення)\\s+(?:оператора|користувача|людини)\\s*(?:(?:була|були|було|є)\\s*)?[:—]?\\s*${QUOTE_OPEN})`,
 ].join(""), "iu");

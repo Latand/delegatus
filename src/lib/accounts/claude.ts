@@ -313,10 +313,18 @@ function credentialPresence(home: string): Pick<ClaudeAccount, "authPresent" | "
 }
 function account(stored: StoredAccount): ClaudeAccount { const home = managedHome(stored.id); return { ...stored, home, projectsDir: projectsDirFor(home), ...(stored.provider ? { authPresent: readClaudeProviderToken(home) !== null } : credentialPresence(home)) }; }
 function main(): ClaudeAccount { const home = legacyClaudeHome(); return { id: DEFAULT_ID, label: "Main", kind: "legacy", home, projectsDir: projectsDirFor(home), ...credentialPresence(home), createdAt: 0 }; }
-export function listClaudeAccounts(options: { strict?: boolean } = {}): ClaudeAccount[] {
+/** Complete stored names for publication checks, including retained history.
+    This read neither recovers removals nor discovers credentials. */
+export function claudeAccountsForPrivacy(): readonly { id: string; label: string }[] {
+  const loaded = readRegistry();
+  if (loaded.corrupt) throw new CorruptClaudeAccountsError();
+  return [{ id: DEFAULT_ID, label: "Main" }, ...loaded.registry.accounts, ...loaded.registry.retired,
+    ...loaded.registry.removals.map((item) => ({ id: item.id, label: "" }))];
+}
+
+export function listClaudeAccounts(): ClaudeAccount[] {
   recoverRemovalsAtStartup();
   const loaded = readRegistry();
-  if (options.strict && loaded.corrupt) throw new CorruptClaudeAccountsError();
   return [main(), ...loaded.registry.accounts.map(account)];
 }
 /** Routing needs persisted membership only; credential discovery may spawn Keychain. */

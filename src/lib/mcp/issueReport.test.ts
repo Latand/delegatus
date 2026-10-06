@@ -462,6 +462,10 @@ const additionalPrivateReports: [string, string][] = [
   ["quote", "<q><b>перезапусти</b> всіх агентів зараз</q>"],
   ["quote", "The operator wrote <pre>restart every agent now</pre>."],
   ["quote", "Оператор написав у повідомленні <pre>перезапусти всіх агентів зараз</pre>."],
+  ["quote", "The operator requested `restart every agent now`."],
+  ["quote", "The user stated in their message <code>restart every agent now</code>."],
+  ["quote", "Оператор вимагав `перезапусти всіх агентів зараз`."],
+  ["quote", "Користувач зазначив у повідомленні <pre>перезапусти всіх агентів зараз</pre>."],
   ["host", "Machine: remote-worker"],
   ["host", "node = remote-worker"],
   ["host", '{"machine":"remote-worker"}'],
@@ -551,7 +555,7 @@ test("available empty sources allow reports, recovered people sources reject kno
   expect(empty.published).toEqual([{ ...REPORT, repository: REPOSITORY }]);
 });
 
-test.each(["fifth chat", "older page", "remote without seat", "aliased display name"])("known private names from %s are refused at both boundaries", async (source) => {
+test.each(["fifth chat", "older page", "posting disabled", "remote without seat", "aliased display name"])("known private names from %s are refused at both boundaries", async (source) => {
   if (source === "remote without seat") fs.writeFileSync(path.join(privacyState, "project-remotes.json"), JSON.stringify({
     schemaVersion: 1, remotes: { [`repo-${"1".repeat(32)}`]: `https://${["github", "com"].join(".")}/acme/HiddenWorkshop.git` },
   }));
@@ -559,10 +563,10 @@ test.each(["fifth chat", "older page", "remote without seat", "aliased display n
     schemaVersion: 1, aliases: { "old-project": `repo-${"1".repeat(32)}` }, displayNames: { "old-project": "HiddenWorkshop" },
   }));
   const h = harness({ controlRead: async (url) => {
-    if (url.endsWith("op=chats")) return { chats: Array.from({ length: source === "fifth chat" ? 5 : 1 }, (_, index) => ({ chat: `allowed-chat-${index}`, postAllowed: true })) };
+    if (url.endsWith("op=chats")) return { chats: Array.from({ length: source === "fifth chat" ? 5 : 1 }, (_, index) => ({ chat: `allowed-chat-${index}`, postAllowed: source !== "posting disabled" })) };
     const params = new URLSearchParams(url.split("?")[1]);
     if (source === "older page" && !params.has("cursor")) return { messages: [], hasMore: true, nextCursor: "older" };
-    return { messages: source === "older page" || params.get("chat") === "allowed-chat-4" ? [{ fromName: "Person Later" }] : [], hasMore: false, nextCursor: null };
+    return { messages: source === "older page" || source === "posting disabled" || params.get("chat") === "allowed-chat-4" ? [{ fromName: "Person Later" }] : [], hasMore: false, nextCursor: null };
   } });
   const projectSource = source === "remote without seat" || source === "aliased display name";
   const bodies = projectSource ? ["HiddenWorkshop observed the failure.", ...(source === "remote without seat" ? ["acme/HiddenWorkshop observed the failure."] : [])] : ["Person Later observed the failure."];
@@ -575,6 +579,27 @@ test.each(["fifth chat", "older page", "remote without seat", "aliased display n
   }
   for (const body of bodies) {
     const { digest } = recordIssueReportPreview({ title: REPORT.title, body }, REPORTER.conversationId!, { directory: sandbox });
+    h.operatorSays((await shown(h, digest)).en);
+    expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, code: "issue_report_private_data" });
+    expect(readIssueReportPreview(digest, sandbox)?.publication).toBeUndefined();
+  }
+  expect(h.published).toEqual([]);
+});
+
+test.each(["claude", "codex"])("retired %s account names remain private at both boundaries", async (engine) => {
+  fs.writeFileSync(path.join(privacyState, `${engine}-accounts.json`), JSON.stringify({
+    version: 1, active: "default", accounts: [],
+    retired: [{ id: "archived-account", label: "HiddenAccount", retiredAt: 1, archived: true }], removals: [],
+  }));
+  const h = harness({ controlRead: async () => ({ chats: [] }) });
+  for (const name of ["HiddenAccount", "archived-account"]) {
+    const report = { title: REPORT.title, body: `${name} encountered the failure.` };
+    expect(await h.call(REPORTER, { action: "preview", ...report })).toMatchObject({ ok: false, code: "issue_report_private_data" });
+    expect(fs.readdirSync(sandbox)).toEqual([]);
+  }
+  for (const name of ["HiddenAccount", "archived-account"]) {
+    const report = { title: REPORT.title, body: `${name} encountered the failure.` };
+    const { digest } = recordIssueReportPreview(report, REPORTER.conversationId!, { directory: sandbox });
     h.operatorSays((await shown(h, digest)).en);
     expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, code: "issue_report_private_data" });
     expect(readIssueReportPreview(digest, sandbox)?.publication).toBeUndefined();
