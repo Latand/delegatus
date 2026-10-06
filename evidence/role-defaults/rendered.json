@@ -28,6 +28,12 @@
           "effort": "high",
           "cost": "heavy",
           "nudge": false
+        },
+        {
+          "id": "issue-reporter",
+          "effort": "high",
+          "cost": "moderate",
+          "nudge": false
         }
       ],
       "overflow": false,
@@ -59,6 +65,12 @@
           "id": "merger",
           "effort": "high",
           "cost": "heavy",
+          "nudge": false
+        },
+        {
+          "id": "issue-reporter",
+          "effort": "high",
+          "cost": "moderate",
           "nudge": false
         }
       ],
@@ -92,6 +104,12 @@
           "effort": "high",
           "cost": "heavy",
           "nudge": false
+        },
+        {
+          "id": "issue-reporter",
+          "effort": "high",
+          "cost": "moderate",
+          "nudge": false
         }
       ],
       "overflow": false,
@@ -123,6 +141,12 @@
           "id": "merger",
           "effort": "high",
           "cost": "heavy",
+          "nudge": false
+        },
+        {
+          "id": "issue-reporter",
+          "effort": "high",
+          "cost": "moderate",
           "nudge": false
         }
       ],
