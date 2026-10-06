@@ -460,6 +460,8 @@ const additionalPrivateReports: [string, string][] = [
   ["quote", "<q>restart every agent now</q>"],
   ["quote", "<Q class=\"quotation\">restart every agent now</Q>"],
   ["quote", "<q><b>перезапусти</b> всіх агентів зараз</q>"],
+  ["quote", "The operator wrote <pre>restart every agent now</pre>."],
+  ["quote", "Оператор написав у повідомленні <pre>перезапусти всіх агентів зараз</pre>."],
   ["host", "Machine: remote-worker"],
   ["host", "node = remote-worker"],
   ["host", '{"machine":"remote-worker"}'],
@@ -494,7 +496,7 @@ test.each(additionalPrivateForms)("legacy private report $index form $form is re
 
 test("unpopulated machine fields and technical spans after a speech sentence stay publishable", async () => {
   const h = harness({ deny: { accounts: [], people: [], local: [], projects: [] } });
-  const report = { title: REPORT.title, body: "The machine field and node field were missing. The operator asked for an investigation.\nThe error was `connection refused during startup`; see src/lib/mcp/bindings.ts:1767." };
+  const report = { title: REPORT.title, body: "The machine field and node field were missing. The operator asked for an investigation.\nThe error was `connection refused during startup`; see src/lib/mcp/bindings.ts:1767. Technical output: <pre>connection refused during startup</pre>." };
   const digest = await previewed(h, report);
   h.operatorSays((await shown(h, digest)).uk);
   expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });

@@ -88,7 +88,7 @@ const OPERATOR = "(?:operator|user|human|оператор|користувач|�
    wraps in the same clause. A sentence boundary ends it, so a later
    technical span stays readable. */
 const SPEECH_CONNECTOR = "[^\x60‹›“”«»\"'‘’<>.!?;:]*";
-const QUOTE_OPEN = "(?:[\x60‹“«\"'‘]|<(?:code|q)\\b[^<>]*>)";
+const QUOTE_OPEN = "(?:[\x60‹“«\"'‘]|<(?:code|pre|q)\\b[^<>]*>)";
 const ATTRIBUTED_OPERATOR_WORDS = new RegExp([
   `(?<!\\p{L})(?:${OPERATOR}\\s*(?:`,
   `(?:${OPERATOR_SPEECH}\\s*)?[:—]\\s*\\S`,
