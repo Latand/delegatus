@@ -1241,3 +1241,16 @@ test.each(["scripts/", "__pycache__/"])("bytecode directory %s containing a uniq
   expect(report.kept[0]!.reason).toBe("ignored-files");
   expect(fs.readFileSync(log, "utf8")).toBe("unique evidence");
 });
+
+test("a lane that settles again during measurement receives fresh retention", async () => {
+  const root = repository(); remoteRepository(root);
+  const { dir } = lane(root, path.join(caseDir, "resettled"), "topic/resettled");
+  git(["push", "-q", "origin", "topic/resettled"], root);
+  const owner = pipeline({ repoDir: root, worktreeDir: dir, branch: "topic/resettled", closedAt: OLD_TERMINAL });
+  const report = await sweepMergedWorktrees(ports({ pipelines: [owner], now: () => RETAIN_NOW,
+    measure: async () => { owner.closedAt = new Date(RETAIN_NOW).toISOString(); return 10; },
+  }));
+  expect(report.removed).toEqual([]);
+  expect(report.kept[0]!.reason).toBe("retention");
+  expect(fs.existsSync(dir)).toBe(true);
+});

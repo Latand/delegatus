@@ -228,6 +228,12 @@ function pipelineHoldsCheckout(pipeline: SweptPipeline): boolean {
   return !SETTLED_STATES.has(pipeline.state) || !pipelineActivitySettled(pipeline);
 }
 
+function latestTerminalTime(pipelines: readonly SweptPipeline[]): number {
+  const times = pipelines.flatMap(owner => [owner.closedAt, ...(owner.runs ?? []).flatMap(run => run.attempts.map(attempt => attempt.completedAt))])
+    .map(date => date ? Date.parse(date) : Number.NaN).filter(Number.isFinite);
+  return times.length ? Math.max(...times) : 0;
+}
+
 /** Ignored outputs any checkout rebuilds, which a removal may take. Anything
     else ignored keeps the worktree. */
 const REBUILDABLE_DIRECTORIES: ReadonlySet<string> = new Set([
@@ -619,13 +625,12 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
         inside(worktree, temp) && isOwnedTempName(path.relative(temp, worktree).split(path.sep)[0] ?? ""));
       /* A lane's own terminal time dates it on the first pass; otherwise the
          first sweep that saw it settled starts the clock. */
-      const terminal = owners.flatMap((owner) => [owner.closedAt, ...(owner.runs ?? []).flatMap((run) => run.attempts.map((attempt) => attempt.completedAt))])
-        .map((date) => date ? Date.parse(date) : Number.NaN).filter(Number.isFinite);
+      const terminal = latestTerminalTime(owners);
       const previous = previouslyKept.get(worktree);
-      const terminalAt = terminal.length ? new Date(Math.max(...terminal)).toISOString() : report.at;
+      const terminalAt = terminal ? new Date(terminal).toISOString() : report.at;
       const firstSettledAt = finished ? previous?.firstSettledAt
         ?? (previous && BUSY_REASONS.has(previous.reason) ? report.at : terminalAt) : undefined;
-      const settledSince = Math.max(terminal.length ? Math.max(...terminal) : 0, Date.parse(firstSettledAt ?? report.at));
+      const settledSince = Math.max(terminal, Date.parse(firstSettledAt ?? report.at));
       const retained = finished && now() - settledSince >= FINISHED_WORKTREE_RETENTION_MS;
       const base = { path: worktree, ...(pipelineId ? { pipelineId } : {}), ...(firstSettledAt ? { firstSettledAt } : {}) };
       if (initial.open.some((open) => inside(open, worktree))) {
@@ -705,6 +710,9 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
         if (retained) {
           const freshOwners = ownersOf(ownershipPipelines(), worktree);
           if (freshOwners.some(pipelineHoldsCheckout)) return { ...base, reason: "open-pipeline" };
+          const freshSettled = Math.max(settledSince, latestTerminalTime(freshOwners));
+          if (now() - freshSettled < FINISHED_WORKTREE_RETENTION_MS)
+            return { ...base, reason: "retention", detail: `eligible after ${new Date(freshSettled + FINISHED_WORKTREE_RETENTION_MS).toISOString()}` };
           const remote = await onRemote(current.head);
           if (remote) return { pr: null, anchor: current.head, preservation: "remote-ref", branch: current.branch };
           if (freshOwners.some((owner) => owner.baseRef === current.head)) return { pr: null, anchor: current.head, preservation: "base", branch: current.branch };
