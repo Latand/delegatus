@@ -3539,7 +3539,7 @@ async function productionPublicDenyList(project: string | null, control: ViewerC
     for (const seat of activeOrchestratorSeats()) keys.add(canonicalOrchestratorProject(seat.project));
     const aliases = projectAliasSnapshot({ strict: requireComplete });
     const remotes = requireComplete ? recordedProjectRemotes({ strict: true }) : {};
-    for (const key of Object.keys(aliases.displayNames)) keys.add(canonicalOrchestratorProject(key));
+    for (const key of Object.keys(aliases.displayNames)) keys.add(requireComplete ? key : canonicalOrchestratorProject(key));
     for (const key of Object.keys(remotes)) keys.add(key);
     for (const key of keys) {
       if (!requireComplete && key === own) continue;

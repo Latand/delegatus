@@ -549,9 +549,12 @@ test("available empty sources allow reports, recovered people sources reject kno
   expect(empty.published).toEqual([{ ...REPORT, repository: REPOSITORY }]);
 });
 
-test.each(["fifth chat", "older page", "remote without seat"])("known private names from %s are refused at both boundaries", async (source) => {
+test.each(["fifth chat", "older page", "remote without seat", "aliased display name"])("known private names from %s are refused at both boundaries", async (source) => {
   if (source === "remote without seat") fs.writeFileSync(path.join(privacyState, "project-remotes.json"), JSON.stringify({
     schemaVersion: 1, remotes: { [`repo-${"1".repeat(32)}`]: `https://${["github", "com"].join(".")}/acme/HiddenWorkshop.git` },
+  }));
+  if (source === "aliased display name") fs.writeFileSync(path.join(privacyState, "project-aliases.json"), JSON.stringify({
+    schemaVersion: 1, aliases: { "old-project": `repo-${"1".repeat(32)}` }, displayNames: { "old-project": "HiddenWorkshop" },
   }));
   const h = harness({ controlRead: async (url) => {
     if (url.endsWith("op=chats")) return { chats: Array.from({ length: source === "fifth chat" ? 5 : 1 }, (_, index) => ({ chat: `allowed-chat-${index}`, postAllowed: true })) };
@@ -559,12 +562,13 @@ test.each(["fifth chat", "older page", "remote without seat"])("known private na
     if (source === "older page" && !params.has("cursor")) return { messages: [], hasMore: true, nextCursor: "older" };
     return { messages: source === "older page" || params.get("chat") === "allowed-chat-4" ? [{ fromName: "Person Later" }] : [], hasMore: false, nextCursor: null };
   } });
-  const bodies = source === "remote without seat" ? ["HiddenWorkshop observed the failure.", "acme/HiddenWorkshop observed the failure."] : ["Person Later observed the failure."];
+  const projectSource = source === "remote without seat" || source === "aliased display name";
+  const bodies = projectSource ? ["HiddenWorkshop observed the failure.", ...(source === "remote without seat" ? ["acme/HiddenWorkshop observed the failure."] : [])] : ["Person Later observed the failure."];
   for (const body of bodies) {
     const report = { title: REPORT.title, body };
     const refused = await h.call(REPORTER, { action: "preview", ...report });
     expect(refused).toMatchObject({ ok: false, code: "issue_report_private_data" });
-    expect((refused.details as { findings: { class: string }[] }).findings.map((finding) => finding.class)).toContain(source === "remote without seat" ? "project" : "person");
+    expect((refused.details as { findings: { class: string }[] }).findings.map((finding) => finding.class)).toContain(projectSource ? "project" : "person");
     expect(fs.readdirSync(sandbox)).toEqual([]);
   }
   for (const body of bodies) {
