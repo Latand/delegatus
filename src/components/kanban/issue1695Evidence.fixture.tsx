@@ -433,7 +433,8 @@ if (ASKS_YOU) {
   });
 }
 /* t-links: a simple chain parked on a decision. */
-const linksImpl = add(conversation("links-impl", "Which of the two anchors should win?", { mtime: now - 17 * MIN, engine: "codex", model: "gpt-5.6", waitingInput: { since: now - 17 * MIN } }));
+/* The sidebar frames print this question on the project's row, so they get it in the frame's language. */
+const linksImpl = add(conversation("links-impl", new URLSearchParams(location.search).has("rail") ? L("Which of the two anchors should win?", "Який із двох якорів має перемогти?") : "Which of the two anchors should win?", { mtime: now - 17 * MIN, engine: "codex", model: "gpt-5.6", waitingInput: { since: now - 17 * MIN } }));
 /* t-limits: build failed, the fail edge started diagnose, which needs a decision. */
 const limitsBuild = add(conversation("limits-build", "Rate limited before the verdict", { mtime: now - 3 * 24 * 60 * MIN, engine: "codex", model: "gpt-5.6" }));
 const limitsDiag = add(conversation("limits-diag", "Retry on another account, or wait for the reset?", { mtime: now - 3 * 24 * 60 * MIN + 20 * MIN }));
@@ -583,6 +584,11 @@ if (RAIL) {
     for (const [project, displayName, conversations, age] of quiet) named(project, displayName, conversations, age);
     talk("tidal-build", "tidal-forecast", "Fitting the harbour gauge model", working({ pid: 4_514, mtime: now - 40 }));
     talk("lantern-ask", "lantern-api", L("Keep the v1 routes for another release?", "Залишити маршрути v1 ще на один випуск?"), { engine: "codex", model: "gpt-5.6", mtime: now - 95 * MIN, waitingInput: { since: now - 95 * MIN } });
+    localStorage.setItem("llvArchivedProjects", JSON.stringify(["quiet-orchard", "birch-notes"]));
+  } else if (new URLSearchParams(location.search).has("railarchive")) {
+    /* `&railarchive`: the short list with two archived projects under it, so the archive fold is inside the frame. */
+    named("quiet-orchard", "Quiet Orchard", 3, 20 * 24 * 60 * MIN);
+    named("birch-notes", "Birch Notes", 7, 31 * 24 * 60 * MIN);
     localStorage.setItem("llvArchivedProjects", JSON.stringify(["quiet-orchard", "birch-notes"]));
   } else localStorage.removeItem("llvArchivedProjects");
 }

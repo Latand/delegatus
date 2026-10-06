@@ -30,7 +30,7 @@ export function ReserveBar({ percent, color, className = "w-10" }: { percent: nu
 export function MeterLine({ label, value, percent, color }: { label: ReactNode; value: ReactNode; percent: number | null; color: string }) {
   return (
     <span data-meter-line="" className="flex h-[22px] items-center gap-2">
-      <span className="min-w-0 flex-1 truncate text-[11.5px] font-semibold text-primary">{label}</span>
+      <span data-meter-label="" className="min-w-0 flex-1 truncate text-[11.5px] font-semibold text-primary">{label}</span>
       <span data-meter-value="" className="shrink-0 text-[11px] tabular-nums text-muted">{value}</span>
       <ReserveBar percent={percent} color={color} />
     </span>

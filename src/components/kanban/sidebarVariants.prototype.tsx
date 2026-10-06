@@ -1,7 +1,7 @@
 "use client";
 
-import { Gauge, LayoutGrid, PanelLeftClose, PanelLeftOpen, Search, User } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { ChevronDown, ChevronUp, Gauge, LayoutGrid, PanelLeftClose, PanelLeftOpen, Search, TriangleAlert, User } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 
 import { attentionId } from "@/components/attention";
 import { DelegatusMark } from "@/components/brand/BrandMark";
@@ -15,7 +15,7 @@ import { buildProjectSummaries, OVERVIEW, partitionCrownedSummaries, projectKey,
 import { CreateProjectForm, RAIL_FOOTER_STORAGE_KEY, RailHeaderMenu, RailPrototypeContext, type ProjectRailProps } from "@/components/ProjectRail";
 import type { RailFooterDensity } from "@/components/railFooterDensity";
 import { ResourcesFooter } from "@/components/ResourcesFooter";
-import { BoardRowsSkeleton } from "@/components/skeletons";
+import { BoardRowsSkeleton, SKELETON_BAR } from "@/components/skeletons";
 import { PRODUCT_NAME } from "@/lib/brand";
 import { projectMatchesQuery } from "@/lib/displayNames";
 import { useLocale } from "@/lib/i18n";
@@ -36,7 +36,9 @@ import { useLocale } from "@/lib/i18n";
  *      line per reading; `?railask=1` adds variant 3's question line to it,
  *      which is the note's recommendation;
  *   2  a narrow rail of project tiles and gauges; the full sidebar opens beside
- *      it on hover, so the rail stays under the pointer, and docks on request;
+ *      it on hover, so the rail stays under the pointer, and docks on request.
+ *      The rail itself says when the list is loading or the catalog cannot be
+ *      reached, and a first run draws the full sidebar until a project exists;
  *   3  rows that say what waits on the operator and which engines are working,
  *      with quiet projects folded to one line.
  */
@@ -59,12 +61,14 @@ const COPY = {
     conversations: "{n} conversations", conversationsOne: "1 conversation", updated: "updated {age}", detail: "Every limit window and its reset", compact: "One line per reading",
     detailShort: "All windows", compactShort: "Compact", withAsk: "with the question line from 3",
     open: "Open the sidebar", dock: "Keep the sidebar open", undock: "Fold the sidebar to a rail", find: "Find a project",
+    moreBelow: "{n} more below", moreAbove: "{n} more above",
   },
   uk: {
     pinned: "Закріплені", projects: "Проєкти", system: "Система", needsYou: "{n} чекають на вас", needsYouOne: "1 чекає на вас", working: "{n} працює",
     conversations: "розмов: {n}", conversationsOne: "1 розмова", updated: "оновлено {age}", detail: "Усі вікна лімітів і час скидання", compact: "Один рядок на показник",
     detailShort: "Усі вікна", compactShort: "Коротко", withAsk: "із рядком питання з варіанта 3",
     open: "Відкрити панель", dock: "Тримати панель відкритою", undock: "Згорнути панель до рейки", find: "Знайти проєкт",
+    moreBelow: "Ще {n} нижче", moreAbove: "Ще {n} вище",
   },
 } as const;
 type CopyKey = keyof (typeof COPY)["en"];
@@ -196,6 +200,7 @@ function CrownToggle({ crowned, onToggle }: { crowned: boolean; onToggle: () => 
   return (
     <button
       type="button"
+      data-rail-crown=""
       className={`group/crown absolute right-1.5 top-[5px] flex h-[22px] w-[22px] items-center justify-center rounded-[7px] border border-border bg-card opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100 ${FOCUS}`}
       title={crowned ? t("rail.uncrown") : t("rail.crown")}
       aria-label={crowned ? t("rail.uncrown") : t("rail.crown")}
@@ -237,8 +242,8 @@ function ProjectRow({ row, kind, props, model, crowned }: { row: RowFacts; kind:
           <span className="block break-words">
             <span className="float-right ml-1.5 flex h-[18px] items-center gap-1.5 font-normal">
               {rich ? null : <MarkColumns needs={row.attentionCount} live={row.liveCount} model={model} own />}
-              {/* The crown control takes the age's place while the pointer is on the row. */}
-              <span data-rail-slot="age" className={`${SLOT_AGE} ${props.onToggleCrown ? "group-hover:opacity-0" : ""}`}>{age}</span>
+              {/* The crown control takes the age's place while the pointer is on the row or the keyboard is on the control. */}
+              <span data-rail-slot="age" className={`${SLOT_AGE} ${props.onToggleCrown ? "group-hover:opacity-0 group-has-[[data-rail-crown]:focus-visible]:opacity-0" : ""}`}>{age}</span>
             </span>
             {row.displayName}
           </span>
@@ -411,7 +416,7 @@ function FullRail({ props, model, kind, headerExtra, start, beside = false }: { 
           </span>
           {kind === "rich" ? <><NeedsMark count={model.totalAttention} /><LiveMark count={model.totalLive} /></> : <><MarkColumns needs={model.totalAttention} live={model.totalLive} model={model} /><span className={SLOT_AGE} /></>}
         </button>
-        {crowned.length ? <SectionLabel icon={<Crown className="h-3 w-3 fill-crown text-crown" aria-hidden />}>{c("pinned")}</SectionLabel> : null}
+        {crowned.length ? <SectionLabel count={crowned.length} icon={<Crown className="h-3 w-3 fill-crown text-crown" aria-hidden />}>{c("pinned")}</SectionLabel> : null}
         <FlipRow>
           {crowned.map(row)}
           {crowned.length || rest.length ? <div data-flip-key="__projects-label__" className={crowned.length ? "mt-1.5" : ""}><SectionLabel count={rest.length}>{c("projects")}</SectionLabel></div> : null}
@@ -424,7 +429,7 @@ function FullRail({ props, model, kind, headerExtra, start, beside = false }: { 
               <span className="font-semibold tabular-nums">{archived.length}</span>
               <ChevronRight className={`h-3 w-3 shrink-0 transition-transform ${archiveOpen ? "rotate-90" : ""}`} aria-hidden />
             </button>
-            {archiveOpen ? archived.map((entry) => <ProjectRow key={entry.project} row={entry} kind={kind === "rich" ? "rich" : "line"} props={{ ...props, onToggleCrown: undefined }} model={model} crowned={crowns.has(entry.project)} />) : null}
+            {archiveOpen ? <div data-rail-archived="">{archived.map((entry) => <ProjectRow key={entry.project} row={entry} kind={kind === "rich" ? "rich" : "line"} props={{ ...props, onToggleCrown: undefined }} model={model} crowned={crowns.has(entry.project)} />)}</div> : null}
           </>
         ) : null}
         {!model.active.length && !archived.length ? (
@@ -439,13 +444,15 @@ function FullRail({ props, model, kind, headerExtra, start, beside = false }: { 
 }
 
 /** `?railask=1`: variant 1 with the question line of variant 3, the combination the note recommends. */
+/** `?railarchive=open`: the archive fold starts unfolded, for a frame of the archived rows. */
+const ARCHIVE_OPEN = () => typeof location !== "undefined" && new URLSearchParams(location.search).get("railarchive") === "open";
 const WITH_ASK = () => typeof location !== "undefined" && new URLSearchParams(location.search).get("railask") === "1";
 
 function Variant1(props: ProjectRailProps) {
   const model = useRailModel(props);
   return (
     <aside data-rail-variant="1" className="flex w-[248px] shrink-0 flex-col border-r border-border bg-card">
-      <FullRail props={props} model={model} kind={WITH_ASK() ? "ask" : "line"} />
+      <FullRail props={props} model={model} kind={WITH_ASK() ? "ask" : "line"} start={ARCHIVE_OPEN() ? "archive" : null} />
     </aside>
   );
 }
@@ -454,7 +461,7 @@ function Variant3(props: ProjectRailProps) {
   const model = useRailModel(props);
   return (
     <aside data-rail-variant="3" className="flex w-[264px] shrink-0 flex-col border-r border-border bg-card">
-      <FullRail props={props} model={model} kind="rich" />
+      <FullRail props={props} model={model} kind="rich" start={ARCHIVE_OPEN() ? "archive" : null} />
     </aside>
   );
 }
@@ -491,6 +498,41 @@ function Tile({ row, props }: { row: RowFacts; props: ProjectRailProps }) {
   );
 }
 
+/** How many of the rail's tiles lie past each end of its list, so a list that scrolls says so without a scrollbar. */
+function useHiddenTiles(list: RefObject<HTMLElement | null>, watch: unknown) {
+  const [hidden, setHidden] = useState({ above: 0, below: 0 });
+  useEffect(() => {
+    const element = list.current;
+    if (!element) return;
+    const read = () => {
+      const box = element.getBoundingClientRect();
+      const tiles = [...element.querySelectorAll<HTMLElement>("[data-rail-project], [data-rail-archive]")].map((tile) => tile.getBoundingClientRect());
+      const next = { above: tiles.filter((tile) => tile.top < box.top - 1).length, below: tiles.filter((tile) => tile.bottom > box.bottom + 1).length };
+      setHidden((current) => (current.above === next.above && current.below === next.below ? current : next));
+    };
+    read();
+    element.addEventListener("scroll", read, { passive: true });
+    const observer = new ResizeObserver(read);
+    observer.observe(element);
+    return () => { element.removeEventListener("scroll", read); observer.disconnect(); };
+  }, [list, watch]);
+  return hidden;
+}
+
+/** A strip at an end of the tile list: how many tiles lie past it; a press brings the next ones in. */
+function MoreTiles({ count, up = false, list }: { count: number; up?: boolean; list: RefObject<HTMLElement | null> }) {
+  const { c } = useCopy();
+  if (count <= 0) return null;
+  const label = c(up ? "moreAbove" : "moreBelow", { n: count });
+  const Arrow = up ? ChevronUp : ChevronDown;
+  return (
+    <button type="button" data-rail-more={up ? "above" : "below"} title={label} aria-label={label} onClick={() => list.current?.scrollBy({ top: (up ? -1 : 1) * Math.max(80, list.current.clientHeight - 44) })} className={`flex h-5 w-full shrink-0 items-center justify-center gap-0.5 border-border text-[10px] font-bold tabular-nums text-muted hover:bg-canvas hover:text-primary ${up ? "border-b" : "border-t"} ${FOCUS}`}>
+      <Arrow className="h-3 w-3" aria-hidden />
+      {count}
+    </button>
+  );
+}
+
 /**
  * The narrow rail. At rest it is 56 px of tiles and gauges. Resting the pointer
  * on it, or any of its three "open" controls, lays the full sidebar beside it,
@@ -499,6 +541,12 @@ function Tile({ row, props }: { row: RowFacts; props: ProjectRailProps }) {
  * under the pointer; that click also closes the sidebar, since the choice is
  * made. The dock control keeps the sidebar open in the layout.
  * `?railopen=1` holds it open for a frame.
+ *
+ * What the list has to say before it has a project it says at rest (#696,
+ * #1162): placeholder tiles while it loads, a warning tile that opens the
+ * notice and its retry when the catalog cannot be reached, and on a first run
+ * the full sidebar in the layout with the labelled "Create project" button,
+ * since tiles that do not exist cannot carry it.
  */
 function Variant2(props: ProjectRailProps) {
   const { c, t } = useCopy();
@@ -510,6 +558,8 @@ function Variant2(props: ProjectRailProps) {
   /* The rail's own tiles, gauges and menu: they act in place. */
   const acting = useRef<HTMLDivElement | null>(null);
   const flyout = useRef<HTMLDivElement | null>(null);
+  const tiles = useRef<HTMLElement | null>(null);
+  const hidden = useHiddenTiles(tiles, `${model.crowned.length}:${model.rest.length}:${model.archived.length}`);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const later = (next: typeof peek, delay: number) => {
     if (timer.current) clearTimeout(timer.current);
@@ -540,13 +590,18 @@ function Variant2(props: ProjectRailProps) {
       {docked ? <PanelLeftClose className="h-3.5 w-3.5" aria-hidden /> : <PanelLeftOpen className="h-3.5 w-3.5" aria-hidden />}
     </button>
   );
-  if (docked) {
+  /* A first run has no tile to show and one thing to say, in words: the sidebar stays in the layout until a project exists. */
+  const firstRun = model.firstRun && Boolean(props.onCreateProject);
+  if (docked || firstRun) {
     return (
-      <aside data-rail-variant="2" data-rail-state="docked" className="flex w-[248px] shrink-0 flex-col border-r border-border bg-card">
-        <FullRail props={props} model={model} kind="line" headerExtra={dock} />
+      <aside data-rail-variant="2" data-rail-state={docked ? "docked" : "first-run"} className="flex w-[248px] shrink-0 flex-col border-r border-border bg-card">
+        <FullRail props={props} model={model} kind="line" headerExtra={docked ? dock : undefined} start={ARCHIVE_OPEN() ? "archive" : null} />
       </aside>
     );
   }
+  const none = !model.active.length && !model.archived.length;
+  const unreachable = none && (props.catalogFailures ?? 0) > 0;
+  const loading = none && !unreachable && !props.loaded;
   const railButton = `flex h-8 w-9 items-center justify-center rounded-[9px] text-muted hover:bg-canvas hover:text-primary ${FOCUS}`;
   const overview = props.selected === OVERVIEW;
   return (
@@ -566,7 +621,8 @@ function Variant2(props: ProjectRailProps) {
         {props.onCreateProject ? <button type="button" data-rail-open-create="" className={railButton} title={t("rail.createProject")} aria-label={t("rail.createProject")} onClick={() => setPeek("create")}><FolderPlus className="h-4 w-4" aria-hidden /></button> : null}
       </div>
       <div ref={acting} className="flex min-h-0 flex-1 flex-col" onClickCapture={shut}>
-        <nav className="flex flex-1 flex-col items-center gap-1 overflow-y-auto border-t border-border px-1 pb-2 pt-2 [scrollbar-width:none]" aria-label={t("rail.projects")}>
+        <div className="shrink-0 border-t border-border"><MoreTiles count={hidden.above} up list={tiles} /></div>
+        <nav ref={tiles} className="flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto px-1 pb-2 pt-2 [scrollbar-width:none]" aria-label={t("rail.projects")}>
           <button type="button" data-rail-overview="" title={t("rail.overview")} aria-label={t("rail.overview")} aria-current={overview ? "page" : undefined} onClick={() => props.onSelect(OVERVIEW)} className={`relative flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] border ${FOCUS} ${overview ? "border-strong bg-canvas text-primary shadow-1" : "border-transparent text-muted hover:bg-canvas hover:text-primary"}`}>
             <LayoutGrid className="h-4 w-4" aria-hidden />
           </button>
@@ -577,6 +633,18 @@ function Variant2(props: ProjectRailProps) {
             {model.crowned.length && model.rest.length ? <span data-flip-key="__crown-divider__" className="my-0.5 h-px w-6 shrink-0 bg-border" /> : null}
             {model.rest.map((row) => <Tile key={row.project} row={row} props={props} />)}
           </FlipRow>
+          {unreachable ? (
+            /* The warning mark of the notice it opens; the count is the attempts made so far. */
+            <button type="button" role="alert" data-rail-catalog-warning="" title={`${t("catalog.errorTitle")} · ${t("catalog.attempts", { count: props.catalogFailures ?? 0 })}`} aria-label={`${t("catalog.errorTitle")} · ${t("catalog.attempts", { count: props.catalogFailures ?? 0 })}`} onClick={() => setPeek("hover")} className={`relative flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] border border-danger/35 bg-danger-soft text-danger ${FOCUS}`}>
+              <TriangleAlert className="h-4 w-4" aria-hidden />
+              <span className="absolute -right-1 -top-1 flex h-[15px] min-w-[15px] items-center justify-center rounded-full bg-danger px-[3px] text-[9.5px] font-bold leading-none tabular-nums text-card">{(props.catalogFailures ?? 0) > 9 ? "9+" : props.catalogFailures}</span>
+            </button>
+          ) : null}
+          {loading ? (
+            <span role="status" aria-busy="true" aria-label={t("common.loadingCap")} title={t("common.loadingCap")} data-rail-skeleton="" className="flex flex-col items-center gap-1">
+              {[0, 1, 2, 3, 4].map((index) => <span key={index} aria-hidden className={`h-9 w-9 shrink-0 !rounded-[10px] ${SKELETON_BAR}`} />)}
+            </span>
+          ) : null}
           {model.archived.length ? (
             <button type="button" data-rail-archive="" title={`${t("rail.archive")} ${model.archived.length}`} aria-label={`${t("rail.archive")} ${model.archived.length}`} onClick={() => setPeek("archive")} className={`relative mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] text-muted hover:bg-canvas hover:text-primary ${FOCUS}`}>
               <Archive className="h-4 w-4" aria-hidden />
@@ -584,6 +652,7 @@ function Variant2(props: ProjectRailProps) {
             </button>
           ) : null}
         </nav>
+        <MoreTiles count={hidden.below} list={tiles} />
         <SystemBlock gauges />
         <div data-rail-menu-slot="" className="flex shrink-0 items-center justify-center border-t border-border py-1.5"><RailHeaderMenu /></div>
       </div>

@@ -17977,7 +17977,11 @@ describe("the left sidebar, numbered design variants", () => {
   const CROP = 320;
 
   /* `everywhere` states are shot at both sizes, both schemes and both languages; the rest at 1440x900 light, once in `lang` or once per language. */
-  interface State { name: string; query: string; folded?: boolean; click?: string; first?: boolean; bare?: boolean; variants?: readonly number[]; everywhere: boolean; lang?: "en" | "uk" | "both" }
+  interface State {
+    name: string; query: string; folded?: boolean; click?: string; first?: boolean; bare?: boolean; variants?: readonly number[]; everywhere: boolean; lang?: "en" | "uk" | "both";
+    /** What the state is about: a selector that has to match something drawn inside the window, per variant or for all. A click that opens no panel names what it opens here. */
+    shows?: string | Partial<Record<number, string>>;
+  }
   const langsOf = (state: State): readonly ("en" | "uk")[] => state.lang === "both" ? ["uk", "en"] : [state.lang ?? "en"];
   const ACCOUNT = '[data-engine-limits="claude"] button[aria-haspopup="dialog"]';
   const STATES: readonly State[] = [
@@ -18002,10 +18006,17 @@ describe("the left sidebar, numbered design variants", () => {
     { name: "panel-burndown", query: "rail=few", click: ACCOUNT, variants: [1], everywhere: false, lang: "uk" },
     { name: "panel-cleanup", query: "rail=few", click: "[data-resources-footer] > button", variants: [1, 2], everywhere: false, lang: "uk" },
     { name: "panel-telegram", query: "rail=few", click: "[data-rail-footer] button[aria-haspopup='dialog']", variants: [1, 2], everywhere: false, lang: "uk" },
-    /* Today's empty rail is shot beside variant 1's. */
-    { name: "empty", query: "rail=few&railstate=empty&railview=overview", variants: [0, 1], everywhere: false, lang: "uk" },
-    { name: "loading", query: "rail=few&railstate=loading", bare: true, variants: [1], everywhere: false, lang: "uk" },
-    { name: "unreachable", query: "rail=few&railstate=unreachable", bare: true, variants: [1], everywhere: false, lang: "uk" },
+    /* The list's three states before it has a project, each read at rest: today's empty rail beside every variant's,
+       then the loading list and the unreachable catalog. Variant 2 says them on the rail itself. */
+    { name: "empty", query: "rail=few&railstate=empty&railview=overview", variants: [0, 1, 2, 3], everywhere: false, lang: "uk", shows: '[data-testid="rail-create-project"] span' },
+    { name: "loading", query: "rail=few&railstate=loading", bare: true, variants: [1, 2, 3], everywhere: false, lang: "uk", shows: { 1: 'nav [data-skeleton="rows-rail"]', 2: "nav [data-rail-skeleton]", 3: 'nav [data-skeleton="rows-rail"]' } },
+    { name: "unreachable", query: "rail=few&railstate=unreachable", bare: true, variants: [1, 2, 3], everywhere: false, lang: "uk", shows: { 1: "nav [data-catalog-error] button", 2: "nav [data-rail-catalog-warning]", 3: "nav [data-catalog-error] button" } },
+    { name: "unreachable-open", query: "rail=few&railstate=unreachable", bare: true, click: "nav [data-rail-catalog-warning]", variants: [2], everywhere: false, lang: "uk", shows: "[data-rail-flyout] [data-catalog-error] button" },
+    /* The archive: two archived projects under the short list. The fold is unfolded in the full sidebars; the narrow rail
+       shows its archive tile at rest, and a press on it opens the sidebar with the archive unfolded. */
+    { name: "archive", query: "rail=few&railarchive=open", variants: [1, 3], everywhere: false, lang: "both", shows: "nav [data-rail-archived] [data-rail-project]" },
+    { name: "archive", query: "rail=few&railarchive=1", variants: [2], everywhere: false, lang: "both", shows: "nav [data-rail-archive]" },
+    { name: "open-archive", query: "rail=few&railarchive=1", click: "nav [data-rail-archive]", variants: [2], everywhere: false, lang: "both", shows: "[data-rail-flyout] [data-rail-archived] [data-rail-project]" },
   ];
   /* The fixture's machine: what a memory line's amount is a share of. */
   const TOTAL_GIB: Record<string, number> = { RAM: 32, Swap: 8 };
@@ -18021,6 +18032,12 @@ describe("the left sidebar, numbered design variants", () => {
     meters: { label: string; value: string; bar: number | null }[];
     /** The question lines: how many are cut, and how many of the cut ones the row's tooltip does not complete. */
     asks: { shown: number; cut: number; cutWithoutTooltip: number };
+    /** The archive: where its label starts inside the sidebar that draws it, whether it is unfolded, the archived rows inside the window, and the narrow rail's tile. */
+    archive: { labelLeft: number | null; open: boolean; rows: number; tile: boolean };
+    /** How many elements the state is about are drawn inside the window; null when the state names none. */
+    shows: number | null;
+    /** The narrow rail's strips that count the tiles past each end of its list. */
+    more: { above: number; below: number } | null;
     /** A panel opened in this frame, and whether all of it is inside the window. */
     panel: { width: number; height: number; inside: boolean } | null;
     main: { width: number };
@@ -18028,7 +18045,7 @@ describe("the left sidebar, numbered design variants", () => {
     pageErrors: string[];
   }
 
-  const readRail = (page: Page) => page.evaluate(() => {
+  const readRail = (page: Page, shows: string | null) => page.evaluate((shows) => {
     const rail = document.querySelector<HTMLElement>("aside:not([data-orchestrator-dock])")!;
     const list = rail.querySelector<HTMLElement>("nav");
     const footer = rail.querySelector<HTMLElement>("[data-rail-footer]");
@@ -18042,7 +18059,7 @@ describe("the left sidebar, numbered design variants", () => {
     const cut = asks.filter((ask) => ask.scrollHeight > ask.clientHeight + 1 || ask.scrollWidth > ask.clientWidth + 1);
     const dialog = [...document.querySelectorAll<HTMLElement>('[role="dialog"], [data-rail-menu-panel], [data-resources-panel]')].map((element) => element.getBoundingClientRect()).find((box) => box.width > 0) ?? null;
     return {
-      edges: { text: lefts("nav [data-rail-name], nav [data-rail-label], [data-rail-footer] [data-rail-label]"), needs: lefts('[data-rail-slot="needs"] [data-rail-needs]'), live: lefts('[data-rail-slot="live"] [data-rail-live]'), accounts: lefts("[data-meter-line] [data-meter-name]") },
+      edges: { text: lefts("nav [data-rail-name], nav [data-rail-label], [data-rail-footer] [data-rail-label], [data-rail-footer] [data-meter-label], [data-rail-footer] [data-meter-name]"), needs: lefts('[data-rail-slot="needs"] [data-rail-needs]'), live: lefts('[data-rail-slot="live"] [data-rail-live]'), accounts: lefts("[data-meter-line] [data-meter-name]") },
       accounts: [...rail.querySelectorAll<HTMLElement>("[data-meter-line] [data-meter-name]")].map((name) => ({ name: name.textContent ?? "", cut: name.scrollWidth > name.clientWidth + 1 })),
       meters: [...rail.querySelectorAll<HTMLElement>("[data-meter-line]")].map((line) => {
         const track = line.querySelector<HTMLElement>("[data-meter-bar]");
@@ -18053,6 +18070,20 @@ describe("the left sidebar, numbered design variants", () => {
           bar: track && fill ? Math.round((1000 * fill.getBoundingClientRect().width) / track.getBoundingClientRect().width) / 10 : null,
         };
       }),
+      archive: (() => {
+        const fold = [...rail.querySelectorAll<HTMLElement>("[data-rail-archive]")].find((element) => element.hasAttribute("aria-expanded")) ?? null;
+        const label = fold?.querySelector<HTMLElement>("[data-rail-label]")?.getBoundingClientRect() ?? null;
+        const host = (fold?.closest<HTMLElement>("[data-rail-flyout]") ?? rail).getBoundingClientRect();
+        const within = fold?.closest("nav")?.getBoundingClientRect().bottom ?? innerHeight;
+        return {
+          labelLeft: label ? Math.round((label.left - host.left) * 2) / 2 : null,
+          open: fold?.getAttribute("aria-expanded") === "true",
+          rows: [...rail.querySelectorAll<HTMLElement>("[data-rail-archived] [data-rail-project]")].map((row) => row.getBoundingClientRect()).filter((box) => box.height > 0 && box.bottom <= within + 1).length,
+          tile: [...rail.querySelectorAll<HTMLElement>("nav [data-rail-archive]:not([aria-expanded])")].some((tile) => { const box = tile.getBoundingClientRect(); const nav = tile.closest("nav")!.getBoundingClientRect(); return box.height > 0 && box.top >= nav.top && box.bottom <= nav.bottom + 1; }),
+        };
+      })(),
+      shows: shows === null ? null : [...rail.querySelectorAll<HTMLElement>(shows)].map((element) => element.getBoundingClientRect()).filter((box) => box.width > 0 && box.height > 0 && box.top >= 0 && box.bottom <= innerHeight).length,
+      more: rail.matches('[data-rail-variant="2"]:not([data-rail-state="docked"]):not([data-rail-state="first-run"])') ? { above: Number(rail.querySelector('[data-rail-more="above"]')?.textContent ?? 0), below: Number(rail.querySelector('[data-rail-more="below"]')?.textContent ?? 0) } : null,
       asks: { shown: asks.length, cut: cut.length, cutWithoutTooltip: cut.filter((ask) => !(ask.closest("button")?.title ?? "").includes(ask.textContent ?? "\u0000")).length },
       panel: dialog ? { width: Math.round(dialog.width), height: Math.round(dialog.height), inside: dialog.left >= 0 && dialog.top >= 0 && dialog.right <= innerWidth && dialog.bottom <= innerHeight } : null,
       rail: {
@@ -18067,7 +18098,7 @@ describe("the left sidebar, numbered design variants", () => {
       main: { width: Math.round(document.querySelector<HTMLElement>("main")?.getBoundingClientRect().width ?? 0) },
       controls: { inRail: controls.length, smallest: smallest ? { width: Math.round(smallest.width), height: Math.round(smallest.height) } : null },
     };
-  });
+  }, shows);
 
   const caption = (text: string, width: number, height = 26, size = 13) => Buffer.from(
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="#262a36"/>`
@@ -18209,13 +18240,16 @@ describe("the left sidebar, numbered design variants", () => {
           if (!state.folded) await page.waitForSelector("[data-resources-footer]", { timeout: 20_000 });
           await page.waitForSelector("[data-engine-limits], [data-rail-footer] button[aria-haspopup='dialog']", { state: state.folded ? "detached" : "attached", timeout: 20_000 });
           await page.waitForTimeout(state.folded ? 2_200 : state.bare ? 2_500 : 700);
+          const shows = typeof state.shows === "string" ? state.shows : state.shows?.[variant] ?? null;
           if (state.click) {
             const target = page.locator(state.click);
             await (state.first ? target.first() : target.last()).click();
+            /* A sidebar the click opened mounts its own resources block, which reads 1.5 s after it mounts. */
+            if (shows?.includes("[data-rail-flyout]")) await page.waitForSelector("[data-rail-flyout] [data-resources-footer]", { timeout: 20_000 });
             await page.waitForTimeout(600);
           }
           await page.screenshot({ path: path.join(OUT, `${frame}.png`) });
-          const reading: Reading = { frame, variant, state: state.name, width: size.width, height: size.height, scheme, lang, ...(await readRail(page)), pageErrors };
+          const reading: Reading = { frame, variant, state: state.name, width: size.width, height: size.height, scheme, lang, ...(await readRail(page, shows)), pageErrors };
           readings.push(reading);
           if (pageErrors.length) failures.push(`${frame}: ${pageErrors.join(" | ")}`);
           if (variant > 0) {
@@ -18236,8 +18270,21 @@ describe("the left sidebar, numbered design variants", () => {
             if (lang === "en" && reading.rail.clippedNames) failures.push(`${frame}: ${reading.rail.clippedNames} project name(s) cut`);
             if (reading.asks.cutWithoutTooltip) failures.push(`${frame}: ${reading.asks.cutWithoutTooltip} cut question(s) the tooltip does not complete`);
             /* A panel and the narrow rail's opened sidebar lie outside the sidebar's box by design. */
-            if (reading.rail.overflowX && !reading.panel && !(variant === 2 && state.query.includes("railopen"))) failures.push(`${frame}: the sidebar is wider than its box`);
-            if (state.click && state.name !== "detail" && state.name !== "create" && !reading.panel) failures.push(`${frame}: nothing opened`);
+            if (reading.rail.overflowX && !reading.panel && !(variant === 2 && (state.query.includes("railopen") || shows?.includes("[data-rail-flyout]")))) failures.push(`${frame}: the sidebar is wider than its box`);
+            if (state.click && state.name !== "detail" && state.name !== "create" && !state.shows && !reading.panel) failures.push(`${frame}: nothing opened`);
+            /* A state is read off the frame: what it is about is drawn inside the window, at rest unless the state clicks. */
+            if (reading.shows === 0) failures.push(`${frame}: the state shows nothing that matches ${shows}`);
+            /* A first run on the narrow rail is the full sidebar with its labelled button; tiles alone would say nothing. */
+            if (variant === 2 && state.name === "empty" && reading.rail.width < 200) failures.push(`${frame}: a first run is drawn as a ${reading.rail.width} px rail`);
+            if (state.name.includes("archive")) {
+              /* The archive label starts on the edge every name starts on, and its rows are in the frame once it is unfolded. */
+              if (state.query.includes("railarchive=open") || state.click) {
+                if (reading.archive.labelLeft !== 19) failures.push(`${frame}: the archive label starts at ${reading.archive.labelLeft} px`);
+                if (!reading.archive.open || reading.archive.rows !== 2) failures.push(`${frame}: the archive is ${reading.archive.open ? "unfolded" : "folded"} with ${reading.archive.rows} of 2 rows in the frame`);
+              } else if (!reading.archive.tile) failures.push(`${frame}: the rail has no archive tile inside its list`);
+            }
+            /* A tile list that does not fit says how many tiles are past its end. */
+            if (reading.more && reading.rail.rows > reading.rail.rowsInView && reading.more.above + reading.more.below === 0) failures.push(`${frame}: ${reading.rail.rows - reading.rail.rowsInView} tiles are out of the list's box and no strip says so`);
             if (reading.panel && !reading.panel.inside) failures.push(`${frame}: the opened panel leaves the window`);
           }
         } catch (error) {

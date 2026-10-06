@@ -243,10 +243,12 @@ export function CopilotFooterRow({ limits, limitsAccountId, now, provenance, onC
             <MeterGauge mark={<span aria-hidden className="h-2 w-2 rounded-full" style={{ backgroundColor: tint.color }} />} percent={left} color={color} />
           ) : (
             <>
-              {/* Built as the Claude and Codex lines are: a mark in a 12 px box, the account in words,
+              {/* Built as the Claude and Codex lines are: the account in words, a mark in a 12 px box after it,
                   what is left, its bar. Copilot has no mark of its own, so its tint dot stands in the box. */}
-              <span role="img" aria-label="Copilot" title="Copilot" className="grid h-3 w-3 shrink-0 place-items-center"><span className="h-2 w-2 rounded-full" style={{ backgroundColor: tint.color }} /></span>
-              <span data-meter-name="" className="min-w-0 flex-1 truncate text-[11.5px] font-semibold text-primary">{active ? active.label : "Copilot"}</span>
+              <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                <span data-meter-name="" className="min-w-0 truncate text-[11.5px] font-semibold text-primary">{active ? active.label : "Copilot"}</span>
+                <span role="img" aria-label="Copilot" title="Copilot" className="grid h-3 w-3 shrink-0 place-items-center"><span className="h-2 w-2 rounded-full" style={{ backgroundColor: tint.color }} /></span>
+              </span>
               {active ? null : <span className="shrink-0 text-[10px] text-muted">{t("copilot.accounts.none")}</span>}
               {left === null ? null : <span data-meter-value="" className="shrink-0 text-[11px] tabular-nums text-muted">{t("limits.left")} <span className="font-bold text-primary">{Math.round(left)}%</span></span>}
               {left === null ? null : <ReserveBar percent={left} color={color} />}

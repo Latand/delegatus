@@ -298,13 +298,14 @@ function EngineLimitsBlock({
       <div ref={containerRef} className="relative" data-engine-limits={engine}>
         <div data-meter-line="" className={`flex h-[26px] items-center pl-[13px] pr-1.5 ${anyStale ? "opacity-60" : ""}`}>
           <button ref={triggerRef} type="button" aria-expanded={open} aria-haspopup="dialog" aria-label={t("accounts.triggerAria", { engine: label })} title={summary} className={`flex h-[22px] min-w-0 items-center gap-1.5 rounded-[7px] px-1.5 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${hasWindows && effective ? "flex-1" : "flex-initial"}`} onClick={() => { setChartOpen(false); setOpen((value) => !value); }}>
-            {/* The mark names the engine here, as it does on a card; the words go to the account.
-                The amber dot stands on the mark's corner, where it takes no width from the name. */}
+            {/* The account starts on the edge every name in the sidebar starts on, and the mark that names
+                the engine follows it, as an icon follows its word in the list above. The amber dot
+                stands on the mark's corner, where it takes no width from the name. */}
+            <span data-meter-name="" className="min-w-0 truncate text-[11.5px] font-semibold text-primary">{activeLabel}</span>
             <span className="relative flex shrink-0">
               <EngineMark engine={engine} size={12} label={label} />
               {staleReason ? <span data-limits-stale-dot="" title={staleReason} className="absolute -right-[3px] -top-[3px] h-1.5 w-1.5 rounded-full bg-warning ring-1 ring-card" /> : null}
             </span>
-            <span data-meter-name="" className="min-w-0 truncate text-[11.5px] font-semibold text-primary">{activeLabel}</span>
             {draining ? <Loader2 className="h-3 w-3 shrink-0 animate-spin text-accent motion-reduce:animate-none" aria-hidden /> : null}
           </button>
           {hasWindows && effective ? (
