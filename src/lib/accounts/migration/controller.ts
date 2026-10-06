@@ -80,16 +80,20 @@ export function syncCompatibilityRouting(registry: AgentRegistry): void {
   });
 }
 
-async function reconcileAccountLogins(): Promise<void> {
+/** Settles the device logins that still have a transition ahead of them. A
+    completed one is left alone: observing it started an app-server child and
+    took the account lock every minute for nothing. */
+export async function reconcileAccountLogins(): Promise<void> {
   const mutationLocked = codexAccountsMutationLocked();
+  const runtime = managedCodexRuntime();
   await Promise.all(listCodexAccounts().map(async (account) => {
     if (account.kind === "managed") {
       if (account.loginPane && !mutationLocked) setCodexAccountLoginPane(account.id, null);
-      if (managedCodexRuntime().peekLogin(account).attemptState) await managedCodexRuntime().loginSnapshot(account);
+      if (runtime.loginUnsettled(account)) await runtime.loginSnapshot(account);
       return;
     }
     /* Main's own device login (#2166) settles the way a managed one does. */
-    if (managedCodexRuntime().peekLogin(account).attemptState) await managedCodexRuntime().loginSnapshot(account);
+    if (runtime.loginUnsettled(account)) await runtime.loginSnapshot(account);
     if (!account.loginPane) return;
     const pane = await paneInfo(account.loginPane.paneId);
     const status = codexLoginPaneStatus(account.authPresent, account.loginPane, pane);

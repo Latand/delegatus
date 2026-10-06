@@ -96,7 +96,7 @@ test.each(["claude", "codex"] as const)("%s answer profile pins publication iden
   expect([built.env.GIT_AUTHOR_NAME, built.env.GIT_AUTHOR_EMAIL, built.env.GIT_COMMITTER_NAME, built.env.GIT_COMMITTER_EMAIL]).toEqual(["Build Agent", email, "Build Agent", email]);
   if (engine === "claude") {
     const settings = JSON.parse(built.args[built.args.indexOf("--settings") + 1]!);
-    expect(Object.values(settings.env)).toEqual(["Build Agent", email, "Build Agent", email]);
+    expect(settings.env).toEqual(agentPublicationIdentityEnv(request.account.env));
   } else expect(built.args).toContain(`shell_environment_policy.set.GIT_AUTHOR_EMAIL=${JSON.stringify(email)}`);
 });
 test("Codex finds a new account model when the answer-home cache is stale", () => {

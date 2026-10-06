@@ -181,6 +181,13 @@ function processIdentity(pid: number): string | null {
   return process.platform === "darwin" ? darwinProcessIdentity(pid) : null;
 }
 
+/** `ps` reports an exited, unreaped process with a state that starts with Z.
+    One subprocess per call: only asked about a pid a caller is about to trust. */
+function processExited(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  return runCapture("ps", ["-o", "stat=", "-p", String(pid)]).trim().startsWith("Z");
+}
+
 /**
  * No per-pid CPU accounting without /proc that does not cost a `ps`
  * subprocess, and this is read per structured host on a controller tick. The
@@ -288,6 +295,7 @@ export const portableBackend: ProcBackend = {
   readCwd,
   readPpid,
   processIdentity,
+  processExited,
   processCpuMs,
   readEnvVar,
   listProcesses,

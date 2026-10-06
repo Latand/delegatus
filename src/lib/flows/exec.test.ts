@@ -1,3 +1,4 @@
+import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { afterAll, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -34,7 +35,7 @@ test("headless launch asynchronously retains publication fields through restrict
     expect(probes).toBe(0);
     const prepared = await prepareHeadlessPublication(built, process.env.LLV_STATE_DIR!);
     expect(probes).toBe(1);
-    expect(prepared.args).toContain(`shell_environment_policy.include_only=${JSON.stringify(["PATH", "HOME", "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"])}`);
+    expect(prepared.args).toContain(`shell_environment_policy.include_only=${JSON.stringify([...new Set(["PATH", "HOME", ...Object.keys(agentPublicationIdentityEnv(process.env))])])}`);
   } finally { restore(); }
 });
 
@@ -65,7 +66,7 @@ test.each([
       .toEqual([name, email, name, email]);
     if (engine === "claude") {
       const settings = JSON.parse(built.args[built.args.indexOf("--settings") + 1]!);
-      expect(Object.values(settings.env)).toEqual([name, email, name, email]);
+      expect(settings.env).toEqual(agentPublicationIdentityEnv(process.env));
     } else {
       expect(built.args).toContain(`shell_environment_policy.set.GIT_AUTHOR_EMAIL=${JSON.stringify(email)}`);
     }

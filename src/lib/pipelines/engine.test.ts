@@ -1877,6 +1877,8 @@ test("fallback verdict preserves the pre-output PR head through real settlement 
         throw new Error(`unexpected gh ${args.join(" ")}`);
       },
     });
+    /* The fake `gh` above stands in for the App write seam as well: no token is minted. */
+    ports.write = (args) => ports.run(args);
     for (let poll = 0; poll < Math.ceil(MERGE_SETTLE_MS / MERGE_POLL_MS) + 3; poll += 1) {
       await sweepAutoMerge(ports);
       clock += MERGE_POLL_MS;
@@ -2495,9 +2497,11 @@ test.each(["drain", "early-switch-off", "host-fallback"] as const)("a stage comp
   const old = "b".repeat(40);
   let now = Date.parse("2026-01-01T00:00:00Z");
   const rev = (sha: string) => ({ sha, short: sha.slice(0, 7), version: "1", date: "" });
-  const record = { version: 1, checkout: process.cwd(), launcher: { pid: 100, startIdentity: "test", autoAdmission: 1 },
+  const record: LauncherRecord = { version: 1, checkout: process.cwd(), launcher: { pid: 100, startIdentity: "test", autoAdmission: 1 },
     releasePointer: path.join(dir, "release.json"), requestFile: path.join(dir, "request.json"), releasesDir: path.join(dir, "releases"),
-    web: { state: "healthy", revision: old.slice(0, 7), error: null }, runtimeHost: { state: "healthy", revision: old.slice(0, 7), error: null } } as LauncherRecord;
+    port: 45123, socket: path.join(dir, "runtime-host.sock"), updatedAt: new Date(now).toISOString(),
+    web: { state: "healthy", pid: 101, startIdentity: "web-test", startedAt: new Date(now).toISOString(), requestId: null, revision: old.slice(0, 7), error: null },
+    runtimeHost: { state: "healthy", pid: 102, startIdentity: "host-test", startedAt: new Date(now).toISOString(), requestId: null, revision: old.slice(0, 7), error: null } };
   writeAuto(path.join(dir, "auto.json"), { ...initialAuto(), enabled: true, green: { [target]: { state: "green" } }, rollbackCaptured: true });
   fs.writeFileSync(path.join(dir, "state.json"), JSON.stringify({ slice: initialCheck(), update: null, autoRollbackCaptured: true }));
   const snapshot = (): Snapshot => ({ mode: "checkout", unsupportedReason: null, installed: rev(target), available: null, check: idleCheck(), update: idleUpdate(), busy: null,

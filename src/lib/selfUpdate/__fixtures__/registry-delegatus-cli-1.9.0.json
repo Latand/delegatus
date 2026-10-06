@@ -1,0 +1,39 @@
+{
+  "name": "delegatus-cli",
+  "version": "1.9.0",
+  "description": "Hand your software work to Claude Code, Codex and GitHub Copilot agents and steer it from a local board, in the browser or on your phone.",
+  "license": "MIT",
+  "bin": {
+    "dlg": "bin/cli.mjs",
+    "delegatus": "bin/cli.mjs",
+    "delegatus-mcp": "bin/mcp-server.mjs",
+    "agent-log-viewer": "bin/legacy-cli.mjs",
+    "agent-log-viewer-mcp": "bin/legacy-mcp-server.mjs"
+  },
+  "repository": {
+    "url": "git+https://github.com/Latand/delegatus.git",
+    "type": "git"
+  },
+  "engines": {
+    "bun": ">=1.4.0",
+    "node": ">=20.9.0"
+  },
+  "_id": "delegatus-cli@1.9.0",
+  "_integrity": "sha512-7lzcVb8OKIvdfRNeqsE8hayr4JCGnZHklQMDTfO54lM+91X+rySOAd7kWpqf1ZINwPkOwrEHF9/tZdbeQyfHAg==",
+  "_nodeVersion": "24.21.0",
+  "_npmVersion": "11.19.0",
+  "_hasShrinkwrap": false,
+  "dist": {
+    "shasum": "1d4effd20be88cd81b33956098fede8a0f4f1d0a",
+    "tarball": "https://registry.npmjs.org/delegatus-cli/-/delegatus-cli-1.9.0.tgz",
+    "fileCount": 3231,
+    "integrity": "sha512-7lzcVb8OKIvdfRNeqsE8hayr4JCGnZHklQMDTfO54lM+91X+rySOAd7kWpqf1ZINwPkOwrEHF9/tZdbeQyfHAg==",
+    "attestations": {
+      "url": "https://registry.npmjs.org/-/npm/v1/attestations/delegatus-cli@1.9.0",
+      "provenance": {
+        "predicateType": "https://slsa.dev/provenance/v1"
+      }
+    },
+    "unpackedSize": 75334988
+  }
+}

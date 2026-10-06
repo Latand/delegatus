@@ -5,7 +5,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { requireOperatorAuthority } from "@/lib/agent/operatorAuthority";
 import { viewerMcpRegistered } from "@/lib/agent/spawnPolicy";
-import { executeOrchestratorSeatRequest } from "@/lib/orchestrator/seatCommand";
+import { executeOrchestratorSeatRequest, reconcileOrchestratorSeatLaunch } from "@/lib/orchestrator/seatCommand";
 import { deputiesForSeatIn, deputyConversationRefsIn, readDeputyFileOrNull, type OrchestratorDeputy, type RetiredDeputyRef } from "@/lib/orchestrator/deputies";
 import { seatDeputyView, type SeatDeputyView } from "@/lib/orchestrator/deputyView";
 import { allSeatConversationsIn, orchestratorSeatIn, previousOrchestratorSeatsIn, readOrchestratorSeatFileOrNull, seatTaskOf, type OrchestratorSeat, type PreviousOrchestratorSeat, type SeatConversations, type SeatNotesTask } from "@/lib/orchestrator/seats";
@@ -88,7 +88,7 @@ export async function GET(req: NextRequest): Promise<NextResponse<SeatStatus | S
      OTHER project's seat names — comes out of the same parse: this is a poll,
      and three readers of one document would re-read and re-parse it three
      times per tick for one answer. */
-  const record = readOrchestratorSeatFileOrNull();
+  const record = await seatRecordReconciled(project);
   const deputyFile = readDeputyFileOrNull();
   const deputies = deputyFile?.deputies ?? null;
   const { active, pending, history } = orchestratorSeatIn(record, project);
@@ -129,6 +129,34 @@ export async function GET(req: NextRequest): Promise<NextResponse<SeatStatus | S
        from these, and the seat head and card point at the live one. */
     ...(seatDeputies.length ? { deputies: seatDeputies } : {}),
   });
+}
+
+/**
+ * The seat record, with this project's designation brought up to date with the
+ * launch it rests on.
+ *
+ * Only a designation that still WAITS on a launch costs anything: a pending
+ * spawn intent, or a seat activated on an accepted launch whose transcript has
+ * not appeared. Those are the two records that used to stay as they were until
+ * somebody posted to the seat route again, so the pane read «creating» for as
+ * long as it was open while the task card said the launch had failed. Every
+ * other read is the one parse it always was.
+ */
+async function seatRecordReconciled(project: string): Promise<ReturnType<typeof readOrchestratorSeatFileOrNull>> {
+  const record = readOrchestratorSeatFileOrNull();
+  const { active, pending } = orchestratorSeatIn(record, project);
+  const waiting = (pending?.intent.mode === "spawn" && pending.intent.error === null)
+    || (active?.intent.mode === "spawn" && active.path === null && active.conversationId !== null);
+  if (!waiting) return record;
+  try {
+    await reconcileOrchestratorSeatLaunch(project);
+  } catch (error) {
+    /* A busy store or a registry that could not be read changes nothing: the
+       record is answered as it stands and the next poll asks again. */
+    console.warn("[orchestrator seat] the designation could not be reconciled", error instanceof Error ? error.name : "unknown");
+    return record;
+  }
+  return readOrchestratorSeatFileOrNull();
 }
 
 /** The seat record's conversations with every deputy's beside them (trimmed
