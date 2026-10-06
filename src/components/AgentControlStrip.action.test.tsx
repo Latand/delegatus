@@ -1,7 +1,7 @@
 import { afterAll, afterEach, expect, mock, test } from "bun:test";
 import { act } from "react";
 import { installActEnv } from "@/test-helpers/actEnv";
-import { Window } from "happy-dom";
+import { PropertySymbol, Window } from "happy-dom";
 import { createRoot, type Root } from "react-dom/client";
 
 import { translate } from "@/lib/i18n";
@@ -13,6 +13,16 @@ import type { HostAxis, HostKind } from "@/components/runtime/runtimeModel";
    Shared-root interrupt remains explicit; all transports use current-owner routing. */
 
 const dom = new Window();
+/* Happy DOM 20.10 stores its mutation callback only in a WeakRef. Keep it
+   alive with the listener, as a browser does, so GC cannot silence the
+   Hint's watch for its control disabling itself. */
+const observeMutations = dom.Node.prototype[PropertySymbol.observeMutations];
+const mutationCallbacks = new WeakMap<object, unknown>();
+dom.Node.prototype[PropertySymbol.observeMutations] = function (listener) {
+  mutationCallbacks.set(listener, listener.callback.deref());
+  observeMutations.call(this, listener);
+};
+afterAll(() => { dom.Node.prototype[PropertySymbol.observeMutations] = observeMutations; });
 installActEnv();
 Object.assign(globalThis, {
   window: dom, document: dom.document, navigator: dom.navigator,
@@ -499,9 +509,13 @@ async function settleHint(): Promise<void> {
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, HINT_SHOWN_MS)); });
 }
 
-/** React derives pointer enter and leave from the bubbling pair. */
+/** React derives pointer enter and leave from the bubbling pair. A pointer
+    that arrives also moves over the control, as a mouse does. */
 async function pointer(target: Element, type: "pointerover" | "pointerout"): Promise<void> {
-  await act(async () => { target.dispatchEvent(new dom.Event(type, { bubbles: true }) as unknown as Event); });
+  await act(async () => {
+    target.dispatchEvent(new dom.Event(type, { bubbles: true }) as unknown as Event);
+    if (type === "pointerover") target.dispatchEvent(new dom.Event("pointermove", { bubbles: true }) as unknown as Event);
+  });
   await settleHint();
 }
 
@@ -620,5 +634,44 @@ test("a keyboard-focus hint shows, closes when its control becomes disabled, and
   await act(async () => stopButton(host)!.blur());
   await settleHint();
   expect(hints()).toEqual([]);
+  await act(async () => root.unmount());
+});
+
+test("a hint already open when the surface is handed another conversation closes without another input", async () => {
+  const { HintScope } = await import("./Hint");
+  sessionView = structuredClaudeView();
+  const scoped = (file: FileEntry) => <HintScope id={file.path}><AgentControlStrip file={file} /></HintScope>;
+  const { host, root } = await mount(structuredClaudeRoot);
+  await act(async () => root.render(scoped(structuredClaudeRoot)));
+
+  /* Keyboard focus rests on Compact, its hint open, and the dock's seat moves. */
+  await act(async () => compactButton(host)!.focus());
+  await settleHint();
+  expect(hints()).toEqual([translate("en", "strip.compactClaudeMessage")]);
+  await act(async () => root.render(scoped(otherClaudeRoot)));
+  await settleHint();
+  expect(document.activeElement).toBe(compactButton(host));
+  expect(hints()).toEqual([]);
+
+  /* The same for a pointer resting on Stop. */
+  await act(async () => stopButton(host)!.blur());
+  await pointer(stopButton(host)!, "pointerover");
+  expect(hints()).toEqual([translate("en", "composer.interruptTitle")]);
+  await act(async () => root.render(scoped(structuredClaudeRoot)));
+  await settleHint();
+  expect(hints()).toEqual([]);
+
+  /* The hand-over shifts the strip for a frame, and the browser reports a
+     leave and an enter under the resting pointer with no movement. */
+  await act(async () => {
+    for (const type of ["pointerout", "pointerover"]) stopButton(host)!.dispatchEvent(new dom.Event(type, { bubbles: true }) as unknown as Event);
+  });
+  await settleHint();
+  expect(hints()).toEqual([]);
+
+  /* Leaving and arriving anew shows it again. */
+  await pointer(stopButton(host)!, "pointerout");
+  await pointer(stopButton(host)!, "pointerover");
+  expect(hints()).toEqual([translate("en", "composer.interruptTitle")]);
   await act(async () => root.unmount());
 });

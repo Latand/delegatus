@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useReducer, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useReducer, useRef, useState, type ReactNode } from "react";
 
 import { TooltipBubble } from "@/components/TooltipBubble";
 
@@ -11,36 +11,63 @@ const SHOW_DELAY_MS = 150;
 interface HintState {
   hovered: boolean;
   focused: boolean;
-  /** Closed by an activation, by the control going away or by something
-      happening elsewhere. Holds until the pointer or the keyboard arrives anew,
+  /** Closed by an activation, by the control going away, by something
+      happening elsewhere or by the surface being handed another conversation.
+      Holds until the keyboard focuses the control or the pointer arrives anew,
       so a pointer still resting on the control does not reopen the bubble. */
   dismissed: boolean;
+  /** The pointer has left the control since the dismissal, so its next real
+      movement over the control is a new arrival. */
+  left: boolean;
 }
 
-type HintEvent = "enter" | "leave" | "focus" | "blur" | "dismiss" | "gone";
+/** `arrive` is the pointer's own input on the control: a movement, or a
+    finger or pen pressing it. */
+type HintEvent = "enter" | "leave" | "arrive" | "focus" | "blur" | "dismiss" | "gone";
 
-const RESTING: HintState = { hovered: false, focused: false, dismissed: false };
+const RESTING: HintState = { hovered: false, focused: false, dismissed: false, left: false };
 
 function hintReducer(state: HintState, event: HintEvent): HintState {
   switch (event) {
     case "enter":
-      /* React reports the pointer entering again whenever the node under it is
-         replaced (a busy control swaps its icon for a spinner). Only an arrival
-         from outside reopens a dismissed bubble. */
-      return state.hovered ? state : { ...state, hovered: true, dismissed: false };
+      /* An enter alone never reopens a dismissed bubble. React reports one
+         whenever the node under the pointer is replaced (a busy control swaps
+         its icon for a spinner), and the browser reports a leave and an enter
+         when the layout shifts for a frame under a resting pointer, which is
+         what a conversation hand-over does to the strip. */
+      return state.hovered ? state : { ...state, hovered: true };
     case "leave":
-      return state.hovered || state.dismissed ? { ...state, hovered: false, dismissed: false } : state;
+      return state.hovered || (state.dismissed && !state.left) ? { ...state, hovered: false, left: state.dismissed } : state;
+    case "arrive":
+      if (state.dismissed) return state.left ? { ...state, hovered: true, dismissed: false, left: false } : state;
+      return state.hovered ? state : { ...state, hovered: true };
     case "focus":
-      return state.focused && !state.dismissed ? state : { ...state, focused: true, dismissed: false };
+      return state.focused && !state.dismissed ? state : { ...state, focused: true, dismissed: false, left: false };
     case "blur":
       return state.focused ? { ...state, focused: false } : state;
     case "dismiss":
       /* Focus is dropped with it: a control that disables itself loses focus
          during React's commit, and React delivers no blur for that. */
-      return state.dismissed && !state.focused ? state : { ...state, focused: false, dismissed: true };
+      return state.dismissed && !state.focused ? state : { ...state, focused: false, dismissed: true, left: !state.hovered };
     case "gone":
       return state === RESTING ? state : RESTING;
   }
+}
+
+/** What the hints below are about: the conversation a surface shows. */
+const HintScopeContext = createContext("");
+
+/**
+ * Names what every Hint inside is about. When `id` changes, an open bubble
+ * closes: a surface that keeps its components mounted while it is handed
+ * another conversation (the orchestrator dock, a reader) would otherwise
+ * carry a bubble about the previous conversation into the next one, and that
+ * hand-over reaches no anchor as a pointer, a key or a blur. Scopes nest, so
+ * a change anywhere above a hint reaches it.
+ */
+export function HintScope({ id, children }: { id: string; children: ReactNode }) {
+  const parent = useContext(HintScopeContext);
+  return <HintScopeContext.Provider value={`${parent}\u0000${id}`}>{children}</HintScopeContext.Provider>;
 }
 
 const MODIFIER_KEYS = new Set(["Shift", "Control", "Alt", "Meta", "AltGraph"]);
@@ -66,7 +93,8 @@ function focusIsVisible(target: EventTarget | null): boolean {
  * clipping container's edge (the send button in a composer) shows it whole.
  *
  * It closes when the control is activated, when the control disables itself or
- * unmounts, and on a pointer press or a key anywhere else. Focus opens it only
+ * unmounts, on a pointer press or a key anywhere else, and when the surface
+ * around it is handed another conversation (`HintScope`). Focus opens it only
  * when the focus came from the keyboard.
  */
 export function Hint({
@@ -82,6 +110,8 @@ export function Hint({
 }) {
   const anchorRef = useRef<HTMLSpanElement>(null);
   const [state, send] = useReducer(hintReducer, RESTING);
+  const scope = useContext(HintScopeContext);
+  const shownScope = useRef(scope);
   const [rested, setRested] = useState(false);
   const active = !state.dismissed && (state.hovered || state.focused);
   const shown = active && rested;
@@ -94,6 +124,12 @@ export function Hint({
       setRested(false);
     };
   }, [active]);
+
+  useEffect(() => {
+    if (shownScope.current === scope) return;
+    shownScope.current = scope;
+    send("dismiss");
+  }, [scope]);
 
   /* While the bubble is wanted, it also listens for the reasons to withdraw
      that never reach the anchor as a leave or a blur: the control disabling
@@ -138,6 +174,10 @@ export function Hint({
       className="relative inline-flex"
       onPointerEnter={() => send("enter")}
       onPointerLeave={() => send("leave")}
+      onPointerMove={() => send("arrive")}
+      onPointerDown={(event) => {
+        if (event.pointerType !== "mouse") send("arrive");
+      }}
       onFocus={(event) => {
         if (focusIsVisible(event.target)) send("focus");
       }}

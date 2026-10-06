@@ -3533,6 +3533,41 @@ describe("a control's hint never outlives its click", () => {
         }
       }
 
+      /* A hint already open when the dock is handed another conversation, with
+         no input in between: by keyboard focus on Compact, then by a pointer
+         resting on Stop. */
+      {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}${URL_QUERY}`, { width: 1280, height: 900 }, "dark", "en");
+        try {
+          await page.waitForSelector(compact, { timeout: 20_000 });
+          await page.locator(stop).first().focus();
+          await page.keyboard.press("Tab");
+          await page.keyboard.press("Tab");
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([translate("en", "composer.compactTitle")]);
+          await switchConversation(page);
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await page.evaluate(() => document.querySelector("[data-link-path]")!.getAttribute("data-link-path"))).toBe("/another-orchestrator.jsonl");
+          expect(await page.evaluate((query) => document.activeElement === document.querySelector(query), compact)).toBe(true);
+          expect(await hints(page)).toEqual([]);
+          await page.screenshot({ path: path.join(out, "open-hint-after-handoff.png") });
+          await rest(page, stop);
+          expect(await hints(page)).toEqual([translate("en", "composer.interruptTitle")]);
+          await page.evaluate(() => {
+            (window as unknown as { ownSteps: { open: (conversation: string) => void } }).ownSteps.open("third-orchestrator");
+          });
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([]);
+          /* The pointer leaves and arrives anew: the hint is back. */
+          await leave(page);
+          await rest(page, stop);
+          expect(await hints(page)).toEqual([translate("en", "composer.interruptTitle")]);
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+      }
+
       /* Touch: a held finger still opens the hint, and lifting it closes it. */
       {
         const { context, page, pageErrors } = await openFixture(browser, `${served.base}${URL_QUERY}`, { width: 1280, height: 900 }, "dark", "en");
