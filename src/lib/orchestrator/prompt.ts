@@ -252,7 +252,7 @@ export const ORCHESTRATOR_BOARD_REPORT_HEADING = "## Board maintenance report";
 export const ORCHESTRATOR_BOARD_REPORT_DIRECTIVE = `${ORCHESTRATOR_BOARD_REPORT_HEADING}
 Each time you are seated, Delegatus makes one read-only pass over this board and sends it after your first turn, headed "[Delegatus] Board maintenance report". Your first turn gives status and leaves the board walk to it; later wakes still make their own pass. Take its sections in order and re-read each item before you change it. You alone change this board: close items one by one with the reason, and a card marked "ask first" only when the operator agrees. Offer its suggested issues with suggest_replies and start none unasked; where it finds no recorded priority, say so once and never ask for labels or fields. Cover an unavailable section or a missing report with your own reads.`;
 
-/** Identifies the section below inside a mandate, however its body was edited. */
+/** The heading of the required reporting and cross-project rules. */
 export const ORCHESTRATOR_REPORTS_AND_PROJECTS_HEADING = "## Delegatus bug reports, and work for another project";
 
 /**
@@ -567,7 +567,9 @@ const DELIVERED_DIRECTIVES: readonly { markers: readonly string[]; directive: st
   { markers: [ORCHESTRATOR_TASK_OWNERSHIP_HEADING], directive: ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE },
   { markers: [ORCHESTRATOR_VIEWER_CLOCK_HEADING, SHIPPED_CLOCK_HEADING], directive: ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE },
   { markers: [ORCHESTRATOR_BOARD_REPORT_HEADING], directive: ORCHESTRATOR_BOARD_REPORT_DIRECTIVE },
-  { markers: [ORCHESTRATOR_REPORTS_AND_PROJECTS_HEADING], directive: ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE },
+  /* These rules are required for every seat. A heading or partial custom
+     wording cannot establish that both contracts were delivered. */
+  { markers: [ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE], directive: ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE },
   { markers: [ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE], directive: ORCHESTRATOR_INITIAL_STATUS_DIRECTIVE },
 ];
 
@@ -581,7 +583,9 @@ const DELIVERED_DIRECTIVES: readonly { markers: readonly string[]; directive: st
     the current prompt version and a rotation passes the incumbent's version
     through unchanged — so a version number
     cannot say which paragraphs a mandate actually contains. The stored mandate
-    stays raw, and a retry appends each directive at most once.
+    stays raw, and a retry appends each directive at most once. The required
+    reporting and cross-project rules use their complete directive as the
+    marker, so an edited heading alone cannot suppress either contract.
 
     Delivery also takes one thing OFF the mandate (#1760): the `## Deploys`
     section as it shipped in the body up to v15, which told every project's

@@ -593,13 +593,19 @@ test("the mandate asks before a bug report is filed, publishes only an approved 
   expect(section).toContain("Never create tasks or pipelines on its board, spawn agents there or message its workers");
   expect(section).toContain("only when the operator explicitly asks, repeat the launch with crossProjectRequest quoting them");
 
-  /* A bespoke mandate receives the section once; a seat that reworded it
-     under the heading keeps its wording. */
+  /* A bespoke mandate receives both required rules once. A retained heading
+     cannot suppress them when its body was edited or removed. */
   const delivered = orchestratorMandateForDelivery("Run this project.");
   expect(delivered.split(section)).toHaveLength(2);
   expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
-  const reworded = `Run this project.\n\n${ORCHESTRATOR_REPORTS_AND_PROJECTS_HEADING}\nMy own wording.`;
-  expect(orchestratorMandateForDelivery(reworded)).not.toContain(section);
+  for (const body of ["", "My own wording.", "Ask before filing issues.", "Route another project's work to its orchestrator."]) {
+    const reworded = `Run this project.\n\n${ORCHESTRATOR_REPORTS_AND_PROJECTS_HEADING}\n${body}`;
+    const deliveredEdit = orchestratorMandateForDelivery(reworded);
+    expect(deliveredEdit).toStartWith(reworded);
+    expect(deliveredEdit.split(section)).toHaveLength(2);
+    expect(orchestratorMandateForDelivery(deliveredEdit)).toBe(deliveredEdit);
+    expect(orchestratorMandateWithRoleTable(reworded, null)).toContain(section);
+  }
 });
 
 /** The `## Deploys` section exactly as it shipped in the mandate body through
