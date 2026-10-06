@@ -169,6 +169,20 @@
       "overlaps": [],
       "outside": []
     },
+    "desktop-1440-en-light-needs-you-text": [
+      {
+        "task": "t-upload",
+        "text": "Prototype ready· 9m agoRedesign attachment upload for large filesGo to prototype"
+      },
+      {
+        "task": "t-links",
+        "text": "Prototype ready· 6m agoRepair old links in the release notesGo to prototype"
+      },
+      {
+        "task": "t-search",
+        "text": "Prototype ready· 3m agoRestore search results after the index rebuildGo to prototype"
+      }
+    ],
     "desktop-1440-en-light-needs-you-jump": {
       "review": "t-links",
       "round": "r-links-2",
@@ -207,14 +221,14 @@
       "rows": [
         {
           "task": "t-search",
-          "text": "Prototype readySearch results layoutGo to prototype",
+          "text": "Prototype readyRestore search results after the index rebuild · Search results layoutGo to prototype",
           "actionInside": true,
           "titleClear": true,
           "height": 34
         },
         {
           "task": "t-upload",
-          "text": "Prototype readyUpload progress sheetGo to prototype",
+          "text": "Prototype readyRedesign attachment upload for large files · Upload progress sheetGo to prototype",
           "actionInside": true,
           "titleClear": true,
           "height": 34
@@ -785,7 +799,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/7/2026, 12:34:23 AM",
+      "time": "10/7/2026, 2:00:28 AM",
       "posts": [
         {
           "taskId": "t-search",
@@ -1661,6 +1675,20 @@
       "overlaps": [],
       "outside": []
     },
+    "desktop-1440-en-dark-needs-you-text": [
+      {
+        "task": "t-upload",
+        "text": "Prototype ready· 9m agoRedesign attachment upload for large filesGo to prototype"
+      },
+      {
+        "task": "t-links",
+        "text": "Prototype ready· 6m agoRepair old links in the release notesGo to prototype"
+      },
+      {
+        "task": "t-search",
+        "text": "Prototype ready· 3m agoRestore search results after the index rebuildGo to prototype"
+      }
+    ],
     "desktop-1440-en-dark-needs-you-jump": {
       "review": "t-links",
       "round": "r-links-2",
@@ -1699,14 +1727,14 @@
       "rows": [
         {
           "task": "t-search",
-          "text": "Prototype readySearch results layoutGo to prototype",
+          "text": "Prototype readyRestore search results after the index rebuild · Search results layoutGo to prototype",
           "actionInside": true,
           "titleClear": true,
           "height": 34
         },
         {
           "task": "t-upload",
-          "text": "Prototype readyUpload progress sheetGo to prototype",
+          "text": "Prototype readyRedesign attachment upload for large files · Upload progress sheetGo to prototype",
           "actionInside": true,
           "titleClear": true,
           "height": 34
@@ -2277,7 +2305,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/7/2026, 12:34:44 AM",
+      "time": "10/7/2026, 2:00:52 AM",
       "posts": [
         {
           "taskId": "t-search",
@@ -3153,6 +3181,20 @@
       "overlaps": [],
       "outside": []
     },
+    "desktop-1440-uk-light-needs-you-text": [
+      {
+        "task": "t-upload",
+        "text": "Прототип готовий· 9 хв томуRedesign attachment upload for large filesДо прототипу"
+      },
+      {
+        "task": "t-links",
+        "text": "Прототип готовий· 6 хв томуRepair old links in the release notesДо прототипу"
+      },
+      {
+        "task": "t-search",
+        "text": "Прототип готовий· 3 хв томуRestore search results after the index rebuildДо прототипу"
+      }
+    ],
     "desktop-1440-uk-light-needs-you-jump": {
       "review": "t-links",
       "round": "r-links-2",
@@ -3191,14 +3233,14 @@
       "rows": [
         {
           "task": "t-search",
-          "text": "Прототип готовийМакет результатів пошукуДо прототипу",
+          "text": "Прототип готовийRestore search results after the index rebuild · Макет результатів пошукуДо прототипу",
           "actionInside": true,
           "titleClear": true,
           "height": 34
         },
         {
           "task": "t-upload",
-          "text": "Прототип готовийПанель перебігу завантаженняДо прототипу",
+          "text": "Прототип готовийRedesign attachment upload for large files · Панель перебігу завантаженняДо прототипу",
           "actionInside": true,
           "titleClear": true,
           "height": 34
@@ -3769,7 +3811,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "07.10.2026, 00:35:06",
+      "time": "07.10.2026, 02:01:14",
       "posts": [
         {
           "taskId": "t-search",
@@ -4645,6 +4687,20 @@
       "overlaps": [],
       "outside": []
     },
+    "desktop-1440-uk-dark-needs-you-text": [
+      {
+        "task": "t-upload",
+        "text": "Прототип готовий· 9 хв томуRedesign attachment upload for large filesДо прототипу"
+      },
+      {
+        "task": "t-links",
+        "text": "Прототип готовий· 6 хв томуRepair old links in the release notesДо прототипу"
+      },
+      {
+        "task": "t-search",
+        "text": "Прототип готовий· 3 хв томуRestore search results after the index rebuildДо прототипу"
+      }
+    ],
     "desktop-1440-uk-dark-needs-you-jump": {
       "review": "t-links",
       "round": "r-links-2",
@@ -4683,14 +4739,14 @@
       "rows": [
         {
           "task": "t-search",
-          "text": "Прототип готовийМакет результатів пошукуДо прототипу",
+          "text": "Прототип готовийRestore search results after the index rebuild · Макет результатів пошукуДо прототипу",
           "actionInside": true,
           "titleClear": true,
           "height": 34
         },
         {
           "task": "t-upload",
-          "text": "Прототип готовийПанель перебігу завантаженняДо прототипу",
+          "text": "Прототип готовийRedesign attachment upload for large files · Панель перебігу завантаженняДо прототипу",
           "actionInside": true,
           "titleClear": true,
           "height": 34
@@ -5261,7 +5317,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "07.10.2026, 00:35:29",
+      "time": "07.10.2026, 02:01:37",
       "posts": [
         {
           "taskId": "t-search",
@@ -6139,6 +6195,20 @@
         "rows#6"
       ]
     },
+    "pane-1000-en-light-needs-you-text": [
+      {
+        "task": "t-upload",
+        "text": "Prototype ready· 9m agoRedesign attachment upload for large filesGo to prototype"
+      },
+      {
+        "task": "t-links",
+        "text": "Prototype ready· 6m agoRepair old links in the release notesGo to prototype"
+      },
+      {
+        "task": "t-search",
+        "text": "Prototype ready· 3m agoRestore search results after the index rebuildGo to prototype"
+      }
+    ],
     "pane-1000-en-light-needs-you-jump": {
       "review": "t-links",
       "round": "r-links-2",
@@ -6181,6 +6251,7 @@
         ]
       },
       "text": "Prototype ready3",
+      "label": "Prototype ready: Restore search results after the index rebuild. Go to prototype",
       "count": "3"
     },
     "pane-1000-en-light-notice": {
@@ -6216,14 +6287,14 @@
       "rows": [
         {
           "task": "t-search",
-          "text": "Prototype readySearch results layoutGo to prototype",
+          "text": "Prototype readyRestore search results after the index rebuild · Search results layoutGo to prototype",
           "actionInside": true,
           "titleClear": true,
           "height": 34
         },
         {
           "task": "t-upload",
-          "text": "Prototype readyUpload progress sheetGo to prototype",
+          "text": "Prototype readyRedesign attachment upload for large files · Upload progress sheetGo to prototype",
           "actionInside": true,
           "titleClear": true,
           "height": 34
@@ -6794,7 +6865,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/7/2026, 12:35:51 AM",
+      "time": "10/7/2026, 2:02:00 AM",
       "posts": [
         {
           "taskId": "t-search",
@@ -7672,6 +7743,20 @@
         "rows#6"
       ]
     },
+    "pane-1000-en-dark-needs-you-text": [
+      {
+        "task": "t-upload",
+        "text": "Prototype ready· 9m agoRedesign attachment upload for large filesGo to prototype"
+      },
+      {
+        "task": "t-links",
+        "text": "Prototype ready· 6m agoRepair old links in the release notesGo to prototype"
+      },
+      {
+        "task": "t-search",
+        "text": "Prototype ready· 3m agoRestore search results after the index rebuildGo to prototype"
+      }
+    ],
     "pane-1000-en-dark-needs-you-jump": {
       "review": "t-links",
       "round": "r-links-2",
@@ -7714,6 +7799,7 @@
         ]
       },
       "text": "Prototype ready3",
+      "label": "Prototype ready: Restore search results after the index rebuild. Go to prototype",
       "count": "3"
     },
     "pane-1000-en-dark-notice": {
@@ -7749,14 +7835,14 @@
       "rows": [
         {
           "task": "t-search",
-          "text": "Prototype readySearch results layoutGo to prototype",
+          "text": "Prototype readyRestore search results after the index rebuild · Search results layoutGo to prototype",
           "actionInside": true,
           "titleClear": true,
           "height": 34
         },
         {
           "task": "t-upload",
-          "text": "Prototype readyUpload progress sheetGo to prototype",
+          "text": "Prototype readyRedesign attachment upload for large files · Upload progress sheetGo to prototype",
           "actionInside": true,
           "titleClear": true,
           "height": 34
@@ -8327,7 +8413,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/7/2026, 12:36:12 AM",
+      "time": "10/7/2026, 2:02:22 AM",
       "posts": [
         {
           "taskId": "t-search",
@@ -9205,6 +9291,20 @@
         "rows#6"
       ]
     },
+    "pane-1000-uk-light-needs-you-text": [
+      {
+        "task": "t-upload",
+        "text": "Прототип готовий· 9 хв томуRedesign attachment upload for large filesДо прототипу"
+      },
+      {
+        "task": "t-links",
+        "text": "Прототип готовий· 6 хв томуRepair old links in the release notesДо прототипу"
+      },
+      {
+        "task": "t-search",
+        "text": "Прототип готовий· 3 хв томуRestore search results after the index rebuildДо прототипу"
+      }
+    ],
     "pane-1000-uk-light-needs-you-jump": {
       "review": "t-links",
       "round": "r-links-2",
@@ -9247,6 +9347,7 @@
         ]
       },
       "text": "Прототип готовий3",
+      "label": "Прототип готовий: Restore search results after the index rebuild. До прототипу",
       "count": "3"
     },
     "pane-1000-uk-light-notice": {
@@ -9282,14 +9383,14 @@
       "rows": [
         {
           "task": "t-search",
-          "text": "Прототип готовийМакет результатів пошукуДо прототипу",
+          "text": "Прототип готовийRestore search results after the index rebuild · Макет результатів пошукуДо прототипу",
           "actionInside": true,
           "titleClear": true,
           "height": 34
         },
         {
           "task": "t-upload",
-          "text": "Прототип готовийПанель перебігу завантаженняДо прототипу",
+          "text": "Прототип готовийRedesign attachment upload for large files · Панель перебігу завантаженняДо прототипу",
           "actionInside": true,
           "titleClear": true,
           "height": 34
@@ -9860,7 +9961,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "07.10.2026, 00:36:34",
+      "time": "07.10.2026, 02:02:45",
       "posts": [
         {
           "taskId": "t-search",
@@ -10738,6 +10839,20 @@
         "rows#6"
       ]
     },
+    "pane-1000-uk-dark-needs-you-text": [
+      {
+        "task": "t-upload",
+        "text": "Прототип готовий· 9 хв томуRedesign attachment upload for large filesДо прототипу"
+      },
+      {
+        "task": "t-links",
+        "text": "Прототип готовий· 6 хв томуRepair old links in the release notesДо прототипу"
+      },
+      {
+        "task": "t-search",
+        "text": "Прототип готовий· 3 хв томуRestore search results after the index rebuildДо прототипу"
+      }
+    ],
     "pane-1000-uk-dark-needs-you-jump": {
       "review": "t-links",
       "round": "r-links-2",
@@ -10780,6 +10895,7 @@
         ]
       },
       "text": "Прототип готовий3",
+      "label": "Прототип готовий: Restore search results after the index rebuild. До прототипу",
       "count": "3"
     },
     "pane-1000-uk-dark-notice": {
@@ -10815,14 +10931,14 @@
       "rows": [
         {
           "task": "t-search",
-          "text": "Прототип готовийМакет результатів пошукуДо прототипу",
+          "text": "Прототип готовийRestore search results after the index rebuild · Макет результатів пошукуДо прототипу",
           "actionInside": true,
           "titleClear": true,
           "height": 34
         },
         {
           "task": "t-upload",
-          "text": "Прототип готовийПанель перебігу завантаженняДо прототипу",
+          "text": "Прототип готовийRedesign attachment upload for large files · Панель перебігу завантаженняДо прототипу",
           "actionInside": true,
           "titleClear": true,
           "height": 34
@@ -11393,7 +11509,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "07.10.2026, 00:36:55",
+      "time": "07.10.2026, 02:03:07",
       "posts": [
         {
           "taskId": "t-search",
@@ -12335,6 +12451,20 @@
       "overlaps": [],
       "outside": []
     },
+    "phone-390-en-light-needs-you-text": [
+      {
+        "task": "t-upload",
+        "text": "Redesign attachment upload for large filesPrototype ready·9m ago"
+      },
+      {
+        "task": "t-links",
+        "text": "Repair old links in the release notesPrototype ready·6m ago"
+      },
+      {
+        "task": "t-search",
+        "text": "Restore search results after the index rebuildPrototype ready·3m ago"
+      }
+    ],
     "phone-390-en-light-needs-you-jump": {
       "review": "t-links",
       "round": "r-links-2",
@@ -12368,6 +12498,7 @@
       "word": "Prototype",
       "wordClipped": false,
       "titleClipped": false,
+      "label": "Prototype ready: Restore search results after the index rebuild. Go to prototype",
       "count": "3",
       "chipSize": [
         105,
@@ -12795,7 +12926,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/7/2026, 12:37:16 AM",
+      "time": "10/7/2026, 2:03:29 AM",
       "posts": [
         {
           "taskId": "t-search",
@@ -13445,7 +13576,7 @@
         },
         "reasons": [
           "permission prompt",
-          "gpt-5.6·17m",
+          "gpt-5.6·16m",
           "Prototype"
         ],
         "overlaps": [],
@@ -13635,6 +13766,20 @@
       "overlaps": [],
       "outside": []
     },
+    "phone-390-en-dark-needs-you-text": [
+      {
+        "task": "t-upload",
+        "text": "Redesign attachment upload for large filesPrototype ready·9m ago"
+      },
+      {
+        "task": "t-links",
+        "text": "Repair old links in the release notesPrototype ready·6m ago"
+      },
+      {
+        "task": "t-search",
+        "text": "Restore search results after the index rebuildPrototype ready·3m ago"
+      }
+    ],
     "phone-390-en-dark-needs-you-jump": {
       "review": "t-links",
       "round": "r-links-2",
@@ -13668,6 +13813,7 @@
       "word": "Prototype",
       "wordClipped": false,
       "titleClipped": false,
+      "label": "Prototype ready: Restore search results after the index rebuild. Go to prototype",
       "count": "3",
       "chipSize": [
         105,
@@ -14095,7 +14241,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/7/2026, 12:37:38 AM",
+      "time": "10/7/2026, 2:03:51 AM",
       "posts": [
         {
           "taskId": "t-search",
@@ -14935,6 +15081,20 @@
       "overlaps": [],
       "outside": []
     },
+    "phone-390-uk-light-needs-you-text": [
+      {
+        "task": "t-upload",
+        "text": "Redesign attachment upload for large filesПрототип готовий·9 хв тому"
+      },
+      {
+        "task": "t-links",
+        "text": "Repair old links in the release notesПрототип готовий·6 хв тому"
+      },
+      {
+        "task": "t-search",
+        "text": "Restore search results after the index rebuildПрототип готовий·3 хв тому"
+      }
+    ],
     "phone-390-uk-light-needs-you-jump": {
       "review": "t-links",
       "round": "r-links-2",
@@ -14968,6 +15128,7 @@
       "word": "Прототип",
       "wordClipped": false,
       "titleClipped": false,
+      "label": "Прототип готовий: Restore search results after the index rebuild. До прототипу",
       "count": "3",
       "chipSize": [
         106,
@@ -15395,7 +15556,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "07.10.2026, 00:38:01",
+      "time": "07.10.2026, 02:04:14",
       "posts": [
         {
           "taskId": "t-search",
@@ -16045,7 +16206,7 @@
         },
         "reasons": [
           "запит дозволу",
-          "gpt-5.6·17 хв",
+          "gpt-5.6·16 хв",
           "Прототип"
         ],
         "overlaps": [],
@@ -16235,6 +16396,20 @@
       "overlaps": [],
       "outside": []
     },
+    "phone-390-uk-dark-needs-you-text": [
+      {
+        "task": "t-upload",
+        "text": "Redesign attachment upload for large filesПрототип готовий·9 хв тому"
+      },
+      {
+        "task": "t-links",
+        "text": "Repair old links in the release notesПрототип готовий·6 хв тому"
+      },
+      {
+        "task": "t-search",
+        "text": "Restore search results after the index rebuildПрототип готовий·3 хв тому"
+      }
+    ],
     "phone-390-uk-dark-needs-you-jump": {
       "review": "t-links",
       "round": "r-links-2",
@@ -16268,6 +16443,7 @@
       "word": "Прототип",
       "wordClipped": false,
       "titleClipped": false,
+      "label": "Прототип готовий: Restore search results after the index rebuild. До прототипу",
       "count": "3",
       "chipSize": [
         106,
@@ -16695,7 +16871,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "07.10.2026, 00:38:23",
+      "time": "07.10.2026, 02:04:37",
       "posts": [
         {
           "taskId": "t-search",

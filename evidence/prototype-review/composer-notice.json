@@ -6,7 +6,7 @@
       "rows": [
         {
           "task": "t-search",
-          "text": "Prototype readySearch results layoutGo to prototype",
+          "text": "Prototype readyRestore search results after the index rebuild · Search results layoutGo to prototype",
           "box": [
             10,
             644,
@@ -19,9 +19,9 @@
             116.5,
             44
           ],
-          "actionLabel": "Go to the prototype «Search results layout»",
+          "actionLabel": "Go to the prototype for «Restore search results after the index rebuild»",
           "titleClear": true,
-          "titleCut": false
+          "titleCut": true
         }
       ],
       "more": {
@@ -55,7 +55,7 @@
       "rows": [
         {
           "task": "t-search",
-          "text": "Prototype readySearch results layoutGo to prototype",
+          "text": "Prototype readyRestore search results after the index rebuild · Search results layoutGo to prototype",
           "box": [
             10,
             536,
@@ -68,13 +68,13 @@
             116.5,
             44
           ],
-          "actionLabel": "Go to the prototype «Search results layout»",
+          "actionLabel": "Go to the prototype for «Restore search results after the index rebuild»",
           "titleClear": true,
-          "titleCut": false
+          "titleCut": true
         },
         {
           "task": "t-links",
-          "text": "Prototype readyRelease notes links, smaller arrows and a title long enough to be cutGo to prototype",
+          "text": "Prototype readyRepair old links in the release notes · Release notes links, smaller arrows and a title long enough to be cutGo to prototype",
           "box": [
             10,
             590,
@@ -87,13 +87,13 @@
             116.5,
             44
           ],
-          "actionLabel": "Go to the prototype «Release notes links, smaller arrows and a title long enough to be cut»",
+          "actionLabel": "Go to the prototype for «Repair old links in the release notes»",
           "titleClear": true,
           "titleCut": true
         },
         {
           "task": "t-upload",
-          "text": "Prototype readyUpload progress sheetGo to prototype",
+          "text": "Prototype readyRedesign attachment upload for large files · Upload progress sheetGo to prototype",
           "box": [
             10,
             644,
@@ -106,9 +106,9 @@
             116.5,
             44
           ],
-          "actionLabel": "Go to the prototype «Upload progress sheet»",
+          "actionLabel": "Go to the prototype for «Redesign attachment upload for large files»",
           "titleClear": true,
-          "titleCut": false
+          "titleCut": true
         }
       ],
       "more": {
@@ -155,7 +155,7 @@
       "rows": [
         {
           "task": "t-search",
-          "text": "Prototype readySearch results layoutGo to prototype",
+          "text": "Prototype readyRestore search results after the index rebuild · Search results layoutGo to prototype",
           "box": [
             10,
             644,
@@ -168,9 +168,9 @@
             116.5,
             44
           ],
-          "actionLabel": "Go to the prototype «Search results layout»",
+          "actionLabel": "Go to the prototype for «Restore search results after the index rebuild»",
           "titleClear": true,
-          "titleCut": false
+          "titleCut": true
         }
       ],
       "more": {
@@ -204,7 +204,7 @@
       "rows": [
         {
           "task": "t-search",
-          "text": "Prototype readySearch results layoutGo to prototype",
+          "text": "Prototype readyRestore search results after the index rebuild · Search results layoutGo to prototype",
           "box": [
             10,
             536,
@@ -217,13 +217,13 @@
             116.5,
             44
           ],
-          "actionLabel": "Go to the prototype «Search results layout»",
+          "actionLabel": "Go to the prototype for «Restore search results after the index rebuild»",
           "titleClear": true,
-          "titleCut": false
+          "titleCut": true
         },
         {
           "task": "t-links",
-          "text": "Prototype readyRelease notes links, smaller arrows and a title long enough to be cutGo to prototype",
+          "text": "Prototype readyRepair old links in the release notes · Release notes links, smaller arrows and a title long enough to be cutGo to prototype",
           "box": [
             10,
             590,
@@ -236,13 +236,13 @@
             116.5,
             44
           ],
-          "actionLabel": "Go to the prototype «Release notes links, smaller arrows and a title long enough to be cut»",
+          "actionLabel": "Go to the prototype for «Repair old links in the release notes»",
           "titleClear": true,
           "titleCut": true
         },
         {
           "task": "t-upload",
-          "text": "Prototype readyUpload progress sheetGo to prototype",
+          "text": "Prototype readyRedesign attachment upload for large files · Upload progress sheetGo to prototype",
           "box": [
             10,
             644,
@@ -255,9 +255,9 @@
             116.5,
             44
           ],
-          "actionLabel": "Go to the prototype «Upload progress sheet»",
+          "actionLabel": "Go to the prototype for «Redesign attachment upload for large files»",
           "titleClear": true,
-          "titleCut": false
+          "titleCut": true
         }
       ],
       "more": {
@@ -304,7 +304,7 @@
       "rows": [
         {
           "task": "t-search",
-          "text": "Прототип готовийМакет результатів пошукуДо прототипу",
+          "text": "Прототип готовийПовернути результати пошуку після перебудови індексу · Макет результатів пошукуДо прототипу",
           "box": [
             10,
             644,
@@ -317,7 +317,7 @@
             108.2,
             44
           ],
-          "actionLabel": "Перейти до прототипу «Макет результатів пошуку»",
+          "actionLabel": "Перейти до прототипу задачі «Повернути результати пошуку після перебудови індексу»",
           "titleClear": true,
           "titleCut": true
         }
@@ -353,7 +353,7 @@
       "rows": [
         {
           "task": "t-search",
-          "text": "Прототип готовийМакет результатів пошукуДо прототипу",
+          "text": "Прототип готовийПовернути результати пошуку після перебудови індексу · Макет результатів пошукуДо прототипу",
           "box": [
             10,
             536,
@@ -366,13 +366,13 @@
             108.2,
             44
           ],
-          "actionLabel": "Перейти до прототипу «Макет результатів пошуку»",
+          "actionLabel": "Перейти до прототипу задачі «Повернути результати пошуку після перебудови індексу»",
           "titleClear": true,
           "titleCut": true
         },
         {
           "task": "t-links",
-          "text": "Прототип готовийПосилання в нотатках релізу, менші стрілки і назва, якій доведеться обрізатисяДо прототипу",
+          "text": "Прототип готовийПолагодити старі посилання в нотатках до випуску · Посилання в нотатках релізу, менші стрілки і назва, якій доведеться обрізатисяДо прототипу",
           "box": [
             10,
             590,
@@ -385,13 +385,13 @@
             108.2,
             44
           ],
-          "actionLabel": "Перейти до прототипу «Посилання в нотатках релізу, менші стрілки і назва, якій доведеться обрізатися»",
+          "actionLabel": "Перейти до прототипу задачі «Полагодити старі посилання в нотатках до випуску»",
           "titleClear": true,
           "titleCut": true
         },
         {
           "task": "t-upload",
-          "text": "Прототип готовийПанель перебігу завантаженняДо прототипу",
+          "text": "Прототип готовийПереробити завантаження великих вкладень · Панель перебігу завантаженняДо прототипу",
           "box": [
             10,
             644,
@@ -404,7 +404,7 @@
             108.2,
             44
           ],
-          "actionLabel": "Перейти до прототипу «Панель перебігу завантаження»",
+          "actionLabel": "Перейти до прототипу задачі «Переробити завантаження великих вкладень»",
           "titleClear": true,
           "titleCut": true
         }
@@ -441,9 +441,9 @@
       "variants": 2,
       "sheet": [
         0,
-        129,
+        113,
         390,
-        715
+        731
       ],
       "sheetInside": true,
       "overflowX": 0
@@ -453,7 +453,7 @@
       "rows": [
         {
           "task": "t-search",
-          "text": "Прототип готовийМакет результатів пошукуДо прототипу",
+          "text": "Прототип готовийПовернути результати пошуку після перебудови індексу · Макет результатів пошукуДо прототипу",
           "box": [
             10,
             644,
@@ -466,7 +466,7 @@
             108.2,
             44
           ],
-          "actionLabel": "Перейти до прототипу «Макет результатів пошуку»",
+          "actionLabel": "Перейти до прототипу задачі «Повернути результати пошуку після перебудови індексу»",
           "titleClear": true,
           "titleCut": true
         }
@@ -502,7 +502,7 @@
       "rows": [
         {
           "task": "t-search",
-          "text": "Прототип готовийМакет результатів пошукуДо прототипу",
+          "text": "Прототип готовийПовернути результати пошуку після перебудови індексу · Макет результатів пошукуДо прототипу",
           "box": [
             10,
             536,
@@ -515,13 +515,13 @@
             108.2,
             44
           ],
-          "actionLabel": "Перейти до прототипу «Макет результатів пошуку»",
+          "actionLabel": "Перейти до прототипу задачі «Повернути результати пошуку після перебудови індексу»",
           "titleClear": true,
           "titleCut": true
         },
         {
           "task": "t-links",
-          "text": "Прототип готовийПосилання в нотатках релізу, менші стрілки і назва, якій доведеться обрізатисяДо прототипу",
+          "text": "Прототип готовийПолагодити старі посилання в нотатках до випуску · Посилання в нотатках релізу, менші стрілки і назва, якій доведеться обрізатисяДо прототипу",
           "box": [
             10,
             590,
@@ -534,13 +534,13 @@
             108.2,
             44
           ],
-          "actionLabel": "Перейти до прототипу «Посилання в нотатках релізу, менші стрілки і назва, якій доведеться обрізатися»",
+          "actionLabel": "Перейти до прототипу задачі «Полагодити старі посилання в нотатках до випуску»",
           "titleClear": true,
           "titleCut": true
         },
         {
           "task": "t-upload",
-          "text": "Прототип готовийПанель перебігу завантаженняДо прототипу",
+          "text": "Прототип готовийПереробити завантаження великих вкладень · Панель перебігу завантаженняДо прототипу",
           "box": [
             10,
             644,
@@ -553,7 +553,7 @@
             108.2,
             44
           ],
-          "actionLabel": "Перейти до прототипу «Панель перебігу завантаження»",
+          "actionLabel": "Перейти до прототипу задачі «Переробити завантаження великих вкладень»",
           "titleClear": true,
           "titleCut": true
         }
@@ -590,9 +590,9 @@
       "variants": 2,
       "sheet": [
         0,
-        129,
+        113,
         390,
-        715
+        731
       ],
       "sheetInside": true,
       "overflowX": 0

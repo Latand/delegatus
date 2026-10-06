@@ -18875,6 +18875,8 @@ describe("prototype review on a task: the card's button, the review and the orch
     const readings: Record<string, unknown> = {};
     const url = `${server.base}?proto=1`;
     const REVIEW = "[data-prototype-review]";
+    /* What each waiting task's line has to name: the card's own first line, which «Go to prototype» lands on. This fixture keeps its task texts in English in both languages. */
+    const TASK_TITLES: Record<string, string> = { "t-search": "Restore search results after the index rebuild", "t-links": "Repair old links in the release notes", "t-upload": "Redesign attachment upload for large files" };
     const DESKTOP_REGIONS = {
       header: `${REVIEW} [role=dialog] > header`,
       rail: `${REVIEW} aside`,
@@ -19223,6 +19225,8 @@ describe("prototype review on a task: the card's button, the review and the orch
             if (JSON.stringify(prototypes.map((row) => row.prototype).sort()) !== JSON.stringify(["t-links", "t-search", "t-upload"])) failures.push(`${label}: the needs-you list names the waiting reviews of ${JSON.stringify(prototypes.map((row) => row.prototype))}`);
             if (rows.length !== waitingBefore || (!size.phone && await tabCount() !== waitingBefore)) failures.push(`${label}: the needs-you control counts ${waitingBefore}, the tab ${await tabCount()} and the list holds ${rows.length} rows`);
             if (geometry.overlaps.length || prototypes.some((row) => row.dismiss || !row.text?.includes(tr("proto.notice.ready")) || (size.phone && row.height < 44))) failures.push(`${label}: a waiting review's needs-you row is broken: ${JSON.stringify({ prototypes, overlaps: geometry.overlaps })}`);
+            record("needs-you-text", prototypes.map((row) => ({ task: row.prototype, text: rows.find((entry) => entry.prototype === row.prototype)?.text ?? null })));
+            for (const row of rows.filter((entry) => entry.prototype)) if (!row.text?.includes(TASK_TITLES[row.prototype!]!)) failures.push(`${label}: the needs-you row of ${row.prototype} does not name its task: «${row.text}»`);
             await page.locator(`${LIST} [data-attention-prototype="t-links"]`).click();
             await page.waitForSelector(`${REVIEW} [data-prototype-variant]`, { timeout: 10_000 });
             await page.waitForTimeout(500);
@@ -19246,7 +19250,9 @@ describe("prototype review on a task: the card's button, the review and the orch
             if (await page.locator('[data-kanban-seat][data-collapsed="1"]').count()) {
               await chip.waitFor({ timeout: 15_000 });
               const strip = await measure(page, "[data-kanban-seat] [data-seat-head]", { parts: "[data-kanban-seat] [data-seat-head] > *" });
-              record("notice-strip", { ...strip, text: await chip.textContent(), count: await chip.getAttribute("data-prototype-notice-chip") });
+              const chipLabel = await chip.getAttribute("aria-label");
+              record("notice-strip", { ...strip, text: await chip.textContent(), label: chipLabel, count: await chip.getAttribute("data-prototype-notice-chip") });
+              if (!Object.values(TASK_TITLES).some((title) => chipLabel?.includes(title))) failures.push(`${label}: the folded seat's notice chip names no task: «${chipLabel}»`);
               if (strip.overlaps.length || strip.outside.length || await chip.getAttribute("data-prototype-notice-chip") !== "3") failures.push(`${label}: the folded seat's notice chip overlaps ${strip.overlaps.join(", ")}, leaves the strip ${strip.outside.join(", ")} or miscounts`);
               await shot("notice-folded");
               await page.locator("[data-kanban-seat] [data-seat-collapse]").click();
@@ -19268,6 +19274,7 @@ describe("prototype review on a task: the card's button, the review and the orch
             if (noticeParts.length !== 2 || more !== "1") failures.push(`${label}: ${noticeParts.length} notice lines and «${more}» folded in the orchestrator's pane, expected two lines and one folded for the three waiting tasks`);
             if (notice.overlaps.length || notice.outside.length) failures.push(`${label}: the notice overlaps ${notice.overlaps.join(", ")} or leaves the pane ${notice.outside.join(", ")}`);
             if (noticeParts.some((row) => !row.actionInside || !row.titleClear || !row.text?.includes(tr("proto.notice.open")))) failures.push(`${label}: a notice row is broken: ${JSON.stringify(noticeParts)}`);
+            for (const row of noticeParts) if (!row.text?.includes(TASK_TITLES[row.task!]!)) failures.push(`${label}: the composer's notice of ${row.task} does not name its task: «${row.text}»`);
             await shot("notice");
             await page.locator('[data-prototype-notice-open="t-search"]').click();
             await page.waitForSelector(`${REVIEW} [data-prototype-variant]`, { timeout: 10_000 });
@@ -19291,7 +19298,9 @@ describe("prototype review on a task: the card's button, the review and the orch
               const titles = [...document.querySelectorAll<HTMLElement>("[data-mobile2-seat-card] button span.truncate")].filter((element) => element.getBoundingClientRect().width > 0);
               return { chip: document.querySelector("[data-mobile2-seat-card] [data-prototype-notice-chip]")?.textContent ?? null, word: word?.textContent ?? null, wordClipped: Boolean(word && word.scrollWidth > word.clientWidth + 0.5), titleClipped: titles.some((element) => element.scrollWidth > element.clientWidth + 0.5) };
             });
-            record("notice", { ...seatCard, ...seatWords, count: await chip.getAttribute("data-prototype-notice-chip"), chipSize: [Math.round(chipBox.width), Math.round(chipBox.height)] });
+            const chipLabel = await chip.getAttribute("aria-label");
+            record("notice", { ...seatCard, ...seatWords, label: chipLabel, count: await chip.getAttribute("data-prototype-notice-chip"), chipSize: [Math.round(chipBox.width), Math.round(chipBox.height)] });
+            if (!Object.values(TASK_TITLES).some((title) => chipLabel?.includes(title))) failures.push(`${label}: the seat card's notice chip names no task: «${chipLabel}»`);
             if (seatCard.overlaps.length || seatCard.outside.length || chipBox.height < 44 || chipBox.width < 44 || await chip.getAttribute("data-prototype-notice-chip") !== "3") failures.push(`${label}: the seat card's notice chip reads ${JSON.stringify({ seatCard, chipBox })}`);
             if (seatWords.word !== tr("proto.button.word") || seatWords.chip !== `${tr("proto.button.word")}3` || seatWords.wordClipped || seatWords.titleClipped) failures.push(`${label}: the seat card's chip and title read ${JSON.stringify(seatWords)}`);
             await shot("notice");

@@ -34,7 +34,7 @@ function subscribe(listener: () => void): () => void {
 }
 
 export function publishPrototypeNotices(next: readonly PrototypeReviewNotice[]): void {
-  const same = next.length === notices.length && next.every((notice, at) => notice.id === notices[at]!.id && notice.title === notices[at]!.title);
+  const same = next.length === notices.length && next.every((notice, at) => notice.id === notices[at]!.id && notice.title === notices[at]!.title && notice.roundTitle === notices[at]!.roundTitle);
   if (same) return;
   notices = next.length ? next : EMPTY;
   emit();

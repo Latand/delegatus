@@ -1666,7 +1666,7 @@ export const en = {
   "proto.notice.list": "Prototypes waiting for you",
   "proto.notice.ready": "Prototype ready",
   "proto.notice.open": "Go to prototype",
-  "proto.notice.openAria": "Go to the prototype «{title}»",
+  "proto.notice.openAria": "Go to the prototype for «{title}»",
   "proto.notice.more": { one: "and {count} more prototype", other: "and {count} more prototypes" },
   "proto.notice.fewer": "Show fewer",
   "proto.variants": "Variants",

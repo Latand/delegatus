@@ -1619,7 +1619,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "proto.notice.list": "Прототипи, що чекають на вас",
   "proto.notice.ready": "Прототип готовий",
   "proto.notice.open": "До прототипу",
-  "proto.notice.openAria": "Перейти до прототипу «{title}»",
+  "proto.notice.openAria": "Перейти до прототипу задачі «{title}»",
   "proto.notice.more": { one: "і ще {count} прототип", few: "і ще {count} прототипи", many: "і ще {count} прототипів", other: "і ще {count} прототипів" },
   "proto.notice.fewer": "Показати менше",
   "proto.variants": "Варіанти",

@@ -3769,6 +3769,10 @@ describe("prototype review: the orchestrator's open composer says a prototype is
       for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
         const label = `phone-390-${lang}-${scheme}`;
         const tr = (key: Parameters<typeof translate>[1], vars?: Record<string, string | number>) => translate(lang, key, vars);
+        /* Each line names the task its jump lands on, the fixture's task text. */
+        const taskTitles: Record<string, string> = lang === "uk"
+          ? { "t-search": "Повернути результати пошуку після перебудови індексу", "t-links": "Полагодити старі посилання в нотатках до випуску", "t-upload": "Переробити завантаження великих вкладень" }
+          : { "t-search": "Restore search results after the index rebuild", "t-links": "Repair old links in the release notes", "t-upload": "Redesign attachment upload for large files" };
         const { context, page, pageErrors } = await openFixture(browser, `${served.base}?case=prototype-notice&lang=${lang}`, VIEWPORT, scheme, lang, "reduce", true);
         const shot = (name: string) => page.screenshot({ path: path.join(pngDir, `${label}-composer-${name}.png`) });
         /* The notice, the message field and the screen: what the line says,
@@ -3813,6 +3817,7 @@ describe("prototype review: the orchestrator's open composer says a prototype is
           /* Three tasks wait: the phone shows one line and folds two behind the count. */
           if (folded.waiting !== "3" || folded.rows.length !== 1 || folded.more?.folded !== "2" || !folded.more.text?.includes("2")) failures.push(`${label}: the composer's notice reads ${JSON.stringify({ waiting: folded.waiting, rows: folded.rows.length, more: folded.more })}`);
           if (!first || first.task !== "t-search" || !first.text?.includes(tr("proto.notice.ready")) || !first.text.includes(tr("proto.notice.open")) || !first.titleClear) failures.push(`${label}: the notice line reads ${JSON.stringify(first)}`);
+          if (first && (!first.text?.includes(taskTitles[first.task!]!) || !first.actionLabel?.includes(taskTitles[first.task!]!))) failures.push(`${label}: the notice line does not name its task: «${first.text}», «${first.actionLabel}»`);
           if (first && (first.action[3]! < 44 || first.action[2]! < 44)) failures.push(`${label}: «${tr("proto.notice.open")}» is ${first.action[2]}×${first.action[3]}, under a 44 px touch target`);
           if (folded.more && folded.more.box[3]! < 44) failures.push(`${label}: the count behind the notice is ${folded.more.box[3]} px tall`);
           if (!folded.field || !folded.fieldEnabled || (first && first.box[1]! + first.box[3]! > folded.field[1]! + 0.5)) failures.push(`${label}: the notice does not stand above a usable message field: ${JSON.stringify({ row: first?.box, field: folded.field })}`);
@@ -3826,6 +3831,7 @@ describe("prototype review: the orchestrator's open composer says a prototype is
           readings[`${label}-notice-all`] = all;
           await shot("notice-all");
           if (all.rows.length !== 3 || all.more?.expanded !== "true" || all.rows.some((row) => !row.titleClear || row.action[3]! < 44)) failures.push(`${label}: the unfolded notice reads ${JSON.stringify(all.rows.map((row) => ({ task: row.task, clear: row.titleClear, action: row.action })))}`);
+          for (const row of all.rows) if (!row.text?.includes(taskTitles[row.task!]!)) failures.push(`${label}: the unfolded notice of ${row.task} does not name its task: «${row.text}»`);
           if (!all.rows.some((row) => row.titleCut)) failures.push(`${label}: the long title was expected to be cut and was not`);
           if (all.overlaps.length || all.outside || all.overflowX > 0) failures.push(`${label}: unfolded, the notice overlaps ${all.overlaps.join(", ")}, leaves the screen (${all.outside}) or scrolls sideways by ${all.overflowX}px`);
           await page.locator("[data-evidence-composer] [data-prototype-notice-more]").click();

@@ -993,14 +993,14 @@ const PROTO_PROJECT = "viewer";
 const PROTO_UK = params.get("lang") === "uk";
 const protoWord = (en: string, uk: string) => (PROTO_UK ? uk : en);
 const PROTO_WAITING = [
-  { task: "t-search", review: "r-search", title: protoWord("Search results layout", "Макет результатів пошуку"), ago: 3 },
-  { task: "t-links", review: "r-links", title: protoWord("Release notes links, smaller arrows and a title long enough to be cut", "Посилання в нотатках релізу, менші стрілки і назва, якій доведеться обрізатися"), ago: 6 },
-  { task: "t-upload", review: "r-upload", title: protoWord("Upload progress sheet", "Панель перебігу завантаження"), ago: 9 },
+  { task: "t-search", review: "r-search", text: protoWord("Restore search results after the index rebuild", "Повернути результати пошуку після перебудови індексу"), title: protoWord("Search results layout", "Макет результатів пошуку"), ago: 3 },
+  { task: "t-links", review: "r-links", text: protoWord("Repair old links in the release notes", "Полагодити старі посилання в нотатках до випуску"), title: protoWord("Release notes links, smaller arrows and a title long enough to be cut", "Посилання в нотатках релізу, менші стрілки і назва, якій доведеться обрізатися"), ago: 6 },
+  { task: "t-upload", review: "r-upload", text: protoWord("Redesign attachment upload for large files", "Переробити завантаження великих вкладень"), title: protoWord("Upload progress sheet", "Панель перебігу завантаження"), ago: 9 },
 ];
 const protoAt = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
 const PROTO_TASKS = [
   ...PROTO_WAITING.map((entry) => ({
-    id: entry.task, project: PROTO_PROJECT, status: "assigned", placement: "unplaced", text: entry.title, assignments: [], createdAt: protoAt(60), updatedAt: protoAt(entry.ago),
+    id: entry.task, project: PROTO_PROJECT, status: "assigned", placement: "unplaced", text: entry.text, assignments: [], createdAt: protoAt(60), updatedAt: protoAt(entry.ago),
     prototypeReview: { latestReviewId: entry.review, waitingReviewId: entry.review, title: entry.title, rounds: 1, createdAt: protoAt(entry.ago) },
   })),
   {

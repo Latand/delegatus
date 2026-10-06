@@ -15,15 +15,17 @@ import { usePrototypeNoticesFor } from "./prototypeReviewStore";
  * field where the task chips stand: one line per waiting task, with the action
  * that takes the operator to that task and opens its review. Absent while
  * nothing waits, so the composer keeps the layout it had. Two lines at most
- * stand there, one on the phone; the rest fold behind one count, so many
- * waiting tasks never push the message field away.
+ * stand there, one on the phone, where the line is the task's name and its
+ * action; the rest fold behind one count, so many waiting tasks never push
+ * the message field away.
  */
 
 export function PrototypeNoticeRow({ project }: { project: string }) {
   const { t } = useLocale();
   const notices = usePrototypeNoticesFor(project);
   const [all, setAll] = useState(false);
-  const SHOWN = useIsMobile() ? 1 : 2;
+  const mobile = useIsMobile();
+  const SHOWN = mobile ? 1 : 2;
   if (!notices.length) return null;
   const rows = all ? notices : notices.slice(0, SHOWN);
   const folded = notices.length - rows.length;
@@ -37,8 +39,12 @@ export function PrototypeNoticeRow({ project }: { project: string }) {
           className="flex min-w-0 items-center gap-1.5 rounded-control border border-accent/30 bg-accent-soft py-0.5 pl-2 pr-0.5 text-label text-accent"
         >
           <GalleryHorizontalEnd className="h-3.5 w-3.5 shrink-0" aria-hidden />
-          <span className="shrink-0 font-semibold">{t("proto.notice.ready")}</span>
-          <span className="min-w-0 flex-1 truncate font-medium text-primary" title={notice.title}>{notice.title}</span>
+          {/* The phone gives the line to the task's name; the mark and the action already say what waits. */}
+          <span className={mobile ? "sr-only" : "shrink-0 font-semibold"}>{t("proto.notice.ready")}</span>
+          <span className="min-w-0 flex-1 truncate font-medium text-primary" title={notice.roundTitle ? `${notice.title} · ${notice.roundTitle}` : notice.title}>
+            {notice.title}
+            {notice.roundTitle ? <span data-prototype-notice-round="" className="font-normal text-muted"> · {notice.roundTitle}</span> : null}
+          </span>
           <button
             type="button"
             data-prototype-notice-open={notice.taskId}

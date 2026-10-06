@@ -100,7 +100,10 @@ export interface PrototypeReviewNotice {
   project: string;
   taskId: string;
   reviewId: string;
+  /** The task's first line: the card the jump lands on. */
   title: string;
+  /** The waiting round's own title, shown second. */
+  roundTitle?: string;
   createdAt: string;
   /** The UI focuses this task and opens this round in its review surface. */
   target: { kind: "prototype-review"; taskId: string; reviewId: string };
