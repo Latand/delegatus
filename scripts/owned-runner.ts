@@ -7,6 +7,7 @@ import path from "node:path";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
 import { procBackend } from "../src/lib/proc";
 import { stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
+import { admitPortableTestRunner } from "../src/lib/testing/portableTestAdmission";
 
 type Launch = { command: string[]; cwd: string; env: NodeJS.ProcessEnv; owner: ProcessIdentity; parent?: ProcessIdentity; unit: string; timeoutMs: number };
 const args = process.argv.slice(2);
@@ -16,7 +17,7 @@ if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error("owned ru
 if (args[0] === "--portable") {
   // The fallback uses the same spawn ledger and independent guardian as direct
   // test runs. On Linux the gate refuses to lose kernel cgroup containment.
-  if (process.platform === "linux") throw new Error("owned gates on Linux require a reachable user systemd manager");
+  admitPortableTestRunner();
   const command = args.slice(1);
   if (!command.length) throw new Error("owned runner needs a command");
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "delegatus-owned-run-"));

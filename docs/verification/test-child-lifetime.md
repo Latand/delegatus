@@ -233,7 +233,7 @@ Linux path.
 | `scripts/fixtures/detachedChildParent.fixture.ts` | 5 | contained helper |
 | `scripts/fixtures/nestedTestRunner.fixture.ts` | 7 | contained helper |
 | `scripts/fixtures/ownedRunner.fixture.ts` | 9, 14 | contained helper |
-| `scripts/gate-slot.test.ts` | 17, 33, 35 | owned |
+| `scripts/gate-slot.test.ts` | 37, 53, 55 | owned |
 | `scripts/install-mcp.test.ts` | 30, 82, 173 | owned |
 | `scripts/local-gate-tests.test.ts` | 16, 32, 39, 116, 187, 204, 205, 209, 272, 285, 289, 316, 328, 329, 331, 332, 334, 378, 407, 536, 561 | owned |
 | `scripts/npm-package-smoke.test.ts` | 13, 37, 49, 77 | owned |
@@ -471,8 +471,21 @@ Additional launch wiring checked by text and imports:
 
 Long-lived fixture entry points with no spawn call of their own also bind to the recorded originating runner: `stageHostGeneration.ts`, `stateLeaseOwner.fixture.ts`, `releaseHandoverIncumbent.ts`, `seatSuccessorHost.ts`, `codexSeatSuccessor.ts`, `nativeCodexRuntime.ts`, `packagedRollback.ts`, `fakeClaudePermissionCli.ts`, and the three `claude-stream-json-*` fixtures. The runtime image writer and structured image admission writer check that identity inside their bounded blocking barriers. MCP fixtures inherit it through their shared barrier helper. Intended adoption can outlast an intermediate generation while the originating test run is alive. A zombie runner has already ended and cannot retain fixture ownership.
 
-## Remaining portable containment decision
+## Platform containment contract
 
 Two independent reviews reproduced a detached descendant escaping the portable guardian between observations of its short-lived parent. The portable branch provides identity-safe cleanup of recorded processes with bounded interruption and cleanup, but cannot establish ownership of every descendant at birth. Its empty ledger performs no host-wide scans. Linux runs use their service cgroup instead of this guardian.
 
-The unresolved choice is to refuse unsupported admission until native kernel containment is supplied, or explicitly limit the permanent guarantee to Linux while retaining portable execution. Refusing unsupported admission preserves the stated lifetime guarantee and is the recommended option. Native macOS and Windows execution was unavailable in this session. This known gap prevents a claim that the complete cross-platform acceptance contract is met.
+The accepted contract keeps the strong lifetime guarantee on Linux and refuses Linux admission when native containment is unavailable. macOS and Windows continue with the portable guardian as best effort, with one warning per owning run that a detached descendant can escape between guardian polls. Both the slot wrapper and direct test preload use the same policy; nested runners inherit the warning marker. The marker never enables portable admission on Linux.
+
+The policy regression was written first and failed before the implementation. Parameterized macOS and Windows policy tests check permitted admission and a single explicit warning; a Linux policy test checks refusal even with an inherited marker. The actual Linux gate refusal and service lifetime regressions remain in place. Native macOS and Windows execution was unavailable on this Linux machine; policy coverage does not establish native execution coverage. The accepted portable limitation requires no further containment review rounds.
+
+
+After the platform decision, fresh isolated runs passed all six slot/admission
+checks, all nine actual Linux runner lifetime cases, all three real-fixture
+lifetime cases and the idle-CPU regression (19 tests across four named files).
+The lifetime probes again preserved same-argv bystanders and the enclosing
+ownership checks reported zero survivors. The final incremental typecheck
+passed after giving the synthetic policy environments the project's required
+NODE_ENV field. No further independent review round was started; the shared
+policy, inherited warning marker, Linux refusal and documentation received a
+focused read-only self-review.

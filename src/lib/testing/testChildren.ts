@@ -5,12 +5,14 @@ import { afterAll } from "bun:test";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
 import { procBackend } from "@/lib/proc";
 import { stopFixtureProcess } from "./fixtureProcess";
+import { admitPortableTestRunner } from "./portableTestAdmission";
 
 /** The preload owns real subprocess handles before spawn returns. This covers
  * imported aliases, fork/execFile and product helpers exercised by a test, too.
  * A separate guardian retains the identities if the test runner is SIGKILLed.
  */
 export function beginTestChildOwnership(root: string): void {
+  if (process.platform !== "linux") admitPortableTestRunner();
   const owner = captureProcessIdentity(process.pid);
   const supervisor = captureProcessIdentity(process.ppid);
   const cgroup = process.platform === "linux" ? process.env.LLV_OWNED_TEST_RUN_CGROUP : undefined;

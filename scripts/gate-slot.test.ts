@@ -3,6 +3,26 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { admitPortableTestRunner } from "../src/lib/testing/portableTestAdmission";
+
+for (const platform of ["darwin", "win32"] as const) test(`portable ${platform} admission warns once and permits best-effort execution`, () => {
+  const env: NodeJS.ProcessEnv = { NODE_ENV: "test" };
+  const warnings: string[] = [];
+  admitPortableTestRunner(platform, env, warning => warnings.push(warning));
+  admitPortableTestRunner(platform, { ...env }, warning => warnings.push(warning));
+  expect(warnings).toHaveLength(1);
+  expect(warnings[0]).toContain("best effort");
+  expect(warnings[0]).toContain("a detached descendant can escape between guardian polls");
+  expect(env.LLV_PORTABLE_TEST_WARNING_SHOWN).toBe("1");
+});
+
+test("Linux portable admission refuses even an inherited warning marker", () => {
+  const warnings: string[] = [];
+  expect(() => admitPortableTestRunner("linux", { NODE_ENV: "test", LLV_PORTABLE_TEST_WARNING_SHOWN: "1" }, warning => warnings.push(warning)))
+    .toThrow("require a reachable user systemd manager");
+  expect(warnings).toEqual([]);
+});
+
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 function fixture(systemd: boolean) {

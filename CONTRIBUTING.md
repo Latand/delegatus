@@ -280,10 +280,12 @@ stay in that service's cgroup. Surviving children fail the command before the
 manager reaps them. macOS uses a separate identity-bound guardian and omits
 the slot lock when flock is absent. Windows test comparison uses the same
 guardian with the existing kernel creation-time identity backend.
-The portable guardian can miss a descendant detached between observations of
-a short-lived parent. The full lifetime guarantee is currently verified on
-Linux; the unresolved admission choice is recorded in
-`docs/verification/test-child-lifetime.md`.
+macOS and Windows permit best-effort execution and print one warning per
+owning run: a detached descendant can escape between guardian polls of a
+short-lived parent. Nested runners inherit the warning marker. The strong
+lifetime guarantee applies to Linux with native containment; Linux refuses
+admission when that containment is unavailable. The platform decision and
+verification limits are recorded in `docs/verification/test-child-lifetime.md`.
 `LLV_GATE_LOCK_DIR=/var/tmp` joins the existing machine gate's lock files.
 Otherwise locks live in a `delegatus-gate` directory under the runtime/temp root.
 An existing `NODE_OPTIONS` is preserved.
