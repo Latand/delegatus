@@ -2023,8 +2023,7 @@ describe("CodexAppServerHost", () => {
     expect(JSON.stringify(items)).toContain("truncated");
     expect(await host.send({ id: "post-shrink", text: "ping" })).toMatchObject({ outcome: "turn-started" });
     await host.release();
-  // The 25 MiB replay is CPU-bound; allow headroom for concurrent pinned-runtime gates.
-  }, 60_000);
+  });
 
   test("inline image history in the replay envelope reaches the ledger only as a bounded reference", async () => {
     const threadId = "image-replay-thread";
