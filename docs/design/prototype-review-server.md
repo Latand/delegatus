@@ -15,6 +15,16 @@ a caller outside a pipeline supplies `taskId` in its own project. Replay uses
 the same publication key and payload, including after the source disappears.
 `read_prototype_review` returns history and the exact saved choice and comment.
 
+Both tools ask the Viewer (`POST /api/prototype-reviews/scope`) which caller
+and which task the call is about before the MCP service reads, claims or joins
+a receipt, with the same fences the publication and the read pass. The receipt
+is keyed by that answer and the `clientRequestId`, so two agents that pick the
+same key each publish on their own task, and a caller of another project gets
+the Viewer's refusal instead of someone else's cached answer. A publication
+whose MCP process stopped before its receipt settled is dispatched again on
+the retry: the Viewer answers with the round it recorded under that caller and
+key, or publishes the one it never wrote.
+
 Metadata is a task extension in the existing SQLite task store. Private copies
 are in `state/prototype-reviews/<review id>/`; no upload occurs. Source reads
 reuse the image viewer's home/worktree and evidence roots (normally `/var/tmp`),
@@ -163,7 +173,9 @@ undecided it keeps the accent mark without the fill (`opened`, remembered in
 dot in the check's place (`unsent`). A newer round after a decision is `ready`
 again. The word "Prototype" is drawn where the foot is at least 480 px wide; a
 narrower foot keeps the mark and the dot. A card that waits only on its review
-adds no reason line and no dismissal to its foot: the choice is what clears it.
+says so once in words: on the button where the foot is wide, and on the foot's
+reason line («Prototype ready») where it is narrow. It has no dismissal: the
+choice is what clears it.
 The phone's task screen carries the same entry as a row (`PhonePrototypeRow`).
 
 **The orchestrator's notice** (`PrototypeNoticeRow`) stands above the seat's

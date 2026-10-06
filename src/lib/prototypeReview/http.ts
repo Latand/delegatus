@@ -15,15 +15,47 @@ import { canonicalProject } from "@/lib/projects/aliases";
 export function prototypeFailure(error: unknown): NextResponse {
   return NextResponse.json({ error: error instanceof PrototypeError ? error.message : "prototype review is unavailable" }, { status: error instanceof PrototypeError ? error.status : 503 });
 }
+/** The task a review read is about: the one named, or the caller's pipeline's own. */
+function readTarget(request: NextRequest,named: unknown,world: PrototypeWorld) {
+  const caller = world.caller(request);
+  const stage = caller.conversationId ? world.stage(caller.conversationId) : null;
+  const taskId = named ?? (stage?.taskIds.length === 1 ? stage.taskIds[0] : null);
+  if (typeof taskId !== "string" || !taskId) throw new PrototypeError("taskId is required outside a pipeline bound to one task");
+  taskForPrototype(taskId,caller);
+  return { caller, taskId };
+}
+/** The task a publication lands on, with every fence a publication passes. */
+function publicationTarget(request: NextRequest,named: string | undefined,world: PrototypeWorld) {
+  const caller = world.caller(request);
+  const stage = caller.conversationId ? world.stage(caller.conversationId) : null;
+  const taskId = stage ? stage.taskIds[0] : named;
+  if (!taskId || (stage && stage.taskIds.length !== 1)) throw new PrototypeError("publication needs exactly one task; a pipeline caller inherits its pipeline's task");
+  if (stage && named && named !== taskId) throw new PrototypeError("pipeline publication is bound to its own task",403);
+  const task = taskForPrototype(taskId,caller,true);
+  if (stage && canonicalProject(stage.project) !== canonicalProject(task.project)) throw new PrototypeError("pipeline and task projects differ",403);
+  return { caller, stage, taskId };
+}
+/** Who is asking and about which task, decided exactly as the publication or
+    the read itself decides it. The MCP service keys a receipt by this answer
+    and asks again before every replay, so a receipt is only ever answered to
+    the caller and the task it was made for. */
+export async function reviewScopePOST(request: NextRequest,world: PrototypeWorld = prototypeWorld): Promise<NextResponse> {
+  const rejected = rejectCrossOrigin(request); if (rejected) return rejected;
+  const anonymous = refuseAnonymous(teamActor(request)); if (anonymous) return anonymous;
+  try {
+    const body = await request.json();
+    if (!body || typeof body !== "object" || (body.mode !== "publish" && body.mode !== "read")) throw new PrototypeError("invalid scope request");
+    if (body.taskId !== undefined && (typeof body.taskId !== "string" || !body.taskId)) throw new PrototypeError("invalid taskId");
+    const target = body.mode === "publish" ? publicationTarget(request,body.taskId,world) : readTarget(request,body.taskId,world);
+    if (!target.caller.conversationId) throw new PrototypeError("caller could not be identified",403);
+    return NextResponse.json({ conversationId: target.caller.conversationId, taskId: target.taskId },{ headers: { "cache-control": "private, no-store" } });
+  } catch (error) { return prototypeFailure(error); }
+}
 export async function reviewReadPOST(request: NextRequest,world: PrototypeWorld = prototypeWorld): Promise<NextResponse> {
   const rejected = rejectCrossOrigin(request); if (rejected) return rejected;
   try {
     const body = await request.json();
-    const caller = world.caller(request);
-    const stage = caller.conversationId ? world.stage(caller.conversationId) : null;
-    const taskId = body?.taskId ?? (stage?.taskIds.length === 1 ? stage.taskIds[0] : null);
-    if (typeof taskId !== "string" || !taskId) throw new PrototypeError("taskId is required outside a pipeline bound to one task");
-    return reviewGET(request,taskId,world);
+    return reviewGET(request,readTarget(request,body?.taskId,world).taskId,world);
   } catch (error) { return prototypeFailure(error); }
 }
 export async function publishPOST(request: NextRequest,world: PrototypeWorld = prototypeWorld): Promise<NextResponse> {
@@ -31,13 +63,7 @@ export async function publishPOST(request: NextRequest,world: PrototypeWorld = p
   const anonymous = refuseAnonymous(teamActor(request)); if (anonymous) return anonymous;
   try {
     const input = parsePrototypeInput(await request.json());
-    const caller = world.caller(request);
-    const stage = caller.conversationId ? world.stage(caller.conversationId) : null;
-    const taskId = stage ? stage.taskIds[0] : input.taskId;
-    if (!taskId || (stage && stage.taskIds.length !== 1)) throw new PrototypeError("publication needs exactly one task; a pipeline caller inherits its pipeline's task");
-    if (stage && input.taskId && input.taskId !== taskId) throw new PrototypeError("pipeline publication is bound to its own task",403);
-    const task = taskForPrototype(taskId,caller,true);
-    if (stage && canonicalProject(stage.project) !== canonicalProject(task.project)) throw new PrototypeError("pipeline and task projects differ",403);
+    const { caller, stage, taskId } = publicationTarget(request,input.taskId,world);
     const round = await publishPrototype(input,taskId,stage?.source ?? { conversationId: caller.conversationId });
     return NextResponse.json({ reviewId: round.id, taskId, title: round.title, variants: round.variants.length,
       frames: round.variants.reduce((n,v) => n + v.frames.length,0), videos: round.variants.reduce((n,v) => n + v.videos.length,0) });

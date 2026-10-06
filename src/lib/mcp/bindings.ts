@@ -6605,6 +6605,18 @@ async function recoverSpawn(
   };
 }
 
+/** The caller and task a prototype call's receipt belongs to, decided by the
+    Viewer with the same fences as the call itself. A caller the Viewer refuses
+    is refused here, before any receipt is read. */
+async function prototypeReceiptScope(mode: "publish" | "read",args: McpToolArgs,control: ViewerControlDependencies,context?: McpToolCallContext): Promise<string> {
+  const capability = callerCapability();
+  if (!capability) throw new Error("prototype reviews require an identified caller");
+  const scope = await viewerControlForCall(control,context).post("/api/prototype-reviews/scope",
+    { mode, ...(args.taskId === undefined ? {} : { taskId: args.taskId }) },{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
+  if (typeof scope.conversationId !== "string" || typeof scope.taskId !== "string") throw new Error("the Viewer did not name the caller and task of this prototype call");
+  return `${scope.conversationId}\n${scope.taskId}`;
+}
+
 /**
  * The recoverable mutations (#1490): both bind the caller before dispatch and
  * answer an existing claim from durable evidence only. Neither `recover` can
@@ -6703,16 +6715,16 @@ export function viewerMcpBindings(
     lifecycle_events: (args, context) => lifecycleEvents(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     request_attention: (args, context) => requestAttention(args, domainDependencies, context),
     suggest_replies: (args) => Promise.resolve(suggestReplies(args, domainDependencies)),
-    publish_prototype_review: (args,context) => {
+    publish_prototype_review: Object.assign((args: McpToolArgs,context?: McpToolCallContext) => {
       const capability = callerCapability();
       if (!capability) throw new Error("prototype publication requires an identified caller");
       return viewerControlForCall(controlDependencies,context).post("/api/prototype-reviews",args,{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
-    },
-    read_prototype_review: (args,context) => {
+    },{ receiptScope: (args: McpToolArgs,context?: McpToolCallContext) => prototypeReceiptScope("publish",args,controlDependencies,context) }),
+    read_prototype_review: Object.assign((args: McpToolArgs,context?: McpToolCallContext) => {
       const capability = callerCapability();
       if (!capability) throw new Error("prototype reads require an identified caller");
       return viewerControlForCall(controlDependencies,context).post("/api/prototype-reviews/read",withoutKeys(args,["clientRequestId"]),{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
-    },
+    },{ receiptScope: (args: McpToolArgs,context?: McpToolCallContext) => prototypeReceiptScope("read",args,controlDependencies,context) }),
     dismiss_attention: (args) => dismissAttentionTool(args, domainDependencies),
     bridge_report: (args, context) => bridgeReport(args, domainDependencies, viewerControlForCall(controlDependencies, context)),
     bridge_directive: (args, context) => bridgeDirective(args, viewerControlForCall(controlDependencies, context), domainDependencies),

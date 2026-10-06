@@ -230,6 +230,12 @@ const INTERRUPTED_RECOVERABLE_TOOLS: ReadonlySet<McpToolName> = new Set<McpToolN
   // replay the completed Telegram receipt without repeating the HTTP send.
   "telegram_bot_send_media",
   "telegram_bot_send_document",
+  /* The Viewer keys a publication by its caller and clientRequestId and checks
+     the payload's digest under its publication lock, so a re-dispatch either
+     publishes the round the stopped process never wrote or answers with the
+     one it did, whose copies no longer need the source files. A changed
+     payload under the same key is refused by the digest check above. */
+  "publish_prototype_review",
   /* Deliberately NOT here: `suggest_replies`. Its write is idempotent over the
      record, but the record is retired by something outside the call — the
      operator's own answer — so re-running an interrupted write would put the
@@ -339,6 +345,12 @@ export interface McpDispatchTracker {
 export type McpToolBinding = ((args: McpToolArgs, context?: McpToolCallContext) => Promise<McpToolPayload>) & {
   /** Caller-dependent checks before receipt reads, claims or in-process joins. Must not mutate state. */
   authorizeReceipt?: (args: McpToolArgs) => void | Promise<void>;
+  /** Who the receipt belongs to, as the Viewer decides it for this call (the
+      caller and the target it is allowed to reach). Asked before every receipt
+      read, claim or in-process join, and part of the receipt's key, so one
+      caller's clientRequestId never answers another's. A refusal burns nothing.
+      Must not mutate state. */
+  receiptScope?: (args: McpToolArgs, context?: McpToolCallContext) => Promise<string>;
 };
 export type McpToolBindings = Record<McpToolName, McpToolBinding>;
 
@@ -836,10 +848,18 @@ function hasExactKeys(value: Record<string, unknown>, expected: string[]): boole
   return keys.length === expected.length && keys.every((key, index) => key === expected[index]);
 }
 
+/** A receipt's key: the tool, the owner its binding's `receiptScope` named
+    (hashed, so the key carries no identity), and the caller's request id. */
+function receiptKey(toolName: McpToolName, requestId: string, scope: string | null): string {
+  return scope === null
+    ? `${toolName}:${requestId}`
+    : `${toolName}@${crypto.createHash("sha256").update(scope).digest("hex").slice(0, 32)}:${requestId}`;
+}
+
 function receiptKeyParts(key: string): { toolName: McpToolName; requestId: string } | null {
   const separator = key.indexOf(":");
   if (separator <= 0) return null;
-  const toolName = key.slice(0, separator);
+  const toolName = key.slice(0, separator).replace(/@[0-9a-f]{32}$/, "");
   const requestId = key.slice(separator + 1);
   if (!(MCP_TOOL_NAMES as readonly string[]).includes(toolName) || !requestId.trim()) return null;
   return { toolName: toolName as McpToolName, requestId };
@@ -2565,6 +2585,13 @@ export function createMcpToolService(
       } catch (error) {
         return finish(failure(typedTool, requestId, "tool_failed", error instanceof Error ? error.message : String(error), false), "failure");
       }
+      let scope: string | null;
+      try {
+        scope = await measure("caller", async () => await bindings[typedTool].receiptScope?.(effectiveArgs, context) ?? null);
+      } catch (error) {
+        // Nothing is claimed yet, so the same key may be tried again as it is.
+        return finish(failure(typedTool, requestId, "tool_failed", error instanceof Error ? error.message : String(error), true), "failure");
+      }
 
       /* #1490: `recoveryOnly` decides only whether an absent claim may start
          work, so it is excluded from the digest — the same logical call with
@@ -2574,7 +2601,7 @@ export function createMcpToolService(
         ? Object.fromEntries(Object.entries(effectiveArgs).filter(([name]) => name !== "recoveryOnly"))
         : effectiveArgs;
       const digest = requestDigest(typedTool, digestArgs);
-      const key = `${typedTool}:${requestId}`;
+      const key = receiptKey(typedTool, requestId, scope);
       /* A recoverable mutation never joins an in-process duplicate: who is
          calling is decided first, and every later call under the key — in
          this process or another — is answered from the durable record. */
