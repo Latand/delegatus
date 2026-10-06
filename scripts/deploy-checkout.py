@@ -184,6 +184,24 @@ def stage_outcome(host, attempts, activity):
     return result
 
 
+def complete_activity(answer):
+    """agent_activity is a capped selection; it has no pagination cursor."""
+    selection = answer.get("selection") or {}
+    if (answer.get("unselectedCount") != 0
+            or not isinstance(selection.get("matched"), int)
+            or selection.get("matched") != selection.get("selected")
+            or selection.get("recoveryPending") != 0
+            or selection.get("recoveryTruncated") is not False
+            or selection.get("cacheStatus") in ["pending", "stale"]
+            or answer.get("catalog") in ["pending", "stale"]
+            or answer.get("evidence") == "pending"
+            or any(answer.get(key, 0) for key in ["unverifiedCount", "undescribedHostCount", "undescribedTargetCount"])
+            or any(selection.get(key, 0) for key in ["projected", "unreadable"])
+            or any(row.get("evidenceSource") != "transcript" for row in answer.get("conversations", []))):
+        raise RuntimeError("protected activity capture incomplete")
+    return answer["conversations"]
+
+
 def detached_command(script, config, state, run_id):
     return ["systemd-run", "--user", "--collect", "--no-block",
             "--unit=delegatus-deploy-" + run_id, "--property=UMask=0077",
@@ -398,25 +416,19 @@ class Checkout:
             if not ready(self.serving(), self.baseline["sha"]):
                 raise RuntimeError("baseline serving health unavailable")
         retry(baseline_ready, self.clock, 30)
-        hosts, cursor = [], None
-        for _ in range(100):
-            args = {"liveOnly": True, "compact": False, "limit": 200}
-            if cursor:
-                args["cursor"] = cursor
-            answer = retry(lambda: self.mcp.call("agent_activity", args), self.clock, 30)
-            for row in answer.get("conversations", []):
-                host, pipeline = row.get("host") or {}, row.get("pipeline")
-                if pipeline and host.get("state") == "alive" and row.get("turnState") == "busy":
-                    entry = {"pid": host["pid"]}
-                    proc = self.process(entry)
-                    hosts.append({**entry, "startIdentity": proc["startIdentity"] if proc else None,
-                                  "conversationId": row["conversationId"], "pipelineId": pipeline["pipelineId"],
-                                  "stageId": pipeline["stageId"], "attempt": pipeline["attempt"]})
-            cursor = answer.get("nextCursor")
-            if not cursor:
-                break
-        else:
-            raise RuntimeError("protected activity capture exceeded page bound")
+        def capture():
+            answer = self.mcp.call("agent_activity", {"liveOnly": True, "compact": False, "limit": 200})
+            return complete_activity(answer)
+        rows = retry(capture, self.clock, 30)
+        hosts = []
+        for row in rows:
+            host, pipeline = row.get("host") or {}, row.get("pipeline")
+            if pipeline and host.get("state") == "alive" and row.get("turnState") == "busy":
+                entry = {"pid": host["pid"]}
+                proc = self.process(entry)
+                hosts.append({**entry, "startIdentity": proc["startIdentity"] if proc else None,
+                              "conversationId": row["conversationId"], "pipelineId": pipeline["pipelineId"],
+                              "stageId": pipeline["stageId"], "attempt": pipeline["attempt"]})
         return [record[role] for role in ["launcher", "web", "runtimeHost"]], hosts
 
     def publish(self):
@@ -440,14 +452,14 @@ class Checkout:
     def stage(self, host):
         answer = self.mcp.call("get_pipeline", {"pipelineId": host["pipelineId"], "full": True})
         pipeline = answer["pipeline"]
-        stage = next((s for s in pipeline["stages"] if s["id"] == host["stageId"]), None)
-        attempts = stage["attempts"] if stage else []
+        run = next((r for r in pipeline["runs"] if r["stageId"] == host["stageId"]), None)
+        attempts = run["attempts"] if run else []
         current = max((a for a in attempts if not a.get("historical")), key=lambda a: a["n"], default={})
         activity = {}
-        if current.get("conversationId"):
+        if current.get("conversationId") and current.get("state") in ["running", "reviewing", "committing"]:
             result = self.mcp.call("agent_activity", {"conversationId": current["conversationId"], "compact": False, "includeGone": True})
-            rows = result.get("conversations", [])
-            if len(rows) == 1:
+            rows = complete_activity(result)
+            if len(rows) == 1 and rows[0].get("conversationId") == current["conversationId"]:
                 activity = rows[0]
                 live = activity.get("host") or {}
                 if live.get("state") == "alive" and self.process({"pid": live.get("pid")}) is None:

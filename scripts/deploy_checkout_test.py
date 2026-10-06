@@ -243,6 +243,10 @@ class CheckoutIntegration(unittest.TestCase):
         self.mcp_failures = 0
         self.http_failures = 0
         self.commands = []
+        self.attempts = [{"n": 1, "state": "running", "conversationId": "synthetic-stage"}]
+        self.inventory_overrides = {}
+        self.inventory_reads = 0
+        self.recovery_overrides = {}
         self.set_record(OLD)
         fixture = self
         class Transport:
@@ -255,10 +259,28 @@ class CheckoutIntegration(unittest.TestCase):
                     fixture.mcp_failures -= 1
                     raise RuntimeError("MCP tool returned error")
                 if tool == "get_pipeline":
-                    return {"ok": True, "pipeline": {"stages": [{"id": "build", "attempts": [{"n": 1, "state": "running", "conversationId": "synthetic-stage"}]}]}}
+                    return {"ok": True, "pipeline": {"stages": [{"id": "build"}], "runs": [
+                        {"stageId": "other", "attempts": [{"n": 99, "state": "passed"}]},
+                        {"stageId": "build", "attempts": fixture.attempts if fixture.old_gone else [
+                            {"n": 1, "state": "running", "conversationId": "synthetic-stage"}]}]}}
+                current = fixture.attempts[-1] if fixture.old_gone else {"n": 1, "conversationId": "synthetic-stage"}
                 row = {"conversationId": "synthetic-stage", "turnState": "busy", "lifecycle": "running",
-                       "host": {"state": "alive", "pid": 204 if fixture.old_gone else 104}, "pipeline": {"pipelineId": "synthetic-lane", "stageId": "build", "attempt": 1}}
-                return {"ok": True, "conversations": [row]}
+                       "evidenceSource": "transcript",
+                       "host": {"state": "alive", "pid": 204 if fixture.old_gone else 104},
+                       "pipeline": {"pipelineId": "synthetic-lane", "stageId": "build", "attempt": current["n"]}}
+                row["conversationId"] = current.get("conversationId", "synthetic-stage")
+                answer = {"ok": True, "conversations": [row], "unselectedCount": 0,
+                          "selection": {"matched": 1, "selected": 1, "recoveryPending": 0,
+                                        "recoveryTruncated": False, "cacheStatus": "fresh", "projected": 0, "unreadable": 0}}
+                if args.get("limit") == 200:
+                    fixture.inventory_reads += 1
+                    overrides = fixture.inventory_overrides
+                    if callable(overrides):
+                        overrides = overrides(fixture.inventory_reads)
+                    answer.update(overrides)
+                elif args.get("conversationId"):
+                    answer.update(fixture.recovery_overrides)
+                return answer
         env = patch.dict(os.environ, {"LLV_STATE_DIR": str(self.state)})
         env.start()
         self.addCleanup(env.stop)
@@ -328,6 +350,115 @@ class CheckoutIntegration(unittest.TestCase):
         self.assertTrue(all(result["serving"][r]["since"] for r in ["launcher", "viewer", "runtimeHost"]))
         self.assertEqual(sum("restart" in c for c in self.commands), 1)
         self.assertTrue(all("stop" not in c and "kill" not in c for c in self.commands))
+
+    def assert_stage_verdict(self, attempts, verdict, outcome, attempt):
+        self.attempts = attempts
+        self.adapter.run_dir = self.state / "deploy-verdicts/synthetic-stage-run"
+        self.adapter.run_dir.mkdir(parents=True, mode=0o700)
+        result = deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
+        self.assertEqual(result["verdict"], verdict)
+        self.assertEqual(result["protected"], [{"pipelineId": "synthetic-lane", "stageId": "build",
+                                              "attempt": attempt, "outcome": outcome}])
+        events = [json.loads(line) for line in (self.adapter.run_dir / "switch.log").read_text().splitlines()
+                  if line.startswith("{")]
+        samples = [event for event in events if "sample" in event]
+        self.assertEqual([event["sample"] for event in samples], [1, 2, 3])
+        self.assertTrue(all(event["protected"] == result["protected"] for event in samples))
+        self.assertEqual(json.loads((self.adapter.run_dir / "verdict.json").read_text())["protected"], result["protected"])
+        self.assertTrue(all(result["serving"][role]["sha"] == TARGET and result["serving"][role]["since"]
+                            for role in ["launcher", "viewer", "runtimeHost"]))
+        self.assertNotIn("KeyError", result["diagnostics"])
+
+    def test_pipeline_runs_reconcile_recovered_attempt(self):
+        self.assert_stage_verdict(self.attempts, "pass", "recovered", 1)
+
+    def test_pipeline_runs_reconcile_fresh_attempt_after_loss(self):
+        self.assert_stage_verdict([
+            {"n": 1, "state": "failed", "error": "stage host was lost while its turn was open"},
+            {"n": 2, "state": "running", "conversationId": "synthetic-replacement"}],
+            "pass", "fresh attempt started", 2)
+
+    def test_pipeline_runs_reconcile_completed_attempt(self):
+        self.assert_stage_verdict([{"n": 1, "state": "passed", "conversationId": "synthetic-stage"}],
+                                  "pass", "completed", 1)
+
+    def test_pipeline_runs_reconcile_lost_attempt(self):
+        self.assert_stage_verdict([{"n": 1, "state": "failed", "conversationId": "synthetic-stage",
+                                   "error": "stage host was lost while its turn was open"}], "fail", "lost", 1)
+
+    def test_pipeline_runs_reconcile_pending_attempt(self):
+        self.assert_stage_verdict([{"n": 1, "state": "spawning", "conversationId": "synthetic-stage"}],
+                                  "needs_decision", "unknown", 1)
+
+    def test_terminal_attempt_verdicts_survive_activity_transport_failure(self):
+        original = self.adapter.mcp.call
+        def read(tool, args):
+            if args.get("conversationId"):
+                raise ConnectionError("targeted activity unavailable")
+            return original(tool, args)
+        self.adapter.mcp.call = read
+        self.old_gone = True
+        host = {"pipelineId": "synthetic-lane", "stageId": "build", "attempt": 1}
+        for state, error, expected in [
+                ("passed", None, "completed"),
+                ("failed", "stage host was lost while its turn was open", "lost")]:
+            with self.subTest(outcome=expected):
+                self.attempts = [{"n": 1, "state": state, "error": error, "conversationId": "synthetic-stage"}]
+                self.assertEqual(self.adapter.stage(host)["outcome"], expected)
+
+    def test_degraded_targeted_activity_cannot_prove_recovery(self):
+        self.recovery_overrides = {"evidence": "pending", "unverifiedCount": 1}
+        self.assert_stage_verdict(self.attempts, "needs_decision", "unknown", 1)
+
+    def test_unrelated_targeted_activity_cannot_prove_recovery(self):
+        self.recovery_overrides = {"conversations": [{"conversationId": "synthetic-other",
+            "evidenceSource": "transcript", "host": {"state": "alive", "pid": 204}, "lifecycle": "running"}]}
+        self.assert_stage_verdict(self.attempts, "needs_decision", "unknown", 1)
+
+    def assert_incomplete_inventory_refused(self, overrides):
+        self.inventory_overrides = overrides
+        with self.assertRaisesRegex(RuntimeError, "protected activity capture incomplete"):
+            deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
+        self.assertGreater(self.inventory_reads, 1)
+        self.assertLessEqual(self.adapter.clock.now(), 30)
+        self.assertEqual(json.loads(self.pointer.read_text()), self.baseline)
+        self.assertFalse(any("restart" in c for c in self.commands))
+
+    def test_capped_protected_inventory_never_authorizes_switch(self):
+        self.assert_incomplete_inventory_refused({"unselectedCount": 1, "selection": {
+            "matched": 201, "selected": 200, "recoveryPending": 0, "recoveryTruncated": False}})
+
+    def test_pending_hosted_recovery_never_authorizes_switch(self):
+        self.assert_incomplete_inventory_refused({"selection": {
+            "matched": 1, "selected": 1, "recoveryPending": 1, "recoveryTruncated": True}})
+
+    def test_degraded_protected_inventory_never_authorizes_switch(self):
+        self.assert_incomplete_inventory_refused({"catalog": "stale", "evidence": "pending", "unverifiedCount": 1})
+
+    def test_each_incomplete_inventory_signal_is_fenced(self):
+        selection = {"matched": 1, "selected": 1, "recoveryPending": 0, "recoveryTruncated": False,
+                     "cacheStatus": "fresh", "projected": 0, "unreadable": 0}
+        signals = [{"unselectedCount": 1}, {"catalog": "pending"}, {"catalog": "stale"},
+                   {"evidence": "pending"}, {"unverifiedCount": 1}, {"undescribedHostCount": 1},
+                   {"undescribedTargetCount": 1}, {"selection": {}}]
+        signals.extend({"conversations": [{"evidenceSource": source}]} for source in ["projection", "unreadable"])
+        signals.extend({"selection": {**selection, key: value}} for key, value in [
+            ("matched", 2), ("recoveryPending", 1), ("recoveryTruncated", True),
+            ("cacheStatus", "pending"), ("cacheStatus", "stale"), ("projected", 1), ("unreadable", 1)])
+        for signal in signals:
+            with self.subTest(signal=signal):
+                self.adapter.clock = FakeClock()
+                self.inventory_reads = 0
+                self.assert_incomplete_inventory_refused(signal)
+
+    def test_transient_incomplete_inventory_retries_to_complete_capture(self):
+        self.inventory_overrides = lambda n: {"selection": {
+            "matched": 1, "selected": 1, "recoveryPending": 1, "recoveryTruncated": True}} if n < 3 else {}
+        result = deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
+        self.assertEqual(result["verdict"], "pass")
+        self.assertEqual(result["protected"][0]["outcome"], "recovered")
+        self.assertEqual(self.inventory_reads, 3)
+        self.assertEqual(sum("restart" in c for c in self.commands), 1)
 
     def test_preflight_failure_never_publishes_or_restarts(self):
         deploy.write_json(self.evidence, {"sha": TARGET, "viewer": "pass", "runtimeHost": "fail"})

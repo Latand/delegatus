@@ -38,6 +38,14 @@ procedure before this one can pass preflight. Credentials stay inside the
 process and its owned MCP child; arbitrary transport exception messages are
 withheld from logs.
 
+Protected-host capture requires a complete, current `agent_activity` selection.
+The endpoint caps selection at 200 and has no pagination cursor. Preflight
+retries incomplete capture for up to 30 seconds, then refuses publication and
+restart if hosts remain omitted, hosted recovery is pending or truncated, the
+catalog is pending or stale, or transcript evidence is unreadable or projected.
+A consistently capped inventory needs a complete enumeration before this
+procedure can run.
+
 Validate without publishing or restarting:
 
 ```sh
@@ -87,6 +95,11 @@ remain diagnostic evidence while later samples continue. Read retries extend
 the observation period beyond the minimum five minutes.
 
 A vanished protected host is reconciled with the stage's current attempt.
+Attempts come from the matching `stageId` entry in `pipeline.runs`; stage
+definitions in `pipeline.stages` carry no attempt history. Recovery requires
+complete targeted activity evidence and a live process. Terminal attempts are
+classified directly from their recorded state and error even when activity
+reads are unavailable.
 The outcome names preserved work, recovery, a fresh attempt that started,
 completed work, confirmed loss, or an unknown outcome. A queued replacement
 alone cannot prove recovery. An unknown outcome requests a decision after the
