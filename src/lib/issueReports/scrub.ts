@@ -87,7 +87,7 @@ const OPERATOR = "(?:operator|user|human|оператор|користувач|�
    wraps in the same clause. A sentence boundary ends it, so a later
    technical span stays readable. Attribution needs no finite verb list. */
 const SPEECH_CONNECTOR = "[^\x60‹›“”«»\"'‘’<>.!?;:]*";
-const QUOTE_OPEN = "(?:[\x60‹“«\"'‘]|<(?:code|pre|q)\\b[^<>]*>)";
+const QUOTE_OPEN = "(?:[\x60‹“«\"‘]|(?<![\\p{L}\\p{N}])'|<(?:code|pre|q)\\b[^<>]*>)";
 const ATTRIBUTED_OPERATOR_WORDS = new RegExp([
   `(?<!\\p{L})(?:${OPERATOR}(?![\\p{L}\\p{N}_])\\s*(?:`,
   `[:—]\\s*\\S`,

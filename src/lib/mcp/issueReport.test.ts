@@ -633,6 +633,21 @@ test.each(["claude-accounts.json", "codex-accounts.json", "copilot-accounts.json
   expect(h.published).toEqual([]);
 });
 
+test.each([
+  "The operator's tool returned E_STREAM.",
+  "The operator’s tool returned E_STREAM.",
+  "The user's tool returned `connection refused during startup`.",
+])("ordinary possessive technical evidence remains publishable: %s", async (body) => {
+  const h = harness({ deny: { accounts: [], people: [], local: [], projects: [] } });
+  for (const encoded of [body, encodeURIComponent(body), [...body].map((char) => `&#${char.codePointAt(0)};`).join("")]) {
+    const report = { title: REPORT.title, body: encoded };
+    const digest = await previewed(h, report);
+    h.operatorSays((await shown(h, digest)).en);
+    expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
+    expect(h.published.at(-1)).toEqual({ ...report, repository: REPOSITORY });
+  }
+});
+
 test("technical numeric evidence and source line references remain publishable", async () => {
   const h = harness({ deny: { accounts: [], people: [], local: [], projects: [] } });
   for (const body of [
