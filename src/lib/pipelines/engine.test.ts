@@ -19471,6 +19471,7 @@ test.each([null, -120_000])("missing or elapsed reset=%s automatic stage retries
   const f = await providerRecoveryHarness("claude", "rate_limit", "You've hit your session limit", resetDelay, true);
   const baseSpawn = f.h.ports.spawnAgent;
   f.h.ports.spawnAgent = async (input, reserved) => ({ ...await baseSpawn(input, reserved), paneId: null });
+  const until = f.now() + 72 * 60 * 60_000;
   for (let minute = 0; minute < 72 * 60; minute++) {
     const a = loadPipelines()[0]!.runs[0]!.attempts.at(-1)!;
     if (a.agentPath && loadPipelines()[0]!.state === "running") f.h.durableTurns.set(a.agentPath, { turn: "terminal", message: null,
@@ -19478,7 +19479,12 @@ test.each([null, -120_000])("missing or elapsed reset=%s automatic stage retries
     f.h.setConversationActive(false);
     await tickPipelines([], { ...f.h.ports });
     f.advance(60_000);
+    const lane = loadPipelines()[0]!;
+    if (lane.state === "needs_decision" && !lane.runs[0]!.attempts.at(-1)!.providerWait?.stageRetry) break;
   }
+  f.advance(until - f.now());
+  await tickPipelines([], { ...f.h.ports });
+  await tickPipelines([], { ...f.h.ports });
   const lane = loadPipelines()[0]!;
   expect(f.h.spawnInputs).toHaveLength(2);
   expect(f.sends.length).toBeLessThanOrEqual(6);
@@ -19523,10 +19529,15 @@ test.each(["deferred", "unresolved"] as const)("parked quota retry bounds its %s
   f.h.ports.stopStageAgent = async () => { stops++; return outcome === "deferred" ? { outcome: "deferred" }
     : { outcome: "unresolved", error: "host ownership unknown", survivors: [] }; };
   f.advance(180_000);
+  const until = f.now() + 24 * 60 * 60_000;
   for (let tick = 0; tick < 2880; tick++) {
     await tickPipelines([], f.h.ports);
     f.advance(30_000);
+    if (!loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait?.stageRetry) break;
   }
+  f.advance(until - f.now());
+  await tickPipelines([], f.h.ports);
+  await tickPipelines([], f.h.ports);
   const attempt = loadPipelines()[0]!.runs[0]!.attempts[0]!;
   expect(stops).toBeLessThanOrEqual(21);
   expect(attempt.providerWait?.stageRetry).toBeUndefined();
