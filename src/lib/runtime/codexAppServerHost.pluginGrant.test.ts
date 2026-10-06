@@ -1,11 +1,14 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from "node:child_process";
-import { expect, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
+import { parseCodexFeatures, setCodexFeatureReaderForTest } from "@/lib/agent/codexSpawnPolicy";
 
 import { CodexAppServerHost } from "./codexAppServerHost";
 import type { RuntimeEvent } from "./engineHost";
 import type { RuntimeEventStore } from "./eventStore";
+const restoreFeatures = setCodexFeatureReaderForTest(() => parseCodexFeatures("multi_agent stable true\nmulti_agent_v2 stable false\nplugins stable true\ncomputer_use stable true"));
+afterAll(restoreFeatures);
 
 /**
  * Per-thread Computer Use grant (issue #687). Codex resolves plugins from the
@@ -118,6 +121,7 @@ test("a granted thread turns the plugin subsystem on for itself and allowlists c
   const config = (server.requests.find((request) => request.method === "thread/start")
     ?.params as { config: { features: Record<string, unknown>; plugins: Record<string, { enabled: boolean }> } }).config;
   expect(config.features).toMatchObject({ plugins: true, apps: false, multi_agent: false });
+  expect(config.features.computer_use).not.toBe(false);
   expect(config.plugins).toEqual({
     "computer-use@openai-bundled": { enabled: true },
     "browser@openai-bundled": { enabled: false },

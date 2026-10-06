@@ -74,21 +74,28 @@ The CLI serves the output of the last build, so build again after you pull.
 `bun dev` runs the app with hot reload, and you start the runtime host for it
 yourself.
 
-**Update** in the rail menu builds and restarts onto a newer commit. Its
-**Automatic updates** switch, off by default, does this by itself: once a
-merged pull request's checks have all finished green, Delegatus builds that
-commit and restarts onto it at a quiet moment, when no agent or pipeline
-stage is running and nobody has used Delegatus for ten minutes. The dialog
-says what it is waiting for. A failed automatic restart goes back to the
-previous release and turns the switch off.
+**Update** in the rail menu builds the selected green revision in a separate
+release directory, then replaces and verifies the launcher, web server and
+runtime host together. If verification fails, the launcher restores the previous
+release. Running sessions reconnect and interrupted work resumes.
 
-If the switch says the launcher needs a one-time setup, the dialog lists the
-two commands to run in the install's folder and asks you to restart Delegatus
-once. After that, launcher changes arrive with each release.
+A recovery web server re-adopts its installation's launcher. If an older
+launcher needs upgrading, the dialog offers **Restart launcher** for the user
+service that runs it, naming that service, or the exact command for its
+terminal. Packaged installs download a published npm release into the user's
+cache, so global installation permissions are not needed. Docker's runtime-host
+profile uses its deployment coordinator.
 
-The Docker install has the same switch. A green merge is deployed the way the
-**Update** button deploys it, with the same health check and rollback, and a
-failed deployment turns the switch off and shows the reason.
+Packaged releases that predate this updater need one launch of
+`bunx delegatus-cli@latest` to load it. The Update dialog installs a published
+version that names the commit it was packed from; for a version published
+without one (every version up to 1.9.0) it names the version and asks for
+`bunx delegatus-cli@latest`.
+
+**Automatic updates**, off by default, waits for green checks and holds new work
+while the current cohort finishes. The dialog shows the work it awaits and asks
+for a decision when the drain overruns. A failed automatic apply rolls back and
+turns the switch off.
 
 ## What it does
 
@@ -742,11 +749,11 @@ To try Delegatus, use `bunx delegatus-cli` from the
 listening port, and `scripts/rebuild.sh` deploys a revision.
 [docs/docker.md](docs/docker.md) is the full runbook.
 
-Docker is the only supported way to run Delegatus as a service; the systemd
-unit is gone. If `delegatus` finds an old unit file in
-`~/.config/systemd/user`, it prints how to stop and remove it, and
-[docs/docker.md](docs/docker.md#moving-off-the-systemd-install) has the same
-steps.
+A checkout launcher may also run under a user systemd service. The Update dialog
+restarts an older launcher through a transient service outside the unit being
+restarted. Obsolete `agent-log-viewer` units still produce the migration notice;
+[docs/docker.md](docs/docker.md#moving-off-the-systemd-install) describes moving
+those installs to Docker.
 
 ## More
 

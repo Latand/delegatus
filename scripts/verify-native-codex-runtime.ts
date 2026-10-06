@@ -15,6 +15,7 @@ const env: NodeJS.ProcessEnv = {
   NATIVE_CODEX_QUEUE_TEST_BINARY: binary,
   LLV_CODEX_HISTORY_CLI: binary,
   LLV_CODEX_BINARY: binary,
+  LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1",
 };
 for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "LLV_STATE_DIR", "TMPDIR"]) {
   env[key] = join(roots, key === "TMPDIR" ? "t" : key.toLowerCase()); mkdirSync(env[key]!);

@@ -1,4 +1,5 @@
-import { afterAll, expect, test } from "bun:test";
+import { parseCodexFeatures, setCodexFeatureReaderForTest } from "@/lib/agent/codexSpawnPolicy";
+import { beforeEach, afterEach, afterAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -12,6 +13,15 @@ import { identityMaterializationFence } from "./identityMaterialization";
 /* The codex resume command now enumerates MCP servers via `codex mcp list --json`
    (PR #610). Stub that binary so the pure P1#6 launch-attach composition below
    stays hermetic and does not depend on a real codex install being present. */
+// Command/control tests use a fake interpreter and its explicit inventory.
+let restoreFeatureReader: () => void;
+beforeEach(() => {
+  restoreFeatureReader = setCodexFeatureReaderForTest(() => parseCodexFeatures(
+    "multi_agent stable true\nmulti_agent_v2 stable true\nfuture_worker experimental true",
+  ));
+});
+afterEach(() => restoreFeatureReader());
+
 const MCP_STUB_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-attach-mcp-"));
 const MCP_STUB = path.join(MCP_STUB_DIR, "codex-mcp-stub");
 fs.writeFileSync(MCP_STUB, `#!/bin/sh\nprintf '[{"name":"viewer"}]'\n`);

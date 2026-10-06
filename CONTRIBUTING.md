@@ -295,6 +295,11 @@ Docker PR builds are limited to image inputs, with a 45-minute timeout and
 cancellation of superseded runs. Main and v* tag image publishing are preserved,
 as are npm publishing and the in-image candidate rehearsal.
 
+`scripts/rebuild.test.ts` exercises the actual host deploy command against a
+port-0 server behind the team gate, including credentials, redirect refusal,
+receipt replay and terminal exit codes. The changed test is selected by the
+pre-push touched-tests gate. Run it by path in isolated home/config/state.
+
 After this workflow switch, a merge already waiting on a removed check name
 may need to be re-armed once. Branch protection needs no change: keep exactly
 `privacy-publication` and `privacy-tracker-audit`, with strict updates enabled.

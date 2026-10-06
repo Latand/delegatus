@@ -1,0 +1,114 @@
+[
+  {
+    "locale": "en",
+    "kind": "root",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "receipt": {
+      "text": "Reopen",
+      "x": 309.984375,
+      "right": 374,
+      "width": 64.015625,
+      "height": 44
+    },
+    "writes": [
+      {
+        "kind": "close",
+        "path": "/state/agent-log-viewer/shared/accounts/claude/spare/projects/atlas/running.jsonl"
+      },
+      {
+        "kind": "restore",
+        "path": "/state/agent-log-viewer/shared/accounts/claude/spare/projects/atlas/running.jsonl",
+        "placement": "manual"
+      }
+    ],
+    "restoredAfterRefresh": true,
+    "pageErrors": []
+  },
+  {
+    "locale": "en",
+    "kind": "manual",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "receipt": {
+      "text": "Reopen",
+      "x": 309.984375,
+      "right": 374,
+      "width": 64.015625,
+      "height": 44
+    },
+    "writes": [
+      {
+        "kind": "close",
+        "path": "/repo/done-0.jsonl"
+      },
+      {
+        "kind": "restore",
+        "path": "/repo/done-0.jsonl",
+        "placement": "manual"
+      }
+    ],
+    "restoredAfterRefresh": true,
+    "pageErrors": []
+  },
+  {
+    "locale": "uk",
+    "kind": "root",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "receipt": {
+      "text": "Відкрити знову",
+      "x": 262.78125,
+      "right": 374,
+      "width": 111.21875,
+      "height": 44
+    },
+    "writes": [
+      {
+        "kind": "close",
+        "path": "/state/agent-log-viewer/shared/accounts/claude/spare/projects/atlas/running.jsonl"
+      },
+      {
+        "kind": "restore",
+        "path": "/state/agent-log-viewer/shared/accounts/claude/spare/projects/atlas/running.jsonl",
+        "placement": "manual"
+      }
+    ],
+    "restoredAfterRefresh": true,
+    "pageErrors": []
+  },
+  {
+    "locale": "uk",
+    "kind": "manual",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "receipt": {
+      "text": "Відкрити знову",
+      "x": 262.78125,
+      "right": 374,
+      "width": 111.21875,
+      "height": 44
+    },
+    "writes": [
+      {
+        "kind": "close",
+        "path": "/repo/done-0.jsonl"
+      },
+      {
+        "kind": "restore",
+        "path": "/repo/done-0.jsonl",
+        "placement": "manual"
+      }
+    ],
+    "restoredAfterRefresh": true,
+    "pageErrors": []
+  }
+]

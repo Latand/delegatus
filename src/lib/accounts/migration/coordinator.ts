@@ -230,6 +230,31 @@ function structuredHostTurnReleased(
     && host.activeTurnRef === null;
 }
 
+/** The other half of the same statement (issue #1810): a live structured host
+    that records an active turn is inside one, whatever the transcript's last
+    record says. Between a host taking a turn and the CLI journaling its prompt
+    the file still ends on the previous turn's terminal record. The evidence
+    bar is the one above: a verified live process, never a bare row, so a host
+    that is gone holds nothing open and the transcript governs again. A host
+    that has exited and waits for its parent's reap is gone in that sense: it
+    keeps its pid and start identity for as long as the reap is outstanding,
+    and it will never end the turn its row still names. */
+function structuredHostTurnActive(
+  registry: AgentRegistry,
+  engine: AgentEngine,
+  generation: { id: string; path: string },
+): boolean {
+  const entry = registry.readOnlySnapshot().entries[sessionKeyId({ engine, sessionId: generation.id })];
+  const host = entry?.structuredHost;
+  if (!host || entry!.artifactPath !== generation.path) return false;
+  if (entry!.status !== "live" && entry!.status !== "idle") return false;
+  return host.activeTurnRef !== null
+    && host.process !== null
+    && host.process.startIdentity !== null
+    && procBackend.processIdentity(host.process.pid) === host.process.startIdentity
+    && !procBackend.processExited(host.process.pid);
+}
+
 /** The generation an in-flight migration is moving off, matching the source
     `advanceConversationMigration` resolves for the provider. */
 function migrationSourceGeneration(conversation: RegistryConversation) {
@@ -407,7 +432,8 @@ async function inventory(files: FileEntry[], registry: AgentRegistry): Promise<C
         ? existing.turn.observedAt
         : observationUnchanged(existing, turn, mtimeMs, deliveredAt)
           ? existing.turn.observedAt
-          : new Date(Math.max(mtimeMs, inventoryStartedAt)).toISOString(),
+          // ISO stamps must still cover the file's fractional millisecond mtime.
+          : new Date(Math.max(Math.ceil(mtimeMs), inventoryStartedAt)).toISOString(),
     });
   });
   return observations;
@@ -662,6 +688,13 @@ function completeProviderTurnObservation(
     return false;
   }
   if (after.size !== before.size || after.mtimeMs !== before.mtimeMs) return false;
+  /* A verified live host inside a turn speaks before any reading of the file
+     (#1810). It has not journaled its prompt yet, so the tail is the turn
+     before, and so is a composer release cached against these same bytes: a
+     dead stalled turn released while no host existed stays cached until the
+     file changes, and the host that has since taken a turn has not changed
+     it. A host whose process is gone fails the check and fences nothing. */
+  if (structuredHostTurnActive(registry, conversation.engine, source)) return false;
   /* An explicit composer release is the operator's own signal and outranks
      the recovery-tail host fence: a live-but-idle host at the composer must
      not hold the reseat hostage. */

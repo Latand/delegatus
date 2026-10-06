@@ -26,10 +26,54 @@ waits; the dialog and the update history show an automatic update as such;
 checkout installs whose HEAD moved past the release pointer are left alone;
 managed installs keep their behaviour unless the same rule applies cleanly.
 
-Everything below is validated against the quote. What it does not demand is in
-"Deferred" at the end.
+The originating requirement above is retained. The current delivery contract
+is the section below. The original design and implementation sketches that
+follow are historical: #2430 delivered bounded drain and #2495 delivered the
+coherent launcher apply described in [self-update-every-install.md](self-update-every-install.md).
+Those sketches preserve the original reasoning and evidence; their 24-hour
+notice, separate manual restarts, and deferred drain policy are superseded.
 
-## Summary of the decisions
+## Current drain and apply contract
+
+- A selected green automatic target starts a durable drain cohort and holds
+  new admission immediately. Work already admitted keeps its custody and can
+  finish. The hold covers new pipeline stages, automatic flow rounds, seat
+  sends and structured delivery; queued work remains durable.
+- The cohort records its target, identity and start time. A newer green tip
+  does not replace an owned target. Restart recovery restores the same cohort
+  and hold from durable records. An unreadable custody record remains held
+  for repair.
+- The Update surface shows the actual blockers: running turns and stages,
+  operator activity, another update or restart, insufficient memory, and
+  unreadable activity. Normal admission still requires the quiet probes,
+  fresh green authorization, and the launcher's final checks.
+- After **six hours** blocked, a Needs-you decision offers **Deploy now** and
+  **Keep waiting**. Replies are operator-only and fenced by the cohort id.
+  Keep waiting preserves the hold and waits for normal quiet admission.
+  Deploy now permits admission despite activity blockers; it still refuses
+  another update/restart, unreadable activity or insufficient memory, and
+  retains every green, authentication and health gate. The bound itself
+  never forces an interruption. Work that starts after the request is filed
+  was never let go and refuses the admission. A refused admission keeps the
+  cohort, the decision and the cumulative wait. It puts the previous release
+  pointer back while the candidate's directory stays, so the next tick
+  publishes the same build again without an install or a build (and without
+  waiting for build memory) and then admits the same cohort again.
+- Once admitted, the transaction owns custody independently of the automatic
+  setting. Turning the switch off stops future admission; accepted work keeps
+  its hold through handoff, crashes and rollback until verified settlement.
+- A capable checkout or package launcher applies one relaunch request, moving
+  the launcher, Viewer and runtime host together. Success requires coherent
+  serving identities and health. Rollback retains custody until the prior
+  release is coherently serving and verified. The legacy two-request path is
+  reserved for launchers without relaunch support; prerequisite actions are
+  described in [the install contract](self-update-every-install.md).
+
+The implementation is in `src/lib/selfUpdate/{service,auto,drain,apply}.ts`,
+with the launcher handoff in `bin/{launcher-relaunch,self-update-supervisor}.mjs`.
+The six-hour bound is `DRAIN_NOTICE_MS` in `drain.ts`.
+
+## Summary of the original decisions (historical, superseded)
 
 - **Green** is read from the pull request that produced the target commit,
   because CI here runs only on pull requests and a commit on `main` carries no
@@ -241,6 +285,78 @@ Two consequences shape the rule:
    (Claude, Codex, Copilot), orchestrator seats, deputies, flows and ad-hoc
    conversations alike. A snapshot that cannot be read is a blocker
    ("cannot read what agents are doing").
+
+   A session row is only a claim, because the host that would close a turn is
+   the one that can die with it. Each claiming row is therefore judged on the
+   record `agent_activity` answers for its conversation
+   (`agentLivenessSnapshot`, read by `turnEvidenceReader` in
+   `src/lib/selfUpdate/instance.ts`), with `livenessRecordIsLive` as the one
+   predicate both surfaces use (#2515):
+
+   - a row whose host is gone never counts, whether its turn was left open or
+     had settled; it is reported in `blockers.discounted`;
+   - a row counts while its host is alive, while a launch is inside its
+     five-minute grace, while its registry row records a process that still
+     answers, while a headless reviewer its flow round records answers under
+     its exact start identity (`headlessReviewerProcess`), and whenever a host in
+     this Viewer holds an active turn for it;
+   - a conversation with no transcript to read is judged on its registry row
+     alone (`conversationRegistryHost`): a row with no live host releases it at
+     once;
+   - a row with neither a record nor a registry row is unresolved. It counts
+     for five minutes from the first probe that saw it
+     (`UNRESOLVED_TURN_GRACE_MS`) and is reported in `blockers.unresolved`
+     for as long as it exists;
+   - evidence that cannot be read counts.
+
+   Both projections take recorded live host ownership before a registry status
+   word that can lag it, including processes that survived structured-host
+   termination. `conversationRegistryHost` derives its process verdict from
+   that same host projection, so readable transcripts and missing transcripts
+   agree about ownership.
+   An admitted structured resume also owns its setup interval through the
+   registry claim's exact live process identity and matching writer epoch.
+   This evidence protects a `registering` journal row while host startup is
+   awaited, even when the resumed registry row still says `dead`. A released,
+   stale, dead or reused claim provides no live ownership.
+   Corpus selection also retains bound headless PIDs whose identity is
+   unproven, using the same `headlessRoundProcess` verdict before filtering
+   the completed inventory. It follows conversation aliases when only a bound
+   id names the transcript, and keeps recovery bounded at 64 paths. A missing
+   PID or a proven dead or reused PID receives no process selection priority.
+
+   A fallback transcript path resolves its canonical owner through the same
+   registry generations, continuity paths and aliases as the liveness read.
+   That owner's recorded process and current Viewer host remain evidence even
+   when the transcript was deleted or the registry's status word lags. Each
+   probe reads the journal before judging stages, so a journal artifact path
+   also supplies a stage's missing binding. Cached readings include both the
+   conversation id and the effective artifact path.
+
+   The rows themselves are corrected at the source: once a minute the
+   delivery controller publishes the registry's verdict over a session row
+   that still claims an open turn for a conversation the registry proves
+   hostless (`settleHostlessSessions` in
+   `src/lib/runtime/structuredDeliveryController.ts`). The sweep runs in the
+   Viewer, which is the only process that publishes projections, and stays out
+   of startup: each ended row costs one keyed session read. A sweep makes at
+   most 64 reads. Rows not read yet go first, and what is left of the batch
+   reads again the rows read longest ago, so a session row that a late write
+   reopens after its first reading is closed on a later sweep. A launch can
+   take the conversation while the sweep waits on its read or on its write,
+   so the sweep reads the registry row again after the session row, and its
+   write names the revision of the session row it read
+   (`expectedSessionRevision`). The journal compares that revision inside the
+   transaction that records the event and refuses a row that moved, so the
+   new owner's `hosted`/`running` row and its active turn stay as written and
+   keep blocking the restart. Settlement uses `append-session-fenced`, an RPC
+   whose handler requires that revision and enforces it in the journal's
+   transaction. During web-first succession, an older runtime host rejects
+   the method and the sweep leaves the row as published. It retries after host
+   succession on the same socket; it never retries through ordinary `append`
+   or caches a capability across host generations.
+   Historical alias ids are read under their canonical owner's hostless proof,
+   so their journal rows settle even when they carry no artifact path.
 3. **No running pipeline stage.** No pipeline in state `running` has a cursor
    in `spawning`, `running`, `reviewing` or `committing`
    (`loadPipelinesForList`). This adds the controller's own work between
@@ -248,7 +364,63 @@ Two consequences shape the rule:
    `pending` does not block: a pending stage has nothing in flight and may
    wait hours for an account. Only pipelines in state `running` count, so the
    stale `running` attempts left on closed pipelines (five on this host) never
-   block.
+   block. A `running` or `reviewing` stage is judged on the same evidence and
+   the same `livenessRecordIsLive` predicate as a turn. It counts while its
+   conversation's host is alive, while a launch is inside its grace, while a
+   process its registry row records still answers, and while the headless
+   reviewer its flow round records answers under the exact start identity
+   saved there, with or without a transcript to read. A recorded pid that still
+   answers with an absent or unreadable start identity keeps the stage and
+   turn counted as `unproven`, including bound rounds. A missing pid adds no
+   process evidence to a bound conversation's verdict. Journal and flow owner
+   ids follow the same registry aliases, even when the journal has no artifact
+   path. A turn no process owns
+   that did not settle (open, or with no readable turn state) releases the
+   stage at once: nothing is left to finish it, and the engine replaces the
+   attempt after the restart. That covers a host that is gone and a transcript
+   that aged out of its launch grace with no host ever recorded. A turn no
+   process owns that did settle leaves the controller a verdict to read, so it
+   holds the stage for five minutes from the first probe that saw it and is
+   counted in `blockers.settled` for as long as it lasts. A registry row that
+   proves the host gone releases the stage when the transcript cannot be read,
+   and a conversation nothing resolves holds it for the same five minutes
+   (`blockers.unresolved`). A `reviewing` stage also asks about the reviewer
+   of its flow's newest round, because the attempt takes that round's binding
+   only on the pipeline's next pass: a live reviewer there, or a launch that
+   has started and names no conversation yet, keeps the stage counted. A
+   stored round may record its headless process before it names a
+   conversation. That process then answers for the round
+   (`headlessRoundProcess`): while it answers under the saved start identity
+   the stage counts for as long as it runs, and once the pid is gone or
+   answers under another start identity the round has no owner, whatever
+   launch marker is left beside it. A pid with no saved identity proves
+   nothing and keeps the stage counted.
+   Process ownership follows the recorded reviewer across `needs_decision`
+   and `paused`, including when the attempt still names the previous round.
+   It also follows the reviewer into `relaying`: the flow can read findings
+   before that process exits. A relay waiting for admission discounts only
+   its next action after checking existing owners. A live or unproven owner
+   keeps the stage counted; a settled dead owner needs no collection grace
+   for an action already held, and an unresolved owner retains the same
+   five-minute diagnostic bound. An undispatched action with no owners
+   leaves the drain quiet.
+   The review attempt remains bound to its reviewer during findings relay and
+   fixing. The stage also reads its implementer through the same liveness
+   evidence, including legacy flows that only name a transcript path and parked
+   fixing continuations. A live implementer keeps the stage protected after
+   the reviewer dies; proven absence releases it, with the existing five-minute
+   bound for settled or unresolved owners. An accepted relay keeps custody
+   before any implementer turn starts, until the flow controller records
+   settlement or clears the attempt through its bounded delivery retry path.
+   The admission fence includes implementer binding and relay settlement so
+   either changing during an awaited probe invalidates that probe.
+
+   The same headless process verdict is projected into `agent_activity` and
+   used when a transcript cannot be read. A bound reviewer's proven death or
+   replaced start identity releases its turn and stage immediately, even with
+   a fresh `starting` registry marker. A current live or unproven replacement
+   process remains protected. An unproven recorded reviewer does not age out
+   through the grace intended for launches with no process evidence.
 4. **No operator activity.** No presence record (`listPresence`) has
    `lastInteractionAt` in the last 10 minutes. Presence covers every signed-in
    member, desktop and phone. A closed page drops out after 120 s.
@@ -286,7 +458,7 @@ admitted before the gate is checked by the final quiet reads. If it began, the
 launcher discards the request and releases the gate; the next quiet window can
 try again. A gate has a five-minute upper bound if the launcher disappears.
 
-### 2.4 Order: web first, then the runtime host
+### 2.4 Original order: web first, then the runtime host (historical)
 
 Each restart waits for its own quiet moment. Web goes first because:
 
@@ -303,41 +475,22 @@ files on disk.
 
 ## 3. The wait and its bound
 
-The bound is a notice. The automatic path takes no action at it:
+The current [drain and apply contract](#current-drain-and-apply-contract)
+holds new admission as soon as a green target owns a cohort. Existing admitted
+work finishes under that cohort's custody. Blockers remain visible while the
+hold is active.
 
-- While a built target waits, the dialog shows since when and each blocker
-  with its count: "2 agent turns running", "1 pipeline stage running", "you
-  were active 3 min ago", "an update or restart is in progress", "less than
-  4 GB of free memory", "cannot read what agents are doing".
-- After **24 hours** without a quiet moment, the dialog adds that the update
-  has waited over a day, that it applies at the next quiet moment, and how to
-  apply it now by hand (restart web, then the runtime host). The seat tick
-  gives the orchestrator seat of the install's own project (the project
-  `projectInfoFromCwd` resolves for the checkout) a signal, so the operator
-  hears about it without opening the dialog: `self-update: <sha> built and
-  waiting 24 h for a quiet moment (2 agent turns, 1 stage)`. The signal goes
-  into `signals()` beside `deploy` and `host-retirement`
-  (`src/lib/monitor/seatTickSources.ts:1204`).
-- The wait continues after the notice. A newer green tip replaces the target
-  and is built (building disturbs nothing), and the waiting clock keeps its
-  original start.
+After six hours blocked, the operator chooses Deploy now or Keep waiting in
+Needs-you. The decision is fenced by the cohort identity and preserves the
+security and health checks described above. Keep waiting retains the hold;
+the bound alone takes no disruptive action. A newer tip cannot silently
+replace the cohort's owned target.
 
-24 hours sits just above the longest observed stretch without ten quiet
-minutes (22.4 h). A notice sooner than that would fire on an ordinary busy
-day.
+The original design used a 24-hour notice, based on an observed 22.4-hour busy
+stretch, and deferred drain. #2430 superseded that policy with immediate drain
+and the six-hour operator decision.
 
-Two alternatives were weighed and left out:
-
-- **Interrupting at the bound.** The specification prefers waiting, and the
-  operator was told the update waits while work runs.
-- **Holding new work at the bound** ("drain"): stop starting new pipeline
-  stages until running turns end, then apply. This never cuts a turn and
-  bounds the wait to the longest running turn. It costs held lanes, needs a
-  hold in the pipeline controller and a visible "held for an update" state on
-  the board, and is a second disturbance of its own. It is in "Deferred",
-  with the numbers that would justify it.
-
-## 4. The automatic run
+## 4. The original automatic run (historical, superseded)
 
 ### 4.1 Where it runs
 
@@ -766,12 +919,11 @@ green, quiet, with their tests), the automatic path (service, auto, history,
 route, deadlines, rollback, prune, signal), and the surface (dialog, copy,
 reload row, evidence).
 
-## Deferred — not currently justified
+## Original deferred list (historical)
 
-- **Holding new work to end a long wait ("drain").** After the bound, stop
-  starting new pipeline stages until running turns end, then install. It
-  becomes justified if the 24-hour notice keeps firing. On this host's week it
-  would have fired on the 22.4 h stretch only.
+- **Drain was delivered by #2430.** Immediate admission hold, durable cohort
+  custody and the six-hour operator choice follow the
+  [current contract](#current-drain-and-apply-contract).
 - **Interrupting at the bound.** The specification prefers waiting.
 - **Managed installs.** They need a "promote when quiet" phase inside the
   runtime host's deployment coordinator, which holds a built, health-checked
@@ -781,8 +933,8 @@ reload row, evidence).
   The next green merge carries the same code.
 - **Authenticated GitHub reads** (private repositories, a higher rate limit),
   and forges other than github.com.
-- **A Needs-you item** for a long wait or a failure. The seat tick signal
-  carries both to the orchestrator for now.
+- **The long-wait Needs-you item was delivered by #2430.** It carries the
+  Deploy now / Keep waiting decision under the current drain contract.
 - **Restoring the pointer after a manual restart falls back**, and **pruning
   on manual-only installs.** Both are the operator's to see today. They could
   share the automatic path's code later.

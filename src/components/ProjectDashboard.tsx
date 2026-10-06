@@ -1885,8 +1885,8 @@ function ProjectDashboardView({
      back on its own; the paths closed from here are held until the board
      settles, so that return also gets a receipt. */
   const swipeClosesRef = useRef(new Map<string, string>());
-  /* Reopen from the board lifts the tombstone where the card stood and leaves
-     the operator on the board. The switchboard's open is the phone's OPEN
+  /* Reopen from a board row or the conversation menu lifts the tombstone
+     where the card stood. The switchboard's open is the phone's OPEN
      gesture — it pushes the conversation screen — so it is not used here; the
      placement it would have chosen is remembered at the close instead. Both
      halves read the latest render at the moment they run, as the undo keys
@@ -2504,7 +2504,8 @@ function ProjectDashboardView({
                      other conversation's pane before replacing it. */
                   focus={mobileLaunchSuccessor?.path ?? mobileConversationKey ?? highlight}
                   onSelect={openSwitchboardFile}
-                  onClose={closeNode}
+                  onClose={(path) => swipeCardRef.current?.close(path)}
+                  onReopen={(path) => swipeCardRef.current?.reopen(path)}
                   onDraftClose={removeDraft}
                   onDraftSpawned={draftSpawned}
                   onConversationOpened={markPathSeen}

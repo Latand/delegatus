@@ -1827,6 +1827,90 @@ describe("older history of a long conversation keeps its rows, its frames and it
       served.stop();
     }
   }, 300_000);
+
+  /*
+   * The own-message step row reads the feed on every scroll frame
+   * (docs/design/own-message-steps.md). Over twenty-five days of an
+   * orchestrator's conversation, all of it on the page (225 messages of the
+   * operator's), one reading takes no selector pass over the feed and a wheel
+   * through the history costs what it costs without the row. The numbers go
+   * to the same directory, as `own-message-steps.json`.
+   */
+  const DAYS = 25;
+  const median = (values: number[]) => [...values].sort((a, b) => a - b)[values.length >> 1] ?? 0;
+
+  browserTest("one reading per frame is a few bisections, and frame times stay inside the pane's own spread", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    let browser: Browser | null = null;
+    try {
+      browser = await chromium.launch(LAUNCH);
+      const run = async (row: boolean) => {
+        const { context, page, pageErrors } = await openFixture(browser!, `${served.base}?case=own-message-steps&days=${DAYS}&row=${row ? 1 : 0}`, { width: 1280, height: 800 }, "dark", "en", "reduce");
+        try {
+          await page.locator("[data-own-message]").first().waitFor();
+          /* Bring the whole history onto the page, as a reader at the top does. */
+          await page.evaluate(async (own) => {
+            const scroller = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+            for (const deadline = performance.now() + 60_000; scroller.querySelectorAll("[data-own-message]").length < own && performance.now() < deadline;) {
+              scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }));
+              if (scroller.scrollTop === 0) scroller.dispatchEvent(new Event("scroll")); else scroller.scrollTop = 0;
+              await new Promise((resolve) => setTimeout(resolve, 60));
+            }
+          }, DAYS * 9);
+          expect(await page.locator("[data-own-message]").count()).toBe(DAYS * 9);
+          const rows = await page.locator("[data-feed-key]").count();
+          const reading = row ? await page.evaluate(() => (window as unknown as { ownSteps: { readCost: (runs: number) => { medianMs: number; meanMs: number; selectorPasses: number } } }).ownSteps.readCost(200)) : null;
+          /* A wheel from the start of the history to its end. */
+          await page.evaluate(() => {
+            const scroller = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+            scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }));
+            scroller.scrollTop = 0;
+          });
+          await page.waitForTimeout(500);
+          await page.locator("[data-log-feed-scroller]").hover();
+          await page.evaluate(() => {
+            const state = { frames: [] as number[] };
+            (window as unknown as { __frames: typeof state }).__frames = state;
+            let last = performance.now();
+            const tick = (now: number) => { state.frames.push(now - last); last = now; requestAnimationFrame(tick); };
+            requestAnimationFrame(tick);
+          });
+          for (let step = 0; step < 300; step += 1) {
+            await page.mouse.wheel(0, 900);
+            await page.waitForTimeout(16);
+          }
+          const frames = await page.evaluate(() => (window as unknown as { __frames: { frames: number[] } }).__frames.frames.slice(1));
+          expect(pageErrors).toEqual([]);
+          return { row, rows, reading, frames: frames.length, medianFrameMs: Math.round(median(frames) * 10) / 10, over50: frames.filter((ms) => ms > 50).length };
+        } finally {
+          await context.close();
+        }
+      };
+      const runs: Awaited<ReturnType<typeof run>>[] = [];
+      for (let pair = 0; pair < 3; pair += 1) { runs.push(await run(true)); runs.push(await run(false)); }
+      fs.writeFileSync(path.join(OUT, "own-message-steps.json"), JSON.stringify(runs, null, 2));
+      const withRow = runs.filter((entry) => entry.row);
+      const without = runs.filter((entry) => !entry.row);
+      for (const entry of withRow) {
+        expect(entry.reading!.selectorPasses).toBe(0);
+        expect(entry.reading!.medianMs).toBeLessThanOrEqual(0.5);
+        expect(entry.reading!.meanMs).toBeLessThanOrEqual(0.5);
+      }
+      /* The pane without the row is the yardstick: its own three runs differ
+         from each other, and the row's runs stay inside that spread. */
+      const spread = (pick: (entry: typeof runs[number]) => number) => {
+        const values = without.map(pick);
+        const high = Math.max(...values);
+        return high + Math.max(high - Math.min(...values), high * 0.1);
+      };
+      expect(median(withRow.map((entry) => entry.medianFrameMs))).toBeLessThanOrEqual(spread((entry) => entry.medianFrameMs));
+      expect(median(withRow.map((entry) => entry.over50 / entry.frames))).toBeLessThanOrEqual(spread((entry) => entry.over50 / entry.frames) + 0.02);
+    } finally {
+      await browser?.close();
+      served.stop();
+    }
+  }, 900_000);
 });
 
 describe("delivery outcome settlement", () => {
@@ -1875,4 +1959,960 @@ describe("delivery outcome settlement", () => {
       fs.writeFileSync("evidence/delivery-outcome/receipts.json", JSON.stringify(evidence, null, 2) + "\n");
     } finally { await browser.close(); served.stop(); }
   }, 120_000);
+});
+
+describe("own-message step row", () => {
+  /*
+   * The row that steps between the operator's own messages
+   * (docs/design/own-message-steps.md): a row of its own between the feed and
+   * the composer. The fixture's `own-message-steps` case mounts the production
+   * pane over an orchestrator's day, with the row (`row=1`) and without it
+   * (`row=0`), and the two are driven side by side: every moment is measured
+   * in both, so whatever the row changed about the pane is on record.
+   *
+   * Per control: a hit-test at its centre and four corners answers with the
+   * control itself, its box intersects no other interactive element and no
+   * part of the feed's viewport, it is inside the window, and on the phone a
+   * button is at least 44 x 44. Per pane: against the pane without the row,
+   * only the feed's height and the place of the rows riding above the step
+   * row may differ, by the row's own height.
+   *
+   * Frames go to `.artifacts/own-message-steps/` (not committed); the
+   * measurements to `evidence/own-message-steps/row.json`.
+   */
+  const OUT = path.resolve(".artifacts/own-message-steps");
+  const EVIDENCE = path.resolve("evidence/own-message-steps");
+  const VIEWPORTS = [
+    { name: "desktop-1440", width: 1440, height: 900, phone: false, pane: 0, surface: "pane" },
+    { name: "desktop-1000", width: 1000, height: 800, phone: false, pane: 0, surface: "pane" },
+    /* A board-node-sized pane: the narrowest the desktop draws. */
+    { name: "desktop-1000-pane-440", width: 1000, height: 800, phone: false, pane: 440, surface: "pane" },
+    /* The orchestrator's conversation in its dock column. */
+    { name: "desktop-1000-orchestrator-440", width: 1000, height: 800, phone: false, pane: 440, surface: "orchestrator" },
+    { name: "phone-390", width: 390, height: 844, phone: true, pane: 0, surface: "pane" },
+  ] as const;
+  const LANGS = ["en", "uk"] as const;
+  /** The on-screen keyboard's height on a 390 x 844 phone. */
+  const KEYBOARD_PX = 336;
+  const LOADED_OWN = 7;
+  const ALL_OWN = 9;
+  /** What the row costs the feed. */
+  const ROW_PX = { desktop: 37, phone: 45 } as const;
+  /** The feed's own way-back row, which the phone's step row takes in. */
+  const JUMP_PX = 44;
+
+  type Box = [x: number, y: number, width: number, height: number];
+  interface ControlReading {
+    name: string;
+    box: Box;
+    /** Centre and four corners all answer with the control itself. */
+    hit: boolean;
+    /** Other interactive elements whose box intersects this one. */
+    overlaps: string[];
+    /** Any part of it lies inside the feed's viewport. */
+    overFeed: boolean;
+    insideWindow: boolean;
+  }
+  interface Reading {
+    controls: ControlReading[];
+    probes: Record<string, Box>;
+    overflowX: number;
+    /** The count as the row prints it; null without the row. */
+    count: string | null;
+    row: Box | null;
+    /** Own messages on the page, and how many of them start at or above the reading line. */
+    own: number;
+    machine: number;
+    /** Where the own message being read sits under the feed's top edge. */
+    landedAt: number | null;
+    atFeedEnd: boolean;
+    /** The agent's answer to that message has started inside the feed's viewport. */
+    replyOnScreen: boolean;
+    jumpStrips: number;
+  }
+  interface Moved { probe: string; delta: Box }
+
+  const measure = (page: import("playwright-core").Page, fromEnd: number) => page.evaluate((fromEnd): Reading => {
+    const box = (element: Element): [number, number, number, number] => {
+      const rect = element.getBoundingClientRect();
+      return [rect.x, rect.y, rect.width, rect.height].map((value) => Math.round(value * 10) / 10) as [number, number, number, number];
+    };
+    const cut = (a: DOMRect, b: DOMRect) => Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left)) * Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+    const shown = (element: Element) => {
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none"
+        && rect.right > 0 && rect.bottom > 0 && rect.left < innerWidth && rect.top < innerHeight;
+    };
+    const name = (element: Element) => {
+      const text = element.getAttribute("aria-label") ?? element.getAttribute("title") ?? element.getAttribute("data-testid")
+        ?? element.getAttribute("placeholder") ?? (element.textContent ?? "").trim().slice(0, 28);
+      return `${element.tagName.toLowerCase()}:${text}`;
+    };
+    const scroller = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+    const feed = scroller.getBoundingClientRect();
+    const controls = Array.from(document.querySelectorAll<HTMLElement>("[data-own-step-control]")).filter(shown);
+    const interactive = Array.from(document.querySelectorAll<HTMLElement>(
+      'button, a[href], textarea, input, select, summary, [role="button"], [role="menuitem"], [role="menuitemradio"], [tabindex]:not([tabindex="-1"])',
+    )).filter(shown);
+    const readings = controls.map((control) => {
+      const rect = control.getBoundingClientRect();
+      /* A rounded corner is not part of the control, so the corner points sit
+         just inside the rounding. */
+      const inset = Math.ceil((parseFloat(getComputedStyle(control).borderTopLeftRadius) || 0) * 0.3) + 1;
+      const points = [
+        [rect.left + rect.width / 2, rect.top + rect.height / 2],
+        [rect.left + inset, rect.top + inset], [rect.right - inset, rect.top + inset],
+        [rect.left + inset, rect.bottom - inset], [rect.right - inset, rect.bottom - inset],
+      ] as const;
+      return {
+        name: control.dataset.ownStepControl!,
+        box: box(control),
+        hit: points.every(([x, y]) => { const at = document.elementFromPoint(x, y); return at !== null && control.contains(at); }),
+        /* A row scrolled out of the feed is clipped by it, so what counts
+           of a control inside the feed is the part the feed shows. */
+        overlaps: interactive
+          .filter((other) => other !== control && !other.contains(control) && !control.contains(other))
+          .filter((other) => {
+            const at = other.getBoundingClientRect();
+            if (!scroller.contains(other)) return cut(rect, at) > 1;
+            const top = Math.max(at.top, feed.top);
+            const bottom = Math.min(at.bottom, feed.bottom);
+            return bottom > top && cut(rect, new DOMRect(at.left, top, at.width, bottom - top)) > 1;
+          })
+          .map(name),
+        overFeed: cut(rect, feed) > 1,
+        insideWindow: rect.left >= 0 && rect.top >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight,
+      };
+    });
+
+    /* The rest of the pane, by name: its structure, then every interactive
+       element outside the feed (rows inside it move with the scroll) and
+       outside the step row. */
+    const probes: Record<string, [number, number, number, number]> = {};
+    const put = (key: string, element: Element | null | undefined) => { if (element && shown(element)) probes[key] = box(element); };
+    const header = document.querySelector("[data-mobile2-bar]") ?? document.querySelector("[data-link-path] > header");
+    put("header", header);
+    put("title", document.querySelector("[data-mobile2-title]") ?? header?.querySelector(".truncate"));
+    put("feed", scroller);
+    put("jump-strip", document.querySelector("[data-feed-jump-strip]"));
+    put("jump-pill", document.querySelector("[data-feed-jump-pill]"));
+    const last = scroller.parentElement?.parentElement?.lastElementChild;
+    put("turn-status", last === scroller.parentElement || last?.matches("[data-feed-jump-strip]") ? null : last);
+    put("composer", document.querySelector('[data-testid="composer-input-unit"]'));
+    put("field", document.querySelector("textarea"));
+    const seen = new Map<string, number>();
+    for (const element of interactive) {
+      if (scroller.contains(element) || element.closest("[data-own-steps]") || element.tagName === "TEXTAREA") continue;
+      const group = element.closest("[data-mobile2-tools]") ? "tools" : element.closest('[data-testid="composer-input-unit"]') ? "composer"
+        : element.closest("[data-mobile2-bar], [data-link-path] > header") ? "header" : element.closest('[role="dialog"]') ? "sheet" : "control";
+      const key = `${group}:${name(element)}`;
+      const count = (seen.get(key) ?? 0) + 1;
+      seen.set(key, count);
+      probes[count > 1 ? `${key} #${count}` : key] = box(element);
+    }
+
+    const rows = Array.from(scroller.querySelectorAll<HTMLElement>("[data-own-message]"));
+    const current = rows[rows.length - 1 - fromEnd];
+    let reply: Element | null = current?.nextElementSibling ?? null;
+    while (reply && reply.getAttribute("data-feed-kind") !== "prose") reply = reply.nextElementSibling;
+    const replyTop = reply?.getBoundingClientRect().top ?? Infinity;
+    const row = document.querySelector("[data-own-steps]");
+    return {
+      controls: readings,
+      probes,
+      overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+      count: document.querySelector('[data-own-step-control="count"]')?.textContent ?? null,
+      row: row ? box(row) : null,
+      own: rows.length,
+      machine: scroller.querySelectorAll('[data-feed-kind="tmsg"]').length,
+      landedAt: current ? Math.round(current.getBoundingClientRect().top - feed.top) : null,
+      atFeedEnd: scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= 1,
+      replyOnScreen: replyTop >= feed.top && replyTop < feed.bottom,
+      jumpStrips: document.querySelectorAll("[data-feed-jump-strip]").length,
+    };
+  }, fromEnd);
+
+  /* The pane without the row has no step of its own, so it is put where the
+     pane with the row went: the same own message on the reading line, as a
+     reader's scroll, with older history brought the same way. */
+  const follow = (page: import("playwright-core").Page, fromEnd: number, own: number, phone: boolean) => page.evaluate(async ({ fromEnd, own, phone }) => {
+    const scroller = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+    const frame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    const asReader = (to: number) => {
+      scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: to > scroller.scrollTop ? 1 : -1, bubbles: true }));
+      if (scroller.scrollTop === to) scroller.dispatchEvent(new Event("scroll"));
+      else scroller.scrollTop = to;
+    };
+    const rows = () => Array.from(scroller.querySelectorAll<HTMLElement>("[data-own-message]"));
+    for (const deadline = performance.now() + 6_000; rows().length < own && performance.now() < deadline;) {
+      asReader(0);
+      await new Promise((resolve) => setTimeout(resolve, 80));
+    }
+    const row = rows()[rows().length - 1 - fromEnd];
+    if (!row) return;
+    for (const until = performance.now() + 600; performance.now() < until;) {
+      const top = row.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+      const wanted = Math.max(0, Math.min(scroller.scrollHeight - scroller.clientHeight, phone ? Math.floor(top) : Math.round(top - 8)));
+      if (Math.abs(wanted - scroller.scrollTop) >= 1) asReader(wanted);
+      await frame();
+    }
+  }, { fromEnd, own, phone });
+
+  const moved = (baseline: Reading, reading: Reading): Moved[] => {
+    const out: Moved[] = [];
+    for (const probe of new Set([...Object.keys(baseline.probes), ...Object.keys(reading.probes)])) {
+      const was = baseline.probes[probe];
+      const now = reading.probes[probe];
+      if (!was || !now) { out.push({ probe: `${probe} ${was ? "gone" : "new"}`, delta: [0, 0, 0, 0] }); continue; }
+      const delta = now.map((value, index) => Math.round((value - was[index]!) * 10) / 10) as Box;
+      if (delta.some((value) => Math.abs(value) > 0.5)) out.push({ probe, delta });
+    }
+    return out;
+  };
+  /* The record is one file and each case owns its sections of it, so a case
+     run alone leaves the other's readings as they were. */
+  const writeEvidence = (sections: Record<string, Record<string, unknown>>) => {
+    const file = path.join(EVIDENCE, "row.json");
+    const kept = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, Record<string, unknown>> : {};
+    const all = { ...kept, ...sections };
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    fs.writeFileSync(file, `{\n${Object.entries(all).map(([section, moments]) => `  ${JSON.stringify(section)}: {\n${
+      Object.entries(moments).map(([moment, reading]) => `    ${JSON.stringify(moment)}: ${JSON.stringify(reading)}`).join(",\n")
+    }\n  }`).join(",\n")}\n}\n`);
+  };
+  const position = (reading: Reading) => Number(reading.count?.split(" / ")[0] ?? NaN);
+  const total = (reading: Reading) => Number.parseInt(reading.count?.split(" / ")[1] ?? "", 10);
+
+  browserTest("the row covers nothing and costs the feed its own height, at every width, in both languages", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    const server = await chromium.launchServer(LAUNCH);
+    const browserPid = server.process().pid!;
+    const browser = await chromium.connect(server.wsEndpoint());
+    const failures: string[] = [];
+    const evidence: Record<string, Record<string, unknown>> = {};
+    const totals: Record<string, { readings: number; hitTestPasses: number; intersections: number; overFeed: number; outsideWindow: number; underSize: number; undeclaredChanges: number }> = {};
+    try {
+      for (const viewport of VIEWPORTS) for (const lang of LANGS) {
+        const where = `${viewport.name}-${lang}`;
+        const query = `case=own-message-steps&lang=${lang}${viewport.pane ? `&pane=${viewport.pane}` : ""}&surface=${viewport.surface}`;
+        const size = { width: viewport.width, height: viewport.height };
+        const withRow = await openFixture(browser, `${served.base}?${query}&row=1`, size, "dark", lang, "reduce", viewport.phone);
+        const without = await openFixture(browser, `${served.base}?${query}&row=0`, size, "dark", lang, "reduce", viewport.phone);
+        const page = withRow.page;
+        const base = without.page;
+        const sum = totals[viewport.name] ??= { readings: 0, hitTestPasses: 0, intersections: 0, overFeed: 0, outsideWindow: 0, underSize: 0, undeclaredChanges: 0 };
+        const fail = (moment: string, what: string) => failures.push(`${where} ${moment}: ${what}`);
+        const settled = () => page.waitForTimeout(650);
+        const cost = viewport.phone ? ROW_PX.phone : ROW_PX.desktop;
+        const press = async (direction: -1 | 1) => {
+          await page.locator(`[data-own-step-control="${direction < 0 ? "previous" : "next"}"]`).click();
+          await settled();
+        };
+        const record = async (moment: string, fromEnd: number, shot: boolean): Promise<Reading> => {
+          const reading = await measure(page, fromEnd);
+          const baseline = await measure(base, fromEnd);
+          /* The pane without the row shows its way-back row exactly while the
+             reader is away from the tail. */
+          const away = baseline.jumpStrips > 0;
+          /* What the row says it changes. The feed gives up the row's height;
+             on the phone, away from the tail, the feed's own way-back row is
+             a cell of the step row, so the feed gives up the difference. */
+          const feedCost = viewport.phone && away ? cost - JUMP_PX : cost;
+          const changes = moved(baseline, reading);
+          const undeclared = changes.filter(({ probe, delta }) => {
+            if (probe === "feed") return !(delta[0] === 0 && delta[1] === 0 && delta[2] === 0 && Math.abs(delta[3] + feedCost) <= 0.5);
+            if (viewport.phone) return !/^(jump-strip gone|jump-pill|control:button:.* gone)$/.test(probe);
+            return !(/^(jump-strip|jump-pill|turn-status|control:.*)$/.test(probe) && delta[0] === 0 && delta[2] === 0 && delta[3] === 0 && Math.abs(delta[1] + cost) <= 0.5);
+          });
+          for (const change of undeclared) fail(moment, `undeclared change to "${change.probe}" by ${JSON.stringify(change.delta)}`);
+          if (!changes.some((change) => change.probe === "feed")) fail(moment, "the feed did not give up the row's height");
+          if (!reading.row || Math.abs(reading.row[3] - cost) > 0.5) fail(moment, `the row is ${reading.row?.[3]} px tall, expected ${cost}`);
+          if (baseline.row) fail(moment, "the pane without the row drew one");
+          const buttons = reading.controls.filter((control) => control.name !== "count");
+          if (buttons.length < 2 || !reading.controls.some((control) => control.name === "count")) fail(moment, "the row is missing a control");
+          for (const control of reading.controls) {
+            sum.readings += 1;
+            if (control.hit) sum.hitTestPasses += 1; else fail(moment, `${control.name} is not what a pointer meets at its centre and corners`);
+            if (control.overlaps.length) { sum.intersections += control.overlaps.length; fail(moment, `${control.name} intersects ${control.overlaps.join(", ")}`); }
+            if (control.overFeed) { sum.overFeed += 1; fail(moment, `${control.name} lies over the feed`); }
+            if (!control.insideWindow) { sum.outsideWindow += 1; fail(moment, `${control.name} leaves the window`); }
+            if (viewport.phone && control.name !== "count" && (control.box[2] < 44 || control.box[3] < 44)) { sum.underSize += 1; fail(moment, `${control.name} is ${control.box[2]} x ${control.box[3]}, under 44 px`); }
+          }
+          sum.undeclaredChanges += undeclared.length;
+          if (reading.overflowX) fail(moment, `the page scrolls sideways by ${reading.overflowX}`);
+          if (viewport.phone && away && reading.jumpStrips) fail(moment, "the phone spends a second row on the way back");
+          if (viewport.phone && away && !reading.controls.some((control) => control.name === "latest")) fail(moment, "the way back is not in the step row");
+          if (!viewport.phone && away && reading.jumpStrips !== 1) fail(moment, "the desktop lost its way-back row");
+          (evidence[where] ??= {})[moment] = { count: reading.count, row: reading.row, controls: reading.controls, changedAgainstNoRow: changes };
+          if (shot) {
+            await page.screenshot({ path: path.join(OUT, `${where}-${moment}.png`) });
+            await base.screenshot({ path: path.join(OUT, `${where}-${moment}-no-row.png`) });
+          }
+          return reading;
+        };
+        try {
+          for (const each of [page, base]) {
+            await each.locator("[data-own-message]").first().waitFor();
+            await each.waitForTimeout(650);
+          }
+
+          /* At rest: the tail, nothing typed. Only what the operator typed is
+             counted; wakes, notices and pipeline messages are relay cards. */
+          const rest = await record("rest", 0, true);
+          expect(rest.own).toBe(LOADED_OWN);
+          expect(rest.machine).toBeGreaterThanOrEqual(20);
+          expect(rest.count).toBe(`${LOADED_OWN} / ${LOADED_OWN}+`);
+          expect(await page.locator('[data-own-step-control="next"]').isDisabled()).toBe(true);
+
+          /* Three steps back: the message stepped to is at the top of the feed
+             and its answer is under it. */
+          await press(-1); await press(-1); await press(-1);
+          let now = await measure(page, 0);
+          let fromEnd = total(now) - position(now);
+          await follow(base, fromEnd, now.own, viewport.phone);
+          const stepped = await record("stepped", fromEnd, true);
+          /* From the tail the first step goes to the message the reply on
+             screen answers, which is the last one unless it is still in view. */
+          expect([LOADED_OWN - 3, LOADED_OWN - 2]).toContain(position(stepped));
+          expect(stepped.count).toBe(`${position(stepped)} / ${LOADED_OWN}+`);
+          const lands = viewport.phone ? 0 : 8;
+          if (stepped.landedAt === null || Math.abs(stepped.landedAt - lands) > 2) fail("stepped", `the message landed ${stepped.landedAt}px under the feed's top`);
+          if (!stepped.replyOnScreen) fail("stepped", "the reply to the message is not on screen");
+          /* The phone's feed moves itself to a row boundary after a reader's
+             scroll (#1978); a landing it accepts is still there later. */
+          await page.waitForTimeout(900);
+          const rested = await measure(page, fromEnd);
+          if (rested.landedAt !== stepped.landedAt) fail("stepped", `the feed moved the landed message from ${stepped.landedAt}px to ${rested.landedAt}px`);
+
+          /* A draft of several lines; on the phone, the keyboard up as well. */
+          for (const each of [page, base]) await each.locator("textarea").first().fill("one\ntwo\nthree\nfour\nfive\nsix");
+          await page.waitForTimeout(300);
+          await record("six-line-draft", fromEnd, true);
+          if (viewport.phone) {
+            for (const each of [page, base]) await each.evaluate((px) => (window as unknown as { ownSteps: { keyboard: (px: number) => void } }).ownSteps.keyboard(px), KEYBOARD_PX);
+            await page.waitForTimeout(300);
+            await record("keyboard", fromEnd, true);
+            for (const each of [page, base]) await each.evaluate(() => (window as unknown as { ownSteps: { keyboard: (px: number) => void } }).ownSteps.keyboard(0));
+          }
+          for (const each of [page, base]) {
+            await each.locator("textarea").first().fill("");
+            await each.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+          }
+          await page.waitForTimeout(300);
+
+          /* A step forward comes back to where the count says, and the keys
+             do what the buttons do, from inside the composer too. */
+          await press(1);
+          now = await measure(page, 0);
+          if (position(now) !== position(stepped) + 1) fail("forward", `position ${position(now)} after ${position(stepped)}`);
+          const draft = "one\ntwo\nthree\nfour\nfive\nsix";
+          await page.locator("textarea").first().fill(draft);
+          await page.locator("textarea").first().evaluate((field) => { (field as HTMLTextAreaElement).setSelectionRange(5, 5); });
+          await page.locator("textarea").first().focus();
+          await page.keyboard.press("Alt+ArrowUp");
+          await settled();
+          now = await measure(page, 0);
+          if (position(now) !== position(stepped)) fail("keys", `Alt+ArrowUp left the position at ${position(now)}`);
+          await page.keyboard.press("Alt+ArrowDown");
+          await settled();
+          now = await measure(page, 0);
+          if (position(now) !== position(stepped) + 1) fail("keys", `Alt+ArrowDown left the position at ${position(now)}`);
+          expect(await page.locator("textarea").first().inputValue()).toBe(draft);
+          expect(await page.locator("textarea").first().evaluate((field) => {
+            const input = field as HTMLTextAreaElement;
+            return [input.selectionStart, input.selectionEnd, document.activeElement === input];
+          })).toEqual([5, 5, true]);
+          await page.locator("textarea").first().fill("");
+          await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+
+          /* All the way back. A step back from the oldest loaded message asks
+             the feed for the page before it and finishes there, so the walk
+             ends on the conversation's first own message with the count no
+             longer open-ended and nothing left to step back to. */
+          for (let presses = 0; presses < ALL_OWN + 2; presses += 1) {
+            if (await page.locator('[data-own-step-control="previous"]').isDisabled()) break;
+            await press(-1);
+          }
+          now = await measure(page, 0);
+          fromEnd = total(now) - position(now);
+          await follow(base, fromEnd, ALL_OWN, viewport.phone);
+          const oldest = await record("oldest", fromEnd, true);
+          expect(oldest.count).toBe(`1 / ${ALL_OWN}`);
+          expect(oldest.own).toBe(ALL_OWN);
+          if (!oldest.replyOnScreen) fail("oldest", "the reply to the message is not on screen");
+          if (oldest.landedAt === null || Math.abs(oldest.landedAt - lands) > 2) fail("oldest", `the message landed ${oldest.landedAt}px under the feed's top`);
+          expect(await page.locator('[data-own-step-control="previous"]').isDisabled()).toBe(true);
+
+          /* The way back, from the step row on the phone and from the feed's
+             own row on the desktop, returns to the tail. */
+          await page.locator('button:has([data-feed-jump-pill])').click();
+          await settled();
+          const tail = await measure(page, 0);
+          if (await page.locator("[data-feed-jump-pill]").count()) fail("tail", "the way back did not reach the tail");
+          expect(tail.count).toBe(`${ALL_OWN} / ${ALL_OWN}`);
+          expect([...withRow.pageErrors, ...without.pageErrors]).toEqual([]);
+        } finally {
+          await withRow.context.close();
+          await without.context.close();
+        }
+      }
+
+      /* Fewer than two own messages: nothing to step between, so no row. */
+      for (const own of [1, 2] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?case=own-message-steps&own=${own}`, { width: 1440, height: 900 }, "dark", "en", "reduce");
+        try {
+          await page.locator("[data-own-message]").first().waitFor();
+          await page.waitForTimeout(650);
+          expect(await page.locator("[data-own-message]").count()).toBe(own);
+          expect(await page.locator("[data-own-steps]").count()).toBe(own === 2 ? 1 : 0);
+          (evidence["own-messages"] ??= {})[String(own)] = { row: own === 2 };
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+      }
+
+      writeEvidence({ totals, ...evidence });
+      expect(failures).toEqual([]);
+    } finally {
+      await browser.close(); await server.close(); served.stop();
+      let alive = false;
+      try { process.kill(browserPid, 0); alive = true; } catch { /* Recorded browser exited. */ }
+      expect(alive).toBe(false);
+    }
+  }, 1_800_000);
+
+  type Page = import("playwright-core").Page;
+  type Controls = { arrive: (kind: "work" | "replies" | "turn" | "voice", count: number) => void };
+  const arrive = (page: Page, kind: "work" | "replies" | "turn" | "voice", count: number) =>
+    page.evaluate(({ kind, count }) => (window as unknown as { ownSteps: Controls }).ownSteps.arrive(kind, count), { kind, count });
+  const countOf = (page: Page) => page.locator('[data-own-step-control="count"]').textContent({ timeout: 1_000 }).catch(() => null);
+  /** Where the feed is: how far from its end, whether it shows its way back,
+      and where the own message being read starts under its top edge. */
+  const place = (page: Page) => page.evaluate(() => {
+    const scroller = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+    const feed = scroller.getBoundingClientRect();
+    const count = document.querySelector('[data-own-step-control="count"]')?.textContent ?? null;
+    const own = Array.from(scroller.querySelectorAll<HTMLElement>("[data-own-message]"));
+    const nearest = own.map((row) => Math.round(row.getBoundingClientRect().top - feed.top)).sort((a, b) => Math.abs(a) - Math.abs(b))[0] ?? null;
+    return {
+      count,
+      row: document.querySelectorAll("[data-own-steps]").length,
+      toEnd: Math.round(scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop),
+      wayBack: document.querySelectorAll("[data-feed-jump-pill]").length,
+      nextDisabled: document.querySelector<HTMLButtonElement>('[data-own-step-control="next"]')?.disabled ?? null,
+      nearestOwnTop: nearest,
+    };
+  });
+
+  browserTest("empty steps return an untouched tail and its last visible own message", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    const server = await chromium.launchServer(LAUNCH);
+    const browserPid = server.process().pid!;
+    const browser = await chromium.connect(server.wsEndpoint());
+    const evidence: Record<string, Record<string, unknown>> = {};
+    try {
+      for (const size of [
+        { name: "desktop-1440", width: 1440, height: 900, phone: false },
+        { name: "phone-390", width: 390, height: 844, phone: true },
+      ]) for (const lang of LANGS) for (const turns of [1, 2]) {
+        const { context, page, pageErrors } = await openFixture(browser,
+          `${served.base}?case=own-message-steps&lang=${lang}&own=0&trailing=150&tailOnly=1&row=1`, size, "dark", lang, "reduce", size.phone);
+        try {
+          await page.locator("[data-log-feed-scroller]").waitFor();
+          for (let turn = 0; turn < turns; turn += 1) await arrive(page, "turn", 1);
+          await page.locator('[data-own-step-control="previous"]').waitFor();
+          await page.waitForTimeout(650);
+          const before = await place(page);
+          expect(before.count).toBe(`${turns} / ${turns}+`);
+          const previous = page.locator('[data-own-step-control="previous"]');
+          if (size.phone) await previous.tap(); else await previous.click();
+          await page.waitForTimeout(650);
+          const after = await place(page);
+          expect(after.wayBack).toBe(0);
+          expect(after.toEnd).toBe(0);
+          expect(after.count).toBe(turns === 1 ? null : "2 / 2");
+          if (turns === 2) {
+            expect(await previous.isDisabled()).toBe(true);
+            expect(after.nextDisabled).toBe(true);
+            if (!size.phone) expect(await page.evaluate(() => document.activeElement?.hasAttribute("data-own-steps"))).toBe(true);
+          }
+          await arrive(page, "replies", 6);
+          await page.waitForTimeout(650);
+          const replies = await place(page);
+          expect(replies.toEnd).toBe(0);
+          expect(replies.wayBack).toBe(0);
+          evidence[`empty-step-${size.name}-${lang}-${turns}`] = { before, after, replies };
+          await page.screenshot({ path: path.join(OUT, `empty-step-${size.name}-${lang}-${turns}.png`) });
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      /* A slow page need not produce another revision before the deadline.
+         On the phone also exercise the long reply interval under CPU 4x. */
+      for (const size of [
+        { name: "desktop-1440", width: 1440, height: 900, phone: false },
+        { name: "phone-390", width: 390, height: 844, phone: true },
+      ]) {
+        const { context, page, pageErrors } = await openFixture(browser,
+          `${served.base}?case=own-message-steps&own=0&trailing=${size.phone ? 4000 : 150}&tailOnly=1&older=30000`, size, "dark", "en", "reduce", size.phone);
+        try {
+          if (size.phone) await (await context.newCDPSession(page)).send("Emulation.setCPUThrottlingRate", { rate: 4 });
+          await page.locator('[data-own-step-control="previous"]').waitFor();
+          await page.waitForTimeout(650);
+          const previous = page.locator('[data-own-step-control="previous"]');
+          if (size.phone) await previous.tap(); else await previous.click();
+          await page.waitForTimeout(100);
+          /* Shortcuts from a control inside the scroller must retain the
+             original tail ownership through a repeat and a disabled direction. */
+          await page.locator("[data-log-feed-scroller] button").last().focus();
+          expect(await page.evaluate(() => document.querySelector("[data-log-feed-scroller]")!.contains(document.activeElement))).toBe(true);
+          await page.keyboard.press("Alt+ArrowUp");
+          await page.keyboard.press("Alt+ArrowDown");
+          const waitStarted = await page.evaluate(() => performance.now());
+          await page.waitForTimeout(18_000);
+          /* CPU throttling can leave a commit in flight when the timer is
+             due. Read the settled result; it must arrive within the review's
+             forty-second observation window even through that long frame. */
+          await page.waitForFunction(() => !document.querySelector("[data-feed-jump-pill]"), undefined, { timeout: 20_000 });
+          await page.waitForTimeout(650);
+          const expired = await place(page);
+          const restoredAfterMs = Math.round(await page.evaluate(() => performance.now()) - waitStarted);
+          expect(restoredAfterMs).toBeLessThanOrEqual(40_000);
+          evidence[`empty-step-deadline-${size.name}`] = { expired, restoredAfterMs };
+          writeEvidence(evidence);
+          await page.screenshot({ path: path.join(OUT, `empty-step-deadline-${size.name}.png`) });
+          expect({ scenario: size.name, ...expired }).toMatchObject({ wayBack: 0, toEnd: 0 });
+          await arrive(page, "replies", 6);
+          await page.waitForTimeout(1000);
+          const replies = await place(page);
+          expect(replies.wayBack).toBe(0);
+          expect(replies.toEnd).toBe(0);
+          evidence[`empty-step-deadline-${size.name}`] = { expired, restoredAfterMs, replies };
+          if (size.phone) {
+            await page.waitForTimeout(13_000);
+            const latePage = await place(page);
+            expect(latePage.wayBack).toBe(0);
+            expect(latePage.toEnd).toBe(0);
+            evidence[`empty-step-deadline-${size.name}`] = { expired, restoredAfterMs, replies, latePage };
+          }
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      writeEvidence(evidence);
+    } finally {
+      await browser.close(); await server.close(); served.stop();
+      let alive = false;
+      try { process.kill(browserPid, 0); alive = true; } catch { /* Recorded browser exited. */ }
+      expect(alive).toBe(false);
+    }
+  }, 120_000);
+
+  browserTest("the row holds through a long turn, a way back mid-step, the phone's resting tail and arriving rows", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    const server = await chromium.launchServer(LAUNCH);
+    const browserPid = server.process().pid!;
+    const browser = await chromium.connect(server.wsEndpoint());
+    const failures: string[] = [];
+    const evidence: Record<string, Record<string, unknown>> = {};
+    const SIZES = [
+      { name: "desktop-1440", width: 1440, height: 900, phone: false },
+      { name: "phone-390", width: 390, height: 844, phone: true },
+    ] as const;
+    try {
+      const open = (query: string, size: { width: number; height: number }, lang: "en" | "uk", phone: boolean) =>
+        openFixture(browser!, `${served.base}?case=own-message-steps&lang=${lang}${query}`, size, "dark", lang, "reduce", phone);
+      const ready = async (page: Page) => {
+        await page.locator("[data-own-message]").first().waitFor();
+        await page.waitForTimeout(650);
+      };
+      const previous = (page: Page) => page.locator('[data-own-step-control="previous"]');
+
+      /* A long turn of the agent's after the last own message: the page shows
+         the last rows of what is loaded, so every own message slides off it.
+         The row stays, its total does not shrink while the reader is at the
+         tail, and the walk back reaches every own message in turn, by the
+         button and by the key. */
+      for (const size of SIZES) {
+        const where = `long-turn-${size.name}`;
+        const { context, page, pageErrors } = await open("", size, "en", size.phone);
+        const fail = (what: string) => failures.push(`${where}: ${what}`);
+        try {
+          await ready(page);
+          const atTail: unknown[] = [];
+          let onPage = LOADED_OWN;
+          for (let chunk = 1; chunk <= 30 && onPage > 0; chunk += 1) {
+            await arrive(page, "work", 20);
+            await page.waitForTimeout(350);
+            const now = await place(page);
+            onPage = await page.locator("[data-own-message]").count();
+            atTail.push({ calls: chunk * 20, count: now.count, ownOnPage: onPage });
+            if (now.row !== 1) fail(`no row after ${chunk * 20} tool calls`);
+            if (now.count !== `${LOADED_OWN} / ${LOADED_OWN}+`) fail(`count ${now.count} after ${chunk * 20} tool calls`);
+            if (now.wayBack) fail("the feed left its tail while rows arrived");
+          }
+          if (onPage !== 0) fail("the long turn did not push every own message off the page");
+          await page.screenshot({ path: path.join(OUT, `${where}-tail.png`) });
+          /* Each step lands on the own message before: the ninth, the eighth
+             and so on to the first. The feed brings older history as the
+             reader nears the top, so the total opens up along the way. */
+          const lands = size.phone ? 0 : 8;
+          const walk: (string | null)[] = [];
+          for (let fromEnd = 0; fromEnd < ALL_OWN; fromEnd += 1) {
+            if (fromEnd % 2 && !size.phone) {
+              await page.locator("textarea").first().focus();
+              await page.keyboard.press("Alt+ArrowUp");
+            } else await previous(page).click();
+            await page.waitForFunction(({ fromEnd, lands }) => {
+              const [at, of] = (document.querySelector('[data-own-step-control="count"]')?.textContent ?? "").split(" / ");
+              const scroller = document.querySelector<HTMLElement>("[data-log-feed-scroller]")!;
+              const top = scroller.getBoundingClientRect().top;
+              return Number.parseInt(of ?? "", 10) - Number(at) === fromEnd
+                && Array.from(scroller.querySelectorAll("[data-own-message]")).some((row) => Math.abs(row.getBoundingClientRect().top - top - lands) <= 2);
+            }, { fromEnd, lands }, { timeout: 8_000 }).catch(() => undefined);
+            await page.waitForTimeout(650);
+            const now = await place(page);
+            walk.push(now.count);
+            const [at, of] = (now.count ?? "").split(" / ");
+            if (Number.parseInt(of ?? "", 10) - Number(at) !== fromEnd) fail(`step ${fromEnd + 1} shows ${now.count}`);
+            if (now.nearestOwnTop === null || Math.abs(now.nearestOwnTop - lands) > 2) fail(`step ${fromEnd + 1} landed ${now.nearestOwnTop}px under the feed's top`);
+          }
+          if (walk.at(-1) !== `1 / ${ALL_OWN}`) fail(`the walk ended on ${walk.at(-1)}`);
+          if (!await previous(page).isDisabled()) fail("a step back is still offered on the first own message");
+          evidence[where] = { "at-tail": atTail, "walk-back": walk };
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+      }
+
+      /* The way back to the tail, pressed while a step is still landing and
+         while a step is waiting for an older page that takes three seconds. */
+      for (const size of SIZES) {
+        const where = `way-back-${size.name}`;
+        const record: Record<string, unknown> = {};
+        const pill = (page: Page) => page.locator("button:has([data-feed-jump-pill])");
+        for (const pause of [60, 250]) {
+          const { context, page, pageErrors } = await open("", size, "en", size.phone);
+          try {
+            await ready(page);
+            await previous(page).click(); await page.waitForTimeout(650);
+            await previous(page).click(); await page.waitForTimeout(650);
+            await previous(page).click();
+            await page.waitForTimeout(pause);
+            await pill(page).click();
+            await page.waitForTimeout(1_200);
+            const soon = await place(page);
+            await page.waitForTimeout(2_800);
+            const later = await place(page);
+            record[`mid-landing-${pause}ms`] = { soon, later };
+            for (const [when, now] of [["1.2 s", soon], ["4 s", later]] as const) {
+              if (now.wayBack) failures.push(`${where} ${pause} ms: the way back is still offered after ${when}, ${now.toEnd}px from the end at ${now.count}`);
+              if (now.count !== `${LOADED_OWN} / ${LOADED_OWN}+`) failures.push(`${where} ${pause} ms: count ${now.count} after ${when}`);
+            }
+            expect(pageErrors).toEqual([]);
+          } finally {
+            await context.close();
+          }
+        }
+        const { context, page, pageErrors } = await open("&older=3000", size, "en", size.phone);
+        try {
+          await ready(page);
+          for (let presses = 0; presses < LOADED_OWN + 1 && await countOf(page) !== `1 / ${LOADED_OWN}+`; presses += 1) {
+            await previous(page).click();
+            await page.waitForTimeout(650);
+          }
+          expect(await countOf(page)).toBe(`1 / ${LOADED_OWN}+`);
+          await previous(page).click();
+          await page.waitForTimeout(700);
+          await pill(page).click();
+          await page.waitForTimeout(1_200);
+          const soon = await place(page);
+          await page.waitForTimeout(2_800);
+          const later = await place(page);
+          record["waiting-for-older-page"] = { soon, later };
+          for (const [when, now] of [["1.2 s", soon], ["4 s", later]] as const) {
+            if (now.wayBack) failures.push(`${where} older page: the way back is still offered after ${when}, ${now.toEnd}px from the end at ${now.count}`);
+          }
+          if (later.count !== `${ALL_OWN} / ${ALL_OWN}`) failures.push(`${where} older page: count ${later.count} once the page arrived`);
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+        evidence[where] = record;
+      }
+
+      /* #1978: a phone feed that follows the tail rests with a row starting
+         at its top edge, up to a row short of the very end. While it holds
+         the tail the count names the last own message on screen and there is
+         no next, whatever the height. */
+      for (const lang of LANGS) {
+        const record: Record<string, unknown> = {};
+        for (let height = 780; height <= 900; height += 10) {
+          const { context, page, pageErrors } = await open("", { width: 390, height }, lang, true);
+          try {
+            await ready(page);
+            await arrive(page, "turn", 1);
+            await page.waitForTimeout(900);
+            const now = await place(page);
+            record[String(height)] = { toEnd: now.toEnd, count: now.count, nextDisabled: now.nextDisabled, wayBack: now.wayBack };
+            const wanted = `${LOADED_OWN + 1} / ${LOADED_OWN + 1}+`;
+            if (now.wayBack) failures.push(`phone-tail-${lang} ${height}: the feed is not holding its tail`);
+            if (now.count !== wanted) failures.push(`phone-tail-${lang} ${height}: count ${now.count}, ${now.toEnd}px from the end`);
+            if (!now.nextDisabled) failures.push(`phone-tail-${lang} ${height}: a next is offered at the tail`);
+            expect(pageErrors).toEqual([]);
+          } finally {
+            await context.close();
+          }
+        }
+        evidence[`phone-tail-390-${lang}`] = record;
+      }
+
+      /* New rows while the reader is away from the tail, on the phone: the
+         way back is a 44 px cell of the step row, and it keeps its arrow
+         whole whatever the count of new rows is. */
+      for (const lang of LANGS) {
+        const where = `phone-390-${lang}`;
+        const { context, page, pageErrors } = await open("", { width: 390, height: 844 }, lang, true);
+        const record: Record<string, unknown> = {};
+        try {
+          await ready(page);
+          await previous(page).click();
+          await page.waitForTimeout(650);
+          let arrived = 0;
+          for (const wanted of [0, 2, 12, 112, 1112]) {
+            if (wanted > arrived) {
+              await arrive(page, "replies", wanted - arrived);
+              arrived = wanted;
+              await page.waitForTimeout(wanted > 200 ? 1_500 : 500);
+            }
+            const reading = await measure(page, 0);
+            const cell = await page.evaluate(() => {
+              const pill = document.querySelector<HTMLElement>("[data-own-steps] [data-feed-jump-pill]");
+              if (!pill) return null;
+              const round = (rect: DOMRect) => [rect.x, rect.y, rect.width, rect.height].map((value) => Math.round(value * 10) / 10);
+              const arrow = pill.querySelector("svg")!.getBoundingClientRect();
+              const count = pill.querySelector<HTMLElement>("[data-feed-jump-count]");
+              const box = pill.getBoundingClientRect();
+              const text = count?.getBoundingClientRect() ?? null;
+              const inside = (rect: DOMRect) => rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5 && rect.top >= box.top - 0.5 && rect.bottom <= box.bottom + 0.5;
+              return {
+                label: count?.textContent ?? "",
+                pill: round(box),
+                arrow: round(arrow),
+                arrowInside: inside(arrow),
+                textInside: text ? inside(text) && count!.scrollWidth <= count!.clientWidth + 1 : true,
+                arrowClearOfText: text ? arrow.bottom <= text.top + 0.5 || text.bottom <= arrow.top + 0.5 : true,
+              };
+            });
+            const latest = reading.controls.find((control) => control.name === "latest");
+            const moment = `new-rows-${wanted}`;
+            record[moment] = { cell, latest, overflowX: reading.overflowX, count: reading.count };
+            const fail = (what: string) => failures.push(`${where} ${moment}: ${what}`);
+            if (!cell || !latest) { fail("the way back is not in the step row"); continue; }
+            if (cell.label !== (wanted === 0 ? "" : wanted > 99 ? "99+" : String(wanted))) fail(`the cell says "${cell.label}"`);
+            if (Math.abs(cell.arrow[2]! - 14) > 0.5 || Math.abs(cell.arrow[3]! - 14) > 0.5 || !cell.arrowInside || !cell.arrowClearOfText) fail(`the arrow is ${cell.arrow[2]} x ${cell.arrow[3]}`);
+            if (!cell.textInside) fail("the count leaves the pill");
+            if (latest.box[2] < 44 || latest.box[3] < 44) fail(`the way back is ${latest.box[2]} x ${latest.box[3]}`);
+            if (!latest.hit) fail("the way back is not what a pointer meets");
+            if (latest.overlaps.length) fail(`the way back intersects ${latest.overlaps.join(", ")}`);
+            for (const control of reading.controls) if (control.overlaps.length) fail(`${control.name} intersects ${control.overlaps.join(", ")}`);
+            if (reading.overflowX) fail(`the page scrolls sideways by ${reading.overflowX}`);
+            if (wanted === 12 || wanted === 1112) await page.screenshot({ path: path.join(OUT, `${where}-${moment}.png`) });
+          }
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+        evidence[`${where}-new-rows`] = record;
+      }
+
+      writeEvidence(evidence);
+      expect(failures).toEqual([]);
+    } finally {
+      await browser.close(); await server.close(); served.stop();
+      let alive = false;
+      try { process.kill(browserPid, 0); alive = true; } catch { /* Recorded browser exited. */ }
+      expect(alive).toBe(false);
+    }
+  }, 900_000);
+
+  browserTest("late senders, older history under append and voice turns are own-message steps", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    const server = await chromium.launchServer(LAUNCH);
+    const browserPid = server.process().pid!;
+    const browser = await chromium.connect(server.wsEndpoint());
+    const evidence: Record<string, Record<string, unknown>> = {};
+    const failures: string[] = [];
+    const sizes = [
+      { name: "desktop", width: 1440, height: 900, phone: false },
+      { name: "phone", width: 390, height: 844, phone: true },
+    ];
+    try {
+      for (const size of sizes) {
+        const open = (query: string) => openFixture(browser, `${served.base}?case=own-message-steps${query}`, size, "dark", "en", "reduce", size.phone);
+        const lands = size.phone ? 0 : 8;
+        /* Every loaded record counts toward pending, even above the first
+           sixty rows or above the page. A partial answer keeps waiting. */
+        for (const scenario of ["visible", "above-page", "partial", "full"]) {
+          const query = `&engine=claude&ledger=${scenario === "partial" ? 200 : 2500}&trailing=${scenario === "above-page" ? 400 : 100}${scenario === "partial" ? "&partial=1" : ""}${scenario === "full" ? "&full=1" : ""}`;
+          const { context, page, pageErrors } = await open(query);
+          const samples: unknown[] = [];
+          try {
+            for (let sample = 0; sample < 8; sample += 1) {
+              await page.waitForTimeout(250);
+              const now = await place(page);
+              samples.push(now);
+              if (now.count !== null) failures.push(`${size.name} ${scenario}: premature count ${now.count}`);
+            }
+            if (scenario === "partial") {
+              const own = await page.locator("[data-own-message]").count();
+              if (own < 2) failures.push(`${size.name} partial: no resolved bubbles to exercise the count`);
+              await page.evaluate(() => (window as unknown as { ownSteps: { settleSenders(): void } }).ownSteps.settleSenders());
+            }
+            const wanted = scenario === "full" ? "9 / 9" : "7 / 7+";
+            await page.waitForFunction((wanted) => document.querySelector('[data-own-step-control="count"]')?.textContent === wanted, wanted, { timeout: 8000 }).catch(() => undefined);
+            const after = await place(page);
+            if (after.count !== wanted) failures.push(`${size.name} ${scenario}: settled count ${after.count}`);
+            evidence[`senders-${size.name}-${scenario}`] = { samples, after };
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+        /* From a tail with no own rows, release the cap before asking for
+           history. Appending during the load must retain the reply. */
+        for (const engine of ["codex", "claude"]) {
+          const { context, page, pageErrors } = await open(`&engine=${engine}&tailOnly=1&trailing=150&cap=150&older=600&ledger=300`);
+          try {
+            await page.locator('[data-own-step-control="previous"]').waitFor();
+            await page.waitForTimeout(650);
+            await page.locator('[data-own-step-control="previous"]').click();
+            await page.waitForTimeout(60);
+            const immediately = await place(page);
+            if (immediately.wayBack !== 1) failures.push(`${size.name} ${engine}: no way back before the older page`);
+            for (let append = 0; append < 6; append += 1) {
+              // The cap fixture's records are Codex arrivals; exercise the
+              // real append boundary on Codex and the ledger boundary on Claude.
+              if (engine === "codex") await arrive(page, "replies", 1);
+              await page.waitForTimeout(250);
+            }
+            await page.waitForTimeout(800);
+            const after = await place(page);
+            if (after.count !== "9 / 9") failures.push(`${size.name} ${engine}: older count ${after.count}`);
+            if (after.nearestOwnTop === null || Math.abs(after.nearestOwnTop - lands) > 2) failures.push(`${size.name} ${engine}: first press landed ${after.nearestOwnTop}`);
+            const reply = await page.evaluate(() => {
+              const rows = Array.from(document.querySelectorAll<HTMLElement>("[data-own-message]"));
+              const last = rows.at(-1);
+              let reply = last?.nextElementSibling;
+              while (reply && !reply.matches('[data-feed-kind="prose"]')) reply = reply.nextElementSibling;
+              return reply?.textContent ?? "";
+            });
+            if (!reply.includes("Agreed: the search lane merges as soon as the browser check passes")) failures.push(`${size.name} ${engine}: the answer was trimmed: ${reply.slice(0, 80)}`);
+            evidence[`older-${size.name}-${engine}`] = { immediately, after, reply };
+            await page.screenshot({ path: path.join(OUT, `older-${size.name}-${engine}.png`) });
+            expect(pageErrors).toEqual([]);
+          } finally { await context.close(); }
+        }
+        const { context, page, pageErrors } = await open("");
+        try {
+          await page.locator("[data-own-message]").first().waitFor();
+          await page.waitForTimeout(650);
+          await arrive(page, "voice", 1);
+          await arrive(page, "replies", 20);
+          await page.waitForTimeout(650);
+          const voice = page.locator('[data-feed-kind="voice"]');
+          if (await voice.getAttribute("data-own-message") === null) failures.push(`${size.name}: voice has no own-message marker`);
+          const atTail = await place(page);
+          if (atTail.count !== "8 / 8+") failures.push(`${size.name}: voice count ${atTail.count}`);
+          await page.locator('[data-own-step-control="previous"]').click();
+          await page.waitForTimeout(900);
+          const after = await place(page);
+          const voiceTop = await voice.evaluate((row) => row.getBoundingClientRect().top - document.querySelector("[data-log-feed-scroller]")!.getBoundingClientRect().top);
+          if (Math.abs(voiceTop - lands) > 2) failures.push(`${size.name}: voice landed ${voiceTop}`);
+          await page.screenshot({ path: path.join(OUT, `voice-${size.name}.png`) });
+          await page.locator('button:has([data-feed-jump-pill])').click();
+          await arrive(page, "work", 600);
+          await page.waitForTimeout(1000);
+          const abovePage = await place(page);
+          if (await voice.count() !== 0) failures.push(`${size.name}: voice did not move above the page`);
+          if (abovePage.count !== "8 / 8+") failures.push(`${size.name}: voice above-page count ${abovePage.count}`);
+          evidence[`voice-${size.name}`] = { atTail, after, voiceTop, abovePage };
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      writeEvidence(evidence);
+      expect(failures).toEqual([]);
+    } finally {
+      await browser.close();
+      await server.close();
+      served.stop();
+      let alive = false;
+      try { process.kill(browserPid, 0); alive = true; } catch { /* The recorded browser exited. */ }
+      expect(alive).toBe(false);
+    }
+  }, 180_000);
+
+
+  browserTest("long phone counts keep every control clear in both languages", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    const server = await chromium.launchServer(LAUNCH);
+    const browserPid = server.process().pid!;
+    const browser = await chromium.connect(server.wsEndpoint());
+    const evidence: Record<string, Record<string, unknown>> = {};
+    try {
+      for (const days of [25, 112]) for (const lang of LANGS) {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?case=own-message-steps&days=${days}&lang=${lang}`, { width: 390, height: 844 }, "dark", lang, "reduce", true);
+        const readings: Record<string, unknown> = {};
+        try {
+          await page.locator("[data-own-message]").first().waitFor();
+          await page.waitForTimeout(900);
+          for (const moment of ["rest", "stepped", "draft", "keyboard"]) {
+            if (moment === "stepped") await page.locator('[data-own-step-control="previous"]').click();
+            if (moment === "draft") await page.locator("textarea").first().fill("one\ntwo\nthree\nfour\nfive\nsix");
+            if (moment === "keyboard") await page.evaluate((px) => (window as unknown as { ownSteps: { keyboard(px: number): void } }).ownSteps.keyboard(px), KEYBOARD_PX);
+            await page.waitForTimeout(650);
+            const reading = await measure(page, 0);
+            readings[moment] = reading;
+            expect(reading.count?.split(" / ")[1]).toBe(String(days * ALL_OWN));
+            expect(reading.row?.[3]).toBe(ROW_PX.phone);
+            expect(reading.overflowX).toBe(0);
+            if (moment !== "rest") expect(reading.controls.some((control) => control.name === "latest")).toBe(true);
+            for (const control of reading.controls) {
+              expect(control.hit).toBe(true);
+              expect(control.overlaps).toEqual([]);
+              expect(control.overFeed).toBe(false);
+              expect(control.insideWindow).toBe(true);
+              if (control.name !== "count") {
+                expect(control.box[2]).toBeGreaterThanOrEqual(44);
+                expect(control.box[3]).toBeGreaterThanOrEqual(44);
+              }
+            }
+            const labelsFit = await page.evaluate(() => Array.from(document.querySelectorAll<HTMLButtonElement>('[data-own-step-control="previous"], [data-own-step-control="next"]')).every((button) => {
+              const text = button.lastElementChild as HTMLElement;
+              const inner = text.getBoundingClientRect();
+              const outer = button.getBoundingClientRect();
+              return inner.left >= outer.left && inner.right <= outer.right && inner.top >= outer.top && inner.bottom <= outer.bottom
+                && text.scrollWidth <= text.clientWidth + 1 && text.scrollHeight <= text.clientHeight + 1;
+            }));
+            expect(labelsFit).toBe(true);
+            if (moment === "stepped") await page.screenshot({ path: path.join(OUT, `long-count-phone-${days}-${lang}.png`) });
+          }
+          evidence[`long-count-phone-${days}-${lang}`] = readings;
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      writeEvidence(evidence);
+    } finally {
+      await browser.close(); await server.close(); served.stop();
+      let alive = false;
+      try { process.kill(browserPid, 0); alive = true; } catch { /* Recorded browser exited. */ }
+      expect(alive).toBe(false);
+    }
+  }, 120_000);
+
 });

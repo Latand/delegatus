@@ -26,6 +26,8 @@ import { DeadlineExceededError } from "@/lib/deadline";
 import { CORPUS_BODY_MARKERS, pipelineCorpus } from "@/lib/pipelines/fixtures/corpus";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { registerPipelineTick } from "@/lib/pipelines/controllerSignal";
+import { statePath } from "@/lib/configDir";
+import { initialAuto, writeAuto } from "@/lib/selfUpdate/auto";
 import { drainFile, releaseDrain, writeDrain } from "@/lib/selfUpdate/drain";
 import { listRoles } from "@/lib/roles/registry";
 import type { RoleDefinition } from "@/lib/roles/types";
@@ -494,6 +496,17 @@ test("automatic drain refuses autonomous spawns and permits operator launches", 
     await expect(as("manager")({ ...args, clientRequestId: "held-seat" })).rejects.toMatchObject({ details: { code: "launch_held_for_update" } });
     expect(spawns).toBe(0);
     await expect(as("agent")({ ...args, clientRequestId: "held-helper" })).rejects.toMatchObject({ details: { code: "launch_held_for_update" } });
+    // The refusal names what the update waits for, from the blockers its last probe recorded (#2515).
+    const autoFile = statePath("self-update", "auto.json");
+    const blockers = { turns: 2, stages: 1, operatorActiveAt: null, busy: false, unreadable: null, memoryMb: null };
+    writeAuto(autoFile, { ...initialAuto(), enabled: true, lastBlockers: blockers });
+    try {
+      await expect(as("agent")({ ...args, clientRequestId: "held-named" })).rejects.toMatchObject({
+        message: "new launches are held while the automatic update waits for 2 running turns and 1 pipeline stage to finish",
+        details: { code: "launch_held_for_update", target: "a".repeat(40), waitingFor: "2 running turns and 1 pipeline stage to finish", blockers },
+      });
+    } finally { fs.rmSync(autoFile, { force: true }); }
+    expect(spawns).toBe(0);
     await as("gateway")({ ...args, clientRequestId: "allowed-operator" });
     expect(spawns).toBe(1);
   } finally { releaseDrain(file, "mcp-test"); }
@@ -4521,4 +4534,28 @@ test.each(["manager", "agent", "unidentified", "gateway"])("%s MCP spawn carries
   const spawn = viewerMcpBindings(undefined, control, { callerAttribution: () => ({ kind, conversationId: "conversation_fixture_caller", role: "builder" }) } as never).spawn_agent;
   await spawn({ clientRequestId: `admission-${kind}`, cwd: "/repo", title: "Admission fixture", prompt: "Inspect work" });
   expect(sentHeaders?.["x-llv-autonomous-spawn"]).toBe(kind === "gateway" ? undefined : "1");
+});
+
+test.each([
+  { id: "restart-service", button: true, unit: "delegatus.service" },
+  { id: "start-service", button: true, unit: "delegatus.service" },
+  { id: "restart-terminal", button: false, command: "bun bin/cli.mjs --port 45123 --no-open" },
+  { id: "restart-terminal", button: false, command: "& 'bun' 'bin/cli.mjs' --port 45123 --no-open", terminalEveryUpdate: true },
+  { id: "start-launcher", button: false, command: "bun bin/cli.mjs --port 45123 --no-open" },
+  { id: "update-first", button: true },
+  { id: "docker-deployments", button: false, command: "LLV_VIEWER_DEPLOYMENTS=1 docker compose --profile runtime-host up -d" },
+  { id: "secure-handoff", button: false },
+] satisfies import("../selfUpdate/types").InstallAction[])("checkout deploy prerequisite survives the production MCP control response: %j", async (action) => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => Response.json({ state: "action-required", code: "self-update-action-required", error: "Restore launcher supervision", action }, { status: 409 })) as unknown as typeof fetch;
+  try {
+    const bindings = viewerMcpBindings(undefined, undefined, {
+      callerAttribution: () => ({ kind: "manager", conversationId: "conversation_seat", role: null }),
+      callerProject: () => "proj-a", viewerProjects: () => ["proj-a"],
+      authorizedSeats: () => [{ conversationId: "conversation_seat", path: null, project: "proj-a" }],
+    } as never);
+    const error = await bindings.deploy_exact_sha({ revision: "a".repeat(40), clientRequestId: "deploy-prerequisite" }).catch(error => error);
+    expect(error).toBeInstanceOf(McpToolRefusal);
+    expect(error.details).toMatchObject({ status: 409, code: "self-update-action-required", action });
+  } finally { globalThis.fetch = originalFetch; }
 });

@@ -717,6 +717,14 @@ describe("a designation failure in the operator's words", () => {
     expect(seatFailureCauseOf("the account store stayed busy, so the designation could not be recorded; try again")).toBe("store-busy");
   });
 
+  test("the safe store sentence is localized when direct or wrapped", () => {
+    const message = "The account store is temporarily busy; try again shortly.";
+    for (const error of [message, `the accepted launch failed before its conversation became readable: ${message}`]) {
+      expect(seatFailureCauseOf(error)).toBe("store-busy");
+      expect(seatFailureCopy(error, "same")).toEqual({ text: "orchPanel.failureStoreBusy", hint: "orchPanel.failureRetrySameHint" });
+    }
+  });
+
   test("a launch that timed out or found no runtime host is named, wherever the layer put the words", () => {
     expect(seatFailureCauseOf("structured spawn transport failed: runtime host request timed out")).toBe("launch-timeout");
     expect(seatFailureCauseOf("the accepted launch failed before its conversation became readable: structured spawn transport failed: runtime host timed out")).toBe("launch-timeout");

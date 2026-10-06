@@ -746,13 +746,16 @@ test("startup socket recovery retains a partially adopted host and drains its he
     adoptClaude: async () => [],
   };
 
+  let now = Date.now();
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
   try {
     await runStructuredHostStartup(
       () => adoptStructuredHostsAtStartup(dependencies),
       () => {},
       {
-        schedule: (callback) => {
-          scheduled.push(callback);
+        schedule: (callback, delayMs) => {
+          // Firing the timer must also elapse the delivery queue's retry deadline.
+          scheduled.push(() => { now += delayMs; callback(); });
           return { unref() {} };
         },
       },
@@ -800,6 +803,7 @@ test("startup socket recovery retains a partially adopted host and drains its he
       },
     });
   } finally {
+    clock.mockRestore();
     await bindStructuredDeliveryQueue([], { registry, client: null });
     journal.close();
     fs.rmSync(directory, { recursive: true, force: true });
@@ -964,8 +968,11 @@ test("scheduled startup retry continues through the retained Codex host", async 
     expect(structuredStartupHosts()).toMatchObject([{ key, host }]);
     expect(adoptedProcesses).toBe(1);
     expect(continuationAdmissions).toBe(2);
-    /* The Viewer wrote it, so it never carries the operator's marker. */
-    expect(continuationOrigins).toEqual([{ kind: "agent", role: "startup-recovery" }, { kind: "agent", role: "startup-recovery" }]);
+    /* Startup recovery is attributed to the recipient's project on every admission. */
+    expect(continuationOrigins).toEqual([
+      { kind: "agent", role: "startup-recovery", project: path.basename(directory) },
+      { kind: "agent", role: "startup-recovery", project: path.basename(directory) },
+    ]);
     expect(registry.snapshot().entries[`codex:${sessionId}`]!.claimEpoch).toBe(retainedEpoch);
     expect(ledger.writes.map(({ id, text }) => ({ id, text }))).toEqual([
       { id: "queued-draft-before-retained-retry", text: "keep this draft ahead of continuation" },
@@ -3728,6 +3735,51 @@ test.each(["codex", "claude"] as const)(
     });
 
     expect(await startupAdoptionAttempts(registry)).toEqual([`${engine}:${sessionId}`]);
+    expect(registry.conversation(conversation.id)?.turn.state).toBe("busy");
+
+    fs.rmSync(directory, { recursive: true, force: true });
+  },
+);
+
+/* An account pick applies at once on a conversation the registry holds as
+   terminal, so the turn this pass writes decides whether a host that is still
+   retrying is moved off its account. Codex closes a turn on a lifecycle record
+   only and held before the Claude rule was shared; it is here as the control. */
+test.each([
+  ["claude", "a server_error API error", { isApiErrorMessage: true, error: "server_error" }],
+  ["claude", "an unknown API error", { isApiErrorMessage: true, error: "unknown" }],
+  ["claude", "a synthetic record that is no API error", {}],
+  ["codex", "an error event", {}],
+] as const)(
+  "startup keeps a live %s turn open when its transcript ends on %s",
+  async (engine, _shape, extra) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), `llv-runtime-startup-open-error-${engine}-`));
+    const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
+    const sessionId = `${engine === "codex" ? "6" : "7"}1000000-0000-0000-0000-000000000001`;
+    const at = (secondsAgo: number) => new Date(Date.now() - secondsAgo * 1000).toISOString();
+    const { conversation } = addStructuredRestartConversation(registry, directory, {
+      engine,
+      sessionId,
+      status: "live",
+      turn: "busy",
+      activeTurnRef: "turn-retrying",
+      transcriptRecords: engine === "codex"
+        ? [
+            { timestamp: at(60), payload: { type: "task_started", turn_id: "turn-retrying" } },
+            { timestamp: at(59), payload: { type: "error", message: "fixture: server error" } },
+          ]
+        : [
+            { type: "user", timestamp: at(60), message: { role: "user", content: [{ type: "text", text: "go" }] } },
+            {
+              type: "assistant",
+              timestamp: at(59),
+              ...extra,
+              message: { role: "assistant", model: "<synthetic>", stop_reason: "stop_sequence", stop_sequence: "", content: [{ type: "text", text: "API Error: fixture" }] },
+            },
+          ],
+    });
+
+    await startupAdoptionAttempts(registry);
     expect(registry.conversation(conversation.id)?.turn.state).toBe("busy");
 
     fs.rmSync(directory, { recursive: true, force: true });

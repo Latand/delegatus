@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import type { AgentRegistryEntry, RegistryFile } from "@/lib/agent/registry";
+import type { AgentRegistryEntry, RegistryFile, SpawnReceipt } from "@/lib/agent/registry";
 import { livenessProbe } from "@/lib/agent/accountLiveness";
 import { PROVIDER_THROTTLE_GRACE_MS } from "@/lib/limitsThrottle";
 import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
@@ -14,8 +14,11 @@ import type { FileEntry } from "@/lib/types";
 import { completedGenerationSelection, type CompletedGenerationRead } from "./inventorySelection";
 import {
   agentLivenessSnapshot,
+  conversationRegistryHost,
   evaluateLiveness,
   HOSTED_RECOVERY_MAX,
+  livenessRecordIsLive,
+  STARTING_GRACE_MS,
   type AgentLivenessSources,
 } from "./liveness";
 import { projectLivenessEvents } from "./projector";
@@ -249,7 +252,7 @@ test.each([
   { name: "live tmux with dead structured host", alive: new Set([1112]), status: "live", lifecycle: "running", kind: "tmux" },
   { name: "both hosts live", alive: new Set([1112, 2222]), status: "live", lifecycle: "running", kind: "tmux" },
   { name: "both hosts dead", alive: new Set<number>(), status: "live", lifecycle: "stalled", kind: "tmux" },
-  { name: "terminal registry status", alive: new Set([1112, 2222]), status: "dead", lifecycle: "stalled", kind: "tmux" },
+  { name: "terminal registry status with live ownership", alive: new Set([1112, 2222]), status: "dead", lifecycle: "running", kind: "tmux" },
 ] as const)("$name reports combined dual-host liveness", async ({ alive, status, lifecycle, kind }) => {
   const dir = sandbox();
   const agentPath = path.join(dir, "dual-host.jsonl");
@@ -705,11 +708,12 @@ test("a headless reviewer needs a readable exact start identity", async () => {
   );
 
   expect((await snapshotFor("reviewer-start", "reviewer-start")).conversations[0]!.host).toMatchObject({ state: "alive", kind: "headless" });
-  for (const [saved, current, alive] of [
-    ["reused-start", "reviewer-start", true], [null, "reviewer-start", true],
-    ["reviewer-start", null, true], ["reviewer-start", "reviewer-start", false],
+  for (const [saved, current, alive, expected] of [
+    ["reused-start", "reviewer-start", true, "gone"], [null, "reviewer-start", true, "unknown"],
+    ["reviewer-start", null, true, "unknown"], ["reviewer-start", "reviewer-start", false, "gone"],
   ] as const) {
-    expect((await snapshotFor(saved, current, alive)).conversations[0]!.host.state).toBe("unknown");
+    expect((await snapshotFor(saved, current, alive)).conversations[0]!.host.state)
+      .toBe(expected);
   }
 });
 
@@ -731,6 +735,99 @@ test("a targeted query with an unknown conversation id returns an empty snapshot
 
   expect(snapshot.count).toBe(0);
   expect(snapshot.conversations).toEqual([]);
+});
+
+/* ------------------------------------------------------------------------- *
+ * #2515 — one answer to "can a process still be working on this?", shared by
+ * `agent_activity liveOnly` and the update drain.
+ * ------------------------------------------------------------------------- */
+
+test("the liveOnly predicate keeps every verdict a process can still stand behind and drops the rest", () => {
+  const verdict = (host: "alive" | "gone" | "unknown", turnState: "busy" | "idle" | "unknown", silentForMs: number | null) => {
+    const evaluated = evaluateLiveness({ host: { state: host }, turnState, silentForMs, stallAfterMs: 10 * 60_000 });
+    return livenessRecordIsLive({ ...evaluated, turnState, host: { state: host } });
+  };
+  /* A live host counts whatever its turn says, a silent one included. */
+  expect(verdict("alive", "busy", 0)).toBe(true);
+  expect(verdict("alive", "busy", 11 * 24 * 60 * 60_000)).toBe(true);
+  expect(verdict("alive", "idle", 0)).toBe(true);
+  /* A launch still inside its grace counts; past it, it does not. */
+  expect(verdict("unknown", "busy", STARTING_GRACE_MS - 1)).toBe(true);
+  expect(verdict("unknown", "busy", STARTING_GRACE_MS)).toBe(false);
+  expect(verdict("unknown", "idle", 12 * 24 * 60 * 60_000)).toBe(false);
+  /* A dead host never counts: the zombie with its turn open, and the one that settled. */
+  expect(verdict("gone", "busy", 11 * 24 * 60 * 60_000)).toBe(false);
+  expect(verdict("gone", "idle", 0)).toBe(false);
+});
+
+test("a conversation's registry row says who hosts it without a transcript to read", () => {
+  const transcript = "/sessions/host-evidence.jsonl";
+  const conversation = { id: "conversation_host", engine: "codex", generations: [{ id: "session-zombie", path: transcript }] };
+  const registry = (entry: AgentRegistryEntry | null, aliases: Record<string, string> = {}) => ({
+    entries: entry ? { "codex:session-zombie": entry } : {},
+    conversations: { conversation_host: conversation },
+    conversationAliases: aliases,
+  }) as unknown as RegistryFile;
+  const probe = (alive: boolean) => ({ now: () => NOW, pidAlive: () => alive, processIdentity: () => alive ? "start-token-of-a-dead-host" : null });
+  const hosted = structuredEntry(transcript, 4242);
+
+  /* A hosted row whose process answers under its recorded identity. */
+  expect(conversationRegistryHost(registry(hosted), "conversation_host", probe(true))).toEqual({ state: "alive", processAlive: true });
+  /* The same row once the process is gone, and after the registry ended it. */
+  expect(conversationRegistryHost(registry(hosted), "conversation_host", probe(false))).toEqual({ state: "gone", processAlive: false });
+  const ended = { ...hosted, status: "dead", structuredHost: null } as AgentRegistryEntry;
+  expect(conversationRegistryHost(registry(ended), "conversation_host", probe(false))).toEqual({ state: "gone", processAlive: false });
+  /* A status word that says dead over a process that still answers: named, so a restart cannot land on it. */
+  expect(conversationRegistryHost(registry({ ...hosted, status: "dead" }), "conversation_host", probe(true))).toEqual({ state: "alive", processAlive: true });
+  /* A process that survived its termination is still a process. */
+  const survivor = { ...ended, structuredTerminationSurvivors: [{ pid: 4243, startIdentity: "start-token-of-a-dead-host" }] } as AgentRegistryEntry;
+  expect(conversationRegistryHost(registry(survivor), "conversation_host", probe(true))).toEqual({ state: "alive", processAlive: true });
+  expect(conversationRegistryHost(registry(survivor), "conversation_host", probe(false))).toEqual({ state: "gone", processAlive: false });
+  const reused = { ...survivor, structuredTerminationSurvivors: [{ pid: 4243, startIdentity: "previous-process" }] };
+  expect(conversationRegistryHost(registry(reused), "conversation_host", probe(true))).toEqual({ state: "gone", processAlive: false });
+  /* A current writer can own admitted setup before any host is published. */
+  const claimed = { ...ended, claimEpoch: 1,
+    claimOwner: `structured-host:${JSON.stringify({ pid: 4243, startIdentity: "start-token-of-a-dead-host" })}`,
+    structuredHost: { ...hosted.structuredHost!, process: null, writerClaimEpoch: 1 } };
+  expect(conversationRegistryHost(registry(claimed), "conversation_host", probe(true))).toEqual({ state: "alive", processAlive: true });
+  expect(conversationRegistryHost(registry(claimed), "conversation_host", probe(false))).toEqual({ state: "gone", processAlive: false });
+  const staleClaim = { ...claimed, structuredHost: { ...claimed.structuredHost, writerClaimEpoch: 0 } };
+  expect(conversationRegistryHost(registry(staleClaim), "conversation_host", probe(true))).toEqual({ state: "gone", processAlive: false });
+  expect(conversationRegistryHost(registry({ ...claimed, claimOwner: "foreign-owner" }), "conversation_host", probe(true)))
+    .toEqual({ state: "gone", processAlive: false });
+  /* A hosted row with no process yet is a launch inside its grace, then rot. */
+  const launching = { ...hosted, structuredHost: null, status: "starting", updatedAt: new Date(NOW - 60_000).toISOString() } as AgentRegistryEntry;
+  expect(conversationRegistryHost(registry(launching), "conversation_host", probe(false))).toEqual({ state: "unknown", processAlive: false });
+  const rotted = { ...launching, updatedAt: new Date(NOW - STARTING_GRACE_MS).toISOString() } as AgentRegistryEntry;
+  expect(conversationRegistryHost(registry(rotted), "conversation_host", probe(false))).toEqual({ state: "gone", processAlive: false });
+  /* An id the registry reaches only through an alias names the same row. */
+  expect(conversationRegistryHost(registry(ended, { conversation_before: "conversation_host" }), "conversation_before", probe(false)))
+    .toEqual({ state: "gone", processAlive: false });
+  /* No conversation, or no row for its generation: nothing to read, and nothing proven. */
+  expect(conversationRegistryHost(registry(ended), "conversation_elsewhere", probe(false))).toBeNull();
+  expect(conversationRegistryHost(registry(null), "conversation_host", probe(false))).toBeNull();
+});
+
+test("a targeted query follows the registry's aliases to the conversation's transcript", async () => {
+  const transcript = "/sessions/aliased.jsonl";
+  const registry = {
+    entries: { "codex:session-zombie": structuredEntry(transcript, 4242) },
+    conversations: { conversation_owner: { id: "conversation_owner", engine: "codex", generations: [{ id: "session-zombie", path: transcript }] } },
+    conversationAliases: { conversation_before: "conversation_owner" },
+  } as unknown as RegistryFile;
+  const read = (conversationId: string) => agentLivenessSnapshot({ conversationId }, sources({
+    listFiles: async () => { throw new Error("a targeted query must not run the inventory sweep"); },
+    describeTranscript: async (requested) => ({ path: requested, project: "viewer", title: "stage agent", engine: "codex",
+      mtimeMs: FROZEN_AT, conversationId: null, activity: null, activityReason: null }),
+    registrySnapshot: () => registry,
+    pipelines: () => [],
+    transcriptEvidence: async () => ({ turn: "busy", lastRecordTs: FROZEN_AT }),
+  }));
+
+  const aliased = await read("conversation_before");
+  expect(aliased.conversations).toMatchObject([{ transcriptPath: transcript, lifecycle: "stalled", reason: "host_gone_turn_open", host: { state: "gone" } }]);
+  expect((await read("conversation_owner")).conversations).toMatchObject([{ transcriptPath: transcript, reason: "host_gone_turn_open" }]);
+  expect((await read("conversation_nowhere")).conversations).toEqual([]);
 });
 
 /* ------------------------------------------------------------------------- *
@@ -1012,29 +1109,79 @@ test.each(ownerSelectionCases)("verified owner survives recovery: cached=$activi
 });
 
 test.each([
-  { name: "missing saved identity", saved: null, current: "start", alive: true },
-  { name: "unreadable current identity", saved: "start", current: null, alive: true },
-  { name: "reused PID", saved: "old-start", current: "start", alive: true },
-  { name: "dead PID", saved: "start", current: "start", alive: false },
-].flatMap((identity) => [false, true].map((present) => ({ ...identity, present }))))(
-  "unverified headless owner gets no selection or recovery priority: $name present=$present",
-  async ({ saved, current, alive, present }) => {
+  { name: "exact saved identity", saved: "start", current: "start", alive: true, pid: 4242 },
+  { name: "missing saved identity", saved: null, current: "start", alive: true, pid: 4242 },
+  { name: "unreadable current identity", saved: "start", current: null, alive: true, pid: 4242 },
+  { name: "reused PID", saved: "old-start", current: "start", alive: true, pid: 4242 },
+  { name: "dead PID", saved: "start", current: "start", alive: false, pid: 4242 },
+  { name: "missing PID", saved: null, current: "start", alive: true, pid: null },
+].flatMap((identity) => [false, true].flatMap((present) => [false, true].map((historical) => ({ ...identity, present, historical })))))(
+  "headless selection shares the process ownership verdict: $name present=$present historical=$historical",
+  async ({ saved, current, alive, pid, present, historical }) => {
     const candidate = "/transcripts/unverified.jsonl";
     const fallback = "/transcripts/scan-live.jsonl";
     const generation = publishedGeneration([
       fileEntry({ path: fallback, activity: "live", mtime: NOW / 1000 }),
       ...(present ? [fileEntry({ path: candidate, activity: "idle" })] : []),
     ]);
+    const held = pid !== null && alive && (!saved || !current || saved === current);
     const snapshot = await agentLivenessSnapshot({ project: "viewer", liveOnly: true, limit: 1 }, corpusSources(generation, {
       probe: { now: () => NOW, pidAlive: () => alive, processIdentity: () => current },
-      flows: () => [{ reviewerMode: "headless", state: "reviewing", rounds: [{
-        reviewerPath: candidate, reviewerPid: 4242, reviewerIdentity: saved,
-      }] }] as unknown as Flow[],
-      // corpusSources throws if an unverified path reaches describeTranscript.
-      transcriptEvidence: async () => ({ turn: "busy", lastRecordTs: NOW - 1_000 }),
+      flows: () => [{ reviewerMode: "headless", state: historical ? "spawning" : "reviewing", rounds: [{
+        reviewerPath: candidate, reviewerPid: pid, reviewerIdentity: saved,
+      }, ...(historical ? [{}] : [])] }] as unknown as Flow[],
+      describeTranscript: async (target) => {
+        expect(held).toBe(true);
+        expect(target).toBe(candidate);
+        return { path: target, project: "viewer", title: "candidate", engine: "codex", mtimeMs: NOW - 60_000,
+          sizeBytes: 4096, conversationId: null, activity: null, activityReason: null };
+      },
+      transcriptEvidence: async (_engine, target) => ({ turn: "busy", lastRecordTs: target === candidate ? NOW - 12 * 60 * 60_000 : NOW - 1_000 }),
     }));
-    expect(snapshot.conversations.map((row) => row.transcriptPath)).toEqual([fallback]);
-    expect(snapshot.selection).toMatchObject({ recovered: 0, recoveryTruncated: false, selected: 1, hydrated: 1 });
+    expect(snapshot.conversations.map((row) => row.transcriptPath)).toEqual([held ? candidate : fallback]);
+    expect(snapshot.selection).toMatchObject({ recovered: held && !present ? 1 : 0, recoveryTruncated: false, selected: 1, hydrated: 1 });
+  },
+);
+
+test.each([
+  { owner: "admission", state: "starting", alive: true, saved: "start", held: true },
+  { owner: "admission", state: "starting", alive: true, saved: null, held: true },
+  { owner: "admission", state: "starting", alive: false, saved: "start", held: false },
+  { owner: "admission", state: "starting", alive: true, saved: "reused", held: false },
+  { owner: "admission", state: "completed", alive: true, saved: "start", held: false },
+  { owner: "verified", state: "completed", alive: true, saved: "start", held: true },
+  { owner: "pane", state: "pane-bound", alive: true, saved: "start", held: true },
+].flatMap((owner) => [false, true].map((present) => ({ ...owner, present }))))(
+  "receipt custody shares fallback, record and inventory verdict: $owner $state alive=$alive saved=$saved present=$present",
+  async ({ owner, state, alive, saved, held, present }) => {
+    const candidate = "/transcripts/receipt-owned.jsonl";
+    const process = { pid: 4242, startIdentity: saved };
+    const receipt = {
+      launchId: "launch", conversationId: "conversation_old", artifactPath: candidate,
+      transport: "structured", state,
+      admissionOwner: owner === "admission" ? process : null,
+      verifiedHost: owner === "verified" ? { agent: process } : null,
+      pane: owner === "pane" ? { panePid: process } : null,
+    } as unknown as SpawnReceipt;
+    const registry = { entries: {}, receipts: { launch: receipt }, conversationAliases: { conversation_old: "conversation_canonical" },
+      conversations: { conversation_canonical: { id: "conversation_canonical", engine: "codex", generations: [{ id: "session", path: candidate }] } },
+    } as unknown as RegistryFile;
+    const probe = { now: () => NOW, pidAlive: () => alive, processIdentity: () => "start" };
+    expect(conversationRegistryHost(registry, "conversation_canonical", probe)).toEqual({ state: held ? "alive" : "gone", processAlive: held });
+    expect(conversationRegistryHost(registry, "conversation_old", probe)).toEqual({ state: held ? "alive" : "gone", processAlive: held });
+    const generation = publishedGeneration(present ? [fileEntry({ path: candidate, conversationId: "conversation_canonical", activity: "stalled" })] : []);
+    const shared = corpusSources(generation, {
+      probe, registrySnapshot: () => registry,
+      describeTranscript: async (target) => ({ path: target, project: "viewer", title: "candidate", engine: "codex", mtimeMs: FROZEN_AT,
+        sizeBytes: 4096, conversationId: "conversation_canonical", activity: null, activityReason: null }),
+      transcriptEvidence: async () => ({ turn: "busy", lastRecordTs: FROZEN_AT }),
+    });
+    const direct = await agentLivenessSnapshot({ conversationId: "conversation_canonical", limit: 1 }, shared);
+    expect(direct.conversations).toHaveLength(1);
+    expect(livenessRecordIsLive(direct.conversations[0]!)).toBe(held);
+    const corpus = await agentLivenessSnapshot({ project: "viewer", liveOnly: true, limit: 1 }, shared);
+    expect(corpus.conversations.map((record) => record.transcriptPath)).toEqual(held ? [candidate] : []);
+    expect(corpus.selection.recovered).toBe(held && !present ? 1 : 0);
   },
 );
 
