@@ -18004,6 +18004,43 @@ test("the interruption a dying CLI writes is the restart's own mark: the cut sti
   expect(lane.runs[0]!.attempts[0]!.providerWait).toBeUndefined();
 });
 
+/* What a real CLI leaves behind: interim prose, then the shutdown marker it
+   writes as the restart takes its process. The marker keeps that prose out of
+   the verdict; the fresh attempt is still told it. */
+test.each(["claude", "codex"] as const)("a %s attempt a native shutdown marker closed tells its one replacement what it last said", async (engine) => {
+  const h = harness();
+  const attempt = await restartCutStage(h, [{ id: "build", kind: "run", engine, model: engine === "codex" ? "gpt-6-sol" : "fable", prompt: "Build", next: null }]);
+  h.advanceWallClock(10 * 60_000);
+  const recordedAt = h.ports.now();
+  cutByRestart(h, h.ports, attempt, recordedAt, "unused");
+  const at = (offset: number) => new Date(Date.parse(recordedAt) + offset).toISOString();
+  const prose = "Two of five suites are green; running the remaining three.";
+  const records = engine === "codex" ? [
+    { timestamp: at(-60_000), type: "event_msg", payload: { type: "task_started" } },
+    { timestamp: at(-30_000), type: "event_msg", payload: { type: "agent_message", message: prose } },
+    { timestamp: at(1_000), type: "event_msg", payload: { type: "turn_aborted" } },
+  ] : [
+    { timestamp: at(-60_000), type: "user", message: { role: "user", content: "Build" } },
+    { timestamp: at(-30_000), type: "assistant", message: { role: "assistant", content: [{ type: "text", text: prose }] } },
+    { timestamp: at(1_000), type: "user", interruptedByShutdown: true, message: { role: "user", content: "[Request interrupted by user]" } },
+  ];
+  const transcript = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "llv-native-cut-")), `${engine}.jsonl`);
+  fs.writeFileSync(transcript, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
+  const evidence = await durableStageTurnEvidence(engine, transcript);
+  expect(evidence).toMatchObject({ turn: "terminal", message: null, terminalProviderMessage: { errorClass: "turn_aborted" } });
+  h.durableTurns.set(attempt.agentPath!, evidence!);
+  for (let tick = 0; tick < 3; tick += 1) {
+    h.advanceWallClock(5 * 60_000);
+    await tickPipelines([], h.ports);
+  }
+
+  const lane = loadPipelines()[0]!;
+  expect(lane.runs[0]!.attempts).toHaveLength(2);
+  expect(lane.runs[0]!.attempts[0]).toMatchObject({ state: "failed", error: "interrupted by a Delegatus restart; replaced by a fresh stage attempt" });
+  expect(lane.runs[0]!.attempts[1]!.restartContext).toMatchObject({ previousAttempt: 1, cause: "restart", lastReport: prose });
+  expect(h.spawnInputs[1]!.prompt).toContain(`> ${prose}`);
+});
+
 test("a restart cut is retried exactly once across repeated restarts and two Viewer generations", async () => {
   const h = harness();
   const attempt = await restartCutStage(h, [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }]);

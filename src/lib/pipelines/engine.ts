@@ -4106,9 +4106,10 @@ async function replaceInterruptedStageAttempt(
 }
 
 /** What the cut attempt last said, for the replacement's first message: its
-    newest assistant message, bounded. A turn that never wrote one has none. */
+    newest assistant message, bounded, including one a native shutdown marker
+    left unfinished. A turn that never wrote one has none. */
 function cutAttemptReport(durable: StageTurnEvidence | null | undefined): string | undefined {
-  const text = (durable?.reportProse ?? durable?.message?.text ?? "").trim();
+  const text = (durable?.reportProse ?? durable?.message?.text ?? durable?.cutProse ?? "").trim();
   return text ? redactBounded(text, CUT_ATTEMPT_REPORT_CHARS) : undefined;
 }
 const CUT_ATTEMPT_REPORT_CHARS = 1_500;

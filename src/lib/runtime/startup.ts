@@ -382,23 +382,25 @@ function recordOrchestratorRestartObligations(
  * A restart of the service (a deploy, a self-update, a crash) ends every
  * engine process the previous Viewer hosted: the claim below re-hosts the row
  * on a resumed, idle process, or the process dies with its stdin. Whatever
- * the conversation was doing goes with it. Three shapes are in flight:
+ * the conversation was doing goes with it. Four shapes are in flight:
  *
  *  - a turn still open in the transcript (a tool call, a reply being written);
  *  - a Claude turn that had ended on harness background work still running
  *    (`run_in_background`, a Monitor, a wakeup), whose row reads idle. The
  *    work was a child of the old process, so its completion notice, which is
  *    what would have woken the agent, never arrives;
- *  - a pipeline stage launched moments before, whose transcript holds no
- *    dated event yet. Its controller still has to know the restart took it;
- *  - the turn a continuation that arrived after an earlier cut started, which
- *    the row names as active before its transcript shows a word of it.
+ *  - a turn started moments before, whose transcript holds no record of its
+ *    work yet: a pipeline stage's launch, or a spawned agent's first prompt
+ *    the row names as its active turn;
+ *  - the turn a message started after an earlier cut was resolved (its
+ *    continuation, or an operator's or controller's send), which the row
+ *    names as active before its transcript shows a word of it.
  *
  * The capture runs once per boot, before any claim can replace the process.
  * The transcript decides whether a turn was open; the row's process says
  * nothing, since the old one may stay alive for a few seconds more. The row's
- * active turn is what names the turn, so a turn a delivered continuation
- * started is a cut of its own and the same turn found again is the same cut.
+ * active turn is what names the turn, so a turn a message started after an
+ * earlier cut is a cut of its own and the same turn found again is the same cut.
  * A transcript whose tail cannot be read whole proves no turn, so it records
  * no cut: a record is what authorizes a stage's fresh attempt and what the
  * deploy verdict lists, and neither may rest on a guess.
@@ -461,18 +463,25 @@ async function restartCutTargets(
     if (!evidence?.verified) continue;
     const stage = interruptionStageOf(snapshot.memberships, conversationId);
     const at = evidence.lastWork?.at ?? null;
-    /* The same window bounds every adoption a turn claim alone asks for. */
-    if (at !== null && now - at > startupTurnMaxAgeMs()) continue;
+    /* The same window bounds every adoption a turn claim alone asks for. A
+       turn with no record of its work yet is as old as the row that started it. */
+    if (now - (at ?? Date.parse(entry.updatedAt)) > startupTurnMaxAgeMs()) continue;
     const backgroundTasks = await backgroundWorkAwaitedAtCut(conversation.engine, generation.path, evidence, now);
     const turnRef = live ? entry.structuredHost.activeTurnRef ?? null : null;
-    /* A continuation arrived since a cut whose transcript has not moved, and
+    /* An earlier cut was resolved, by its continuation or by any message that
+       took the conversation up, and the transcript has not moved since while
        the row names a turn other than the one that cut was. That turn is the
-       continuation's, open whatever the transcript, which has yet to show it. */
-    const resumedTurn = turnRef !== null && recorded.some((obligation) => obligation.state === "delivered"
+       message's, open whatever the transcript, which has yet to show it. */
+    const resumedTurn = turnRef !== null && recorded.some((obligation) => !interruptionObligationUnresolved(obligation)
       && registry.canonicalConversationId(obligation.conversationId) === conversationId
       && obligation.turnRef !== turnRef && obligation.checkpoint.lastEventAt === at);
+    /* A turn whose work has no record yet is open when the row names one and
+       no record of the transcript was ever observed: the first prompt reached
+       the engine, as a stage's launch did. A row whose transcript was seen and
+       is now gone or empty says nothing current (#1281). */
+    const firstTurn = turnRef !== null && conversation.turn.source === "empty";
     const inFlight = live && (resumedTurn || (at === null
-      ? stage !== null && evidence.turn !== "terminal"
+      ? (stage !== null || firstTurn) && evidence.turn !== "terminal"
       : evidence.turn === "busy" || (stage !== null && evidence.turn === "unknown")));
     if (!inFlight && backgroundTasks.length === 0) continue;
     const memberships = snapshot.memberships[conversationId] ?? [];

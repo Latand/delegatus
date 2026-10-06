@@ -359,6 +359,55 @@ class InterruptedConversations(unittest.TestCase):
         self.assertEqual(result["verdict"], "needs_decision")
         self.assertEqual(result["interruptedUnreadable"], ["interruption-obligations.pending.jsonl.claim-77-0123456789ab:1"])
 
+    def test_a_claim_taken_over_while_it_is_read_is_still_listed_by_a_switch(self):
+        # A later import renames an abandoned claim to its own just before the
+        # inventory reads it, and has not published the record yet.
+        state = self.state
+        abandoned = "interruption-obligations.pending.jsonl.claim-77-0123456789ab"
+        original = pathlib.Path.read_text
+
+        def taken_over(path, *args, **kwargs):
+            if path.name == abandoned:
+                path.rename(path.with_name("interruption-obligations.pending.jsonl.claim-99-fedcba987654"))
+            return original(path, *args, **kwargs)
+
+        class TakeoverSwitch(Switch):
+            def restart(self):
+                (state / abandoned).write_text(json.dumps(obligation("taken", "conversation_taken", deploy.utc())) + "\n")
+
+            def interrupted(self, since, hosts):
+                with patch.object(pathlib.Path, "read_text", taken_over):
+                    return deploy.interrupted_conversations(state, since, hosts)
+
+        result = deploy.run_switch(TakeoverSwitch(), TARGET, samples=3, interval=2, timeout=5)
+        self.assertEqual(result["verdict"], "pass")
+        self.assertEqual(result["interruptedUnreadable"], [])
+        self.assertEqual([entry["conversationId"] for entry in result["interrupted"]], ["conversation_taken"])
+
+    def test_records_that_keep_moving_leave_the_inventory_unknown(self):
+        state = self.state
+        pending = state / "interruption-obligations.pending.jsonl"
+        original = deploy.read_journal
+
+        def appended_during_every_read(path, records, unreadable):
+            original(path, records, unreadable)
+            with pending.open("a") as journal:
+                journal.write("\n")
+
+        class MovingSwitch(Switch):
+            def restart(self):
+                record = obligation("moving", "conversation_moving", deploy.utc())
+                deploy.write_json(state / "interruption-obligations" / (record["id"] + ".json"), record)
+
+            def interrupted(self, since, hosts):
+                with patch.object(deploy, "read_journal", appended_during_every_read), patch.object(deploy.time, "sleep"):
+                    return deploy.interrupted_conversations(state, since, hosts)
+
+        result = deploy.run_switch(MovingSwitch(), TARGET, samples=3, interval=2, timeout=5)
+        self.assertEqual(result["verdict"], "needs_decision")
+        self.assertEqual(result["interruptedUnreadable"], ["interruption-obligations:moving"])
+        self.assertEqual([entry["conversationId"] for entry in result["interrupted"]], ["conversation_moving"])
+
     def test_a_record_too_incomplete_to_name_its_conversation_is_unreadable(self):
         self.write({"id": "interruption-continuation-bare", "recordedAt": "2026-10-06T23:00:00Z"})
         for name, change in [("anonymous", {"conversationId": None}), ("stageless", {"stage": {"stageId": "build"}}),

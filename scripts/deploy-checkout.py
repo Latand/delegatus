@@ -174,11 +174,14 @@ def obligation_flaw(record):
 
 
 PENDING_JOURNAL = "interruption-obligations.pending.jsonl"
+# Inventory reads before the records are reported as still moving. An import
+# holds its claim for milliseconds, so a quiet read comes within a few.
+INVENTORY_ROUNDS = 5
 
 
 def read_journal(path, records, unreadable):
     """Adds the records of one pending journal, each id once. A journal gone
-    by the read was taken by an import, which moved its records on first."""
+    by the read moved elsewhere; the round that read it says so by its places."""
     try:
         lines = path.read_text().splitlines()
     except FileNotFoundError:
@@ -199,33 +202,35 @@ def read_journal(path, records, unreadable):
         records.setdefault(record["id"], record)
 
 
-def interrupted_conversations(state, since, hosts=()):
-    """The conversations whose turn this switch cut, as the Viewers recorded
-    them: an incumbent at release, the booting successor at restart, and the
-    records it could not read or that are too incomplete to name a
-    conversation. Each conversation names its pipeline stage when it ran one;
-    a stage the preflight protected names it from that capture when the record
-    does not. A state with no record directory recorded no cut.
+def file_identity(path):
+    try:
+        status = os.stat(path)
+    except FileNotFoundError:
+        return None
+    return status.st_ino, status.st_size, status.st_mtime_ns
 
-    A record can wait in the pending journal, and an import takes that journal
-    by renaming it to a claim beside it, writes its records into the
-    directory, returns the ones the directory refused to the journal and only
-    then deletes the claim. A claim an import died holding stays until a later
-    import takes it over. So the journal and every claim are read before the
-    directory and the journal once more after it: a record moving between
-    them during the read is found in one of them."""
-    directory = pathlib.Path(state) / "interruption-obligations"
-    pending = directory.with_name(PENDING_JOURNAL)
-    journaled = {}
-    unreadable = []
-    read_journal(pending, journaled, unreadable)
+
+def obligation_places(directory, pending):
+    """Every place a record can be, by what would change if one moved: the
+    pending journal and each import claim by file identity, the record
+    directory by its names. A rename, an append, a publication and a deleted
+    claim each change one of them."""
     try:
         beside = sorted(os.listdir(directory.parent))
     except FileNotFoundError:
         beside = []
-    for name in beside:
-        if name.startswith(PENDING_JOURNAL + ".claim-"):
-            read_journal(directory.parent / name, journaled, unreadable)
+    claims = tuple((name, file_identity(directory.parent / name))
+                   for name in beside if name.startswith(PENDING_JOURNAL + ".claim-"))
+    names = tuple(sorted(os.listdir(directory))) if os.path.lexists(directory) else ()
+    return file_identity(pending), claims, names
+
+
+def read_obligations(directory, pending, claims):
+    journaled = {}
+    unreadable = []
+    read_journal(pending, journaled, unreadable)
+    for name in claims:
+        read_journal(directory.parent / name, journaled, unreadable)
     records = {}
     names = sorted(os.listdir(directory)) if os.path.lexists(directory) else []
     for name in names:
@@ -240,9 +245,38 @@ def interrupted_conversations(state, since, hosts=()):
             unreadable.append(name + ":shape")
             continue
         records[record["id"]] = record
-    read_journal(pending, journaled, unreadable)
     for identifier, record in journaled.items():
         records.setdefault(identifier, record)
+    return records, unreadable
+
+
+def interrupted_conversations(state, since, hosts=()):
+    """The conversations whose turn this switch cut, as the Viewers recorded
+    them: an incumbent at release, the booting successor at restart, and the
+    records it could not read or that are too incomplete to name a
+    conversation. Each conversation names its pipeline stage when it ran one;
+    a stage the preflight protected names it from that capture when the record
+    does not. A state with no record directory recorded no cut.
+
+    A record can wait in the pending journal, and an import takes that journal
+    by renaming it to a claim beside it, writes its records into the
+    directory, returns the ones the directory refused to the journal and only
+    then deletes the claim. A later import takes over a claim one died holding
+    by renaming it to a claim of its own. A record can therefore move while it
+    is read, so a read counts only when every place it can be is unchanged
+    across it. A read that never finds them still is reported as unreadable,
+    which leaves the inventory unknown."""
+    directory = pathlib.Path(state) / "interruption-obligations"
+    pending = directory.with_name(PENDING_JOURNAL)
+    for round_number in range(INVENTORY_ROUNDS):
+        if round_number:
+            time.sleep(0.05 * round_number)
+        before = obligation_places(directory, pending)
+        records, unreadable = read_obligations(directory, pending, [name for name, _ in before[1]])
+        if obligation_places(directory, pending) == before:
+            break
+    else:
+        unreadable.append("interruption-obligations:moving")
     unreadable = list(dict.fromkeys(unreadable))
     boundary = parse_time(since)
     protected = {host.get("conversationId"): host for host in hosts if host.get("conversationId")}

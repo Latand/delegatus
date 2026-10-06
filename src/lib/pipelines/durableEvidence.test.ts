@@ -642,6 +642,8 @@ for (const engine of ["codex", "claude"] as const) {
     ]);
     const evidence = await durableStageTurnEvidence(engine, file);
     expect(evidence).toMatchObject({ turn: "terminal", terminalProviderMessage: { errorClass: "turn_aborted", ts: Date.parse("2026-10-02T10:02:00Z") } });
+    expect(evidence!.message).toBeNull();
+    expect(evidence!.cutProse).toBe("unfinished edit");
   });
 }
 

@@ -26,6 +26,10 @@ export type StageTurnEvidence = {
   /** Prose written before this attempt's stage_report call, when the agent
       followed its detailed answer with a shorter closing message. */
   reportProse?: string | null;
+  /** The newest assistant prose of a turn a native shutdown marker closed.
+      `message` drops it, since unfinished output never settles a verdict; a
+      fresh attempt is told it as what the cut attempt last said. */
+  cutProse?: string | null;
   /** The verified read covers the complete artifact and contains only Codex's
       launch metadata record. */
   launchOnly?: boolean;
@@ -393,6 +397,7 @@ export async function durableStageTurnEvidence(
   return {
     turn: terminal ? "terminal" : turn.state === "busy" ? "busy" : "unknown",
     message: nativeCut ? null : message,
+    ...(nativeCut ? { cutProse: message?.text ?? null } : {}),
     ...(reportAt ? { reportProse } : {}),
     lastRecordAt: newest ? recordTs(newest, fallbackTs) || null : null,
     lastAgentEventAt: agentEventAt(evidenceRead.records, codex),

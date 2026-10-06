@@ -124,6 +124,9 @@ function incumbentConversation(
   sessionId: string,
   engineProcess: ProcessIdentity,
   records: Record<string, unknown>[] = midToolTranscript(engine),
+  /** What the registry last observed of the turn; a spawn that has written
+      no record yet was never observed. */
+  observed: "busy" | "never" = "busy",
 ): CutConversation {
   const registryFile = path.join(directory, "agent-registry.json");
   const registry = new AgentRegistry(registryFile);
@@ -135,7 +138,9 @@ function incumbentConversation(
     path: artifactPath,
     accountId: null,
     launchProfile,
-    turn: { state: "busy", source: "lifecycle", terminalAt: null },
+    turn: observed === "busy"
+      ? { state: "busy", source: "lifecycle", terminalAt: null }
+      : { state: "unknown", source: "empty", terminalAt: null },
     observedAt: new Date(Date.now() - 30_000).toISOString(),
   }]);
   const conversation = registry.conversationForPath(artifactPath)!;
@@ -1309,6 +1314,88 @@ test("an agent resumed after one restart and cut mid-turn by the next gets its o
   }
 });
 
+test("a spawned Claude agent cut before its first transcript record is resumed once across repeated boots", async () => {
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  try {
+    /* The first prompt reached the engine, which names its turn, and the
+       restart came before the CLI wrote a line. */
+    const cut = incumbentConversation("claude", cutSessionId(47), deadEngine(2_000_001_147), [], "never");
+    const ledger = createFakeDeliveryLedger();
+    /* The next boot finds the row as the cut left it. That boot declines to
+       re-host a turn claim no transcript record dates, so a third has no row. */
+    for (const index of [1, 2]) {
+      if (index > 1) markHosted(cut, "live", CUT_TURN);
+      expect((await successorBoot(cut.registryFile, journal, ledger, { viewer: OTHER_VIEWER(70 + index) })).error).toBeNull();
+      await settle(() => ledger.writes.length > 0, index === 1 ? 400 : 150);
+    }
+    const writes = continuationsIn(ledger);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toStartWith("Viewer restarted and severed your structured host mid-turn.");
+    expect(obligationsFor(cut.registryFile)).toMatchObject([{
+      reason: "viewer-restart", turnRef: CUT_TURN, boundary: "viewer-restart:launch", checkpoint: { lastEventAt: null },
+    }]);
+  } finally {
+    journal.close();
+  }
+});
+
+test.each([
+  { row: "idle", status: "idle", turn: null, observed: "never" },
+  { row: "live with no turn named", status: "live", turn: null, observed: "never" },
+  { row: "naming a turn whose transcript was observed before", status: "live", turn: CUT_TURN, observed: "busy" },
+] as const)("an agent's row $row, its transcript holding no record, records nothing and sends nothing", async ({ status, turn, observed }) => {
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  try {
+    const cut = incumbentConversation("claude", cutSessionId(48), deadEngine(2_000_001_148), [], observed);
+    markHosted(cut, status, turn);
+    const ledger = createFakeDeliveryLedger();
+    expect((await successorBoot(cut.registryFile, journal, ledger)).error).toBeNull();
+    await settle(() => ledger.writes.length > 0, 150);
+    expect(continuationsIn(ledger)).toEqual([]);
+    expect(obligationsFor(cut.registryFile)).toEqual([]);
+  } finally {
+    journal.close();
+  }
+});
+
+test("a turn an operator resumed after a cut, cut again before its transcript shows it, gets its own one continuation", async () => {
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  try {
+    const cut = incumbentConversation("claude", cutSessionId(50), deadEngine(2_000_001_150));
+    await releaseIncumbent([cut], journal, () => deadEngine(2_000_001_150));
+    runtimeSession(journal, cut);
+    await Bun.sleep(5);
+    expect(operatorSend(journal, cut, "operator-send-after-release", "carry on").status).not.toBe("rejected");
+
+    const ledger = createFakeDeliveryLedger();
+    expect((await successorBoot(cut.registryFile, journal, ledger, { viewer: OTHER_VIEWER(80) })).error).toBeNull();
+    await settle(() => ledger.writes.length > 0);
+    expect(continuationsIn(ledger)).toEqual(["carry on"]);
+    expect(obligationsFor(cut.registryFile).map(({ state }) => state)).toEqual(["discharged"]);
+
+    /* The operator's message started a turn the next restart cut before the
+       transcript echoed its prompt. */
+    const receipt = ledger.receipts.get(ledger.writes[0]!.id);
+    if (receipt?.outcome !== "turn-started") throw new Error("the operator's message started no turn");
+    const operatorTurn = receipt.turnId;
+    await Bun.sleep(5);
+    for (const index of [1, 2, 3]) {
+      markHosted(cut, "live", operatorTurn);
+      expect((await successorBoot(cut.registryFile, journal, ledger, { viewer: OTHER_VIEWER(80 + index) })).error).toBeNull();
+      await settle(() => ledger.writes.length > 1, index === 1 ? 400 : 150);
+    }
+    const writes = continuationsIn(ledger);
+    expect(writes).toHaveLength(2);
+    expect(writes[1]).toStartWith("Viewer restarted and severed your structured host mid-turn.");
+    expect(obligationsFor(cut.registryFile).map(({ reason, turnRef }) => ({ reason, turnRef }))).toEqual([
+      { reason: "viewer-release", turnRef: CUT_TURN },
+      { reason: "viewer-restart", turnRef: operatorTurn },
+    ]);
+  } finally {
+    journal.close();
+  }
+});
+
 test("a Codex agent's restart cut is continued once across repeated boots and Viewer generations", async () => {
   const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
   try {
@@ -1340,7 +1427,8 @@ test.each(["codex", "claude"] as const)("a %s pipeline stage the restart cut get
     });
     const ledger = createFakeDeliveryLedger();
     for (const index of [1, 2]) {
-      if (index > 1) markHosted(cut, "live", "turn-still-open");
+      /* The later boot finds the row as the cut left it: the same turn. */
+      if (index > 1) markHosted(cut, "live", CUT_TURN);
       expect((await successorBoot(cut.registryFile, journal, ledger, { viewer: OTHER_VIEWER(20 + index) })).error).toBeNull();
       await settle(() => ledger.writes.length > 0, 150);
     }
