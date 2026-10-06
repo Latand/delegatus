@@ -4,16 +4,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { roleDescription, roleName, roleParamDescription, roleParamLabel, roleParamOptionLabel } from "@/components/builderCopy";
 import {
-  AGENT_LAUNCH_ENGINES,
   EngineRadioGroup,
-  LaunchAccountSelect,
   launchEngineLabel,
   openLaunchSignIn,
   useAgentLaunchDraft,
   useLaunchReadiness,
 } from "@/components/draft/AgentLaunchControls";
-import { Play, X } from "@/components/icons";
+import { DraftRuntimePill } from "@/components/draft/DraftRuntimePill";
+import { FeedMessageRow } from "@/components/conversation/OutboxBubbles";
+import { FeedSkeleton, SKELETON_BAR } from "@/components/skeletons";
 import { Select } from "@/components/ui/Select";
+import { useIsMobile } from "@/hooks/useIsMobile";
 import { useComposer } from "@/hooks/useComposer";
 import { seedLaunchOutbox } from "@/components/conversation/outbox";
 import { playCue } from "@/lib/audio/app";
@@ -22,16 +23,13 @@ import { useLocale } from "@/lib/i18n";
 import { requestFilesRefresh } from "@/lib/filesEvents";
 import { STREAM_RECONNECTED_EVENT } from "@/hooks/runtimeBus";
 import { applySpawnedConversationSnapshot } from "@/hooks/useFiles";
-import { shippedVariantConfig, variantForParams } from "@/lib/roles/paramConfig";
-import { defaultRoleParameterValues } from "@/lib/roles/parameters";
 import type { RoleDefinition } from "@/lib/roles/types";
 import type { FileEntry } from "@/lib/types";
-import { conversationIdentity, withoutArchivedPredecessors } from "@/lib/accounts/identity";
+import { conversationIdentity } from "@/lib/accounts/identity";
 import type { RuntimeImageCapability } from "@/lib/runtime/structuredContent";
 
-import { ComposerBar, type ComposerBarProps } from "./ComposerBar";
+import { ComposerBar } from "./ComposerBar";
 import { markLaunchedConversation } from "./launchedConversations";
-import { DirectoryPicker } from "./DirectoryPicker";
 import { DraftLaunchStatus } from "./DraftLaunchStatus";
 import {
   CONFIRM_ATTENTION_MS,
@@ -52,18 +50,14 @@ import {
   spawnRequestBody,
   upgradeLegacySpawnAttempt,
 } from "./draftSpawn";
-import { ReasoningControls } from "./ReasoningControls";
-import { cleanTitle, engineTintOf } from "./utils";
 import { draftWorkingDirectory } from "./projectModel";
-import { Z } from "@/components/layers";
-import { hasDraftLayout, InstalledDraftLayout } from "@/components/draft/draftLayout";
 
 type Engine = "claude" | "codex" | "copilot";
 
-/* Engine/model/effort/account state and the engine chips are SHARED with the
-   orchestrator panel and the mobile create sheet (PRD #976 slice A) — they live
-   in `@/components/draft/AgentLaunchControls` now. Re-exported here because the
-   pipeline stage placeholder has always imported the chips from this module. */
+/* The engine chips are SHARED with the orchestrator panel and the pipeline
+   stage placeholder (PRD #976 slice A) — they live in
+   `@/components/draft/AgentLaunchControls`. Re-exported here because the stage
+   placeholder has always imported the chips from this module. */
 export { EngineRadioGroup };
 
 const STRUCTURED_IMAGE_MIMES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
@@ -155,8 +149,7 @@ export function useRoleCatalog(): RoleCatalogItem[] {
  * The role block every draft-style window shares: role select, description,
  * typed parameters, and the scaffold + safety-fences preview. `allowedRoleIds`
  * narrows the catalog (a pipeline stage may not use deployer); `children`
- * renders extra fields between the params and the preview (the agent draft's
- * deploy confirm). `compactPreview` caps the scaffold preview's height for
+ * renders extra fields between the params and the preview. `compactPreview` caps the scaffold preview's height for
  * fixed-height hosts (stage placeholder windows).
  */
 export function RoleSection({
@@ -257,21 +250,12 @@ function writeField(id: string, name: string, value: string) {
   else sessionStorage.removeItem(field(id, name));
 }
 
-function readRoleParams(id: string): Record<string, string | number> {
-  try {
-    const value = JSON.parse(readField(id, "roleParams") || "{}") as unknown;
-    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-    return Object.fromEntries(Object.entries(value).filter(([, parameter]) => typeof parameter === "string" || typeof parameter === "number"));
-  } catch {
-    return {};
-  }
-}
-
 function scaffoldPreview(scaffold: string, params: Record<string, string | number>): string {
   return scaffold.replace(/\{\{([A-Za-z][A-Za-z0-9]*)\}\}/g, (_match, key: string) => String(params[key] ?? ""));
 }
 
-/** Everything a draft keeps in sessionStorage; called when the draft leaves the scheme. */
+/** Everything a draft keeps in sessionStorage; called when the draft leaves the board. The role fields are
+    the ones the form had before it became the composer alone: a tab that still holds them is cleared too. */
 export function clearDraftStorage(id: string) {
   for (const name of ["engine", "model", "cwd", "cwdSeed", "text", "boot", "src", "parentConversationId", "band", "effort", "speed", "accountId", "role", "roleParams", "reviews", "confirm"]) sessionStorage.removeItem(field(id, name));
 }
@@ -368,11 +352,56 @@ function newAttemptId(): string {
 }
 
 /**
- * A conversation that does not exist yet, drawn as a full pane on the scheme:
- * engine picker in the header retints the whole card, the directory rides
- * under it, and the composer at the bottom is the same chat input the real
- * panes have. The first message boots the agent in tmux; once its transcript
- * shows up in the scanner the draft hands over to the real node in place.
+ * What the launched conversation's card adds around its feed, held from the
+ * press. The launch reply replaces this pane with the product's own card: the
+ * task's title, status and description rows, then the conversation's window
+ * with its head. These rows keep that room, in the board's own classes, so the
+ * first message is drawn where the window will draw it and nothing the operator
+ * is reading moves when the reply lands (kanbanBoard.css shows them on a card
+ * that holds nothing but the draft; a task's card already has its own rows).
+ */
+function OpeningCardRows({ title }: { title: string }) {
+  return (
+    <div aria-hidden data-draft-card-rows="" className="draft-card-rows hidden">
+      <div className="head">
+        <span className="h-4 w-4 shrink-0" />
+        <h3 className="title"><span className="clamp">{title}</span></h3>
+        <span className="h-6 w-[82px] shrink-0" />
+      </div>
+      <span className={`h-4 w-24 ${SKELETON_BAR}`} />
+      <span className="h-7" />
+    </div>
+  );
+}
+
+/** The opening of the conversation: the window's head on the board (the phone names a conversation in its
+    top bar instead), the first message as the feed's own row, and the loading shape where the answer will be. */
+function OpeningFeed({ text, status, phone }: { text: string; status: React.ReactNode; phone: boolean }) {
+  return (
+    <>
+      {phone ? null : (
+        <div aria-hidden data-draft-opening-head="" className="draft-opening-head flex shrink-0 flex-col justify-center gap-2">
+          <span className={`h-3 w-2/5 ${SKELETON_BAR}`} />
+          <span className={`h-2.5 w-1/4 ${SKELETON_BAR}`} />
+        </div>
+      )}
+      <div data-draft-opening="" className={`draft-opening flex min-h-0 flex-1 flex-col gap-3 overflow-hidden ${phone ? "pt-1" : ""}`}>
+        <FeedMessageRow entry={null} canonical={{ text }} />
+        <FeedSkeleton latestOnly className="!flex-none !justify-start !px-0 !pb-1 !pt-0" />
+        {status}
+      </div>
+    </>
+  );
+}
+
+/**
+ * A conversation that does not exist yet: the conversation composer and
+ * nothing else (docs/design/new-agent-redesign.md, variant 1). The prompt is
+ * typed or dictated, the runtime pill picks the engine, model, tier and
+ * account, and Send launches at once. The project and the working directory
+ * come from where the draft was opened and are never shown. From the press the
+ * pane is the conversation: the first message as the feed's own row above the
+ * feed's loading shape, until the launched conversation takes the pane over.
  */
 export function DraftAgentPane({
   draftId,
@@ -399,12 +428,7 @@ export function DraftAgentPane({
      long as the operator has not picked a directory of their own. */
   const awaitingInheritedCwdRef = useRef(Boolean(src && draftCwdIsUntouched(draftId)));
   const [cwd, setCwdState] = useState(() => initialCwd || draftWorkingDirectory(files, project, src));
-  const roles = useRoleCatalog();
-  const [roleId, setRoleIdState] = useState(() => readField(draftId, "role"));
-  const [roleParams, setRoleParamsState] = useState(() => readRoleParams(draftId));
-  const [reviews, setReviewsState] = useState(() => readField(draftId, "reviews"));
-  const [deployConfirm, setDeployConfirmState] = useState(() => readField(draftId, "confirm"));
-  const [dirs, setDirs] = useState<string[]>([]);
+  const isMobile = useIsMobile();
   /* The stored key is "" before the first negotiation and after an engine flip;
      the derived value below reads any mismatch as «loading», which is exactly
      what a not-yet-negotiated engine is. */
@@ -413,9 +437,9 @@ export function DraftAgentPane({
     requestKey: "",
   });
   /* Engine, model, effort, codex speed and the stored account are the SHARED
-     launch parameters (PRD #976 slice A) — the orchestrator panel offers the
-     operator the very same set, so the state and its invariants live in one
-     module and this pane keeps only its own persistence. */
+     launch parameters (PRD #976 slice A): the state and its invariants live in
+     one module, this pane keeps only its own persistence, and the runtime pill
+     reads and writes this same object, so what it shows is what Send launches. */
   const launch = useAgentLaunchDraft({
     storage: {
       read: (name) => readField(draftId, name),
@@ -456,67 +480,6 @@ export function DraftAgentPane({
     return () => window.removeEventListener(DRAFT_CWD_RESOLVED_EVENT, applyResolvedCwd);
   }, [draftId]);
 
-  const { setEngine, setModel, setEffort, setSpeed } = launch;
-  /* The operator's own pick: it outranks every system answer from here on, so
-     the seed is deliberately left behind rather than moved onto the new value. */
-  const setCwd = (value: string) => {
-    awaitingInheritedCwdRef.current = false;
-    setCwdState(value);
-    writeField(draftId, "cwd", value);
-  };
-  const setRoleParams = (value: Record<string, string | number>) => {
-    setRoleParamsState(value);
-    writeField(draftId, "roleParams", JSON.stringify(value));
-  };
-  const setRoleParam = (key: string, value: string | number) => {
-    const next = { ...roleParams, [key]: value };
-    setRoleParams(next);
-    const selected = roles.find((role) => role.id === roleId);
-    if (!selected) return;
-    /* The variants come from the catalog, so the install's agent mapping
-       (#1876) reaches the draft exactly as it reaches the registry; the
-       precedence is the registry's own (variantForParams). */
-    const variant = variantForParams(selected.id, next);
-    /* Only a change of variant moves the runtime: a lens, a diff source or a
-       parallel count leaves the one the operator picked. A role with no
-       variants keeps whatever runtime the draft shows. */
-    if (variant === variantForParams(selected.id, roleParams)) return;
-    if (!variant && !selected.variants) return;
-    const config = variant
-      ? selected.variants?.[variant] ?? shippedVariantConfig(selected.id, variant) ?? selected.config
-      /* Plain/general mode falls back to the server-merged config so a saved
-         role override is honored, matching selectRole below. */
-      : selected.config;
-    setEngine(config.engine);
-    setModel(config.model);
-    setEffort(config.effort);
-    if (variant && config.engine === "claude") setSpeed("");
-  };
-  const setDeployConfirm = (value: string) => {
-    setDeployConfirmState(value);
-    writeField(draftId, "confirm", value);
-  };
-  const setReviews = (value: string) => {
-    setReviewsState(value);
-    writeField(draftId, "reviews", value);
-  };
-  const selectRole = (nextId: string) => {
-    setRoleIdState(nextId);
-    writeField(draftId, "role", nextId);
-    const selected = roles.find((role) => role.id === nextId);
-    if (!selected) {
-      setRoleParams({});
-      setDeployConfirm("");
-      return;
-    }
-    const params = defaultRoleParameterValues(selected);
-    setRoleParams(params);
-    setDeployConfirm("");
-    setEngine(selected.config.engine);
-    setModel(selected.config.model);
-    setEffort(selected.config.effort);
-    setSpeed("");
-  };
   const setAttempt = useCallback((value: SpawnAttempt | null) => {
     setAttemptState(value);
     writeField(draftId, "boot", value ? JSON.stringify(value) : "");
@@ -545,8 +508,8 @@ export function DraftAgentPane({
   });
   const { text, setText, setStatus, busy, setBusy, voiceSending, attachments } = composer;
 
-  /* Recent working directories, the current project's first; a handoff draft
-     inherits the source transcript's own cwd over everything else. */
+  /* What the engine takes as images, and for a handoff draft the source
+     transcript's own cwd, which it inherits over everything else. */
   useEffect(() => {
     let cancelled = false;
     const requestKey = spawnImageNegotiationKey;
@@ -557,12 +520,13 @@ export function DraftAgentPane({
       })
       .then((json) => {
         if (cancelled) return;
-        if (Array.isArray(json.dirs)) setDirs(json.dirs);
         const inherited = typeof json.cwd === "string" ? json.cwd.trim() : "";
         const shouldInherit = Boolean(awaitingInheritedCwdRef.current && inherited);
         if (shouldInherit) awaitingInheritedCwdRef.current = false;
         setCwdState((prev) => {
-          const next = (shouldInherit && inherited) || prev || inherited || json.dirs?.[0] || "";
+          /* Only the source's own directory is inherited. The suggestions' other directories are guesses
+             the operator used to see and correct; unseen, a guess is not launched in. */
+          const next = (shouldInherit && inherited) || prev || inherited || "";
           if (next !== prev) setDraftCwd(draftId, next);
           return next;
         });
@@ -743,7 +707,6 @@ export function DraftAgentPane({
     void submitAttempt(attempt);
   }, [attempt, submitAttempt]);
 
-  const selectedRole = roles.find((role) => role.id === roleId) ?? null;
   const spawnImagesDisabled = spawnImageNegotiation.status !== "ready"
     || (readySpawnImageNegotiation?.spawnTransport === "structured" && !structuredSpawnImageCapability?.supported);
   const spawnImagesReason = spawnImageNegotiation.status === "loading"
@@ -755,6 +718,12 @@ export function DraftAgentPane({
         : readySpawnImageNegotiation?.spawnTransport === "structured" && !structuredSpawnImageCapability?.supported
         ? t("composer.structuredImagesProtocol")
         : undefined;
+
+  /* The directory the launch runs in, never shown and never asked: the one the board seeded from where the
+     draft was opened, or a handoff's source directory. `/` is what the board seeds while the project's
+     folder is still unresolved; it counts only when the project's own conversations say the root is `/`. */
+  const seededCwd = cwd.trim();
+  const launchCwd = seededCwd && seededCwd !== "/" ? seededCwd : draftWorkingDirectory(files, project, src);
 
   const send = async (overrideText?: string) => {
     const payloadText = overrideText ?? text;
@@ -768,35 +737,13 @@ export function DraftAgentPane({
       return;
     }
     if (attachments.images.length && !attachments.validate()) return;
-    if (!cwd.trim()) {
-      setStatus({ kind: "err", text: t("draft.needDir") });
-      return;
-    }
-    if (selectedRole) {
-      const missing = selectedRole.parameters.find((parameter) => {
-        if (!parameter.required) return false;
-        const value = roleParams[parameter.key];
-        return value === undefined || (typeof value === "string" && !value.trim());
-      });
-      if (missing) {
-        setStatus({ kind: "err", text: t("draft.roleNeedsParams") });
-        return;
-      }
-      if (selectedRole.id === "deployer" && deployConfirm !== "deploy") {
-        setStatus({ kind: "err", text: t("draft.deployConfirm") });
-        return;
-      }
-      if (selectedRole.id === "reviewer" && !reviews) {
-        setStatus({ kind: "err", text: t("draft.reviewerNeedsConversation") });
-        return;
-      }
-    }
+    if (!launchCwd) return;
     if (!payloadText.trim() && !attachments.images.length) return;
     const candidate = createSpawnAttempt(newAttemptId(), Date.now(), {
-      title: draftSpawnTitle(engine, roleId, payloadText, attachments.images.length),
+      title: draftSpawnTitle(engine, "", payloadText, attachments.images.length),
       engine,
       model,
-      cwd: cwd.trim(),
+      cwd: launchCwd,
       effort,
       fast: engine === "codex" && speed ? speed === "fast" : null,
       accountId: launch.launchAccountId,
@@ -805,12 +752,6 @@ export function DraftAgentPane({
       src,
       ...(parentConversationId ? { parentConversationId } : {}),
       ...(draftBand(draftId).startsWith("task:") ? { taskId: draftBand(draftId).slice("task:".length) } : {}),
-      ...(roleId ? {
-        role: roleId,
-        roleParams,
-        ...(roleId === "reviewer" && reviews ? { reviews } : {}),
-        ...(deployConfirm ? { confirm: deployConfirm } : {}),
-      } : {}),
     });
     /* Persist before POST: a navigation now has the launch id, timestamp, and
        exact recoverable payload needed to reconcile the original request. */
@@ -823,209 +764,101 @@ export function DraftAgentPane({
     await submitAttempt(candidate);
   };
 
-  const tint = engineTintOf(engine);
   const fieldsDisabled = composer.fieldsDisabled;
-  const dirPickerId = "draft-dirs-" + draftId;
-  /* Display phase drives the frozen-card copy. `busy` (POST in flight) shows as
+  /* Display phase drives the status line. `busy` (POST in flight) shows as
      `launching`; a durable attempt shows booting/booting-slow/confirming/attention. */
   const phase = displayPhase(attempt, busy, slowBoot);
   const target = attempt?.target ?? "";
-  const reviewCandidates = withoutArchivedPredecessors(files).filter((file) =>
-    (file.engine === "claude" || file.engine === "codex")
-    && Boolean(file.conversationId || file.path));
-
-  const roleExtras = (
-    <>
-    {selectedRole?.id === "reviewer" ? (
-      <label className="flex max-w-full flex-col gap-0.5 text-caption text-muted">
-        <span>{t("draft.reviews")}</span>
-        <Select
-          value={reviews}
-          disabled={fieldsDisabled}
-          onChange={(event) => setReviews(event.target.value)}
-          aria-label={t("draft.reviewsAria")}
-        >
-          <option value="">{t("draft.reviewsPlaceholder")}</option>
-          {reviews && !reviewCandidates.some((file) => (file.conversationId ?? file.path) === reviews) ? (
-            <option value={reviews}>{reviews}</option>
-          ) : null}
-          {reviewCandidates.map((file) => {
-            const value = file.conversationId ?? file.path;
-            return <option key={value} value={value}>{cleanTitle(file.title, 80)}</option>;
-          })}
-        </Select>
-      </label>
-    ) : null}
-    {selectedRole?.id === "deployer" ? (
-      <label className="flex max-w-52 flex-col gap-0.5 text-[10px] text-muted">
-        <span>{t("draft.deployConfirm")}</span>
-        <input value={deployConfirm} disabled={fieldsDisabled} onChange={(event) => setDeployConfirm(event.target.value)} aria-label={t("draft.deployConfirm")} placeholder="deploy" className="h-7 rounded-[7px] border border-border bg-card px-1.5 text-[11px] text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60" />
-      </label>
-    ) : null}
-    </>
-  );
-  const capabilityAlert = spawnImageNegotiation.status === "error" ? (
-      <div role="alert" className="flex items-center justify-between gap-2 rounded-control bg-danger-soft px-2 py-1 text-caption text-danger">
-        <span>{t("composer.imageCapabilityError")}</span>
-        <button
-          type="button"
-          className="shrink-0 rounded-control border border-danger/30 bg-card px-2 py-1 font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/30"
-          onClick={() => {
-            setSpawnImageNegotiation({ status: "loading", requestKey: spawnImageNegotiationKey });
-            setSpawnNegotiationAttempt((attempt) => attempt + 1);
-          }}
-        >
-          {t("composer.imageCapabilityRetry")}
-        </button>
-      </div>
-    ) : null;
-  const composerProps: ComposerBarProps = {
-    composer,
-    placeholder: structuredSpawn ? t("draft.placeholderStructured") : t("draft.placeholder"),
-    textareaAriaLabel: t("draft.promptTextAria"),
-    imageAriaLabel: t("draft.addImages"),
-    sendLabelIdle: t("composer.launchAgent"),
-    sendLabelRecording: t("draft.stopAndLaunch"),
-    sendIdleClassName: "hover:opacity-90",
-    sendIdleStyle: { backgroundColor: tint.color, borderColor: tint.color },
-    imageDisabled: spawnImagesDisabled,
-    imageDisabledReason: spawnImagesReason,
-    sendDisabledReason: signInFirst && !attempt
-      ? t("launch.accountSignedOut", { label: signInFirst.label, engine: launchEngineLabel(signInFirst.engine) })
-      : undefined,
-    onSendBlockedRecover: signInFirst && !attempt ? () => openLaunchSignIn(signInFirst) : undefined,
-    sendBlockedRecoverLabel: signInFirst ? t("launch.signInFirst", { engine: launchEngineLabel(signInFirst.engine) }) : undefined,
-    leftSlot: <span
-        className="inline-flex min-w-0 items-center gap-1 rounded-control bg-sunken px-1.5 py-1 text-caption font-semibold text-secondary"
-        title={structuredSpawn ? t("draft.newWindowTitleStructured") : t("draft.newWindowTitle")}
-      >
-        <Play className="h-3 w-3 shrink-0" aria-hidden /> {t("draft.newAgent")}
-      </span>,
-  };
-  const launchStatus = attempt
+  const sent = Boolean(attempt);
+  /* The launch speaks in words only once it needs the operator: it is slow, it
+     could not be confirmed, or it failed. Until then the loading shape says it. */
+  const launchStatus = attempt && (phase === "booting-slow" || phase === "confirming-slow" || phase === "attention" || attempt.error)
     ? <DraftLaunchStatus ref={attentionRef} phase={phase} target={target} structured={structuredSpawn} error={attempt.error ?? null} />
     : null;
-  const submitForm = () => void send();
-  const heading = src ? t("draft.handoffLabel", { title: srcFile ? cleanTitle(srcFile.title, 60) : t("draft.conversation") }) : t("draft.newConvo");
-  const headingTitle = srcFile ? cleanTitle(srcFile.title) : undefined;
+  const blockedReason = attempt
+    ? undefined
+    : signInFirst
+      ? t("launch.accountSignedOut", { label: signInFirst.label, engine: launchEngineLabel(signInFirst.engine) })
+      : launchCwd ? undefined : t("draft.folderUnknown");
 
-  /* A design prototype may arrange the same parts another way
-     (`@/components/draft/draftLayout`); the product installs none. */
-  if (hasDraftLayout()) {
-    return (
-      <InstalledDraftLayout
-        draftId={draftId} launch={launch} fieldsDisabled={fieldsDisabled} heading={heading} headingTitle={headingTitle} src={src} band={draftBand(draftId)}
-        cwd={cwd} dirs={dirs} setCwd={setCwd} roles={roles} roleId={roleId} roleParams={roleParams} selectRole={selectRole} setRoleParam={setRoleParam}
-        roleExtras={roleExtras} attempt={attempt} launchStatus={launchStatus} capabilityAlert={capabilityAlert} composerProps={composerProps}
-        submit={submitForm} onClose={onClose}
-      />
-    );
-  }
+  /* The title the launched card will carry: the launch's own title without the engine it leads with. */
+  const openingTitle = (attempt?.request?.title ?? "").replace(/^[^·]*·\s*/, "") || attempt?.prompt.split("\n")[0] || "";
+  const { inputRef } = composer;
+  /* The cursor is in the field the moment the draft opens. */
+  useEffect(() => {
+    inputRef.current?.focus({ preventScroll: true });
+  }, [inputRef]);
+
+  const paneRef = useRef<HTMLElement>(null);
+  /* On Send the card grows to a conversation's height. It is brought to the top of its column the way the
+     board lands a launched card whose head is out of sight (`KanbanBoard`, the landing reveal), so that
+     reveal finds the head in view when the launch answers and scrolls nothing. */
+  useEffect(() => {
+    if (sent) paneRef.current?.closest<HTMLElement>(".card")?.scrollIntoView?.({ block: "start", inline: "nearest", behavior: "auto" });
+  }, [sent]);
 
   return (
+    /* `reader-host` is the board's own opt-out from its button reset (kanbanBoard.css), the one a conversation uses. */
     <section
+      ref={paneRef}
       data-pan-ignore
-      className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[10px] border border-border bg-card shadow-1"
+      data-draft-pane={sent ? "opening" : "composer"}
       aria-label={t("draft.paneAria")}
+      className={`reader-host flex min-w-0 flex-col gap-2 ${sent || isMobile ? "h-full min-h-0 flex-1" : ""} ${isMobile ? "border border-transparent bg-card p-3" : ""}`}
     >
-      <span aria-hidden className="h-1 w-full shrink-0" style={{ backgroundColor: tint.color }} />
-      <header className="flex h-10 shrink-0 items-center gap-1.5 border-b border-border px-2.5" style={{ backgroundColor: tint.soft }}>
-        <LaunchAccountSelect draft={launch} disabled={fieldsDisabled} className="max-w-28" />
-        <span className="h-2 w-2 shrink-0 rounded-full bg-strong" title={t("draft.notStarted")} />
-        <EngineRadioGroup engine={engine} engines={AGENT_LAUNCH_ENGINES} disabled={fieldsDisabled} onChange={setEngine} />
-        <span
-          className="min-w-0 flex-1 truncate text-[12px] font-semibold text-muted"
-          title={headingTitle}
-        >
-          {heading}
-        </span>
-        <button
-          className="inline-flex shrink-0 items-center rounded-[8px] border border-border bg-canvas px-1.5 py-0.5 text-muted hover:border-danger/40 hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-          aria-label={t("draft.dismiss")}
-          onClick={onClose}
-        >
-          <X className="h-3 w-3" aria-hidden />
-        </button>
-      </header>
-
-      {/* The picker's popup hangs out of this strip, so the strip cannot clip
-          its own overflow — the pane below it scrolls, the strip does not. */}
-      <div className={`relative ${Z.lifted} flex shrink-0 items-center gap-1.5 border-b border-border bg-sunken px-2.5 py-1.5`}>
-        <span className="shrink-0 text-[10px] font-semibold text-muted">{t("draft.directory")}</span>
-        <DirectoryPicker
-          id={dirPickerId}
-          value={cwd}
-          dirs={dirs}
-          disabled={fieldsDisabled}
-          ariaLabel={t("draft.dirAria")}
-          onChange={setCwd}
-        />
-      </div>
-
-      <RoleSection
-        idPrefix={draftId}
-        roles={roles}
-        roleId={roleId}
-        roleParams={roleParams}
-        disabled={fieldsDisabled}
-        onSelectRole={selectRole}
-        onSetParam={setRoleParam}
-      >
-        {roleExtras}
-      </RoleSection>
-
-      <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-border bg-sunken px-2.5 py-1.5">
-        <span className="shrink-0 text-[10px] font-semibold text-muted">{t("draft.reasoning")}</span>
-        <ReasoningControls
-          engine={engine}
-          model={model}
-          effort={effort}
-          speed={speed}
-          disabled={fieldsDisabled}
-          onModel={setModel}
-          onEffort={setEffort}
-          onSpeed={setSpeed}
-        />
-      </div>
-
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-4">
-        {attempt ? (
-          <div className="flex flex-1 flex-col justify-end gap-3">
-            <div className="flex justify-end">
-              <span className="min-w-0 max-w-[85%] whitespace-pre-wrap rounded-[10px] rounded-br-[3px] bg-accent-soft px-2.5 py-1.5 text-[12px] text-secondary">
-                {attempt.prompt || t("draft.imagesOnly")}
-              </span>
-            </div>
-            {launchStatus}
-          </div>
-        ) : (
-          <div className="flex flex-1 flex-col items-center justify-center gap-2 text-center">
-            <span className="rounded-full px-3 py-1 text-[13px] font-bold" style={{ backgroundColor: tint.soft, color: tint.color }}>
-              {launchEngineLabel(engine)}
-            </span>
-            <div className="max-w-[360px] text-[12px] text-muted">
-              {src ? t("draft.hintRelay") : structuredSpawn ? t("draft.hintNewStructured") : t("draft.hintNew")}
-            </div>
-            {src ? (
-              <div className="max-w-[420px] truncate font-mono text-[10px] text-muted" title={src}>
-                {src}
-              </div>
-            ) : null}
-          </div>
-        )}
-      </div>
-
+      {sent ? <OpeningCardRows key="card-rows" title={openingTitle} /> : null}
+      <div key="window" data-draft-window="" className={`draft-window flex min-w-0 flex-col gap-2 ${sent || isMobile ? "min-h-0 flex-1" : ""}`}>
+      {sent
+        ? <OpeningFeed key="feed" text={attempt!.prompt || t("draft.imagesOnly")} status={launchStatus} phone={isMobile} />
+        : isMobile ? <div key="room" className="min-h-0 flex-1" /> : null}
       <form
+        key="form"
+        data-draft-form=""
+        className="flex min-w-0 shrink-0 flex-col gap-1.5"
+        aria-label={t("draft.promptAria")}
         onSubmit={(event) => {
           event.preventDefault();
-          submitForm();
+          void send();
         }}
-        className="flex shrink-0 flex-col gap-1.5 border-t border-border bg-card px-2.5 py-2"
-        aria-label={t("draft.promptAria")}
+        onKeyDown={(event) => {
+          /* Escape on an empty field puts the draft away, as it does for a new task. */
+          if (event.key !== "Escape" || event.defaultPrevented || sent || text || attachments.attachments.length) return;
+          event.preventDefault();
+          onClose();
+        }}
       >
-        {capabilityAlert}
-        <ComposerBar {...composerProps} />
+        {spawnImageNegotiation.status === "error" ? (
+          <div role="alert" className="flex items-center justify-between gap-2 rounded-control bg-danger-soft px-2 py-1 text-caption text-danger">
+            <span>{t("composer.imageCapabilityError")}</span>
+            <button
+              type="button"
+              className="shrink-0 rounded-control border border-danger/30 bg-card px-2 py-1 font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/30"
+              onClick={() => {
+                setSpawnImageNegotiation({ status: "loading", requestKey: spawnImageNegotiationKey });
+                setSpawnNegotiationAttempt((attempt) => attempt + 1);
+              }}
+            >
+              {t("composer.imageCapabilityRetry")}
+            </button>
+          </div>
+        ) : null}
+        <ComposerBar
+          composer={composer}
+          placeholder={structuredSpawn ? t("draft.placeholderStructured") : t("draft.placeholder")}
+          textareaAriaLabel={t("draft.promptTextAria")}
+          imageAriaLabel={t("draft.addImages")}
+          sendLabelIdle={t("composer.launchAgent")}
+          sendLabelRecording={t("draft.stopAndLaunch")}
+          sendIdleClassName="border-accent bg-accent hover:opacity-90"
+          imageDisabled={spawnImagesDisabled}
+          imageDisabledReason={spawnImagesReason}
+          sendDisabledReason={blockedReason}
+          onSendBlockedRecover={signInFirst && !attempt ? () => openLaunchSignIn(signInFirst) : undefined}
+          sendBlockedRecoverLabel={signInFirst ? t("launch.signInFirst", { engine: launchEngineLabel(signInFirst.engine) }) : undefined}
+          leftSlot={<DraftRuntimePill launch={launch} disabled={fieldsDisabled} />}
+        />
       </form>
+      </div>
     </section>
   );
 }

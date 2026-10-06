@@ -1,8 +1,11 @@
 # Creating a new agent: the composer, and the conversation after Send
 
-Design only. Nothing in this note ships: the two variants are prototypes that
-only the kanban evidence fixture can install, and the product draws today's
-draft exactly as before.
+**Variant 1 was built** (the operator, 2026-10-06, on the reworked frames: «там
+где вариант, где только строка компоузера, мне нравится»). «+ Agent» opens it
+for every user; the old form, variant 2, the variant switch and the prototype
+files are removed. Sections 1 to 9 are the design record as it was written and
+still name the prototype's files, line numbers and `?newagent=<n>`; section 10
+says what the built form is and where it departs from them.
 
 ## Operator verdict 2026-10-06
 
@@ -331,3 +334,59 @@ every option of today's form on the surface and were rejected for that. Their
 frames and sheets are kept beside the new ones in a folder named
 `rejected-looks-1-3`; their code is removed from the branch and remains in its
 history (`abed14684`).
+
+## 10. As built
+
+`DraftAgentPane` (`src/components/DraftAgentPane.tsx`) is the form: the
+product's `ComposerBar` with `DraftRuntimePill`
+(`src/components/draft/DraftRuntimePill.tsx`) in its left slot, and nothing
+else. What differs from sections 1 to 8:
+
+- **One face.** The pill's button is `RuntimePillFace`
+  (`src/components/RuntimePill.tsx`), the same component a conversation's pill
+  draws. The draft feeds it, the popover and the phone's sheet from its own
+  launch parameters, so what the face says is what Send launches.
+- **The tier is always on the face.** A conversation's pill always names a
+  tier. With none chosen the draft's face says «Default» («Типово»), since the
+  launch then sends no tier and the engine picks its own.
+- **The phone's sheet is headed «New agent»** («Новий агент»), with the line
+  «The agent starts on: …» under it; its account rows carry no «current» and
+  «next message» marks, which belong to a running conversation. The phone's
+  chip names no account, as a conversation's chip names none; the desktop face
+  names a picked account after an arrow.
+- **Nothing moves when the launch answers.** From the press the pane is laid
+  out as the launched card will be: on a card that holds only the draft, the
+  task's title, status and description rows; then the conversation window's
+  box with its head; then the first message where the feed draws it. The
+  driver compares the first message's box before and after the launch reply
+  at every size and finds it unchanged. The board lands the opening the way it
+  lands a launched card (the card's head at the top of its column), so the
+  board's own reveal at the reply has nothing left to scroll. A column holds a
+  reader's width from the moment a draft opens in it.
+- **The composer after Send** stands where the launched window's composer
+  will. At 1440x900 and 1000x700 that is under the window's lower edge, as it
+  is on the product's launched card; it is locked until the launch answers.
+- **Attachments are images.** A launch carries images and no other file
+  (`POST /api/spawn` takes `images`; the conversation composer's documents go
+  through `/api/tmux`, which stages them in the inbox of a conversation that
+  already exists). The form shows the image picker and refuses another file by
+  name. Parity needs the launch command to admit, stage and settle a file
+  batch as the message route does, and to count the files in its replay
+  digest.
+- **The working directory** is the one the board seeded when the draft was
+  opened: the project's root, or a handoff's source directory. While the
+  project's folder is unresolved the board seeds `/`; the form then holds Send
+  with the composer's blocked-send line («This project's folder is not known
+  yet…») and launches as soon as the board finds the folder. The suggestions'
+  other directories are no longer a fallback: unseen, a guess is not launched
+  in.
+- **A launch from this form carries no role.** Reviewer and Deployer were
+  reachable only through the form's role select and have no entry point here;
+  roles stay with the orchestrator's tools.
+
+Evidence: the block «creating a new agent» in
+`src/components/kanban/kanbanBoard.browser.test.tsx` over
+`?scenario=new-agent`, and its readings in
+`evidence/new-agent-redesign/built.json`. `NEW_AGENT_TODAY` names the frames of
+the old form (shot by the design lane at the last commit that had it) for the
+comparison sheets.

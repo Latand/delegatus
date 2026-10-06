@@ -5,7 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 
 import { setLocale } from "@/lib/i18n";
 
-import { DraftAgentPane } from "./DraftAgentPane";
+import { DraftAgentPane, setDraftCwd } from "./DraftAgentPane";
 
 const dom = new Window();
 Object.assign(globalThis, {
@@ -74,6 +74,7 @@ const settle = async () => {
 };
 
 function mount(draftId: string): HTMLElement {
+  setDraftCwd(draftId, "/repo");
   const host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -81,20 +82,21 @@ function mount(draftId: string): HTMLElement {
   return host as unknown as HTMLElement;
 }
 
-function accountSelect(host: HTMLElement, engine: "Claude" | "Codex"): HTMLSelectElement {
-  const select = host.querySelector(`select[aria-label="${engine} account for this launch"]`) as HTMLSelectElement | null;
-  expect(select).toBeTruthy();
-  return select!;
+const click = (element: Element) => flushSync(() => element.dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event));
+const pill = (host: HTMLElement) => host.querySelector("[data-runtime-pill]") as HTMLButtonElement;
+const popover = (selector: string) => document.querySelector(`[data-runtime-popover] ${selector}`) as HTMLElement | null;
+
+/** The pill's own Account panel, the one a conversation's composer opens. */
+async function openAccounts(host: HTMLElement): Promise<string[]> {
+  click(pill(host));
+  click(popover('[data-runtime-value="account"]')!);
+  await settle();
+  return [...document.querySelectorAll('[data-runtime-popover] [data-runtime-row="account"]')].map((row) => row.getAttribute("data-runtime-value")!);
 }
 
 function reactProps<T>(element: Element): T {
   const key = Object.keys(element).find((candidate) => candidate.startsWith("__reactProps$"))!;
   return (element as unknown as Record<string, T>)[key]!;
-}
-
-function chooseAccount(select: HTMLSelectElement, id: string): void {
-  select.value = id;
-  flushSync(() => select.dispatchEvent(new dom.Event("change", { bubbles: true }) as unknown as Event));
 }
 
 async function launch(host: HTMLElement, prompt: string): Promise<void> {
@@ -105,19 +107,22 @@ async function launch(host: HTMLElement, prompt: string): Promise<void> {
   await settle();
 }
 
-test("a Claude draft lists stored profiles, marks the active default, disables signed-out ones, and launches on the chosen account", async () => {
+test("the pill's Account panel lists the engine's signed-in profiles, and the launch runs on the one picked", async () => {
   const posts: Record<string, unknown>[] = [];
   installFetch(posts);
   const host = mount("claude-account-draft");
   await settle();
 
-  const select = accountSelect(host, "Claude");
-  expect(select.value).toBe("anna");
-  const options = [...select.querySelectorAll("option")];
-  expect(options.map((option) => option.textContent)).toEqual(["anna · active", "bob", "carol · needs sign-in"]);
-  expect(options.map((option) => option.disabled)).toEqual([false, false, true]);
+  /* Before a pick the face names no account; the panel says where the agent starts. */
+  expect(pill(host).querySelector("[data-runtime-pill-next-account]")).toBeNull();
+  click(pill(host));
+  expect(popover("[data-runtime-popover-account]")!.textContent).toBe("starts on anna");
+  click(pill(host));
 
-  chooseAccount(select, "bob");
+  /* A signed-out profile cannot take a launch and is not offered. */
+  expect(await openAccounts(host)).toEqual(["account-anna", "account-bob"]);
+  click(popover('[data-runtime-value="account-bob"]')!);
+  expect(pill(host).querySelector("[data-runtime-pill-next-account]")!.textContent).toBe("→ bob");
   await launch(host, "Run on the second profile");
 
   expect(posts).toHaveLength(1);
@@ -125,39 +130,43 @@ test("a Claude draft lists stored profiles, marks the active default, disables s
   expect(posts[0]!.accountId).toBe("bob");
 });
 
-test("flipping the engine re-defaults the launch account to the target engine's active profile", async () => {
+test("a model of another engine re-defaults the launch account to that engine's active profile", async () => {
   const posts: Record<string, unknown>[] = [];
   installFetch(posts);
   const host = mount("engine-flip-draft");
   await settle();
 
-  chooseAccount(accountSelect(host, "Claude"), "bob");
-  const codexRadio = [...host.querySelectorAll('[role="radio"]')].find((button) => button.textContent === "Codex") as HTMLButtonElement;
-  flushSync(() => codexRadio.dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event));
+  await openAccounts(host);
+  click(popover('[data-runtime-value="account-bob"]')!);
+  click(pill(host));
+  click(popover('[data-runtime-value="model"]')!);
+  click(popover('[data-runtime-value="codex/gpt-6-astra"]')!);
   await settle();
 
-  const select = accountSelect(host, "Codex");
-  expect(select.value).toBe("terra");
-  expect([...select.querySelectorAll("option")].map((option) => option.textContent)).toEqual(["terra · active"]);
+  /* The pick belonged to Claude's catalog: the face drops it, and Codex starts on its own active account. */
+  expect(pill(host).textContent).toContain("Codex · 6-Astra");
+  expect(pill(host).querySelector("[data-runtime-pill-next-account]")).toBeNull();
+  click(pill(host));
+  expect(popover("[data-runtime-popover-account]")!.textContent).toBe("starts on terra");
+  click(pill(host));
 
   await launch(host, "Codex launch after the flip");
   expect(posts).toHaveLength(1);
   expect(posts[0]!.engine).toBe("codex");
+  expect(posts[0]!.model).toBe("gpt-6-astra");
   expect(posts[0]!.accountId).toBe("terra");
 });
 
-test("the ukrainian locale localizes the default and sign-in markers", async () => {
+test("the ukrainian locale words the pill's default tier and its account line", async () => {
   setLocale("uk");
   const posts: Record<string, unknown>[] = [];
   installFetch(posts);
   const host = mount("uk-account-draft");
   await settle();
 
-  const select = host.querySelector('select[aria-label="Обліковий запис Claude для цього запуску"]') as HTMLSelectElement | null;
-  expect(select).toBeTruthy();
-  const texts = [...select!.querySelectorAll("option")].map((option) => option.textContent);
-  expect(texts).toContain("anna · активний");
-  expect(texts).toContain("carol · потрібен вхід");
+  expect(pill(host).textContent).toContain("Claude · Opus 5.5 · Типово");
+  click(pill(host));
+  expect(popover("[data-runtime-popover-account]")!.textContent).toBe("стартує на anna");
 });
 
 /* #2170: the engine readiness preflight. A newcomer's only Claude account,
@@ -184,8 +193,6 @@ test("a draft on a signed-out account opens that account's sign-in instead of la
     const host = mount("signed-out-draft");
     await settle();
 
-    const select = accountSelect(host, "Claude");
-    expect([...select.querySelectorAll("option")].map((option) => option.textContent)).toEqual(["Main · needs sign-in"]);
     const blocked = host.querySelector('[data-testid="composer-send-blocked"]');
     expect(blocked?.textContent).toContain("Main is signed out of Claude.");
     const action = [...blocked!.querySelectorAll("button")].find((button) => button.textContent === "Sign in to Claude first");

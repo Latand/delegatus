@@ -2463,8 +2463,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
   /* So does one holding an agent draft, and Inbox while `+ Task` composes in it. */
   for (const card of cardsById.values()) {
     if (card.drafts.length && card.status !== "assigned" && !collapsed.has(card.id)) readingStatuses.add(card.status);
-    /* A draft in Assigned holds the width its launched conversation will need. */
-    if (card.drafts.length && card.status === "assigned" && !collapsed.has(card.id)) agentStatuses.add("assigned");
+    /* A draft holds the width its launched conversation will need, in whichever column its card stands. */
+    if (card.drafts.length && !collapsed.has(card.id)) agentStatuses.add(card.status);
   }
   if (composingTask) readingStatuses.add("inbox");
   const wideShelf = widthControls ? wideColumns.wide : null;

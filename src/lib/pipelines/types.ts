@@ -42,7 +42,7 @@ export type PipelineRoleId =
 
 /**
  * Roles a pipeline stage may not use. Deployer demands an explicit
- * `confirm: "deploy"` gate (resolveSpawnRole / DraftAgentPane) that a pipeline —
+ * `confirm: "deploy"` gate (resolveSpawnRole) that a pipeline —
  * which spawns its stages automatically, without a per-stage confirmation — has
  * no way to honor, so it is excluded from the builder and rejected by the API.
  */

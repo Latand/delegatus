@@ -18,8 +18,6 @@ import { runFocusTransaction } from "@/components/attention/navigate";
 import { asksYouFixtureLines, asksYouFixtureSetting, reportLogFixturePage } from "@/components/orchestrator/reportLog/reportLogEvidence.fixture";
 import { writeProfile } from "@/components/runtimeProfile";
 import { Viewer } from "@/components/Viewer";
-import { installDraftLayout } from "@/components/draft/draftLayout";
-import { NewAgentHost, newAgentLayout, parseNewAgent } from "@/components/draft/newAgentVariants.prototype";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import { resolvePipelineLinks, resolveTaskLinks, type CachedPullRequest, type FilesWorkLinks, type ForgeCacheView, type ForgeRepositoryView, type ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -315,18 +313,16 @@ const TICK_CARDS = SCENARIO === "seat-tick-cards";
    the end of the turn. */
 const LAUNCH_CLS = SCENARIO === "launch-cls";
 /* Creating a new agent (docs/design/new-agent-redesign.md): the board of `atlas`, with what a draft reads
-   answered in full — the accounts of each engine, the role catalog, the directories, a structured launch
-   that takes images — and a launch that runs on the clock of `launch-cls`, held a little longer before its
-   receipt so the frame between the press and the receipt can be read. `?newagent=<n>` draws the draft in
-   look n, 0 being today's; the page prints the number in a strip around the application's frame. */
+   answered in full — the accounts of each engine, a structured launch that takes images — and a launch
+   that runs on the clock of `launch-cls`, held a little longer before its receipt so the frame between the
+   press and the receipt can be read. */
 const NEW_AGENT = SCENARIO === "new-agent";
-const NEW_AGENT_LOOK = parseNewAgent(location.search);
-if (NEW_AGENT_LOOK?.inner) installDraftLayout(newAgentLayout(NEW_AGENT_LOOK.look));
 /* Three states no single press reaches (`?naseed=`): a handoff draft, restored the way the product restores
    a tab's drafts, continuing the conversation «Worker waiting for a seat»; the engine's active account
    signed out; and a launch the server refuses by name. */
-const NEW_AGENT_SEED = NEW_AGENT ? NEW_AGENT_LOOK?.seed ?? null : null;
-if (NEW_AGENT_SEED === "handoff" && NEW_AGENT_LOOK?.inner) {
+const NEW_AGENT_SEEDS = ["handoff", "signed-out", "refused"] as const;
+const NEW_AGENT_SEED = NEW_AGENT ? NEW_AGENT_SEEDS.find((seed) => seed === new URLSearchParams(location.search).get("naseed")) ?? null : null;
+if (NEW_AGENT_SEED === "handoff") {
   sessionStorage.setItem("llvDrafts:atlas", JSON.stringify(["na-handoff"]));
   sessionStorage.setItem("llvDraftPane:na-handoff:src", "/repo/pending-worker.jsonl");
 }
@@ -2564,7 +2560,6 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     }
     return json(albumPage(taskId));
   }
-  if (NEW_AGENT && url.pathname === "/api/roles") return json({ roles: ROLE_DEFAULTS.map((role) => ({ ...role, variants: ROLE_VARIANT_DEFAULTS[role.id as keyof typeof ROLE_VARIANT_DEFAULTS], promptPreview: role.promptScaffold })) });
   if (NEW_AGENT && url.pathname === "/api/accounts" && method === "GET") {
     return json(NEW_AGENT_SEED === "signed-out" ? {
       ...accountsBody,
@@ -3157,4 +3152,4 @@ createRoot(document.getElementById("root")!).render(SCENARIO === "task-queue-pre
   new URLSearchParams(location.search).has("mapping") ? <div className="p-6"><AgentMappingTable statuses={{ claude: { connected: true, account: null }, codex: { connected: true, account: null } }} layout={innerWidth < 640 ? "card" : "table"} onConnect={() => {}} /></div> : <div className="p-6" style={{ paddingTop: 400 }}>
     <RuntimePill file={{ ...searchVer2, engine: "codex", root: "codex-sessions", model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast" }} surface="structured" runtimeSettings={{ perTurnEffort: true, perTurnModel: false }} />
   </div>
-) : NEW_AGENT_LOOK && !NEW_AGENT_LOOK.inner ? <NewAgentHost look={NEW_AGENT_LOOK.look} /> : <Viewer />);
+) : <Viewer />);
