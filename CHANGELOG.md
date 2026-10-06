@@ -12,15 +12,16 @@ guarantees for the 1.x series.
 - **Work cut by a Delegatus restart continues by itself.** A deploy, a
   self-update or a crash recovery used to leave a pipeline stage that was
   near the end of its work failed as "completed without a valid final JSON
-  verdict" until someone pressed retry. The booting Delegatus now records
-  every turn it finds in flight. A stage cut that way is retried once in the
-  same worktree, keeping uncommitted work, and its first message says the
-  previous attempt was cut and quotes what it last said; a second cut parks
-  the stage as before. A spawned agent whose turn was cut, including one
-  waiting on a background command the restart killed, gets one message
-  saying so, so it re-checks what it was waiting for. The checkout deploy
-  verdict lists the conversations its restart interrupted, with the pipeline
-  stage when there is one.
+  verdict" until someone pressed retry. The release and the booting
+  Delegatus now record every turn they cut. A stage cut that way is retried
+  once in the same worktree, keeping uncommitted work, and its first message
+  says the previous attempt was cut and quotes what it last said; when the
+  next restart cuts that retry too, the stage parks for a decision. A spawned
+  agent whose turn was cut, including one waiting on a background command the
+  restart killed, gets one message saying so, so it re-checks what it was
+  waiting for. The checkout deploy verdict lists the conversations its
+  restart interrupted, with the pipeline stage when there is one; when those
+  records cannot be read, it says the list is unknown and does not pass.
 
 ## [1.10.0] — 2026-10-06
 

@@ -49,9 +49,12 @@ import {
   interruptionObligationDirectory,
   interruptionObligationStore,
   interruptionObligationUnresolved,
+  interruptionStageOf,
+  STAGE_CUT_RESOLUTION,
   submittedContinuationOutcome,
   type InterruptionObligation,
   type InterruptionObligationStore,
+  type InterruptionStage,
 } from "./interruptionObligations";
 
 type AdoptedStructuredHost = AdoptedCodexHost | AdoptedClaudeHost;
@@ -63,6 +66,9 @@ const STARTUP_READ_TIMEOUT_MS = 30_000;
 type StartupPassState = {
   /** The turns this process's restart cut have been recorded (once per boot). */
   restartCutsRecorded?: boolean;
+  /** The host rows whose cut that capture found recorded, by the transcript's
+      last event at the cut: a record answers each of them. */
+  recordedCuts?: Map<string, number | null>;
   generation?: string | null;
   retained?: AdoptedStructuredHost[];
   recoveries?: OrchestratorRestartRecoveryTarget[];
@@ -377,13 +383,15 @@ function recordOrchestratorRestartObligations(
  * A restart of the service (a deploy, a self-update, a crash) ends every
  * engine process the previous Viewer hosted: the claim below re-hosts the row
  * on a resumed, idle process, or the process dies with its stdin. Whatever
- * the conversation was doing goes with it. Two shapes are in flight:
+ * the conversation was doing goes with it. Three shapes are in flight:
  *
  *  - a turn still open in the transcript (a tool call, a reply being written);
  *  - a Claude turn that had ended on harness background work still running
- *    (`run_in_background`, a Monitor, a wakeup). The work was a child of the
- *    old process, so its completion notice, which is what would have woken the
- *    agent, never arrives.
+ *    (`run_in_background`, a Monitor, a wakeup), whose row reads idle. The
+ *    work was a child of the old process, so its completion notice, which is
+ *    what would have woken the agent, never arrives;
+ *  - a pipeline stage launched moments before, whose transcript holds no
+ *    dated event yet. Its controller still has to know the restart took it.
  *
  * The capture runs once per boot, before any claim can replace the process, and
  * reads the transcript only: the registry row may still name the old process,
@@ -395,10 +403,13 @@ interface RestartCutTarget {
   hostKey: string;
   path: string;
   claimEpoch: number;
-  lastEvent: { kind: TranscriptEventKind | null; at: number };
+  lastEvent: { kind: TranscriptEventKind | null; at: number | null };
   backgroundTasks: string[];
-  stage: { pipelineId: string; stageId: string | null; attempt: number | null } | null;
-  flow: boolean;
+  stage: InterruptionStage | null;
+  /** Who answers the cut instead of its own continuation, or null when the
+      continuation is what resumes it: a pipeline stage is retried by its
+      controller, and a review round's reviewer is relaunched by its flow. */
+  answeredBy: string | null;
 }
 
 async function restartCutTargets(
@@ -409,8 +420,9 @@ async function restartCutTargets(
   now = Date.now(),
 ): Promise<RestartCutTarget[]> {
   /* A seat has its own capture, and a conversation whose continuation is
-     already owed or on its way is covered by it: whatever its transcript
-     gained since is the provider's bookkeeping or that continuation's turn. */
+     still owed or on its way is covered by it: whatever its transcript gained
+     since is the provider's bookkeeping or that continuation's turn. One that
+     already arrived was settled before this capture and covers nothing. */
   const covered = new Set([
     ...seats.flatMap((seat) => seat.conversationId?.startsWith("conversation_")
       ? [registry.canonicalConversationId(seat.conversationId as ViewerConversationId)]
@@ -425,10 +437,13 @@ async function restartCutTargets(
     if (covered.has(conversationId)) continue;
     const hostKey = sessionKeyId({ engine: conversation.engine, sessionId: generation.id });
     const entry = snapshot.entries[hostKey];
-    /* Only a live structured row a previous Viewer hosted: a pane belongs to
-       its terminal, an idle row had no process for the restart to end, and a
-       row this process already claimed is its own work. */
-    if (!entry?.structuredHost || entry.host !== null || entry.status !== "live") continue;
+    /* Only a structured row a previous Viewer hosted: a pane belongs to its
+       terminal, and a row this process already claimed is its own work. An
+       idle row is a Claude turn that ended, cut only when background work
+       outlived it. */
+    if (!entry?.structuredHost || entry.host !== null) continue;
+    const live = entry.status === "live";
+    if (!live && !(entry.status === "idle" && conversation.engine === "claude")) continue;
     if (entry.claimOwner && structuredClaimIdentity(entry.claimOwner)?.pid === process.pid) continue;
     let evidence;
     try {
@@ -436,19 +451,22 @@ async function restartCutTargets(
     } catch {
       continue;
     }
+    const stage = interruptionStageOf(snapshot.memberships, conversationId);
     const at = evidence.lastEventAt;
     /* The same window bounds every adoption a turn claim alone asks for. */
-    if (at === null || now - at > startupTurnMaxAgeMs()) continue;
+    if (at !== null && now - at > startupTurnMaxAgeMs()) continue;
     let backgroundTasks: string[] = [];
-    if (evidence.turn === "terminal" && conversation.engine === "claude" && now - at <= BACKGROUND_TASK_WAIT_LIMIT_MS) {
+    if (at !== null && evidence.turn === "terminal" && conversation.engine === "claude" && now - at <= BACKGROUND_TASK_WAIT_LIMIT_MS) {
       const ledger = await readBackgroundTaskLedger(generation.path).catch(() => null);
       backgroundTasks = ledger ? pendingBackgroundTasks(ledger, now).map((task) => task.kind === "wakeup"
         ? "a scheduled wakeup"
         : `${task.kind === "monitor" ? "monitor" : "background task"} ${task.id}`) : [];
     }
-    if (evidence.turn !== "busy" && backgroundTasks.length === 0) continue;
+    const inFlight = live && (at === null
+      ? stage !== null && evidence.turn !== "terminal"
+      : evidence.turn === "busy" || (stage !== null && evidence.turn === "unknown"));
+    if (!inFlight && backgroundTasks.length === 0) continue;
     const memberships = snapshot.memberships[conversationId] ?? [];
-    const pipeline = memberships.find((membership) => membership.kind === "pipeline");
     targets.push({
       conversationId,
       engine: conversation.engine,
@@ -457,31 +475,27 @@ async function restartCutTargets(
       claimEpoch: entry.claimEpoch,
       lastEvent: { kind: evidence.kind, at },
       backgroundTasks,
-      stage: pipeline ? { pipelineId: pipeline.containerId, stageId: pipeline.stageId, attempt: pipeline.round } : null,
-      flow: memberships.some((membership) => membership.kind === "flow"),
+      stage,
+      answeredBy: stage ? STAGE_CUT_RESOLUTION
+        : memberships.some((membership) => membership.kind === "flow" && membership.role === "reviewer")
+          ? "a review flow reviewer: its flow relaunches the round"
+          : null,
     });
   }
   return targets;
 }
 
-/** Who answers a cut other than its own continuation, or null when the
-    continuation is what resumes it. A pipeline stage is retried by its
-    controller and a review round by its flow; a live Codex row with an open
-    turn is adopted and gets the standing Codex continuation below. */
-function restartCutAnsweredBy(target: RestartCutTarget): string | null {
-  if (target.stage) return "a pipeline stage: its controller retries the attempt";
-  if (target.flow) return "a review flow round: the flow recovers it";
-  if (target.engine === "codex") return "a Codex turn: the standing restart continuation resumes it";
-  return null;
-}
-
 /** Records each cut once. The boundary is the cut itself, the transcript's
     last event, so a later boot that finds the same silent turn lands on the
     record this boot wrote, and one the agent resumed and was cut again in gets
-    its own. */
-function recordRestartCuts(store: InterruptionObligationStore, targets: readonly RestartCutTarget[]): void {
+    its own. Every engine's continuation is keyed by that record. */
+function recordRestartCuts(
+  store: InterruptionObligationStore,
+  targets: readonly RestartCutTarget[],
+  recorded: Map<string, number | null>,
+): void {
   for (const target of targets) {
-    const answeredBy = restartCutAnsweredBy(target);
+    recorded.set(target.hostKey, target.lastEvent.at);
     const { obligation, created } = store.record({
       conversationId: target.conversationId,
       engine: target.engine,
@@ -490,7 +504,7 @@ function recordRestartCuts(store: InterruptionObligationStore, targets: readonly
       owner: null,
       claimEpoch: target.claimEpoch,
       turnRef: null,
-      boundary: `viewer-restart:${target.lastEvent.at}`,
+      boundary: `viewer-restart:${target.lastEvent.at ?? "launch"}`,
       reason: "viewer-restart",
       checkpoint: {
         lastEventKind: target.lastEvent.kind,
@@ -499,7 +513,7 @@ function recordRestartCuts(store: InterruptionObligationStore, targets: readonly
       },
       seat: null,
       stage: target.stage,
-      ...(answeredBy ? { answeredBy } : {}),
+      ...(target.answeredBy ? { answeredBy: target.answeredBy } : {}),
     });
     if (created) {
       console.error("[structured hosts] recorded a turn the restart cut", {
@@ -554,6 +568,9 @@ function interruptionObligationDischarge(
   /* An admitted continuation is replayed under its own key until it reports
      arrival; a later message cannot un-send it. */
   if (obligation.state !== "owed") return null;
+  /* A stage's cut is its controller's to answer with one fresh attempt,
+     whoever recorded it: a continuation would resume the attempt it replaces. */
+  if (interruptionStageOf(snapshot.memberships, conversationId)) return STAGE_CUT_RESOLUTION;
   const newerHeld = Object.values(snapshot.heldDeliveries).some((delivery) =>
     registry.canonicalConversationId(delivery.conversationId) === conversationId
       && delivery.clientMessageId !== obligation.id
@@ -769,6 +786,37 @@ function assertEligibleHostsResolved(
   throw Object.assign(new RuntimeHostUnavailableError(
     `structured startup left ${keys.length} eligible host(s) owned by the incumbent Viewer: ${keys.join(", ")}`,
   ), { hostKey: keys[0] });
+}
+
+/**
+ * The host rows whose cut a record already answers, in whatever state it is
+ * in by now: its own continuation, a stage's fresh attempt, a flow's relaunch.
+ *
+ * The generic Codex nudge below is keyed by the claim, which every boot and
+ * every generation renews, so it would answer such a cut once more on each of
+ * them. A record names its cut by the transcript's last event; a transcript
+ * that moved since is a new turn the record does not name. A pipeline stage's
+ * cuts are its controller's whatever the transcript did.
+ */
+function cutsAnsweredByRecord(
+  registry: AgentRegistry,
+  obligations: readonly InterruptionObligation[],
+  lastEventByHost: ReadonlyMap<string, number | null>,
+  recordedCuts: ReadonlyMap<string, number | null> | undefined,
+): Set<string> {
+  const memberships = registry.readOnlySnapshot().memberships;
+  const answered = new Set<string>();
+  for (const [hostKey, at] of recordedCuts ?? []) {
+    if (!lastEventByHost.has(hostKey) || lastEventByHost.get(hostKey) === at) answered.add(hostKey);
+  }
+  for (const obligation of obligations) {
+    const at = lastEventByHost.get(obligation.hostKey) ?? null;
+    if ((at !== null && obligation.checkpoint.lastEventAt === at)
+      || interruptionStageOf(memberships, registry.canonicalConversationId(obligation.conversationId))) {
+      answered.add(obligation.hostKey);
+    }
+  }
+  return answered;
 }
 
 function interruptedCodexContinuationOperationId(sessionId: string, claimEpoch: number): string {
@@ -1419,8 +1467,11 @@ async function adoptStructuredHostsPass(
   recordOrchestratorRestartObligations(interruptions, orchestratorRecoveries);
   const passState = startupPasses.get(registry);
   if (passState && !passState.restartCutsRecorded && !resumeDeferred) {
+    /* A continuation that already arrived covers nothing any more: settle it
+       first, so a turn the agent resumed and the restart cut again is seen. */
     recordRestartCuts(interruptions, await restartCutTargets(registry, orchestratorSeats(),
-      interruptions.list().filter(interruptionObligationUnresolved)));
+      settleSubmittedInterruptionObligations(registry, interruptions, interruptions.list().filter(interruptionObligationUnresolved))),
+    passState.recordedCuts ??= new Map());
     passState.restartCutsRecorded = true;
   }
   const controllerBoundEarly = client !== null;
@@ -1466,6 +1517,8 @@ async function adoptStructuredHostsPass(
       interruptions.list().filter(interruptionObligationUnresolved),
     );
     const interruptionHostKeys = new Set(unresolvedInterruptions.map((obligation) => obligation.hostKey));
+    const answeredCutHostKeys = cutsAnsweredByRecord(registry, interruptions.list(), lastEventByHost,
+      startupPasses.get(registry)?.recordedCuts);
     let interruptedHostKeys: ReadonlySet<string> = interruptionHostKeys;
     const retainedRecoveryHostKeys = () => new Set([...orchestratorHostKeys, ...interruptedHostKeys]);
     let nextAdoptedHosts = await revalidateRetainedStartupHosts(
@@ -1704,7 +1757,8 @@ async function adoptStructuredHostsPass(
     const candidateCodexHosts = nextAdoptedHosts.filter(
       (item): item is AdoptedCodexHost => item.key.engine === "codex"
         && !orchestratorHostKeys.has(sessionKeyId(item.key))
-        && !interruptionHostKeys.has(sessionKeyId(item.key)),
+        && !interruptionHostKeys.has(sessionKeyId(item.key))
+        && !answeredCutHostKeys.has(sessionKeyId(item.key)),
     );
     const existingCodexContinuations = client
       ? await interruptedCodexContinuations(registry, client, candidateCodexHosts)
@@ -1762,7 +1816,8 @@ async function adoptStructuredHostsPass(
     const finalCodexHosts = nextAdoptedHosts.filter(
       (item): item is AdoptedCodexHost => item.key.engine === "codex"
         && !orchestratorHostKeys.has(sessionKeyId(item.key))
-        && !interruptionHostKeys.has(sessionKeyId(item.key)),
+        && !interruptionHostKeys.has(sessionKeyId(item.key))
+        && !answeredCutHostKeys.has(sessionKeyId(item.key)),
     );
     reportProgress("finalizing structured delivery");
     /* `controllerBoundEarly` is exactly "this pass has a runtime client", so the

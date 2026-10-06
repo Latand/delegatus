@@ -4,7 +4,13 @@ import os from "node:os";
 import path from "node:path";
 
 import { readStableTailRecords } from "@/lib/scanner/activity";
-import { oauthFailureWithRecoveryTail } from "@/lib/accounts/migration/fixtures/claudeRecoveryTail";
+import {
+  continuationPromptRecord,
+  oauthFailureWithRecoveryTail,
+  shutdownInterruptRecord,
+  syntheticNoOpRecord,
+  workingAssistantRecord,
+} from "@/lib/accounts/migration/fixtures/claudeRecoveryTail";
 
 import { durableStageTurnEvidence, MAX_REPORT_EVIDENCE_BYTES } from "./durableEvidence";
 
@@ -662,4 +668,37 @@ test("a real Claude continuation cut is newer than an earlier provider failure",
   const file = writeTranscript("claude-real-continuation-cut.jsonl", records);
   expect(await durableStageTurnEvidence("claude", file)).toMatchObject({ turn: "terminal",
     terminalProviderMessage: { errorClass: "turn_aborted", ts: Date.parse("2026-07-24T08:01:00Z") } });
+});
+
+/* A restart cut is judged by the agent's own last event, so what a CLI writes
+   as it exits or resumes must not move it. */
+test("the agent's last event ignores the bookkeeping a Claude CLI writes as it exits and resumes", async () => {
+  const file = writeTranscript("claude-cut-bookkeeping.jsonl", [
+    { type: "user", timestamp: "2026-10-06T10:00:00.000Z", message: { role: "user", content: "prompt" } },
+    workingAssistantRecord("2026-10-06T10:01:00.000Z"),
+    shutdownInterruptRecord("2026-10-06T10:02:00.000Z"),
+    continuationPromptRecord("2026-10-06T10:03:00.000Z"),
+    syntheticNoOpRecord("2026-10-06T10:03:01.000Z"),
+    { type: "system", subtype: "local_command", timestamp: "2026-10-06T10:04:00.000Z" },
+  ]);
+  const evidence = await durableStageTurnEvidence("claude", file);
+  expect(evidence!.lastAgentEventAt).toBe(Date.parse("2026-10-06T10:01:00.000Z"));
+  expect(evidence!.lastRecordAt).toBe(Date.parse("2026-10-06T10:04:00.000Z"));
+});
+
+test("the agent's last event ignores Codex token counts and a shutdown abort, and moves on a tool result", async () => {
+  const cut = writeTranscript("codex-cut-bookkeeping.jsonl", [
+    { timestamp: "2026-10-06T10:00:00.000Z", type: "event_msg", payload: { type: "task_started" } },
+    { timestamp: "2026-10-06T10:01:00.000Z", type: "response_item", payload: { type: "function_call", name: "shell", call_id: "c1" } },
+    { timestamp: "2026-10-06T10:02:00.000Z", type: "event_msg", payload: { type: "token_count" } },
+    { timestamp: "2026-10-06T10:03:00.000Z", type: "event_msg", payload: { type: "turn_aborted" } },
+    { timestamp: "2026-10-06T10:04:00.000Z", type: "turn_context", payload: { cwd: "/repo" } },
+  ]);
+  expect((await durableStageTurnEvidence("codex", cut))!.lastAgentEventAt).toBe(Date.parse("2026-10-06T10:01:00.000Z"));
+  const worked = writeTranscript("codex-worked-after.jsonl", [
+    { timestamp: "2026-10-06T10:00:00.000Z", type: "event_msg", payload: { type: "task_started" } },
+    { timestamp: "2026-10-06T10:01:00.000Z", type: "response_item", payload: { type: "function_call", name: "shell", call_id: "c1" } },
+    { timestamp: "2026-10-06T10:05:00.000Z", type: "response_item", payload: { type: "function_call_output", call_id: "c1", output: "ok" } },
+  ]);
+  expect((await durableStageTurnEvidence("codex", worked))!.lastAgentEventAt).toBe(Date.parse("2026-10-06T10:05:00.000Z"));
 });

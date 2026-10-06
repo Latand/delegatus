@@ -34,6 +34,7 @@ import { conversationTurnLiveness, readTranscriptEvidence, type TurnLivenessDepe
 import {
   interruptionObligationDirectory,
   interruptionObligationStore,
+  interruptionStageOf,
   type InterruptionObligationStore,
 } from "./interruptionObligations";
 import { structuredHostKillRefFromRegistry, terminateStructuredHostTree } from "./structuredHostControl";
@@ -1991,6 +1992,9 @@ export async function recordDemotionInterruption(
     reason: "viewer-release",
     checkpoint: { lastEventKind: transcript?.kind ?? null, lastEventAt: transcript?.lastEventAt ?? null },
     seat,
+    /* Still owed: the stage stays held until the successor boots and hands
+       the cut to the stage's controller instead of continuing it. */
+    stage: interruptionStageOf(snapshot.memberships, conversationId),
   });
   if (created) {
     console.error("[viewer release] recorded an interrupted turn owed one continuation", {

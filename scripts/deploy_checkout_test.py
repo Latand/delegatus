@@ -42,6 +42,7 @@ class Switch:
         self.mcp_errors = 0
         self.outcome = "recovered"
         self.cut = []
+        self.cut_unreadable = []
         self.cut_error = None
 
     def preflight(self):
@@ -76,7 +77,7 @@ class Switch:
     def interrupted(self, since, hosts):
         if self.cut_error:
             raise self.cut_error
-        return self.cut
+        return self.cut, self.cut_unreadable
 
 
 class LoggedFailures(unittest.TestCase):
@@ -120,15 +121,26 @@ class LoggedFailures(unittest.TestCase):
         result = deploy.run_switch(switch, TARGET, samples=3, interval=2, timeout=5)
         self.assertEqual(result["verdict"], "pass")
         self.assertEqual(result["interrupted"], switch.cut)
+        self.assertEqual(result["interruptedUnreadable"], [])
         self.assertEqual(result["diagnostics"], [])
 
-    def test_unreadable_cut_records_are_a_diagnostic_and_decide_nothing(self):
+    def test_an_unreadable_cut_inventory_is_unknown_and_never_passes(self):
         switch = Switch()
         switch.cut_error = PermissionError("records unreadable")
         result = deploy.run_switch(switch, TARGET, samples=3, interval=2, timeout=5)
-        self.assertEqual(result["verdict"], "pass")
-        self.assertEqual(result["interrupted"], [])
+        self.assertEqual(result["verdict"], "needs_decision")
+        self.assertIsNone(result["interrupted"])
+        self.assertEqual(result["interruptedUnreadable"], ["interrupted:PermissionError"])
         self.assertEqual(result["diagnostics"], ["interrupted:PermissionError"])
+
+    def test_a_cut_inventory_with_gaps_keeps_what_it_read_and_never_passes(self):
+        switch = Switch()
+        switch.cut = [{"conversationId": "conversation_synthetic", "stage": None}]
+        switch.cut_unreadable = ["interruption-continuation-broken.json:JSONDecodeError"]
+        result = deploy.run_switch(switch, TARGET, samples=3, interval=2, timeout=5)
+        self.assertEqual(result["verdict"], "needs_decision")
+        self.assertEqual(result["interrupted"], switch.cut)
+        self.assertEqual(result["interruptedUnreadable"], switch.cut_unreadable)
 
     def test_old_or_mixed_serving_releases_retry_and_are_named_in_verdict(self):
         switch = Switch()
@@ -263,7 +275,8 @@ class InterruptedConversations(unittest.TestCase):
                               stage={"pipelineId": "lane", "stageId": "build", "attempt": 1}))
         self.write(obligation("protected", "conversation_protected", "2026-10-06T14:25:32.000Z"))
         hosts = [{"conversationId": "conversation_protected", "pipelineId": "other", "stageId": "fix", "attempt": 4}]
-        listed = deploy.interrupted_conversations(self.state, "2026-10-06T14:25:15.000000+00:00", hosts)
+        listed, unreadable = deploy.interrupted_conversations(self.state, "2026-10-06T14:25:15.000000+00:00", hosts)
+        self.assertEqual(unreadable, [])
         self.assertEqual([entry["conversationId"] for entry in listed],
                          ["conversation_agent", "conversation_stage", "conversation_protected"])
         self.assertIsNone(listed[0]["stage"])
@@ -272,16 +285,26 @@ class InterruptedConversations(unittest.TestCase):
         self.assertEqual(listed[1]["state"], "discharged")
         self.assertEqual(listed[2]["stage"], {"pipelineId": "other", "stageId": "fix", "attempt": 4})
 
-    def test_reads_the_pending_journal_and_skips_unreadable_records(self):
+    def test_reads_the_pending_journal_and_names_every_record_it_could_not_read(self):
         (self.directory / "interruption-continuation-broken.json").write_text("{")
+        self.write(obligation("undated", "conversation_undated", None))
         pending = self.state / "interruption-obligations.pending.jsonl"
         pending.write_text(json.dumps(obligation("journal", "conversation_journal", "2026-10-06T14:26:00.000Z")) + "\n{\n")
-        listed = deploy.interrupted_conversations(self.state, "2026-10-06T14:25:15+00:00")
+        listed, unreadable = deploy.interrupted_conversations(self.state, "2026-10-06T14:25:15+00:00")
         self.assertEqual([entry["conversationId"] for entry in listed], ["conversation_journal"])
+        self.assertEqual(unreadable, ["interruption-continuation-broken.json:JSONDecodeError",
+                                      "interruption-obligations.pending.jsonl:2",
+                                      "interruption-continuation-undated:recordedAt"])
+
+    def test_an_unreadable_record_directory_raises_rather_than_listing_nothing(self):
+        self.directory.rmdir()
+        self.directory.write_text("not a directory")
+        with self.assertRaises(OSError):
+            deploy.interrupted_conversations(self.state, "2026-10-06T14:25:15+00:00")
 
     def test_a_state_without_records_lists_nothing(self):
         self.directory.rmdir()
-        self.assertEqual(deploy.interrupted_conversations(self.state, "2026-10-06T14:25:15+00:00"), [])
+        self.assertEqual(deploy.interrupted_conversations(self.state, "2026-10-06T14:25:15+00:00"), ([], []))
 
 
 class CheckoutIntegration(unittest.TestCase):

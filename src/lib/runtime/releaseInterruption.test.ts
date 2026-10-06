@@ -1234,3 +1234,152 @@ test("a restart that finds an agent's turn already settled records nothing and s
     journal.close();
   }
 });
+
+/** The row as a previous Viewer left it: hosted, its turn `live` or, once a
+    Claude turn ended, `idle`. */
+function markHosted(cut: CutConversation, status: "live" | "idle", activeTurnRef: string | null = null): void {
+  const registry = new AgentRegistry(cut.registryFile);
+  const entry = registry.readOnlySnapshot().entries[cut.hostKey]!;
+  if (!registry.setStructuredHostClaimed({ engine: cut.engine, sessionId: cut.sessionId },
+    { ...entry.structuredHost!, activeTurnRef }, status, entry.claimOwner!, entry.claimEpoch)) {
+    throw new Error("the hosted row could not be restated");
+  }
+}
+
+function appendTranscript(cut: CutConversation, records: Record<string, unknown>[]): void {
+  fs.appendFileSync(cut.artifactPath, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
+}
+
+const OTHER_VIEWER = (index: number): ProcessIdentity => ({ pid: 2_000_002_000 + index, startIdentity: `viewer-${index}` });
+
+test("an idle Claude agent whose ended turn still waited on background work is told once that the restart killed it", async () => {
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  try {
+    const cut = incumbentConversation("claude", cutSessionId(35), deadEngine(2_000_001_135), waitingOnBackgroundTranscript());
+    /* A completed turn reports idle and clears its turn, while the CLI and the
+       command it started in the background keep running. */
+    markHosted(cut, "idle");
+    const ledger = createFakeDeliveryLedger();
+    const boot = await successorBoot(cut.registryFile, journal, ledger);
+    expect(boot.error).toBeNull();
+    await settle(() => ledger.writes.length > 0);
+    const writes = continuationsIn(ledger);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toContain("background work you started was still running (background task gatetask1)");
+    expect(obligationsFor(cut.registryFile).map(({ conversationId, reason, checkpoint }) => ({ conversationId, reason, tasks: checkpoint.backgroundTasks })))
+      .toEqual([{ conversationId: cut.conversationId, reason: "viewer-restart", tasks: ["background task gatetask1"] }]);
+  } finally {
+    journal.close();
+  }
+});
+
+test("an agent resumed after one restart and cut mid-turn by the next gets its own one continuation", async () => {
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  try {
+    const cut = incumbentConversation("claude", cutSessionId(36), deadEngine(2_000_001_136));
+    const ledger = createFakeDeliveryLedger();
+    expect((await successorBoot(cut.registryFile, journal, ledger, { viewer: OTHER_VIEWER(1) })).error).toBeNull();
+    await settle(() => ledger.writes.length > 0);
+    expect(continuationsIn(ledger)).toHaveLength(1);
+    const delivered = Object.values(new AgentRegistry(cut.registryFile).readOnlySnapshot().heldDeliveries)
+      .filter((delivery) => delivery.state === "delivered");
+    expect(delivered).toHaveLength(1);
+
+    /* The agent took the continuation up and was mid-tool when the next
+       restart came. */
+    await Bun.sleep(5);
+    const at = new Date().toISOString();
+    appendTranscript(cut, [
+      { type: "user", timestamp: at, message: { content: "continue" } },
+      { type: "assistant", timestamp: at, message: { content: [{ type: "tool_use", id: "tool-second", name: "Bash" }] } },
+    ]);
+    markHosted(cut, "live", "turn-after-resume");
+    expect((await successorBoot(cut.registryFile, journal, ledger, { viewer: OTHER_VIEWER(2) })).error).toBeNull();
+    await settle(() => ledger.writes.length > 1);
+    expect(continuationsIn(ledger)).toHaveLength(2);
+    expect(obligationsFor(cut.registryFile).filter((obligation) => obligation.reason === "viewer-restart")).toHaveLength(2);
+
+    /* A third boot that finds the same silent turn owes nothing more. */
+    markHosted(cut, "live", "turn-after-resume");
+    expect((await successorBoot(cut.registryFile, journal, ledger, { viewer: OTHER_VIEWER(3) })).error).toBeNull();
+    await settle(() => ledger.writes.length > 2, 150);
+    expect(continuationsIn(ledger)).toHaveLength(2);
+  } finally {
+    journal.close();
+  }
+});
+
+test("a Codex agent's restart cut is continued once across repeated boots and Viewer generations", async () => {
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  try {
+    const cut = incumbentConversation("codex", cutSessionId(37), deadEngine(2_000_001_137));
+    const ledger = createFakeDeliveryLedger();
+    for (const index of [1, 2, 3]) {
+      if (index > 1) markHosted(cut, "live", "turn-still-open");
+      expect((await successorBoot(cut.registryFile, journal, ledger, { viewer: OTHER_VIEWER(10 + index) })).error).toBeNull();
+      await settle(() => ledger.writes.length > 0, index === 1 ? 400 : 150);
+    }
+    const writes = continuationsIn(ledger);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toStartWith("Viewer restarted and severed your structured host mid-turn.");
+    expect(obligationsFor(cut.registryFile).map(({ reason, state }) => ({ reason, state }))[0]?.reason).toBe("viewer-restart");
+    expect(obligationsFor(cut.registryFile)).toHaveLength(1);
+  } finally {
+    journal.close();
+  }
+});
+
+test.each(["codex", "claude"] as const)("a %s pipeline stage the restart cut gets no continuation from any path", async (engine) => {
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  try {
+    const cut = incumbentConversation(engine, cutSessionId(engine === "codex" ? 38 : 39), deadEngine(2_000_001_138));
+    new AgentRegistry(cut.registryFile).rememberMembership(cut.conversationId, {
+      kind: "pipeline", containerId: "lane-fixture", role: "builder", slot: "build:1",
+      stageId: "build", stageOrder: 0, round: 1, parentConversationId: null,
+    });
+    const ledger = createFakeDeliveryLedger();
+    for (const index of [1, 2]) {
+      if (index > 1) markHosted(cut, "live", "turn-still-open");
+      expect((await successorBoot(cut.registryFile, journal, ledger, { viewer: OTHER_VIEWER(20 + index) })).error).toBeNull();
+      await settle(() => ledger.writes.length > 0, 150);
+    }
+    expect(continuationsIn(ledger)).toEqual([]);
+    expect(obligationsFor(cut.registryFile)).toMatchObject([{
+      reason: "viewer-restart", state: "discharged", stage: { pipelineId: "lane-fixture", stageId: "build", attempt: 1 },
+    }]);
+  } finally {
+    journal.close();
+  }
+});
+
+test("an orderly release of a pipeline stage leaves its cut to the stage controller", async () => {
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  try {
+    const cut = incumbentConversation("claude", cutSessionId(40), deadEngine(2_000_001_140));
+    new AgentRegistry(cut.registryFile).rememberMembership(cut.conversationId, {
+      kind: "pipeline", containerId: "lane-fixture", role: "builder", slot: "build:1",
+      stageId: "build", stageOrder: 0, round: 1, parentConversationId: null,
+    });
+    const { exitCode } = await releaseIncumbent([cut], journal, () => deadEngine(2_000_001_140));
+    expect(exitCode).toBe(0);
+    const ledger = createFakeDeliveryLedger();
+    expect((await successorBoot(cut.registryFile, journal, ledger)).error).toBeNull();
+    await settle(() => ledger.writes.length > 0, 150);
+
+    expect(continuationsIn(ledger)).toEqual([]);
+    const [record] = obligationsFor(cut.registryFile);
+    expect(record).toMatchObject({
+      reason: "viewer-release", state: "discharged", resolution: "a pipeline stage: its controller retries the attempt",
+      stage: { pipelineId: "lane-fixture", stageId: "build", attempt: 1 },
+    });
+    const registry = new AgentRegistry(cut.registryFile);
+    setAgentRegistryForTests(registry);
+    try {
+      expect(defaultPipelinePorts().conversationRestartCut!(cut.conversationId)).toEqual({ recordedAt: record!.recordedAt });
+    } finally {
+      setAgentRegistryForTests(null);
+    }
+  } finally {
+    journal.close();
+  }
+});

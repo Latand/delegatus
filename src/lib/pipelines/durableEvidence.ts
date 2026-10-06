@@ -35,6 +35,13 @@ export type StageTurnEvidence = {
       assistant message: a delivered prompt and a tool result move this and not
       that. Null when the read found no record carrying a timestamp. */
   lastRecordAt?: number | null;
+  /** Timestamp of the newest record the agent's work wrote: a prompt, a reply,
+      a tool call or its result. The bookkeeping a CLI writes as it exits or
+      resumes (a shutdown interrupt, a replayed meta prompt, a synthetic
+      no-response, Codex token counts and turn aborts) is left out, and so is
+      an undated record, which `lastRecordAt` dates by the file. A move here is
+      work; a move of `lastRecordAt` alone may be neither. */
+  lastAgentEventAt?: number | null;
   /** The provider's own end-of-turn notice, when the record that closed the
       turn is one: a session or model limit, an expired credential, a refusal —
       a message the CLI writes *instead of* the agent's answer, so the turn
@@ -265,6 +272,29 @@ function terminalProviderMessageFromRecords(
   return null;
 }
 
+const CODEX_BOOKKEEPING_TYPES = new Set(["token_count", "turn_aborted"]);
+
+function agentEventAt(records: RecordLike[], codex: boolean): number | null {
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    const record = records[index]!;
+    const at = Date.parse(String(record.timestamp ?? ""));
+    if (!Number.isFinite(at)) continue;
+    if (codex) {
+      const type = stringValue(recordValue(record.payload)?.type);
+      if (type && !CODEX_BOOKKEEPING_TYPES.has(type)) return at;
+      continue;
+    }
+    if (record.type !== "user" && record.type !== "assistant") continue;
+    const message = recordValue(record.message);
+    if (record.isMeta === true || message?.model === "<synthetic>") continue;
+    const content = stringValue(message?.content) ?? claudeAssistantText(record);
+    if (record.type === "user" && (record.interruptedByShutdown === true || "interruptedMessageId" in record
+      || /^\s*\[Request interrupted by user(?: for tool use)?\]\s*$/.test(content))) continue;
+    return at;
+  }
+  return null;
+}
+
 /** Whether a Claude stage attempt ended on a provider failure the CLI gave up
     on: its newest prompt or assistant record is a flagged API error stamped
     with a closing stop reason. The shared turn projection keeps such a turn
@@ -351,6 +381,7 @@ export async function durableStageTurnEvidence(
     message: nativeCut ? null : message,
     ...(reportAt ? { reportProse } : {}),
     lastRecordAt: newest ? recordTs(newest, fallbackTs) || null : null,
+    lastAgentEventAt: agentEventAt(evidenceRead.records, codex),
     launchOnly: codex
       && !evidenceRead.prefixTruncated
       && evidenceRead.records.length === 1

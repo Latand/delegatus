@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migration/contracts";
-import type { DeliveryOperationOwner } from "@/lib/agent/registry";
+import type { DeliveryOperationOwner, RegistryFile } from "@/lib/agent/registry";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 
 import { VIEWER_RELEASE_INTERRUPTION_OPENING, VIEWER_RESTART_INTERRUPTION_OPENING } from "./recoveryNotices";
@@ -66,6 +66,18 @@ export interface InterruptionStage {
   pipelineId: string;
   stageId: string | null;
   attempt: number | null;
+}
+
+/** Why a cut of a pipeline stage's conversation is owed no continuation. */
+export const STAGE_CUT_RESOLUTION = "a pipeline stage: its controller retries the attempt";
+
+/** The pipeline stage a conversation runs, from its durable membership. */
+export function interruptionStageOf(
+  memberships: RegistryFile["memberships"],
+  conversationId: string,
+): InterruptionStage | null {
+  const pipeline = (memberships[conversationId] ?? []).find((membership) => membership.kind === "pipeline");
+  return pipeline ? { pipelineId: pipeline.containerId, stageId: pipeline.stageId, attempt: pipeline.round } : null;
 }
 
 export type InterruptionObligationInput = Omit<InterruptionObligation,

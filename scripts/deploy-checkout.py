@@ -104,17 +104,22 @@ def run_switch(adapter, target, samples=21, interval=15, timeout=180):
             except Exception as error:
                 diagnostics.append("sample-log:" + type(error).__name__)
     # Read once the samples are over: the booting Viewer records its cuts
-    # before it re-hosts anything, long before the last sample.
-    interrupted = []
+    # before it re-hosts anything, long before the last sample. A list read
+    # with gaps names them in `interruptedUnreadable`; a list that could not be
+    # read at all is null. Either leaves the inventory unknown, which the seat
+    # has to look at, so the switch cannot pass on it.
     try:
-        interrupted = adapter.interrupted(started, hosts)
+        interrupted, unreadable = adapter.interrupted(started, hosts)
     except Exception as error:
-        diagnostics.append("interrupted:" + type(error).__name__)
+        interrupted, unreadable = None, ["interrupted:" + type(error).__name__]
+        diagnostics.append(unreadable[0])
     healthy = ready(serving, target)
     outcomes = {entry["outcome"] for entry in protected}
-    verdict = "fail" if not healthy or "lost" in outcomes else "needs_decision" if "unknown" in outcomes else "pass"
+    unknown = "unknown" in outcomes or interrupted is None or bool(unreadable)
+    verdict = "fail" if not healthy or "lost" in outcomes else "needs_decision" if unknown else "pass"
     result = {"verdict": verdict, "target": target, "serving": serving,
-              "protected": protected, "interrupted": interrupted, "diagnostics": diagnostics}
+              "protected": protected, "interrupted": interrupted,
+              "interruptedUnreadable": unreadable, "diagnostics": diagnostics}
     adapter.last_result = result
     adapter.emit(result)
     return result
@@ -130,28 +135,39 @@ def parse_time(value):
 
 def interrupted_conversations(state, since, hosts=()):
     """The conversations whose turn this switch cut, as the Viewers recorded
-    them: an incumbent at release, the booting successor at restart. Each names
-    its pipeline stage when it ran one; a stage the preflight protected names it
-    from that capture when the record does not."""
+    them: an incumbent at release, the booting successor at restart, and the
+    records it could not read. Each conversation names its pipeline stage when
+    it ran one; a stage the preflight protected names it from that capture when
+    the record does not. A state with no record directory recorded no cut."""
     directory = pathlib.Path(state) / "interruption-obligations"
     records = {}
-    sources = sorted(directory.glob("interruption-continuation-*.json")) if directory.is_dir() else []
-    for source in sources:
-        try:
-            record = json.loads(source.read_text())
-        except (OSError, ValueError):
+    unreadable = []
+    names = sorted(os.listdir(directory)) if os.path.lexists(directory) else []
+    for name in names:
+        if not (name.startswith("interruption-continuation-") and name.endswith(".json")):
             continue
-        if isinstance(record, dict) and isinstance(record.get("id"), str):
-            records[record["id"]] = record
+        try:
+            record = json.loads((directory / name).read_text())
+        except (OSError, ValueError) as error:
+            unreadable.append(name + ":" + type(error).__name__)
+            continue
+        if not isinstance(record, dict) or not isinstance(record.get("id"), str):
+            unreadable.append(name + ":shape")
+            continue
+        records[record["id"]] = record
     pending = directory.with_name(directory.name + ".pending.jsonl")
-    if pending.is_file():
-        for line in pending.read_text().splitlines():
+    if os.path.lexists(pending):
+        for number, line in enumerate(pending.read_text().splitlines(), 1):
+            if not line.strip():
+                continue
             try:
                 record = json.loads(line)
             except ValueError:
+                record = None
+            if not isinstance(record, dict) or not isinstance(record.get("id"), str):
+                unreadable.append(pending.name + ":" + str(number))
                 continue
-            if isinstance(record, dict) and isinstance(record.get("id"), str):
-                records.setdefault(record["id"], record)
+            records.setdefault(record["id"], record)
     boundary = parse_time(since)
     protected = {host.get("conversationId"): host for host in hosts if host.get("conversationId")}
     listed = []
@@ -159,7 +175,8 @@ def interrupted_conversations(state, since, hosts=()):
         try:
             if parse_time(record["recordedAt"]) < boundary:
                 continue
-        except (KeyError, TypeError, ValueError):
+        except (KeyError, TypeError, ValueError, AttributeError):
+            unreadable.append(record["id"] + ":recordedAt")
             continue
         conversation = record.get("conversationId")
         stage = record.get("stage")
@@ -171,7 +188,7 @@ def interrupted_conversations(state, since, hosts=()):
                        "reason": record.get("reason"), "state": record.get("state"),
                        "resolution": record.get("resolution"), "stage": stage or None,
                        "backgroundTasks": checkpoint.get("backgroundTasks") or []})
-    return sorted(listed, key=lambda entry: (entry["recordedAt"], entry["conversationId"] or ""))
+    return sorted(listed, key=lambda entry: (entry["recordedAt"], entry["conversationId"] or "")), unreadable
 
 
 def write_json(destination, body):

@@ -3371,8 +3371,10 @@ test("a busy Codex turn advances after container replacement without operator me
     onStateChange: () => () => {},
     send: async (entry: Parameters<FakeEngineHost["send"]>[0]) => {
       const receipt = await FakeEngineHost.prototype.send.call(baseHost, entry);
+      /* The continuation arrives after the cut was recorded, and starts the
+         turn the next replacement cuts. */
       fs.appendFileSync(artifactPath, `${JSON.stringify({
-        timestamp: new Date(Date.now() - 60_000).toISOString(),
+        timestamp: new Date().toISOString(),
         payload: { type: "user_message", text: entry.text },
       })}\n`);
       return receipt;
@@ -3393,9 +3395,10 @@ test("a busy Codex turn advances after container replacement without operator me
   });
   await startup();
 
+  /* The boot records the cut it found and continues it under that record. */
   await waitFor(() => ledger.writes.length === 1);
   expect(ledger.writes).toEqual([expect.objectContaining({
-    text: "Continue the interrupted turn from the transcript.",
+    text: expect.stringMatching(/^Viewer restarted and severed your structured host mid-turn\./),
   })]);
   expect(fs.statSync(artifactPath).size).toBeGreaterThan(before);
   expect(registry.conversation(conversation.id)?.id).toBe(conversation.id);
@@ -3432,8 +3435,9 @@ test("a busy Codex turn advances after container replacement without operator me
   await startup();
   await waitFor(() => nextLedger.writes.length === 1);
   expect(nextLedger.writes).toEqual([expect.objectContaining({
-    id: `recovery-continuation-${sessionId}-4`,
+    text: expect.stringMatching(/^Viewer restarted and severed your structured host mid-turn\./),
   })]);
+  expect(nextLedger.writes[0]!.text).not.toBe(ledger.writes[0]!.text);
   expect(fs.statSync(artifactPath).size).toBeGreaterThan(advanced);
 
   await bindStructuredDeliveryQueue([], { registry, client: null });

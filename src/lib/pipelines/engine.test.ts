@@ -6362,6 +6362,47 @@ test("a stage turn a deploy cut stays open past the host grace while its continu
   }
 });
 
+test("a stage turn an orderly release cut is held until the successor hands it to the controller, then retried once", async () => {
+  const h = harness();
+  const cut = deployCutObligations(h, "released-stage");
+  try {
+    await runningStructuredStage(h);
+    h.ports.conversationRestartCut = (conversationId) => defaultPipelinePorts().conversationRestartCut!(conversationId);
+    h.setConversationActive(false);
+    const cutAt = h.ports.now();
+    const lastWork = Date.parse(cutAt) - 1_000;
+    h.ports.conversationHostUnavailableSince = async () => cutAt;
+    h.durableTurns.set("/codex/stage-1.jsonl", { turn: "busy", message: { text: "Running the suite.", ts: lastWork },
+      lastRecordAt: lastWork, lastAgentEventAt: lastWork });
+    const obligation = cut.record("conversation_stage_1", cutAt);
+    h.advanceWallClock(60_000);
+
+    /* The release recorded the cut and the successor has not booted. */
+    await tickPipelines([], h.ports);
+    expect(loadPipelines()[0]).toMatchObject({ state: "running", stateDetail: DEPLOY_CUT_HOLD });
+    expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+
+    /* The successor's startup gives the cut to the stage's controller. */
+    cut.store.update(obligation.id, { state: "discharged", resolvedAt: h.ports.now(), resolution: "a pipeline stage: its controller retries the attempt" });
+    await tickPipelines([], h.ports);
+    await tickPipelines([], h.ports);
+
+    const lane = loadPipelines()[0]!;
+    expect(lane.runs[0]!.attempts).toHaveLength(2);
+    expect(lane.runs[0]!.attempts[0]!.error).toBe("interrupted by a Delegatus restart; replaced by a fresh stage attempt");
+    expect(lane.runs[0]!.attempts[1]!.restartContext).toMatchObject({ cause: "restart", lastReport: "Running the suite." });
+  } finally {
+    /* The store is shared by this file's cases; the next one records the same
+       conversation and must not read this cut as its newest. */
+    for (const obligation of cut.store.list()) {
+      if (obligation.hostKey === "codex:released-stage") {
+        fs.rmSync(path.join(interruptionObligationDirectory(cut.registry.filename), `${obligation.id}.json`), { force: true });
+      }
+    }
+    cut.restore();
+  }
+});
+
 test("a continuation that arrived while its obligation still reads submitted starts the host grace from its arrival (#1835 review)", async () => {
   const h = harness();
   const cut = deployCutObligations(h, "submitted-cut");
@@ -17806,7 +17847,9 @@ test("a stage a restart cut is retried once in its worktree, told it was cut and
   expect(h.spawnInputs[1]!.prompt).toContain(attempt.agentPath!);
 });
 
-test("a restart replacement cut by a second restart parks as any lost stage does", async () => {
+const RESTART_CUT_AGAIN = "the automatic restart attempt was interrupted by another Delegatus restart; retry-stage to start another attempt";
+
+test("a restart replacement cut by a second restart parks with its two attempts", async () => {
   const h = harness();
   const attempt = await restartCutStage(h, [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }]);
   cutByRestart(h, h.ports, attempt, h.ports.now(), "first cut");
@@ -17826,9 +17869,93 @@ test("a restart replacement cut by a second restart parks as any lost stage does
 
   const parked = loadPipelines()[0]!;
   expect(parked.state).toBe("needs_decision");
-  expect(parked.stateDetail).toBe(HISTORICAL_VERDICT_MISS);
+  expect(parked.stateDetail).toBe(RESTART_CUT_AGAIN);
   expect(parked.runs[0]!.attempts).toHaveLength(2);
-  expect(parked.runs[0]!.attempts[1]).toMatchObject({ state: "failed", error: HISTORICAL_VERDICT_MISS });
+  expect(parked.runs[0]!.attempts[1]).toMatchObject({ state: "needs_decision", error: RESTART_CUT_AGAIN });
+});
+
+/* The replacement is cut again before it wrote a word, so the provider's
+   host-death relaunch would otherwise answer it with a third attempt. */
+test.each([
+  { case: "no output", turn: "terminal", launchOnly: false },
+  { case: "launch only", turn: "busy", launchOnly: true },
+] as const)("a restart replacement cut again with $case parks before any other recovery, in a later boot", async ({ turn, launchOnly }) => {
+  const h = harness();
+  const attempt = await restartCutStage(h, [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }]);
+  cutByRestart(h, h.ports, attempt, h.ports.now(), "first cut");
+  h.advanceWallClock(5 * 60_000);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const lane = loadPipelines()[0]!;
+  const replacement = lane.runs[0]!.attempts[1]!;
+  replacement.paneId = null;
+  savePipelines([lane]);
+
+  cutByRestart(h, h.ports, replacement, h.ports.now(), "ignored");
+  h.durableTurns.set(replacement.agentPath!, { turn, message: null, launchOnly, lastRecordAt: Date.parse(replacement.startedAt!) });
+  const later: PipelinePorts = { ...h.ports, restartRecoveryBootId: () => "later-boot", conversationAgentActive: async () => false };
+  for (let tick = 0; tick < 4; tick += 1) {
+    h.advanceWallClock(5 * 60_000);
+    await tickPipelines([], later);
+  }
+
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.stateDetail).toBe(RESTART_CUT_AGAIN);
+  expect(parked.runs[0]!.attempts).toHaveLength(2);
+  expect(h.spawnInputs).toHaveLength(2);
+});
+
+test("a verdict written while the restart-cut host is being stopped settles the attempt and starts no replacement", async () => {
+  const h = harness();
+  const attempt = await restartCutStage(h, [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }]);
+  cutByRestart(h, h.ports, attempt, h.ports.now(), "Interim: the sweep is still running.");
+  const stop = h.ports.stopStageAgent;
+  h.ports.stopStageAgent = async (target) => {
+    const at = Date.parse(h.ports.now()) - 1;
+    h.durableTurns.set(attempt.agentPath!, { turn: "terminal", message: { text: PASS_TEXT, ts: at }, lastRecordAt: at });
+    return stop(target);
+  };
+  h.advanceWallClock(5 * 60_000);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+
+  const settled = loadPipelines()[0]!;
+  expect(settled.runs[0]!.attempts).toHaveLength(1);
+  expect(settled.runs[0]!.attempts[0]!.state).toBe("passed");
+  expect(h.spawnInputs).toHaveLength(1);
+});
+
+test.each([
+  { case: "a minute", offset: 60_000 },
+  { case: "four minutes", offset: 4 * 60_000 },
+] as const)("work in the transcript $case after a restart cut means the restart did not end the attempt", async ({ offset }) => {
+  const h = harness();
+  const attempt = await restartCutStage(h, [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }]);
+  const recordedAt = h.ports.now();
+  cutByRestart(h, h.ports, attempt, recordedAt, "cut");
+  const worked = Date.parse(recordedAt) + offset;
+  h.durableTurns.set(attempt.agentPath!, { turn: "terminal", message: { text: "Resumed and kept going.", ts: worked }, lastRecordAt: worked, lastAgentEventAt: worked });
+  h.advanceWallClock(25 * 60_000);
+  await tickPipelines([], h.ports);
+
+  const current = loadPipelines()[0]!;
+  expect(current.runs[0]!.attempts).toHaveLength(1);
+  expect(current.runs[0]!.attempts[0]).toMatchObject({ state: "failed", error: HISTORICAL_VERDICT_MISS });
+});
+
+test("records a CLI writes as it exits after a restart cut do not count as work", async () => {
+  const h = harness();
+  const attempt = await restartCutStage(h, [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }]);
+  const recordedAt = h.ports.now();
+  cutByRestart(h, h.ports, attempt, recordedAt, "Almost done.");
+  const cutAt = Date.parse(recordedAt) - 1;
+  h.durableTurns.set(attempt.agentPath!, { turn: "terminal", message: { text: "Almost done.", ts: cutAt },
+    lastRecordAt: Date.parse(recordedAt) + 90_000, lastAgentEventAt: cutAt });
+  h.advanceWallClock(5 * 60_000);
+  await tickPipelines([], h.ports);
+
+  expect(loadPipelines()[0]!.runs[0]!.attempts[1]!.restartContext).toMatchObject({ cause: "restart", lastReport: "Almost done." });
 });
 
 test("a restart cut is retried exactly once across repeated restarts and two Viewer generations", async () => {
@@ -17878,7 +18005,10 @@ test("an open turn a restart cut is named a restart and its replacement, cut aga
   const h = harness();
   const attempt = await restartCutStage(h, [{ id: "build", kind: "run", engine: "claude", model: "fable", prompt: "Build", next: null }]);
   const recordedAt = h.ports.now();
-  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: { text: "Committing.", ts: Date.parse(recordedAt) - 1 }, lastRecordAt: Date.parse(recordedAt) + 27_000 });
+  /* The dying CLI's bookkeeping moved the newest record past the cut; the
+     agent's own last event is before it. */
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: { text: "Committing.", ts: Date.parse(recordedAt) - 1 },
+    lastRecordAt: Date.parse(recordedAt) + 27_000, lastAgentEventAt: Date.parse(recordedAt) - 1 });
   /* The booting Viewer predates nothing here: only the recorded cut says a
      restart happened. */
   const boot = (id: string): PipelinePorts => ({ ...h.ports,
