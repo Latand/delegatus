@@ -351,12 +351,49 @@ describe("issue 516 — structured Claude API-error records project the terminal
   });
 
   test("activity: an ordinary stop_sequence assistant record keeps its terminal projection", () => {
-    const records = [user("2026-07-17T15:00:00Z"), apiError("2026-07-17T15:00:01Z", null, false)];
+    const ordinary = apiError("2026-07-17T15:00:01Z", null, false);
+    const records = [user("2026-07-17T15:00:00Z"), { ...ordinary, message: { ...ordinary.message, model: "claude-opus-5" } }];
     expect(turnStateFromRecords(records, "claude")).toEqual({
       state: "terminal",
       source: "lifecycle",
       terminalAt: "2026-07-17T15:00:01Z",
     });
+  });
+
+  /* The stop reasons the CLI stamps itself (#1811). The activity projection
+     asks the same authorship question as the authoritative one, so neither
+     closes a turn the provider did not end. */
+  for (const [name, record] of [
+    ["a server_error API error", apiError("2026-07-17T15:00:01Z", "server_error")],
+    ["an unknown API error", apiError("2026-07-17T15:00:01Z", "unknown")],
+    ["a synthetic record that is no API error", apiError("2026-07-17T15:00:01Z", null, false)],
+  ] as const) {
+    test(`activity: ${name} stamped stop_sequence leaves the turn open, as the authoritative projection reads it`, () => {
+      const records = [user("2026-07-17T15:00:00Z"), record];
+      expect(turnStateFromRecords(records, "claude")).toEqual({ state: "busy", source: "assistant", terminalAt: null });
+      expect(turnStateFromRecords(records, "claude")).toEqual(turnStateFromRecords(records, "claude", true));
+    });
+  }
+
+  /* A queued prompt retired without a provider call ends on the CLI's own
+     no-op. The turn it follows is over, and both projections say so. */
+  test("activity: a synthetic no-op that retires a queued prompt after a settled turn stays terminal", () => {
+    const records = [
+      user("2026-07-17T15:00:00Z"),
+      apiError("2026-07-17T15:00:01Z", "authentication_failed"),
+      user("2026-07-17T15:00:02Z"),
+      {
+        type: "assistant",
+        timestamp: "2026-07-17T15:00:03Z",
+        message: { role: "assistant", model: "<synthetic>", stop_reason: "stop_sequence", content: [{ type: "text", text: "No response requested." }] },
+      },
+    ];
+    expect(turnStateFromRecords(records, "claude")).toEqual({
+      state: "terminal",
+      source: "lifecycle",
+      terminalAt: "2026-07-17T15:00:01Z",
+    });
+    expect(turnStateFromRecords(records, "claude")).toEqual(turnStateFromRecords(records, "claude", true));
   });
 });
 

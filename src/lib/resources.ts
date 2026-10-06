@@ -7,7 +7,7 @@ import { chmodSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readF
 import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import { completedFileScan, currentResourceFileScan } from "@/lib/scanner/scanCache";
+import { completedFileScan, currentResourceFileScan, lastScannedFiles } from "@/lib/scanner/scanCache";
 import {
   createResourceCollector,
   createResourceDiagnosticTail,
@@ -60,7 +60,10 @@ export type ResourceBuildDiagnostic = {
   phases: ResourceBuildPhases;
 };
 
-export type ServedResourceDiagnostic = ResourceBuildDiagnostic & {
+export type ServedResourceDiagnostic = Omit<ResourceBuildDiagnostic, "status"> & {
+  /** `pending`: the caller's wait ended while the first collection was still
+      running. Nothing failed; the table arrives with a later read. */
+  status: ResourceBuildDiagnostic["status"] | "pending";
   generation: number;
   startedAt: string;
   completedAt: string;
@@ -449,7 +452,14 @@ export function resourceWorkerFileHandoff(
     projected from the registry. The collector worker takes it as handed over:
     the registry is the Viewer's to read, never the worker's (#1870). */
 export async function readResourceFileSnapshot(fresh: boolean): Promise<ResourceWorkerFileObservation[]> {
-  const scan = fresh ? await currentResourceFileScan() : await completedFileScan({ revalidate: false });
+  /* A process with no completed generation, in memory or on disk, has only a
+     full-corpus scan to wait for: 2.9 s over 2,500 transcripts, where the
+     staged projection a fresh read takes answers in 0.3 s. The table needs the
+     scan's scope and none of its enrichment, so the cold read takes that
+     projection too, and the full generation completes behind it. */
+  const scan = fresh || lastScannedFiles() === null
+    ? await currentResourceFileScan()
+    : await completedFileScan({ revalidate: false });
   return resourceWorkerFileHandoff(scan.snapshot.files);
 }
 
@@ -697,8 +707,16 @@ export async function buildResourceSnapshot(
   }
 }
 
+export interface ResourcesReadOptions {
+  /** The longest an ordinary read waits for a first collection. Past it the
+      read answers `pending` with the system block and no session rows, and the
+      collection carries on for the next read. A fresh read ignores it: its
+      caller asked for the completed observation. */
+  waitMs?: number;
+}
+
 export interface ResourcesReader {
-  read(fresh?: boolean): Promise<ResourcesRead>;
+  read(fresh?: boolean, options?: ResourcesReadOptions): Promise<ResourcesRead>;
 }
 
 export type CollectedResources = {
@@ -2351,6 +2369,27 @@ function sessionTableStamp(
   };
 }
 
+/** The answer to a read whose wait ended before the first collection did. */
+function pendingResourceRead(
+  result: ResourceCollectorResult<CollectedResources>,
+  captureSystem: () => ResourcesPayload["system"],
+): ResourcesRead {
+  return {
+    payload: { system: captureSystem(), sessions: [], sessionsCapturedAt: null, sessionsStale: true },
+    diagnostic: {
+      fresh: false,
+      status: "pending",
+      durationMs: Math.max(0, result.completedAt - result.startedAt),
+      phases: emptyResourceBuildPhases(),
+      generation: result.generation,
+      startedAt: new Date(result.startedAt).toISOString(),
+      completedAt: new Date(result.completedAt).toISOString(),
+      collectorId: result.collectorId,
+      cache: { status: "miss" },
+    },
+  };
+}
+
 function resourceReadFromResult(
   result: ResourceCollectorResult<CollectedResources>,
   captureSystem: () => ResourcesPayload["system"],
@@ -2485,9 +2524,9 @@ export function createResourcesReader(
     }
   };
 
-  const revalidateInBackground = (latest: ResourceObservation<CollectedResources>) => {
+  const observeInBackground = (fence: number) => {
     if (backgroundFlight) return;
-    const task = collector.observe(latest.generation, observeTimeoutMs, false)
+    const task = collector.observe(fence, observeTimeoutMs, false)
       .then((result) => {
         if (result.failure) {
           logFailure(result);
@@ -2504,14 +2543,14 @@ export function createResourcesReader(
     backgroundFlight = task;
   };
 
-  const readOnce = async (fresh: boolean): Promise<ResourcesRead> => {
+  const readOnce = async (fresh: boolean, waitMs?: number): Promise<ResourcesRead> => {
     const latest = collector.latest();
     if (!fresh && latest) {
       if (now() - latest.completedAt >= CACHE_MS) {
         /* The completed file snapshot remains the response while a bounded
            current scan revalidates in the collector. Its rejection is held
            by the collector, so polling never leaks an unhandled rejection. */
-        revalidateInBackground(latest);
+        observeInBackground(latest.generation);
       }
       persist(latest);
       if (latestBackgroundFailure) {
@@ -2526,11 +2565,19 @@ export function createResourcesReader(
       }, captureSystem, false, true, now());
     }
     const fence = fresh ? collector.fence() : -1;
+    const bounded = !fresh && waitMs !== undefined && waitMs < observeTimeoutMs;
     const result = await collector.observe(
       fence,
-      observeTimeoutMs,
+      bounded ? waitMs : observeTimeoutMs,
       fresh,
     );
+    if (bounded && !result.observation && result.failure?.diagnostic.cause === "observation-timeout") {
+      /* The collection outlived this caller's wait and is still running. It
+         keeps one observer, so its outcome is logged and the next read finds
+         the table or the failure. */
+      observeInBackground(-1);
+      return pendingResourceRead(result, captureSystem);
+    }
     if (result.observation && !result.failure) {
       persist(result.observation);
       clearBackgroundFailure(result.observation);
@@ -2540,8 +2587,8 @@ export function createResourcesReader(
   };
 
   return {
-    async read(fresh = false): Promise<ResourcesRead> {
-      if (!fresh) return readOnce(false);
+    async read(fresh = false, options: ResourcesReadOptions = {}): Promise<ResourcesRead> {
+      if (!fresh) return readOnce(false, options.waitMs);
       if (freshFlight) return freshFlight;
       const task = readOnce(true);
       freshFlight = task;
@@ -2598,11 +2645,11 @@ function withViewerSection(read: ResourcesRead): ResourcesRead {
   return { ...read, payload: { ...read.payload, viewer, viewerUnavailable: unavailable } };
 }
 
-export async function readResourcesWithDiagnostic(fresh = false): Promise<ResourcesRead> {
+export async function readResourcesWithDiagnostic(fresh = false, options: ResourcesReadOptions = {}): Promise<ResourcesRead> {
   const fixturePath = process.env.LLV_RESOURCES_FIXTURE;
   if (fixturePath) {
     noteSessionTargets([]);
     return fixtureRead(parseResourcesFixture(readFileSync(fixturePath, "utf8")), fresh);
   }
-  return withViewerSection(await resourcesReader().read(fresh));
+  return withViewerSection(await resourcesReader().read(fresh, options));
 }
