@@ -309,6 +309,12 @@ Two consequences shape the rule:
      for as long as it exists;
    - evidence that cannot be read counts.
 
+   Both projections take recorded live host ownership before a registry status
+   word that can lag it, including processes that survived structured-host
+   termination. `conversationRegistryHost` derives its process verdict from
+   that same host projection, so readable transcripts and missing transcripts
+   agree about ownership.
+
    A fallback transcript path resolves its canonical owner through the same
    registry generations, continuity paths and aliases as the liveness read.
    That owner's recorded process and current Viewer host remain evidence even

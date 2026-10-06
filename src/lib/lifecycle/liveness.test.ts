@@ -252,7 +252,7 @@ test.each([
   { name: "live tmux with dead structured host", alive: new Set([1112]), status: "live", lifecycle: "running", kind: "tmux" },
   { name: "both hosts live", alive: new Set([1112, 2222]), status: "live", lifecycle: "running", kind: "tmux" },
   { name: "both hosts dead", alive: new Set<number>(), status: "live", lifecycle: "stalled", kind: "tmux" },
-  { name: "terminal registry status", alive: new Set([1112, 2222]), status: "dead", lifecycle: "stalled", kind: "tmux" },
+  { name: "terminal registry status with live ownership", alive: new Set([1112, 2222]), status: "dead", lifecycle: "running", kind: "tmux" },
 ] as const)("$name reports combined dual-host liveness", async ({ alive, status, lifecycle, kind }) => {
   const dir = sandbox();
   const agentPath = path.join(dir, "dual-host.jsonl");
@@ -778,10 +778,13 @@ test("a conversation's registry row says who hosts it without a transcript to re
   const ended = { ...hosted, status: "dead", structuredHost: null } as AgentRegistryEntry;
   expect(conversationRegistryHost(registry(ended), "conversation_host", probe(false))).toEqual({ state: "gone", processAlive: false });
   /* A status word that says dead over a process that still answers: named, so a restart cannot land on it. */
-  expect(conversationRegistryHost(registry({ ...hosted, status: "dead" }), "conversation_host", probe(true))).toEqual({ state: "gone", processAlive: true });
+  expect(conversationRegistryHost(registry({ ...hosted, status: "dead" }), "conversation_host", probe(true))).toEqual({ state: "alive", processAlive: true });
   /* A process that survived its termination is still a process. */
   const survivor = { ...ended, structuredTerminationSurvivors: [{ pid: 4243, startIdentity: "start-token-of-a-dead-host" }] } as AgentRegistryEntry;
-  expect(conversationRegistryHost(registry(survivor), "conversation_host", probe(true))).toEqual({ state: "gone", processAlive: true });
+  expect(conversationRegistryHost(registry(survivor), "conversation_host", probe(true))).toEqual({ state: "alive", processAlive: true });
+  expect(conversationRegistryHost(registry(survivor), "conversation_host", probe(false))).toEqual({ state: "gone", processAlive: false });
+  const reused = { ...survivor, structuredTerminationSurvivors: [{ pid: 4243, startIdentity: "previous-process" }] };
+  expect(conversationRegistryHost(registry(reused), "conversation_host", probe(true))).toEqual({ state: "gone", processAlive: false });
   /* A hosted row with no process yet is a launch inside its grace, then rot. */
   const launching = { ...hosted, structuredHost: null, status: "starting", updatedAt: new Date(NOW - 60_000).toISOString() } as AgentRegistryEntry;
   expect(conversationRegistryHost(registry(launching), "conversation_host", probe(false))).toEqual({ state: "unknown", processAlive: false });

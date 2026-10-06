@@ -12,7 +12,7 @@ import { randomUUID } from "node:crypto";
 import { AgentRegistry, setAgentRegistryForTests, type ProcessIdentity } from "@/lib/agent/registry";
 import { newRound, reserveReviewerSpawn, tickFlows } from "@/lib/flows/engine";
 import { loadFlows, saveFlows } from "@/lib/flows/store";
-import { agentLivenessSnapshot, productionLivenessSources } from "@/lib/lifecycle/liveness";
+import { agentLivenessSnapshot, livenessRecordIsLive, productionLivenessSources } from "@/lib/lifecycle/liveness";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 import { bindStructuredDeliveryQueue, publishStructuredDeliveryHost } from "@/lib/runtime/structuredDeliveryController";
 import { FakeEngineHost } from "@/lib/runtime/fixtures/fakeEngineHost";
@@ -190,6 +190,25 @@ test("a process the row still records keeps its turn and stage under a dead stat
   rmSync(live.artifactPath);
   const p = ports([row(live, "unhosted")], [lane("lane_lagging", "running", { conversationId: live.conversation.id, agentPath: live.artifactPath })]);
   expect(await probeQuiet(snapshot, p, Date.now() + 12 * 60 * 60_000, true)).toMatchObject({ quiet: false, blockers: { turns: 1, stages: 1 } });
+});
+
+test.each(["host", "survivor"] as const)("liveOnly and drain share recorded live %s ownership under a stale dead status", async (kind) => {
+  const child = Bun.spawn(["sleep", "60"]);
+  const identity = captureProcessIdentity(child.pid)!;
+  const fixture = hosted("open", identity);
+  const entry = registry.readOnlySnapshot().entries[`codex:${fixture.key.sessionId}`]!;
+  registry.upsert({ ...entry, status: "dead", ...(kind === "survivor" ? { structuredHost: null, structuredTerminationSurvivors: [identity] } : {}) });
+  const p = ports([row(fixture, "hosted")]);
+  try {
+    const activity = await agentActivity(fixture.conversation.id);
+    expect(activity.filter(livenessRecordIsLive)).toHaveLength(1);
+    expect(activity).toMatchObject([{ host: { state: "alive", pid: child.pid }, turnState: "busy" }]);
+    expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: false, blockers: { turns: 1 } });
+    child.kill();
+    await child.exited;
+    expect((await agentActivity(fixture.conversation.id)).filter(livenessRecordIsLive)).toHaveLength(0);
+    expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
+  } finally { child.kill(); await child.exited; }
 });
 
 /** A stored review flow whose newest round is `round`, read back through the flow store. */

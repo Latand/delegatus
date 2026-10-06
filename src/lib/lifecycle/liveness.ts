@@ -361,12 +361,17 @@ function hostEvidence(
       }
     : null;
 
+  // Status can lag host admission or termination. Recorded live ownership is
+  // the same evidence for liveOnly and restart admission, including a child
+  // that survived termination and is still fenced by its saved identity.
+  if (tmux?.state === "alive") return tmux;
+  if (structuredEvidence?.state === "alive") return structuredEvidence;
+  const survivor = entry.structuredTerminationSurvivors?.find((identity) => identityAlive(identity, probe));
+  if (survivor) return { state: "alive", kind: "structured", pid: survivor.pid };
   if (!hosted) {
     const recorded = tmux ?? structuredEvidence;
     return recorded ? { ...recorded, state: "gone" } : { state: "gone", kind: "none", pid: null };
   }
-  if (tmux?.state === "alive") return tmux;
-  if (structuredEvidence?.state === "alive") return structuredEvidence;
   if (tmux) return tmux;
   if (structuredEvidence) return structuredEvidence;
 
@@ -608,15 +613,10 @@ export function conversationRegistryHost(
   const entry = registry.entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })]
     ?? entryForPath(registry, generation.path);
   if (!entry) return null;
-  const recorded = [
-    entry.host?.agent,
-    entry.host?.panePid,
-    entry.structuredHost?.process,
-    ...(entry.structuredTerminationSurvivors ?? []),
-  ];
+  const host = hostEvidence(entry, probe);
   return {
-    state: hostEvidence(entry, probe).state,
-    processAlive: recorded.some((identity) => identityAlive(identity, probe)),
+    state: host.state,
+    processAlive: host.state === "alive",
   };
 }
 
