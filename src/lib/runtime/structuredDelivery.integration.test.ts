@@ -22,6 +22,7 @@ import { StructuredDeliveryQueue, type StructuredDeliveryQueuePort } from "./str
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { deliverHeldStructuredMessage, enqueueStructuredMessage } from "./structuredMessageDelivery";
 import { structuredContentDigest } from "./structuredContent";
+import { DeliveryProgressStore } from "./deliveryProgress";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { drainFile, releaseDrain, writeDrain } from "@/lib/selfUpdate/drain";
@@ -2453,6 +2454,107 @@ test("queue binding settles an uncertain reservation from a terminal journal rec
     error: null,
   });
   await bindStructuredDeliveryQueue([], { registry, client: null });
+});
+
+test("with nobody draining, the bound controller's watchdog delivers an admitted send once and records why it waited, under its original key", async () => {
+  /* Incident 2026-10-06: the browser is closed and the wake that should follow
+     this admission never arrives. The controller's own watchdog is the only
+     thing left to move it. */
+  const sessionId = "deadbeef-2222-\x34222-8222-222222222222";
+  const directory = path.join(sandbox, "controller-watchdog-lost-wake");
+  const artifactPath = path.join(directory, `${sessionId}.jsonl`);
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
+  const profile = emptyLaunchProfile({ cwd: directory });
+  registry.reconcileConversations([{
+    engine: "codex",
+    path: artifactPath,
+    accountId: "watchdog-account",
+    launchProfile: profile,
+    turn: { state: "idle", source: "empty", terminalAt: null },
+    observedAt: "2026-10-06T12:00:00.000Z",
+  }]);
+  const conversation = registry.conversationForPath(artifactPath)!;
+  const key = { engine: "codex" as const, sessionId };
+  registry.upsert({
+    key,
+    artifactPath,
+    cwd: directory,
+    accountId: "watchdog-account",
+    launchProfile: profile,
+    status: "idle",
+    host: null,
+    structuredHost: {
+      kind: "codex-app-server",
+      endpoint: "fake:watchdog-host",
+      process: null,
+      eventCursor: 0,
+      protocolVersion: "fake-v1",
+      writerClaimEpoch: 0,
+      activeTurnRef: null,
+      pendingAttention: [],
+      activeFlags: [],
+    },
+    claimEpoch: 0,
+    claimOwner: null,
+    pendingAction: null,
+  });
+  const journal = new RuntimeJournal(path.join(directory, "events.sqlite"), { structuredHosts: true });
+  journal.append({
+    scope: { type: "session", id: conversation.id },
+    kind: "session-status",
+    payload: {
+      conversationId: conversation.id,
+      sessionKey: key,
+      hostKind: "codex-app-server",
+      host: "hosted",
+      turn: "idle",
+      provenance: "structured",
+      artifactPath,
+      capabilities: { steer: true, structuredAttention: true },
+    },
+  });
+  const client = runtimeJournalClient(journal);
+  const taken: string[] = [];
+  const host = new FakeEngineHost();
+  const originalSend = host.send.bind(host);
+  host.send = async (entry: QueueEntry) => {
+    taken.push(entry.id);
+    return originalSend(entry);
+  };
+  const progress = new DeliveryProgressStore(null);
+  try {
+    await bindStructuredDeliveryQueue([{ key, host: observableFakeHost(host) }], {
+      registry,
+      client,
+      progress,
+      watchdogIntervalMs: 20,
+      settlementSweepMs: 0,
+      queueTiming: { safetyPassMs: 100 },
+    });
+    /* Let every wake the binding itself raised run out first. */
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const text = "hold the cutover until I say go";
+    const operationId = "operation-watchdog";
+    const held = registry.holdDelivery(conversation.id, text, "watchdog-key", "text", [],
+      structuredContentDigest({ text, images: [] }), { operationId, kind: "send", policy: "queue", turnId: null });
+    registry.beginDeliveryAttempt(held.id, held.generationId!);
+    /* Admitted to the journal, and no drain is requested. */
+    journal.executeOperation({ kind: "send", operationId, idempotencyKey: "watchdog-key", conversationId: conversation.id, text, policy: "queue" });
+    const admittedAt = performance.now();
+    await waitForCondition(() => journal.operationResult(operationId)?.receipt.status === "turn-started"
+      || journal.operationResult(operationId)?.receipt.status === "delivered");
+    /* Picked up by the watchdog's safety pass well inside the ten seconds. */
+    expect(performance.now() - admittedAt).toBeLessThan(2_000);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(taken).toEqual([operationId]);
+    const record = progress.get(operationId)!;
+    expect(record.originalKey).toBe("watchdog-key");
+    expect(record.wakeLostAt).not.toBeNull();
+    expect(record.terminal?.state).toBe("delivered");
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close();
+  }
 });
 
 test("a send its host could not answer for settles the reservation without waiting for a sweep", async () => {

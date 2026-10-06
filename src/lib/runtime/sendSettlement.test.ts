@@ -38,6 +38,7 @@ const {
   runtimeReceiptForSend,
   sendIsSettled,
   sendReceiptFor,
+  settleDueSends,
 } = await import("./sendSettlement");
 const { handleRuntimeOperationQuery, handleRuntimeRetry } = await import("./http");
 const { NextRequest } = await import("next/server");
@@ -349,6 +350,59 @@ test("a dropped send settles as failed, and the fence stops the queue from deliv
     await new StructuredDeliveryQueue(stalePort, () => host).drain().catch(() => undefined);
     expect(received).toEqual([]);
     expect(active.journal.operationResult(operationId)?.receipt.status).toBe("failed");
+  } finally {
+    active.close();
+  }
+});
+
+test("with no reader asking, the background deadline ends a dropped send and the queue never delivers it", async () => {
+  /* Incident 2026-10-06: settlement ran only when somebody read the receipt.
+     Here nobody does: the sweep the delivery controller runs on a timer is the
+     only caller, as it is with the browser closed. */
+  const active = fixture("background");
+  try {
+    const { operationId, deliveryId } = acceptSend(active, { clientMessageId: "background-key", text: "resume the cutover" });
+    const deadlines: Array<{ operationId: string; deadlineAt: string | null; policy: string | null }> = [];
+    const young = await settleDueSends({
+      registry: active.registry,
+      client: active.client,
+      onDeadline: (id, _conversation, deadline) => deadlines.push({ operationId: id, deadlineAt: deadline?.deadlineAt ?? null, policy: deadline?.policy ?? null }),
+    });
+    /* Inside the window it is only recorded, with the deadline that will end it. */
+    expect(young.settled).toEqual([]);
+    expect(deadlines).toHaveLength(1);
+    expect(deadlines[0]!.operationId).toBe(operationId);
+    expect(deadlines[0]!.policy).toBe("settlement-window");
+    expect(active.registry.readOnlySnapshot().heldDeliveries[deliveryId]?.state).not.toBe("failed");
+
+    const swept = await settleDueSends({ registry: active.registry, client: active.client, now: AFTER_THE_WINDOW });
+    expect(swept.settled).toEqual([{ operationId, state: "failed", duplicateRisk: false }]);
+    const receipt = receiptOf(active, operationId);
+    expect(receipt?.reason).toBe(SEND_LOST_REASON);
+    expect(receipt?.resend).toBe("safe");
+    expect(active.journal.operationResult(operationId)?.receipt.status).toBe("failed");
+
+    const { host, received } = recordingHost(active.generationId);
+    await new StructuredDeliveryQueue(stalePortFor(active, operationId, "background-key", "resume the cutover"), () => host)
+      .drain().catch(() => undefined);
+    expect(received).toEqual([]);
+    /* A second sweep finds nothing left to end. */
+    expect((await settleDueSends({ registry: active.registry, client: active.client, now: AFTER_THE_WINDOW })).settled).toEqual([]);
+  } finally {
+    active.close();
+  }
+});
+
+test("the background deadline ends a send an executor took as unverified and keeps a resend behind verification", async () => {
+  const active = fixture("background-uncertain");
+  try {
+    const { operationId } = acceptSend(active, { clientMessageId: "background-uncertain-key" });
+    active.journal.transitionOperation(operationId, "delivering", { turnId: "turn-9" });
+    const swept = await settleDueSends({ registry: active.registry, client: active.client, now: AFTER_THE_WINDOW });
+    expect(swept.settled).toEqual([{ operationId, state: "failed", duplicateRisk: true }]);
+    const receipt = receiptOf(active, operationId);
+    expect(receipt?.duplicateRisk).toBe(true);
+    expect(receipt?.resend).toBe("verify-first");
   } finally {
     active.close();
   }

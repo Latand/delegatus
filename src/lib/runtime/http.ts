@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import { readDeliveryProgress } from "./deliveryProgress";
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "node:crypto";
 
@@ -517,8 +518,12 @@ export async function handleRuntimeOperationQuery(
   );
   const send = settlement.readable ? settlement.value : null;
   /* The rule above, applied before anything can contradict it. */
+  /* What the delivery is waiting on, beside the receipt: it explains the
+     wait and decides nothing. */
+  const progress = readDeliveryProgress([operationId]).get(operationId) ?? null;
+  const explained = progress ? { progress } : {};
   if (send && send.state !== "in-flight") {
-    return NextResponse.json({ operationId, receipt: runtimeReceiptForSend(send), send });
+    return NextResponse.json({ operationId, receipt: runtimeReceiptForSend(send), send, ...explained });
   }
   /* An absent plane and an unreachable one stay distinct answers: only the
      first carries the code, and reporting a dead socket as a rolled-back plane
@@ -536,6 +541,7 @@ export async function handleRuntimeOperationQuery(
           operationId: result.operationId,
           receipt: result.receipt,
           ...(send ? { send } : {}),
+          ...explained,
         });
       }
     } catch (error) {
@@ -544,7 +550,7 @@ export async function handleRuntimeOperationQuery(
   }
   /* The journal could not answer. The durable delivery record still can, and
      for an accepted send that is the whole point of settling it there. */
-  if (send) return NextResponse.json({ operationId, receipt: runtimeReceiptForSend(send), send });
+  if (send) return NextResponse.json({ operationId, receipt: runtimeReceiptForSend(send), send, ...explained });
   if (!settlement.readable) {
     /* Neither store gave a usable answer, and one of them was never read. That
        is not an operation nobody admitted, so it must not be answered as one. */

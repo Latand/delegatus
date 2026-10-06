@@ -28,6 +28,7 @@
 import type { MessageKey, TFunction } from "@/lib/i18n";
 
 import { deliveryWaitFor, deliveryWaitText, type DeliveryWaitPhase } from "@/components/runtime/deliveryWait";
+import type { DeliveryProgressRecord } from "@/lib/runtime/deliveryProgress";
 import { humanReceiptReasonKey, type HostAxis, type TurnAxis } from "@/components/runtime/runtimeModel";
 
 import { outboxStateForReceiptStatus, receiptHasUnknownFate, type OutboxEntry } from "./outbox";
@@ -183,6 +184,7 @@ export function transportLine(
   switchHold: MessageRowSwitchHold | null,
   nowMs: number,
   session: MessageRowSession | null,
+  progress: DeliveryProgressRecord | null = null,
 ): { label: string; wait: MessageRowModel["wait"] } {
   /* An outcome nobody could establish keeps its own words in the evidence —
      the transport genuinely does not know, and the disclosure says exactly
@@ -204,6 +206,23 @@ export function transportLine(
      owed that. The generic wording stays for every other hold. */
   const hostAxisSpeaks = session?.host === "dead" || session?.host === "unhosted"
     || session?.host === "recovering" || session?.host === "registering";
+  /* What the delivery queue recorded this message is waiting on (incident
+     2026-10-06) is the most specific answer there is, so it answers whenever
+     it is present and the message is still unsettled. */
+  const recorded = progress && !progress.terminal && (entry.state === "delivering" || entry.state === "queued") && !switchHold
+    ? progress : null;
+  if (recorded) {
+    const wait = deliveryWaitFor({
+      status: "queued",
+      host: session?.host ?? null,
+      turn: session?.turn ?? null,
+      admittedAt: new Date(entry.at).toISOString(),
+      nowMs,
+    });
+    if (wait && wait.phase !== "uncertain") {
+      return { label: deliveryWaitText(t, { ...wait, progress: recorded, nowMs })!, wait: wait.phase };
+    }
+  }
   if (entry.acceptedHeld && entry.state === "delivering" && !hostAxisSpeaks) {
     return { label: t("composer.deliveryHeldWaiting"), wait: null };
   }
@@ -322,11 +341,17 @@ function contextRowModel(t: TFunction, entry: OutboxEntry): MessageRowModel {
 export function messageRowModel(
   t: TFunction,
   entry: OutboxEntry,
-  options: { switchHold?: MessageRowSwitchHold | null; nowMs?: number; session?: MessageRowSession | null } = {},
+  options: {
+    switchHold?: MessageRowSwitchHold | null;
+    nowMs?: number;
+    session?: MessageRowSession | null;
+    /** The delivery queue's own record of what this message waits on. */
+    progress?: DeliveryProgressRecord | null;
+  } = {},
 ): MessageRowModel {
-  const { switchHold = null, nowMs = 0, session = null } = options;
+  const { switchHold = null, nowMs = 0, session = null, progress = null } = options;
   if (entry.intent === "context") return contextRowModel(t, entry);
-  const transport = transportLine(t, entry, switchHold, nowMs, session);
+  const transport = transportLine(t, entry, switchHold, nowMs, session, progress);
   /* An unconfirmed outcome is NOT a failure: the message may well have
      arrived, and the one thing the row must never do is tell the operator it
      was not sent. It stays pending, and the disclosure offers Check status

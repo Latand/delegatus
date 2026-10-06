@@ -46,16 +46,19 @@ import { readEvidence, readEvidenceSync, unreadableEvidence, type Evidence } fro
  *   resendable. Delivering a deployment instruction twice is a worse incident
  *   than the silence this issue is about.
  *
- * ── ONE MECHANISM, DRIVEN BY THE CALLER ───────────────────────────────────
+ * ── ONE MECHANISM, TWO CALLERS ────────────────────────────────────────────
  *
- * There is no sweep and no timer here, on purpose. A background reconciler
- * settles a send only while the process that owns it is healthy, which is
- * exactly when the send was least likely to be lost — a fix for "this can hang
- * forever" that hangs whenever the runtime does has moved the problem rather
- * than solved it. So the settlement runs where the question is asked: a caller
- * holding an operation id asks what became of it, and an accepted send past its
- * deadline is settled by that read, from whatever evidence exists, including
- * none.
+ * The settlement runs where the question is asked: a caller holding an
+ * operation id asks what became of it, and an accepted send past its deadline
+ * is settled by that read, from whatever evidence exists, including none. A
+ * background sweep alone would settle a send only while the process that owns
+ * it is healthy, which is exactly when the send was least likely to be lost.
+ *
+ * The read alone left the deadline to whoever happened to look, and with the
+ * browser closed nobody did (incident 2026-10-06). So the delivery controller
+ * also runs {@link settleDueSends} on a timer: the same deadline, the same
+ * evidence and the same verdicts, applied without a reader. Neither caller
+ * replaces the other.
  *
  * The deadline itself is durable — the reservation's own acceptance time — so
  * it survives every restart on both sides and needs nothing to be running.
@@ -566,6 +569,91 @@ function pastSettlementDeadline(
   if (restedMs < (ports.windowMs ?? SEND_SETTLEMENT_WINDOW_MS)) return false;
   if (restedMs >= (ports.inTurnCeilingMs ?? SEND_SETTLEMENT_IN_TURN_CEILING_MS)) return true;
   return !awaitingRecipientTurn(registry, file, subject.conversationId);
+}
+
+/** When an accepted send's settlement deadline falls, and which policy sets
+    it: the ordinary window, or the in-turn ceiling while its recipient's turn
+    is running. Null for a subject that is not settleable. */
+export interface SettlementDeadline {
+  deadlineAt: string;
+  policy: "settlement-window" | "in-turn-ceiling";
+}
+
+function settlementDeadline(
+  registry: AgentRegistry,
+  file: RegistryFile,
+  subject: SettlementSubject,
+  ports: SendSettlementPorts,
+): SettlementDeadline | null {
+  if (!subject.settleable) return null;
+  const acceptedAt = parseTime(subject.acceptedAt);
+  if (acceptedAt === null) return null;
+  const inTurn = awaitingRecipientTurn(registry, file, subject.conversationId);
+  const span = inTurn
+    ? ports.inTurnCeilingMs ?? SEND_SETTLEMENT_IN_TURN_CEILING_MS
+    : ports.windowMs ?? SEND_SETTLEMENT_WINDOW_MS;
+  return { deadlineAt: new Date(acceptedAt + span).toISOString(), policy: inTurn ? "in-turn-ceiling" : "settlement-window" };
+}
+
+export interface SettlementSweepResult {
+  /** In-flight sends the sweep looked at. */
+  examined: number;
+  /** Operations the sweep ended, with the answer it reached and whether a
+      resend could duplicate it. */
+  settled: Array<{ operationId: string; state: SendReceiptState; duplicateRisk: boolean }>;
+}
+
+/**
+ * Ends every accepted send past its deadline, with no caller asking (incident
+ * 2026-10-06). Runs the same {@link resolveSendReceipt} a receipt read runs,
+ * so a send it ends is fenced in the journal first and never called safe to
+ * resend unless the journal proves it never executed. `onDeadline` hears each
+ * in-flight send's current deadline, so its progress record can show it.
+ *
+ * Bounded per sweep; a send it could not reach this time is reached by the
+ * next one, or by any read in between.
+ */
+export async function settleDueSends(
+  ports: SendSettlementPorts & {
+    onDeadline?: (operationId: string, conversationId: string, deadline: SettlementDeadline | null) => void;
+    limit?: number;
+  } = {},
+): Promise<SettlementSweepResult> {
+  const registry = ports.registry ?? agentRegistry();
+  const file = registry.readOnlySnapshot();
+  const now = (ports.now ?? Date.now)();
+  const operations = new Set<string>();
+  for (const delivery of Object.values(file.heldDeliveries)) {
+    if (!SETTLEABLE_DELIVERY_STATES.has(delivery.state) || !delivery.command.operationId) continue;
+    operations.add(delivery.command.operationId);
+  }
+  for (const [operationId, owner] of Object.entries(file.deliveryOperationOwners)) {
+    if (owner.retryOfOperationId && owner.terminalState === null) operations.add(operationId);
+  }
+  const result: SettlementSweepResult = { examined: 0, settled: [] };
+  const limit = ports.limit ?? 64;
+  for (const operationId of operations) {
+    if (result.settled.length >= limit) break;
+    const subject = settlementSubject(retryAttemptOwner(file, operationId), deliveryForOperation(file, operationId));
+    if (!subject) continue;
+    result.examined += 1;
+    const deadline = settlementDeadline(registry, file, subject, ports);
+    ports.onDeadline?.(operationId, subject.conversationId, deadline);
+    if (deadline && Date.parse(deadline.deadlineAt) > now) continue;
+    if (!pastSettlementDeadline(registry, file, subject, ports)) continue;
+    try {
+      const receipt = await resolveSendReceipt(operationId, ports);
+      if (receipt && receipt.state !== "in-flight") {
+        result.settled.push({ operationId, state: receipt.state, duplicateRisk: receipt.duplicateRisk });
+      }
+    } catch (error) {
+      console.error("[send settlement] background settlement failed", {
+        operationId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return result;
 }
 
 /**

@@ -6,6 +6,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { Database as BunDatabase } from "bun:sqlite";
 
 import { openCurrentDatabase } from "@/lib/state/currentDatabase";
+import { recordBlockingWait } from "@/lib/blockingWaits";
 
 import { reboundAssembledMcpGrants, rowClaimsBeyondBaselineGrant, type McpGrantPolicy } from "./mcpAllowlist";
 import { identityMaterializationFence } from "./identityMaterialization";
@@ -991,7 +992,7 @@ export class SqliteAgentRegistryStore {
       let changes: RegistryChanges;
       let result: T;
       try {
-        if (pessimistic) this.onWriterWait?.(performance.now() - waitStartedAt);
+        if (pessimistic) this.noteWriterWait(performance.now() - waitStartedAt, operationName);
         current = this.loadLazyInTransaction();
         result = operation(current.file);
         changes = current.changes();
@@ -1006,10 +1007,18 @@ export class SqliteAgentRegistryStore {
       let stamps = { before: "", after: "" };
       const changed = changes.rows.size > 0 || changes.meta.size > 0 || changes.order.size > 0;
       try {
-        if (!pessimistic) this.onWriterWait?.(performance.now() - optimisticWaitStartedAt);
+        if (!pessimistic) this.noteWriterWait(performance.now() - optimisticWaitStartedAt, operationName);
         if (!pessimistic && Number(this.meta("revision") ?? 0) !== current.revision) {
           this.db.exec("ROLLBACK");
           operationName ||= new Error().stack?.split("\n")[2]?.trim() ?? "anonymous";
+          /* The whole lost attempt, read and wait included: the time a lost
+             revision cost the caller before its retry. */
+          recordBlockingWait({
+            site: "registry-revision-retry",
+            durationMs: performance.now() - waitStartedAt,
+            synchronous: true,
+            subject: operationName,
+          });
           if (attempt >= this.maxMutationAttempts) {
             console.warn(`[registry] mutation ${operationName} reached its retry ceiling after ${attempt} lost revision`);
             throw new RegistryMutationRetryLimitError(operationName, attempt);
@@ -1046,6 +1055,58 @@ export class SqliteAgentRegistryStore {
       return { result, file: null, revision };
     }
     throw new RegistryMutationRetryLimitError(operationName || "anonymous", this.maxMutationAttempts);
+  }
+
+  private noteWriterWait(durationMs: number, operationName: string): void {
+    this.onWriterWait?.(durationMs);
+    recordBlockingWait({ site: "registry-lock", durationMs, synchronous: true, subject: operationName || "anonymous" });
+  }
+
+  /**
+   * Waits for the registry write lock without holding the event loop, and
+   * answers whether it was free when the wait ended.
+   *
+   * The synchronous acquisition in {@link mutate} spins for up to five seconds
+   * on the caller's thread, and on 2026-10-06 the Viewer's delivery path spent
+   * up to 4.1 s there with every request behind it. A caller on that path
+   * awaits this first: each probe takes and immediately releases the lock in
+   * one synchronous step with no await inside it, and sleeps between probes, so
+   * a lock another process holds is waited out while the loop serves others.
+   * The mutation that follows is unchanged: it still acquires the lock itself
+   * and still checks its revision, so this only moves where the wait happens.
+   */
+  async awaitWriterAvailable(options: { deadlineMs?: number; probeMs?: number } = {}): Promise<boolean> {
+    const startedAt = performance.now();
+    const deadline = this.writerClock() + (options.deadlineMs ?? 5_000);
+    const probeMs = options.probeMs ?? 5;
+    let free = false;
+    let probes = 0;
+    for (;;) {
+      probes += 1;
+      free = this.probeWriter();
+      if (free || this.writerClock() >= deadline) break;
+      await new Promise<void>((resolve) => setTimeout(resolve, probeMs));
+    }
+    if (probes > 1) {
+      recordBlockingWait({ site: "registry-lock-async", durationMs: performance.now() - startedAt, synchronous: false, subject: "agent-registry" });
+    }
+    return free;
+  }
+
+  private probeWriter(): boolean {
+    /* A transaction this connection already holds means the lock is ours. */
+    if (this.db.inTransaction) return true;
+    this.db.exec("PRAGMA busy_timeout = 0");
+    try {
+      this.db.exec("BEGIN IMMEDIATE");
+      this.db.exec("ROLLBACK");
+      return true;
+    } catch (error) {
+      if (error instanceof Error && (error as { code?: string }).code === "SQLITE_BUSY") return false;
+      throw error;
+    } finally {
+      this.db.exec("PRAGMA busy_timeout = 5000");
+    }
   }
 
   private beginMutationWrite(): void {

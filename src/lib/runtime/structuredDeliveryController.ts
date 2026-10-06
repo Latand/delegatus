@@ -24,7 +24,9 @@ import { runtimeHostKindForEngine, runtimeSettingsCapability, runtimeSteerCapabi
 import { confirmedSend } from "./confirmedSend";
 import { readEvidence } from "./evidence";
 import type { EngineHost, HostState } from "./engineHost";
-import { StructuredDeliveryQueue } from "./structuredDeliveryQueue";
+import { StructuredDeliveryQueue, type StructuredDeliveryQueueTiming } from "./structuredDeliveryQueue";
+import { deliveryProgressStore, type DeliveryProgressSink, type DeliveryProgressStore } from "./deliveryProgress";
+import { withWaitCorrelation } from "@/lib/blockingWaits";
 import { applyStructuredReconfigure, type StructuredReconfigureDependencies } from "./structuredReconfigure";
 import { projectEngineHostEvent } from "./engineHostEvents";
 import { observeCodexSubagentEvent } from "./codexSubagentDetection";
@@ -39,7 +41,7 @@ import {
 import { structuredHostKillRefFromRegistry, terminateStructuredHostTree } from "./structuredHostControl";
 import { publishFilesRevision } from "./filesRevision";
 import { setStructuredDeliveryKick } from "./structuredDeliverySignal";
-import { deliveryRouteOf, journalVerdict, sendIsSettled } from "./sendSettlement";
+import { deliveryRouteOf, journalVerdict, sendIsSettled, settleDueSends } from "./sendSettlement";
 import { runtimeImageCapability } from "./runtimeImageStore";
 import { noteVoiceWorkBoundary } from "./voiceViewBinding";
 import { STRUCTURED_IMAGE_CAPABILITY } from "./structuredContent";
@@ -81,6 +83,12 @@ interface HostRegistration {
 
 const DELIVERY_DRAIN_COALESCE_MS = 25;
 const DELIVERY_DRAIN_MAX_BACKOFF_MS = 1_000;
+/** How often the delivery watchdog looks for stalls, overdue wakes and lanes
+    to reconcile. */
+const DELIVERY_WATCHDOG_MS = 1_000;
+/** How often accepted sends past their settlement deadline are ended with no
+    reader asking (incident 2026-10-06). */
+const DELIVERY_SETTLEMENT_SWEEP_MS = 15_000;
 const TERMINAL_RECONCILIATION_PAGE_SIZE = 16;
 /** One socket frame's worth of acknowledgements (#1612). */
 const TERMINAL_ACKNOWLEDGEMENT_BATCH_SIZE = 128;
@@ -722,6 +730,13 @@ export async function bindStructuredDeliveryQueue(
     /** How often session rows of ended hosts are settled; 0 leaves it to a
         direct call. Tests pass their own. */
     hostlessSettleIntervalMs?: number;
+    /** Where wait reasons are recorded; tests pass their own store. */
+    progress?: DeliveryProgressStore;
+    /** The queue's bounds; tests shorten them. */
+    queueTiming?: Partial<StructuredDeliveryQueueTiming>;
+    /** Watchdog and background settlement cadences; 0 leaves each to a direct call. */
+    watchdogIntervalMs?: number;
+    settlementSweepMs?: number;
   } = {},
 ): Promise<void> {
   const client = dependencies.client === undefined ? runtimeHostClient() : dependencies.client;
@@ -797,8 +812,30 @@ export async function bindStructuredDeliveryQueue(
       return { status: "committed", binding: { threadId: current.id, accountId: current.accountId } };
     },
   });
+  const progressStore = dependencies.progress ?? deliveryProgressStore();
+  /* The first record of an operation carries its original key and admission
+     time off the delivery record, so the record answers for the key the
+     operator holds. */
+  const progress: DeliveryProgressSink = {
+    note: (operationId, conversationId, note) => {
+      if (!progressStore.get(operationId)) {
+        const owner = registry.readOnlySnapshot().deliveryOperationOwners[operationId];
+        note = { ...note, originalKey: owner?.clientMessageId ?? null, admittedAt: owner?.createdAt ?? null };
+      }
+      progressStore.note(operationId, conversationId, note);
+    },
+    stalled: (operationId) => progressStore.stalled(operationId),
+    deadline: (operationId, deadlineAt, policy) => progressStore.deadline(operationId, deadlineAt, policy),
+    settle: (operationId, state, reason) => progressStore.settle(operationId, state, reason),
+    get: (operationId) => progressStore.get(operationId),
+    open: () => progressStore.open(),
+  };
   const queue = new StructuredDeliveryQueue(
     {
+      progress,
+      /* Original-key reconciliation reads the host's own evidence: the Claude
+         delivery ledger and transcript, the Codex thread. It never writes input. */
+      confirmedDelivery: (operationId) => confirmedSend(registry.readOnlySnapshot(), operationId, true),
       handoffHeld: () => !!activeRestartGate(statePath("self-update", "auto-admission.json")),
       autonomousTurnHeld: (operationId, admittedAt) => {
         const hold = activeDrain();
@@ -819,7 +856,11 @@ export async function bindStructuredDeliveryQueue(
         });
       },
       effects: (kinds, afterEventSeq) => client.effectBatch(kinds, afterEventSeq),
-      bindDeliveryGeneration: (operationId, generationId) => registry.bindDeliveryOperationGeneration(operationId, generationId),
+      bindDeliveryGeneration: async (operationId, generationId) => {
+        await registry.awaitWriterAvailable({ label: "delivery.bind-generation", operationId });
+        return withWaitCorrelation({ label: "delivery.bind-generation", operationId },
+          () => registry.bindDeliveryOperationGeneration(operationId, generationId));
+      },
       nativeQueueExecute: (command, refusalReason) => nativeQueueExecutor.execute(command, refusalReason),
       nativeQueueReconcile: async () => {
         if (!client.nativeQueueRead) return;
@@ -896,7 +937,10 @@ export async function bindStructuredDeliveryQueue(
         if (!terminal) return;
         const conversationId = result.receipt.conversationId;
         if (!conversationId?.startsWith("conversation_")) return;
-        registry.recordDeliveryOutcomeForOperation(
+        /* The registry's write lock is waited for off the event loop; the
+           write itself keeps its revision check and runs where it always did. */
+        await registry.awaitWriterAvailable({ label: "delivery.outcome", operationId });
+        withWaitCorrelation({ label: "delivery.outcome", operationId }, () => registry.recordDeliveryOutcomeForOperation(
           conversationId as `conversation_${string}`,
           result.receipt.presentationOperationId ?? operationId,
           status === "uncertain" ? "failed" : status,
@@ -909,7 +953,7 @@ export async function bindStructuredDeliveryQueue(
           /* The journal receipt, not these details: it carries the route the
              delivering transition recorded, whichever executor began it. */
           status === "delivered" ? deliveryRouteOf(result.receipt) : null,
-        );
+        ));
         await acknowledgeTerminalProjection(client, [result.operationId]);
         if (status === "delivered" && operationId.startsWith("spawn_message_")) {
           const launchId = operationId.slice("spawn_message_".length);
@@ -1114,9 +1158,12 @@ export async function bindStructuredDeliveryQueue(
       && branchSharesRootHost(registry, registry.conversation(conversationId as `conversation_${string}`))
       ? BRANCH_SHARED_HOST_ERROR
       : null,
+    dependencies.queueTiming,
   );
   let drainTimer: ReturnType<typeof setTimeout> | null = null;
   let settleTimer: ReturnType<typeof setInterval> | null = null;
+  let watchdogTimer: ReturnType<typeof setInterval> | null = null;
+  let settlementSweepTimer: ReturnType<typeof setInterval> | null = null;
   let drainBackoffMs = DELIVERY_DRAIN_COALESCE_MS;
   let stopped = false;
   const scheduleDrain = (delayMs = DELIVERY_DRAIN_COALESCE_MS): boolean => {
@@ -1699,6 +1746,10 @@ export async function bindStructuredDeliveryQueue(
     drainTimer = null;
     if (settleTimer) clearInterval(settleTimer);
     settleTimer = null;
+    if (watchdogTimer) clearInterval(watchdogTimer);
+    watchdogTimer = null;
+    if (settlementSweepTimer) clearInterval(settlementSweepTimer);
+    settlementSweepTimer = null;
     for (const timer of inheritedRetries.values()) clearTimeout(timer);
     inheritedRetries.clear();
     for (const registration of registrations.values()) {
@@ -1812,6 +1863,47 @@ export async function bindStructuredDeliveryQueue(
         .finally(() => { sweeping = false; });
     }, settleIntervalMs);
     settleTimer.unref?.();
+  }
+  /* The delivery watchdog and the background settlement run whether or not
+     anyone is looking at the conversation (incident 2026-10-06): a stalled
+     send is recorded and reconciled, a lost wake is replaced, and a send past
+     its deadline is ended, all with the browser closed. */
+  const watchdogMs = dependencies.watchdogIntervalMs ?? DELIVERY_WATCHDOG_MS;
+  if (watchdogMs > 0) {
+    watchdogTimer = setInterval(() => {
+      if (stopped || state.activeQueue !== queue || startupPending) return;
+      void queue.tick().catch((error) => {
+        console.error("[structured delivery] watchdog failed", { error: error instanceof Error ? error.message : String(error) });
+      });
+    }, watchdogMs);
+    watchdogTimer.unref?.();
+  }
+  const sweepMs = dependencies.settlementSweepMs ?? DELIVERY_SETTLEMENT_SWEEP_MS;
+  if (sweepMs > 0) {
+    let sweeping = false;
+    settlementSweepTimer = setInterval(() => {
+      if (sweeping || stopped || state.activeQueue !== queue) return;
+      sweeping = true;
+      void settleDueSends({
+        registry,
+        client,
+        onDeadline: (operationId, _conversationId, deadline) => {
+          progressStore.deadline(operationId, deadline?.deadlineAt ?? null, deadline?.policy ?? null);
+        },
+      })
+        .then((swept) => {
+          for (const { operationId, state: settled, duplicateRisk } of swept.settled) {
+            progressStore.settle(operationId, settled === "delivered" ? "delivered" : duplicateRisk ? "uncertain" : "failed",
+              "settled by the background deadline");
+          }
+          if (swept.settled.length > 0) requestDrain();
+        })
+        .catch((error) => {
+          console.error("[structured delivery] background settlement failed", { error: error instanceof Error ? error.message : String(error) });
+        })
+        .finally(() => { sweeping = false; });
+    }, sweepMs);
+    settlementSweepTimer.unref?.();
   }
   state.everPublished = true;
   /* The successor now owns every hook, so the predecessor's teardown finds

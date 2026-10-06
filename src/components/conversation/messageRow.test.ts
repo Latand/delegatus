@@ -272,3 +272,48 @@ test("a proven failure of a context row offers Edit, with the reason in both lan
   expect(generic.failure?.reason).toBe(translate("en", "outbox.failure.generic"));
   expect(generic.failure?.detail).toBe("something odd");
 });
+
+test("incident 2026-10-06: the row's transport says what the queue recorded, which attempt, and when it looks again, in both languages", () => {
+  const record = {
+    operationId: "operation-recorded",
+    conversationId: "conversation_recorded",
+    originalKey: "key",
+    kind: "send",
+    waitReason: "awaiting-turn" as const,
+    detail: null,
+    attempt: 2,
+    admittedAt: new Date(AT).toISOString(),
+    phaseSince: new Date(AT + 10_000).toISOString(),
+    lastProgressAt: new Date(AT + 10_000).toISOString(),
+    deadlineAt: new Date(AT + 600_000).toISOString(),
+    deadlinePolicy: "settlement-window" as const,
+    nextWakeAt: new Date(AT + 34_000).toISOString(),
+    stalledSince: null,
+    wakeLostAt: null,
+    executorId: "executor",
+    terminal: null,
+    updatedAt: new Date(AT + 10_000).toISOString(),
+  };
+  const delivering = entry({ state: "delivering", operationId: "operation-recorded" });
+  const row = messageRowModel(t("en"), delivering, { nowMs: AT + 30_000, progress: record });
+  expect(row.phase).toBe("pending");
+  expect(row.status).toBe(translate("en", "outbox.awaitingConfirmation"));
+  expect(row.transport).toBe("waiting for the agent to finish its turn · 30s · attempt 2 · next check in 4s");
+  const uk = messageRowModel(t("uk"), delivering, { nowMs: AT + 30_000, progress: record });
+  expect(uk.transport).toBe("чекає, поки агент завершить хід · 30 с · спроба 2 · наступна перевірка через 4 с");
+
+  /* A phase past the stall bound says it is stalled, and since when. */
+  const stalled = messageRowModel(t("en"), delivering, {
+    nowMs: AT + 30_000,
+    progress: { ...record, waitReason: "dispatching", attempt: 1, stalledSince: new Date(AT + 16_000).toISOString(), nextWakeAt: null },
+  });
+  expect(stalled.transport).toBe("stalled for 20s: handing this over to the agent · 30s");
+
+  /* A switch hold keeps its own sentence, and a settled record says nothing. */
+  expect(messageRowModel(t("en"), delivering, { nowMs: AT + 30_000, progress: record, switchHold: { label: null } }).transport)
+    .toBe(translate("en", "outbox.heldForSwitchUnnamed"));
+  expect(messageRowModel(t("en"), delivering, {
+    nowMs: AT + 30_000,
+    progress: { ...record, terminal: { state: "delivered", at: new Date(AT + 20_000).toISOString(), reason: null } },
+  }).transport).not.toContain("attempt");
+});

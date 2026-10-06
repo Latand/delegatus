@@ -1,4 +1,5 @@
 import { normalizeHostMemory, type HostMemoryState } from "@/lib/runtime/agentMemoryState";
+import { withWaitCorrelation } from "@/lib/blockingWaits";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -5172,6 +5173,22 @@ export class AgentRegistry {
     return this.sqliteMode === "read" || this.sqliteMode === "sqlite"
       ? this.sqliteStore!.snapshot().file
       : readFile(this.filename, this.mcpGrantPolicy);
+  }
+
+  /**
+   * Waits for the registry's write lock off the event loop before a caller
+   * that runs on the Viewer's delivery path mutates. Answers whether the lock
+   * was free when the wait ended; the mutation after it acquires and checks
+   * revision exactly as it would have, so a `false` costs only the old
+   * synchronous wait. Stores without a SQLite writer answer at once.
+   */
+  async awaitWriterAvailable(correlation: { label: string; operationId?: string | null }): Promise<boolean> {
+    if (this.sqliteMode !== "read" && this.sqliteMode !== "sqlite") return true;
+    try {
+      return await withWaitCorrelation(correlation, () => this.sqliteStore!.awaitWriterAvailable());
+    } catch {
+      return false;
+    }
   }
 
   /** Shared process-local snapshot for projections that never mutate registry
