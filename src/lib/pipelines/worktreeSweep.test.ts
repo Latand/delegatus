@@ -1132,7 +1132,7 @@ test("a handmade checkout inside a temp root never gains role ownership", async 
   expect(fs.existsSync(dir)).toBe(true);
 });
 
-test("host temp role checkouts use namespace Git, persist their canonical grouping and keep local work", async () => {
+test.skipIf(process.platform !== "linux")("host temp role checkouts use namespace Git, persist their canonical grouping and keep local work", async () => {
   const root = repository(); remoteRepository(root);
   const proc = path.join(caseDir, "proc/42");
   const namespace = "mnt:[fixture-host]";
@@ -1181,7 +1181,7 @@ test("host temp role checkouts use namespace Git, persist their canonical groupi
   expect(map[canonical].worktree).toBe("checkout");
 });
 
-test("a recycled host namespace anchor cannot redirect Git or filesystem access", async () => {
+test.skipIf(process.platform !== "linux")("a recycled host namespace anchor cannot redirect Git or filesystem access", async () => {
   const proc = path.join(caseDir, "proc/42");
   fs.mkdirSync(path.join(proc, "ns"), { recursive: true });
   fs.symlinkSync("mnt:[replacement]", path.join(proc, "ns/mnt"));

@@ -370,6 +370,9 @@ test("the System panel names the low volume, the largest consumers first, and th
   expect(notice.textContent).not.toContain("Temp:");
   expect(notice.textContent!.indexOf("Worktrees 90")).toBeLessThan(notice.textContent!.indexOf("State 2"));
   expect(notice.textContent).toContain("New checkouts wait for space");
+  flushSync(() => { root.render(<DiskPressureNotice pressure={{ ...pressure, volumes: [{ roles: ["temp"], freeBytes: 0.5 * GiB, level: "critical" }] }} />); });
+  expect(element.textContent).toContain("Temp: 512 MiB free");
+  expect(element.textContent).not.toContain("New checkouts wait");
   /* Back above the warning threshold, still inside the episode: nothing shown. */
   flushSync(() => { root.render(<DiskPressureNotice pressure={{ ...pressure, volumes: [{ ...pressure.volumes[0]!, freeBytes: 11 * GiB, level: "ok" as const }] }} />); });
   expect(element.querySelector("[data-disk-pressure]")).toBeNull();

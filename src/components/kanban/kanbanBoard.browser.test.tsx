@@ -18611,3 +18611,44 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
     expect(failures).toEqual([]);
   }, 3_600_000);
 });
+
+describe("disk warning destinations", () => {
+  browserTest("critical temp and state notices describe admission and fit desktop and phone", async () => {
+    const out = path.resolve(".artifacts/disk-warning-destinations");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    try {
+      for (const density of ["line", "detail", "full"] as const)
+        for (const role of ["state", "temp"] as const)
+          for (const lang of ["en", "uk"] as const)
+            for (const scheme of ["light", "dark"] as const) {
+              const size = density === "full" ? { width: 390, height: 844 } : { width: 1280, height: 800 };
+              const { context, page, pageErrors } = await openFixture(browser,
+                `${server.base}?disk-density=${density}&disk-role=${role}`, size, scheme, lang, "reduce", density === "full");
+              try {
+                await page.waitForSelector("[data-disk-pressure]");
+                const notice = page.locator("[data-disk-pressure]");
+                const text = await notice.innerText();
+                const waiting = translate(lang, "resources.diskWaiting");
+                expect(text.includes(waiting)).toBe(role === "state");
+                const geometry = await notice.evaluate(element => {
+                  const box = element.getBoundingClientRect();
+                  return { width: box.width, right: box.right, bottom: box.bottom, scrollWidth: element.scrollWidth, clientWidth: element.clientWidth };
+                });
+                expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth);
+                expect(geometry.right).toBeLessThanOrEqual(size.width);
+                expect(geometry.bottom).toBeLessThanOrEqual(size.height);
+                expect(pageErrors).toEqual([]);
+                const frame = `${density}-${role}-${lang}-${scheme}`;
+                await page.screenshot({ path: path.join(out, frame + ".png") });
+                readings.push({ frame, ...geometry });
+              } finally { await context.close(); }
+            }
+      const record = path.resolve("evidence/disk-pressure/destinations.json");
+      fs.mkdirSync(path.dirname(record), { recursive: true });
+      fs.writeFileSync(record, JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
+});

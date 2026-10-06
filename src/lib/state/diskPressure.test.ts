@@ -65,10 +65,10 @@ test("provisioning checks its write destinations and ignores unrelated temp volu
   expect(worktreeDiskWait("/srv/repo", "/srv/repo-pipeline-a", stub)).toBeNull();
   expect(visited).not.toContain("/tmp");
   expect(visited).not.toContain("/var/tmp");
-  expect(visited.some(directory => directory.endsWith("/scratch"))).toBe(true);
+  expect(visited.some(directory => path.basename(directory) === "scratch")).toBe(true);
 });
 
-test("a vanished namespace anchor is unknown and never falls back onto procfs", () => {
+test.skipIf(process.platform !== "linux")("a vanished namespace anchor is unknown and never falls back onto procfs", () => {
   expect(probeDisk("/proc/2147483647/root/tmp/checkout")).toBeNull();
 });
 
@@ -165,4 +165,14 @@ test("the wake waits for the consumer sizes, then names them with the free space
   expect(diskPressureWakeReady(measured, Date.parse("2026-10-06T10:01:00.000Z"))).toBe(true);
   expect(diskPressureLabel(measured)).toBe("Disk space low: state/worktrees 3.00 GiB free; largest Delegatus consumers (allocated lower bounds): worktrees 90.00 GiB, temp 12.00 GiB, state 2.00 GiB");
   expect(diskPressureWakeReady({ ...measured, episode: null })).toBe(false);
+});
+
+test("a pending episode wake still names free space in the recovery band", () => {
+  const opening = "2026-10-06T10:00:00Z";
+  const first = observeDiskPressure([{ roles: ["state"], freeBytes: 5 * GiB, level: "warning" }], null, opening);
+  const recovering = observeDiskPressure([{ roles: ["state"], freeBytes: 11 * GiB, level: "ok" }], first, "2026-10-06T10:15:00Z");
+  expect(recovering.episode).toBe(first.episode);
+  expect(diskPressureWakeReady(recovering, Date.parse(recovering.at))).toBe(true);
+  expect(diskPressureLabel(recovering)).toContain("state 11.00 GiB free");
+  expect(diskPressureLabel(recovering)).toContain("consumer measurement pending");
 });

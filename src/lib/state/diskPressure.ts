@@ -97,7 +97,8 @@ export function formatDiskBytes(bytes: number): string { return `${(bytes / 1024
 export function diskPressureLabel(pressure: DiskPressure): string {
   const low = pressure.volumes.filter(row => row.level === "warning" || row.level === "critical");
   const consumers = [...pressure.consumers].sort((a, b) => b.bytes - a.bytes);
-  return `Disk space low: ${low.map(row => `${row.roles.join("/")} ${formatDiskBytes(row.freeBytes!)} free`).join("; ")}`
+  const shown = low.length ? low : pressure.volumes;
+  return `${low.length ? "Disk space low" : "Disk space warning"}: ${shown.map(row => `${row.roles.join("/")} ${row.freeBytes === null ? "free space unavailable" : `${formatDiskBytes(row.freeBytes)} free`}`).join("; ")}`
     + (consumers.length ? `; largest Delegatus consumers (allocated lower bounds): ${consumers.map(row => `${row.kind} ${formatDiskBytes(row.bytes)}`).join(", ")}` : "; consumer measurement pending");
 }
 
@@ -179,7 +180,7 @@ export async function readDiskPressure(ports: {
   const sweep = ports.roots ? null : readWorktreeSweepReport();
   const worktrees = [...new Set([...pipelines.map(row => row.worktreeDir), ...(sweep?.kept ?? []).map(row => row.path)].filter(Boolean))];
   const tempRoots = ports.roots ? [] : sweepRoots(scanProcesses(), [...ownTempRoots(), statePath("scratch")]);
-  const roots: DiskRoot[] = ports.roots ?? [{ role: "state", directory },
+  const roots: DiskRoot[] = ports.roots ?? [{ role: "state", directory }, { role: "state", directory: statePath("scratch") },
     ...worktrees.map(directory => ({ role: "worktrees", directory })),
     ...tempRoots.map(root => ({ role: "temp", directory: root.via + root.path }))];
   const previousEpisode = cached.pressure.episode;

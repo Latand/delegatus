@@ -391,7 +391,7 @@ export function DiskPressureNotice({ pressure, edge = "px-3.5" }: { pressure: Di
       {consumers.length
         ? <div>{t("resources.diskConsumers")} {consumers.map((consumer) => `${role(consumer.kind)} ${fmtBytes(consumer.bytes)}`).join(", ")}</div>
         : <div>{t("resources.diskMeasuring")}</div>}
-      {low.some((volume) => volume.level === "critical") ? <div>{t("resources.diskWaiting")}</div> : null}
+      {low.some((volume) => volume.level === "critical" && volume.roles.includes("state")) ? <div>{t("resources.diskWaiting")}</div> : null}
     </div>
   );
 }
