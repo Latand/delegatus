@@ -120,6 +120,17 @@ keeping the intentionally broken build synthetic; all three named controls
 pass. The review budget was exhausted before this final correction, which
 received a focused self-review and the regressions above.
 
+A later hook attempt stopped at an unnamed merger teardown case during
+filtered flaky confirmation. Its original diagnostic had been discarded by
+that retry. An isolated real Bun hook reproduced the parser error: Bun emits
+a line-less unnamed JUnit case for hook failures. The comparison now preserves
+the hook message as a blocking diagnostic, including ownership-survivor
+names, and never retries it as a named assertion. The executable comparison
+regression was red before this correction and passes afterward. A subsequent
+merger file run passed all 40 tests; its fresh head/base comparison reports
+zero new failures and one fixed test. These observations do not attribute
+the earlier hook failure to a guessed cause.
+
 ## Process-launch audit
 
 The audit parsed test files and fixture/probe helpers throughout the repository
@@ -160,7 +171,7 @@ Linux path.
 | `scripts/fixtures/ownedRunner.fixture.ts` | 9, 14 | contained helper |
 | `scripts/gate-slot.test.ts` | 33 | owned |
 | `scripts/install-mcp.test.ts` | 30, 173 | owned |
-| `scripts/local-gate-tests.test.ts` | 236 | owned |
+| `scripts/local-gate-tests.test.ts` | 247 | owned |
 | `scripts/npm-package-smoke.test.ts` | 13 | owned |
 | `scripts/owned-runner.integration.test.ts` | 23, 26, 31, 70, 72 | owned |
 | `scripts/privacy-publication-gate.test.ts` | 2175 | owned |

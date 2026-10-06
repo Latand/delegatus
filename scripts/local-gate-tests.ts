@@ -121,7 +121,18 @@ export function parseReport(xml: string, output: string, file: string, root: str
     const occurrence = testcaseOccurrences.get(identity) ?? 0;
     testcaseOccurrences.set(identity, occurrence + 1);
     const site: TestSite = { file, suite: attrs.classname ?? "", name: attrs.name, kind: "test", occurrence };
-    if (/<(?:failure|error)\b/.test(match[2] ?? "")) { failures.push(site); namedFailures++; }
+    if (/<(?:failure|error)\b/.test(match[2] ?? "")) {
+      // Bun gives failing lifecycle hooks a line-less "(unnamed)" testcase.
+      // It cannot be selected by a test-name filter. Keep the real diagnostic
+      // blocking, including the survivor names from the ownership afterAll.
+      if (attrs.name === "(unnamed)" && attrs.line === undefined) {
+        const tag = match[2]!.match(/<(?:failure|error)\b[^>]*>/)?.[0];
+        const message = tag ? attributes(tag).message : undefined;
+        if (!message) throw new Error("unidentified JUnit hook failure");
+        failures.push({ file, suite: site.suite, name: `<hook error> ${message.split(root).join("<checkout>")}`, kind: "error" });
+      } else failures.push(site);
+      namedFailures++;
+    }
     else if (!/<skipped\b/.test(match[2] ?? "")) passed.push(site);
   }
   if (tests !== Number(totals.tests) || namedFailures !== Number(totals.failures) || (!tests && !filtered)) throw new Error("JUnit totals incomplete or no tests executed");

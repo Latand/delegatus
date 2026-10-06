@@ -129,6 +129,17 @@ test("report errors are retained; incomplete reports and unidentifiable errors a
   expect(() => parseReport(xml.replace('tests="1"', 'tests="2"'), "", "f.test.ts", "/checkout")).toThrow();
   expect(() => parseReport(xml, " 1 error\n", "f.test.ts", "/checkout")).toThrow();
 });
+
+test("an unnamed teardown failure remains a named blocking diagnostic without a filtered retry", () => {
+  const f = fixture(source(true));
+  writeFileSync(path.join(f.dir, "example.test.ts"), source(true) + '\nimport { afterAll } from "bun:test"; afterAll(() => { throw new Error("synthetic owned child survived teardown"); });');
+  const result = f.run();
+  expect(result.introduced).toHaveLength(1);
+  expect(result.introduced[0]!.kind).toBe("error");
+  expect(result.introduced[0]!.name).toContain("synthetic owned child survived teardown");
+  expect(result.flaky).toHaveLength(0);
+  expect(f.logs.join("\n")).not.toContain("flaky confirmation");
+});
 test("cache prunes owned bounded entries, preserves unrelated files, and refuses linked roots", () => {
   const dir = mkdtempSync(path.join(gateTemporaryRoot(), "gate-cache-test-")); roots.push(dir);
   const cache = path.join(dir, "cache"); mkdirSync(cache, { mode: 0o700 });
