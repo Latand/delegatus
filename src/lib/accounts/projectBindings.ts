@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { statePath } from "@/lib/configDir";
 import { canonicalProject } from "@/lib/projects/aliases";
 
-import { AccountMutationBusyError, withAccountMutationLock } from "./accountMutation";
+import { ACCOUNT_STORE_BUSY_MESSAGE, AccountMutationBusyError, withAccountMutationLock } from "./accountMutation";
 import { BINDINGS_SOURCE, readAccountSource, writeAccountSource } from "./accountsStore";
 import type { ProjectSpawnResolution } from "./contracts";
 
@@ -294,7 +294,7 @@ function inRecordTransaction(operation: () => BindingMutationResult): BindingMut
   } catch (error) {
     if (error instanceof AccountProjectBindingsUnreadableError) return unreadableRefusal(error);
     if (error instanceof AccountMutationBusyError) {
-      return { ok: false, code: "BUSY", message: "another account mutation holds the record; retry shortly", bindings: [] };
+      return { ok: false, code: "BUSY", message: ACCOUNT_STORE_BUSY_MESSAGE, bindings: [] };
     }
     throw error;
   }

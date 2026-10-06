@@ -116,3 +116,30 @@ test("the model endpoint returns the selected account catalogue with auto first"
   expect(catalog).toMatchObject({ accountId, source: "static" });
   expect(catalog.models[0]).toMatchObject({ id: "auto", name: "Auto" });
 });
+
+for (const kind of ["local", "foreign", "queued", "timeout"] as const) test(`selection queues catalog admission behind a ${kind} holder`, async () => {
+  const { withAccountHolder } = await import("@/lib/accounts/accountMutation.fixture");
+  const { ACCOUNT_STORE_BUSY_MESSAGE } = await import("@/lib/accounts/accountMutation");
+  const response = await withAccountHolder(kind, () => POST(new NextRequest("http://127.0.0.1/api/accounts/copilot", {
+    method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify({ action: "select", id: accountId }),
+  })));
+  if (kind === "timeout") {
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ error: ACCOUNT_STORE_BUSY_MESSAGE, code: "account_store_busy" });
+  } else {
+    expect({ status: response.status, body: await response.json() }).toMatchObject({ status: 200 });
+  }
+});
+for (const kind of ["local", "foreign", "queued", "timeout"] as const) test(`managed create queues catalog admission behind a ${kind} holder`, async () => {
+  const { withAccountHolder } = await import("@/lib/accounts/accountMutation.fixture");
+  const { ACCOUNT_STORE_BUSY_MESSAGE } = await import("@/lib/accounts/accountMutation");
+  const response = await withAccountHolder(kind, () => POST(new NextRequest("http://127.0.0.1/api/accounts/copilot", {
+    method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify({ label: "Contended account" }),
+  })));
+  if (kind === "timeout") {
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ error: ACCOUNT_STORE_BUSY_MESSAGE, code: "account_store_busy" });
+  } else {
+    expect({ status: response.status, body: await response.json() }).toMatchObject({ status: 200 });
+  }
+});

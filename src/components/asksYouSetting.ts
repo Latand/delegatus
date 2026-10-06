@@ -70,6 +70,9 @@ export function useAsksYouSetting(initial?: AsksYouSettingView): AsksYouSettingS
   useEffect(() => {
     if (initial) return;
     void readView();
+    const refresh = () => void readView();
+    window.addEventListener("delegatus:provider-key-changed", refresh);
+    return () => window.removeEventListener("delegatus:provider-key-changed", refresh);
   }, [initial]);
 
   const toggle = useCallback(() => {
