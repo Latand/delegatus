@@ -292,7 +292,10 @@ async function serveOnce(root: string, sandbox: string): Promise<{ status: numbe
   } finally {
     // The service's TERM/KILL budget is two seconds. Its original outer handle
     // waits for systemd-run and the exact-unit stop before it exits.
-    await stopFixtureProcess(child, contained ? 4_000 : 500, contained ? 6_000 : 2_000);
+    await stopFixtureProcess(child, contained ? 7_000 : 500, contained ? 10_000 : 2_000);
+    if (contained && (child.signalCode !== null || ![0, 143].includes(child.exitCode ?? -1))) {
+      throw new Error("served probe service shutdown was not confirmed");
+    }
   }
 }
 
@@ -370,6 +373,23 @@ if (import.meta.main) {
     /* A loaded worker bundle holds a handle open, and this process has said
        everything it has to say. */
     process.exit(0);
+  }
+
+  // The direct command prescribed by CI needs the same containment as a hook.
+  // Redirect before probing, and bind the service to this original caller so
+  // its hard death cannot leave the redirected verifier behind.
+  if (process.platform === "linux" && !(Number(process.env.LLV_OWNED_TEST_RUNNER_PID) === process.pid
+    && fs.readFileSync("/proc/self/cgroup", "utf8").split("\n").some(line => line === `0::${process.env.LLV_OWNED_TEST_RUN_CGROUP}`))) {
+    const runner = spawn(process.execPath, [path.join(import.meta.dir, "owned-runner.ts"), process.execPath, import.meta.path, ...argv], {
+      env: { ...process.env, LLV_OWNED_RUN_PARENT_IDENTITY: JSON.stringify(captureProcessIdentity(process.pid)) }, stdio: "inherit",
+    });
+    process.on("SIGTERM", () => runner.kill("SIGTERM"));
+    process.on("SIGINT", () => runner.kill("SIGTERM"));
+    const code = await new Promise<number>(resolve => {
+      runner.once("exit", (exitCode, signal) => resolve(exitCode ?? (signal === "SIGTERM" ? 143 : 137)));
+      runner.once("error", () => resolve(1));
+    });
+    process.exit(code);
   }
 
   const report = await verifyViewerRuntime(process.cwd());

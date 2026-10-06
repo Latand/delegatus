@@ -97,7 +97,7 @@ test("verification of a directory with no build fails, and says that is what hap
   expect(report.served).toBeNull();
 });
 
-test.skipIf(process.platform !== "linux")("verification reaps its served process and detached worker before reporting success", async () => {
+test.skipIf(process.platform !== "linux").each(["normal", "slow stop", "failed stop", "direct CLI"])("verification with %s reaps its served process and detached worker before reporting success", async mode => {
   const root = fixtureRoot([
     "package.json", "node_modules/next/dist/server/node-environment.js",
     path.join(COMPILED_SERVER_DIR, REQUIRED_SERVER_RUNTIME),
@@ -122,14 +122,44 @@ test.skipIf(process.platform !== "linux")("verification reaps its served process
   const other = captureProcessIdentity(bystander.pid!);
   let owned: ProcessIdentity | undefined;
   let worker: ProcessIdentity | undefined;
+  const savedPath = process.env.PATH;
+  if (mode === "slow stop" || mode === "failed stop") {
+    const manager = Bun.which("systemctl")!;
+    const quoted = "'" + manager.replaceAll("'", "'\"'\"'") + "'";
+    const bin = path.join(root, "bin"); fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, "systemctl"), `#!/bin/sh\nif [ "$2" = stop ]; then ${mode === "slow stop" ? "sleep 4.5" : "exit 1"}; fi\nexec ${quoted} "$@"\n`, { mode: 0o700 });
+    process.env.PATH = `${bin}:${savedPath}`;
+  }
   try {
-    const report = await verifyViewerRuntime(root);
-    if (!report.ok) throw new Error(JSON.stringify(report));
+    if (mode === "failed stop") {
+      await expect(verifyViewerRuntime(root)).rejects.toThrow("service shutdown was not confirmed");
+    } else if (mode === "direct CLI") {
+      const env = { ...process.env };
+      delete env.LLV_OWNED_TEST_RUNNER_PID; delete env.LLV_OWNED_TEST_RUN_CGROUP;
+      const cli = spawn(process.execPath, [path.join(import.meta.dir, "verify-viewer-runtime.ts")], { cwd: root, env, stdio: ["ignore", "pipe", "pipe"] });
+      let output = ""; cli.stdout?.on("data", chunk => { output += String(chunk); });
+      cli.stderr?.on("data", () => {});
+      const deadline = setTimeout(() => cli.kill("SIGKILL"), 8_000);
+      try {
+        const code = await new Promise(resolve => { cli.once("exit", resolve); cli.once("error", () => resolve(-1)); });
+        expect(code).toBe(0); expect(JSON.parse(output).ok).toBe(true);
+      } finally { clearTimeout(deadline); await stopFixtureProcess(cli); }
+    } else {
+      const report = await verifyViewerRuntime(root);
+      if (!report.ok) throw new Error(JSON.stringify(report));
+    }
     ({ identity: owned, worker } = JSON.parse(fs.readFileSync(path.join(root, "served.json"), "utf8")));
+    if (mode === "failed stop") {
+      // Forced wrapper death is a failed verification. Its kernel watchdog
+      // still has to reap the service within the bounded owner-death grace.
+      const bound = Date.now() + 3_000;
+      while ([owned!, worker!].some(identity => processIdentityStatus(identity) === "alive") && Date.now() < bound) await Bun.sleep(20);
+    }
     expect(processIdentityStatus(owned!)).toBe("dead");
     expect(processIdentityStatus(worker!)).toBe("dead");
     expect(processIdentityStatus(other)).toBe("alive");
   } finally {
+    process.env.PATH = savedPath;
     if (!owned && fs.existsSync(path.join(root, "served.json"))) ({ identity: owned, worker } = JSON.parse(fs.readFileSync(path.join(root, "served.json"), "utf8")));
     for (const identity of [owned, worker]) if (identity && processIdentityStatus(identity) === "alive") process.kill(identity.pid, "SIGKILL");
     const deadline = Date.now() + 2_000;
@@ -139,4 +169,4 @@ test.skipIf(process.platform !== "linux")("verification reaps its served process
     if (worker) expect(processIdentityStatus(worker)).toBe("dead");
     expect(processIdentityStatus(other)).toBe("dead");
   }
-}, 10_000);
+}, 15_000);

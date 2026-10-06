@@ -106,6 +106,20 @@ descriptors are excluded from baseline cache inputs, and the cache version
 invalidates results from earlier containment semantics. Both regressions
 failed against the earlier behavior and pass after the fixes.
 
+The third and final review reproduced a slow exact-unit stop being cut short
+by a forced wrapper exit, followed by an incorrect success report. New
+regressions were red for delayed and failed stops. Shutdown now allows the
+existing five-second stop budget plus the two-second service grace, and a
+forced or unsuccessful wrapper exit rejects verification. Eight verifier
+tests pass, including delayed stop, failed stop with bounded watchdog cleanup,
+and the direct Linux CLI entering its own containment before probing. Every
+case checks dead server and worker identities and a live same-argv bystander.
+Linux admission without a reachable user manager is refused. The executable
+negative-control fixture now links the full verifier dependency graph while
+keeping the intentionally broken build synthetic; all three named controls
+pass. The review budget was exhausted before this final correction, which
+received a focused self-review and the regressions above.
+
 ## Process-launch audit
 
 The audit parsed test files and fixture/probe helpers throughout the repository
@@ -154,7 +168,7 @@ Linux path.
 | `scripts/probe-realtime-v3.ts` | 276 | contained helper |
 | `scripts/rebuild.test.ts` | 104 | owned |
 | `scripts/runtime-host-viewer-adapter.test.ts` | 107, 258, 520, 598, 700, 1051, 1263, 1340 | owned |
-| `scripts/verify-viewer-runtime.test.ts` | 121 | owned |
+| `scripts/verify-viewer-runtime.test.ts` | 121, 139 | owned |
 | `src/app/api/agent/snapshot/standalone.integration.test.ts` | 385 | owned |
 | `src/app/api/files/route.test.ts` | 521, 894, 3925 | owned |
 | `src/app/api/runtime/hosts/route.test.ts` | 29, 99 | owned |
@@ -300,7 +314,8 @@ Linux path.
 | `scripts/dockerfile-permissions.test.ts` | 56 | synchronous |
 | `scripts/eslint-changes.test.ts` | 13 | synchronous |
 | `scripts/harness-ledger.ts` | 673, 796 | synchronous |
-| `scripts/verify-viewer-runtime.ts` | Served probe owns a nested service when admitted by a Linux gate; bounded awaited stop ends its background descendants. |
+| `scripts/verify-viewer-runtime.ts` | Direct Linux CLI enters containment; served probe owns a nested service and rejects unconfirmed shutdown. |
+| `scripts/verify-bun-runtime-controls.ts` | Synchronous negative-control launches remain contained; synthetic build links verifier dependencies. |
 | `scripts/local-gate-tests.ts` | 143, 183 | synchronous |
 | `scripts/local-gate.test.ts` | 126, 141, 145, 161, 167, 179, 180, 181, 183, 193, 194, 196, 204, 214, 215, 220, 221, 222, 223, 225, 287, 296, 303 | synchronous |
 | `scripts/merge-batch.test.ts` | 222, 303 | synchronous |
