@@ -18,21 +18,15 @@ import { AccessQrButton } from "./AccessQrButton";
 import { CatalogFailureNotice } from "./CatalogFailureNotice";
 import { DirectoryPicker, isDirectoryPath, splitDirectoryPath } from "./DirectoryPicker";
 import { FlipRow } from "./FlipRow";
+import { HeaderMenuPanel } from "./headerMenu/HeaderMenu";
 import { ChevronLeft, ChevronRight, Crown, FolderPlus, MoreHorizontal, Search } from "./icons";
 import { BoardRowsSkeleton } from "./skeletons";
 import { LanguageToggle } from "./LanguageToggle";
-import { openOnboarding } from "./onboarding/useOnboarding";
-import { startInterfaceWalk } from "./onboarding/walkStop";
-import { openSelfUpdate } from "./selfUpdate/openSelfUpdate";
-import { openTelemetrySettings } from "./telemetry/TelemetrySettings";
-import { openLinkedSettings } from "./links/openLinkedSettings";
-import { openExternalRelaySettings } from "./externalRelay/openExternalRelaySettings";
 import { LimitsFooter } from "./LimitsFooter";
 import { buildProjectSummaries, OVERVIEW, partitionCrownedSummaries, type ProjectSummary } from "./projectModel";
 import { PushBell } from "./PushBell";
 import { ResourcesFooter } from "./ResourcesFooter";
 import { Z } from "@/components/layers";
-import { useTeamView } from "@/components/team/teamClient";
 
 /**
  * Asks the rail to open the create-project form it already owns (issue #1162).
@@ -267,7 +261,7 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
                 <ChevronLeft className="h-3.5 w-3.5" aria-hidden />
               </button>
             ) : null}
-            <RailHeaderMenu />
+            <RailHeaderMenu project={selected === OVERVIEW ? null : selected} />
           </>
         )}
       </header>
@@ -478,32 +472,14 @@ function RailRow({ summary, active, now, columns, crowned, onSelect, onToggleCro
 }
 
 /**
- * The desktop rail header's one overflow menu (issue #1819).
- *
- * `EN`, a QR square and a bell said nothing about themselves, so they move
- * behind one button and each gets a line of text saying what it is and, where
- * it has one, what state it is in. The controls themselves are the existing
- * ones — LanguageToggle, AccessQrButton and PushBell keep their own behaviour;
- * this only gives them labels and a place to live.
+ * The desktop rail header's one overflow menu (issue #1819), laid out as the
+ * operator's mix of the header-menu variants (docs/design/header-menu.md):
+ * `HeaderMenuPanel` draws it; this owns the trigger and the dismissal.
  */
-/** Ends this browser's member session and goes to the sign-in page. */
-async function signOutMember(): Promise<void> {
-  try {
-    await fetch("/api/team/session/sign-out", { method: "POST" });
-  } finally {
-    window.location.replace("/sign-in");
-  }
-}
-
-export function RailHeaderMenu() {
-  const { t, locale } = useLocale();
+export function RailHeaderMenu({ project }: { project: string | null }) {
+  const { t } = useLocale();
   const [open, setOpen] = useState(false);
-  /* Passive: the app's session guard loads the team view once per page. */
-  const team = useTeamView({ load: false });
-  const teamMe = team?.mode === "team" ? team.me : null;
-  const [push, setPush] = useState({ supported: false, enabled: false });
   const ref = useRef<HTMLDivElement | null>(null);
-  const onPushStatus = useCallback((status: { supported: boolean; enabled: boolean }) => setPush(status), []);
   useEffect(() => {
     if (!open) return;
     const onKey = (event: KeyboardEvent) => {
@@ -521,11 +497,7 @@ export function RailHeaderMenu() {
       window.removeEventListener("pointerdown", onDown);
     };
   }, [open]);
-  const pushLabel = !push.supported
-    ? t("rail.menuNotificationsUnavailable")
-    : push.enabled
-      ? t("rail.menuNotificationsOn")
-      : t("rail.menuNotificationsOff");
+  const close = useCallback(() => setOpen(false), []);
   return (
     <div ref={ref} className="relative shrink-0">
       <button
@@ -545,96 +517,7 @@ export function RailHeaderMenu() {
           data-rail-menu-panel=""
           className={`absolute right-0 top-[30px] ${Z.popover} w-[232px] rounded-[10px] border border-border bg-card p-1 shadow-2`}
         >
-          <div className="flex items-center gap-2 rounded-[8px] px-2 py-1.5">
-            <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-primary">
-              {t("rail.menuLanguage")}: {locale === "en" ? "English" : "Українська"}
-            </span>
-            <LanguageToggle />
-          </div>
-          <div className="flex items-center gap-2 rounded-[8px] px-2 py-1.5">
-            <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-primary">{t("rail.menuQr")}</span>
-            <AccessQrButton />
-          </div>
-          <div className="flex items-center gap-2 rounded-[8px] px-2 py-1.5">
-            <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-primary">{pushLabel}</span>
-            <PushBell onStatus={onPushStatus} />
-          </div>
-          {/* #1876: the setup guide, its agent mapping and dictation, reachable again; #2166: the interface walk. */}
-          <div className="my-1 border-t border-border" />
-          <button
-            type="button"
-            data-rail-menu-setup-guide=""
-            className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            onClick={() => { setOpen(false); openOnboarding("guide"); }}
-          >
-            {t("onboarding.menu.guide")}
-          </button>
-          <button
-            type="button"
-            data-rail-menu-interface-walk=""
-            className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            onClick={() => { setOpen(false); startInterfaceWalk(); }}
-          >
-            {t("onboarding.menu.walk")}
-          </button>
-          <button
-            type="button"
-            data-rail-menu-agent-mapping=""
-            className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            onClick={() => { setOpen(false); openOnboarding("mapping"); }}
-          >
-            {t("onboarding.menu.mapping")}
-          </button>
-          <button
-            type="button"
-            data-rail-menu-dictation=""
-            className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            onClick={() => { setOpen(false); openOnboarding("voice"); }}
-          >
-            {t("onboarding.menu.voice")}
-          </button>
-          <button type="button" data-rail-menu-settings="" className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken" onClick={() => { setOpen(false); openTelemetrySettings(); }}>{t("telemetry.settings")}</button>
-          {/* #2007: how this install updates itself. */}
-          <button type="button" data-rail-menu-linked-settings="" className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" onClick={() => { setOpen(false); openLinkedSettings(); }}>
-            {t("links.title")}
-          </button>
-          <button type="button" data-rail-menu-external-relay="" className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" onClick={() => { setOpen(false); openExternalRelaySettings(); }}>
-            {t("externalRelay.title")}
-          </button>
-          <button
-            type="button"
-            data-rail-menu-update=""
-            className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            onClick={() => { setOpen(false); openSelfUpdate(); }}
-          >
-            {t("selfUpdate.menu")}
-          </button>
-          {/* Your time and your agents' time, per day and per project. */}
-          <a
-            href="/activity"
-            data-rail-menu-activity=""
-            className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-          >
-            {t("activity.menu")}
-          </a>
-          {/* Members, who did what and sessions (sign-in-and-team §6.9). */}
-          <a
-            href="/team"
-            data-rail-menu-team=""
-            className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-          >
-            {t("team.menu")}
-          </a>
-          {teamMe ? (
-            <button
-              type="button"
-              data-rail-menu-sign-out=""
-              className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-secondary hover:bg-sunken hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-              onClick={() => { setOpen(false); void signOutMember(); }}
-            >
-              {t("team.signOut", { name: teamMe.name })}
-            </button>
-          ) : null}
+          <HeaderMenuPanel project={project} onClose={close} />
         </div>
       ) : null}
     </div>

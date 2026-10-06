@@ -5712,7 +5712,7 @@ describe("#1819 putting the whole project sidebar away, and the header that stay
           headerButtons: [...(header?.querySelectorAll<HTMLElement>(":scope > button, :scope > div > button") ?? [])].map((el) => el.getAttribute("aria-label") ?? ""),
         }
         : null,
-      menu: panel ? { open: true, rows: [...panel.querySelectorAll<HTMLElement>(":scope > div")].map((row) => (row.textContent ?? "").replace(/\s+/g, " ").trim()) } : null,
+      menu: panel ? { open: true, rows: [...panel.querySelectorAll<HTMLElement>("[data-header-menu-cells] > *, [data-header-menu] > :not([data-header-menu-cells])")].map((row) => (row.textContent ?? "").replace(/\s+/g, " ").trim()) } : null,
       restore: restore ? box(restore) : null,
       main: box(main),
       neighbours,
@@ -5746,8 +5746,9 @@ describe("#1819 putting the whole project sidebar away, and the header that stay
           if (/\d/.test(shown.rail?.headerText ?? "")) failures.push(`${scheme}: the rail header still prints a count: ${JSON.stringify(shown.rail?.headerText)}`);
           if ((shown.rail?.headerText ?? "").includes("⏸")) failures.push(`${scheme}: the rail header still carries the paused badge`);
           if ((shown.rail?.headerButtons.length ?? 0) !== 2) failures.push(`${scheme}: the rail header carries ${shown.rail?.headerButtons.length} controls, not the hide control and one menu`);
-          if ((shown.menu?.rows.length ?? 0) !== 3) failures.push(`${scheme}: the menu holds ${shown.menu?.rows.length} rows, not three`);
-          for (const needle of ["Language", "English", "Open on phone (QR)", "Notifications"]) {
+          /* The header menu's mix (docs/design/header-menu.md): three cells, then Open on phone, Settings and Help. */
+          if ((shown.menu?.rows.length ?? 0) !== 6) failures.push(`${scheme}: the menu holds ${shown.menu?.rows.length} entries, not six`);
+          for (const needle of ["Activity", "Team", "Updates", "Open on phone", "Settings", "Help and learning"]) {
             if (!(shown.menu?.rows ?? []).some((row) => row.includes(needle))) failures.push(`${scheme}: the menu says nothing about "${needle}" (${JSON.stringify(shown.menu?.rows)})`);
           }
 
@@ -5800,6 +5801,395 @@ describe("#1819 putting the whole project sidebar away, and the header that stay
     if (failures.length) throw new Error(failures.join("\n"));
     expect(failures).toEqual([]);
   }, 300_000);
+});
+
+describe("the header's menu, built: variant 2's icon row, variant 3's rows", () => {
+  /*
+   * The app header's ⋯ as the operator chose it on 2026-10-06
+   * (docs/design/header-menu.md): variant 2's three icon cells on top, variant 3's rows below, Settings a page with a
+   * back row, its memory and key rows a page each, Help and learning in place;
+   * on the phone the same between the board menu's rows, Help a page there,
+   * with the project's rules on a page of their own.
+   *
+   * Every desktop state at 1440×900 and 1000×700, every phone state at
+   * 390×844, light and dark, en and uk: at rest, Help open (with a member
+   * signed in, the tallest state, so Sign out is measured), Settings, the
+   * memory page in each of its four states (working, off, without a key, at
+   * its cap), with Details open, with the key field opened by «Enter the key»,
+   * and the key page saved, after Replace and missing. Shared memory and the
+   * key are answered by the driver over the product's own two routes.
+   *
+   * It fails when a desktop state is taller than 360 px, when a phone state is
+   * taller than today's 743 px sheet, when any state scrolls, leaves the
+   * window or cuts a label, when the Settings row or the memory page shows
+   * another state than the one served, when a banned word ("Jev",
+   * "decisions", a `2026-10` month, a three-decimal amount) is drawn, when an
+   * entry of today's menu is reachable in no state, and when «Install ping»
+   * does not open the product's dialog or that dialog still draws memory or
+   * the key.
+   *
+   * Frames and sheets go to `LLV_HEADER_MENU_OUT` (default
+   * `.artifacts/header-menu-built/`, never committed); the measurements to
+   * `evidence/compact-card-menu/header-menu-built.json`. With
+   * `LLV_HEADER_MENU_DESIGN` pointing at the design lane's frames (its
+   * `today/`, `v2/` and `v3/`), it also writes the comparison sheet today ·
+   * variant 2 · variant 3 · built.
+   *
+   *   CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 LLV_HEADER_MENU_OUT=… \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "header's menu, built"
+   */
+  type Memory = "working" | "off" | "noKey" | "capped";
+  const MEMORY_STATES: Memory[] = ["working", "off", "noKey", "capped"];
+  const DESKTOP = [{ name: "1440", width: 1440, height: 900 }, { name: "1000", width: 1000, height: 700 }] as const;
+  const PHONE = { name: "390", width: 390, height: 844 } as const;
+  const PANEL = "[data-rail-menu-panel]";
+  const SHEET = "[data-mobile2-sheet='menu']";
+  const TODAY_SHEET_PX = 743;
+  const COUNTS = { decisions: 214, delivered: 61, prepared: 69, noCandidates: 48, noMatches: 97, skipped: 12, failed: 5 };
+  const ZERO = { decisions: 0, delivered: 0, prepared: 0, noCandidates: 0, noMatches: 0, skipped: 0, failed: 0 };
+  /* Today's fourteen entries, by the attribute each carries in the built menu. */
+  const ENTRIES: Record<string, { desktop: string | null; phone: string | null }> = {
+    language: { desktop: "[data-header-menu-page='settings'] [data-header-menu-language]", phone: null },
+    qr: { desktop: "[data-header-menu-qr]", phone: null },
+    push: { desktop: "[data-header-menu-page='settings'] [data-header-menu-push]", phone: null },
+    guide: { desktop: "[data-rail-menu-setup-guide]", phone: "[data-mobile2-menu-row='setup-guide']" },
+    walk: { desktop: "[data-rail-menu-interface-walk]", phone: "[data-mobile2-menu-row='interface-walk']" },
+    mapping: { desktop: "[data-rail-menu-agent-mapping]", phone: "[data-mobile2-menu-row='agent-mapping']" },
+    dictation: { desktop: "[data-rail-menu-dictation]", phone: "[data-mobile2-menu-row='dictation']" },
+    ping: { desktop: "[data-rail-menu-ping]", phone: "[data-mobile2-menu-row='ping']" },
+    memory: { desktop: "[data-rail-menu-memory]", phone: "[data-mobile2-menu-row='memory']" },
+    key: { desktop: "[data-rail-menu-key]", phone: "[data-mobile2-menu-row='key']" },
+    linked: { desktop: "[data-rail-menu-linked-settings]", phone: "[data-mobile2-menu-row='linked-settings']" },
+    relay: { desktop: "[data-rail-menu-external-relay]", phone: "[data-mobile2-menu-row='external-relay']" },
+    update: { desktop: "[data-rail-menu-update]", phone: "[data-mobile2-menu-row='self-update']" },
+    activity: { desktop: "[data-rail-menu-activity]", phone: "[data-mobile2-menu-row='activity']" },
+    team: { desktop: "[data-rail-menu-team]", phone: "[data-mobile2-menu-row='team']" },
+    signOut: { desktop: "[data-rail-menu-sign-out]", phone: null },
+  };
+
+  const caption = (text: string, width: number, height = 26, size = 13) => Buffer.from(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="#262a36"/>`
+    + `<text x="8" y="${Math.round(height * 0.68)}" font-family="Inter, Arial, sans-serif" font-size="${size}" font-weight="600" fill="#fbebdd">${text.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</text></svg>`,
+  );
+  /** Lays pictures out in a grid, each under a caption, under one title, and writes one sheet. */
+  async function sheet(file: string, title: string, columns: number, cells: { label: string; picture: Buffer | null; width: number; height: number }[]) {
+    const GAP = 12;
+    const CAP = 26;
+    const HEAD = 36;
+    const rows: (typeof cells)[] = [];
+    for (let index = 0; index < cells.length; index += columns) rows.push(cells.slice(index, index + columns));
+    const columnWidths = Array.from({ length: columns }, (_, column) => Math.max(0, ...rows.map((row) => row[column]?.width ?? 0)));
+    const rowHeights = rows.map((row) => Math.max(...row.map((cell) => cell.height)) + CAP);
+    const width = columnWidths.reduce((sum, value) => sum + value + GAP, GAP);
+    const height = rowHeights.reduce((sum, value) => sum + value + GAP, GAP + HEAD);
+    const composite: Parameters<ReturnType<typeof sharp>["composite"]>[0] = [{ input: caption(title, width, HEAD, 17), left: 0, top: 0 }];
+    let top = GAP + HEAD;
+    rows.forEach((row, rowIndex) => {
+      let left = GAP;
+      row.forEach((cell, column) => {
+        composite.push({ input: caption(cell.label, columnWidths[column]!), left, top });
+        if (cell.picture) composite.push({ input: cell.picture, left, top: top + CAP });
+        left += columnWidths[column]! + GAP;
+      });
+      top += rowHeights[rowIndex]! + GAP;
+    });
+    await sharp({ create: { width, height, channels: 3, background: "#8d8d98" } }).composite(composite).png().toFile(file);
+  }
+
+  browserTest("the header's menu, built: every state measured and framed, today beside variants 2 and 3", async () => {
+    const out = path.resolve(process.env.LLV_HEADER_MENU_OUT ?? ".artifacts/header-menu-built");
+    fs.mkdirSync(out, { recursive: true });
+    /* What the routes answer: the driver sets the state before each frame, the menu's own writes move it. */
+    let memory: Memory = "working";
+    let enabled = true;
+    let keyPresent = true;
+    const serve = (state: Memory) => { memory = state; enabled = state !== "off"; keyPresent = state !== "noKey"; };
+    const server = await serveEvidenceFixture(path.join(out, "bundle-root"), undefined, {
+      "/api/memory/settings": async (request: Request) => {
+        if (request.method === "PUT") enabled = Boolean((await request.json() as { enabled?: boolean }).enabled);
+        const blocked = !keyPresent ? ["noKey"] : memory === "capped" ? ["capped"] : [];
+        return Response.json({
+          enabled, reasons: [...(enabled ? [] : ["projectOff"]), ...blocked], keySource: keyPresent ? "file" : null, capUsd: 5,
+          spentUsd: memory === "capped" ? 5 : keyPresent ? 1.214 : 0, month: "2026-10", counts: keyPresent ? COUNTS : ZERO,
+        });
+      },
+      "/api/asks-you/key": async (request: Request) => {
+        if (request.method === "PUT") keyPresent = true;
+        return Response.json({ present: keyPresent, source: keyPresent ? "file" : null });
+      },
+      "/api/team": { mode: "team", me: { id: "member-1", name: "Fixture member", role: "owner", telegram: null }, members: [], methods: {} },
+      "/api/telemetry": { enabled: true, locked: false, noticeDismissed: true },
+    });
+    /* The browser runs as a server of its own so its process id is on record and closed by it. */
+    const browserServer = await chromium.launchServer(LAUNCH);
+    const browserPid = browserServer.process().pid!;
+    fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid: browserPid, closed: false }));
+    const browser = await chromium.connect(browserServer.wsEndpoint());
+    const failures: string[] = [];
+    interface State {
+      frame: string; scheme: Scheme; lang: "en" | "uk"; surface: "desktop" | "phone"; state: string; memory: Memory;
+      box: [x: number, y: number, width: number, height: number]; scrolls: boolean; inside: boolean; cut: string[]; file: string;
+    }
+    const states: State[] = [];
+    const reached: Record<"desktop" | "phone", Set<string>> = { desktop: new Set(), phone: new Set() };
+    const url = (member = false) => `${server.base}?scenario=stages&header=1${member ? "&member=1" : ""}`;
+
+    const read = (page: Page, selector: string) => page.evaluate((target) => {
+      const panel = [...document.querySelectorAll<HTMLElement>(target)].find((element) => element.getBoundingClientRect().width > 0);
+      if (!panel) return null;
+      const box = panel.getBoundingClientRect();
+      const visible = (element: Element) => { const rect = element.getBoundingClientRect(); return rect.width > 0 && rect.height > 0; };
+      const scrolls = [panel, ...panel.querySelectorAll<HTMLElement>("*")].some((element) => {
+        const overflow = getComputedStyle(element).overflowY;
+        return (overflow === "auto" || overflow === "scroll") && element.scrollHeight > element.clientHeight + 1;
+      });
+      const cut = [...panel.querySelectorAll<HTMLElement>(".truncate")].filter(visible)
+        .filter((element) => element.scrollWidth > element.clientWidth + 1).map((element) => (element.textContent ?? "").trim().slice(0, 40));
+      return {
+        box: [box.x, box.y, box.width, box.height].map((value) => Math.round(value * 10) / 10) as [number, number, number, number],
+        inside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth + 0.5 && box.bottom <= innerHeight + 0.5,
+        scrolls, cut, text: panel.innerText,
+      };
+    }, selector);
+
+    async function capture(page: Page, at: { frame: string; width: number; scheme: Scheme; lang: "en" | "uk" }, surface: State["surface"], state: string, now: Memory) {
+      const selector = surface === "desktop" ? PANEL : SHEET;
+      await page.waitForTimeout(160);
+      const reading = await read(page, selector);
+      const tag = `${surface} ${at.frame} ${at.scheme} ${at.lang} ${state}`;
+      if (!reading) { failures.push(`${tag}: the menu is not open`); return; }
+      for (const [entry, where] of Object.entries(ENTRIES)) {
+        const target = where[surface];
+        if (target && await page.locator(`${selector} ${target}`).count()) reached[surface].add(entry);
+      }
+      const file = `${surface}-${at.frame}-${at.scheme}-${at.lang}-${state}.png`;
+      await page.screenshot({ path: path.join(out, file) });
+      states.push({ frame: at.frame, scheme: at.scheme, lang: at.lang, surface, state, memory: now, box: reading.box, scrolls: reading.scrolls, inside: reading.inside, cut: reading.cut, file });
+      if (!reading.inside) failures.push(`${tag}: leaves the window ${JSON.stringify(reading.box)}`);
+      if (reading.scrolls) failures.push(`${tag}: scrolls`);
+      if (reading.cut.length) failures.push(`${tag}: cut labels ${JSON.stringify(reading.cut)}`);
+      if (surface === "desktop" && reading.box[3] > 360.5) failures.push(`${tag}: ${reading.box[3]} px is taller than 360`);
+      if (surface === "phone" && reading.box[3] > TODAY_SHEET_PX + 0.5) failures.push(`${tag}: ${reading.box[3]} px is taller than today's ${TODAY_SHEET_PX}`);
+      /* The project rules' page carries «Asks you» and its own wording, which is not this menu's. */
+      if (state !== "rules" && /\bJev\b|decisions|2026-10|\$\d+\.\d{3}/.test(reading.text)) failures.push(`${tag}: a banned word in ${JSON.stringify(reading.text.slice(0, 200))}`);
+    }
+
+    /** The served state, as the Settings row and the memory page show it. */
+    async function agrees(page: Page, tag: string, now: Memory) {
+      const { tone, words } = await page.evaluate(() => ({
+        tone: document.querySelector("[data-memory-page]")?.getAttribute("data-memory-tone") ?? null,
+        words: [...document.querySelectorAll("[data-memory-state]")].map((word) => word.getAttribute("data-memory-state")),
+      }));
+      if (tone !== null && tone !== now) failures.push(`${tag}: the memory page reads ${tone}, the route says ${now}`);
+      for (const word of words) if (word !== now) failures.push(`${tag}: a state word reads ${word}, the route says ${now}`);
+    }
+
+    async function desktop(frame: (typeof DESKTOP)[number], scheme: Scheme, lang: "en" | "uk") {
+      const at = { frame: frame.name, width: frame.width, scheme, lang };
+      const open = async (member = false) => {
+        const opened = await openFixture(browser, url(member), { width: frame.width, height: frame.height }, scheme, lang, "reduce");
+        await opened.page.locator("[data-kanban-board] .card[data-id]").locator("visible=true").first().waitFor({ timeout: 30_000 });
+        await opened.page.waitForTimeout(400);
+        await opened.page.evaluate(() => { for (const button of document.querySelectorAll<HTMLElement>("[data-attention-toast] button")) button.click(); });
+        await opened.page.mouse.move(2, 2);
+        await opened.page.locator("[data-rail-menu]").first().click();
+        await opened.page.waitForSelector(`${PANEL} [data-header-menu-cells]`, { timeout: 10_000 });
+        await opened.page.waitForSelector(`${PANEL} [data-memory-state]:not([data-memory-state="loading"])`, { timeout: 10_000 });
+        return opened;
+      };
+      for (const now of MEMORY_STATES) {
+        serve(now);
+        const { context, page, pageErrors } = await open(now === "working");
+        const tag = `desktop ${frame.name} ${scheme} ${lang} ${now}`;
+        try {
+          await agrees(page, tag, now);
+          if (now === "working") {
+            await capture(page, at, "desktop", "rest", now);
+            await page.locator("[data-rail-menu-help]").click();
+            /* Help open with a member signed in: the tallest state of the first level, Sign out in it. */
+            if (!await page.locator(`${PANEL} [data-rail-menu-sign-out]`).count()) failures.push(`${tag}: no Sign out for a signed-in member`);
+            await capture(page, at, "desktop", "help-member", now);
+            await page.locator("[data-rail-menu-help]").click();
+          } else await capture(page, at, "desktop", `rest-${now}`, now);
+          await page.locator("[data-rail-menu-settings]").click();
+          await page.locator("[data-rail-menu-back]").waitFor();
+          await agrees(page, tag, now);
+          await capture(page, at, "desktop", now === "working" ? "settings" : `settings-${now}`, now);
+          await page.locator("[data-rail-menu-memory]").click();
+          await page.locator("[data-memory-page]").waitFor();
+          await agrees(page, tag, now);
+          await capture(page, at, "desktop", `memory-${now}`, now);
+          if (await page.locator("[data-memory-details]").count()) {
+            await page.locator("[data-memory-details]").click();
+            if ((await page.locator("[data-memory-table] dt").count()) !== 5) failures.push(`${tag}: Details lists ${await page.locator("[data-memory-table] dt").count()} counters, not five`);
+            await capture(page, at, "desktop", `memory-${now}-details`, now);
+          }
+          if (now === "noKey") {
+            await page.locator("[data-memory-enter-key]").click();
+            if (!await page.locator("[data-memory-reason] [data-provider-key] input").count()) failures.push(`${tag}: «Enter the key» did not open the field where it was pressed`);
+            await capture(page, at, "desktop", "memory-noKey-field", now);
+          }
+          await page.locator("[data-rail-menu-back]").click();
+          await page.locator("[data-rail-menu-key]").click();
+          await page.locator("[data-key-page]").waitFor();
+          await capture(page, at, "desktop", now === "noKey" ? "key-missing" : now === "working" ? "key" : `key-${now}`, now);
+          if (now === "working") {
+            await page.locator("[data-key-replace]").click();
+            if (!await page.locator("[data-key-page] [data-provider-key] input").count()) failures.push(`${tag}: Replace did not open the field`);
+            await capture(page, at, "desktop", "key-replace", now);
+            /* Once per frame: «Install ping» opens the product's dialog, which keeps the ping alone. */
+            await page.locator("[data-rail-menu-back]").click();
+            await page.locator("[data-rail-menu-back]").click();
+            await page.locator("[data-rail-menu-settings]").click();
+            await page.locator("[data-rail-menu-ping]").click();
+            const dialog = page.locator("[data-telemetry-settings]");
+            if (!await dialog.waitFor({ timeout: 5_000 }).then(() => true, () => false)) failures.push(`${tag}: «Install ping» did not open the dialog`);
+            else {
+              if (await dialog.locator("[data-memory-page], [data-memory-setting], [data-provider-key]").count()) failures.push(`${tag}: the ping's dialog still draws memory or the key`);
+              if ((await dialog.locator("#telemetry-title").textContent())?.trim() !== translate(lang, "headerMenu.ping")) failures.push(`${tag}: the dialog is not titled «${translate(lang, "headerMenu.ping")}»`);
+              await page.screenshot({ path: path.join(out, `desktop-${frame.name}-${scheme}-${lang}-dialog-ping.png`) });
+            }
+          }
+          if (pageErrors.length) failures.push(`${tag}: page errors ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          failures.push(`${tag}: ${String(error).split("\n")[0]}`);
+          await page.screenshot({ path: path.join(out, `failed-desktop-${frame.name}-${scheme}-${lang}-${now}.png`) }).catch(() => {});
+        } finally {
+          await context.close();
+        }
+      }
+    }
+
+    async function phone(scheme: Scheme, lang: "en" | "uk") {
+      const at = { frame: PHONE.name, width: PHONE.width, scheme, lang };
+      for (const now of MEMORY_STATES) {
+        serve(now);
+        const { context, page, pageErrors } = await openFixture(browser, url(), { width: PHONE.width, height: PHONE.height }, scheme, lang, "reduce", true);
+        const tag = `phone ${scheme} ${lang} ${now}`;
+        try {
+          await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
+          await page.waitForTimeout(600);
+          await page.locator('[data-mobile2-open="menu"]').first().click();
+          await page.waitForSelector(`${SHEET} [data-header-menu-cells]`, { timeout: 10_000 });
+          await page.waitForSelector(`${SHEET} [data-memory-state]:not([data-memory-state="loading"])`, { timeout: 10_000 });
+          await agrees(page, tag, now);
+          if (now === "working") {
+            await capture(page, at, "phone", "rest", now);
+            await page.locator(`${SHEET} [data-mobile2-menu-row="help"]`).click();
+            await capture(page, at, "phone", "help", now);
+            await page.locator(`${SHEET} [data-mobile2-menu-row="back"]`).click();
+            await page.locator(`${SHEET} [data-mobile2-menu-row="rules"]`).click();
+            await capture(page, at, "phone", "rules", now);
+            await page.locator(`${SHEET} [data-mobile2-menu-row="back"]`).click();
+          }
+          await page.locator(`${SHEET} [data-mobile2-menu-row="settings"]`).click();
+          await page.locator(`${SHEET} [data-mobile2-menu-row="back"]`).waitFor();
+          await agrees(page, tag, now);
+          await capture(page, at, "phone", now === "working" ? "settings" : `settings-${now}`, now);
+          await page.locator(`${SHEET} [data-mobile2-menu-row="memory"]`).click();
+          await page.locator("[data-memory-page]").waitFor();
+          await agrees(page, tag, now);
+          await capture(page, at, "phone", `memory-${now}`, now);
+          if (now === "noKey") {
+            await page.locator("[data-memory-enter-key]").click();
+            await capture(page, at, "phone", "memory-noKey-field", now);
+          }
+          if (now === "working" || now === "noKey") {
+            await page.locator(`${SHEET} [data-mobile2-menu-row="back"]`).click();
+            await page.locator(`${SHEET} [data-mobile2-menu-row="key"]`).click();
+            await page.locator("[data-key-page]").waitFor();
+            await capture(page, at, "phone", now === "noKey" ? "key-missing" : "key", now);
+          }
+          if (pageErrors.length) failures.push(`${tag}: page errors ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          failures.push(`${tag}: ${String(error).split("\n")[0]}`);
+          await page.screenshot({ path: path.join(out, `failed-phone-${scheme}-${lang}-${now}.png`) }).catch(() => {});
+        } finally {
+          await context.close();
+        }
+      }
+    }
+
+    try {
+      for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) {
+        for (const frame of DESKTOP) await desktop(frame, scheme, lang);
+        await phone(scheme, lang);
+      }
+      for (const surface of ["desktop", "phone"] as const) for (const [entry, where] of Object.entries(ENTRIES)) {
+        if (where[surface] && !reached[surface].has(entry)) failures.push(`${surface}: «${entry}» is in no state`);
+      }
+
+      /* The sheets: the built menu's states in uk, light; and, with the design lane's frames, today · 2 · 3 · built. */
+      const crop = async (file: string, box: [number, number, number, number], pad = 8) => {
+        const image = sharp(file);
+        const meta = await image.metadata();
+        const left = Math.max(0, Math.floor(box[0] - pad)), top = Math.max(0, Math.floor(box[1] - pad));
+        const width = Math.min(meta.width! - left, Math.ceil(box[2] + pad * 2)), height = Math.min(meta.height! - top, Math.ceil(box[3] + pad * 2));
+        return { picture: await image.extract({ left, top, width, height }).png().toBuffer(), width, height };
+      };
+      const of = (surface: State["surface"], frame: string, lang: "en" | "uk", state: string, scheme: Scheme = "light") =>
+        states.find((entry) => entry.surface === surface && entry.frame === frame && entry.lang === lang && entry.state === state && entry.scheme === scheme);
+      for (const lang of ["en", "uk"] as const) {
+        const uk = lang === "uk";
+        const order = ["rest", "help-member", "settings", "memory-working", "memory-working-details", "memory-off", "memory-noKey", "memory-noKey-field", "memory-capped", "key", "key-replace", "key-missing"];
+        const cells = [];
+        for (const state of order) {
+          const entry = of("desktop", "1440", lang, state);
+          if (entry) cells.push({ label: `${state} · ${Math.round(entry.box[3])} px`, ...(await crop(path.join(out, entry.file), entry.box)) });
+        }
+        await sheet(path.join(out, `sheet-built-desktop-${lang}.png`), uk ? "Меню заголовка, зібране: стани · 1440×900 · світла" : "The header's menu, built: its states · 1440×900 · light", 6, cells);
+        const phoneCells = [];
+        for (const state of ["rest", "help", "settings", "memory-working", "memory-noKey-field", "memory-capped", "key", "rules"]) {
+          const entry = of("phone", "390", lang, state);
+          if (entry) phoneCells.push({ label: `${state} · ${Math.round(entry.box[3])} px`, ...(await crop(path.join(out, entry.file), [0, 0, 390, 844], 0)) });
+        }
+        await sheet(path.join(out, `sheet-built-phone-${lang}.png`), uk ? "Меню дошки на телефоні з пунктами заголовка · 390×844" : "The phone's board menu with the header's entries · 390×844", 4, phoneCells);
+      }
+      const design = process.env.LLV_HEADER_MENU_DESIGN?.trim();
+      if (design && fs.existsSync(design)) {
+        for (const lang of ["uk", "en"] as const) {
+          const uk = lang === "uk";
+          const columns = [
+            { label: uk ? "сьогодні" : "today", dir: "today" },
+            { label: uk ? "варіант 2" : "variant 2", dir: "v2" },
+            { label: uk ? "варіант 3" : "variant 3", dir: "v3" },
+          ];
+          const cells = [];
+          const built = of("desktop", "1440", lang, "rest")!;
+          /* The design frames carry a 40 px strip over the 1440×900 page. */
+          for (const column of columns) {
+            const file = path.join(design, column.dir, `1440-light-${lang}-header-rest.png`);
+            cells.push(fs.existsSync(file) ? { label: `${column.label} · ${uk ? "у спокої" : "at rest"}`, ...(await crop(file, [0, 40, 520, 470], 0)) } : { label: column.label, picture: null, width: 520, height: 470 });
+          }
+          cells.push({ label: `${uk ? "зібране" : "built"} · ${uk ? "у спокої" : "at rest"} · ${Math.round(built.box[3])} px`, ...(await crop(path.join(out, built.file), [0, 0, 520, 470], 0)) });
+          for (const column of columns) {
+            const file = path.join(design, column.dir, `390-light-${lang}-phone-rest.png`);
+            cells.push(fs.existsSync(file) ? { label: `${column.label} · ${uk ? "телефон" : "phone"}`, ...(await crop(file, [0, 40, 390, 844], 0)) } : { label: column.label, picture: null, width: 390, height: 844 });
+          }
+          const phoneRest = of("phone", "390", lang, "rest")!;
+          cells.push({ label: `${uk ? "зібране · телефон" : "built · phone"} · ${Math.round(phoneRest.box[3])} px`, ...(await crop(path.join(out, phoneRest.file), [0, 0, 390, 844], 0)) });
+          await sheet(path.join(out, `sheet-compare-${lang}.png`), uk ? "Меню заголовка: сьогодні · варіант 2 · варіант 3 · зібране (мікс)" : "The header's menu: today · variant 2 · variant 3 · built (the mix)", 4, cells);
+        }
+      }
+      fs.mkdirSync("evidence/compact-card-menu", { recursive: true });
+      fs.writeFileSync("evidence/compact-card-menu/header-menu-built.json", `${JSON.stringify({
+        driver: "src/components/kanban/kanbanBoard.browser.test.tsx", block: "the header's menu, built", bound: { desktop: 360, phone: TODAY_SHEET_PX },
+        tallest: {
+          desktop: Math.max(...states.filter((entry) => entry.surface === "desktop").map((entry) => entry.box[3])),
+          phone: Math.max(...states.filter((entry) => entry.surface === "phone").map((entry) => entry.box[3])),
+        },
+        reached: { desktop: [...reached.desktop].sort(), phone: [...reached.phone].sort() },
+        states, failures,
+      }, null, 2)}\n`);
+    } finally {
+      await browser.close().catch(() => {});
+      await browserServer.close();
+      fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid: browserPid, closed: true }));
+      server.stop();
+    }
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 3_600_000);
 });
 
 /* #1798's return arc under the collapsed row is gone from the card: variant B
@@ -11002,10 +11392,12 @@ describe("#2166 the interface walk", () => {
           await page.waitForTimeout(3_000);
           if (await page.locator("[data-walk-popover]").count()) failures.push(`${label}: an existing install started the walk by itself`);
           await page.locator("[data-rail-menu]").click();
+          /* The header menu's mix: the guide and the walk open in place under «Help and learning». */
+          await page.locator("[data-rail-menu-help]").click();
           await page.waitForSelector("[data-rail-menu-interface-walk]", { state: "visible", timeout: 5_000 });
           const rows = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-rail-menu-panel] button")].map((row) => row.innerText.trim()));
           const guide = rows.indexOf("Setup guide");
-          if (guide < 0 || rows[guide + 1] !== "Interface walk" || rows[guide + 2] !== "Agent mapping") failures.push(`${label}: the menu reads ${JSON.stringify(rows)}`);
+          if (guide < 0 || rows[guide + 1] !== "Interface walk") failures.push(`${label}: the menu reads ${JSON.stringify(rows)}`);
           await page.screenshot({ path: path.join(OUT, `${label}-after.png`) });
           await page.locator("[data-rail-menu-interface-walk]").click();
           await page.waitForSelector('[data-walk-popover="1"]', { state: "visible", timeout: 10_000 });
