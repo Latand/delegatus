@@ -11,7 +11,7 @@ import { expect, test } from "bun:test";
 
 import { type MessageKey, type TFunction, translate } from "@/lib/i18n";
 
-import { messageRowModel } from "./messageRow";
+import { evidenceRepeats, messageRowModel } from "./messageRow";
 import type { OutboxEntry } from "./outbox";
 
 const t = (locale: "en" | "uk"): TFunction => (key, params) => translate(locale, key, params);
@@ -47,8 +47,56 @@ test("arrival is the only confirmation, and a failure is the only decision", () 
   expect(failed.failure).toEqual({
     reason: translate("en", "outbox.failure.generic"),
     detail: "pane is gone",
+    selfExplaining: false,
     action: "retry",
   });
+});
+
+test("a Telegram refusal reads as one sentence with its action, whatever wrapper the runtime put in front of it", () => {
+  /* The two delivery paths wrap one cause differently. Both read the same
+     sentence in the interface language, and no raw sentence stands beside it. */
+  const wrappers = [
+    "structured host recovery failed: telegram MCP connector is not connected at launch",
+    "conversation host was reclaimed; automatic resume did not establish a deliverable host: telegram MCP connector is not connected at launch",
+    "structured host recovery failed: Telegram is not connected, so an agent that needs the Telegram tool cannot start. Reconnect Telegram, or start the agent without it.",
+  ];
+  for (const lang of ["en", "uk"] as const) {
+    for (const error of wrappers) {
+      const failed = messageRowModel(t(lang), entry({ state: "failed", error }), { nowMs: AT });
+      expect(failed.failure).toMatchObject({
+        reason: translate(lang, "outbox.failure.telegramOff"),
+        detail: null,
+        selfExplaining: true,
+      });
+    }
+    for (const error of [
+      "structured host recovery failed: telegram MCP grant was revoked before launch",
+      "structured host recovery failed: telegram MCP orchestrator seat is no longer active",
+    ]) {
+      expect(messageRowModel(t(lang), entry({ state: "failed", error }), { nowMs: AT }).failure).toMatchObject({
+        reason: translate(lang, "outbox.failure.telegramWithdrawn"),
+        detail: null,
+        selfExplaining: true,
+      });
+    }
+  }
+  for (const lang of ["en", "uk"] as const) {
+    expect(messageRowModel(t(lang), entry({ state: "failed",
+      error: "structured host recovery failed: telegram MCP account definition conflicts with operator connector" }), { nowMs: AT }).failure).toMatchObject({
+      reason: translate(lang, "outbox.failure.telegramNameTaken"),
+      detail: null,
+      selfExplaining: true,
+    });
+  }
+  for (const key of ["outbox.failure.telegramOff", "outbox.failure.telegramWithdrawn", "outbox.failure.telegramNameTaken"] as const) {
+    for (const lang of ["en", "uk"] as const) expect(translate(lang, key)).not.toMatch(/MCP|connector|send_message|_/i);
+  }
+});
+
+test("one evidence line is not printed again behind a different wrapper", () => {
+  expect(evidenceRepeats("account is busy", "structured host recovery failed: Account  is busy")).toBe(true);
+  expect(evidenceRepeats("structured host recovery failed: account is busy", "account is busy")).toBe(false);
+  expect(evidenceRepeats(null, "account is busy")).toBe(false);
 });
 
 test("the known failures read in the interface language, with the raw sentence kept", () => {

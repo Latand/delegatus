@@ -27,9 +27,11 @@ import { StructuredHostAdoptionCleanupError } from "@/lib/runtime/engineHost";
 import { hasStructuredDeliveryHost, publishStructuredDeliveryHost, releaseStructuredDeliveryHost, requireStructuredDeliveryControllerPublication } from "@/lib/runtime/structuredDeliveryController";
 import { bindClaudeHostPersistence, bindCodexHostPersistence, structuredHostsEnabled } from "@/lib/runtime/registry";
 import { claudeHostLaunchPaths, materializeStructuredHostAccess, structuredHostAccessPolicy } from "@/lib/runtime/structuredSpawn";
+import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH, TELEGRAM_SEAT_INACTIVE_BEFORE_LAUNCH } from "@/lib/runtime/telegramConnectorEnv";
+import { isCurrentOperatorSeat } from "@/lib/orchestrator/managerAuthoritySources";
 import { cleanupTmuxHostIfMatches, forgetResumePaneIfMatches, verifyTmuxHostEvidence, type TmuxHostCleanupResult } from "@/lib/tmux";
 
-import { launchProfileCodexSandbox, launchProfileEngineReadOnly, type LaunchProfile, type ProviderReceipt, type SuccessorProviderPort } from "./contracts";
+import { launchProfileCodexSandbox, launchProfileEngineReadOnly, type LaunchProfile, type ProviderReceipt, type SuccessorProviderPort, type ViewerConversationId } from "./contracts";
 import { forkClaudeHistory, hashValidatedHistory, HistorySecurityError, MigrationTargetUnavailableError, safeCopyHistory, validateHistorySource } from "./safeHistoryCopy";
 
 interface StructuredHostPublicationInput {
@@ -275,6 +277,25 @@ function successorCapability(input: StructuredHostPublicationInput): { capabilit
   };
 }
 
+/**
+ * What a recovery relaunch re-checks before its engine starts, for the
+ * successor: the profile it was handed was read when the migration began, and
+ * the conversation's own record is the grant. A grant withdrawn since then
+ * refuses the launch, and so does a seat child whose seat has moved on.
+ */
+function successorTelegramGrantCheck(input: StructuredHostPublicationInput): (() => void) | undefined {
+  if (!input.profile.mcpServers.includes("telegram")) return undefined;
+  return () => {
+    const profile = input.conversationId
+      ? input.registry.conversation(input.conversationId as ViewerConversationId)?.generations.at(-1)?.launchProfile
+      : null;
+    if (!profile?.mcpServers.includes("telegram")) throw new Error(TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH);
+    if (profile.parentConversationId && !isCurrentOperatorSeat(profile.parentConversationId, input.registry)) {
+      throw new Error(TELEGRAM_SEAT_INACTIVE_BEFORE_LAUNCH);
+    }
+  };
+}
+
 async function publishCodexSuccessorHost(input: StructuredHostPublicationInput): Promise<() => Promise<void>> {
   if (input.ownsOperation && !await input.ownsOperation()) return async () => {};
   if (!structuredHostsEnabled()) return async () => {};
@@ -479,6 +500,9 @@ async function publishClaudeSuccessorHost(
          bound, and widening native sub-agents is not a re-host's decision. */
       ...claudeHostLaunchPaths(input.target),
       mcpServers: input.profile.mcpServers,
+      /* The Telegram tool is optional, so with Telegram disconnected the
+         successor starts without the tool for this run, as any launch does. */
+      validateTelegramGrant: successorTelegramGrantCheck(input),
       env: access.env,
       /* Transcripts keep dated provider ids the CLI may refuse as a launch
          argument; the launcher that used to project them is gone, so the

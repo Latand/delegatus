@@ -33,7 +33,7 @@ export function spawnTaskProjectError(taskId: unknown, cwd: string, readTasks: t
 /** Roles with zero child-spawn capability (#393). A hardcoded contract
     constant: role overrides only carry config/promptScaffold, so no
     persisted preset can widen this set. */
-export const SPAWN_DENIED_ROLE_IDS: readonly string[] = Object.freeze(["reviewer", "verifier", "maintainer", "merger"]);
+export const SPAWN_DENIED_ROLE_IDS: readonly string[] = Object.freeze(["reviewer", "verifier", "maintainer", "merger", "issue-reporter"]);
 
 export function isSpawnDeniedRole(role: string | null | undefined): boolean {
   return typeof role === "string" && SPAWN_DENIED_ROLE_IDS.includes(role);
@@ -269,6 +269,7 @@ export class SpawnAdmissionError extends Error {
 
 export function reviewerOriginSpawnGuidance(role: string | null): string {
   if (role === "maintainer") return "A board maintenance run starts no agents and no pipelines; put what needs one on your attention list.";
+  if (role === "issue-reporter") return "An issue reporter starts no agents and no pipelines: its one write is the report's preview. Say in your final message what else is needed.";
   const label = role === "verifier" ? "Verifier" : "Reviewer";
   /* Agent-facing: names no endpoint or forge (docs/design/agent-prompt-contract.md C7). */
   return `${label} sessions run every check in-session — filesystem, shell, network and browser access stay available; child agents are the one thing they cannot start. For more perspectives, report the need to your parent so an operator or orchestrator adds a visible reviewer stage.`;

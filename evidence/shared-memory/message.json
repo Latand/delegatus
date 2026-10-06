@@ -1,0 +1,2281 @@
+{
+  "driver": "src/components/mobile/issue1671Evidence.browser.test.tsx",
+  "cases": [
+    {
+      "lang": "en",
+      "width": 1440,
+      "scheme": "light",
+      "outcome": "three",
+      "closed": {
+        "bubble": {
+          "left": 536,
+          "right": 1088,
+          "top": 28,
+          "bottom": 96,
+          "height": 68
+        },
+        "answer": {
+          "left": 352,
+          "right": 1088,
+          "top": 134,
+          "bottom": 184,
+          "height": 50
+        },
+        "sender": null,
+        "actions": null,
+        "chip": {
+          "text": "Memory · 3",
+          "tag": "BUTTON",
+          "size": 12,
+          "contrast": 6.54,
+          "left": 987.3125,
+          "right": 1092,
+          "top": 100,
+          "bottom": 122,
+          "width": 104.6875,
+          "height": 22,
+          "clipped": false
+        },
+        "chevronRight": 1088,
+        "expanded": "false",
+        "titles": [],
+        "none": null,
+        "fits": true
+      },
+      "opened": {
+        "chip": {
+          "text": "Memory · 3",
+          "tag": "BUTTON",
+          "size": 12,
+          "contrast": 15.59,
+          "left": 987.3125,
+          "right": 1092,
+          "top": 100,
+          "bottom": 122,
+          "width": 104.6875,
+          "height": 22,
+          "clipped": false
+        },
+        "titles": [
+          {
+            "text": "Privacy gate flags a line that starts with a prompt key, so move the key off the start of the line",
+            "tag": "BUTTON",
+            "size": 12,
+            "contrast": 6.54,
+            "left": 536,
+            "right": 1088,
+            "top": 124,
+            "bottom": 142,
+            "width": 552,
+            "height": 18,
+            "clipped": false
+          },
+          {
+            "text": "A browser driver started from a stage needs a short Chrome temp directory, or the socket path is too long",
+            "tag": "BUTTON",
+            "size": 12,
+            "contrast": 6.54,
+            "left": 536,
+            "right": 1088,
+            "top": 146,
+            "bottom": 182,
+            "width": 552,
+            "height": 36,
+            "clipped": false
+          },
+          {
+            "text": "Never use the forge's update-branch button: re-merge in a temporary worktree instead",
+            "tag": "BUTTON",
+            "size": 12,
+            "contrast": 6.54,
+            "left": 536,
+            "right": 1088,
+            "top": 186,
+            "bottom": 204,
+            "width": 552,
+            "height": 18,
+            "clipped": false
+          }
+        ],
+        "fits": true
+      },
+      "reader": "document preview",
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "scheme": "light",
+      "outcome": "one",
+      "closed": {
+        "bubble": {
+          "left": 536,
+          "right": 1088,
+          "top": 28,
+          "bottom": 96,
+          "height": 68
+        },
+        "answer": {
+          "left": 352,
+          "right": 1088,
+          "top": 134,
+          "bottom": 184,
+          "height": 50
+        },
+        "sender": null,
+        "actions": null,
+        "chip": {
+          "text": "Memory · 1",
+          "tag": "BUTTON",
+          "size": 12,
+          "contrast": 6.54,
+          "left": 987.3125,
+          "right": 1092,
+          "top": 100,
+          "bottom": 122,
+          "width": 104.6875,
+          "height": 22,
+          "clipped": false
+        },
+        "chevronRight": 1088,
+        "expanded": "false",
+        "titles": [],
+        "none": null,
+        "fits": true
+      },
+      "opened": {
+        "chip": {
+          "text": "Memory · 1",
+          "tag": "BUTTON",
+          "size": 12,
+          "contrast": 15.59,
+          "left": 987.3125,
+          "right": 1092,
+          "top": 100,
+          "bottom": 122,
+          "width": 104.6875,
+          "height": 22,
+          "clipped": false
+        },
+        "titles": [
+          {
+            "text": "Privacy gate flags a line that starts with a prompt key, so move the key off the start of the line",
+            "tag": "BUTTON",
+            "size": 12,
+            "contrast": 6.54,
+            "left": 576.203125,
+            "right": 1088,
+            "top": 124,
+            "bottom": 142,
+            "width": 511.796875,
+            "height": 18,
+            "clipped": false
+          }
+        ],
+        "fits": true
+      },
+      "reader": "document preview",
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "scheme": "light",
+      "outcome": "none",
+      "none": {
+        "text": "Memory: nothing relevant",
+        "tag": "P",
+        "size": 12,
+        "contrast": 4.59,
+        "left": 952.59375,
+        "right": 1088,
+        "top": 100,
+        "bottom": 118,
+        "width": 135.40625,
+        "height": 18,
+        "clipped": false
+      },
+      "bubble": {
+        "left": 536,
+        "right": 1088,
+        "top": 28,
+        "bottom": 96,
+        "height": 68
+      },
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "scheme": "light",
+      "outcome": "empty",
+      "bubble": {
+        "left": 536,
+        "right": 1088,
+        "top": 28,
+        "bottom": 96,
+        "height": 68
+      },
+      "answer": {
+        "left": 352,
+        "right": 1088,
+        "top": 108,
+        "bottom": 158,
+        "height": 50
+      },
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "scheme": "light",
+      "outcome": "live with a sender caption",
+      "before": {
+        "bubble": {
+          "left": 536,
+          "right": 1088,
+          "top": 48.5,
+          "bottom": 116.5,
+          "height": 68
+        },
+        "sender": {
+          "left": 984.078125,
+          "right": 1088,
+          "top": 28,
+          "bottom": 44.5,
+          "height": 16.5
+        },
+        "answer": {
+          "left": 352,
+          "right": 1088,
+          "top": 128.5,
+          "bottom": 178.5,
+          "height": 50
+        }
+      },
+      "after": {
+        "bubble": {
+          "left": 536,
+          "right": 1088,
+          "top": 48.5,
+          "bottom": 116.5,
+          "height": 68
+        },
+        "sender": {
+          "left": 984.078125,
+          "right": 1088,
+          "top": 28,
+          "bottom": 44.5,
+          "height": 16.5
+        },
+        "answer": {
+          "left": 352,
+          "right": 1088,
+          "top": 154.5,
+          "bottom": 204.5,
+          "height": 50
+        },
+        "chip": {
+          "text": "Memory · 3",
+          "tag": "BUTTON",
+          "size": 12,
+          "contrast": 6.54,
+          "left": 987.3125,
+          "right": 1092,
+          "top": 120.5,
+          "bottom": 142.5,
+          "width": 104.6875,
+          "height": 22,
+          "clipped": false
+        }
+      },
+      "pushedBelow": 26,
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "scheme": "light",
+      "outcome": "codex three",
+      "chip": {
+        "text": "Memory · 3",
+        "tag": "BUTTON",
+        "size": 12,
+        "contrast": 6.54,
+        "left": 987.3125,
+        "right": 1092,
+        "top": 100,
+        "bottom": 122,
+        "width": 104.6875,
+        "height": 22,
+        "clipped": false
+      },
+      "none": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "scheme": "light",
+      "outcome": "codex none",
+      "chip": null,
+      "none": {
+        "text": "Memory: nothing relevant",
+        "tag": "P",
+        "size": 12,
+        "contrast": 4.59,
+        "left": 952.59375,
+        "right": 1088,
+        "top": 100,
+        "bottom": 118,
+        "width": 135.40625,
+        "height": 18,
+        "clipped": false
+      },
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "scheme": "dark",
+      "outcome": "three",
+      "closed": {
+        "bubble": {
+          "left": 536,
+          "right": 1088,
+          "top": 28,
+          "bottom": 96,
+          "height": 68
+        },
+        "answer": {
+          "left": 352,
+          "right": 1088,
+          "top": 134,
+          "bottom": 184,
+          "height": 50
+        },
+        "sender": null,
+        "actions": null,
+        "chip": {
+          "text": "Memory · 3",
+          "tag": "BUTTON",
+          "size": 12,
+          "contrast": 7.4,
+          "left": 987.3125,
+          "right": 1092,
+          "top": 100,
+          "bottom": 122,
+          "width": 104.6875,
+          "height": 22,
+          "clipped": false
+        },
+        "chevronRight": 1088,
+        "expanded": "false",
+        "titles": [],
+        "none": null,
+        "fits": true
+      },
+      "opened": {
+        "chip": {
+          "text": "Memory · 3",
+          "tag": "BUTTON",
+          "size": 12,
+          "contrast": 14.91,
+          "left": 987.3125,
+          "right": 1092,
+          "top": 100,
+          "bottom": 122,
+          "width": 104.6875,
+          "height": 22,
+          "clipped": false
+        },
+        "titles": [
+          {
+            "text": "Privacy gate flags a line that starts with a prompt key, so move the key off the start of the line",
+            "tag": "BUTTON",
+            "size": 12,
+            "contrast": 7.4,
+            "left": 536,
+            "right": 1088,
+            "top": 124,
+            "bottom": 142,
+            "width": 552,
+            "height": 18,
+            "clipped": false
+          },
+          {
+            "text": "A browser driver started from a stage needs a short Chrome temp directory, or the socket path is too long",
+            "tag": "BUTTON",
+            "size": 12,
+            "contrast": 7.4,
+            "left": 536,
+            "right": 1088,
+            "top": 146,
+            "bottom": 182,
+            "width": 552,
+            "height": 36,
+            "clipped": false
+          },
+          {
+            "text": "Never use the forge's update-branch button: re-merge in a temporary worktree instead",
+            "tag": "BUTTON",
+            "size": 12,
+            "contrast": 7.4,
+            "left": 536,
+            "right": 1088,
+            "top": 186,
+            "bottom": 204,
+            "width": 552,
+            "height": 18,
+            "clipped": false
+          }
+        ],
+        "fits": true
+      },
+      "reader": "document preview",
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "scheme": "dark",
+      "outcome": "one",
+      "closed": {
+        "bubble": {
+          "left": 536,
+          "right": 1088,
+          "top": 28,
+          "bottom": 96,
+          "height": 68
+        },
+        "answer": {
+          "left": 352,
+          "right": 1088,
+          "top": 134,
+          "bottom": 184,
+          "height": 50
+        },
+        "sender": null,
+        "actions": null,
+        "chip": {
+          "text": "Memory · 1",
+          "tag": "BUTTON",
+          "size": 12,
+          "contrast": 7.4,
+          "left": 987.3125,
+          "right": 1092,
+          "top": 100,
+          "bottom": 122,
+          "width": 104.6875,
+          "height": 22,
+          "clipped": false
+        },
+        "chevronRight": 1088,
+        "expanded": "false",
+        "titles": [],
+        "none": null,
+        "fits": true
+      },
+      "opened": {
+        "chip": {
+          "text": "Memory · 1",
+          "tag": "BUTTON",
+          "size": 12,
+          "contrast": 14.91,
+          "left": 987.3125,
+          "right": 1092,
+          "top": 100,
+          "bottom": 122,
+          "width": 104.6875,
+          "height": 22,
+          "clipped": false
+        },
+        "titles": [
+          {
+            "text": "Privacy gate flags a line that starts with a prompt key, so move the key off the start of the line",
+            "tag": "BUTTON",
+            "size": 12,
+            "contrast": 7.4,
+            "left": 576.203125,
+            "right": 1088,
+            "top": 124,
+            "bottom": 142,
+            "width": 511.796875,
+            "height": 18,
+            "clipped": false
+          }
+        ],
+        "fits": true
+      },
+      "reader": "document preview",
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "scheme": "dark",
+      "outcome": "none",
+      "none": {
+        "text": "Memory: nothing relevant",
+        "tag": "P",
+        "size": 12,
+        "contrast": 5.56,
+        "left": 952.59375,
+        "right": 1088,
+        "top": 100,
+        "bottom": 118,
+        "width": 135.40625,
+        "height": 18,
+        "clipped": false
+      },
+      "bubble": {
+        "left": 536,
+        "right": 1088,
+        "top": 28,
+        "bottom": 96,
+        "height": 68
+      },
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "scheme": "dark",
+      "outcome": "empty",
+      "bubble": {
+        "left": 536,
+        "right": 1088,
+        "top": 28,
+        "bottom": 96,
+        "height": 68
+      },
+      "answer": {
+        "left": 352,
+        "right": 1088,
+        "top": 108,
+        "bottom": 158,
+        "height": 50
+      },
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "scheme": "light",
+      "outcome": "three",
+      "closed": {
+        "bubble": {
+          "left": 66.125,
+          "right": 374,
+          "top": 28,
+          "bottom": 111.25,
+          "height": 83.25
+        },
+        "answer": {
+          "left": 16,
+          "right": 374,
+          "top": 193.25,
+          "bottom": 306.75,
+          "height": 113.5
+        },
+        "sender": null,
+        "actions": {
+          "left": 342,
+          "right": 386,
+          "top": 105.25,
+          "bottom": 149.25,
+          "height": 44
+        },
+        "chip": {
+          "text": "Memory · 3",
+          "tag": "BUTTON",
+          "size": 12,
+          "contrast": 6.54,
+          "left": 273.3125,
+          "right": 378,
+          "top": 149.25,
+          "bottom": 193.25,
+          "width": 104.6875,
+          "height": 44,
+          "clipped": false
+        },
+        "chevronRight": 374,
+        "expanded": "false",
+        "titles": [],
+        "none": null,
+        "fits": true
+      },
+      "opened": {
+        "chip": {
+          "text": "Memory · 3",
+          "tag": "BUTTON",
+          "size": 12,
+          "contrast": 6.54,
+          "left": 273.3125,
+          "right": 378,
+          "top": 149.25,
+          "bottom": 193.25,
+          "width": 104.6875,
+          "height": 44,
+          "clipped": false
+        },
+        "titles": [
+          {
+            "text": "Privacy gate flags a line that starts with a prompt key, so move the key off the start of the line",
+            "tag": "BUTTON",
+            "size": 12,
+            "contrast": 6.54,
+            "left": 66.125,
+            "right": 374,
+            "top": 193.25,
+            "bottom": 237.25,
+            "width": 307.875,
+            "height": 44,
+            "clipped": false
+          },
+          {
+            "text": "A browser driver started from a stage needs a short Chrome temp directory, or the socket path is too long",
+            "tag": "BUTTON",
+            "size": 12,
+            "contrast": 6.54,
+            "left": 66.125,
+            "right": 374,
+            "top": 237.25,
+            "bottom": 281.25,
+            "width": 307.875,
+            "height": 44,
+            "clipped": false
+          },
+          {
+            "text": "Never use the forge's update-branch button: re-merge in a temporary worktree instead",
+            "tag": "BUTTON",
+            "size": 12,
+            "contrast": 6.54,
+            "left": 66.125,
+            "right": 374,
+            "top": 281.25,
+            "bottom": 325.25,
+            "width": 307.875,
+            "height": 44,
+            "clipped": false
+          }
+        ],
+        "fits": true
+      },
+      "reader": "document preview",
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "scheme": "light",
+      "outcome": "one",
+      "closed": {
+        "bubble": {
+          "left": 66.125,
+          "right": 374,
+          "top": 28,
+          "bottom": 111.25,
+          "height": 83.25
+        },
+        "answer": {
+          "left": 16,
+          "right": 374,
+          "top": 193.25,
+          "bottom": 306.75,
+          "height": 113.5
+        },
+        "sender": null,
+        "actions": {
+          "left": 342,
+          "right": 386,
+          "top": 105.25,
+          "bottom": 149.25,
+          "height": 44
+        },
+        "chip": {
+          "text": "Memory · 1",
+          "tag": "BUTTON",
+          "size": 12,
+          "contrast": 6.54,
+          "left": 273.3125,
+          "right": 378,
+          "top": 149.25,
+          "bottom": 193.25,
+          "width": 104.6875,
+          "height": 44,
+          "clipped": false
+        },
+        "chevronRight": 374,
+        "expanded": "false",
+        "titles": [],
+        "none": null,
+        "fits": true
+      },
+      "opened": {
+        "chip": {
+          "text": "Memory · 1",
+          "tag": "BUTTON",
+          "size": 12,
+          "contrast": 6.54,
+          "left": 273.3125,
+          "right": 378,
+          "top": 149.25,
+          "bottom": 193.25,
+          "width": 104.6875,
+          "height": 44,
+          "clipped": false
+        },
+        "titles": [
+          {
+            "text": "Privacy gate flags a line that starts with a prompt key, so move the key off the start of the line",
+            "tag": "BUTTON",
+            "size": 12,
+            "contrast": 6.54,
+            "left": 66.125,
+            "right": 374,
+            "top": 193.25,
+            "bottom": 237.25,
+            "width": 307.875,
+            "height": 44,
+            "clipped": false
+          }
+        ],
+        "fits": true
+      },
+      "reader": "document preview",
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "scheme": "light",
+      "outcome": "none",
+      "none": {
+        "text": "Memory: nothing relevant",
+        "tag": "P",
+        "size": 12,
+        "contrast": 4.59,
+        "left": 238.59375,
+        "right": 374,
+        "top": 149.25,
+        "bottom": 167.25,
+        "width": 135.40625,
+        "height": 18,
+        "clipped": false
+      },
+      "bubble": {
+        "left": 66.125,
+        "right": 374,
+        "top": 28,
+        "bottom": 111.25,
+        "height": 83.25
+      },
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "scheme": "light",
+      "outcome": "empty",
+      "bubble": {
+        "left": 66.125,
+        "right": 374,
+        "top": 28,
+        "bottom": 111.25,
+        "height": 83.25
+      },
+      "answer": {
+        "left": 16,
+        "right": 374,
+        "top": 155.25,
+        "bottom": 268.75,
+        "height": 113.5
+      },
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "scheme": "light",
+      "outcome": "live with a sender caption",
+      "before": {
+        "bubble": {
+          "left": 66.125,
+          "right": 374,
+          "top": 48.5,
+          "bottom": 131.75,
+          "height": 83.25
+        },
+        "sender": {
+          "left": 272.078125,
+          "right": 374,
+          "top": 28,
+          "bottom": 44.5,
+          "height": 16.5
+        },
+        "answer": {
+          "left": 16,
+          "right": 374,
+          "top": 175.75,
+          "bottom": 289.25,
+          "height": 113.5
+        }
+      },
+      "after": {
+        "bubble": {
+          "left": 66.125,
+          "right": 374,
+          "top": 48.5,
+          "bottom": 131.75,
+          "height": 83.25
+        },
+        "sender": {
+          "left": 272.078125,
+          "right": 374,
+          "top": 28,
+          "bottom": 44.5,
+          "height": 16.5
+        },
+        "answer": {
+          "left": 16,
+          "right": 374,
+          "top": 213.75,
+          "bottom": 327.25,
+          "height": 113.5
+        },
+        "chip": {
+          "text": "Memory · 3",
+          "tag": "BUTTON",
+          "size": 12,
+          "contrast": 6.54,
+          "left": 273.3125,
+          "right": 378,
+          "top": 169.75,
+          "bottom": 213.75,
+          "width": 104.6875,
+          "height": 44,
+          "clipped": false
+        }
+      },
+      "pushedBelow": 38,
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "scheme": "light",
+      "outcome": "codex three",
+      "chip": {
+        "text": "Memory · 3",
+        "tag": "BUTTON",
+        "size": 12,
+        "contrast": 6.54,
+        "left": 273.3125,
+        "right": 378,
+        "top": 149.25,
+        "bottom": 193.25,
+        "width": 104.6875,
+        "height": 44,
+        "clipped": false
+      },
+      "none": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "scheme": "light",
+      "outcome": "codex none",
+      "chip": null,
+      "none": {
+        "text": "Memory: nothing relevant",
+        "tag": "P",
+        "size": 12,
+        "contrast": 4.59,
+        "left": 238.59375,
+        "right": 374,
+        "top": 149.25,
+        "bottom": 167.25,
+        "width": 135.40625,
+        "height": 18,
+        "clipped": false
+      },
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "scheme": "dark",
+      "outcome": "three",
+      "closed": {
+        "bubble": {
+          "left": 66.125,
+          "right": 374,
+          "top": 28,
+          "bottom": 111.25,
+          "height": 83.25
+        },
+        "answer": {
+          "left": 16,
+          "right": 374,
+          "top": 193.25,
+          "bottom": 306.75,
+          "height": 113.5
+        },
+        "sender": null,
+        "actions": {
+          "left": 342,
+          "right": 386,
+          "top": 105.25,
+          "bottom": 149.25,
+          "height": 44
+        },
+        "chip": {
+          "text": "Memory · 3",
+          "tag": "BUTTON",
+          "size": 12,
+          "contrast": 7.4,
+          "left": 273.3125,
+          "right": 378,
+          "top": 149.25,
+          "bottom": 193.25,
+          "width": 104.6875,
+          "height": 44,
+          "clipped": false
+        },
+        "chevronRight": 374,
+        "expanded": "false",
+        "titles": [],
+        "none": null,
+        "fits": true
+      },
+      "opened": {
+        "chip": {
+          "text": "Memory · 3",
+          "tag": "BUTTON",
+          "size": 12,
+          "contrast": 7.4,
+          "left": 273.3125,
+          "right": 378,
+          "top": 149.25,
+          "bottom": 193.25,
+          "width": 104.6875,
+          "height": 44,
+          "clipped": false
+        },
+        "titles": [
+          {
+            "text": "Privacy gate flags a line that starts with a prompt key, so move the key off the start of the line",
+            "tag": "BUTTON",
+            "size": 12,
+            "contrast": 7.4,
+            "left": 66.125,
+            "right": 374,
+            "top": 193.25,
+            "bottom": 237.25,
+            "width": 307.875,
+            "height": 44,
+            "clipped": false
+          },
+          {
+            "text": "A browser driver started from a stage needs a short Chrome temp directory, or the socket path is too long",
+            "tag": "BUTTON",
+            "size": 12,
+            "contrast": 7.4,
+            "left": 66.125,
+            "right": 374,
+            "top": 237.25,
+            "bottom": 281.25,
+            "width": 307.875,
+            "height": 44,
+            "clipped": false
+          },
+          {
+            "text": "Never use the forge's update-branch button: re-merge in a temporary worktree instead",
+            "tag": "BUTTON",
+            "size": 12,
+            "contrast": 7.4,
+            "left": 66.125,
+            "right": 374,
+            "top": 281.25,
+            "bottom": 325.25,
+            "width": 307.875,
+            "height": 44,
+            "clipped": false
+          }
+        ],
+        "fits": true
+      },
+      "reader": "document preview",
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "scheme": "dark",
+      "outcome": "one",
+      "closed": {
+        "bubble": {
+          "left": 66.125,
+          "right": 374,
+          "top": 28,
+          "bottom": 111.25,
+          "height": 83.25
+        },
+        "answer": {
+          "left": 16,
+          "right": 374,
+          "top": 193.25,
+          "bottom": 306.75,
+          "height": 113.5
+        },
+        "sender": null,
+        "actions": {
+          "left": 342,
+          "right": 386,
+          "top": 105.25,
+          "bottom": 149.25,
+          "height": 44
+        },
+        "chip": {
+          "text": "Memory · 1",
+          "tag": "BUTTON",
+          "size": 12,
+          "contrast": 7.4,
+          "left": 273.3125,
+          "right": 378,
+          "top": 149.25,
+          "bottom": 193.25,
+          "width": 104.6875,
+          "height": 44,
+          "clipped": false
+        },
+        "chevronRight": 374,
+        "expanded": "false",
+        "titles": [],
+        "none": null,
+        "fits": true
+      },
+      "opened": {
+        "chip": {
+          "text": "Memory · 1",
+          "tag": "BUTTON",
+          "size": 12,
+          "contrast": 7.4,
+          "left": 273.3125,
+          "right": 378,
+          "top": 149.25,
+          "bottom": 193.25,
+          "width": 104.6875,
+          "height": 44,
+          "clipped": false
+        },
+        "titles": [
+          {
+            "text": "Privacy gate flags a line that starts with a prompt key, so move the key off the start of the line",
+            "tag": "BUTTON",
+            "size": 12,
+            "contrast": 7.4,
+            "left": 66.125,
+            "right": 374,
+            "top": 193.25,
+            "bottom": 237.25,
+            "width": 307.875,
+            "height": 44,
+            "clipped": false
+          }
+        ],
+        "fits": true
+      },
+      "reader": "document preview",
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "scheme": "dark",
+      "outcome": "none",
+      "none": {
+        "text": "Memory: nothing relevant",
+        "tag": "P",
+        "size": 12,
+        "contrast": 5.56,
+        "left": 238.59375,
+        "right": 374,
+        "top": 149.25,
+        "bottom": 167.25,
+        "width": 135.40625,
+        "height": 18,
+        "clipped": false
+      },
+      "bubble": {
+        "left": 66.125,
+        "right": 374,
+        "top": 28,
+        "bottom": 111.25,
+        "height": 83.25
+      },
+      "pageErrors": []
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "scheme": "dark",
+      "outcome": "empty",
+      "bubble": {
+        "left": 66.125,
+        "right": 374,
+        "top": 28,
+        "bottom": 111.25,
+        "height": 83.25
+      },
+      "answer": {
+        "left": 16,
+        "right": 374,
+        "top": 155.25,
+        "bottom": 268.75,
+        "height": 113.5
+      },
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "scheme": "light",
+      "outcome": "three",
+      "closed": {
+        "bubble": {
+          "left": 536,
+          "right": 1088,
+          "top": 28,
+          "bottom": 96,
+          "height": 68
+        },
+        "answer": {
+          "left": 352,
+          "right": 1088,
+          "top": 134,
+          "bottom": 184,
+          "height": 50
+        },
+        "sender": null,
+        "actions": null,
+        "chip": {
+          "text": "Пам’ять · 3",
+          "tag": "BUTTON",
+          "size": 12,
+          "contrast": 6.54,
+          "left": 986.1875,
+          "right": 1092,
+          "top": 100,
+          "bottom": 122,
+          "width": 105.8125,
+          "height": 22,
+          "clipped": false
+        },
+        "chevronRight": 1088,
+        "expanded": "false",
+        "titles": [],
+        "none": null,
+        "fits": true
+      },
+      "opened": {
+        "chip": {
+          "text": "Пам’ять · 3",
+          "tag": "BUTTON",
+          "size": 12,
+          "contrast": 15.59,
+          "left": 986.1875,
+          "right": 1092,
+          "top": 100,
+          "bottom": 122,
+          "width": 105.8125,
+          "height": 22,
+          "clipped": false
+        },
+        "titles": [
+          {
+            "text": "Перевірка приватності спрацьовує на рядок, що починається з ключа prompt, тому ключ переносимо з початку рядка",
+            "tag": "BUTTON",
+            "size": 12,
+            "contrast": 6.54,
+            "left": 536,
+            "right": 1088,
+            "top": 124,
+            "bottom": 160,
+            "width": 552,
+            "height": 36,
+            "clipped": false
+          },
+          {
+            "text": "Драйвер браузера, запущений з етапу, потребує короткої тимчасової теки Chrome, інакше шлях сокета задовгий",
+            "tag": "BUTTON",
+            "size": 12,
+            "contrast": 6.54,
+            "left": 536,
+            "right": 1088,
+            "top": 164,
+            "bottom": 200,
+            "width": 552,
+            "height": 36,
+            "clipped": false
+          },
+          {
+            "text": "Ніколи не тиснути кнопку update-branch у форджі: злиття робимо заново в тимчасовому робочому дереві",
+            "tag": "BUTTON",
+            "size": 12,
+            "contrast": 6.54,
+            "left": 536,
+            "right": 1088,
+            "top": 204,
+            "bottom": 240,
+            "width": 552,
+            "height": 36,
+            "clipped": false
+          }
+        ],
+        "fits": true
+      },
+      "reader": "document preview",
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "scheme": "light",
+      "outcome": "one",
+      "closed": {
+        "bubble": {
+          "left": 536,
+          "right": 1088,
+          "top": 28,
+          "bottom": 96,
+          "height": 68
+        },
+        "answer": {
+          "left": 352,
+          "right": 1088,
+          "top": 134,
+          "bottom": 184,
+          "height": 50
+        },
+        "sender": null,
+        "actions": null,
+        "chip": {
+          "text": "Пам’ять · 1",
+          "tag": "BUTTON",
+          "size": 12,
+          "contrast": 6.54,
+          "left": 986.1875,
+          "right": 1092,
+          "top": 100,
+          "bottom": 122,
+          "width": 105.8125,
+          "height": 22,
+          "clipped": false
+        },
+        "chevronRight": 1088,
+        "expanded": "false",
+        "titles": [],
+        "none": null,
+        "fits": true
+      },
+      "opened": {
+        "chip": {
+          "text": "Пам’ять · 1",
+          "tag": "BUTTON",
+          "size": 12,
+          "contrast": 15.59,
+          "left": 986.1875,
+          "right": 1092,
+          "top": 100,
+          "bottom": 122,
+          "width": 105.8125,
+          "height": 22,
+          "clipped": false
+        },
+        "titles": [
+          {
+            "text": "Перевірка приватності спрацьовує на рядок, що починається з ключа prompt, тому ключ переносимо з початку рядка",
+            "tag": "BUTTON",
+            "size": 12,
+            "contrast": 6.54,
+            "left": 536,
+            "right": 1088,
+            "top": 124,
+            "bottom": 160,
+            "width": 552,
+            "height": 36,
+            "clipped": false
+          }
+        ],
+        "fits": true
+      },
+      "reader": "document preview",
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "scheme": "light",
+      "outcome": "none",
+      "none": {
+        "text": "Пам’ять: нічого доречного",
+        "tag": "P",
+        "size": 12,
+        "contrast": 4.59,
+        "left": 943.5625,
+        "right": 1088,
+        "top": 100,
+        "bottom": 118,
+        "width": 144.4375,
+        "height": 18,
+        "clipped": false
+      },
+      "bubble": {
+        "left": 536,
+        "right": 1088,
+        "top": 28,
+        "bottom": 96,
+        "height": 68
+      },
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "scheme": "light",
+      "outcome": "empty",
+      "bubble": {
+        "left": 536,
+        "right": 1088,
+        "top": 28,
+        "bottom": 96,
+        "height": 68
+      },
+      "answer": {
+        "left": 352,
+        "right": 1088,
+        "top": 108,
+        "bottom": 158,
+        "height": 50
+      },
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "scheme": "light",
+      "outcome": "live with a sender caption",
+      "before": {
+        "bubble": {
+          "left": 536,
+          "right": 1088,
+          "top": 48.5,
+          "bottom": 116.5,
+          "height": 68
+        },
+        "sender": {
+          "left": 984.078125,
+          "right": 1088,
+          "top": 28,
+          "bottom": 44.5,
+          "height": 16.5
+        },
+        "answer": {
+          "left": 352,
+          "right": 1088,
+          "top": 128.5,
+          "bottom": 178.5,
+          "height": 50
+        }
+      },
+      "after": {
+        "bubble": {
+          "left": 536,
+          "right": 1088,
+          "top": 48.5,
+          "bottom": 116.5,
+          "height": 68
+        },
+        "sender": {
+          "left": 984.078125,
+          "right": 1088,
+          "top": 28,
+          "bottom": 44.5,
+          "height": 16.5
+        },
+        "answer": {
+          "left": 352,
+          "right": 1088,
+          "top": 154.5,
+          "bottom": 204.5,
+          "height": 50
+        },
+        "chip": {
+          "text": "Пам’ять · 3",
+          "tag": "BUTTON",
+          "size": 12,
+          "contrast": 6.54,
+          "left": 986.1875,
+          "right": 1092,
+          "top": 120.5,
+          "bottom": 142.5,
+          "width": 105.8125,
+          "height": 22,
+          "clipped": false
+        }
+      },
+      "pushedBelow": 26,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "scheme": "light",
+      "outcome": "codex three",
+      "chip": {
+        "text": "Пам’ять · 3",
+        "tag": "BUTTON",
+        "size": 12,
+        "contrast": 6.54,
+        "left": 986.1875,
+        "right": 1092,
+        "top": 100,
+        "bottom": 122,
+        "width": 105.8125,
+        "height": 22,
+        "clipped": false
+      },
+      "none": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "scheme": "light",
+      "outcome": "codex none",
+      "chip": null,
+      "none": {
+        "text": "Пам’ять: нічого доречного",
+        "tag": "P",
+        "size": 12,
+        "contrast": 4.59,
+        "left": 943.5625,
+        "right": 1088,
+        "top": 100,
+        "bottom": 118,
+        "width": 144.4375,
+        "height": 18,
+        "clipped": false
+      },
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "scheme": "dark",
+      "outcome": "three",
+      "closed": {
+        "bubble": {
+          "left": 536,
+          "right": 1088,
+          "top": 28,
+          "bottom": 96,
+          "height": 68
+        },
+        "answer": {
+          "left": 352,
+          "right": 1088,
+          "top": 134,
+          "bottom": 184,
+          "height": 50
+        },
+        "sender": null,
+        "actions": null,
+        "chip": {
+          "text": "Пам’ять · 3",
+          "tag": "BUTTON",
+          "size": 12,
+          "contrast": 7.4,
+          "left": 986.1875,
+          "right": 1092,
+          "top": 100,
+          "bottom": 122,
+          "width": 105.8125,
+          "height": 22,
+          "clipped": false
+        },
+        "chevronRight": 1088,
+        "expanded": "false",
+        "titles": [],
+        "none": null,
+        "fits": true
+      },
+      "opened": {
+        "chip": {
+          "text": "Пам’ять · 3",
+          "tag": "BUTTON",
+          "size": 12,
+          "contrast": 14.91,
+          "left": 986.1875,
+          "right": 1092,
+          "top": 100,
+          "bottom": 122,
+          "width": 105.8125,
+          "height": 22,
+          "clipped": false
+        },
+        "titles": [
+          {
+            "text": "Перевірка приватності спрацьовує на рядок, що починається з ключа prompt, тому ключ переносимо з початку рядка",
+            "tag": "BUTTON",
+            "size": 12,
+            "contrast": 7.4,
+            "left": 536,
+            "right": 1088,
+            "top": 124,
+            "bottom": 160,
+            "width": 552,
+            "height": 36,
+            "clipped": false
+          },
+          {
+            "text": "Драйвер браузера, запущений з етапу, потребує короткої тимчасової теки Chrome, інакше шлях сокета задовгий",
+            "tag": "BUTTON",
+            "size": 12,
+            "contrast": 7.4,
+            "left": 536,
+            "right": 1088,
+            "top": 164,
+            "bottom": 200,
+            "width": 552,
+            "height": 36,
+            "clipped": false
+          },
+          {
+            "text": "Ніколи не тиснути кнопку update-branch у форджі: злиття робимо заново в тимчасовому робочому дереві",
+            "tag": "BUTTON",
+            "size": 12,
+            "contrast": 7.4,
+            "left": 536,
+            "right": 1088,
+            "top": 204,
+            "bottom": 240,
+            "width": 552,
+            "height": 36,
+            "clipped": false
+          }
+        ],
+        "fits": true
+      },
+      "reader": "document preview",
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "scheme": "dark",
+      "outcome": "one",
+      "closed": {
+        "bubble": {
+          "left": 536,
+          "right": 1088,
+          "top": 28,
+          "bottom": 96,
+          "height": 68
+        },
+        "answer": {
+          "left": 352,
+          "right": 1088,
+          "top": 134,
+          "bottom": 184,
+          "height": 50
+        },
+        "sender": null,
+        "actions": null,
+        "chip": {
+          "text": "Пам’ять · 1",
+          "tag": "BUTTON",
+          "size": 12,
+          "contrast": 7.4,
+          "left": 986.1875,
+          "right": 1092,
+          "top": 100,
+          "bottom": 122,
+          "width": 105.8125,
+          "height": 22,
+          "clipped": false
+        },
+        "chevronRight": 1088,
+        "expanded": "false",
+        "titles": [],
+        "none": null,
+        "fits": true
+      },
+      "opened": {
+        "chip": {
+          "text": "Пам’ять · 1",
+          "tag": "BUTTON",
+          "size": 12,
+          "contrast": 14.91,
+          "left": 986.1875,
+          "right": 1092,
+          "top": 100,
+          "bottom": 122,
+          "width": 105.8125,
+          "height": 22,
+          "clipped": false
+        },
+        "titles": [
+          {
+            "text": "Перевірка приватності спрацьовує на рядок, що починається з ключа prompt, тому ключ переносимо з початку рядка",
+            "tag": "BUTTON",
+            "size": 12,
+            "contrast": 7.4,
+            "left": 536,
+            "right": 1088,
+            "top": 124,
+            "bottom": 160,
+            "width": 552,
+            "height": 36,
+            "clipped": false
+          }
+        ],
+        "fits": true
+      },
+      "reader": "document preview",
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "scheme": "dark",
+      "outcome": "none",
+      "none": {
+        "text": "Пам’ять: нічого доречного",
+        "tag": "P",
+        "size": 12,
+        "contrast": 5.56,
+        "left": 943.5625,
+        "right": 1088,
+        "top": 100,
+        "bottom": 118,
+        "width": 144.4375,
+        "height": 18,
+        "clipped": false
+      },
+      "bubble": {
+        "left": 536,
+        "right": 1088,
+        "top": 28,
+        "bottom": 96,
+        "height": 68
+      },
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "scheme": "dark",
+      "outcome": "empty",
+      "bubble": {
+        "left": 536,
+        "right": 1088,
+        "top": 28,
+        "bottom": 96,
+        "height": 68
+      },
+      "answer": {
+        "left": 352,
+        "right": 1088,
+        "top": 108,
+        "bottom": 158,
+        "height": 50
+      },
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "scheme": "light",
+      "outcome": "three",
+      "closed": {
+        "bubble": {
+          "left": 66.125,
+          "right": 374,
+          "top": 28,
+          "bottom": 111.25,
+          "height": 83.25
+        },
+        "answer": {
+          "left": 16,
+          "right": 374,
+          "top": 193.25,
+          "bottom": 306.75,
+          "height": 113.5
+        },
+        "sender": null,
+        "actions": {
+          "left": 342,
+          "right": 386,
+          "top": 105.25,
+          "bottom": 149.25,
+          "height": 44
+        },
+        "chip": {
+          "text": "Пам’ять · 3",
+          "tag": "BUTTON",
+          "size": 12,
+          "contrast": 6.54,
+          "left": 272.1875,
+          "right": 378,
+          "top": 149.25,
+          "bottom": 193.25,
+          "width": 105.8125,
+          "height": 44,
+          "clipped": false
+        },
+        "chevronRight": 374,
+        "expanded": "false",
+        "titles": [],
+        "none": null,
+        "fits": true
+      },
+      "opened": {
+        "chip": {
+          "text": "Пам’ять · 3",
+          "tag": "BUTTON",
+          "size": 12,
+          "contrast": 6.54,
+          "left": 272.1875,
+          "right": 378,
+          "top": 149.25,
+          "bottom": 193.25,
+          "width": 105.8125,
+          "height": 44,
+          "clipped": false
+        },
+        "titles": [
+          {
+            "text": "Перевірка приватності спрацьовує на рядок, що починається з ключа prompt, тому ключ переносимо з початку рядка",
+            "tag": "BUTTON",
+            "size": 12,
+            "contrast": 6.54,
+            "left": 66.125,
+            "right": 374,
+            "top": 193.25,
+            "bottom": 255.25,
+            "width": 307.875,
+            "height": 62,
+            "clipped": false
+          },
+          {
+            "text": "Драйвер браузера, запущений з етапу, потребує короткої тимчасової теки Chrome, інакше шлях сокета задовгий",
+            "tag": "BUTTON",
+            "size": 12,
+            "contrast": 6.54,
+            "left": 66.125,
+            "right": 374,
+            "top": 255.25,
+            "bottom": 317.25,
+            "width": 307.875,
+            "height": 62,
+            "clipped": false
+          },
+          {
+            "text": "Ніколи не тиснути кнопку update-branch у форджі: злиття робимо заново в тимчасовому робочому дереві",
+            "tag": "BUTTON",
+            "size": 12,
+            "contrast": 6.54,
+            "left": 66.125,
+            "right": 374,
+            "top": 317.25,
+            "bottom": 379.25,
+            "width": 307.875,
+            "height": 62,
+            "clipped": false
+          }
+        ],
+        "fits": true
+      },
+      "reader": "document preview",
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "scheme": "light",
+      "outcome": "one",
+      "closed": {
+        "bubble": {
+          "left": 66.125,
+          "right": 374,
+          "top": 28,
+          "bottom": 111.25,
+          "height": 83.25
+        },
+        "answer": {
+          "left": 16,
+          "right": 374,
+          "top": 193.25,
+          "bottom": 306.75,
+          "height": 113.5
+        },
+        "sender": null,
+        "actions": {
+          "left": 342,
+          "right": 386,
+          "top": 105.25,
+          "bottom": 149.25,
+          "height": 44
+        },
+        "chip": {
+          "text": "Пам’ять · 1",
+          "tag": "BUTTON",
+          "size": 12,
+          "contrast": 6.54,
+          "left": 272.1875,
+          "right": 378,
+          "top": 149.25,
+          "bottom": 193.25,
+          "width": 105.8125,
+          "height": 44,
+          "clipped": false
+        },
+        "chevronRight": 374,
+        "expanded": "false",
+        "titles": [],
+        "none": null,
+        "fits": true
+      },
+      "opened": {
+        "chip": {
+          "text": "Пам’ять · 1",
+          "tag": "BUTTON",
+          "size": 12,
+          "contrast": 6.54,
+          "left": 272.1875,
+          "right": 378,
+          "top": 149.25,
+          "bottom": 193.25,
+          "width": 105.8125,
+          "height": 44,
+          "clipped": false
+        },
+        "titles": [
+          {
+            "text": "Перевірка приватності спрацьовує на рядок, що починається з ключа prompt, тому ключ переносимо з початку рядка",
+            "tag": "BUTTON",
+            "size": 12,
+            "contrast": 6.54,
+            "left": 66.125,
+            "right": 374,
+            "top": 193.25,
+            "bottom": 255.25,
+            "width": 307.875,
+            "height": 62,
+            "clipped": false
+          }
+        ],
+        "fits": true
+      },
+      "reader": "document preview",
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "scheme": "light",
+      "outcome": "none",
+      "none": {
+        "text": "Пам’ять: нічого доречного",
+        "tag": "P",
+        "size": 12,
+        "contrast": 4.59,
+        "left": 229.5625,
+        "right": 374,
+        "top": 149.25,
+        "bottom": 167.25,
+        "width": 144.4375,
+        "height": 18,
+        "clipped": false
+      },
+      "bubble": {
+        "left": 66.125,
+        "right": 374,
+        "top": 28,
+        "bottom": 111.25,
+        "height": 83.25
+      },
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "scheme": "light",
+      "outcome": "empty",
+      "bubble": {
+        "left": 66.125,
+        "right": 374,
+        "top": 28,
+        "bottom": 111.25,
+        "height": 83.25
+      },
+      "answer": {
+        "left": 16,
+        "right": 374,
+        "top": 155.25,
+        "bottom": 268.75,
+        "height": 113.5
+      },
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "scheme": "light",
+      "outcome": "live with a sender caption",
+      "before": {
+        "bubble": {
+          "left": 66.125,
+          "right": 374,
+          "top": 48.5,
+          "bottom": 131.75,
+          "height": 83.25
+        },
+        "sender": {
+          "left": 272.078125,
+          "right": 374,
+          "top": 28,
+          "bottom": 44.5,
+          "height": 16.5
+        },
+        "answer": {
+          "left": 16,
+          "right": 374,
+          "top": 175.75,
+          "bottom": 289.25,
+          "height": 113.5
+        }
+      },
+      "after": {
+        "bubble": {
+          "left": 66.125,
+          "right": 374,
+          "top": 48.5,
+          "bottom": 131.75,
+          "height": 83.25
+        },
+        "sender": {
+          "left": 272.078125,
+          "right": 374,
+          "top": 28,
+          "bottom": 44.5,
+          "height": 16.5
+        },
+        "answer": {
+          "left": 16,
+          "right": 374,
+          "top": 213.75,
+          "bottom": 327.25,
+          "height": 113.5
+        },
+        "chip": {
+          "text": "Пам’ять · 3",
+          "tag": "BUTTON",
+          "size": 12,
+          "contrast": 6.54,
+          "left": 272.1875,
+          "right": 378,
+          "top": 169.75,
+          "bottom": 213.75,
+          "width": 105.8125,
+          "height": 44,
+          "clipped": false
+        }
+      },
+      "pushedBelow": 38,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "scheme": "light",
+      "outcome": "codex three",
+      "chip": {
+        "text": "Пам’ять · 3",
+        "tag": "BUTTON",
+        "size": 12,
+        "contrast": 6.54,
+        "left": 272.1875,
+        "right": 378,
+        "top": 149.25,
+        "bottom": 193.25,
+        "width": 105.8125,
+        "height": 44,
+        "clipped": false
+      },
+      "none": null,
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "scheme": "light",
+      "outcome": "codex none",
+      "chip": null,
+      "none": {
+        "text": "Пам’ять: нічого доречного",
+        "tag": "P",
+        "size": 12,
+        "contrast": 4.59,
+        "left": 229.5625,
+        "right": 374,
+        "top": 149.25,
+        "bottom": 167.25,
+        "width": 144.4375,
+        "height": 18,
+        "clipped": false
+      },
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "scheme": "dark",
+      "outcome": "three",
+      "closed": {
+        "bubble": {
+          "left": 66.125,
+          "right": 374,
+          "top": 28,
+          "bottom": 111.25,
+          "height": 83.25
+        },
+        "answer": {
+          "left": 16,
+          "right": 374,
+          "top": 193.25,
+          "bottom": 306.75,
+          "height": 113.5
+        },
+        "sender": null,
+        "actions": {
+          "left": 342,
+          "right": 386,
+          "top": 105.25,
+          "bottom": 149.25,
+          "height": 44
+        },
+        "chip": {
+          "text": "Пам’ять · 3",
+          "tag": "BUTTON",
+          "size": 12,
+          "contrast": 7.4,
+          "left": 272.1875,
+          "right": 378,
+          "top": 149.25,
+          "bottom": 193.25,
+          "width": 105.8125,
+          "height": 44,
+          "clipped": false
+        },
+        "chevronRight": 374,
+        "expanded": "false",
+        "titles": [],
+        "none": null,
+        "fits": true
+      },
+      "opened": {
+        "chip": {
+          "text": "Пам’ять · 3",
+          "tag": "BUTTON",
+          "size": 12,
+          "contrast": 7.4,
+          "left": 272.1875,
+          "right": 378,
+          "top": 149.25,
+          "bottom": 193.25,
+          "width": 105.8125,
+          "height": 44,
+          "clipped": false
+        },
+        "titles": [
+          {
+            "text": "Перевірка приватності спрацьовує на рядок, що починається з ключа prompt, тому ключ переносимо з початку рядка",
+            "tag": "BUTTON",
+            "size": 12,
+            "contrast": 7.4,
+            "left": 66.125,
+            "right": 374,
+            "top": 193.25,
+            "bottom": 255.25,
+            "width": 307.875,
+            "height": 62,
+            "clipped": false
+          },
+          {
+            "text": "Драйвер браузера, запущений з етапу, потребує короткої тимчасової теки Chrome, інакше шлях сокета задовгий",
+            "tag": "BUTTON",
+            "size": 12,
+            "contrast": 7.4,
+            "left": 66.125,
+            "right": 374,
+            "top": 255.25,
+            "bottom": 317.25,
+            "width": 307.875,
+            "height": 62,
+            "clipped": false
+          },
+          {
+            "text": "Ніколи не тиснути кнопку update-branch у форджі: злиття робимо заново в тимчасовому робочому дереві",
+            "tag": "BUTTON",
+            "size": 12,
+            "contrast": 7.4,
+            "left": 66.125,
+            "right": 374,
+            "top": 317.25,
+            "bottom": 379.25,
+            "width": 307.875,
+            "height": 62,
+            "clipped": false
+          }
+        ],
+        "fits": true
+      },
+      "reader": "document preview",
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "scheme": "dark",
+      "outcome": "one",
+      "closed": {
+        "bubble": {
+          "left": 66.125,
+          "right": 374,
+          "top": 28,
+          "bottom": 111.25,
+          "height": 83.25
+        },
+        "answer": {
+          "left": 16,
+          "right": 374,
+          "top": 193.25,
+          "bottom": 306.75,
+          "height": 113.5
+        },
+        "sender": null,
+        "actions": {
+          "left": 342,
+          "right": 386,
+          "top": 105.25,
+          "bottom": 149.25,
+          "height": 44
+        },
+        "chip": {
+          "text": "Пам’ять · 1",
+          "tag": "BUTTON",
+          "size": 12,
+          "contrast": 7.4,
+          "left": 272.1875,
+          "right": 378,
+          "top": 149.25,
+          "bottom": 193.25,
+          "width": 105.8125,
+          "height": 44,
+          "clipped": false
+        },
+        "chevronRight": 374,
+        "expanded": "false",
+        "titles": [],
+        "none": null,
+        "fits": true
+      },
+      "opened": {
+        "chip": {
+          "text": "Пам’ять · 1",
+          "tag": "BUTTON",
+          "size": 12,
+          "contrast": 7.4,
+          "left": 272.1875,
+          "right": 378,
+          "top": 149.25,
+          "bottom": 193.25,
+          "width": 105.8125,
+          "height": 44,
+          "clipped": false
+        },
+        "titles": [
+          {
+            "text": "Перевірка приватності спрацьовує на рядок, що починається з ключа prompt, тому ключ переносимо з початку рядка",
+            "tag": "BUTTON",
+            "size": 12,
+            "contrast": 7.4,
+            "left": 66.125,
+            "right": 374,
+            "top": 193.25,
+            "bottom": 255.25,
+            "width": 307.875,
+            "height": 62,
+            "clipped": false
+          }
+        ],
+        "fits": true
+      },
+      "reader": "document preview",
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "scheme": "dark",
+      "outcome": "none",
+      "none": {
+        "text": "Пам’ять: нічого доречного",
+        "tag": "P",
+        "size": 12,
+        "contrast": 5.56,
+        "left": 229.5625,
+        "right": 374,
+        "top": 149.25,
+        "bottom": 167.25,
+        "width": 144.4375,
+        "height": 18,
+        "clipped": false
+      },
+      "bubble": {
+        "left": 66.125,
+        "right": 374,
+        "top": 28,
+        "bottom": 111.25,
+        "height": 83.25
+      },
+      "pageErrors": []
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "scheme": "dark",
+      "outcome": "empty",
+      "bubble": {
+        "left": 66.125,
+        "right": 374,
+        "top": 28,
+        "bottom": 111.25,
+        "height": 83.25
+      },
+      "answer": {
+        "left": 16,
+        "right": 374,
+        "top": 155.25,
+        "bottom": 268.75,
+        "height": 113.5
+      },
+      "pageErrors": []
+    }
+  ]
+}
