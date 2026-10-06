@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import type { CompanionEvent, Delivery, Payload, Recipient } from "./contract";
 import { admitDelegationProposal, explicitDelegationRequest } from "./gate";
+import { bezierProgress, bezierSlope, maxFrameShare, riseCurve, RISE_FRAME_SHARE, RISE_FROM_REST, RISE_IN_FLIGHT, RISE_MS } from "./motion";
 import { BUBBLE_MAX_CHARS, CONTROL_SELECTOR, defaultAnchor, intersectionArea, isFree, isPassiveCursor, laneLayout, LANE_HEIGHTS, placeCollapsed, placeExpanded, splitSpeech, type Rect } from "./placement";
 import { INITIAL_COMPANION_STATE, reduceCompanion, type CompanionState } from "./reducer";
 import { DEMO_IDS, SCENARIOS, scenarioScript, scenarioText, type ScenarioName } from "./scenarios";
@@ -630,6 +631,59 @@ describe("geometry", () => {
     const placed = placeExpanded({ viewport, block, obstacles, desired: defaultAnchor(viewport, block) })!;
     expect(isFree({ ...placed.at, ...block }, obstacles)).toBe(true);
     expect(isFree(placed.lane.rect, obstacles)).toBe(true);
+  });
+
+  test("the open character keeps off the page's text where a place without any exists, and one page gives one place", () => {
+    /* A paragraph across the corner the character asks for, and a control beside it. */
+    const text = [rect(1000, 700, 420, 18), rect(1000, 722, 420, 18), rect(1000, 744, 300, 18), rect(1000, 860, 420, 18)];
+    const obstacles = [rect(900, 820, 80, 30)];
+    const desired = defaultAnchor(viewport, block);
+    const placed = placeExpanded({ viewport, block, obstacles, text, desired })!;
+    expect(isFree({ ...placed.at, ...block }, [...obstacles, ...text])).toBe(true);
+    expect(isFree(placed.lane.rect, obstacles)).toBe(true);
+    /* The lane may lie over text: only the character is held off it. Without the text the corner itself is taken. */
+    expect(placeExpanded({ viewport, block, obstacles, desired })!.at).not.toEqual(placed.at);
+    /* The same arguments, the same answer, whatever was placed before. */
+    for (let turn = 0; turn < 3; turn += 1) expect(placeExpanded({ viewport, block, obstacles: [...obstacles].reverse(), text: [...text].reverse(), desired })!.at).toEqual(placed.at);
+  });
+
+  test("a page that is text everywhere still gets an open character, off every control", () => {
+    const text: Rect[] = [];
+    for (let y = 0; y < 900; y += 20) text.push(rect(0, y, 1440, 16));
+    const obstacles = [rect(1300, 800, 100, 60)];
+    const placed = placeExpanded({ viewport, block, obstacles, text, desired: defaultAnchor(viewport, block) })!;
+    expect(placed).not.toBeNull();
+    expect(isFree({ ...placed.at, ...block }, obstacles)).toBe(true);
+    expect(isFree(placed.lane.rect, obstacles)).toBe(true);
+  });
+
+  test("no frame of a rise carries more than 12 % of its path, from rest or taking over a rise in flight, even when one frame is missed", () => {
+    for (const curve of [RISE_FROM_REST, RISE_IN_FLIGHT]) {
+      expect(maxFrameShare(curve, RISE_MS, 1000 / 60)).toBeLessThanOrEqual(RISE_FRAME_SHARE / 2);
+      expect(maxFrameShare(curve, RISE_MS, 2000 / 60)).toBeLessThanOrEqual(RISE_FRAME_SHARE);
+      expect(bezierProgress(curve, 0)).toBe(0);
+      expect(bezierProgress(curve, 1)).toBe(1);
+      /* Monotonic: the lane never moves back toward the character. */
+      for (let at = 0; at < 1; at += 0.01) expect(bezierProgress(curve, at + 0.01)).toBeGreaterThanOrEqual(bezierProgress(curve, at));
+    }
+    /* The curve this replaced: a fifth of the path in the first frame. */
+    expect(maxFrameShare([0.22, 1, 0.36, 1], 340, 1000 / 60)).toBeGreaterThan(0.2);
+    /* A rise from rest starts and ends slowly; one that takes over starts at speed. */
+    expect(bezierProgress(RISE_FROM_REST, 0.05)).toBeLessThan(0.01);
+    expect(bezierProgress(RISE_IN_FLIGHT, 0.05)).toBeGreaterThan(0.04);
+  });
+
+  test("a rise that takes over another starts at speed only when the lane still moves at speed", () => {
+    /* Mid-flight of a 100 px rise the lane moves fast: a rise of the same length carries on at speed. */
+    const mid = (100 * bezierSlope(RISE_FROM_REST, 0.5)) / RISE_MS;
+    expect(riseCurve(mid, 100)).toBe(RISE_IN_FLIGHT);
+    /* Its slow end is all but rest, and so is a 20 px rise against a 180 px card that arrives. */
+    expect(riseCurve((100 * bezierSlope(RISE_FROM_REST, 0.97)) / RISE_MS, 100)).toBe(RISE_FROM_REST);
+    expect(riseCurve((20 * bezierSlope(RISE_FROM_REST, 0.5)) / RISE_MS, 200)).toBe(RISE_FROM_REST);
+    expect(riseCurve(0, 100)).toBe(RISE_FROM_REST);
+    expect(riseCurve(mid, 0)).toBe(RISE_FROM_REST);
+    /* The curve that starts at speed sets off no faster than a rise from rest runs at its middle. */
+    expect(bezierSlope(RISE_IN_FLIGHT, 0)).toBeLessThanOrEqual(bezierSlope(RISE_FROM_REST, 0.5));
   });
 
   test("no room for any lane: the open companion has nowhere; the small shape still finds a place", () => {

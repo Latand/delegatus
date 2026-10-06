@@ -107,32 +107,34 @@ export type Placement =
 
 /**
  * The free place nearest `desired` for the character block and its lane:
- * the tallest lane that fits anywhere wins. A grid walk; it runs on a drop or
- * a settled page change, never per frame.
+ * the tallest lane that fits anywhere wins. The character also keeps off
+ * `text`, the lines of the page's text, wherever a place without any exists;
+ * a page with no such place still keeps it off every control. The answer
+ * depends on nothing but the arguments, so one page gives one place.
+ * A grid walk; it runs on a drop or a settled page change, never per frame.
  */
 export function placeExpanded(input: {
-  viewport: Size; block: Size; obstacles: readonly Rect[]; desired: Point; heights?: readonly number[]; clearance?: number; step?: number;
+  viewport: Size; block: Size; obstacles: readonly Rect[]; text?: readonly Rect[]; desired: Point; heights?: readonly number[]; clearance?: number; step?: number;
 }): Extract<Placement, { mode: "expanded" }> | null {
-  const { viewport, block, obstacles, desired, heights = LANE_HEIGHTS, clearance = CONTROL_CLEARANCE, step = 8 } = input;
+  const { viewport, block, obstacles, text = [], desired, heights = LANE_HEIGHTS, clearance = CONTROL_CLEARANCE, step = 8 } = input;
   const padded = obstacles.map((obstacle) => inflate(obstacle, clearance));
+  const lines = text.map((line) => inflate(line, clearance));
   const free = (rect: Rect) => padded.every((obstacle) => intersectionArea(rect, obstacle) === 0);
   const start = clampToViewport(desired, viewport, block);
   const maxX = viewport.width - block.width - VIEWPORT_MARGIN;
   const maxY = viewport.height - block.height - VIEWPORT_MARGIN;
   if (maxX < VIEWPORT_MARGIN || maxY < VIEWPORT_MARGIN) return null;
-  /* The place asked for, when it holds the tallest lane, is the answer without a search:
-     the common case of a page that changed somewhere else. */
-  const asked = { ...start, ...block };
-  const tallest = laneLayout(viewport, asked, heights[0] ?? 0);
-  if (heights.length && free(asked) && tallest.rect.height >= heights[0]! && free(tallest.rect)) return { mode: "expanded", at: start, laneHeight: heights[0]!, lane: tallest };
-  /* Candidates nearest first, so the first free one is the answer. */
+  /* Candidates nearest first, so the first free one is the answer; the place asked for leads them. */
   const candidates = nearestFirst(start, { x: VIEWPORT_MARGIN, y: VIEWPORT_MARGIN }, { x: maxX, y: maxY }, step);
-  for (const height of heights) {
-    for (const point of candidates) {
-      const rect = { ...point, ...block };
-      if (!free(rect)) continue;
-      const lane = laneLayout(viewport, rect, height);
-      if (lane.rect.height >= height && free(lane.rect)) return { mode: "expanded", at: point, laneHeight: height, lane };
+  for (const avoid of lines.length ? [lines, []] : [[]]) {
+    const clear = (rect: Rect) => avoid.every((line) => intersectionArea(rect, line) === 0);
+    for (const height of heights) {
+      for (const point of candidates) {
+        const rect = { ...point, ...block };
+        if (!free(rect) || !clear(rect)) continue;
+        const lane = laneLayout(viewport, rect, height);
+        if (lane.rect.height >= height && free(lane.rect)) return { mode: "expanded", at: point, laneHeight: height, lane };
+      }
     }
   }
   return null;

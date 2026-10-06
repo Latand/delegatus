@@ -2,7 +2,7 @@
   "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
   "fixture": "?scenario=voice-companion",
   "browser": "Chromium (headless)",
-  "rule": "the character and the lane its bubbles may occupy take the free place nearest the bottom-right corner, 8 px from every control; a shorter lane is tried before the companion collapses; the collapsed shape also keeps 8 px from every line of the page's text",
+  "rule": "the character and the lane its bubbles may occupy take the free place nearest the bottom-right corner, 8 px from every control; the character, open or collapsed, also keeps 8 px from every line of the page's text; a shorter lane is tried before the companion collapses; the place is read from the page and the corner alone, so each case is loaded three times and must stand in the same place",
   "controls": "a[href],button,input,select,textarea,summary,[contenteditable='true'],[draggable='true'],[role='button'],[role='link'],[role='tab'],[role='menuitem'],[role='switch'],[role='checkbox'],[role='option'],[role='separator'],[role='slider'],[role='scrollbar'],.kb .card, and every element that shows a cursor other than auto, default or text (resize handles, dragging surfaces)",
   "required": {
     "overlapArea": 0,
@@ -10,12 +10,13 @@
     "trappedLanePoints": 0,
     "handleArea": 0,
     "handleGap": ">= 8",
-    "textUnderCharacterWhenCollapsed": 0
+    "textUnderCharacter": 0,
+    "sameBlockInEveryLoad": true
   },
   "readings": {
     "pointerHits": "points of what the companion reserves, every 4 px, that land on a control or on any cursor other than auto, default or text once the companion is out of the hit test",
     "handleArea": "px² of elements with a resize, grab or move cursor under what the companion reserves; handleGap is the distance to the nearest",
-    "textUnderCharacter": "px² of the page's text line boxes under the character block (open) or the shape (collapsed); required to be 0 collapsed, reported open"
+    "textUnderCharacter": "px² of the page's text line boxes under the character block (open) or the shape (collapsed); required to be 0 in both states"
   },
   "cases": [
     {
@@ -24,20 +25,41 @@
       "scheme": "light",
       "variant": 1,
       "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 872,
+          "y": 496,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 872,
+          "y": 496,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 872,
+          "y": 496,
+          "width": 132,
+          "height": 148
+        }
+      ],
       "layout": "expanded",
       "yielded": false,
       "phase": "offline",
       "side": "left",
       "direction": "up",
       "block": {
-        "x": 904,
-        "y": 384,
+        "x": 872,
+        "y": 496,
         "width": 132,
         "height": 148
       },
       "lane": {
-        "x": 614,
-        "y": 172,
+        "x": 582,
+        "y": 284,
         "width": 280,
         "height": 360
       },
@@ -57,12 +79,9 @@
       "pageOverflows": false,
       "handles": 28,
       "handleArea": 0,
-      "handleGap": 195,
-      "textUnderCharacter": 2227,
-      "textCovered": [
-        "01:40",
-        "The upload lane cannot f"
-      ]
+      "handleGap": 83,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1440x900",
@@ -70,6 +89,27 @@
       "scheme": "light",
       "variant": 1,
       "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 1376,
+          "y": 744,
+          "width": 52,
+          "height": 52
+        },
+        {
+          "x": 1376,
+          "y": 744,
+          "width": 52,
+          "height": 52
+        },
+        {
+          "x": 1376,
+          "y": 744,
+          "width": 52,
+          "height": 52
+        }
+      ],
       "layout": "collapsed",
       "yielded": false,
       "phase": "offline",
@@ -108,20 +148,41 @@
       "scheme": "light",
       "variant": 2,
       "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 872,
+          "y": 504,
+          "width": 132,
+          "height": 134
+        },
+        {
+          "x": 872,
+          "y": 504,
+          "width": 132,
+          "height": 134
+        },
+        {
+          "x": 872,
+          "y": 504,
+          "width": 132,
+          "height": 134
+        }
+      ],
       "layout": "expanded",
       "yielded": false,
       "phase": "offline",
       "side": "left",
       "direction": "up",
       "block": {
-        "x": 904,
-        "y": 392,
+        "x": 872,
+        "y": 504,
         "width": 132,
         "height": 134
       },
       "lane": {
-        "x": 614,
-        "y": 166,
+        "x": 582,
+        "y": 278,
         "width": 280,
         "height": 360
       },
@@ -133,7 +194,7 @@
       "controls": 82,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 13,
+      "minClearance": 12,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 1008,
@@ -141,12 +202,9 @@
       "pageOverflows": false,
       "handles": 28,
       "handleArea": 0,
-      "handleGap": 201,
-      "textUnderCharacter": 2069,
-      "textCovered": [
-        "01:40",
-        "The upload lane cannot f"
-      ]
+      "handleGap": 89,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1440x900",
@@ -154,6 +212,27 @@
       "scheme": "light",
       "variant": 2,
       "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 1096,
+          "y": 752,
+          "width": 140,
+          "height": 44
+        },
+        {
+          "x": 1096,
+          "y": 752,
+          "width": 140,
+          "height": 44
+        },
+        {
+          "x": 1096,
+          "y": 752,
+          "width": 140,
+          "height": 44
+        }
+      ],
       "layout": "collapsed",
       "yielded": false,
       "phase": "offline",
@@ -192,20 +271,41 @@
       "scheme": "light",
       "variant": 3,
       "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 872,
+          "y": 488,
+          "width": 132,
+          "height": 150
+        },
+        {
+          "x": 872,
+          "y": 488,
+          "width": 132,
+          "height": 150
+        },
+        {
+          "x": 872,
+          "y": 488,
+          "width": 132,
+          "height": 150
+        }
+      ],
       "layout": "expanded",
       "yielded": false,
       "phase": "offline",
       "side": "left",
       "direction": "up",
       "block": {
-        "x": 904,
-        "y": 376,
+        "x": 872,
+        "y": 488,
         "width": 132,
         "height": 150
       },
       "lane": {
-        "x": 614,
-        "y": 166,
+        "x": 582,
+        "y": 278,
         "width": 280,
         "height": 360
       },
@@ -217,7 +317,7 @@
       "controls": 82,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 13,
+      "minClearance": 12,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 1008,
@@ -225,12 +325,9 @@
       "pageOverflows": false,
       "handles": 28,
       "handleArea": 0,
-      "handleGap": 201,
-      "textUnderCharacter": 2107,
-      "textCovered": [
-        "01:40",
-        "The upload lane cannot f"
-      ]
+      "handleGap": 89,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1440x900",
@@ -238,6 +335,27 @@
       "scheme": "light",
       "variant": 3,
       "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 1376,
+          "y": 736,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 1376,
+          "y": 736,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 1376,
+          "y": 736,
+          "width": 56,
+          "height": 56
+        }
+      ],
       "layout": "collapsed",
       "yielded": false,
       "phase": "offline",
@@ -276,20 +394,41 @@
       "scheme": "dark",
       "variant": 1,
       "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 872,
+          "y": 496,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 872,
+          "y": 496,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 872,
+          "y": 496,
+          "width": 132,
+          "height": 148
+        }
+      ],
       "layout": "expanded",
       "yielded": false,
       "phase": "offline",
       "side": "left",
       "direction": "up",
       "block": {
-        "x": 904,
-        "y": 384,
+        "x": 872,
+        "y": 496,
         "width": 132,
         "height": 148
       },
       "lane": {
-        "x": 614,
-        "y": 172,
+        "x": 582,
+        "y": 284,
         "width": 280,
         "height": 360
       },
@@ -309,12 +448,9 @@
       "pageOverflows": false,
       "handles": 28,
       "handleArea": 0,
-      "handleGap": 195,
-      "textUnderCharacter": 2227,
-      "textCovered": [
-        "01:40",
-        "The upload lane cannot f"
-      ]
+      "handleGap": 83,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1440x900",
@@ -322,6 +458,27 @@
       "scheme": "dark",
       "variant": 1,
       "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 1376,
+          "y": 744,
+          "width": 52,
+          "height": 52
+        },
+        {
+          "x": 1376,
+          "y": 744,
+          "width": 52,
+          "height": 52
+        },
+        {
+          "x": 1376,
+          "y": 744,
+          "width": 52,
+          "height": 52
+        }
+      ],
       "layout": "collapsed",
       "yielded": false,
       "phase": "offline",
@@ -360,20 +517,41 @@
       "scheme": "dark",
       "variant": 2,
       "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 872,
+          "y": 504,
+          "width": 132,
+          "height": 134
+        },
+        {
+          "x": 872,
+          "y": 504,
+          "width": 132,
+          "height": 134
+        },
+        {
+          "x": 872,
+          "y": 504,
+          "width": 132,
+          "height": 134
+        }
+      ],
       "layout": "expanded",
       "yielded": false,
       "phase": "offline",
       "side": "left",
       "direction": "up",
       "block": {
-        "x": 904,
-        "y": 392,
+        "x": 872,
+        "y": 504,
         "width": 132,
         "height": 134
       },
       "lane": {
-        "x": 614,
-        "y": 166,
+        "x": 582,
+        "y": 278,
         "width": 280,
         "height": 360
       },
@@ -385,7 +563,7 @@
       "controls": 82,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 13,
+      "minClearance": 12,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 1008,
@@ -393,12 +571,9 @@
       "pageOverflows": false,
       "handles": 28,
       "handleArea": 0,
-      "handleGap": 201,
-      "textUnderCharacter": 2069,
-      "textCovered": [
-        "01:40",
-        "The upload lane cannot f"
-      ]
+      "handleGap": 89,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1440x900",
@@ -406,6 +581,27 @@
       "scheme": "dark",
       "variant": 2,
       "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 1096,
+          "y": 752,
+          "width": 140,
+          "height": 44
+        },
+        {
+          "x": 1096,
+          "y": 752,
+          "width": 140,
+          "height": 44
+        },
+        {
+          "x": 1096,
+          "y": 752,
+          "width": 140,
+          "height": 44
+        }
+      ],
       "layout": "collapsed",
       "yielded": false,
       "phase": "offline",
@@ -444,20 +640,41 @@
       "scheme": "dark",
       "variant": 3,
       "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 872,
+          "y": 488,
+          "width": 132,
+          "height": 150
+        },
+        {
+          "x": 872,
+          "y": 488,
+          "width": 132,
+          "height": 150
+        },
+        {
+          "x": 872,
+          "y": 488,
+          "width": 132,
+          "height": 150
+        }
+      ],
       "layout": "expanded",
       "yielded": false,
       "phase": "offline",
       "side": "left",
       "direction": "up",
       "block": {
-        "x": 904,
-        "y": 376,
+        "x": 872,
+        "y": 488,
         "width": 132,
         "height": 150
       },
       "lane": {
-        "x": 614,
-        "y": 166,
+        "x": 582,
+        "y": 278,
         "width": 280,
         "height": 360
       },
@@ -469,7 +686,7 @@
       "controls": 82,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 13,
+      "minClearance": 12,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 1008,
@@ -477,12 +694,9 @@
       "pageOverflows": false,
       "handles": 28,
       "handleArea": 0,
-      "handleGap": 201,
-      "textUnderCharacter": 2107,
-      "textCovered": [
-        "01:40",
-        "The upload lane cannot f"
-      ]
+      "handleGap": 89,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1440x900",
@@ -490,6 +704,27 @@
       "scheme": "dark",
       "variant": 3,
       "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 1376,
+          "y": 736,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 1376,
+          "y": 736,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 1376,
+          "y": 736,
+          "width": 56,
+          "height": 56
+        }
+      ],
       "layout": "collapsed",
       "yielded": false,
       "phase": "offline",
@@ -528,20 +763,41 @@
       "scheme": "light",
       "variant": 1,
       "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 872,
+          "y": 496,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 872,
+          "y": 496,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 872,
+          "y": 496,
+          "width": 132,
+          "height": 148
+        }
+      ],
       "layout": "expanded",
       "yielded": false,
       "phase": "offline",
       "side": "left",
       "direction": "up",
       "block": {
-        "x": 904,
-        "y": 384,
+        "x": 872,
+        "y": 496,
         "width": 132,
         "height": 148
       },
       "lane": {
-        "x": 614,
-        "y": 172,
+        "x": 582,
+        "y": 284,
         "width": 280,
         "height": 360
       },
@@ -561,12 +817,9 @@
       "pageOverflows": false,
       "handles": 28,
       "handleArea": 0,
-      "handleGap": 195,
-      "textUnderCharacter": 2227,
-      "textCovered": [
-        "01:40",
-        "The upload lane cannot f"
-      ]
+      "handleGap": 83,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1440x900",
@@ -574,6 +827,27 @@
       "scheme": "light",
       "variant": 1,
       "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 1376,
+          "y": 744,
+          "width": 52,
+          "height": 52
+        },
+        {
+          "x": 1376,
+          "y": 744,
+          "width": 52,
+          "height": 52
+        },
+        {
+          "x": 1376,
+          "y": 744,
+          "width": 52,
+          "height": 52
+        }
+      ],
       "layout": "collapsed",
       "yielded": false,
       "phase": "offline",
@@ -612,20 +886,41 @@
       "scheme": "light",
       "variant": 2,
       "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 872,
+          "y": 504,
+          "width": 132,
+          "height": 134
+        },
+        {
+          "x": 872,
+          "y": 504,
+          "width": 132,
+          "height": 134
+        },
+        {
+          "x": 872,
+          "y": 504,
+          "width": 132,
+          "height": 134
+        }
+      ],
       "layout": "expanded",
       "yielded": false,
       "phase": "offline",
       "side": "left",
       "direction": "up",
       "block": {
-        "x": 904,
-        "y": 392,
+        "x": 872,
+        "y": 504,
         "width": 132,
         "height": 134
       },
       "lane": {
-        "x": 614,
-        "y": 166,
+        "x": 582,
+        "y": 278,
         "width": 280,
         "height": 360
       },
@@ -637,7 +932,7 @@
       "controls": 82,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 13,
+      "minClearance": 12,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 1008,
@@ -645,12 +940,9 @@
       "pageOverflows": false,
       "handles": 28,
       "handleArea": 0,
-      "handleGap": 201,
-      "textUnderCharacter": 2069,
-      "textCovered": [
-        "01:40",
-        "The upload lane cannot f"
-      ]
+      "handleGap": 89,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1440x900",
@@ -658,6 +950,27 @@
       "scheme": "light",
       "variant": 2,
       "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 1096,
+          "y": 752,
+          "width": 140,
+          "height": 44
+        },
+        {
+          "x": 1096,
+          "y": 752,
+          "width": 140,
+          "height": 44
+        },
+        {
+          "x": 1096,
+          "y": 752,
+          "width": 140,
+          "height": 44
+        }
+      ],
       "layout": "collapsed",
       "yielded": false,
       "phase": "offline",
@@ -696,20 +1009,41 @@
       "scheme": "light",
       "variant": 3,
       "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 872,
+          "y": 488,
+          "width": 132,
+          "height": 150
+        },
+        {
+          "x": 872,
+          "y": 488,
+          "width": 132,
+          "height": 150
+        },
+        {
+          "x": 872,
+          "y": 488,
+          "width": 132,
+          "height": 150
+        }
+      ],
       "layout": "expanded",
       "yielded": false,
       "phase": "offline",
       "side": "left",
       "direction": "up",
       "block": {
-        "x": 904,
-        "y": 376,
+        "x": 872,
+        "y": 488,
         "width": 132,
         "height": 150
       },
       "lane": {
-        "x": 614,
-        "y": 166,
+        "x": 582,
+        "y": 278,
         "width": 280,
         "height": 360
       },
@@ -721,7 +1055,7 @@
       "controls": 82,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 13,
+      "minClearance": 12,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 1008,
@@ -729,12 +1063,9 @@
       "pageOverflows": false,
       "handles": 28,
       "handleArea": 0,
-      "handleGap": 201,
-      "textUnderCharacter": 2107,
-      "textCovered": [
-        "01:40",
-        "The upload lane cannot f"
-      ]
+      "handleGap": 89,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1440x900",
@@ -742,6 +1073,27 @@
       "scheme": "light",
       "variant": 3,
       "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 1376,
+          "y": 736,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 1376,
+          "y": 736,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 1376,
+          "y": 736,
+          "width": 56,
+          "height": 56
+        }
+      ],
       "layout": "collapsed",
       "yielded": false,
       "phase": "offline",
@@ -780,6 +1132,27 @@
       "scheme": "dark",
       "variant": 1,
       "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 872,
+          "y": 496,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 872,
+          "y": 496,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 872,
+          "y": 496,
+          "width": 132,
+          "height": 148
+        }
+      ],
       "layout": "expanded",
       "yielded": false,
       "phase": "offline",
@@ -823,6 +1196,27 @@
       "scheme": "dark",
       "variant": 1,
       "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 1376,
+          "y": 744,
+          "width": 52,
+          "height": 52
+        },
+        {
+          "x": 1376,
+          "y": 744,
+          "width": 52,
+          "height": 52
+        },
+        {
+          "x": 1376,
+          "y": 744,
+          "width": 52,
+          "height": 52
+        }
+      ],
       "layout": "collapsed",
       "yielded": false,
       "phase": "offline",
@@ -861,20 +1255,41 @@
       "scheme": "dark",
       "variant": 2,
       "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 872,
+          "y": 504,
+          "width": 132,
+          "height": 134
+        },
+        {
+          "x": 872,
+          "y": 504,
+          "width": 132,
+          "height": 134
+        },
+        {
+          "x": 872,
+          "y": 504,
+          "width": 132,
+          "height": 134
+        }
+      ],
       "layout": "expanded",
       "yielded": false,
       "phase": "offline",
       "side": "left",
       "direction": "up",
       "block": {
-        "x": 904,
-        "y": 392,
+        "x": 872,
+        "y": 504,
         "width": 132,
         "height": 134
       },
       "lane": {
-        "x": 614,
-        "y": 166,
+        "x": 582,
+        "y": 278,
         "width": 280,
         "height": 360
       },
@@ -886,7 +1301,7 @@
       "controls": 82,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 13,
+      "minClearance": 12,
       "pointerHits": 0,
       "trapped": 0,
       "passed": 1008,
@@ -894,12 +1309,9 @@
       "pageOverflows": false,
       "handles": 28,
       "handleArea": 0,
-      "handleGap": 201,
-      "textUnderCharacter": 2069,
-      "textCovered": [
-        "01:41",
-        "The upload lane cannot f"
-      ]
+      "handleGap": 89,
+      "textUnderCharacter": 0,
+      "textCovered": []
     },
     {
       "viewport": "1440x900",
@@ -907,6 +1319,27 @@
       "scheme": "dark",
       "variant": 2,
       "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 1096,
+          "y": 752,
+          "width": 140,
+          "height": 44
+        },
+        {
+          "x": 1096,
+          "y": 752,
+          "width": 140,
+          "height": 44
+        },
+        {
+          "x": 1096,
+          "y": 752,
+          "width": 140,
+          "height": 44
+        }
+      ],
       "layout": "collapsed",
       "yielded": false,
       "phase": "offline",
@@ -945,6 +1378,27 @@
       "scheme": "dark",
       "variant": 3,
       "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 872,
+          "y": 488,
+          "width": 132,
+          "height": 150
+        },
+        {
+          "x": 872,
+          "y": 488,
+          "width": 132,
+          "height": 150
+        },
+        {
+          "x": 872,
+          "y": 488,
+          "width": 132,
+          "height": 150
+        }
+      ],
       "layout": "expanded",
       "yielded": false,
       "phase": "offline",
@@ -988,6 +1442,27 @@
       "scheme": "dark",
       "variant": 3,
       "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 1376,
+          "y": 736,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 1376,
+          "y": 736,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 1376,
+          "y": 736,
+          "width": 56,
+          "height": 56
+        }
+      ],
       "layout": "collapsed",
       "yielded": false,
       "phase": "offline",
@@ -1026,6 +1501,27 @@
       "scheme": "light",
       "variant": 1,
       "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 840,
+          "y": 496,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 840,
+          "y": 496,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 840,
+          "y": 496,
+          "width": 132,
+          "height": 148
+        }
+      ],
       "layout": "expanded",
       "yielded": false,
       "phase": "offline",
@@ -1069,6 +1565,27 @@
       "scheme": "light",
       "variant": 1,
       "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 920,
+          "y": 592,
+          "width": 52,
+          "height": 52
+        },
+        {
+          "x": 920,
+          "y": 592,
+          "width": 52,
+          "height": 52
+        },
+        {
+          "x": 920,
+          "y": 592,
+          "width": 52,
+          "height": 52
+        }
+      ],
       "layout": "collapsed",
       "yielded": false,
       "phase": "offline",
@@ -1107,6 +1624,27 @@
       "scheme": "light",
       "variant": 2,
       "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 840,
+          "y": 504,
+          "width": 132,
+          "height": 134
+        },
+        {
+          "x": 840,
+          "y": 504,
+          "width": 132,
+          "height": 134
+        },
+        {
+          "x": 840,
+          "y": 504,
+          "width": 132,
+          "height": 134
+        }
+      ],
       "layout": "expanded",
       "yielded": false,
       "phase": "offline",
@@ -1150,6 +1688,27 @@
       "scheme": "light",
       "variant": 2,
       "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 832,
+          "y": 600,
+          "width": 140,
+          "height": 44
+        },
+        {
+          "x": 832,
+          "y": 600,
+          "width": 140,
+          "height": 44
+        },
+        {
+          "x": 832,
+          "y": 600,
+          "width": 140,
+          "height": 44
+        }
+      ],
       "layout": "collapsed",
       "yielded": false,
       "phase": "offline",
@@ -1188,6 +1747,27 @@
       "scheme": "light",
       "variant": 3,
       "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 840,
+          "y": 488,
+          "width": 132,
+          "height": 150
+        },
+        {
+          "x": 840,
+          "y": 488,
+          "width": 132,
+          "height": 150
+        },
+        {
+          "x": 840,
+          "y": 488,
+          "width": 132,
+          "height": 150
+        }
+      ],
       "layout": "expanded",
       "yielded": false,
       "phase": "offline",
@@ -1231,6 +1811,27 @@
       "scheme": "light",
       "variant": 3,
       "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 912,
+          "y": 584,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 912,
+          "y": 584,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 912,
+          "y": 584,
+          "width": 56,
+          "height": 56
+        }
+      ],
       "layout": "collapsed",
       "yielded": false,
       "phase": "offline",
@@ -1269,6 +1870,27 @@
       "scheme": "dark",
       "variant": 1,
       "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 840,
+          "y": 496,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 840,
+          "y": 496,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 840,
+          "y": 496,
+          "width": 132,
+          "height": 148
+        }
+      ],
       "layout": "expanded",
       "yielded": false,
       "phase": "offline",
@@ -1312,6 +1934,27 @@
       "scheme": "dark",
       "variant": 1,
       "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 920,
+          "y": 592,
+          "width": 52,
+          "height": 52
+        },
+        {
+          "x": 920,
+          "y": 592,
+          "width": 52,
+          "height": 52
+        },
+        {
+          "x": 920,
+          "y": 592,
+          "width": 52,
+          "height": 52
+        }
+      ],
       "layout": "collapsed",
       "yielded": false,
       "phase": "offline",
@@ -1350,6 +1993,27 @@
       "scheme": "dark",
       "variant": 2,
       "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 840,
+          "y": 504,
+          "width": 132,
+          "height": 134
+        },
+        {
+          "x": 840,
+          "y": 504,
+          "width": 132,
+          "height": 134
+        },
+        {
+          "x": 840,
+          "y": 504,
+          "width": 132,
+          "height": 134
+        }
+      ],
       "layout": "expanded",
       "yielded": false,
       "phase": "offline",
@@ -1393,6 +2057,27 @@
       "scheme": "dark",
       "variant": 2,
       "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 832,
+          "y": 600,
+          "width": 140,
+          "height": 44
+        },
+        {
+          "x": 832,
+          "y": 600,
+          "width": 140,
+          "height": 44
+        },
+        {
+          "x": 832,
+          "y": 600,
+          "width": 140,
+          "height": 44
+        }
+      ],
       "layout": "collapsed",
       "yielded": false,
       "phase": "offline",
@@ -1431,6 +2116,27 @@
       "scheme": "dark",
       "variant": 3,
       "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 840,
+          "y": 488,
+          "width": 132,
+          "height": 150
+        },
+        {
+          "x": 840,
+          "y": 488,
+          "width": 132,
+          "height": 150
+        },
+        {
+          "x": 840,
+          "y": 488,
+          "width": 132,
+          "height": 150
+        }
+      ],
       "layout": "expanded",
       "yielded": false,
       "phase": "offline",
@@ -1474,6 +2180,27 @@
       "scheme": "dark",
       "variant": 3,
       "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 912,
+          "y": 584,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 912,
+          "y": 584,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 912,
+          "y": 584,
+          "width": 56,
+          "height": 56
+        }
+      ],
       "layout": "collapsed",
       "yielded": false,
       "phase": "offline",
@@ -1512,6 +2239,27 @@
       "scheme": "light",
       "variant": 1,
       "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 840,
+          "y": 496,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 840,
+          "y": 496,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 840,
+          "y": 496,
+          "width": 132,
+          "height": 148
+        }
+      ],
       "layout": "expanded",
       "yielded": false,
       "phase": "offline",
@@ -1555,6 +2303,27 @@
       "scheme": "light",
       "variant": 1,
       "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 920,
+          "y": 592,
+          "width": 52,
+          "height": 52
+        },
+        {
+          "x": 920,
+          "y": 592,
+          "width": 52,
+          "height": 52
+        },
+        {
+          "x": 920,
+          "y": 592,
+          "width": 52,
+          "height": 52
+        }
+      ],
       "layout": "collapsed",
       "yielded": false,
       "phase": "offline",
@@ -1593,6 +2362,27 @@
       "scheme": "light",
       "variant": 2,
       "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 840,
+          "y": 504,
+          "width": 132,
+          "height": 134
+        },
+        {
+          "x": 840,
+          "y": 504,
+          "width": 132,
+          "height": 134
+        },
+        {
+          "x": 840,
+          "y": 504,
+          "width": 132,
+          "height": 134
+        }
+      ],
       "layout": "expanded",
       "yielded": false,
       "phase": "offline",
@@ -1636,6 +2426,27 @@
       "scheme": "light",
       "variant": 2,
       "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 832,
+          "y": 600,
+          "width": 140,
+          "height": 44
+        },
+        {
+          "x": 832,
+          "y": 600,
+          "width": 140,
+          "height": 44
+        },
+        {
+          "x": 832,
+          "y": 600,
+          "width": 140,
+          "height": 44
+        }
+      ],
       "layout": "collapsed",
       "yielded": false,
       "phase": "offline",
@@ -1674,6 +2485,27 @@
       "scheme": "light",
       "variant": 3,
       "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 840,
+          "y": 488,
+          "width": 132,
+          "height": 150
+        },
+        {
+          "x": 840,
+          "y": 488,
+          "width": 132,
+          "height": 150
+        },
+        {
+          "x": 840,
+          "y": 488,
+          "width": 132,
+          "height": 150
+        }
+      ],
       "layout": "expanded",
       "yielded": false,
       "phase": "offline",
@@ -1717,6 +2549,27 @@
       "scheme": "light",
       "variant": 3,
       "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 912,
+          "y": 584,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 912,
+          "y": 584,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 912,
+          "y": 584,
+          "width": 56,
+          "height": 56
+        }
+      ],
       "layout": "collapsed",
       "yielded": false,
       "phase": "offline",
@@ -1755,6 +2608,27 @@
       "scheme": "dark",
       "variant": 1,
       "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 840,
+          "y": 496,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 840,
+          "y": 496,
+          "width": 132,
+          "height": 148
+        },
+        {
+          "x": 840,
+          "y": 496,
+          "width": 132,
+          "height": 148
+        }
+      ],
       "layout": "expanded",
       "yielded": false,
       "phase": "offline",
@@ -1798,6 +2672,27 @@
       "scheme": "dark",
       "variant": 1,
       "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 920,
+          "y": 592,
+          "width": 52,
+          "height": 52
+        },
+        {
+          "x": 920,
+          "y": 592,
+          "width": 52,
+          "height": 52
+        },
+        {
+          "x": 920,
+          "y": 592,
+          "width": 52,
+          "height": 52
+        }
+      ],
       "layout": "collapsed",
       "yielded": false,
       "phase": "offline",
@@ -1836,6 +2731,27 @@
       "scheme": "dark",
       "variant": 2,
       "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 840,
+          "y": 504,
+          "width": 132,
+          "height": 134
+        },
+        {
+          "x": 840,
+          "y": 504,
+          "width": 132,
+          "height": 134
+        },
+        {
+          "x": 840,
+          "y": 504,
+          "width": 132,
+          "height": 134
+        }
+      ],
       "layout": "expanded",
       "yielded": false,
       "phase": "offline",
@@ -1879,6 +2795,27 @@
       "scheme": "dark",
       "variant": 2,
       "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 832,
+          "y": 600,
+          "width": 140,
+          "height": 44
+        },
+        {
+          "x": 832,
+          "y": 600,
+          "width": 140,
+          "height": 44
+        },
+        {
+          "x": 832,
+          "y": 600,
+          "width": 140,
+          "height": 44
+        }
+      ],
       "layout": "collapsed",
       "yielded": false,
       "phase": "offline",
@@ -1917,6 +2854,27 @@
       "scheme": "dark",
       "variant": 3,
       "state": "open",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 840,
+          "y": 488,
+          "width": 132,
+          "height": 150
+        },
+        {
+          "x": 840,
+          "y": 488,
+          "width": 132,
+          "height": 150
+        },
+        {
+          "x": 840,
+          "y": 488,
+          "width": 132,
+          "height": 150
+        }
+      ],
       "layout": "expanded",
       "yielded": false,
       "phase": "offline",
@@ -1960,6 +2918,27 @@
       "scheme": "dark",
       "variant": 3,
       "state": "collapsed",
+      "loads": 3,
+      "blockInEveryLoad": [
+        {
+          "x": 912,
+          "y": 584,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 912,
+          "y": 584,
+          "width": 56,
+          "height": 56
+        },
+        {
+          "x": 912,
+          "y": 584,
+          "width": 56,
+          "height": 56
+        }
+      ],
       "layout": "collapsed",
       "yielded": false,
       "phase": "offline",

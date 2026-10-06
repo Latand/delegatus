@@ -5,14 +5,14 @@
   "drag": {
     "before": {
       "block": {
-        "x": 904,
-        "y": 384,
+        "x": 872,
+        "y": 496,
         "width": 132,
         "height": 148
       },
       "lane": {
-        "x": 614,
-        "y": 172,
+        "x": 582,
+        "y": 284,
         "width": 280,
         "height": 360
       }
@@ -86,8 +86,8 @@
   },
   "collapsedProposal": {
     "flagged": {
-      "x": 952,
-      "y": 472,
+      "x": 948,
+      "y": 582,
       "width": 56,
       "height": 56
     },
@@ -96,8 +96,8 @@
     },
     "ended": {
       "block": {
-        "x": 952,
-        "y": 472,
+        "x": 948,
+        "y": 582,
         "width": 56,
         "height": 56
       },
@@ -109,8 +109,8 @@
       "note": "left with its element",
       "dispatches": 0,
       "block": {
-        "x": 904,
-        "y": 384,
+        "x": 872,
+        "y": 496,
         "width": 132,
         "height": 148
       }
@@ -119,8 +119,8 @@
       "note": "left with its element",
       "dispatches": 0,
       "block": {
-        "x": 904,
-        "y": 392,
+        "x": 872,
+        "y": 504,
         "width": 132,
         "height": 134
       }
@@ -129,8 +129,8 @@
       "note": "left with its element",
       "dispatches": 0,
       "block": {
-        "x": 904,
-        "y": 376,
+        "x": 872,
+        "y": 488,
         "width": 132,
         "height": 150
       }

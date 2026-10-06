@@ -14,6 +14,7 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import { REPORT_LOG_CHAT_MIN_WIDTH, REPORT_LOG_MAX_WIDTH, REPORT_LOG_MIN_WIDTH, REPORT_LOG_SPLIT_WIDTH } from "@/components/orchestrator/OrchestratorPanel";
 
 import { percentile, playPath, pointerPath, recordDrag } from "./dragFrameMeter";
+import { RISE_FRAME_SHARE } from "@/lib/voiceCompanion/motion";
 import { CONTROL_SELECTOR } from "@/lib/voiceCompanion/placement";
 import { DEMO_IDS, demoAnswer, demoInstruction, SCENARIOS } from "@/lib/voiceCompanion/scenarios";
 import { captureSeatMandateHandover, openFixture, serveEvidenceFixture } from "./issue1695BrowserHarness";
@@ -17982,6 +17983,9 @@ describe("floating voice companion", () => {
   const NARROW = { width: 1000, height: 800 } as const;
   const SIZES = [VIEWPORT, NARROW] as const;
   const PROTECT = `${CONTROL_SELECTOR},.kb .card`;
+  /* `LLV_VOICE_COMPANION_ONLY=long,burst` runs those scenarios alone, for work on one of them: the readings go to
+     the hand-off directory and the committed record is left as it is. */
+  const ONLY = process.env.LLV_VOICE_COMPANION_ONLY?.split(",").map((name) => name.trim()).filter(Boolean) ?? null;
   const record = (name: string, body: unknown) => {
     fs.mkdirSync(EVIDENCE, { recursive: true });
     fs.writeFileSync(path.join(EVIDENCE, name), `${JSON.stringify(body, null, 2)}\n`);
@@ -18047,6 +18051,17 @@ describe("floating voice companion", () => {
     const lane = root.querySelector<HTMLElement>("[data-companion-lane]");
     const reserved = [block, ...(lane ? [lane] : [])].map((element) => element.getBoundingClientRect());
     const floaters = [...root.querySelectorAll<HTMLElement>("[data-floater] > *")];
+    /* What of an element can be seen and clicked: its box cut at the lane's end beside the character, where the
+       lane is clipped. A new element comes out from behind that edge. */
+    const seen = (element: Element) => {
+      const box = element.getBoundingClientRect();
+      const clip = lane?.getBoundingClientRect();
+      if (!clip) return box;
+      const top = lane!.dataset.direction === "up" ? box.top : Math.max(box.top, clip.top);
+      const bottom = lane!.dataset.direction === "up" ? Math.min(box.bottom, clip.bottom) : box.bottom;
+      return bottom - top < 1 ? null : new DOMRect(box.left, top, box.width, bottom - top);
+    };
+    const shown = floaters.map(seen).filter((box): box is DOMRect => box !== null);
     /* The reachable part of every control: a card scrolled under the composer is not under the companion. */
     const controls: Array<{ rect: { left: number; top: number; right: number; bottom: number }; name: string }> = [];
     for (const node of document.querySelectorAll<HTMLElement>(selector)) {
@@ -18067,7 +18082,7 @@ describe("floating voice companion", () => {
     let overlapArea = 0;
     let clearance = Number.POSITIVE_INFINITY;
     const covered: string[] = [];
-    for (const box of [...reserved, ...floaters.map((element) => element.getBoundingClientRect())]) for (const control of controls) {
+    for (const box of [...reserved, ...shown]) for (const control of controls) {
       const width = Math.min(box.right, control.rect.right) - Math.max(box.left, control.rect.left);
       const height = Math.min(box.bottom, control.rect.bottom) - Math.max(box.top, control.rect.top);
       if (width > 0 && height > 0) { overlapArea += width * height; covered.push(control.name); }
@@ -18153,8 +18168,8 @@ describe("floating voice companion", () => {
       side: lane?.dataset.side ?? null, direction: lane?.dataset.direction ?? null,
       block: round(block.getBoundingClientRect()), lane: laneBox ? round(laneBox) : null,
       floaters: floaters.length, bubbles, calls: root.querySelectorAll("[data-floater] > .vc-call").length,
-      insideViewport: [...reserved, ...floaters.map((element) => element.getBoundingClientRect())].every(inside),
-      floatersInsideLane: !laneBox || floaters.every((floater) => { const box = floater.getBoundingClientRect(); return box.left >= laneBox.left - 1 && box.right <= laneBox.right + 1 && box.top >= laneBox.top - 1 && box.bottom <= laneBox.bottom + 1; }),
+      insideViewport: [...reserved, ...shown].every(inside),
+      floatersInsideLane: !laneBox || shown.every((box) => { return box.left >= laneBox.left - 1 && box.right <= laneBox.right + 1 && box.top >= laneBox.top - 1 && box.bottom <= laneBox.bottom + 1; }),
       controls: controls.length, overlapArea: Math.round(overlapArea), covered, minClearance: Number.isFinite(clearance) ? Math.round(clearance) : null,
       pointerHits, trapped, passed, clipped: cutLabels, pageOverflows: document.documentElement.scrollWidth > innerWidth,
       handles, handleArea: Math.round(handleArea), handleGap: Number.isFinite(handleGap) ? Math.round(handleGap) : null,
@@ -18162,7 +18177,9 @@ describe("floating voice companion", () => {
     };
   }, PROTECT);
   type Reading = Awaited<ReturnType<typeof readCompanion>>;
-  const expectFree = (reading: Reading, label: string) => {
+  /* `textMayLie`: the operator put the character there, or a conversation is in the lane and the page moved
+     under it. Otherwise an open character at rest covers none of the page's text, like the collapsed shape. */
+  const expectFree = (reading: Reading, label: string, options: { textMayLie?: boolean } = {}) => {
     expect(reading.overlapArea, `${label}: area over controls (${reading.covered.join(", ")})`).toBe(0);
     expect(reading.pointerHits, `${label}: clickable points under what the companion reserves`).toBe(0);
     expect(reading.insideViewport, `${label}: inside the viewport`).toBe(true);
@@ -18173,6 +18190,7 @@ describe("floating voice companion", () => {
     expect(reading.handleArea, `${label}: area over resize handles and dragging surfaces`).toBe(0);
     expect(reading.handleGap ?? 8, `${label}: clearance from resize handles and dragging surfaces`).toBeGreaterThanOrEqual(8);
     if (reading.layout === "collapsed" && !reading.yielded) expect(reading.textUnderCharacter, `${label}: page text under the collapsed shape (${reading.textCovered.join(" | ")})`).toBe(0);
+    if (reading.layout === "expanded" && reading.floaters === 0 && !options.textMayLie) expect(reading.textUnderCharacter, `${label}: page text under the open character (${reading.textCovered.join(" | ")})`).toBe(0);
   };
 
   /* A page-side sampler for the recorded runs: every 120 ms, where every bubble and call element is. */
@@ -18182,7 +18200,15 @@ describe("floating voice companion", () => {
     const root = document.querySelector<HTMLElement>("[data-voice-companion]")!;
     const timer = setInterval(() => {
       const lane = root.querySelector<HTMLElement>("[data-companion-lane]")?.getBoundingClientRect();
-      const floaters = [...root.querySelectorAll<HTMLElement>("[data-floater] > *")].map((element) => ({ element, box: element.getBoundingClientRect() }));
+      const laneNode = root.querySelector<HTMLElement>("[data-companion-lane]");
+      /* The part of each element that can be seen: the lane is clipped at its end beside the character. */
+      const floaters = [...root.querySelectorAll<HTMLElement>("[data-floater] > *")].flatMap((element) => {
+        const full = element.getBoundingClientRect();
+        if (!lane || !laneNode) return [{ element, box: full }];
+        const top = laneNode.dataset.direction === "up" ? full.top : Math.max(full.top, lane.top);
+        const bottom = laneNode.dataset.direction === "up" ? Math.min(full.bottom, lane.bottom) : full.bottom;
+        return bottom - top < 1 ? [] : [{ element, box: new DOMRect(full.left, top, full.width, bottom - top) }];
+      });
       const bubbles = floaters.filter(({ element }) => element.classList.contains("vc-bubble"));
       summary.samples += 1;
       summary.maxBubbles = Math.max(summary.maxBubbles, bubbles.length);
@@ -18207,44 +18233,82 @@ describe("floating voice companion", () => {
   });
 
   /* A page-side reading of every frame of the lane, for the recorded runs. Positions are taken against the lane's
-     own end at the character, so a companion that moves with the page changes nothing here. It counts: frames in
-     which an element moved toward the character (the lane only ever moves away from it); frames in which two
-     elements that can both be read (opacity >= 0.5, leaving ones included) lie over each other by more than
-     2 px; elements that first appeared away from the character's end; and bubbles whose wrapped text leaves a
-     single word on its last line. */
+     own end at the character, so a companion that moves with the page changes nothing here, and by each element's
+     far edge, which an element that grows moves like any other. It counts: frames in which an element moved toward
+     the character (the lane only ever moves away from it); frames in which the visible parts of two elements that
+     can both be read (opacity >= 0.5, leaving ones included) lie over each other by more than 2 px; elements that
+     first appeared away from the character's end; and bubbles whose wrapped text leaves a single word on its last
+     line. It also reads every rise: a run of frames in which an element keeps moving, ended by two frames at
+     rest. For a rise of 8 px or more it takes the largest step of one frame as a share of the whole path. A rise
+     cut short because its element left the lane has no whole path and is not read. This run is the recorded
+     one, which is not the smoothness measurement: a frame that came late (more than 1.5 frame intervals after
+     the one before) is counted in lateFramesInRises and its step is read per frame interval it stood for. */
+  const RISE_SHARE_LIMIT = RISE_FRAME_SHARE;
   const startMotionProbe = (page: Page) => page.evaluate(() => {
     const probe = {
       frames: 0, entries: 0, entriesAwayFromCharacter: 0, entryAwayMaxPx: 0, towardCharacterFrames: 0, towardCharacterMaxPx: 0, awayMaxStepPx: 0,
-      overlapFrames: 0, overlapMaxPx: 0, bubblesRead: 0, orphanLastLines: [] as string[], running: true,
+      rises: 0, riseMaxFrameShare: 0, riseMaxFrameShareStepPx: 0, riseMaxFrameSharePathPx: 0, riseLongestPathPx: 0, risesCutByLeaving: 0, lateFramesInRises: 0,
+      overlapFrames: 0, overlapMaxPx: 0, overlapWorstPair: "", bubblesRead: 0, orphanLastLines: [] as string[], running: true,
     };
     (window as unknown as { __voiceMotion: typeof probe }).__voiceMotion = probe;
     const root = document.querySelector<HTMLElement>("[data-voice-companion]")!;
     const last = new Map<string, number>();
     const read = new Map<string, number>();
-    const tick = () => {
+    const runs = new Map<string, { path: number; step: number; still: number }>();
+    const close = (run: { path: number; step: number; still: number }) => {
+      if (run.path >= 8) {
+        probe.rises += 1;
+        probe.riseLongestPathPx = Math.max(probe.riseLongestPathPx, Math.round(run.path));
+        const share = run.step / run.path;
+        if (share > probe.riseMaxFrameShare) { probe.riseMaxFrameShare = Math.round(share * 1000) / 1000; probe.riseMaxFrameShareStepPx = Math.round(run.step * 10) / 10; probe.riseMaxFrameSharePathPx = Math.round(run.path); }
+      }
+      run.path = 0; run.step = 0;
+    };
+    let previous = 0;
+    let interval = Number.POSITIVE_INFINITY;
+    const tick = (now: number) => {
       if (!probe.running) return;
       requestAnimationFrame(tick);
+      /* The frame interval is the shortest one seen; a frame that came late stood for several. */
+      const elapsed = previous ? now - previous : 0;
+      previous = now;
+      if (elapsed > 4) interval = Math.min(interval, elapsed);
+      const stoodFor = elapsed > interval * 1.5 ? Math.round(elapsed / interval) : 1;
       const laneNode = root.querySelector<HTMLElement>("[data-companion-lane]");
-      if (!laneNode) { last.clear(); return; }
+      if (!laneNode) { last.clear(); for (const run of runs.values()) close(run); runs.clear(); return; }
       probe.frames += 1;
       const lane = laneNode.getBoundingClientRect();
       const up = laneNode.dataset.direction === "up";
-      const items = [...laneNode.querySelectorAll<HTMLElement>(".vc-stack > .vc-floater")].map((node) => ({
-        node, key: node.dataset.floater ?? null, kind: node.dataset.kind, opacity: Number(getComputedStyle(node).opacity), box: node.firstElementChild!.getBoundingClientRect(),
-      }));
+      const items = [...laneNode.querySelectorAll<HTMLElement>(".vc-stack > .vc-floater")].map((node) => {
+        const box = node.firstElementChild!.getBoundingClientRect();
+        /* What can be seen of it: cut at the lane's end beside the character, and by the element's own clip while
+           a part it gained is still coming out. */
+        const inset = /^inset\(([^)]*)\)/u.exec(getComputedStyle(node).clipPath)?.[1]?.split(/\s+/u).map(Number.parseFloat) ?? [];
+        const own = Math.max(0, (up ? inset[2] ?? inset[0] : inset[0]) || 0);
+        const top = up ? box.top : Math.max(box.top + own, lane.top);
+        const bottom = up ? Math.min(box.bottom - own, lane.bottom) : box.bottom;
+        return { node, key: node.dataset.floater ?? null, kind: node.dataset.kind, opacity: Number(getComputedStyle(node).opacity), box, shown: bottom - top >= 1 ? { left: box.left, right: box.right, top, bottom } : null };
+      });
       const seen = new Set<string>();
-      /* Elements first seen in this frame: the newest of them stands at the character's end. */
+      /* Elements first seen in this frame: the newest of them stands at the character's end, or is still behind it. */
       const fresh: number[] = [];
       for (const { node, key, kind, box } of items) {
         if (key === null) continue;
         seen.add(key);
-        const near = up ? lane.bottom - box.bottom : box.top - lane.top;
+        const far = up ? lane.bottom - box.top : box.bottom - lane.top;
         const before = last.get(key);
         if (before === undefined) {
-          if (kind !== "more") { probe.entries += 1; fresh.push(near); }
-        } else if (before - near > 1) { probe.towardCharacterFrames += 1; probe.towardCharacterMaxPx = Math.max(probe.towardCharacterMaxPx, Math.round(before - near)); }
-        else probe.awayMaxStepPx = Math.max(probe.awayMaxStepPx, Math.round(near - before));
-        last.set(key, near);
+          if (kind !== "more") { probe.entries += 1; fresh.push(up ? lane.bottom - box.bottom : box.top - lane.top); }
+          runs.set(key, { path: 0, step: 0, still: 0 });
+        } else {
+          const step = far - before;
+          if (step < -1) { probe.towardCharacterFrames += 1; probe.towardCharacterMaxPx = Math.max(probe.towardCharacterMaxPx, Math.round(-step)); }
+          else probe.awayMaxStepPx = Math.max(probe.awayMaxStepPx, Math.round(step));
+          const run = runs.get(key)!;
+          if (step > 0.05) { run.path += step; run.step = Math.max(run.step, step / stoodFor); run.still = 0; if (stoodFor > 1) probe.lateFramesInRises += 1; }
+          else if ((run.still += 1) >= 2) close(run);
+        }
+        last.set(key, far);
         const text = kind === "speech" ? node.querySelector<HTMLElement>(".vc-text") : null;
         if (text && read.get(key) !== text.innerText.length) {
           read.set(key, text.innerText.length);
@@ -18259,24 +18323,30 @@ describe("floating voice companion", () => {
           if (lines > 1 && onLast === 1 && words.length > 2) probe.orphanLastLines.push(note);
         }
       }
-      for (const key of [...last.keys()]) if (!seen.has(key)) { last.delete(key); read.delete(key); }
-      if (fresh.length && Math.min(...fresh) > 2) { probe.entriesAwayFromCharacter += 1; probe.entryAwayMaxPx = Math.max(probe.entryAwayMaxPx, Math.round(Math.min(...fresh))); }
-      const legible = items.filter((item) => item.opacity >= 0.5);
-      let worst = 0;
-      for (let a = 0; a < legible.length; a += 1) for (let b = a + 1; b < legible.length; b += 1) {
-        const one = legible[a]!.box;
-        const two = legible[b]!.box;
-        if (Math.min(one.right, two.right) - Math.max(one.left, two.left) <= 0) continue;
-        worst = Math.max(worst, Math.min(one.bottom, two.bottom) - Math.max(one.top, two.top));
+      for (const key of [...last.keys()]) if (!seen.has(key)) {
+        const run = runs.get(key)!;
+        if (run.path > 0) probe.risesCutByLeaving += 1;
+        last.delete(key); read.delete(key); runs.delete(key);
       }
-      if (worst > 2) { probe.overlapFrames += 1; probe.overlapMaxPx = Math.max(probe.overlapMaxPx, Math.round(worst)); }
+      if (fresh.length && Math.min(...fresh) > 2) { probe.entriesAwayFromCharacter += 1; probe.entryAwayMaxPx = Math.max(probe.entryAwayMaxPx, Math.round(Math.min(...fresh))); }
+      const legible = items.filter((item) => item.opacity >= 0.5 && item.shown);
+      let worst = 0;
+      let pair = "";
+      for (let a = 0; a < legible.length; a += 1) for (let b = a + 1; b < legible.length; b += 1) {
+        const one = legible[a]!.shown!;
+        const two = legible[b]!.shown!;
+        if (Math.min(one.right, two.right) - Math.max(one.left, two.left) <= 0) continue;
+        const depth = Math.min(one.bottom, two.bottom) - Math.max(one.top, two.top);
+        if (depth > worst) { worst = depth; pair = `${legible[a]!.key ?? "leaving"} (${legible[a]!.kind}) over ${legible[b]!.key ?? "leaving"} (${legible[b]!.kind})`; }
+      }
+      if (worst > 2) { probe.overlapFrames += 1; if (worst > probe.overlapMaxPx) { probe.overlapMaxPx = Math.round(worst); probe.overlapWorstPair = pair; } }
     };
     requestAnimationFrame(tick);
   });
   const stopMotionProbe = (page: Page) => page.evaluate(() => {
     const probe = (window as unknown as { __voiceMotion: Record<string, unknown> & { running: boolean } }).__voiceMotion;
     probe.running = false;
-    return probe as unknown as { frames: number; entries: number; entriesAwayFromCharacter: number; entryAwayMaxPx: number; towardCharacterFrames: number; towardCharacterMaxPx: number; awayMaxStepPx: number; overlapFrames: number; overlapMaxPx: number; bubblesRead: number; orphanLastLines: string[] };
+    return probe as unknown as { frames: number; entries: number; entriesAwayFromCharacter: number; entryAwayMaxPx: number; towardCharacterFrames: number; towardCharacterMaxPx: number; awayMaxStepPx: number; rises: number; riseMaxFrameShare: number; riseMaxFrameShareStepPx: number; riseMaxFrameSharePathPx: number; riseLongestPathPx: number; risesCutByLeaving: number; lateFramesInRises: number; overlapFrames: number; overlapMaxPx: number; overlapWorstPair: string; bubblesRead: number; orphanLastLines: string[] };
   });
 
   browserTest("by default the character and its lane cover no control: three variants, open and collapsed, 1440 and 1000, en and uk, both themes", async () => {
@@ -18289,33 +18359,40 @@ describe("floating voice companion", () => {
       for (const viewport of SIZES) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
         for (const variant of [1, 2, 3]) for (const collapsed of [false, true]) {
           const label = `${viewport.width}-${lang}-${scheme}-v${variant}-${collapsed ? "collapsed" : "open"}`;
-          const { context, page, pageErrors } = await openVoice(browser, server.base, `&variant=${variant}${collapsed ? "&collapsed=1" : ""}`, { viewport, scheme, lang, motion: "reduce" });
-          try {
-            const reading = await readCompanion(page);
-            expectFree(reading, label);
-            expect(await page.locator("[data-companion-variant-number]").innerText(), `${label}: printed number`).toBe(String(variant));
-            if (!collapsed) expect(reading.lane, `${label}: the lane is reserved`).not.toBeNull();
-            expect(pageErrors, label).toEqual([]);
-            cases.push({ viewport: `${viewport.width}x${viewport.height}`, lang, scheme, variant, state: collapsed ? "collapsed" : "open", ...reading });
-            await page.screenshot({ path: path.join(HANDOFF, `placement-${label}.png`) });
-          } finally { await context.close(); }
+          /* Three loads of the same page: the place is the same each time. */
+          const loads: Reading[] = [];
+          for (let load = 0; load < 3; load += 1) {
+            const { context, page, pageErrors } = await openVoice(browser, server.base, `&variant=${variant}${collapsed ? "&collapsed=1" : ""}`, { viewport, scheme, lang, motion: "reduce" });
+            try {
+              const reading = await readCompanion(page);
+              expectFree(reading, `${label}, load ${load + 1}`);
+              expect(await page.locator("[data-companion-variant-number]").innerText(), `${label}: printed number`).toBe(String(variant));
+              if (!collapsed) expect(reading.lane, `${label}: the lane is reserved`).not.toBeNull();
+              expect(pageErrors, label).toEqual([]);
+              loads.push(reading);
+              if (load === 0) await page.screenshot({ path: path.join(HANDOFF, `placement-${label}.png`) });
+            } finally { await context.close(); }
+          }
+          expect(loads.map((reading) => reading.block), `${label}: one page, one place`).toEqual([loads[0]!.block, loads[0]!.block, loads[0]!.block]);
+          expect(loads.map((reading) => reading.lane), `${label}: one page, one lane`).toEqual([loads[0]!.lane, loads[0]!.lane, loads[0]!.lane]);
+          cases.push({ viewport: `${viewport.width}x${viewport.height}`, lang, scheme, variant, state: collapsed ? "collapsed" : "open", loads: 3, blockInEveryLoad: loads.map((reading) => reading.block), ...loads[0]! });
         }
       }
     } finally { processes = await close(); server.stop(); }
     expect(processes.leftAfterClose, "browser processes left after close").toBe(0);
     record("placement.json", {
       driver: DRIVER, fixture: "?scenario=voice-companion", browser: "Chromium (headless)",
-      rule: "the character and the lane its bubbles may occupy take the free place nearest the bottom-right corner, 8 px from every control; a shorter lane is tried before the companion collapses; the collapsed shape also keeps 8 px from every line of the page's text",
+      rule: "the character and the lane its bubbles may occupy take the free place nearest the bottom-right corner, 8 px from every control; the character, open or collapsed, also keeps 8 px from every line of the page's text; a shorter lane is tried before the companion collapses; the place is read from the page and the corner alone, so each case is loaded three times and must stand in the same place",
       controls: `${PROTECT}, and every element that shows a cursor other than auto, default or text (resize handles, dragging surfaces)`,
-      required: { overlapArea: 0, pointerHits: 0, trappedLanePoints: 0, handleArea: 0, handleGap: ">= 8", textUnderCharacterWhenCollapsed: 0 },
+      required: { overlapArea: 0, pointerHits: 0, trappedLanePoints: 0, handleArea: 0, handleGap: ">= 8", textUnderCharacter: 0, sameBlockInEveryLoad: true },
       readings: {
         pointerHits: "points of what the companion reserves, every 4 px, that land on a control or on any cursor other than auto, default or text once the companion is out of the hit test",
         handleArea: "px² of elements with a resize, grab or move cursor under what the companion reserves; handleGap is the distance to the nearest",
-        textUnderCharacter: "px² of the page's text line boxes under the character block (open) or the shape (collapsed); required to be 0 collapsed, reported open",
+        textUnderCharacter: "px² of the page's text line boxes under the character block (open) or the shape (collapsed); required to be 0 in both states",
       },
       cases,
     });
-  }, 900_000);
+  }, 2_400_000);
 
   browserTest("at every edge the lane flips so nothing leaves the viewport, and a click outside a bubble reaches the page", async () => {
     fs.mkdirSync(HANDOFF, { recursive: true });
@@ -18460,7 +18537,7 @@ describe("floating voice companion", () => {
             await page.mouse.up();
             await page.waitForTimeout(800);
             const dropped = await readCompanion(page);
-            expectFree(dropped, `${name}: after the drop`);
+            expectFree(dropped, `${name}: after the drop`, { textMayLie: true });
             await page.screenshot({ path: path.join(HANDOFF, `yield-${name}-dropped.png`) });
             return { heldOverControls: held.overlapArea > 0, held: held.block, dropped: { block: dropped.block, lane: dropped.lane, side: dropped.side, direction: dropped.direction, layout: dropped.layout, overlapArea: dropped.overlapArea } };
           };
@@ -18476,7 +18553,7 @@ describe("floating voice companion", () => {
           for (let press = 0; press < 3; press += 1) await page.keyboard.press("Shift+ArrowLeft");
           await page.waitForTimeout(600);
           const nudged = await readCompanion(page);
-          expectFree(nudged, "after arrow keys");
+          expectFree(nudged, "after arrow keys", { textMayLie: true });
           await page.keyboard.press("Home");
           await page.waitForTimeout(600);
           const home = await readCompanion(page);
@@ -18484,6 +18561,7 @@ describe("floating voice companion", () => {
           /* Home applies the default rule again to the page as it is now: the free place nearest the corner. */
           const fromCorner = (block: Reading["block"]) => Math.hypot(VIEWPORT.width - (block.x + block.width), VIEWPORT.height - (block.y + block.height));
           expect(fromCorner(home.block), `Home returns to the default rule (${JSON.stringify(home.block)} against ${JSON.stringify(before.block)})`).toBeLessThanOrEqual(fromCorner(before.block) + 1);
+          expect(home.block, "Home stands where the page first put the character").toEqual(before.block);
           expect(pageErrors).toEqual([]);
           readings.drag = { before: { block: before.block, lane: before.lane }, overComposer, overToolbar, nudged: nudged.block, home: home.block };
         } finally { await context.close(); }
@@ -18540,7 +18618,7 @@ describe("floating voice companion", () => {
             expect(await note.count(), `variant ${variant}: the element says the request was dropped`).toBe(1);
             expect(await page.locator("[data-companion-send], [data-companion-cancel]").count(), `variant ${variant}: no button is left to tap`).toBe(0);
             const reading = await readCompanion(page);
-            expectFree(reading, `variant ${variant}, withdrawn`);
+            expectFree(reading, `variant ${variant}, withdrawn`, { textMayLie: true });
             await page.screenshot({ path: path.join(HANDOFF, `states-withdrawn-v${variant}-${lang}-${scheme}.png`) });
             await page.waitForFunction(() => (window as unknown as { voiceCompanion: Voice }).voiceCompanion.finished, null, { timeout: 30_000, polling: 100 });
             const voice = await voiceOf(page);
@@ -18704,7 +18782,7 @@ describe("floating voice companion", () => {
     const runs = SIZES.flatMap((viewport, sizeIndex) => SCENARIOS.map((name, index) => {
       const variant = ((index + sizeIndex) % 3) + 1;
       return { viewport, name, variant, lang: (index + sizeIndex) % 2 === 0 ? "en" as const : "uk" as const, scheme: (Math.floor(index / 2) + sizeIndex) % 2 === 0 ? "light" as const : "dark" as const };
-    }));
+    })).filter((run) => !ONLY || ONLY.includes(run.name));
     try {
       for (const recorded of [false, true]) for (const run of runs) {
         const { viewport, name, variant, lang, scheme } = run;
@@ -18723,6 +18801,43 @@ describe("floating voice companion", () => {
           await page.waitForTimeout(1_500);
           const idleTo = await page.evaluate(() => performance.now());
           if (recorded) { await startSampler(page); await startMotionProbe(page); }
+          /* The delegated row in the orchestrator's conversation, read in the frame it appears: how much of what
+             can be seen of it lies under the lane's elements and under the character. */
+          if (recorded && name === "delegation") await page.evaluate(() => {
+            const out = { seen: false, visiblePx2: 0, underLaneElementsPx2: 0, underCharacterPx2: 0, coveredShare: 0, by: [] as string[] };
+            (window as unknown as { __voiceRelay: typeof out }).__voiceRelay = out;
+            const observer = new MutationObserver(() => {
+              const relay = document.querySelector<HTMLElement>("[data-voice-relay]");
+              if (!relay || out.seen) return;
+              out.seen = true;
+              observer.disconnect();
+              requestAnimationFrame(() => {
+                const full = relay.getBoundingClientRect();
+                const rect = { left: Math.max(full.left, 0), top: Math.max(full.top, 0), right: Math.min(full.right, innerWidth), bottom: Math.min(full.bottom, innerHeight) };
+                for (let parent = relay.parentElement; parent; parent = parent.parentElement) {
+                  const overflow = getComputedStyle(parent);
+                  if (overflow.overflowX === "visible" && overflow.overflowY === "visible") continue;
+                  const clip = parent.getBoundingClientRect();
+                  rect.left = Math.max(rect.left, clip.left); rect.top = Math.max(rect.top, clip.top); rect.right = Math.min(rect.right, clip.right); rect.bottom = Math.min(rect.bottom, clip.bottom);
+                }
+                const over = (box: { left: number; top: number; right: number; bottom: number }) => Math.max(0, Math.min(box.right, rect.right) - Math.max(box.left, rect.left)) * Math.max(0, Math.min(box.bottom, rect.bottom) - Math.max(box.top, rect.top));
+                const root = document.querySelector<HTMLElement>("[data-voice-companion]")!;
+                const lane = root.querySelector<HTMLElement>("[data-companion-lane]");
+                const clip = lane?.getBoundingClientRect();
+                out.visiblePx2 = Math.round(Math.max(0, rect.right - rect.left) * Math.max(0, rect.bottom - rect.top));
+                for (const node of root.querySelectorAll<HTMLElement>(".vc-stack > .vc-floater")) {
+                  if (Number(getComputedStyle(node).opacity) < 0.05) continue;
+                  const box = node.firstElementChild!.getBoundingClientRect();
+                  const shown = { left: box.left, right: box.right, top: lane?.dataset.direction === "up" ? box.top : Math.max(box.top, clip!.top), bottom: lane?.dataset.direction === "up" ? Math.min(box.bottom, clip!.bottom) : box.bottom };
+                  const area = over(shown);
+                  if (area > 0) { out.underLaneElementsPx2 += Math.round(area); out.by.push(node.dataset.kind ?? "leaving"); }
+                }
+                out.underCharacterPx2 = Math.round(over(root.querySelector<HTMLElement>(".vc-block, .vc-shape")!.getBoundingClientRect()));
+                out.coveredShare = out.visiblePx2 ? Math.round(((out.underLaneElementsPx2 + out.underCharacterPx2) / out.visiblePx2) * 1000) / 1000 : 0;
+              });
+            });
+            observer.observe(document.body, { subtree: true, childList: true });
+          });
           await page.locator("[data-companion-talk]").click();
           let peak = 0;
           let proposal: unknown = null;
@@ -18767,7 +18882,7 @@ describe("floating voice companion", () => {
           if (name === "interrupt") expect(await page.locator("[data-companion-cut]").count() + (await page.locator("[data-companion-transcript] li").allInnerTexts()).filter((text) => text.includes(translate(lang, "voiceCompanion.cutAfter", { s: "" }).split(" ")[0]!)).length, `${label}: the cut is marked`).toBeGreaterThan(0);
           expect(pageErrors, label).toEqual([]);
           const placement = await readCompanion(page);
-          expectFree(placement, `${label}: after the scenario`);
+          expectFree(placement, `${label}: after the scenario`, { textMayLie: true });
           if (recorded) {
             const samples = await stopSampler(page);
             expect(samples.samplesOutsideViewport, `${label}: an element outside the viewport`).toBe(0);
@@ -18780,13 +18895,17 @@ describe("floating voice companion", () => {
             if (motion.entries === 0) laneFaults.push(`${label}: no element was seen entering`);
             if (motion.entriesAwayFromCharacter) laneFaults.push(`${label}: ${motion.entriesAwayFromCharacter} arrivals whose newest element stood ${motion.entryAwayMaxPx} px from the character`);
             if (motion.towardCharacterFrames) laneFaults.push(`${label}: ${motion.towardCharacterFrames} frames in which an element moved toward the character (up to ${motion.towardCharacterMaxPx} px)`);
-            if (motion.overlapFrames) laneFaults.push(`${label}: ${motion.overlapFrames} frames with two legible elements over each other (up to ${motion.overlapMaxPx} px)`);
+            if (motion.overlapFrames) laneFaults.push(`${label}: ${motion.overlapFrames} frames with two legible elements over each other (up to ${motion.overlapMaxPx} px, ${motion.overlapWorstPair})`);
+            if (motion.rises === 0) laneFaults.push(`${label}: no rise was read`);
+            if (motion.riseMaxFrameShare > RISE_SHARE_LIMIT) laneFaults.push(`${label}: one frame carried ${motion.riseMaxFrameShare} of a rise (${motion.riseMaxFrameShareStepPx} px of ${motion.riseMaxFrameSharePathPx} px)`);
+            const relay = name === "delegation" ? await page.evaluate(() => (window as unknown as { __voiceRelay: Record<string, unknown> }).__voiceRelay) : null;
+            if (relay) expect(relay.seen, `${label}: the delegated row was read as it appeared`).toBe(true);
             if (motion.orphanLastLines.length) laneFaults.push(`${label}: a last line of one word in ${motion.orphanLastLines.join("; ")}`);
             const video = page.video()!;
             await context.close();
             await video.saveAs(path.join(HANDOFF, `scenario-${label}.webm`));
             await video.delete();
-            Object.assign(cases.find((entry) => entry.label === label)!, { recording: `scenario-${label}.webm`, screenshots: shots, geometry: samples, lane: motion });
+            Object.assign(cases.find((entry) => entry.label === label)!, { recording: `scenario-${label}.webm`, screenshots: shots, geometry: samples, lane: motion, ...(relay ? { delegatedRowAsItAppeared: relay } : {}) });
             continue;
           }
           const meter = await page.evaluate(() => {
@@ -18834,12 +18953,13 @@ describe("floating voice companion", () => {
       }
     } finally { processes = await close(); server.stop(); }
     expect(processes.leftAfterClose, "browser processes left after close").toBe(0);
+    if (ONLY) { fs.writeFileSync(path.join(HANDOFF, "scenarios-partial.json"), `${JSON.stringify({ only: ONLY, cases, laneFaults }, null, 2)}\n`); expect(laneFaults).toEqual([]); return; }
     record("scenarios.json", {
       driver: DRIVER, fixture: "?scenario=voice-companion&script=<scenario>", browser: `Chromium ${version} (headless)`, browserProcesses: processes,
       method: "requestAnimationFrame intervals in the foreground page; T is the median interval of a 1.5 s idle reference on the same page; a window is the union of the stated durations after each performance mark the component sets when an animation starts",
       windows: {
-        bubblesRising: "a bubble or call entering (340 ms, unseen for the first half of it) and the stack rising out of its place (340 ms)",
-        arrivingTogether: "two or more elements entering in one commit, or one within 400 ms of the previous",
+        bubblesRising: "a bubble or call coming out at the character's end and the lane rising with it as one sheet (480 ms, one curve for every element)",
+        arrivingTogether: "two or more elements entering in one commit, or one within 480 ms of the previous",
         leaving: "the far end of the lane drifting 16 px away and fading (420 ms)",
         calls: "a call element entering",
         delegation: "the hand-off pellet going out (900 ms) and the answer coming back (700 ms)",
@@ -18850,8 +18970,9 @@ describe("floating voice companion", () => {
       lane: {
         order: "one chronology: the element that arrived last, speech or call, stands beside the character; the orchestrator's answer is an element of its own and arrives there too",
         leaving: "from the far end only: when an element's time is up and nothing older is left, or when a fifth bubble, a fifth call or the lane's height sends the oldest away with everything older than it",
-        reading: "every animation frame of the recorded run, against the lane's end at the character: towardCharacterFrames counts frames in which an element moved more than 1 px toward the character; overlapFrames counts frames in which two elements of opacity >= 0.5 (leaving ones included) overlap by more than 2 px; entriesAwayFromCharacter counts arrivals (the elements first seen in one frame) whose nearest element stood more than 2 px from the character's end; orphanLastLines lists bubbles of more than two words whose last line holds one word",
-        required: { towardCharacterFrames: 0, overlapFrames: 0, entriesAwayFromCharacter: 0, orphanLastLines: [] },
+        reading: "every animation frame of the recorded run, against the lane's end at the character and by each element's far edge: towardCharacterFrames counts frames in which an element moved more than 1 px toward the character; overlapFrames counts frames in which the visible parts of two elements of opacity >= 0.5 (leaving ones included) overlap by more than 2 px; entriesAwayFromCharacter counts arrivals (the elements first seen in one frame) whose nearest element stood more than 2 px from the character's end; orphanLastLines lists bubbles of more than two words whose last line holds one word; a rise is a run of frames in which an element keeps moving, ended by two frames at rest, and riseMaxFrameShare is the largest step of one frame as a share of its rise, over the rises of 8 px or more; a rise cut short by its element leaving the lane is counted in risesCutByLeaving and not read; a frame that came more than 1.5 intervals late is counted in lateFramesInRises and its step is read per interval it stood for, since this run is recorded and the frame times come from the other one; awayMaxStepPx is the largest step of any frame in px, late frames included",
+        required: { towardCharacterFrames: 0, overlapFrames: 0, entriesAwayFromCharacter: 0, orphanLastLines: [], riseMaxFrameShare: `<= ${RISE_SHARE_LIMIT}` },
+        delegatedRow: "delegatedRowAsItAppeared, on the delegation runs: the visible area of the delegated row in the orchestrator's conversation in the frame it appeared, and how much of it lay under the lane's elements and under the character; an accepted cost of standing over the conversation, reported and not required to be 0",
       },
       limitations: [
         "Headless Chromium on the build machine with a software compositor: no physical display, no CPU throttling.",

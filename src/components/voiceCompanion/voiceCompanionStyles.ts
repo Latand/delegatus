@@ -9,6 +9,10 @@
  * a bubble and a call element do, so a click anywhere else in the lane reaches
  * the page underneath. Motion is transform and opacity only.
  *
+ * The lane is clipped at its end beside the character and nowhere else: a new
+ * element comes out from behind that edge while the older ones rise, and an
+ * element that grows shows its new part from there.
+ *
  * Variants: 1 "comic" (bubbles with a tail, pill-shaped calls, a round shape
  * when collapsed), 2 "caption" (dark caption plates, terminal-style calls, a
  * capsule), 3 "lantern" (a lit halo, glass bubbles, call cards, a rounded tile).
@@ -47,7 +51,7 @@ export const VOICE_COMPANION_CSS = `
   display: flex; flex-direction: column; align-items: center; gap: 0; pointer-events: none;
   font-size: 11px; line-height: 14px; color: var(--color-secondary); text-align: center; max-width: 100%;
   padding: 2px 8px; border-radius: 10px; border: 1px solid var(--color-border);
-  background: color-mix(in srgb, var(--color-raised) 94%, transparent);
+  background: var(--color-raised);
 }
 .vc-phase { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; white-space: nowrap; }
 .vc-sim { color: var(--color-muted); white-space: nowrap; }
@@ -129,9 +133,10 @@ export const VOICE_COMPANION_CSS = `
 }
 
 /* The lane: bubbles and calls, each its own element */
-.vc-lane { position: absolute; pointer-events: none; }
-.vc-stack { position: relative; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; gap: 8px; }
-.vc-lane[data-direction="down"] .vc-stack { flex-direction: column-reverse; }
+.vc-lane { position: absolute; pointer-events: none; clip-path: inset(-4000px -48px 0 -48px); }
+.vc-lane[data-direction="down"] { clip-path: inset(0 -48px -4000px -48px); }
+.vc-stack { position: relative; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; gap: 8px; padding-bottom: 8px; }
+.vc-lane[data-direction="down"] .vc-stack { flex-direction: column-reverse; padding-bottom: 0; padding-top: 8px; }
 .vc-floater { display: flex; min-width: 0; will-change: transform; }
 .vc-lane[data-side="left"] .vc-floater { justify-content: flex-end; transform-origin: 100% 100%; }
 .vc-lane[data-side="right"] .vc-floater { justify-content: flex-start; transform-origin: 0 100%; }
