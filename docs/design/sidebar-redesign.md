@@ -203,3 +203,4 @@ Frames and sheets are not committed; they are in `$HOME/Projects/delegatus-wt/ha
 - `sheet-compare-whole-light-<lang>.png`: whole frames of three states, so what is outside the sidebar can be compared
 - `sheet-built-states.png`: the states shot once
 - `built-<state>-<size>-<scheme>-<lang>.png`: the frames
+- `today/v0-<state>-<size>-<scheme>-<lang>.png`: the frames of the replaced sidebar the comparison sheets use

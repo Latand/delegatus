@@ -17979,11 +17979,14 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
    * each frame is judged by go to `evidence/sidebar-redesign/built.json`, beside the
    * design lane's `measurements.json`, whose readings of the replaced sidebar are the
    * numbers the built one is compared with. SIDEBAR_FRAMES_ONLY narrows a run to the
-   * frame names a pattern matches and then writes neither sheets nor readings.
+   * frame names a pattern matches and then writes neither sheets nor readings;
+   * SIDEBAR_FRAMES_PARALLEL sets how many frames are shot at once (4).
    */
   const OUT = path.resolve(process.env.SIDEBAR_FRAMES_DIR?.trim() || ".artifacts/sidebar-built");
   const TODAY = process.env.SIDEBAR_TODAY_DIR?.trim() ? path.resolve(process.env.SIDEBAR_TODAY_DIR.trim()) : null;
   const ONLY = process.env.SIDEBAR_FRAMES_ONLY?.trim() ? new RegExp(process.env.SIDEBAR_FRAMES_ONLY.trim()) : null;
+  /* How many frames are shot at once. */
+  const PARALLEL = Math.max(1, Number(process.env.SIDEBAR_FRAMES_PARALLEL) || 4);
   /* The design lane printed a variant's number on a strip above the frame; its frames of the replaced sidebar still carry it. */
   const TODAY_STRIP = 32;
   const SIZES = [{ width: 1440, height: 900 }, { width: 1000, height: 700 }] as const;
@@ -18208,13 +18211,21 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
     const readings: Reading[] = [];
     const failures: string[] = [];
     try {
+      const jobs: { state: State; size: (typeof SIZES)[number]; scheme: Scheme; lang: "en" | "uk"; frame: string }[] = [];
       for (const state of STATES) for (const size of SIZES) for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) {
         if (!state.everywhere && !(size.width === 1440 && scheme === "light" && langsOf(state).includes(lang))) continue;
         const frame = `built-${state.name}-${size.width}x${size.height}-${scheme}-${lang}`;
-        if (ONLY && !ONLY.test(frame)) continue;
+        if (!ONLY || ONLY.test(frame)) jobs.push({ state, size, scheme, lang, frame });
+      }
+      let relaunch: Promise<void> | null = null;
+      const shoot = async ({ state, size, scheme, lang, frame }: (typeof jobs)[number]) => {
         if (!running.browser.isConnected()) {
-          await running.browserServer.close().catch(() => {});
-          running = await launch();
+          relaunch ??= (async () => {
+            await running.browserServer.close().catch(() => {});
+            running = await launch();
+            relaunch = null;
+          })();
+          await relaunch;
         }
         const context = await running.browser.newContext({ viewport: size, colorScheme: scheme, reducedMotion: "reduce" });
         await context.addInitScript(({ lang, folded, detail }) => {
@@ -18323,7 +18334,15 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
         } finally {
           await context.close().catch(() => {});
         }
-      }
+      };
+      /* Each frame has a context of its own, so several are shot at once; the readings keep the order of the states. */
+      let next = 0;
+      await Promise.all(Array.from({ length: Math.min(PARALLEL, jobs.length) }, async () => {
+        while (next < jobs.length) await shoot(jobs[next++]!);
+      }));
+      const order = new Map(jobs.map((job, index) => [job.frame, index]));
+      readings.sort((one, other) => order.get(one.frame)! - order.get(other.frame)!);
+      failures.sort();
     } finally {
       await running.browser.close().catch(() => {});
       await running.browserServer.close().catch(() => {});

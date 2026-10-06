@@ -301,7 +301,11 @@ function EngineLimitsBlock({
           )}
         </div>
         {/* Behind "All windows" a failed read says why in full, under its account. */}
-        {density === "detail" && visibleFailureReason ? <div data-meter-note="" className={`${LINE_EDGE} -mt-0.5 break-words pb-1 text-[10px] leading-[13px] text-muted ${anyStale ? "opacity-60" : ""}`}>{visibleFailureReason}</div> : null}
+        {density === "detail" && visibleFailureReason ? (
+          <div className={`${LINE_EDGE} -mt-0.5 pb-1 ${anyStale ? "opacity-60" : ""}`}>
+            <span data-meter-note="" className="block break-words text-[10px] leading-[13px] text-muted">{visibleFailureReason}</span>
+          </div>
+        ) : null}
         {density === "detail" && hasWindows ? (
           /* Behind "All windows": the plan, then every window with its reset, on the edge the account starts on. */
           <div data-limits-windows="" className={`${LINE_EDGE} pb-1 ${anyStale ? "opacity-60" : ""}`}>
