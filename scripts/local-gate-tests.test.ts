@@ -140,6 +140,19 @@ test("an unnamed teardown failure remains a named blocking diagnostic without a 
   expect(result.flaky).toHaveLength(0);
   expect(f.logs.join("\n")).not.toContain("flaky confirmation");
 });
+
+test("a green JUnit report cannot hide the owned runner's survivor diagnostic", () => {
+  const f = fixture(source(true));
+  writeFileSync(path.join(f.dir, "example.test.ts"), `import { test } from "bun:test";
+test("detached worker", async () => {
+  const child = Bun.spawn([process.execPath, "-e", 'require("node:child_process").spawn("sleep", ["300"], { detached: true, stdio: "ignore" }).unref(); process.exit(0);'], { stdout: "ignore", stderr: "ignore" });
+  await child.exited;
+});`);
+  const result = f.run();
+  expect(result.introduced).toHaveLength(1);
+  expect(result.introduced[0]!.kind).toBe("error");
+  expect(result.introduced[0]!.name).toContain("owned runner: surviving owned processes:");
+});
 test("cache prunes owned bounded entries, preserves unrelated files, and refuses linked roots", () => {
   const dir = mkdtempSync(path.join(gateTemporaryRoot(), "gate-cache-test-")); roots.push(dir);
   const cache = path.join(dir, "cache"); mkdirSync(cache, { mode: 0o700 });

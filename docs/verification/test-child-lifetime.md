@@ -131,6 +131,18 @@ merger file run passed all 40 tests; its fresh head/base comparison reports
 zero new failures and one fixed test. These observations do not attribute
 the earlier hook failure to a guessed cause.
 
+The runner regressions now verify the entire owning test cgroup after each
+probe, including transports outside the inner service. A controlled hard-kill
+case holds the real systemd transport for one second after its unit ends.
+Without the scope drain, Bun reports one passing assertion case while the
+outer guard detects two surviving transport members and fails. With the
+drain, all nine runner cases pass with 53 assertions, retain the same-argv
+bystanders and leave the kernel-owned scope empty of probe children. The
+gate now preserves that survivor line when the command exit disagrees with
+a green JUnit report; its executable regression was red before the correction
+and passes afterward. Membership reads inspect only the verified owned
+cgroup and never authorize a kill by command line.
+
 ## Process-launch audit
 
 The audit parsed test files and fixture/probe helpers throughout the repository
@@ -171,9 +183,9 @@ Linux path.
 | `scripts/fixtures/ownedRunner.fixture.ts` | 9, 14 | contained helper |
 | `scripts/gate-slot.test.ts` | 33 | owned |
 | `scripts/install-mcp.test.ts` | 30, 173 | owned |
-| `scripts/local-gate-tests.test.ts` | 247 | owned |
+| `scripts/local-gate-tests.test.ts` | 260 | owned |
 | `scripts/npm-package-smoke.test.ts` | 13 | owned |
-| `scripts/owned-runner.integration.test.ts` | 23, 26, 31, 70, 72 | owned |
+| `scripts/owned-runner.integration.test.ts` | 56, 59, 64, 106, 108 | owned |
 | `scripts/privacy-publication-gate.test.ts` | 2175 | owned |
 | `scripts/privacy-test-process.ts` | 22 | owned helper; existing 20-second deadline and finally join retained |
 | `scripts/probe-realtime-v3.ts` | 276 | contained helper |

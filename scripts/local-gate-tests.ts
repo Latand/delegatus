@@ -201,7 +201,10 @@ function runFiles(root: string, files: readonly string[], sandbox: string, inher
       if (result.signalCode || result.exitedDueToTimeout || ![0, 1].includes(result.exitCode)) throw new Error(`runner did not finish (${result.signalCode ?? result.exitCode}${result.exitedDueToTimeout ? "; timed out" : ""})`);
       const output = readFileSync(log, "utf8");
       const parsed = parseReport(readFileSync(report, "utf8"), output, file, root, !!options.sites);
-      if ((result.exitCode === 0) !== (parsed.failures.length === 0)) throw new Error("runner exit disagrees with its report");
+      if ((result.exitCode === 0) !== (parsed.failures.length === 0)) {
+        const survivors = output.split("\n").find(line => line.startsWith("owned runner: surviving owned processes:"));
+        throw new Error(`runner exit disagrees with its report${survivors ? `; ${survivors}` : ""}`);
+      }
       failures.push(...parsed.failures); passed.push(...parsed.passed); completed.push(file);
       if (parsed.failures.length) options.onFailure?.();
     } catch (error) {
