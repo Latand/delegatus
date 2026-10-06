@@ -1226,3 +1226,18 @@ test.each(["role", "pipeline"])("activity while a %s checkout is young restarts 
   expect(quiet.kept[0]!.firstSettledAt).toBe(new Date(quietAt).toISOString());
   expect((await sweepMergedWorktrees({ ...options, previous: quiet, now: () => quietAt + FINISHED_WORKTREE_RETENTION_MS })).removed).toHaveLength(1);
 });
+
+test.each(["scripts/", "__pycache__/"])("bytecode directory %s containing a unique log stays", async ignored => {
+  const root = repository();
+  fs.appendFileSync(path.join(root, ".git/info/exclude"), ignored + "\n");
+  const { dir, tip } = lane(root, path.join(caseDir, "bytecode-log"), "topic/bytecode-log");
+  const base = ignored === "scripts/" ? "scripts/__pycache__" : "__pycache__";
+  const log = path.join(dir, base, "run.log");
+  fs.mkdirSync(path.dirname(log), { recursive: true });
+  fs.writeFileSync(log, "unique evidence");
+  fs.writeFileSync(path.join(path.dirname(log), "module.pyc"), "regenerable bytecode");
+  const report = await sweepMergedWorktrees(ports({ repositories: [root], prs: [merged(161, "topic/bytecode-log", tip)] }));
+  expect(report.removed).toEqual([]);
+  expect(report.kept[0]!.reason).toBe("ignored-files");
+  expect(fs.readFileSync(log, "utf8")).toBe("unique evidence");
+});

@@ -232,7 +232,7 @@ function pipelineHoldsCheckout(pipeline: SweptPipeline): boolean {
     else ignored keeps the worktree. */
 const REBUILDABLE_DIRECTORIES: ReadonlySet<string> = new Set([
   "node_modules", ".next", ".turbo", ".cache", ".parcel-cache", ".svelte-kit", "out", "dist", "build", "coverage",
-  "test-results", "playwright-report", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".hypothesis",
+  "test-results", "playwright-report", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".hypothesis",
   ".venv", "venv", ".tox", ".nox",
 ]);
 const REBUILDABLE_FILES: ReadonlySet<string> = new Set(["next-env.d.ts", ".DS_Store"]);
@@ -244,7 +244,7 @@ function rebuildable(ignored: string): boolean {
   const name = segments.at(-1) ?? "";
   // Git can also report an artifact's ignored descendant directly. Output
   // directory names inside evidence do not establish regenerability.
-  if (segments.includes(".artifacts")) return segments.some(segment => segment === "node_modules" || segment === ".next" || segment === "__pycache__") || name.endsWith(".pyc");
+  if (segments.includes(".artifacts")) return segments.some(segment => segment === "node_modules" || segment === ".next") || name.endsWith(".pyc");
   if (segments.some((segment) => REBUILDABLE_DIRECTORIES.has(segment) || segment.endsWith(".egg-info"))) return true;
   return REBUILDABLE_FILES.has(name) || name.endsWith(".tsbuildinfo") || name.endsWith(".pyc");
 }
@@ -263,8 +263,7 @@ function onlyRebuildableContents(directory: string): boolean {
         const child = path.join(current, entry.name);
         if (entry.name === ".git") return false;
         if (entry.isDirectory()) pending.push(child);
-        else if (!entry.isFile() || (!entry.name.endsWith(".pyc")
-          && !path.relative(directory, child).split(path.sep).includes("__pycache__"))) return false;
+        else if (!entry.isFile() || !entry.name.endsWith(".pyc")) return false;
       }
     }
     return true;

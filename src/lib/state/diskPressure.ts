@@ -151,11 +151,17 @@ export async function readDiskPressure(ports: {
   roots?: DiskRoot[];
   probe?: DiskProbe;
   now?: () => number;
+  readOnly?: boolean;
 } = {}): Promise<DiskPressure> {
   const now = ports.now ?? Date.now;
   const readers = ports.caches ?? caches;
   const directory = stateDir();
   const file = statePath("disk-pressure-report.json");
+  // MCP may run in the host namespace while the Viewer runs in Docker. Its
+  // narrower volume view cannot close the Viewer's episode or repeat its
+  // consumer walks. Every resources read gets the authoritative report.
+  if (ports.readOnly ?? process.env.LLV_STATE_OWNER === "mcp")
+    return readReport(file) ?? observeDiskPressure([], null, new Date(now()).toISOString());
   let cached = readers.get(directory);
   if (!cached) {
     const prior = readReport(file);

@@ -113,6 +113,19 @@ test("resources readers with independent stale caches and a restart preserve one
   await Promise.all([...cachesA.values(), ...cachesB.values(), ...restartCache.values()].map(row => row.measuring));
 });
 
+test("MCP reads cannot close a Viewer episode based on a narrower filesystem view", async () => {
+  const file = path.join(process.env.LLV_STATE_DIR!, "disk-pressure-report.json");
+  const first = observeDiskPressureReport(file, () => [{ roles: ["temp"], freeBytes: GiB, level: "critical" }], "2026-10-06T10:00:00Z");
+  let probed = false;
+  const read = await readDiskPressure({ readOnly: true, roots: [], probe: () => {
+    probed = true; return { volume: "host", freeBytes: 100 * GiB };
+  } });
+  expect(read.episode).toBe(first.episode);
+  expect(read.volumes).toEqual(first.volumes);
+  expect(probed).toBe(false);
+  expect(JSON.parse(fs.readFileSync(file, "utf8")).episode).toBe(first.episode);
+});
+
 test("a new worktree waits only below the critical threshold, naming the volume", () => {
   expect(worktreeDiskWait("/srv/repo", "/srv/repo-pipeline-a", probe({ "/": DISK_WARNING_BYTES - 1 }))).toBeNull();
   const wait = worktreeDiskWait("/srv/repo", "/srv/repo-pipeline-a", probe({ "/": GiB / 2 }));
