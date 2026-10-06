@@ -191,7 +191,9 @@ test("a card whose port the column has scrolled under its header is counted at t
   expect([...node()!.querySelectorAll(".oa-stub")].map((chip) => chip.textContent)).toEqual(["↑ +1"]);
   /* Scrolled back so its port is inside the scroller, the card has its wire, and the port is below the scroller's top. */
   root.querySelector<HTMLElement>('[data-id="task:a"]')!.getBoundingClientRect = () => rect(412, 110, 276, 120);
-  layer.act([{ kind: "stage", taskId: "a", pipelineId: null, at: Date.now() + 1 }]);
+  /* A later action: in the same millisecond it would be read as the one already shown. */
+  layer.probe.advance(1_000);
+  layer.act([{ kind: "stage", taskId: "a", pipelineId: null, at: Date.now() }]);
   expect(drawn()).toEqual(["a"]);
   const cy = Number(root.querySelector("g[data-wire] .oa-port")!.getAttribute("cy"));
   expect(cy).toBeGreaterThanOrEqual(120 + 6);
@@ -242,4 +244,55 @@ test("reduced motion switched on during a fade ends the faded wire at once", () 
   for (const listener of [...motionListeners]) listener();
   expect(node()).toBeNull();
   expect(motionListeners.size).toBe(0);
+});
+
+test("repeated actions in a hidden tab keep one pulse a wire, and the hold's end and destroy leave none", () => {
+  reduce = false;
+  const calls: { node: Element; cancelled: boolean; paused: boolean }[] = [];
+  for (const prototype of [dom.HTMLElement.prototype, dom.SVGElement.prototype]) {
+    Object.defineProperty(prototype, "animate", { configurable: true, value(this: Element) {
+      let reject: (reason: unknown) => void = () => {};
+      /* A paused animation never finishes: only a cancel settles it. */
+      const finished = new Promise((_resolve, fail) => { reject = fail; });
+      finished.catch(() => {});
+      const call = { node: this, cancelled: false, paused: false };
+      calls.push(call);
+      return { currentTime: 0, get playState() { return call.paused ? "paused" : "running"; }, finished, cancel() { call.cancelled = true; reject(new Error("cancelled")); }, pause() { call.paused = true; }, play() { call.paused = false; }, finish() {} };
+    } });
+  }
+  let hidden = true;
+  Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
+  const { layer, node, root } = board();
+  const live = () => calls.filter((call) => !call.cancelled);
+  const marks = () => root.querySelectorAll(".oa-dot, .oa-ring").length;
+  layer.act([{ kind: "pipeline", taskId: "a", pipelineId: null, at: Date.now() }]);
+  const one = { marks: marks(), motions: live().length };
+  expect(one.marks).toBe(2);
+  for (let round = 0; round < 12; round++) {
+    layer.probe.advance(10_000);
+    layer.act([{ kind: round % 2 ? "stage" : "pipeline", taskId: "a", pipelineId: null, at: Date.now() }]);
+  }
+  expect(marks()).toBe(one.marks);
+  expect(live().length).toBeLessThanOrEqual(one.motions);
+  expect(live().every((call) => call.paused)).toBe(true);
+  /* The last action grows no wire, and the growth it replaced left the path whole. */
+  expect(root.querySelector<SVGPathElement>("g[data-wire] path.oa-wire")!.style.strokeDasharray).toBe("");
+  /* Back in view, only the last action's pulse is there to play. */
+  hidden = false;
+  document.dispatchEvent(new dom.Event("visibilitychange") as unknown as Event);
+  expect(marks()).toBe(one.marks);
+  expect(live().filter((call) => !call.paused).length).toBe(live().length);
+  /* One wire's hold ends in the hidden tab while another still shows: its pulse goes with it. */
+  hidden = true;
+  document.dispatchEvent(new dom.Event("visibilitychange") as unknown as Event);
+  layer.probe.advance(30_000);
+  layer.act([{ kind: "stage", taskId: "b", pipelineId: null, at: Date.now() }]);
+  layer.probe.advance(ORCHESTRATOR_WIRE_HOLD_MS - 30_000);
+  expect([...root.querySelectorAll("g[data-wire]")].map((group) => group.getAttribute("data-wire"))).toEqual(["b"]);
+  expect(marks()).toBe(2);
+  expect(live().length).toBe(2);
+  layer.destroy();
+  expect(node()).toBeNull();
+  expect(live()).toEqual([]);
+  expect(document.querySelectorAll(".oa-dot, .oa-ring").length).toBe(0);
 });

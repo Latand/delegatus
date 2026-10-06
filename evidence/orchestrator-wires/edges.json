@@ -26,7 +26,7 @@
           "↑ +1"
         ],
         "seatPort": 1,
-        "dots": 1,
+        "dots": 0,
         "overflow": false
       }
     },
@@ -63,7 +63,7 @@
           "↑ +1"
         ],
         "seatPort": 0,
-        "dots": 1,
+        "dots": 0,
         "overflow": false
       }
     },
@@ -128,6 +128,61 @@
       "seatPort": 0,
       "dots": 0,
       "overflow": false
+    },
+    {
+      "form": "desktop",
+      "frame": "hidden-tab-repeated-actions",
+      "actions": 13,
+      "first": {
+        "dots": 1,
+        "rings": 1,
+        "elements": 11,
+        "animations": 3,
+        "paused": 3
+      },
+      "twelfth": {
+        "dots": 1,
+        "rings": 1,
+        "elements": 11,
+        "animations": 3,
+        "paused": 3
+      }
+    },
+    {
+      "form": "desktop",
+      "frame": "hidden-tab-returned",
+      "dots": 0,
+      "rings": 0,
+      "elements": 9,
+      "animations": 1,
+      "paused": 0
+    },
+    {
+      "form": "desktop",
+      "frame": "hidden-tab-one-expired",
+      "dots": 1,
+      "rings": 1,
+      "elements": 11,
+      "animations": 3,
+      "paused": 3,
+      "drawn": {
+        "layer": true,
+        "paused": true,
+        "wires": [
+          {
+            "taskId": "t-search",
+            "tone": "live",
+            "flows": true,
+            "opacity": 1,
+            "crossed": 0,
+            "corners": 2
+          }
+        ],
+        "stubs": [],
+        "seatPort": 1,
+        "dots": 1,
+        "overflow": false
+      }
     }
   ]
 }

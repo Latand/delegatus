@@ -18285,6 +18285,63 @@ describe("orchestrator wires after a seat action", () => {
           expect(pageErrors).toEqual([]);
         } finally { await context.close(); }
       }
+      /* A hidden tab still reads the board: a dozen seat actions there leave one paused pulse on the wire,
+         the last one, and the hold's end takes it away. */
+      {
+        const { context, page, pageErrors } = await open(browser, "desktop", "");
+        const hide = (hidden: boolean) => page.evaluate((hidden) => {
+          Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
+          Object.defineProperty(document, "visibilityState", { configurable: true, get: () => (hidden ? "hidden" : "visible") });
+          document.dispatchEvent(new Event("visibilitychange"));
+        }, hidden);
+        const held = () => page.evaluate(() => {
+          const animations = document.querySelector("[data-orchestrator-wires]")?.getAnimations({ subtree: true }) ?? [];
+          return {
+            dots: document.querySelectorAll(".oa-dot").length, rings: document.querySelectorAll(".oa-ring").length,
+            elements: document.querySelectorAll("[data-orchestrator-wires] *").length,
+            animations: animations.length, paused: animations.filter((animation) => animation.playState === "paused").length,
+          };
+        });
+        try {
+          await act(page, { kind: "stage", taskId: "t-upload" });
+          await probe(page, "settle");
+          await hide(true);
+          await probe(page, "advance", 10_000);
+          await act(page, { kind: "stage", taskId: "t-upload" });
+          const first = await held();
+          expect(first).toMatchObject({ dots: 1, rings: 1 });
+          for (let round = 0; round < 12; round++) {
+            await probe(page, "advance", 10_000);
+            await act(page, { kind: "stage", taskId: "t-upload" });
+          }
+          const twelfth = await held();
+          frames.push({ form: "desktop", frame: "hidden-tab-repeated-actions", actions: 13, first, twelfth });
+          expect(twelfth).toEqual(first);
+          /* Back in view the one pulse plays out and leaves nothing behind. */
+          await hide(false);
+          expect((await held()).dots).toBeLessThanOrEqual(1);
+          await page.waitForTimeout(3_600);
+          const played = await held();
+          frames.push({ form: "desktop", frame: "hidden-tab-returned", ...played });
+          expect(played).toMatchObject({ dots: 0, rings: 0, paused: 0 });
+          /* Two wires in the hidden tab; the older one's hold ends there, and its pulse goes with it. */
+          await hide(true);
+          await probe(page, "advance", 30_000);
+          await act(page, { kind: "stage", taskId: "t-upload" });
+          await probe(page, "advance", 30_000);
+          await act(page, { kind: "stage", taskId: "t-search" });
+          expect(await held()).toMatchObject({ dots: 2, rings: 2 });
+          await probe(page, "advance", 30_000);
+          const one = await held();
+          frames.push({ form: "desktop", frame: "hidden-tab-one-expired", ...one, drawn: await drawn(page) });
+          expect((await drawn(page)).wires.map((wire) => wire.taskId)).toEqual(["t-search"]);
+          expect(one).toMatchObject({ dots: 1, rings: 1 });
+          await probe(page, "advance", ORCHESTRATOR_WIRE_HOLD_MS);
+          expect((await drawn(page)).layer).toBe(false);
+          expect(await held()).toEqual({ dots: 0, rings: 0, elements: 0, animations: 0, paused: 0 });
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
       fs.mkdirSync("evidence/orchestrator-wires", { recursive: true });
       fs.writeFileSync("evidence/orchestrator-wires/edges.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", holdMs: ORCHESTRATOR_WIRE_HOLD_MS, fadeMs: ORCHESTRATOR_WIRE_FADE_MS, frames }, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); server = null; }

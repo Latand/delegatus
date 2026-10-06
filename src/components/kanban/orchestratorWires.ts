@@ -59,11 +59,14 @@ interface Wire {
   group: SVGGElement | null;
   /** The ring of the last pulse and what it is drawn round, while it lasts. */
   ring: { node: SVGRectElement; round: HTMLElement } | null;
+  /** Everything the last pulse made. A paused pulse never ends by itself, so the wire ends it. */
+  pulse: Pulse | null;
   /** The hold is over. The clock ends the wire; `fade` is only what that looks like. */
   fading: boolean;
   fade: Animation | null;
 }
 
+interface Pulse { nodes: Element[]; motions: Animation[]; path: SVGPathElement }
 interface Point { x: number; y: number }
 type Box = Pick<DOMRect, "left" | "top" | "right" | "bottom" | "width" | "height">;
 type Spot =
@@ -105,6 +108,8 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
   let motionQuery: MediaQueryList | null = null;
   let seatFade: Animation | null = null;
   const stubs = new Map<string, { chip: HTMLElement; wire: SVGPathElement; fade: Animation[] | null }>();
+  /* The phone's tab pulses, one a tab. */
+  const tabPulses = new Map<string, Animation>();
   let seatDot: SVGCircleElement | null = null;
   let frame = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -135,6 +140,17 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
   }
   const fadedFor = (members: Iterable<Wire>, clock: number) => Math.min(...[...members].map((wire) => clock - (wire.at + ORCHESTRATOR_WIRE_HOLD_MS)));
   function gone(animation: Animation, node: Element) { void animation.finished.then(() => node.remove(), () => node.remove()); }
+  /** End a wire's pulse where it is: in a hidden tab it is paused and would otherwise outlive every
+      action that follows, one dot and one ring each. */
+  function endPulse(wire: Wire) {
+    const pulse = wire.pulse;
+    if (!pulse) return;
+    wire.pulse = null;
+    for (const motion of pulse.motions) { motion.cancel(); motions.delete(motion); }
+    for (const node of pulse.nodes) node.remove();
+    pulse.path.style.strokeDasharray = "";
+    wire.ring = null;
+  }
 
   const schedule = () => { if (layer && !frame) frame = window.requestAnimationFrame(() => { frame = 0; update(); }); };
   /* Reduced motion switched on while a wire shows: every pulse and fade stops where it is, the wires
@@ -145,8 +161,9 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
       for (const motion of [...motions, ...fades]) motion.cancel();
       motions.clear();
       fades.clear();
-      for (const wire of wires.values()) { wire.fade = null; wire.ring?.node.remove(); wire.ring = null; }
+      for (const wire of wires.values()) { wire.fade = null; endPulse(wire); }
       for (const stub of stubs.values()) stub.fade = null;
+      tabPulses.clear();
       seatFade = null;
     }
     expire();
@@ -199,6 +216,7 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
     for (const motion of [...motions, ...fades]) motion.cancel();
     motions.clear();
     fades.clear();
+    tabPulses.clear();
     layer.remove();
     layer = canvas = lines = shared = marks = null;
     seatDot = null;
@@ -295,8 +313,8 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
       if (!spot || "hidden" in spot) {
         wire.group?.remove();
         wire.group = null;
-        wire.ring?.node.remove();
-        wire.ring = null;
+        /* A dot and a ring belong to the wire they ran on. */
+        endPulse(wire);
         /* A fade belongs to the group it ran on; a card that comes back into view starts one from the clock. */
         wire.fade?.cancel();
         wire.fade = null;
@@ -335,8 +353,8 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
       if (wire.pending) {
         const action = wire.pending;
         wire.pending = null;
-        wire.ring?.node.remove();
-        wire.ring = still ? null : pulse(action, group.children[0] as SVGPathElement, d, spot.node, spot.view);
+        endPulse(wire);
+        if (!still) pulse(wire, action, group.children[0] as SVGPathElement, d, spot.node, spot.view);
       } else if (wire.ring) {
         /* The ring stays on what it rings while the board scrolls under it, inside the column's visible part. */
         if (wire.ring.node.isConnected && wire.ring.round.isConnected) ringAt(wire.ring.node, rect(wire.ring.round), spot.view);
@@ -408,14 +426,18 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
     else ring.removeAttribute("visibility");
   }
 
-  function pulse(action: SeatAction, path: SVGPathElement, d: string, card: HTMLElement, clip: Box): Wire["ring"] {
-    if (!marks || !shared) return null;
+  function pulse(wire: Wire, action: SeatAction, path: SVGPathElement, d: string, card: HTMLElement, clip: Box) {
+    if (!marks || !shared) return;
+    const made: Pulse = { nodes: [], motions: [], path };
+    wire.pulse = made;
     const grows = action.kind === "pipeline" || action.kind === "task";
     if (grows && typeof path.getTotalLength === "function") {
       const length = Math.max(1, path.getTotalLength());
       path.style.strokeDasharray = `${length}`;
       const grow = track(path.animate([{ strokeDashoffset: length }, { strokeDashoffset: 0 }], { duration: 520, easing: "ease-out", fill: "both" }));
-      const clear = () => { path.style.strokeDasharray = ""; grow.cancel(); };
+      made.motions.push(grow);
+      /* A pulse that was ended has cleared the path already, and the path may be growing again. */
+      const clear = () => { if (wires.get(wire.taskId)?.pulse === made) { path.style.strokeDasharray = ""; grow.cancel(); } };
       grow.finished.then(clear, clear);
     }
     const dot = document.createElement("span");
@@ -423,32 +445,42 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
     dot.style.offsetPath = `path("${d}")`;
     dot.style.offsetRotate = "0deg";
     marks.append(dot);
-    gone(track(dot.animate(
+    const run = track(dot.animate(
       [{ offsetDistance: "0%", opacity: 1 }, { offsetDistance: "100%", opacity: 1, offset: 0.9 }, { offsetDistance: "100%", opacity: 0 }],
       { duration: 820, delay: grows ? 160 : 0, easing: "ease-in-out", fill: "both" },
-    )), dot);
+    ));
+    gone(run, dot);
+    made.nodes.push(dot);
+    made.motions.push(run);
     /* A moved card is ringed by the board as it lands. */
-    if (action.kind === "move") return null;
+    if (action.kind === "move") return;
     const round = (action.pipelineId ? card.querySelector<HTMLElement>(`[data-pipeline="${escape(action.pipelineId)}"]`) : null) ?? card;
     const ring = svg("rect", { rx: 14, class: "oa-ring" });
     ringAt(ring, rect(round), clip);
     shared.before(ring);
-    gone(track(ring.animate(
+    const rings = track(ring.animate(
       [{ opacity: 0, strokeWidth: 8 }, { opacity: 1, strokeWidth: 2, offset: 0.15 }, { opacity: 1, offset: 0.8 }, { opacity: 0 }],
       { duration: 2800, delay: 440, easing: "ease-out", fill: "both" },
-    )), ring);
-    return { node: ring, round };
+    ));
+    gone(rings, ring);
+    made.nodes.push(ring);
+    made.motions.push(rings);
+    wire.ring = { node: ring, round };
   }
 
   function pulseTab(status: string) {
     const tab = root.querySelector<HTMLElement>(`[data-phone-kanban-tab="${escape(status)}"]`);
-    if (tab && typeof tab.animate === "function") track(tab.animate([{ transform: "none" }, { transform: "scale(1.08)", offset: 0.3 }, { transform: "none" }], { duration: 700, delay: 440 }));
+    if (!tab || typeof tab.animate !== "function") return;
+    /* One pulse a tab: a paused one is replaced, never added to. */
+    const prior = tabPulses.get(status);
+    if (prior) { prior.cancel(); motions.delete(prior); }
+    tabPulses.set(status, track(tab.animate([{ transform: "none" }, { transform: "scale(1.08)", offset: 0.3 }, { transform: "none" }], { duration: 700, delay: 440 })));
   }
 
   function drop(wire: Wire) {
     wire.fade?.cancel();
+    endPulse(wire);
     wire.group?.remove();
-    wire.ring?.node.remove();
     wires.delete(wire.taskId);
   }
 
@@ -485,7 +517,7 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
         if (clock - at >= ORCHESTRATOR_WIRE_HOLD_MS || (prior && prior.at >= at)) continue;
         prior?.fade?.cancel();
         const showFrom = action.kind === "move" && !still && !prior?.group ? clock + CARD_FLIGHT_MS : clock;
-        wires.set(action.taskId, { taskId: action.taskId, at, showFrom, pending: action, group: prior?.group ?? null, ring: prior?.ring ?? null, fading: false, fade: null });
+        wires.set(action.taskId, { taskId: action.taskId, at, showFrom, pending: action, group: prior?.group ?? null, ring: prior?.ring ?? null, pulse: prior?.pulse ?? null, fading: false, fade: null });
         fresh = true;
       }
       if (!fresh) return;

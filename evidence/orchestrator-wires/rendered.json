@@ -53,8 +53,8 @@
       "overflow": false,
       "stats": {
         "updates": 8,
-        "totalMs": 47.00000011920929,
-        "maxMs": 17.200000047683716,
+        "totalMs": 44.299999952316284,
+        "maxMs": 9.299999952316284,
         "rectReads": 63,
         "wires": 3,
         "stubs": 0,
@@ -87,7 +87,7 @@
           "taskId": "t-rounds",
           "tone": "live",
           "flows": true,
-          "opacity": 0.603401,
+          "opacity": 0.634999,
           "crossed": 0,
           "corners": 2
         }
@@ -98,8 +98,8 @@
       "overflow": false,
       "stats": {
         "updates": 13,
-        "totalMs": 78.1000000834465,
-        "maxMs": 17.200000047683716,
+        "totalMs": 58,
+        "maxMs": 9.299999952316284,
         "rectReads": 123,
         "wires": 3,
         "stubs": 0,
@@ -127,8 +127,8 @@
       "overflow": false,
       "stats": {
         "updates": 15,
-        "totalMs": 93.80000013113022,
-        "maxMs": 17.200000047683716,
+        "totalMs": 60.90000003576279,
+        "maxMs": 9.299999952316284,
         "rectReads": 140,
         "wires": 1,
         "stubs": 0,
@@ -147,8 +147,8 @@
       "overflow": false,
       "stats": {
         "updates": 16,
-        "totalMs": 98.60000014305115,
-        "maxMs": 17.200000047683716,
+        "totalMs": 64.90000003576279,
+        "maxMs": 9.299999952316284,
         "rectReads": 145,
         "wires": 0,
         "stubs": 0,
@@ -187,10 +187,10 @@
       "dots": 1,
       "overflow": false,
       "stats": {
-        "updates": 8,
-        "totalMs": 26.799999952316284,
-        "maxMs": 10,
-        "rectReads": 48,
+        "updates": 9,
+        "totalMs": 14.999999940395355,
+        "maxMs": 4.900000035762787,
+        "rectReads": 53,
         "wires": 1,
         "stubs": 0,
         "elements": 10
@@ -216,10 +216,10 @@
       "dots": 0,
       "overflow": false,
       "stats": {
-        "updates": 29,
-        "totalMs": 74.39999985694885,
-        "maxMs": 10,
-        "rectReads": 217,
+        "updates": 30,
+        "totalMs": 36.999999940395355,
+        "maxMs": 4.900000035762787,
+        "rectReads": 222,
         "wires": 1,
         "stubs": 0,
         "elements": 8
@@ -235,7 +235,7 @@
           "taskId": "t-rounds",
           "tone": "live",
           "flows": true,
-          "opacity": 0.632875,
+          "opacity": 0.656693,
           "crossed": 0,
           "corners": 2
         }
@@ -245,10 +245,10 @@
       "dots": 0,
       "overflow": false,
       "stats": {
-        "updates": 68,
-        "totalMs": 161.49999970197678,
-        "maxMs": 12.300000011920929,
-        "rectReads": 544,
+        "updates": 74,
+        "totalMs": 101.40000009536743,
+        "maxMs": 5.699999988079071,
+        "rectReads": 592,
         "wires": 1,
         "stubs": 0,
         "elements": 8
@@ -274,10 +274,10 @@
       "dots": 0,
       "overflow": false,
       "stats": {
-        "updates": 90,
-        "totalMs": 188.39999961853027,
-        "maxMs": 12.300000011920929,
-        "rectReads": 716,
+        "updates": 96,
+        "totalMs": 122.30000013113022,
+        "maxMs": 5.699999988079071,
+        "rectReads": 764,
         "wires": 1,
         "stubs": 0,
         "elements": 8
@@ -294,10 +294,10 @@
       "dots": 0,
       "overflow": false,
       "stats": {
-        "updates": 91,
-        "totalMs": 189.89999961853027,
-        "maxMs": 12.300000011920929,
-        "rectReads": 720,
+        "updates": 96,
+        "totalMs": 122.30000013113022,
+        "maxMs": 5.699999988079071,
+        "rectReads": 764,
         "wires": 0,
         "stubs": 0,
         "elements": 0
@@ -332,8 +332,8 @@
       "overflow": false,
       "stats": {
         "updates": 5,
-        "totalMs": 26.099999964237213,
-        "maxMs": 9,
+        "totalMs": 17.799999952316284,
+        "maxMs": 5.599999964237213,
         "rectReads": 43,
         "wires": 2,
         "stubs": 0,
@@ -361,8 +361,8 @@
       "overflow": false,
       "stats": {
         "updates": 3,
-        "totalMs": 3.099999964237213,
-        "maxMs": 1.899999976158142,
+        "totalMs": 4.599999964237213,
+        "maxMs": 2.799999952316284,
         "rectReads": 15,
         "wires": 1,
         "stubs": 0,
@@ -381,8 +381,8 @@
       "overflow": false,
       "stats": {
         "updates": 3,
-        "totalMs": 3.099999964237213,
-        "maxMs": 1.899999976158142,
+        "totalMs": 4.599999964237213,
+        "maxMs": 2.799999952316284,
         "rectReads": 15,
         "wires": 0,
         "stubs": 0,
