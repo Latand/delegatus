@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll } from "bun:test";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
+import { procBackend } from "@/lib/proc";
 import { stopFixtureProcess } from "./fixtureProcess";
 
 /** The preload owns real subprocess handles before spawn returns. This covers
@@ -11,6 +12,16 @@ import { stopFixtureProcess } from "./fixtureProcess";
  */
 export function beginTestChildOwnership(root: string): void {
   const owner = captureProcessIdentity(process.pid);
+  const supervisor = captureProcessIdentity(process.ppid);
+  const cgroup = process.platform === "linux" ? process.env.LLV_OWNED_TEST_RUN_CGROUP : undefined;
+  if (cgroup && (Number(process.env.LLV_OWNED_TEST_RUNNER_PID) !== process.pid
+    || !fs.readFileSync("/proc/self/cgroup", "utf8").split("\n").includes(`0::${cgroup}`))) {
+    throw new Error("test cleanup has no verified owning cgroup");
+  }
+  const scopeChildren = () => cgroup
+    ? fs.readFileSync(path.join("/sys/fs/cgroup", cgroup, "cgroup.procs"), "utf8").trim().split(/\s+/).map(Number)
+      .filter(pid => pid > 0 && pid !== owner.pid && !(pid === supervisor.pid && processIdentityStatus(supervisor) === "alive") && !procBackend.processExited(pid))
+    : [];
   const ledger = path.join(root, "owned-test-children.jsonl");
   fs.writeFileSync(ledger, "", { mode: 0o600 });
   const rawBunSpawn = Bun.spawn;
@@ -68,6 +79,16 @@ export function beginTestChildOwnership(root: string): void {
     })]);
     const identities = fs.readFileSync(ledger, "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line));
     if (identities.some(identity => processIdentityStatus(identity) === "alive")) throw new Error("owned test child survived the final identity check");
+    // Native CLIs can fork their own protocol servers. Keep the test runner
+    // alive while those kernel-owned children finish shutdown, then fail with
+    // identities if they exceed the bound. The service reaps persistent tails.
+    const scopeDeadline = Date.now() + 2_000;
+    let remaining = scopeChildren();
+    while (remaining.length && Date.now() < scopeDeadline) {
+      await Bun.sleep(20);
+      remaining = scopeChildren();
+    }
+    if (remaining.length) throw new Error(`owned test scope children survived teardown: ${remaining.map(pid => `${pid} (${procBackend.processIdentity(pid)})`).join(", ")}`);
     if (survivors.length || bunSurvivors.length || (guardian && guardian.exitCode !== 0)) {
       throw new Error(`owned test children survived teardown: ${[...survivors, ...bunSurvivors].map(child => child.pid).join(", ")}; guardian=${guardian?.exitCode ?? "kernel"}`);
     }

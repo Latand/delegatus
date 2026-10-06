@@ -159,6 +159,20 @@ green after preserving only the manager connection. Application state stays
 private, unrelated ambient values and old admission tokens are excluded, and
 each named native test now runs separately with a five-minute bound.
 
+The admitted native run exposed another shutdown boundary: its CLI exited
+before its MCP launcher and server finished closing. An isolated real-file
+sample identified both survivors inside the verified owning cgroup. Kernel
+containment reaped them, but the standing guard correctly failed the run.
+Test teardown now keeps its runner alive for at most two seconds while
+kernel-owned descendants finish shutdown. Persistent descendants fail with
+their identities named and are reaped by the service. This reads only the
+verified owning cgroup and never signals an observed process by argv.
+The transient-tail and persistent-orphan regressions were red, then green;
+the persistent case preserves an identical-argv bystander. Spawn ownership
+and teardown pass all six tests with 27 assertions. The actual native
+response-injection file then passes all six cases and its enclosing guard,
+with zero owned survivors among the 55 recorded sample identities.
+
 ## Process-launch audit
 
 The audit parsed test files and fixture/probe helpers throughout the repository
@@ -325,7 +339,7 @@ Linux path.
 | `src/lib/telegram/connector.test.ts` | 241, 609 | owned |
 | `src/lib/telemetry/sender.test.ts` | 67, 96, 119, 158, 235, 239 | owned |
 | `src/lib/tempSweep.test.ts` | 100, 101, 102, 213 | owned |
-| `src/lib/testing/testChildren.test.ts` | 9, 10, 11 | owned |
+| `src/lib/testing/testChildren.test.ts` | 11, 12, 13, 42, 44 | owned |
 | `src/lib/viewerWorkerLifecycle.test.ts` | 44, 66 | owned |
 | `src/runtime-host/hostRollback.test.ts` | 252, 278 | owned |
 | `src/runtime-host/journal.test.ts` | 2201, 2306, 2371, 3957 | owned |
