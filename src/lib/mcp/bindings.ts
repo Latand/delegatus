@@ -1743,10 +1743,16 @@ function refuseCrossProjectFromSeat(
 async function issueReportDenyList(control: ViewerControlDependencies | null, dependencies: ViewerMcpDomainDependencies): Promise<PublicDenyList> {
   let own: string | null = null;
   try { own = (dependencies.viewerProjects?.() ?? viewerOwnProjects())[0] ?? null; } catch { /* No project is exempt. */ }
-  if (dependencies.publicDenyList) return dependencies.publicDenyList(own);
-  const deny = await productionPublicDenyList(own, control, true);
-  const delegatus = delegatusIssueRepository(viewerPackageManifest.repository.url)?.toLowerCase() ?? null;
-  return { ...deny, projects: deny.projects.filter((project) => !delegatus || project.repository?.toLowerCase() !== delegatus) };
+  try {
+    if (dependencies.publicDenyList) return dependencies.publicDenyList(own);
+    const deny = await productionPublicDenyList(own, control, true, true);
+    const delegatus = delegatusIssueRepository(viewerPackageManifest.repository.url)?.toLowerCase() ?? null;
+    return { ...deny, projects: deny.projects.filter((project) => !delegatus || project.repository?.toLowerCase() !== delegatus) };
+  } catch {
+    throw new McpToolRefusal("the private data check could not read its name sources; retry after they are available", {
+      code: "issue_report_privacy_unavailable", status: 503, retryable: true,
+    });
+  }
 }
 
 /**
@@ -3499,14 +3505,16 @@ function knownPullRequests(project: string): PullRequestLookup {
  * What the scrubber looks for by name (§5.5), read at call time: every account
  * id and label, the OS user name, the home directory's name and the machine's
  * host name, the people the bot has seen in its allowlisted chats, and the
- * other projects in repository form. Every source fails soft to nothing.
+ * other projects in repository form. Public bridge reports retain their soft
+ * reading; issue reports require every source read to complete.
  */
-async function productionPublicDenyList(project: string | null, control: ViewerControlDependencies | null, postsToTelegram: boolean): Promise<PublicDenyList> {
+async function productionPublicDenyList(project: string | null, control: ViewerControlDependencies | null, postsToTelegram: boolean, requireComplete = false): Promise<PublicDenyList> {
   const accounts: string[] = [];
   const collect = (list: () => readonly { id: string; label: string }[]) => {
     try {
       for (const account of list()) accounts.push(account.id, account.label);
-    } catch {
+    } catch (error) {
+      if (requireComplete) throw error;
       // An unreadable registry contributes nothing.
     }
   };
@@ -3516,12 +3524,14 @@ async function productionPublicDenyList(project: string | null, control: ViewerC
   const local: string[] = [];
   try {
     local.push(os.userInfo().username, path.basename(os.homedir()), os.hostname().split(".")[0] ?? "");
-  } catch {
+  } catch (error) {
+    if (requireComplete) throw error;
     // Nothing to add.
   }
   /* The bot's people are read only for a project that posts to a bot chat:
      a bridge-only project shares nothing with the bot's chats. */
-  const people = control && project && postsToTelegram ? await telegramPeople(control) : [];
+  if (requireComplete && postsToTelegram && !control) throw new Error("Privacy names read is unavailable");
+  const people = control && (project || requireComplete) && postsToTelegram ? await telegramPeople(control, requireComplete) : [];
   const projects: { repository: string | null; names: string[] }[] = [];
   try {
     const own = project ? canonicalOrchestratorProject(project) : null;
@@ -3537,25 +3547,29 @@ async function productionPublicDenyList(project: string | null, control: ViewerC
         names: [repository?.split("/")[1] ?? "", projectDisplayName(key, aliases.displayNames[key])].filter(Boolean),
       });
     }
-  } catch {
+  } catch (error) {
+    if (requireComplete) throw error;
     // An unreadable catalog contributes nothing.
   }
   return { accounts, people, local, projects };
 }
 
-async function telegramPeople(control: ViewerControlDependencies): Promise<string[]> {
+async function telegramPeople(control: ViewerControlDependencies, requireComplete = false): Promise<string[]> {
   const people = new Set<string>();
   try {
     const chats = await readViewerControl(control, "/api/telegram/bot/agent?op=chats") as { chats?: { chat?: unknown; postAllowed?: unknown }[] };
+    if (requireComplete && !Array.isArray(chats.chats)) throw new Error("Privacy chats read is malformed");
     for (const chat of (chats.chats ?? []).filter((entry) => entry.postAllowed === true && typeof entry.chat === "string").slice(0, 4)) {
       const page = await readViewerControl(control, `/api/telegram/bot/agent?${new URLSearchParams({ op: "messages", chat: chat.chat as string, limit: "100", maxChars: "1" })}`) as { messages?: { from?: { name?: unknown; username?: unknown } | null; fromName?: unknown; fromUsername?: unknown }[] };
+      if (requireComplete && !Array.isArray(page.messages)) throw new Error("Privacy people read is malformed");
       for (const message of page.messages ?? []) {
         for (const value of [message.from?.name, message.from?.username, message.fromName, message.fromUsername]) {
           if (typeof value === "string" && value.trim()) people.add(value.replace(/^@/, "").trim());
         }
       }
     }
-  } catch {
+  } catch (error) {
+    if (requireComplete) throw error;
     // No bot, or no answer: nobody to look for.
   }
   return [...people];

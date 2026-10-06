@@ -59,6 +59,8 @@ const STATIC_LABELS: Record<StaticFindingClass, string> = {
 /* Blockquotes can sit inside nested bullet/ordered lists or use HTML. Read
    this in every decoded view before markdownVisible removes the tags. */
 const QUOTED_BLOCK = /(?:^|\n)\s*(?:(?:[-+*]|\d{1,9}[.)])\s+)*>|<blockquote\b/i;
+/* HTML q carries quotation semantics before the visible reading drops tags. */
+const HTML_QUOTATION = /<q\b/i;
 /* A quotation is two or more words between quotation marks. One marked word
    (a state called "delivered") is a term, and an apostrophe inside a word
    opens nothing and closes nothing ('don't stop now' is one quotation). Code spans stay readable: an error text belongs in one. A
@@ -151,7 +153,7 @@ function classesOf(line: string, deny: PublicDenyList): Map<IssueReportFindingCl
   for (const view of views) {
     for (const kind of privateClasses(view, deny, { strict: true })) found.set(kind, privateClassLabel(kind));
     for (const kind of staticSensitiveClasses(view)) found.set(kind, STATIC_LABELS[kind]);
-    if (QUOTATION.some((pattern) => pattern.test(view))) found.set("quote", QUOTATION_LABEL);
+    if (HTML_QUOTATION.test(view) || QUOTATION.some((pattern) => pattern.test(view))) found.set("quote", QUOTATION_LABEL);
     if (SPEAKER_LINE.test(view)) found.set("quote", `a line of a conversation; ${OWN_WORDS}`);
     if (ATTRIBUTED_OPERATOR_WORDS.test(view)) found.set("quote", `a line of a conversation; ${OWN_WORDS}`);
     if (QUOTED_BLOCK.test(view)) found.set("quote", `a quoted block; ${OWN_WORDS}`);

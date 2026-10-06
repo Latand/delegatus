@@ -46,7 +46,7 @@ const REPORT = {
 
 type Publisher = (report: { title: string; body: string }, repository: string) => Promise<string>;
 
-function harness(options: { publisher?: Publisher; finder?: (report: { title: string; body: string }) => Promise<string | null>; deny?: PublicDenyList; privacyRead?: () => Promise<void> } = {}) {
+function harness(options: { publisher?: Publisher; finder?: (report: { title: string; body: string }) => Promise<string | null>; deny?: PublicDenyList; privacyRead?: () => Promise<void>; controlRead?: (url: string) => Promise<Record<string, unknown>> } = {}) {
   const published: { title: string; body: string; repository: string }[] = [];
   /* What the operator wrote, per conversation: the fake of the transcript read. */
   const said = new Map<string, { at: number; text: string }[]>();
@@ -64,7 +64,7 @@ function harness(options: { publisher?: Publisher; finder?: (report: { title: st
         ? { kind: "worker", conversationId: caller.conversationId, role: caller.role }
         : { kind: "unidentified" }),
       callerAttribution: () => caller,
-      publicDenyList: options.privacyRead ? undefined : () => options.deny ?? DENY,
+      publicDenyList: options.privacyRead || options.controlRead ? undefined : () => options.deny ?? DENY,
       viewerProjects: () => ["repo-report"],
       issueReportsDir: () => sandbox,
       issueReportRepository: () => REPOSITORY,
@@ -75,9 +75,10 @@ function harness(options: { publisher?: Publisher; finder?: (report: { title: st
         return options.publisher ? options.publisher(report, repository) : ISSUE_URL;
       },
     };
-    const control = options.privacyRead ? {
+    const control = options.privacyRead || options.controlRead ? {
       post: async () => { throw new Error("unexpected control mutation"); },
       get: async (url: string) => {
+        if (options.controlRead) return options.controlRead(url);
         expect(url).toBe("/api/telegram/bot/agent?op=chats");
         await options.privacyRead!();
         return { chats: [] };
@@ -444,6 +445,9 @@ const additionalPrivateReports: [string, string][] = [
   ["quote", "The operator told me in\r\nthe chat <q>restart every agent now</q>."],
   ["quote", "Оператор написав у\nсвоєму повідомленні `перезапусти всіх агентів зараз`."],
   ["quote", "Користувач сказала мені у\r\nповідомленні <q>перезапусти всіх агентів зараз</q>."],
+  ["quote", "<q>restart every agent now</q>"],
+  ["quote", "<Q class=\"quotation\">restart every agent now</Q>"],
+  ["quote", "<q><b>перезапусти</b> всіх агентів зараз</q>"],
   ["host", "Machine: remote-worker"],
   ["host", "node = remote-worker"],
   ["host", '{"machine":"remote-worker"}'],
@@ -483,6 +487,53 @@ test("unpopulated machine fields and technical spans after a speech sentence sta
   h.operatorSays((await shown(h, digest)).uk);
   expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
   expect(h.published).toEqual([{ ...report, repository: REPOSITORY }]);
+});
+
+const unavailableNameSources = ["chats throws", "chats malformed", "messages throws", "messages malformed"];
+function unavailableNameReader(mode: string) {
+  return async (url: string): Promise<Record<string, unknown>> => {
+    if (url.endsWith("op=chats") && mode.startsWith("messages")) return { chats: [{ chat: "allowed-chat", postAllowed: true }] };
+    if (mode.endsWith("throws")) throw new Error("private-source-error-must-stay-private");
+    return {};
+  };
+}
+
+test.each(unavailableNameSources)("unavailable %s refuses preview without storage or private error text", async (mode) => {
+  const h = harness({ controlRead: unavailableNameReader(mode) });
+  const refused = await h.call(REPORTER, { action: "preview", title: REPORT.title, body: "Ada observed the failed launch." });
+  expect(refused).toMatchObject({ ok: false, code: "issue_report_privacy_unavailable", retryable: true });
+  expect(JSON.stringify(refused)).not.toContain("private-source-error-must-stay-private");
+  expect(fs.readdirSync(sandbox)).toEqual([]);
+  expect(h.published).toEqual([]);
+});
+
+test.each(unavailableNameSources)("unavailable %s refuses an approved legacy preview before its claim", async (mode) => {
+  const h = harness({ controlRead: unavailableNameReader(mode) });
+  const { digest } = recordIssueReportPreview({ title: REPORT.title, body: "Ada observed the failed launch." }, REPORTER.conversationId!, { directory: sandbox });
+  h.operatorSays((await shown(h, digest)).uk);
+  expect(await h.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: false, code: "issue_report_privacy_unavailable", retryable: true });
+  expect(readIssueReportPreview(digest, sandbox)).toMatchObject({ state: "preview" });
+  expect(readIssueReportPreview(digest, sandbox)?.publication).toBeUndefined();
+  expect(h.published).toEqual([]);
+});
+
+test("available empty sources allow reports, recovered people sources reject known names", async () => {
+  let available = false;
+  const h = harness({ controlRead: async (url) => {
+    if (!available) throw new Error("privacy read unavailable");
+    return url.endsWith("op=chats")
+      ? { chats: [{ chat: "allowed-chat", postAllowed: true }] }
+      : { messages: [{ fromName: "Ada" }] };
+  } });
+  expect(await h.call(REPORTER, { action: "preview", ...REPORT })).toMatchObject({ ok: false, code: "issue_report_privacy_unavailable" });
+  available = true;
+  expect(await h.call(REPORTER, { action: "preview", title: REPORT.title, body: "Ada observed the failed launch." })).toMatchObject({ ok: false, code: "issue_report_private_data" });
+  expect(fs.readdirSync(sandbox)).toEqual([]);
+  const empty = harness({ controlRead: async () => ({ bot: { connected: false }, chats: [] }) });
+  const digest = await previewed(empty);
+  empty.operatorSays((await shown(empty, digest)).en);
+  expect(await empty.call(SEAT_CALLER, { action: "publish", digest })).toMatchObject({ ok: true, published: true });
+  expect(empty.published).toEqual([{ ...REPORT, repository: REPOSITORY }]);
 });
 
 test("technical numeric evidence and source line references remain publishable", async () => {
