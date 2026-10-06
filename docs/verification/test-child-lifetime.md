@@ -30,3 +30,336 @@ is in the proof fixture, so no product startup behavior changes in this fix.
 The actual-fixture regression was red before the fix: 1,480 CPU milliseconds
 in a 1-second idle window, against a 200-millisecond ceiling. The test always
 terminates its recorded child and asserts its start identity is gone.
+
+## Earlier investigations
+
+Project-scoped and cross-project transcript searches covered the five phrases
+requested in the brief, then exact identifier and phrase variants. Search
+results that dropped common query terms were retried with quoted terms.
+Opened generation-close discussions from the earlier stage-recovery work
+reported 13 of 44 assertions failing on both branch and base; they did not
+establish that all spawned fixtures had exited. The current helper still
+registered a generation only after its first report. The new readiness and
+parent-death regressions reproduced that gap before the fix.
+
+Prior gate discussions used shared flock slots and an 8 GiB systemd scope.
+The current wrapper likewise provided a memory cap, without a supervisor tied
+to the caller's life. The merger still invoked the machine's older scope-only
+wrapper. Both publication and merger paths now use the repository runner.
+
+An opened memory from the transport retry review documented a hanging helper
+holding stdout/stderr after its direct Git parent timed out. Current test
+comparison likewise killed a process-group number after its root exited,
+which missed separately detached descendants. The new service retains every
+owned descendant in a kernel cgroup and waits for service shutdown. The
+exact orphan-fixture phrase returned no earlier relevant fix beyond this
+task. No prior source established the CPU cause; the measurements above do.
+
+## Ownership and runner checks
+
+Node's actual `ChildProcess.spawn` primitive and Bun's actual `Bun.spawn` are
+registered synchronously by the test preload. Imported aliases, fork/execFile
+and product helpers exercised in the test process share that registration.
+Each record carries PID, start identity and boot epoch. Native subprocess
+handles remain available for ordinary teardown. The Linux service retains the tree through hard runner death; portable runs also retain the ledger in an independent guardian. It authorizes a signal only
+after the recorded start identity is still live; argv never grants authority.
+
+Linux heavy gates now run as transient systemd services in the existing
+slot wrapper. `KillMode=control-group`, `TimeoutStopSec=2s` and `RuntimeMaxSec`
+cover detached children and an unavailable supervisor. The service checks
+the caller's start identity every 100 milliseconds. Normal command exit
+checks its owned cgroup for survivors and fails before systemd reaps them.
+Per-file comparison uses the same runner on head and base. Stage prompts
+prescribe that path; the merger's tests and privacy gate use it too. Linux
+refuses admission without the user manager. Direct and nested Bun test runners re-enter a private service before loading test modules, preserving their exact command line. Admission is bound to the command PID and real cgroup; the service also watches the original redirecting test process, including an unreaped zombie. Linux starts no polling guardian. Direct and nested Bun test runners re-enter a private service before loading test modules, preserving their exact command line. Admission is bound to the command PID and real cgroup; the service also watches the original redirecting test process, including an unreaped zombie. Linux starts no polling guardian.
+
+Fixture parent binding uses the existing kernel start-identity probes on
+Linux and macOS. Windows uses process creation FILETIME in the same backend.
+A dead or unverifiable parent ends the fixture; PID reuse cannot renew its
+lifetime. Blocking barriers check the binding inside their wait. The
+macOS/Windows runner fallback uses the independent guardian; these platforms
+have no Linux service cgroup and were not executed on this Linux machine.
+
+Actual-fixture checks cover a stall before the first report, normal parent
+exit before the report, and hard parent death. Actual gate-path checks cover
+normal exit with a survivor, Bun's test timeout, TERM cancellation, wrapper
+SIGKILL, test-process SIGKILL, and the runner deadline. Three more checks cover a nested direct test exiting, receiving TERM or receiving KILL after a short-lived helper detached a descendant between observations. Three more checks cover a nested direct test exiting, receiving TERM or receiving KILL after a short-lived helper detached a descendant between observations. Each check is bounded,
+retains recovery identities, verifies zero owned survivors, and preserves
+unrelated same-argv fixture and/or detached sleep bystanders before cleaning
+up those bystanders itself.
+
+## Process-launch audit
+
+The audit parsed test files and fixture/probe helpers throughout the repository
+for imported Node spawn/fork/exec calls, their aliases, namespace calls and Bun
+spawn calls. Calls inside generated scripts inherit runner containment too.
+The tables record every source file with matching real call syntax. A local
+function merely named spawn is excluded. Tests that substitute launch ports
+remain covered whenever the real primitive is called.
+
+Disposition **owned**: the preload now records the real handle before spawn
+returns, and the runner contains descendants from fork time. Existing local
+cleanup stays in place. Disposition **contained helper**: a separately launched
+helper stays in the owning run's cgroup; its parent does not need to receive a
+readiness report to establish ownership. Disposition **synchronous**: the
+caller waits for the command; the runner contains any descendants if the
+synchronous call or its parent is interrupted.
+
+The syntax census contains 224 files: 150 with asynchronous primitives and 74 with only synchronous primitives. These dispositions describe the verified Linux path.
+
+The syntax census contains 225 files: 151 with asynchronous primitives and 74 with only synchronous primitives. These dispositions describe the verified Linux path.
+
+| File | Async launch sites | Disposition |
+| --- | --- | --- |
+| `scripts/fixtures/detachedChildParent.fixture.ts` | 5 | contained helper |
+| `scripts/fixtures/nestedTestRunner.fixture.ts` | 7 | contained helper |
+| `scripts/fixtures/ownedRunner.fixture.ts` | 9, 14 | contained helper |
+| `scripts/owned-runner.integration.test.ts` | 23, 26, 31, 70, 72 | owned |
+| `src/lib/pipelines/fixtures/generationParent.ts` | 7 | contained helper |
+| `src/lib/pipelines/stageHostGenerationLifetime.integration.test.ts` | 36, 64, 67 | owned |
+| `src/lib/testing/testChildren.test.ts` | 9, 10, 11 | owned |
+| `bin/__fixtures__/cli-self-update.ts` | 281 | contained helper |
+| `bin/cli.exposure.integration.test.ts` | 262, 284, 317, 336, 355, 389, 417, 444, 469, 496 | owned |
+| `bin/cli.selfUpdate.coldRecovery.integration.test.ts` | 100 | owned |
+| `bin/cli.selfUpdate.divergedApply.integration.test.ts` | 116 | owned |
+| `bin/cli.selfUpdate.integration.test.ts` | 82, 221, 234, 262, 288, 300, 376, 506, 862, 1017, 1042, 1053, 1101, 1130, 1230, 1239, 1317, 1354, 1468, 1477, 1520, 1747 | owned |
+| `bin/launcher-credentials.test.ts` | 211, 229, 230, 265, 266, 310 | owned |
+| `bin/launcher-relaunch.test.ts` | 116, 184 | owned |
+| `bin/mcp-server.test.ts` | 27, 77, 327, 741, 783, 830, 906 | owned |
+| `bin/server-runtime.test.ts` | 201, 262 | owned |
+| `scripts/audit-with-retry.test.ts` | 68 | owned |
+| `scripts/bootstrap-runtime-host.test.ts` | 113 | owned |
+| `scripts/braces-patch.test.ts` | 66 | owned |
+| `scripts/gate-slot.test.ts` | 33 | owned |
+| `scripts/install-mcp.test.ts` | 30, 173 | owned |
+| `scripts/local-gate-tests.test.ts` | 221 | owned |
+| `scripts/npm-package-smoke.test.ts` | 13 | owned |
+| `scripts/privacy-publication-gate.test.ts` | 2175 | owned |
+| `scripts/privacy-test-process.ts` | 22 | owned helper; existing 20-second deadline and finally join retained |
+| `scripts/probe-realtime-v3.ts` | 276 | contained helper |
+| `scripts/rebuild.test.ts` | 104 | owned |
+| `scripts/runtime-host-viewer-adapter.test.ts` | 107, 258, 520, 598, 700, 1051, 1263, 1340 | owned |
+| `src/app/api/agent/snapshot/standalone.integration.test.ts` | 385 | owned |
+| `src/app/api/files/route.test.ts` | 521, 894, 3925 | owned |
+| `src/app/api/runtime/hosts/route.test.ts` | 29, 99 | owned |
+| `src/app/api/spawn/route.test.ts` | 2421, 2561 | owned |
+| `src/app/servedPayloadSecrets.test.ts` | 104 | owned |
+| `src/components/LogFeed.prependAnchor.dom.test.tsx` | 324 | owned |
+| `src/components/team/passkey.browser.test.ts` | 112 | owned |
+| `src/lib/accounts/accountMutation.callers.test.ts` | 130 | owned |
+| `src/lib/accounts/accountMutation.fixture.ts` | 12 | contained helper; bounded readiness and cleanup retained, generated child now binds to runner |
+| `src/lib/accounts/accountMutation.test.ts` | 39, 120, 181, 231, 247, 283, 318, 352, 389, 486 | owned |
+| `src/lib/accounts/accountsStore.sqlite.test.ts` | 100 | owned |
+| `src/lib/accounts/claude.test.ts` | 287, 590, 663 | owned |
+| `src/lib/accounts/claudeLoginIdentity.test.ts` | 178, 289 | owned |
+| `src/lib/accounts/claudeProvider.test.ts` | 386, 438 | owned |
+| `src/lib/accounts/codex.test.ts` | 153, 162, 302, 388 | owned |
+| `src/lib/accounts/copilotLogin.test.ts` | 204 | owned |
+| `src/lib/accounts/manager.interprocess.test.ts` | 76, 100, 204, 270, 310, 330, 369 | owned |
+| `src/lib/accounts/migration/coordinatorTurnAuthority.test.ts` | 212 | owned |
+| `src/lib/accounts/projectBindings.interprocess.test.ts` | 43 | owned |
+| `src/lib/agent/cli.integration.test.ts` | 70 | owned |
+| `src/lib/agent/cli.test.ts` | 84 | owned |
+| `src/lib/agent/codexSpawnPolicy.test.ts` | 99, 178, 355, 429 | owned |
+| `src/lib/agent/ephemeral.probe.test.ts` | 57 | owned |
+| `src/lib/agent/identityWaveMigration.test.ts` | 976 | owned |
+| `src/lib/agent/registry.sqlite.test.ts` | 475, 951, 961, 999, 1009, 1046, 1119, 1134, 1169, 1199, 1222, 1243, 1625, 1709, 1906, 1921 | owned |
+| `src/lib/agent/registry.sqliteOnly.test.ts` | 305 | owned |
+| `src/lib/agent/registry.test.ts` | 1774 | owned |
+| `src/lib/agent/spawnPolicy.test.ts` | 60, 92 | owned |
+| `src/lib/board/store.sqlite.test.ts` | 76 | owned |
+| `src/lib/board/store.test.ts` | 77, 135, 221 | owned |
+| `src/lib/boardMaintenance/store.test.ts` | 18, 23 | owned |
+| `src/lib/externalRelay/store.test.ts` | 54, 96 | owned |
+| `src/lib/flows/decisions.test.ts` | 132 | owned |
+| `src/lib/flows/engine.test.ts` | 1090, 1184, 1272 | owned |
+| `src/lib/flows/exec.test.ts` | 217, 252 | owned |
+| `src/lib/flows/store.test.ts` | 190 | owned |
+| `src/lib/links/boardSync.test.ts` | 50 | owned |
+| `src/lib/links/pairing.test.ts` | 25 | owned |
+| `src/lib/mcp/bindings.test.ts` | 4221, 4258 | owned |
+| `src/lib/mcp/conversationAction.integration.test.ts` | 97 | owned |
+| `src/lib/mcp/ownedChildren.runnerFixture.ts` | 33 | contained helper |
+| `src/lib/mcp/ownedFixtureChildren.test.ts` | 18 | owned |
+| `src/lib/mcp/rolePresets.test.ts` | 259 | owned |
+| `src/lib/mcp/server.test.ts` | 172, 297, 877, 884, 917, 969, 1020, 1042, 1048, 1091, 1150, 1221, 1252, 1273, 1289, 1341, 1361, 1377, 1428, 1445, 1451, 1504, 1521, 1528, 1579, 1595, 1618, 1676, 1694, 1710, 1717 | owned |
+| `src/lib/mcp/stdio.integration.test.ts` | 143, 196, 590 | owned |
+| `src/lib/mcp/taskPosition.integration.test.ts` | 166 | owned |
+| `src/lib/mcp/writerConcurrency.test.ts` | 68, 221 | owned |
+| `src/lib/memory/controller.test.ts` | 79, 100 | owned |
+| `src/lib/memory/hook.test.ts` | 33, 47, 72, 91, 113, 150, 198 | owned |
+| `src/lib/monitor/seatTickController.test.ts` | 826 | owned |
+| `src/lib/pipelines/engine.test.ts` | 4026, 5096, 5450, 5452, 9436, 13754, 16616, 16653, 16708, 16818, 16863, 17003, 17033, 17158, 17328, 17355, 17515, 18278, 20520 | owned |
+| `src/lib/pipelines/fixtures/stageHostGeneration.ts` | 63, 76 | contained helper |
+| `src/lib/pipelines/git.test.ts` | 864, 2436 | owned |
+| `src/lib/pipelines/parkedPublication.test.ts` | 1000, 1051 | owned |
+| `src/lib/pipelines/severedStageRetry.test.ts` | 108 | owned |
+| `src/lib/pipelines/stageHostGenerationClose.integration.test.ts` | 91, 154, 209 | owned; registration before readiness, named deadline and identity cleanup |
+| `src/lib/pipelines/stageHostGenerationIdle.integration.test.ts` | 19 | owned |
+| `src/lib/pipelines/stageInput.restricted.probe.test.ts` | 70 | owned |
+| `src/lib/pipelines/store.test.ts` | 102, 124, 165, 877 | owned |
+| `src/lib/pipelines/terminalReap.test.ts` | 425, 493 | owned |
+| `src/lib/pipelines/worktreeSweep.test.ts` | 201, 753 | owned |
+| `src/lib/proc/darwinArgv.test.ts` | 91 | owned |
+| `src/lib/proc/windows.test.ts` | 45 | owned |
+| `src/lib/processGroup.test.ts` | 159 | owned |
+| `src/lib/resourceViewerTree.test.ts` | 150, 153 | owned |
+| `src/lib/resources.structuredHosts.test.ts` | 220, 387, 427, 498 | owned |
+| `src/lib/resources.test.ts` | 506, 551, 605, 2588 | owned |
+| `src/lib/resources.truth.test.ts` | 107 | owned |
+| `src/lib/runtime/agentMemory.scope.test.ts` | 19 | owned |
+| `src/lib/runtime/agentMemory.test.ts` | 241 | owned |
+| `src/lib/runtime/claudeStreamBrokerHost.test.ts` | 782, 858, 2276, 2351 | owned |
+| `src/lib/runtime/codexAppServerHost.injectCli.test.ts` | 61 | owned |
+| `src/lib/runtime/codexAppServerHost.injectResponses.test.ts` | 90 | owned |
+| `src/lib/runtime/codexAppServerHost.test.ts` | 5043 | owned |
+| `src/lib/runtime/codexHistoryReader.test.ts` | 402 | owned |
+| `src/lib/runtime/codexSteerDelivery.integration.test.ts` | 62 | owned |
+| `src/lib/runtime/fixtures/nativeCodexRuntime.ts` | 167 | contained helper |
+| `src/lib/runtime/fixtures/ownedHostProcess.ts` | 11 | contained helper; identity before spawn event, named deadline, bounded handle cleanup and parent binding |
+| `src/lib/runtime/fixtures/releaseHandoverIncumbent.ts` | 50 | contained helper |
+| `src/lib/runtime/fixtures/seatSuccessorHost.ts` | 30 | contained helper |
+| `src/lib/runtime/handoffQueueStore.test.ts` | 98 | owned |
+| `src/lib/runtime/hostlessSessionSettlement.test.ts` | 36, 293, 363 | owned |
+| `src/lib/runtime/nativeCodexQueue.test.ts` | 60 | owned |
+| `src/lib/runtime/nativeQueueCompaction.integration.test.ts` | 221 | owned |
+| `src/lib/runtime/nativeQueueHost.integration.test.ts` | 82 | owned |
+| `src/lib/runtime/permissionGuard.test.ts` | 82 | owned |
+| `src/lib/runtime/releaseInterruption.test.ts` | 415 | owned |
+| `src/lib/runtime/runtimeImageStore.test.ts` | 453, 489 | owned |
+| `src/lib/runtime/severedHostReap.test.ts` | 51 | owned |
+| `src/lib/runtime/startup.test.ts` | 2474, 2580, 2600 | owned |
+| `src/lib/runtime/startupFinalization.integration.test.ts` | 282, 519, 600 | owned |
+| `src/lib/runtime/structuredDelivery.integration.test.ts` | 41, 4327 | owned |
+| `src/lib/runtime/structuredDeliveryRebind.test.ts` | 648 | owned |
+| `src/lib/runtime/structuredHostControl.test.ts` | 79, 89 | owned |
+| `src/lib/runtime/structuredHostRetirement.test.ts` | 231 | owned |
+| `src/lib/runtime/structuredMessageDelivery.test.ts` | 562 | owned |
+| `src/lib/runtime/structuredSpawn.integration.test.ts` | 4685, 4778, 4903, 5148 | owned |
+| `src/lib/scanner/discover.test.ts` | 40 | owned |
+| `src/lib/scanner/observe.singleFlight.test.ts` | 134 | owned |
+| `src/lib/scanner/process.test.ts` | 45, 50, 55 | owned |
+| `src/lib/scanner/projectDirectories.test.ts` | 101 | owned |
+| `src/lib/scanner/roots.claudeTasks.test.ts` | 55, 91 | owned |
+| `src/lib/selfUpdate/actions.test.ts` | 315 | owned |
+| `src/lib/selfUpdate/pid.test.ts` | 68 | owned |
+| `src/lib/selfUpdate/quietDeadHosts.test.ts` | 48, 327, 346, 393, 494, 571, 606, 650, 684, 746, 762, 812, 847, 903, 976, 1016, 1052, 1090, 1116, 1141, 1194, 1276, 1289 | owned |
+| `src/lib/selfUpdate/snapshotIdentity.test.ts` | 34 | owned |
+| `src/lib/session/titleStore.interprocess.test.ts` | 32 | owned |
+| `src/lib/state/buildPhaseGuard.test.ts` | 133 | owned |
+| `src/lib/state/durability.test.ts` | 366 | owned |
+| `src/lib/state/hotStateStores.sqlite.test.ts` | 41, 118, 235, 284, 367, 444, 808, 862, 870 | owned |
+| `src/lib/state/stateLeaseRecovery.test.ts` | 168 | owned |
+| `src/lib/tasks/store.sqlite.test.ts` | 65 | owned |
+| `src/lib/telegram/connector.test.ts` | 241, 609 | owned |
+| `src/lib/telemetry/sender.test.ts` | 235 | owned |
+| `src/lib/tempSweep.test.ts` | 100, 101, 102, 213 | owned |
+| `src/lib/viewerWorkerLifecycle.test.ts` | 44, 66 | owned |
+| `src/runtime-host/hostRollback.test.ts` | 252, 278 | owned |
+| `src/runtime-host/journal.test.ts` | 2201, 2306, 2371, 3957 | owned |
+| `src/runtime-host/mcpProbeStdioTransport.ts` | 70 | contained helper |
+| `src/runtime-host/mcpRuntimeRelease.test.ts` | 78, 120, 175 | owned |
+| `src/runtime-host/runtimeHostFence.test.ts` | 60, 115, 124 | owned |
+| `src/runtime-host/runtimeHostStartup.test.ts` | 175 | owned |
+| `test-preload.ts` | 19 | contained helper |
+
+| File | Synchronous launch sites | Disposition |
+| --- | --- | --- |
+| `bin/agent-binaries.test.ts` | 75, 93 | synchronous |
+| `bin/envAlias.test.ts` | 65, 121 | synchronous |
+| `bin/launcher-custody.test.ts` | 73 | synchronous |
+| `bin/self-update-supervisor.test.ts` | 27 | synchronous |
+| `bin/skillLinks.test.ts` | 18 | synchronous |
+| `docs/screenshots/issue-499/deepen-to-evidence-revision.test.ts` | 34, 55, 69, 105, 149 | synchronous |
+| `docs/screenshots/issue-499/depth-one-evidence.test.ts` | 33, 42, 51, 72, 88, 92 | synchronous |
+| `docs/screenshots/issue-499/evidence.test.ts` | 93, 108 | synchronous |
+| `evals/roles/controls.test.ts` | 16 | synchronous |
+| `evals/roles/lifecycle.test.ts` | 116 | synchronous |
+| `scripts/ci-platform-scope.test.ts` | 120 | synchronous |
+| `scripts/deploy-checkout.test.ts` | 6 | synchronous |
+| `scripts/docker-image-scope.test.ts` | 77, 162, 168 | synchronous |
+| `scripts/dockerfile-permissions.test.ts` | 56 | synchronous |
+| `scripts/eslint-changes.test.ts` | 13 | synchronous |
+| `scripts/harness-ledger.ts` | 673, 796 | synchronous |
+| `scripts/local-gate-tests.ts` | 143, 183 | synchronous |
+| `scripts/local-gate.test.ts` | 126, 141, 145, 161, 167, 179, 180, 181, 183, 193, 194, 196, 204, 214, 215, 220, 221, 222, 223, 225, 287, 296, 303 | synchronous |
+| `scripts/merge-batch.test.ts` | 222, 303 | synchronous |
+| `scripts/privacy-media-workflow.test.ts` | 46, 77 | synchronous |
+| `scripts/publish-workflow.test.ts` | 189, 328 | synchronous |
+| `scripts/supply-chain-check.test.ts` | 14 | synchronous |
+| `src/app/api/artifact/route.test.ts` | 143 | synchronous |
+| `src/app/api/pipelines/route.test.ts` | 24 | synchronous |
+| `src/components/Viewer.switching.dom.test.tsx` | 299 | synchronous |
+| `src/components/kanban/issue1695BrowserHarness.ts` | 26, 320, 324 | synchronous |
+| `src/components/kanban/kanbanBoard.browser.test.tsx` | 6709, 11921, 12068 | synchronous |
+| `src/lib/accounts/claudeCredentials.test.ts` | 97, 127 | synchronous |
+| `src/lib/agent/spawnCommand.contention.test.ts` | 92, 155, 226 | synchronous |
+| `src/lib/agent/transcript.test.ts` | 36, 40 | synchronous |
+| `src/lib/attention/landing.test.ts` | 42 | synchronous |
+| `src/lib/flows/git.test.ts` | 19, 20, 46 | synchronous |
+| `src/lib/forge/autoMerge.test.ts` | 258, 292, 336, 375, 406 | synchronous |
+| `src/lib/git/agentForgeCredentials.test.ts` | 70, 87, 88, 89, 119, 120, 413, 419, 435, 438 | synchronous |
+| `src/lib/git/agentHistoryGuard.test.ts` | 46, 130 | synchronous |
+| `src/lib/git/codexShellPolicy.test.ts` | 69 | synchronous |
+| `src/lib/links/self.test.ts` | 338, 561, 732 | synchronous |
+| `src/lib/links/taskSync.test.ts` | 387, 389, 475 | synchronous |
+| `src/lib/mcp/callCost.test.ts` | 577 | synchronous |
+| `src/lib/mcp/compactAnswers.test.ts` | 38 | synchronous |
+| `src/lib/mcp/spawnRecovery.integration.test.ts` | 251 | synchronous |
+| `src/lib/mcp/workLinks.test.ts` | 21 | synchronous |
+| `src/lib/onboarding/healthCheck.test.ts` | 342, 346, 357, 365 | synchronous |
+| `src/lib/orchestrator/seatProjectIdentity.test.ts` | 22 | synchronous |
+| `src/lib/pipelines/controllerArtifacts.test.ts` | 22, 129 | synchronous |
+| `src/lib/pipelines/remoteActions.test.ts` | 75, 155, 212, 663, 721 | synchronous |
+| `src/lib/pipelines/stageInput.test.ts` | 18, 142, 183, 211, 268 | synchronous |
+| `src/lib/projects/succession.test.ts` | 55 | synchronous |
+| `src/lib/reaperRuntime.test.ts` | 1654, 1655, 1656, 1658, 1659, 1660, 1696, 1697, 1698, 1700, 1701, 1702, 1704, 1705 | synchronous |
+| `src/lib/review/extraction.test.ts` | 73 | synchronous |
+| `src/lib/reviewHistory/reader.test.ts` | 546 | synchronous |
+| `src/lib/runtime/agentPublicationIdentity.test.ts` | 20, 107 | synchronous |
+| `src/lib/runtime/codexStructuredUserText.compact.test.ts` | 82 | synchronous |
+| `src/lib/runtime/codexSubagentDetection.test.ts` | 484 | synchronous |
+| `src/lib/runtime/integrationTestHome.ts` | 73, 101, 102 | synchronous |
+| `src/lib/runtime/pipelineStageHostAccess.integration.test.ts` | 36 | synchronous |
+| `src/lib/runtime/sendSettlement.test.ts` | 1558, 1666 | synchronous |
+| `src/lib/scanner/describe.test.ts` | 661, 701, 726 | synchronous |
+| `src/lib/search/projectScope.test.ts` | 30, 31 | synchronous |
+| `src/lib/selfUpdate/auto.test.ts` | 39, 114, 517, 551, 725, 807, 864, 913, 1615 | synchronous |
+| `src/lib/selfUpdate/package.test.ts` | 35 | synchronous |
+| `src/lib/stateOwnership.entryPoints.test.ts` | 63, 87 | synchronous |
+| `src/lib/stateOwnership.test.ts` | 98 | synchronous |
+| `src/lib/tasks/ghostSettlement.test.ts` | 122 | synchronous |
+| `src/lib/telegram/bot/service.test.ts` | 654 | synchronous |
+| `src/lib/telegram/packaging.test.ts` | 72, 149, 183, 213, 302, 369, 447, 468 | synchronous |
+| `src/lib/telegram/vendorPagination.test.ts` | 64 | synchronous |
+| `src/lib/tempDirs.test.ts` | 88 | synchronous |
+| `src/lib/tmux.test.ts` | 647, 647, 663, 691, 759, 783 | synchronous |
+| `src/lib/workflows/engine.test.ts` | 169, 580, 602 | synchronous |
+| `src/lib/workflows/provision.test.ts` | 68, 96 | synchronous |
+| `src/runtime-host/candidateContainer.test.ts` | 94, 204, 344 | synchronous |
+| `src/runtime-host/canonicalMirror.test.ts` | 109 | synchronous |
+| `src/runtime-host/deploymentAdapter.test.ts` | 48 | synchronous |
+
+Additional launch wiring checked by text and imports:
+
+| File | Result |
+| --- | --- |
+| `src/lib/mcp/ownedFixtureChildren.ts` | Receives existing handles; immediate registration and handle cleanup retained. The preload owns them before any caller can await. |
+| `src/lib/testing/testChildren.ts` | Wraps the real Node primitive and both Bun overloads before spawn returns; supplies the parent identity even without options. |
+| `scripts/local-gate-tests.ts` | Per-file comparison launches the kernel-owned runner and removes the old post-exit group-number kill. |
+| `src/lib/runtime/claudeStreamBrokerHost.integration.test.ts` | Generated launchers and product launch ports remain inside their test service. |
+| `src/lib/runtime/codexAppServerHost.integration.test.ts` | Generated launchers and product launch ports remain inside their test service. |
+| `src/lib/runtime/copilotAcpHost.integration.test.ts` | Calls a product launch port; the preload owns real process creation. |
+| `src/app/api/spawn/route.binding.test.ts` | A local function calls the route, without a subprocess primitive. |
+| `src/lib/monitor/seatTickSources.test.ts` | The named spawn creates synthetic records, without a child process. |
+| `src/lib/pipelines/resolveDecision.test.ts` | A substituted launch callback creates synthetic records. |
+| `src/lib/pipelines/stageCompletion.test.ts` | A substituted launch callback creates synthetic records. |
+| `src/lib/telegram/reportRunner.test.ts` | A substituted launch port creates synthetic reports. |
+
+Long-lived fixture entry points with no spawn call of their own also bind to the recorded originating runner: `stageHostGeneration.ts`, `stateLeaseOwner.fixture.ts`, `releaseHandoverIncumbent.ts`, `seatSuccessorHost.ts`, `codexSeatSuccessor.ts`, `nativeCodexRuntime.ts`, `packagedRollback.ts`, `fakeClaudePermissionCli.ts`, and the three `claude-stream-json-*` fixtures. The runtime image writer and structured image admission writer check that identity inside their bounded blocking barriers. MCP fixtures inherit it through their shared barrier helper. Intended adoption can outlast an intermediate generation while the originating test run is alive. A zombie runner has already ended and cannot retain fixture ownership.
+
+## Remaining portable containment decision
+
+Two independent reviews reproduced a detached descendant escaping the portable guardian between observations of its short-lived parent. The portable branch provides identity-safe cleanup of recorded processes with bounded interruption and cleanup, but cannot establish ownership of every descendant at birth. Its empty ledger performs no host-wide scans. Linux runs use their service cgroup instead of this guardian.
+
+The unresolved choice is to refuse unsupported admission until native kernel containment is supplied, or explicitly limit the permanent guarantee to Linux while retaining portable execution. Refusing unsupported admission preserves the stated lifetime guarantee and is the recommended option. Native macOS and Windows execution was unavailable in this session. This known gap prevents a claim that the complete cross-platform acceptance contract is met.

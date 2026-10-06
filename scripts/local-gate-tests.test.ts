@@ -142,10 +142,10 @@ test("cache prunes owned bounded entries, preserves unrelated files, and refuses
   prepareCache(cache); expect(existsSync(pending)).toBeFalse(); expect(existsSync(oversized)).toBeFalse();
   const linked = path.join(dir, "linked"); symlinkSync(cache, linked, "dir"); expect(() => prepareCache(linked)).toThrow("owned private directory");
 });
-test.skipIf(process.platform === "win32")("test helpers in the recorded process group cannot keep the slot alive", () => {
+test.skipIf(process.platform === "win32")("a surviving test helper fails the run and cannot keep the slot alive", () => {
   const marker = path.join(gateTemporaryRoot(), `gate-helper-${process.pid}-${Math.random()}`); roots.push(marker);
   const f = fixture(`import { test } from "bun:test"; import { spawn } from "node:child_process"; import { appendFileSync } from "node:fs"; const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }); appendFileSync(${JSON.stringify(marker)}, String(child.pid) + "\\n"); child.unref(); test("helper", () => {});`);
-  expect(f.run().introduced).toHaveLength(0);
+  expect(f.run().preexisting.length).toBeGreaterThan(0);
   for (const pid of readFileSync(marker, "utf8").trim().split("\n").map(Number)) {
     const probe = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" });
     expect(probe.status !== 0 || probe.stdout.trim().startsWith("Z")).toBeTrue();
@@ -155,7 +155,7 @@ test("real pre-push entry permits PRE-EXISTING and refuses NEW after privacy/typ
   const f = fixture(source(false));
   for (const leaf of [".githooks", ".github/workflows", "shims"]) mkdirSync(path.join(f.dir, leaf), { recursive: true });
   mkdirSync(path.join(f.dir, "scripts"));
-  for (const name of ["local-gate.ts", "local-gate-tests.ts", "gate-slot.sh", "verify-native-codex-runtime.ts"]) symlinkSync(path.join(root, "scripts", name), path.join(f.dir, "scripts", name));
+  for (const name of ["local-gate.ts", "local-gate-tests.ts", "gate-slot.sh", "owned-runner.ts", "verify-native-codex-runtime.ts"]) symlinkSync(path.join(root, "scripts", name), path.join(f.dir, "scripts", name));
   writeFileSync(path.join(f.dir, ".githooks/pre-push"), readFileSync(path.join(root, ".githooks/pre-push")));
   for (const name of ["platform-tests.yml", "bun-runtime.yml"]) writeFileSync(path.join(f.dir, ".github/workflows", name), readFileSync(path.join(root, ".github/workflows", name)));
   const calls = path.join(f.dir, "phases.log");
@@ -168,7 +168,7 @@ test("real pre-push entry permits PRE-EXISTING and refuses NEW after privacy/typ
   execFileSync("git", ["--git-dir", remote, "fetch", f.dir, "HEAD:main"], { env: f.env, stdio: "pipe" });
   f.git("remote", "set-url", "origin", remote); f.git("update-ref", "refs/remotes/origin/main", hookBase);
   writeFileSync(path.join(f.dir, "example.test.ts"), `// harmless\n${source(false)}`);
-  const env = { ...f.env, PATH: `${path.join(f.dir, "shims")}:${f.env.PATH}`, FIXTURE_BUN: process.execPath, FIXTURE_CALLS: calls, LLV_SKIP_HOOKS: "0", LLV_GATE_LOCK_DIR: f.dir };
+  const env = { ...f.env, PATH: `${path.join(f.dir, "shims")}:${f.env.PATH}`, FIXTURE_BUN: process.execPath, LLV_GATE_BUN: process.execPath, FIXTURE_CALLS: calls, LLV_SKIP_HOOKS: "0", LLV_GATE_LOCK_DIR: f.dir };
   const hook = () => spawnSync("bash", [".githooks/pre-push"], { cwd: f.dir, env, encoding: "utf8" });
   const accepted = hook(); if (accepted.status !== 0) throw new Error(accepted.stdout + accepted.stderr); expect(accepted.status).toBe(0);
   expect(accepted.stdout).toContain("PRE-EXISTING example.test.ts: contract > same name & Unicode Ω");

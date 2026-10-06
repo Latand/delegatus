@@ -180,16 +180,12 @@ function runFiles(root: string, files: readonly string[], sandbox: string, inher
     const fd = openSync(log, "w");
     let result: Bun.SyncSubprocess;
     try {
-      result = Bun.spawnSync({ cmd: [process.execPath, "test", `./${file}`, "--reporter=junit", `--reporter-outfile=${report}`, ...filter],
-        cwd: root, env, stdio: ["ignore", fd, fd], timeout: Math.min(FILE_BUDGET_MS, remaining), killSignal: "SIGKILL",
-        detached: process.platform !== "win32",
+      result = Bun.spawnSync({ cmd: [process.execPath, path.join(import.meta.dir, "owned-runner.ts"), ...(process.platform === "linux" ? [] : ["--portable"]), process.execPath, "test", `./${file}`, "--reporter=junit", `--reporter-outfile=${report}`, ...filter],
+        cwd: root, env: { ...env, LLV_OWNED_RUN_TIMEOUT_MS: String(Math.min(FILE_BUDGET_MS, remaining)) }, stdio: ["ignore", fd, fd], timeout: Math.min(FILE_BUDGET_MS, remaining) + 5_000, killSignal: "SIGKILL",
       });
     } finally { closeSync(fd); }
-    // Reap only the process group created for this file, including helpers that
-    // inherited the gate slot descriptor. No port/name based process cleanup.
-    if (process.platform !== "win32" && result.pid) {
-      try { process.kill(-result.pid, "SIGKILL"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
-    }
+    // The owned runner ends the service cgroup. A group number after the root
+    // exits is neither a bound handle nor proof against PID reuse.
     try {
       if (result.signalCode || result.exitedDueToTimeout || ![0, 1].includes(result.exitCode)) throw new Error(`runner did not finish (${result.signalCode ?? result.exitCode}${result.exitedDueToTimeout ? "; timed out" : ""})`);
       const output = readFileSync(log, "utf8");

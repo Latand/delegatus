@@ -36,6 +36,7 @@
  * _HOME, LLV_STATE_DIR, TMPDIR and LLV_RUNTIME_HOST_SOCKET must already point
  * at the isolated state the test owns.
  */
+import "@/lib/testing/fixtureLifetime";
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";

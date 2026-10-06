@@ -1,6 +1,6 @@
 import { expect, test, afterEach } from "bun:test";
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync, readFileSync, chmodSync, copyFileSync, symlinkSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { withAgentConfigSandbox } from "../src/lib/runtime/agentConfigSandbox";
@@ -97,8 +97,8 @@ test("merger lints baseline commits without the helper and upgrades persisted ol
   f.seed("eslint.config.mjs", 'export default [{ rules: { "no-unused-vars": "error" } }];\n');
   f.seed("example.js", "function example() { const old = 1; } example();\n");
   const head = f.addPr(12, "example.js", "\nfunction example() { const old = 1; } example();\n");
-  const runner: CommandRunner = async (cwd, args, env) => args[2]?.endsWith("eslint-changes.ts")
-    ? commandRunner(cwd, args.slice(1), env) : { code: 0, output: "" };
+  const runner: CommandRunner = async (cwd, args, env) => args[3]?.endsWith("eslint-changes.ts")
+    ? commandRunner(cwd, args.slice(2), env) : { code: 0, output: "" };
   const batch = new MergeBatch(f.repo, join(f.root, "merge-batch.json"), runner, f.gh);
   const state = await batch.build(`12@${head}`);
   const lint = localGateCommands(state.work, state.base).find(gate => gate.id === "eslint")!;
@@ -147,7 +147,7 @@ test("a real git bisect isolates a local gate culprit and rebuilds the remaining
     if (args[0] === "git" && args[1] === "bisect") {
       return commandRunner(cwd, ["git", "bisect", "run", "node", "-e", "process.exit(require('node:fs').existsSync('bad.txt') ? 1 : 0)"], env);
     }
-    return { code: args[1] === "bunx" && args[2] === "tsc" && existsSync(join(cwd, "bad.txt")) ? 1 : 0, output: "" };
+    return { code: args[2] === "bunx" && args[3] === "tsc" && existsSync(join(cwd, "bad.txt")) ? 1 : 0, output: "" };
   };
   const batch = new MergeBatch(f.repo, join(f.root, "merge-batch.json"), runner, f.gh);
   await batch.build(`12@${a},13@${bad},14@${c}`);
@@ -170,7 +170,12 @@ function landingFixture(mode: "green" | "attributed" | "unknown" | "privacy-file
   const commands: string[][] = [];
   const defaultRun: CommandRunner = async (_cwd, args, env) => {
     commands.push(args);
-    if (env?.LLV_STATE_DIR) expect(env.LLV_STATE_DIR).toStartWith("/var/tmp/");
+    if (env?.LLV_STATE_DIR) {
+      expect(env.LLV_STATE_DIR).toStartWith("/var/tmp/");
+      expect(env.HOME).toBe(join(dirname(env.LLV_STATE_DIR), "home"));
+      expect(env.XDG_CONFIG_HOME).toBe(join(dirname(env.LLV_STATE_DIR), "xdg_config_home"));
+      expect(env.LLV_VIEWER_CONTROL_URL).toBe("http://127.0.0.1:1");
+    }
     return { code: 0, output: "" };
   };
   const run = runOverride ?? setupRun?.(f) ?? defaultRun;
@@ -265,6 +270,7 @@ function seedRealTrustedPrivacyFiles(f: ReturnType<typeof fixture>): void {
   mkdirSync(join(f.repo, "src", "lib"), { recursive: true });
   copyFileSync(join(import.meta.dir, "privacy-publication-gate.ts"), join(f.repo, "scripts/privacy-publication-gate.ts"));
   copyFileSync(join(import.meta.dir, "generate-privacy-known-value-fingerprints.ts"), join(f.repo, "scripts/generate-privacy-known-value-fingerprints.ts"));
+  copyFileSync(join(import.meta.dir, "privacy-text-preparation.ts"), join(f.repo, "scripts/privacy-text-preparation.ts"));
   copyFileSync(join(import.meta.dir, "privacy-known-value-fingerprints.json"), join(f.repo, "scripts/privacy-known-value-fingerprints.json"));
   copyFileSync(join(import.meta.dir, "../src/lib/environmentIsolation.ts"), join(f.repo, "src/lib/environmentIsolation.ts"));
   f.seed("scripts/privacy-publication-gate.ts", readFileSync(join(f.repo, "scripts/privacy-publication-gate.ts"), "utf8"));
@@ -273,7 +279,7 @@ function seedRealTrustedPrivacyFiles(f: ReturnType<typeof fixture>): void {
 
 function trustedPrivacyRunner(f: ReturnType<typeof fixture>, rejectedIdentity?: string, observed: string[] = [], candidates: string[] = []): CommandRunner {
   return async (cwd, args, env) => {
-    if (args[1] === "bun" && args[2] === "scripts/privacy-publication-gate.ts") {
+    if (args[2] === "bun" && args[3] === "scripts/privacy-publication-gate.ts") {
       observed.push(cwd);
       const candidate = args[args.indexOf("--repository") + 1]!;
       candidates.push(candidate);
@@ -293,9 +299,9 @@ function trustedPrivacyRunner(f: ReturnType<typeof fixture>, rejectedIdentity?: 
 
 function realBodyPrivacyRunner(): CommandRunner {
   return async (cwd, args, env) => {
-    if (args[1] === "bun" && args[2] === "scripts/privacy-publication-gate.ts" && args.includes("--paths")) {
+    if (args[2] === "bun" && args[3] === "scripts/privacy-publication-gate.ts" && args.includes("--paths")) {
       const result = Bun.spawnSync({
-        cmd: [process.execPath, join(cwd, args[2]!), ...args.slice(3)],
+        cmd: [process.execPath, join(cwd, args[3]!), ...args.slice(4)],
         cwd,
         env: { ...process.env, ...env },
         stderr: "pipe",
@@ -614,7 +620,7 @@ test("BEHIND rebuilds at most three times", async () => {
   await expect(f.batch.land()).rejects.toThrow("three times");
   expect(f.batch.read().refreshes).toBe(3);
   expect(f.calls.filter((args) => args[1] === "merge")).toHaveLength(0);
-});
+}, 15_000);
 
 test("a deferred conflict only fast-forwards its original branch after landing, then needs independent review", async () => {
   const resolutionCandidates: string[] = [];
@@ -697,8 +703,8 @@ test("deferred resolutions run their own touched tests and block a failed resolu
   const testRuns: string[][] = [];
   let resolutionWork = "";
   const runner: CommandRunner = async (cwd, args) => {
-    if (args[1] === "bun" && args[2] === "test") {
-      const paths = args.slice(3);
+    if (args[2] === "bun" && args[3] === "test") {
+      const paths = args.slice(4);
       testRuns.push(paths);
       if (cwd === resolutionWork && paths.some((path) => path.includes("story.test.ts"))) {
         return { code: 1, output: "resolution test failed" };
@@ -741,7 +747,7 @@ test("bisect keeps the reviewed regression test corpus when a candidate lacks th
     if (args[0] === "git" && args[1] === "bisect") {
       return commandRunner(cwd, args, env);
     }
-    if (args[1] === "bun" && args[2] === "test") {
+    if (args[2] === "bun" && args[3] === "test") {
       const testFile = args.at(-1)!.replace(/^\.\//, "");
       const script = [
         "const fs=require('node:fs');",

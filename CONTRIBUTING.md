@@ -271,11 +271,30 @@ also run the shared supply-chain check; CI audits weekly and by dispatch.
 
 Heavy commands run through `scripts/gate-slot.sh`: six slots by default,
 `LLV_GATE_SLOTS` to change the count, `LLV_GATE_MEM` for the systemd memory cap
-(default `8G`), and a default Node heap of 6144 MB. Without a user systemd
-manager, commands run directly; without flock (macOS), the slot lock is omitted.
+(default `8G`), and a default Node heap of 6144 MB. Linux gates require a user
+systemd manager. Each command runs in a transient service with
+`KillMode=control-group`, a two-second TERM-to-KILL bound and a finite deadline
+(`LLV_OWNED_RUN_TIMEOUT_MS`, default fifteen minutes). A recorded caller start
+identity lets the service detect a hard-killed wrapper. Detached descendants
+stay in that service's cgroup. Surviving children fail the command before the
+manager reaps them. macOS uses a separate identity-bound guardian and omits
+the slot lock when flock is absent. Windows test comparison uses the same
+guardian with the existing kernel creation-time identity backend.
+The portable guardian can miss a descendant detached between observations of
+a short-lived parent. The full lifetime guarantee is currently verified on
+Linux; the unresolved admission choice is recorded in
+`docs/verification/test-child-lifetime.md`.
 `LLV_GATE_LOCK_DIR=/var/tmp` joins the existing machine gate's lock files.
 Otherwise locks live in a `delegatus-gate` directory under the runtime/temp root.
 An existing `NODE_OPTIONS` is preserved.
+
+Run an individual test as `bash scripts/gate-slot.sh bun test <file>` with an
+isolated home, config, state and temporary root. The preload registers real
+Node and Bun children before spawn returns, checks for survivors, and reaps
+them before deleting its temporary root. Direct and nested Linux test runners
+enter their own service before test modules load. Portable runs use an independent
+guardian. Fixtures with blocking barriers check their recorded
+parent identity within the barrier; asynchronous fixtures check it on a timer.
 
 `LLV_SKIP_HOOKS=1` skips both hooks for a false positive. A fetch failure uses
 the last `origin/main`; a missing merge base fails the push. The hook warns

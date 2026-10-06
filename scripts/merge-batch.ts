@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import type { GithubRunner } from "../src/lib/monitor/githubEvidence";
+import { isolatedEnvironment } from "./local-gate";
 
 export type ReviewedPr = { number: number; reviewed: string };
 
@@ -391,7 +392,7 @@ export class MergeBatch {
         backups.set(path, existsSync(absolute) ? readFileSync(absolute) : null);
         writeFileSync(absolute, Buffer.from(contents, "base64"));
       }
-      return await this.run(cwd, ["/var/tmp/llv-gate", ...args], { ...process.env, LLV_STATE_DIR: stateDir });
+      return await this.run(cwd, ["/bin/bash", join(import.meta.dir, "gate-slot.sh"), ...args], isolatedEnvironment(stateDir, process.env));
     } finally {
       for (const [path, contents] of backups) {
         const absolute = join(cwd, path);
@@ -473,10 +474,9 @@ export class MergeBatch {
       const modules = join(this.repo, "node_modules");
       if (existsSync(modules)) symlinkSync(modules, join(trustedWork, "node_modules"), "dir");
       const catalog = join(trustedWork, "scripts/privacy-known-value-fingerprints.json");
-      return await this.run(trustedWork, ["/var/tmp/llv-gate", "bun", "scripts/privacy-publication-gate.ts",
+      return await this.run(trustedWork, ["/bin/bash", join(import.meta.dir, "gate-slot.sh"), "bun", "scripts/privacy-publication-gate.ts",
         "--repository", candidate, "--base", base, ...args], {
-        ...process.env,
-        LLV_STATE_DIR: stateDir,
+        ...isolatedEnvironment(stateDir, process.env),
         LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: catalog,
       });
     } finally {

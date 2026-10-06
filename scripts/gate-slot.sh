@@ -10,9 +10,9 @@ if [[ $# -eq 0 ]]; then echo "usage: gate-slot.sh command [args...]" >&2; exit 2
 export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=6144}"
 run() {
   if command -v systemd-run >/dev/null && command -v systemctl >/dev/null && systemctl --user show-environment >/dev/null 2>&1; then
-    exec systemd-run --user --scope -q -p "MemoryMax=${LLV_GATE_MEM:-8G}" -- "$@"
+    exec "${LLV_GATE_BUN:-bun}" "$(dirname "${BASH_SOURCE[0]}")/owned-runner.ts" "$@"
   fi
-  exec "$@"
+  exec "${LLV_GATE_BUN:-bun}" "$(dirname "${BASH_SOURCE[0]}")/owned-runner.ts" --portable "$@"
 }
 # macOS has neither flock nor a systemd user manager.
 if ! command -v flock >/dev/null; then run "$@"; fi

@@ -93,6 +93,7 @@ export function renderStagePrompt(
     ...branchContract,
     ...pipelineDeliveryGuidance(pipeline),
     "Pipeline nesting is forbidden. Never create or start another pipeline from this stage.",
+    "Run test files by explicit path with bash scripts/gate-slot.sh bun test <file>, using isolated HOME, XDG, TMPDIR and LLV_STATE_DIR. The owned runner ends detached descendants on deadline or cancellation; never bypass it for lifecycle tests.",
     "",
     /* One completion channel, one fallback (#1797): asking for the call AND an
        unconditional fenced block let a stage treat the block as the real answer
