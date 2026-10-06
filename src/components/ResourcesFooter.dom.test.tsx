@@ -373,6 +373,8 @@ test("the System panel names the low volume, the largest consumers first, and th
   flushSync(() => { root.render(<DiskPressureNotice pressure={{ ...pressure, volumes: [{ roles: ["temp"], freeBytes: 0.5 * GiB, level: "critical" }] }} />); });
   expect(element.textContent).toContain("Temp: 512 MiB free");
   expect(element.textContent).not.toContain("New checkouts wait");
+  flushSync(() => { root.render(<DiskPressureNotice pressure={{ ...pressure, volumes: [{ roles: ["temp"], freeBytes: 0.5 * GiB, level: "critical", provisioning: true }] }} />); });
+  expect(element.textContent).toContain("New checkouts wait for space");
   /* Back above the warning threshold, still inside the episode: nothing shown. */
   flushSync(() => { root.render(<DiskPressureNotice pressure={{ ...pressure, volumes: [{ ...pressure.volumes[0]!, freeBytes: 11 * GiB, level: "ok" as const }] }} />); });
   expect(element.querySelector("[data-disk-pressure]")).toBeNull();

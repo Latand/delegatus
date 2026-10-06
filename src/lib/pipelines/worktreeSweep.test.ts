@@ -1275,18 +1275,25 @@ test("self-update's release checkouts are left to self-update", async () => {
   expect(fs.existsSync(release)).toBe(true);
 });
 
-test("a virtual environment under any name is rebuildable, found by its pyvenv.cfg", async () => {
+for (const name of [".venv-lane", ".venv"]) test(`a virtual environment ${name} preserves unique logs and source`, async () => {
   const root = repository();
-  fs.appendFileSync(path.join(root, ".git/info/exclude"), ".venv-lane/\n");
+  fs.appendFileSync(path.join(root, ".git/info/exclude"), `${name}/\n`);
   const { dir, tip } = lane(root, path.join(caseDir, "venv-lane"), "topic/venv");
-  const venv = path.join(dir, ".venv-lane");
+  const venv = path.join(dir, name);
   fs.mkdirSync(path.join(venv, "lib"), { recursive: true });
   fs.writeFileSync(path.join(venv, "pyvenv.cfg"), "home = /usr/bin\n");
   /* Python's own venv writes a `*` .gitignore, so git lists each entry. */
   fs.writeFileSync(path.join(venv, ".gitignore"), "*\n");
   fs.writeFileSync(path.join(venv, "lib/site.py"), "installed");
+  fs.writeFileSync(path.join(venv, "unique-run.log"), "unique log");
+  fs.mkdirSync(path.join(venv, "out"));
+  fs.writeFileSync(path.join(venv, "out/desktop.png"), "unique capture");
   const report = await sweepMergedWorktrees(ports({ repositories: [root], prs: [merged(131, "topic/venv", tip)] }));
-  expect(report.removed.map((removal) => removal.path)).toEqual([dir]);
+  expect(report.removed).toEqual([]);
+  expect(report.kept).toEqual([expect.objectContaining({ path: dir, reason: "ignored-files" })]);
+  expect(fs.readFileSync(path.join(venv, "unique-run.log"), "utf8")).toBe("unique log");
+  expect(fs.readFileSync(path.join(venv, "lib/site.py"), "utf8")).toBe("installed");
+  expect(fs.readFileSync(path.join(venv, "out/desktop.png"), "utf8")).toBe("unique capture");
 });
 
 test("a fixture bundle is trimmed only when it holds nothing but bundled fixtures", async () => {

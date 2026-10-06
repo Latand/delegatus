@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { exclusiveBytes } from "@/lib/pipelines/worktreeSweep";
+import { agentConfigSandboxRoot } from "@/lib/runtime/agentConfigSandbox";
 
 import {
   DISK_CRITICAL_BYTES,
@@ -67,6 +68,36 @@ test("provisioning checks its write destinations and ignores unrelated temp volu
   expect(visited).not.toContain("/tmp");
   expect(visited).not.toContain("/var/tmp");
   expect(visited.some(directory => path.basename(directory) === "scratch")).toBe(true);
+});
+
+test("stage config and Claude temp destinations wait when critical and resume after recovery", () => {
+  const previous = process.env.LLV_STATE_DIR;
+  const state = "/srv/delegatus-config/agent-log-viewer/state";
+  const source = { XDG_CONFIG_HOME: "/srv/delegatus-config", TMPDIR: "/srv/agent-temp", CLAUDE_CODE_TMPDIR: "/srv/claude-temp" };
+  process.env.LLV_STATE_DIR = state;
+  try {
+    const config = agentConfigSandboxRoot({ ...source, TMPDIR: path.join(state, "scratch/tmp") });
+    expect(config.startsWith(path.join(state, "scratch") + path.sep)).toBe(false);
+    for (const low of [config, source.CLAUDE_CODE_TMPDIR]) {
+      let freeBytes = GiB;
+      const visited: string[] = [];
+      const stub: DiskProbe = directory => {
+        visited.push(directory);
+        return { volume: directory === low ? "stage-temp" : "disk", freeBytes: directory === low ? freeBytes : 500 * GiB, totalBytes: 1000 * GiB };
+      };
+      expect(worktreeDiskWait("/srv/repo", "/srv/lane", stub, source)).toContain("1.00 GiB free");
+      expect(visited).toContain(low);
+      freeBytes = 20 * GiB;
+      expect(worktreeDiskWait("/srv/repo", "/srv/lane", stub, source)).toBeNull();
+    }
+    const small: DiskProbe = directory => directory === config
+      ? { volume: "small-temp", freeBytes: 3.9 * GiB, totalBytes: 4 * GiB }
+      : { volume: "disk", freeBytes: 500 * GiB, totalBytes: 1000 * GiB };
+    expect(worktreeDiskWait("/srv/repo", "/srv/lane", small, source)).toBeNull();
+  } finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previous;
+  }
 });
 
 test.skipIf(process.platform !== "linux")("a vanished namespace anchor is unknown and never falls back onto procfs", () => {

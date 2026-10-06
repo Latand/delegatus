@@ -1,10 +1,12 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import { stateDir, statePath } from "@/lib/configDir";
 import { isOwnedTempName, ownTempRoots, scanProcesses, sweepRoots, type TempSweepRoot } from "@/lib/tempSweep";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { withFileTransactionSync } from "@/lib/state/fileTransaction";
+import { agentConfigSandboxRoot } from "@/lib/runtime/agentConfigSandbox";
 
 /**
  * Free space on the volumes Delegatus writes to: its state directory, the
@@ -34,10 +36,10 @@ const CONSUMER_CACHE_MS = 30 * 60_000;
 /** The wake waits this long for the consumer sizes before it goes without them. */
 const CONSUMER_WAKE_WAIT_MS = 15 * 60_000;
 
-export type DiskVolume = { roles: string[]; freeBytes: number | null; totalBytes?: number; level: "ok" | "warning" | "critical" | "unknown" };
+export type DiskVolume = { roles: string[]; freeBytes: number | null; totalBytes?: number; provisioning?: boolean; level: "ok" | "warning" | "critical" | "unknown" };
 export type DiskConsumer = { kind: "state" | "worktrees" | "temp"; bytes: number; measuredAt: string };
 export type DiskPressure = { at: string; episode: string | null; volumes: DiskVolume[]; consumers: DiskConsumer[]; warningBytes: number; criticalBytes: number };
-export type DiskRoot = { role: string; directory: string };
+export type DiskRoot = { role: string; directory: string; provisioning?: boolean };
 export type DiskProbe = (directory: string) => { volume: string; freeBytes: number; totalBytes?: number } | null;
 
 /** Small volumes use 10%, 12% and 2% of their capacity respectively. */
@@ -74,22 +76,34 @@ export function diskVolumes(roots: readonly DiskRoot[], probe: DiskProbe = probe
     const row = volumes.get(key);
     if (row) {
       if (!row.roles.includes(root.role)) row.roles.push(root.role);
+      if (root.provisioning) row.provisioning = true;
       if (free !== null) row.freeBytes = Math.min(row.freeBytes ?? free, free);
     } else volumes.set(key, { roles: [root.role], freeBytes: free,
+      ...(root.provisioning ? { provisioning: true } : {}),
       ...(observation?.totalBytes === undefined ? {} : { totalBytes: observation.totalBytes }), level: "unknown" });
   }
   return [...volumes.values()].map(row => ({ ...row, level: row.freeBytes === null ? "unknown"
     : row.freeBytes < threshold(DISK_CRITICAL_BYTES, row.totalBytes) ? "critical" : row.freeBytes < threshold(DISK_WARNING_BYTES, row.totalBytes) ? "warning" : "ok" }));
 }
 
-function rootsForProvision(repoDir: string, worktreeDir: string): DiskRoot[] {
+/** Every stage writes scratch and agent config. Full-access Claude also
+    keeps background-task output on its pre-stage temp destination. Resolve
+    config with the same scratch environment the spawn boundary hands it. */
+function stageDiskRoots(source: NodeJS.ProcessEnv): DiskRoot[] {
+  const scratch = statePath("scratch");
+  return [{ role: "state", directory: scratch, provisioning: true },
+    { role: "state", directory: agentConfigSandboxRoot({ ...source, TMPDIR: path.join(scratch, "tmp") }), provisioning: true },
+    { role: "temp", directory: source.CLAUDE_CODE_TMPDIR || source.TMPDIR || os.tmpdir(), provisioning: true }];
+}
+
+function rootsForProvision(repoDir: string, worktreeDir: string, source: NodeJS.ProcessEnv): DiskRoot[] {
   return [{ role: "state", directory: stateDir() }, { role: "worktrees", directory: worktreeDir },
-    { role: "repository", directory: repoDir }, { role: "state", directory: statePath("scratch") }];
+    { role: "repository", directory: repoDir }, ...stageDiskRoots(source)];
 }
 
 /** Admission only. A low volume never changes an existing agent's lifecycle. */
-export function worktreeDiskWait(repoDir: string, worktreeDir: string, probe: DiskProbe = probeDisk): string | null {
-  const low = diskVolumes(rootsForProvision(repoDir, worktreeDir), probe).filter(row => row.level === "critical");
+export function worktreeDiskWait(repoDir: string, worktreeDir: string, probe: DiskProbe = probeDisk, source: NodeJS.ProcessEnv = process.env): string | null {
+  const low = diskVolumes(rootsForProvision(repoDir, worktreeDir, source), probe).filter(row => row.level === "critical");
   return low.length ? `${DISK_SPACE_WAIT_PREFIX} ${low.map(row => `${row.roles.join("/")} has ${formatDiskBytes(row.freeBytes!)} free (needs ${formatDiskBytes(threshold(DISK_CRITICAL_BYTES, row.totalBytes))})`).join("; ")}; retries automatically` : null;
 }
 
@@ -183,7 +197,7 @@ export async function readDiskPressure(ports: {
   const worktrees = ports.worktrees ?? [...new Set([...pipelines.map(row => row.worktreeDir), ...(sweep?.kept ?? []).map(row => row.path)].filter(Boolean))];
   const tempRoots = ports.tempRoots ?? (ports.roots ? [] : sweepRoots(scanProcesses(), [...ownTempRoots(), statePath("scratch")]));
   const accessible = hostTempWorktreeAccess(tempRoots).accessiblePath;
-  const roots: DiskRoot[] = ports.roots ?? [{ role: "state", directory }, { role: "state", directory: statePath("scratch") },
+  const roots: DiskRoot[] = ports.roots ?? [{ role: "state", directory }, ...stageDiskRoots(process.env),
     ...worktrees.map(directory => ({ role: "worktrees", directory: accessible(directory) })),
     ...tempRoots.map(root => ({ role: "temp", directory: root.via + root.path }))];
   const previousEpisode = cached.pressure.episode;

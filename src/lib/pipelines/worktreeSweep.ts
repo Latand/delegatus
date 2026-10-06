@@ -244,7 +244,6 @@ function latestTerminalTime(pipelines: readonly SweptPipeline[]): number {
 const REBUILDABLE_DIRECTORIES: ReadonlySet<string> = new Set([
   "node_modules", ".next", ".turbo", ".cache", ".parcel-cache", ".svelte-kit", "out", "dist", "build", "coverage",
   "test-results", "playwright-report", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".hypothesis",
-  ".venv", "venv", ".tox", ".nox",
 ]);
 const REBUILDABLE_FILES: ReadonlySet<string> = new Set(["next-env.d.ts", ".DS_Store"]);
 
@@ -289,9 +288,8 @@ function emptyDirectory(directory: string): boolean {
   }
 }
 
-/** A Python virtual environment, whatever its directory is called: its
-    creator writes `pyvenv.cfg` at its root. Seen on this machine as the only
-    ignored content of a merged checkout (`.venv-<lane>`). */
+/** A Python virtual environment, whatever its directory is called. Its
+    marker identifies the container; contents still need their own proof. */
 function virtualenvRoot(worktree: string, ignored: string): string | null {
   const segments = ignored.replace(/\/+$/, "").split("/");
   for (let depth = 1; depth <= segments.length; depth += 1) {
@@ -303,13 +301,15 @@ function virtualenvRoot(worktree: string, ignored: string): string | null {
   return null;
 }
 
-/** An ignored path a removal may take after all: empty, a virtual
-    environment, or a container holding only rebuildable outputs. */
+/** An ignored path a removal may take after all: empty, a known generated
+    output, or a container holding only bytecode. A virtual environment can
+    also carry unique logs or source; its marker proves no file disposable. */
 function disposableIgnored(worktree: string, ignored: string, checked: Map<string, boolean>): boolean {
   const target = path.join(worktree, ignored);
   if (emptyDirectory(target)) return true;
-  let generated = virtualenvRoot(worktree, ignored);
-  if (!generated && rebuildable(ignored)) {
+  if (virtualenvRoot(worktree, ignored)) return onlyRebuildableContents(target);
+  let generated: string | null = null;
+  if (rebuildable(ignored)) {
     const segments = ignored.replace(/\/+$/, "").split("/");
     const depth = segments.findIndex((_, index) => rebuildable(segments.slice(0, index + 1).join("/")));
     generated = path.join(worktree, ...segments.slice(0, depth + 1));
