@@ -120,7 +120,7 @@ import {
   withDismissedReceipts,
   writeDismissedReceipts,
 } from "./runtime/deliveryState";
-import { deliveryNoticeRun, describeReceiptFailure, failureCauseKey } from "./runtime/deliveryNotice";
+import { deliveryNoticeRun, describeReceiptFailure, failureCauseKey, sentenceCauseKey } from "./runtime/deliveryNotice";
 import { mintIdempotencyKey, receiptIsAdmitted, receiptIsTerminal, type HostAxis, type TurnAxis } from "./runtime/runtimeModel";
 import { tmuxComposerRuntimeDependencies } from "./tmuxComposerRuntime";
 import { VoiceConversationButton } from "./VoiceConversation";
@@ -507,10 +507,14 @@ export function RuntimeComposerReceipts({
       </> : null}
     </span>
   );
+  /* A cause with its own wording is said once: an earlier attempt refused for
+     it is in the row's counter, and its line would be the chip's line again. */
   const supersededStatusLabels = (attempts: RuntimeReceipt[]): string[] => {
     const counts = new Map<string, number>();
+    const current = attempts[0] && sentenceCauseKey(attempts[0].reason) ? receiptStatusText(attempts[0]) : null;
     for (const attempt of attempts.slice(1)) {
       const label = receiptStatusText(attempt);
+      if (label === current) continue;
       counts.set(label, (counts.get(label) ?? 0) + 1);
     }
     return [...counts].map(([label, count]) => (count > 1 ? `${label} ×${count}` : label));
@@ -544,7 +548,12 @@ export function RuntimeComposerReceipts({
   const notice = deliveryNoticeRun(attemptGroups, textlessProblems);
   const noticeUnknown = notice ? receiptHasUnknownFate(notice.current) : false;
   const noticeFailure = notice && !noticeUnknown && notice.current.resend !== "safe" ? describeReceiptFailure(t, notice.current.reason) : null;
-  const noticeLabel = t(noticeUnknown ? "composer.deliveryChecking" : "composer.deliveryNotDelivered");
+  /* A cause that says what to do in its own detail leaves the row to the cause:
+     "send again" beside it was the action said twice, and on a phone it took
+     the width the cause needed. */
+  const noticeLabel = t(noticeUnknown
+    ? "composer.deliveryChecking"
+    : noticeFailure?.saysWhatToDo ? "composer.deliveryFailed" : "composer.deliveryNotDelivered");
   const noticeLine = notice
     ? noticeFailure?.cause
       ? `${noticeLabel} — ${noticeFailure.cause}`

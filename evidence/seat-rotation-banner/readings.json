@@ -1,0 +1,97 @@
+{
+  "frames": {
+    "390-en": {
+      "level": "strongly_recommend",
+      "title": "This conversation has used 520,825 tokens of context; rotation is advised from 500,000. Rotate to continue with a fresh context.",
+      "text": "This conversation has used 520,825 tokens of context; rotation is advised from 500,000. Rotate to continue with a fresh context.\n\nThe orchestrator is not running. Send it a message to start it again, or rotate.",
+      "lines": [
+        {
+          "text": "This conversation has used 520,825 tokens of context; rotation is advised from 500,000. Rotate to continue with a fresh context.",
+          "inside": true,
+          "cut": false,
+          "height": 32
+        },
+        {
+          "text": "The orchestrator is not running. Send it a message to start it again, or rotate.",
+          "inside": true,
+          "cut": false,
+          "height": 32
+        }
+      ],
+      "width": 332,
+      "height": 66,
+      "insideViewport": true,
+      "pageOverflow": false
+    },
+    "390-uk": {
+      "level": "strongly_recommend",
+      "title": "Розмова використала 520 825 токенів контексту; ротацію радимо від 500 000. Зробіть ротацію, щоб продовжити зі свіжим контекстом.",
+      "text": "Розмова використала 520 825 токенів контексту; ротацію радимо від 500 000. Зробіть ротацію, щоб продовжити зі свіжим контекстом.\n\nОркестратор не запущений. Напишіть йому повідомлення, щоб запустити знову, або зробіть ротацію.",
+      "lines": [
+        {
+          "text": "Розмова використала 520 825 токенів контексту; ротацію радимо від 500 000. Зробіть ротацію, щоб продовжити зі свіжим контекстом.",
+          "inside": true,
+          "cut": false,
+          "height": 48
+        },
+        {
+          "text": "Оркестратор не запущений. Напишіть йому повідомлення, щоб запустити знову, або зробіть ротацію.",
+          "inside": true,
+          "cut": false,
+          "height": 32
+        }
+      ],
+      "width": 332,
+      "height": 82,
+      "insideViewport": true,
+      "pageOverflow": false
+    },
+    "1440-en": {
+      "level": "strongly_recommend",
+      "title": "Rotation strongly recommended",
+      "text": "Rotation strongly recommended\n\nThis conversation has used 520,825 tokens of context; rotation is advised from 500,000. Rotate to continue with a fresh context.\nThe orchestrator is not running. Send it a message to start it again, or rotate.",
+      "lines": [
+        {
+          "text": "This conversation has used 520,825 tokens of context; rotation is advised from 500,000. Rotate to continue with a fresh context.",
+          "inside": true,
+          "cut": false,
+          "height": 16
+        },
+        {
+          "text": "The orchestrator is not running. Send it a message to start it again, or rotate.",
+          "inside": true,
+          "cut": false,
+          "height": 16
+        }
+      ],
+      "width": 1038,
+      "height": 64,
+      "insideViewport": true,
+      "pageOverflow": false
+    },
+    "1440-uk": {
+      "level": "strongly_recommend",
+      "title": "Наполегливо рекомендовано ротацію",
+      "text": "Наполегливо рекомендовано ротацію\n\nРозмова використала 520 825 токенів контексту; ротацію радимо від 500 000. Зробіть ротацію, щоб продовжити зі свіжим контекстом.\nОркестратор не запущений. Напишіть йому повідомлення, щоб запустити знову, або зробіть ротацію.",
+      "lines": [
+        {
+          "text": "Розмова використала 520 825 токенів контексту; ротацію радимо від 500 000. Зробіть ротацію, щоб продовжити зі свіжим контекстом.",
+          "inside": true,
+          "cut": false,
+          "height": 16
+        },
+        {
+          "text": "Оркестратор не запущений. Напишіть йому повідомлення, щоб запустити знову, або зробіть ротацію.",
+          "inside": true,
+          "cut": false,
+          "height": 16
+        }
+      ],
+      "width": 1038,
+      "height": 64,
+      "insideViewport": true,
+      "pageOverflow": false
+    }
+  },
+  "failures": []
+}
