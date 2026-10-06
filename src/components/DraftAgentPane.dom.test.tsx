@@ -251,6 +251,41 @@ test("Send launches at once in the directory the draft was opened with, with wha
   expect(host.textContent).not.toContain("confirming the agent");
 });
 
+/* A launch that carried a picture, restored mid-launch: the attempt the pane keeps across a reload, with
+   the launch still unanswered. */
+function seedPictureLaunch(draftId: string, words: string) {
+  const request = { engine: "claude", cwd: "/repo", fast: null, ["prompt"]: words, images: [{ base64: "aGVsbG8=", mime: "image/png" }], title: "claude · Analyze attached image" };
+  sessionStorage.setItem(`llvDraftPane:${draftId}:boot`, JSON.stringify({
+    clientAttemptId: `attempt_${draftId}`, at: Date.now(), target: "", path: null, conversationId: null, launchId: null,
+    ["prompt"]: words, hasImages: true, request, engine: "claude", src: "", phase: "confirming", error: null,
+  }));
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    if (url === "/api/spawn" && init?.method === "POST") return new Promise<Response>(() => {});
+    const auxiliary = auxiliaryResponse(url);
+    if (auxiliary) return auxiliary;
+    if (url.startsWith("/api/spawn?")) return { ok: true, json: async () => imageNegotiation("structured") } as Response;
+    throw new Error(`unexpected request: ${url}`);
+  }) as typeof fetch;
+}
+
+test("the first message names the picture it carries, as the conversation will once the launch answers", async () => {
+  seedPictureLaunch("picture-draft", "Compare the two export screens");
+  const host = mount("picture-draft");
+  await settle();
+  const row = host.querySelector("[data-draft-opening] [data-message-row]")!;
+  expect(row.textContent).toContain("Compare the two export screens");
+  expect(row.textContent).toContain("1 image");
+});
+
+test("a picture with no words opens as the image count alone, with no stand-in text", async () => {
+  seedPictureLaunch("picture-only-draft", "");
+  const host = mount("picture-only-draft");
+  await settle();
+  const row = host.querySelector("[data-draft-opening] [data-message-row]")!;
+  expect(row.querySelector("[data-user-bubble]")!.textContent).toBe("1 image");
+});
+
 test("a handoff carries its source and its parent into the launch, and no field comes back for them", async () => {
   const posts: Record<string, unknown>[] = [];
   launchSeam(posts, { ...imageNegotiation("structured"), cwd: "/repos/source-checkout" });

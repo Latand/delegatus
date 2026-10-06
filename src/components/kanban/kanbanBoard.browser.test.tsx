@@ -18176,10 +18176,11 @@ describe("creating a new agent: the composer alone, and the conversation after S
    * from the board's own button through the same moments at 1440x900, 1000x700 and a 390 phone, light and
    * dark, en and uk: the empty form, the runtime pill open, the model and the account chosen, dictation in
    * progress, the frame after Send, the frame after the launch answered, and the loaded conversation. On the
-   * desktop the same launch is walked from a task card's own «+ Agent». Five more states are drawn once, at
-   * 1440 in the light theme in English: a refused launch, a handoff draft, a handoff whose source's folder
-   * is on no record, a signed-out account and a Copilot account chosen in the pill. The launch is the
-   * fixture's own: no agent starts.
+   * desktop the same launch is walked from a task card's own «+ Agent». At every size, scheme and language a
+   * launch that carries a picture is walked too, to the frame after the launch answered. Six more states are
+   * drawn once, at 1440 in the light theme in English: a refused launch, a handoff draft, a handoff whose
+   * source's folder is on no record, a signed-out account, a Copilot account chosen in the pill and a launch
+   * of a picture with no words. The launch is the fixture's own: no agent starts.
    *
    *   CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 NEW_AGENT_OUT=<dir> NEW_AGENT_TODAY=<dir> \
    *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "creating a new agent"
@@ -18203,9 +18204,10 @@ describe("creating a new agent: the composer alone, and the conversation after S
     { name: "desktop-1000", width: 1000, height: 700, touch: false },
     { name: "phone-390", width: 390, height: 844, touch: true },
   ] as const;
-  const STATES = ["empty", "picker", "chosen", "dictation", "sent", "receipt", "loaded", "task-card-empty", "task-card-sent", "task-card-receipt", "task-card-loaded"] as const;
+  const STATES = ["empty", "picker", "chosen", "dictation", "sent", "receipt", "loaded", "task-card-empty", "task-card-sent", "task-card-receipt", "task-card-loaded", "image-sent", "image-receipt"] as const;
   /* Drawn once. */
-  const EXTRAS = ["refused", "handoff", "handoff-lost", "signed-out", "copilot"] as const;
+  const EXTRAS = ["refused", "handoff", "handoff-lost", "signed-out", "copilot", "image-only-sent", "image-only-receipt"] as const;
+  const EXTRA_PASSES = ["refused", "handoff", "handoff-lost", "signed-out", "copilot", "image-only"] as const;
   const caption = (text: string, width: number, height: number, size: number) => Buffer.from(
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="#1f2430"/><text x="14" y="${height / 2 + size / 3}" font-family="sans-serif" font-weight="700" font-size="${size}" fill="#fff">${text.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</text></svg>`,
   );
@@ -18249,20 +18251,24 @@ describe("creating a new agent: the composer alone, and the conversation after S
     fs.mkdirSync(out, { recursive: true });
     const readings: Record<string, unknown>[] = [];
     const server = await serveEvidenceFixture(work);
+    /* The picture a launch carries: a small PNG, put in through the composer's own file input. */
+    const picture = path.join(work, "screen.png");
+    await sharp({ create: { width: 64, height: 48, channels: 3, background: "#3b82f6" } }).png().toFile(picture);
     /* Dictation is recorded from the browser's own synthetic microphone. */
     const browser = await chromium.launch({ ...LAUNCH, args: [...(LAUNCH.args ?? []), "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"] });
     try {
       for (const view of views) for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) {
         if (!wanted("views", view.name) || !wanted("schemes", scheme) || !wanted("langs", lang)) continue;
         const tr = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate(lang, key, params);
-        for (const pass of ["header", "task-card", ...EXTRAS] as const) {
+        for (const pass of ["header", "task-card", "image", ...EXTRA_PASSES] as const) {
           if (!wanted("passes", pass)) continue;
-          const extra = (EXTRAS as readonly string[]).includes(pass);
+          const extra = (EXTRA_PASSES as readonly string[]).includes(pass);
           if (extra && (view.name !== "desktop-1440" || scheme !== "light" || lang !== "en")) continue;
           /* A card's own «+ Agent» is on the desktop board; the phone opens a draft from its menu alone. */
           if (pass === "task-card" && view.touch) continue;
           const { width, height } = view;
-          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=new-agent${extra ? `&naseed=${pass}` : ""}`, { width, height }, scheme, lang, "reduce", view.touch);
+          const seeded = extra && pass !== "image-only";
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=new-agent${seeded ? `&naseed=${pass}` : ""}`, { width, height }, scheme, lang, "reduce", view.touch);
           await context.grantPermissions(["microphone"]);
           const label = (state: string) => `built-${view.name}-${scheme}-${lang}-${state}`;
           const settle = async () => {
@@ -18347,16 +18353,33 @@ describe("creating a new agent: the composer alone, and the conversation after S
               expect(within(found.message), `${label(state)} the first message in the window`).toBe(true);
               return found;
             };
+            /* The account the conversation's window names: the phone's top bar, or the chip nearest the row
+               on the board. */
+            const accountShown = async (text: string) => {
+              if (view.touch) return (await page.locator("[data-mobile2-chat-account-runs]").filter({ visible: true }).first().innerText()).replace(/^@\s*/, "").trim();
+              return page.locator("[data-message-row]").filter({ hasText: text }).filter({ visible: true }).first().evaluate((row) => {
+                for (let at: Element | null = row; at; at = at.parentElement) {
+                  const chip = at.querySelector(".ch-account");
+                  if (chip) return (chip.querySelector(".cur") ?? chip).textContent?.trim() ?? "";
+                }
+                return "";
+              });
+            };
             /* The launch answered: the product's own conversation window took the pane over. The first
-               message is the same row in the same place; nothing the operator was reading moved. */
+               message is the same row in the same place and of the same height, the picture's count under
+               it included; nothing the operator was reading moved. */
             const receipt = async (state: string, text: string, before: { message: { left: number; top: number; right: number; bottom: number } }) => {
               await page.locator("[data-draft-pane]").first().waitFor({ state: "detached", timeout: 10_000 });
               const row = page.locator("[data-message-row]").filter({ hasText: text }).filter({ visible: true }).first();
               await row.waitFor({ timeout: 5_000 });
               const message = await box(row);
+              const account = await accountShown(text);
               await shoot(state);
-              expect({ top: message.top, left: message.left, right: message.right }, `${label(state)} the first message where it was`).toEqual({ top: before.message.top, left: before.message.left, right: before.message.right });
-              return { message };
+              /* Each edge within a pixel: the window lays the row out a fraction of a pixel off the pane's, which
+                 rounds either way; the jump this guards against was 18 px. */
+              const moved = Math.max(...(["left", "top", "right", "bottom"] as const).map((edge) => Math.abs(message[edge] - before.message[edge])));
+              expect(moved, `${label(state)} the first message where it was: ${JSON.stringify({ before: before.message, after: message })}`).toBeLessThanOrEqual(1);
+              return { message, account };
             };
             /* The loaded conversation is the product's own window: the first message once, and the agent's answer. */
             const loaded = async (state: string, text: string) => {
@@ -18368,9 +18391,30 @@ describe("creating a new agent: the composer alone, and the conversation after S
               const rows = await page.locator("[data-message-row]").filter({ hasText: text }).filter({ visible: true }).count();
               expect(rows, `${label(state)} the first message, once`).toBe(1);
               expect(await page.locator("[data-draft-pane]").count(), `${label(state)} the draft is gone`).toBe(0);
-              return { firstMessage: rows };
+              return { firstMessage: rows, account: await accountShown(text) };
             };
-            if (pass === "refused") {
+            /* A launch that carries a picture: its count is under the first message from the press, as the
+               conversation draws it, so the row keeps its height when the launch answers. */
+            const withPicture = async (words: string) => {
+              await draft.locator('input[type="file"]').setInputFiles(picture);
+              await page.locator('[data-testid="attachment-tile"][data-status="ready"]').first().waitFor({ timeout: 10_000 });
+              if (words) await prompt.fill(words);
+              await prompt.press("Enter");
+              const count = tr("composer.imagesCount", { count: 1 });
+              const sent = await opening(`${pass}-sent`, words || count);
+              const caption = await draft.locator("[data-draft-opening] [data-message-row]").getByText(count, { exact: true }).count();
+              const answered = await receipt(`${pass}-receipt`, words || count, sent);
+              const posted = await launches();
+              const launchedWith = { count: posted.length, images: (posted[0]?.images as unknown[] | undefined)?.length ?? 0, prompt: posted[0]?.prompt };
+              readings.push({ view: view.name, scheme, lang, state: pass, caption, launchedWith, sent, receipt: answered, pageErrors });
+              expect(caption, `${label(`${pass}-sent`)} the picture's count under the first message`).toBe(1);
+              expect(launchedWith, `${label(`${pass}-sent`)} what was launched`).toEqual({ count: 1, images: 1, prompt: words });
+            };
+            if (pass === "image") {
+              await withPicture(TYPED[lang]);
+            } else if (pass === "image-only") {
+              await withPicture("");
+            } else if (pass === "refused") {
               /* The engine is chosen with the model: a model of another engine moves the draft to it. */
               await draft.locator("[data-runtime-pill]").click();
               await page.locator('[data-runtime-popover] [data-runtime-value="model"]').click();
@@ -18479,6 +18523,7 @@ describe("creating a new agent: the composer alone, and the conversation after S
               expect(holder, `${label("task-card-loaded")} the conversation on its card`).toBe(card);
               const posted = await launches();
               expect({ count: posted.length, taskId: posted[0]?.taskId, cwd: posted[0]?.cwd, role: posted[0]?.role ?? null }, `${label("task-card-sent")} what was launched`).toEqual({ count: 1, taskId: card.slice("task:".length), cwd: "/repo", role: null });
+              expect(answered.account, `${label("task-card-receipt")} the account the window names`).toBe(done.account);
               readings.push({ view: view.name, scheme, lang, state: pass, card, empty, sent, receipt: answered, loaded: done, pageErrors });
             } else {
               await settle();
@@ -18547,6 +18592,8 @@ describe("creating a new agent: the composer alone, and the conversation after S
               const posted = await launches();
               const launchedWith = { count: posted.length, engine: posted[0]?.engine, model: posted[0]?.model, effort: posted[0]?.effort, accountId: posted[0]?.accountId, cwd: posted[0]?.cwd, role: posted[0]?.role ?? null };
               expect(launchedWith, `${label("sent")} what was launched`).toEqual({ count: 1, engine: "claude", model: "fable", effort: "high", accountId: "account-c", cwd: "/repo", role: null });
+              /* The window names the account the pill chose, from the launch's answer on. */
+              expect({ receipt: answered.account, loaded: done.account }, `${label("receipt")} the account the window names`).toEqual({ receipt: "Account C", loaded: "Account C" });
               readings.push({ view: view.name, scheme, lang, state: pass, empty, defaultFace, sheetTitle, face, launchedWith, sent, receipt: answered, loaded: done, pageErrors });
             }
             expect(pageErrors, `${label(pass)} page errors`).toEqual([]);

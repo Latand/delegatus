@@ -2496,6 +2496,10 @@ const launchRun = {
   startedAt: 0, prompt: "", title: "Claude", engine: "claude", model: "haiku", effort: "low", clientAttemptId: null as string | null,
   /* The card whose own «+ Agent» opened the draft, when one did. */
   taskId: null as string | null,
+  /* The account the launch asked for, which the spawn record carries as the product's does. */
+  accountId: null as string | null,
+  /* How many pictures the first message carried, which the server projects beside its words. */
+  images: 0,
   requests: [] as Record<string, unknown>[],
 };
 /* The new-agent frames read the pane between the press and the receipt, so that scenario holds the receipt longer. */
@@ -2522,6 +2526,8 @@ function launchTranscript(): string {
   for (const entry of launchTimeline) if (elapsed >= entry.at + LAUNCH_HOLD_MS) rows.push(...entry.lines(stamp));
   return `${rows.join("\n")}\n`;
 }
+/* The launch's name: its first line, or for a picture with no words the title it was launched with. */
+const launchName = () => launchRun.prompt.split("\n")[0] || launchRun.title.replace(/^[^·]*·\s*/, "");
 /* The files and tasks the board holds at this moment of the launch. */
 function launchAdvance() {
   if (!(LAUNCH_CLS || SEAT_CLS || NEW_AGENT) || !launchRun.startedAt) return;
@@ -2532,7 +2538,7 @@ function launchAdvance() {
   const ended = elapsed >= LAUNCH_END_MS;
   const common = { model: launchRun.model, launchModel: launchRun.model, effort: launchRun.effort, fast: null, mtime: nowSeconds };
   files.push(adopted
-    ? conversation("launch-cls", SEAT_CLS ? SEAT_TITLE : launchRun.prompt.split("\n")[0] ?? "", {
+    ? conversation("launch-cls", SEAT_CLS ? SEAT_TITLE : launchName(), {
       ...common, path: launchRun.path, size: new TextEncoder().encode(launchTranscript()).length,
       ...(ended
         ? { activity: "recent", authoritativeTurn: { state: "terminal", source: "lifecycle", terminalAt: new Date().toISOString() }, lastTurn: { startedAt: launchRun.startedAt, endedAt: Date.now() } }
@@ -2541,8 +2547,8 @@ function launchAdvance() {
     : conversation("launch-cls", SEAT_CLS ? SEAT_TITLE : launchRun.title, {
       ...common, path: `spawn:${launchRun.launchId}`, size: 0, activity: "live", activityReason: "structured_spawn_starting", generation: 1,
       spawn: {
-        launchId: launchRun.launchId, clientAttemptId: launchRun.clientAttemptId, accountId: null, conversationId: launchRun.conversationId, generation: 1,
-        state: "starting", initialMessage: "queued", retrySafe: false, error: null, prompt: launchRun.prompt, promptAt: launchRun.startedAt,
+        launchId: launchRun.launchId, clientAttemptId: launchRun.clientAttemptId, accountId: launchRun.accountId, conversationId: launchRun.conversationId, generation: 1,
+        state: "starting", initialMessage: "queued", retrySafe: false, error: null, prompt: launchRun.prompt, promptAt: launchRun.startedAt, promptImages: launchRun.images,
         ...(SEAT_CLS ? { mandate: { kind: "version", version: ORCHESTRATOR_PROMPT_VERSION } } : {}),
       },
     }));
@@ -2563,7 +2569,7 @@ function launchAdvance() {
   }
   const index = tasks.findIndex((entry) => entry.id === "t-launch");
   const placeholder = {
-    id: "t-launch", project: PROJECT, text: launchRun.prompt.split("\n")[0] ?? "", status: "assigned", placement: "unplaced",
+    id: "t-launch", project: PROJECT, text: launchName(), status: "assigned", placement: "unplaced",
     origin: { kind: "launch", key: launchRun.clientAttemptId ?? launchRun.launchId, refinement: "pending" },
     assignments: [{
       launchId: launchRun.launchId, clientAttemptId: launchRun.clientAttemptId, conversationId: launchRun.conversationId, path: adopted ? launchRun.path : null,
@@ -2642,6 +2648,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     Object.assign(launchRun, {
       taskId: typeof body.taskId === "string" ? body.taskId : null,
+      accountId: NEW_AGENT && typeof body.accountId === "string" ? body.accountId : null,
+      images: Array.isArray(body.images) ? body.images.length : 0,
       /* A managed account's transcripts live under its own home, which is how the conversation names its account. */
       ...(NEW_AGENT && typeof body.accountId === "string" && body.accountId !== "default" ? { path: `/repo/accounts/claude/${body.accountId}/launch-cls.jsonl` } : {}),
       startedAt: Date.now(), prompt: String(body.prompt ?? ""), title: String(body.title ?? "Claude"), engine: String(body.engine ?? "claude"),

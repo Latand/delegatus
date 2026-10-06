@@ -69,10 +69,12 @@
           "top": 349,
           "right": 1293,
           "bottom": 388
-        }
+        },
+        "account": "Account C"
       },
       "loaded": {
-        "firstMessage": 1
+        "firstMessage": 1,
+        "account": "Account C"
       },
       "pageErrors": []
     },
@@ -129,10 +131,57 @@
           "top": 366,
           "right": 1001,
           "bottom": 405
-        }
+        },
+        "account": "Account A"
       },
       "loaded": {
-        "firstMessage": 1
+        "firstMessage": 1,
+        "account": "Account A"
+      },
+      "pageErrors": []
+    },
+    {
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "en",
+      "state": "image",
+      "caption": 1,
+      "launchedWith": {
+        "count": 1,
+        "images": 1,
+        "prompt": "Compare the two export screens and list what differs"
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 782,
+          "top": 162,
+          "right": 1306,
+          "bottom": 1000
+        },
+        "message": {
+          "left": 795,
+          "top": 349,
+          "right": 1293,
+          "bottom": 406
+        },
+        "composer": {
+          "left": 795,
+          "top": 885,
+          "right": 1293,
+          "bottom": 967
+        }
+      },
+      "receipt": {
+        "message": {
+          "left": 795,
+          "top": 349,
+          "right": 1293,
+          "bottom": 406
+        },
+        "account": "Account A"
       },
       "pageErrors": []
     },
@@ -285,6 +334,51 @@
     {
       "view": "desktop-1440",
       "scheme": "light",
+      "lang": "en",
+      "state": "image-only",
+      "caption": 1,
+      "launchedWith": {
+        "count": 1,
+        "images": 1,
+        "prompt": ""
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 782,
+          "top": 162,
+          "right": 1306,
+          "bottom": 1000
+        },
+        "message": {
+          "left": 795,
+          "top": 349,
+          "right": 1293,
+          "bottom": 388
+        },
+        "composer": {
+          "left": 795,
+          "top": 885,
+          "right": 1293,
+          "bottom": 967
+        }
+      },
+      "receipt": {
+        "message": {
+          "left": 795,
+          "top": 349,
+          "right": 1293,
+          "bottom": 387
+        },
+        "account": "Account A"
+      },
+      "pageErrors": []
+    },
+    {
+      "view": "desktop-1440",
+      "scheme": "light",
       "lang": "uk",
       "state": "header",
       "empty": {
@@ -346,10 +440,12 @@
           "top": 349,
           "right": 1293,
           "bottom": 407
-        }
+        },
+        "account": "Account C"
       },
       "loaded": {
-        "firstMessage": 1
+        "firstMessage": 1,
+        "account": "Account C"
       },
       "pageErrors": []
     },
@@ -406,10 +502,57 @@
           "top": 366,
           "right": 1001,
           "bottom": 405
-        }
+        },
+        "account": "Account A"
       },
       "loaded": {
-        "firstMessage": 1
+        "firstMessage": 1,
+        "account": "Account A"
+      },
+      "pageErrors": []
+    },
+    {
+      "view": "desktop-1440",
+      "scheme": "light",
+      "lang": "uk",
+      "state": "image",
+      "caption": 1,
+      "launchedWith": {
+        "count": 1,
+        "images": 1,
+        "prompt": "Порівняй два екрани експорту й перелічи відмінності"
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 782,
+          "top": 162,
+          "right": 1306,
+          "bottom": 1000
+        },
+        "message": {
+          "left": 795,
+          "top": 349,
+          "right": 1293,
+          "bottom": 406
+        },
+        "composer": {
+          "left": 795,
+          "top": 885,
+          "right": 1293,
+          "bottom": 967
+        }
+      },
+      "receipt": {
+        "message": {
+          "left": 795,
+          "top": 349,
+          "right": 1293,
+          "bottom": 406
+        },
+        "account": "Account A"
       },
       "pageErrors": []
     },
@@ -477,10 +620,12 @@
           "top": 349,
           "right": 1293,
           "bottom": 388
-        }
+        },
+        "account": "Account C"
       },
       "loaded": {
-        "firstMessage": 1
+        "firstMessage": 1,
+        "account": "Account C"
       },
       "pageErrors": []
     },
@@ -537,10 +682,57 @@
           "top": 366,
           "right": 1001,
           "bottom": 405
-        }
+        },
+        "account": "Account A"
       },
       "loaded": {
-        "firstMessage": 1
+        "firstMessage": 1,
+        "account": "Account A"
+      },
+      "pageErrors": []
+    },
+    {
+      "view": "desktop-1440",
+      "scheme": "dark",
+      "lang": "en",
+      "state": "image",
+      "caption": 1,
+      "launchedWith": {
+        "count": 1,
+        "images": 1,
+        "prompt": "Compare the two export screens and list what differs"
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 782,
+          "top": 162,
+          "right": 1306,
+          "bottom": 1000
+        },
+        "message": {
+          "left": 795,
+          "top": 349,
+          "right": 1293,
+          "bottom": 406
+        },
+        "composer": {
+          "left": 795,
+          "top": 885,
+          "right": 1293,
+          "bottom": 967
+        }
+      },
+      "receipt": {
+        "message": {
+          "left": 795,
+          "top": 349,
+          "right": 1293,
+          "bottom": 406
+        },
+        "account": "Account A"
       },
       "pageErrors": []
     },
@@ -608,10 +800,12 @@
           "top": 349,
           "right": 1293,
           "bottom": 407
-        }
+        },
+        "account": "Account C"
       },
       "loaded": {
-        "firstMessage": 1
+        "firstMessage": 1,
+        "account": "Account C"
       },
       "pageErrors": []
     },
@@ -668,10 +862,57 @@
           "top": 366,
           "right": 1001,
           "bottom": 405
-        }
+        },
+        "account": "Account A"
       },
       "loaded": {
-        "firstMessage": 1
+        "firstMessage": 1,
+        "account": "Account A"
+      },
+      "pageErrors": []
+    },
+    {
+      "view": "desktop-1440",
+      "scheme": "dark",
+      "lang": "uk",
+      "state": "image",
+      "caption": 1,
+      "launchedWith": {
+        "count": 1,
+        "images": 1,
+        "prompt": "Порівняй два екрани експорту й перелічи відмінності"
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 782,
+          "top": 162,
+          "right": 1306,
+          "bottom": 1000
+        },
+        "message": {
+          "left": 795,
+          "top": 349,
+          "right": 1293,
+          "bottom": 406
+        },
+        "composer": {
+          "left": 795,
+          "top": 885,
+          "right": 1293,
+          "bottom": 967
+        }
+      },
+      "receipt": {
+        "message": {
+          "left": 795,
+          "top": 349,
+          "right": 1293,
+          "bottom": 406
+        },
+        "account": "Account A"
       },
       "pageErrors": []
     },
@@ -739,10 +980,12 @@
           "top": 432,
           "right": 949,
           "bottom": 471
-        }
+        },
+        "account": "Account C"
       },
       "loaded": {
-        "firstMessage": 1
+        "firstMessage": 1,
+        "account": "Account C"
       },
       "pageErrors": []
     },
@@ -799,10 +1042,57 @@
           "top": 528,
           "right": 949,
           "bottom": 567
-        }
+        },
+        "account": "Account A"
       },
       "loaded": {
-        "firstMessage": 1
+        "firstMessage": 1,
+        "account": "Account A"
+      },
+      "pageErrors": []
+    },
+    {
+      "view": "desktop-1000",
+      "scheme": "light",
+      "lang": "en",
+      "state": "image",
+      "caption": 1,
+      "launchedWith": {
+        "count": 1,
+        "images": 1,
+        "prompt": "Compare the two export screens and list what differs"
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 342,
+          "top": 245,
+          "right": 962,
+          "bottom": 881
+        },
+        "message": {
+          "left": 355,
+          "top": 432,
+          "right": 949,
+          "bottom": 489
+        },
+        "composer": {
+          "left": 355,
+          "top": 766,
+          "right": 949,
+          "bottom": 848
+        }
+      },
+      "receipt": {
+        "message": {
+          "left": 355,
+          "top": 432,
+          "right": 949,
+          "bottom": 489
+        },
+        "account": "Account A"
       },
       "pageErrors": []
     },
@@ -870,10 +1160,12 @@
           "top": 432,
           "right": 949,
           "bottom": 471
-        }
+        },
+        "account": "Account C"
       },
       "loaded": {
-        "firstMessage": 1
+        "firstMessage": 1,
+        "account": "Account C"
       },
       "pageErrors": []
     },
@@ -930,10 +1222,57 @@
           "top": 528,
           "right": 949,
           "bottom": 567
-        }
+        },
+        "account": "Account A"
       },
       "loaded": {
-        "firstMessage": 1
+        "firstMessage": 1,
+        "account": "Account A"
+      },
+      "pageErrors": []
+    },
+    {
+      "view": "desktop-1000",
+      "scheme": "light",
+      "lang": "uk",
+      "state": "image",
+      "caption": 1,
+      "launchedWith": {
+        "count": 1,
+        "images": 1,
+        "prompt": "Порівняй два екрани експорту й перелічи відмінності"
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 342,
+          "top": 245,
+          "right": 962,
+          "bottom": 881
+        },
+        "message": {
+          "left": 355,
+          "top": 432,
+          "right": 949,
+          "bottom": 489
+        },
+        "composer": {
+          "left": 355,
+          "top": 766,
+          "right": 949,
+          "bottom": 848
+        }
+      },
+      "receipt": {
+        "message": {
+          "left": 355,
+          "top": 432,
+          "right": 949,
+          "bottom": 489
+        },
+        "account": "Account A"
       },
       "pageErrors": []
     },
@@ -1001,10 +1340,12 @@
           "top": 432,
           "right": 949,
           "bottom": 471
-        }
+        },
+        "account": "Account C"
       },
       "loaded": {
-        "firstMessage": 1
+        "firstMessage": 1,
+        "account": "Account C"
       },
       "pageErrors": []
     },
@@ -1061,10 +1402,57 @@
           "top": 528,
           "right": 949,
           "bottom": 567
-        }
+        },
+        "account": "Account A"
       },
       "loaded": {
-        "firstMessage": 1
+        "firstMessage": 1,
+        "account": "Account A"
+      },
+      "pageErrors": []
+    },
+    {
+      "view": "desktop-1000",
+      "scheme": "dark",
+      "lang": "en",
+      "state": "image",
+      "caption": 1,
+      "launchedWith": {
+        "count": 1,
+        "images": 1,
+        "prompt": "Compare the two export screens and list what differs"
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 342,
+          "top": 245,
+          "right": 962,
+          "bottom": 881
+        },
+        "message": {
+          "left": 355,
+          "top": 432,
+          "right": 949,
+          "bottom": 489
+        },
+        "composer": {
+          "left": 355,
+          "top": 766,
+          "right": 949,
+          "bottom": 848
+        }
+      },
+      "receipt": {
+        "message": {
+          "left": 355,
+          "top": 432,
+          "right": 949,
+          "bottom": 489
+        },
+        "account": "Account A"
       },
       "pageErrors": []
     },
@@ -1132,10 +1520,12 @@
           "top": 432,
           "right": 949,
           "bottom": 471
-        }
+        },
+        "account": "Account C"
       },
       "loaded": {
-        "firstMessage": 1
+        "firstMessage": 1,
+        "account": "Account C"
       },
       "pageErrors": []
     },
@@ -1192,10 +1582,57 @@
           "top": 528,
           "right": 949,
           "bottom": 567
-        }
+        },
+        "account": "Account A"
       },
       "loaded": {
-        "firstMessage": 1
+        "firstMessage": 1,
+        "account": "Account A"
+      },
+      "pageErrors": []
+    },
+    {
+      "view": "desktop-1000",
+      "scheme": "dark",
+      "lang": "uk",
+      "state": "image",
+      "caption": 1,
+      "launchedWith": {
+        "count": 1,
+        "images": 1,
+        "prompt": "Порівняй два екрани експорту й перелічи відмінності"
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 342,
+          "top": 245,
+          "right": 962,
+          "bottom": 881
+        },
+        "message": {
+          "left": 355,
+          "top": 432,
+          "right": 949,
+          "bottom": 489
+        },
+        "composer": {
+          "left": 355,
+          "top": 766,
+          "right": 949,
+          "bottom": 848
+        }
+      },
+      "receipt": {
+        "message": {
+          "left": 355,
+          "top": 432,
+          "right": 949,
+          "bottom": 489
+        },
+        "account": "Account A"
       },
       "pageErrors": []
     },
@@ -1263,10 +1700,57 @@
           "top": 126,
           "right": 377,
           "bottom": 220
-        }
+        },
+        "account": "Account C"
       },
       "loaded": {
-        "firstMessage": 1
+        "firstMessage": 1,
+        "account": "Account C"
+      },
+      "pageErrors": []
+    },
+    {
+      "view": "phone-390",
+      "scheme": "light",
+      "lang": "en",
+      "state": "image",
+      "caption": 1,
+      "launchedWith": {
+        "count": 1,
+        "images": 1,
+        "prompt": "Compare the two export screens and list what differs"
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 0,
+          "top": 97,
+          "right": 390,
+          "bottom": 844
+        },
+        "message": {
+          "left": 13,
+          "top": 126,
+          "right": 377,
+          "bottom": 238
+        },
+        "composer": {
+          "left": 13,
+          "top": 747,
+          "right": 377,
+          "bottom": 831
+        }
+      },
+      "receipt": {
+        "message": {
+          "left": 13,
+          "top": 126,
+          "right": 377,
+          "bottom": 238
+        },
+        "account": "Account A"
       },
       "pageErrors": []
     },
@@ -1334,10 +1818,57 @@
           "top": 126,
           "right": 377,
           "bottom": 220
-        }
+        },
+        "account": "Account C"
       },
       "loaded": {
-        "firstMessage": 1
+        "firstMessage": 1,
+        "account": "Account C"
+      },
+      "pageErrors": []
+    },
+    {
+      "view": "phone-390",
+      "scheme": "light",
+      "lang": "uk",
+      "state": "image",
+      "caption": 1,
+      "launchedWith": {
+        "count": 1,
+        "images": 1,
+        "prompt": "Порівняй два екрани експорту й перелічи відмінності"
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 0,
+          "top": 97,
+          "right": 390,
+          "bottom": 844
+        },
+        "message": {
+          "left": 13,
+          "top": 126,
+          "right": 377,
+          "bottom": 238
+        },
+        "composer": {
+          "left": 13,
+          "top": 747,
+          "right": 377,
+          "bottom": 831
+        }
+      },
+      "receipt": {
+        "message": {
+          "left": 13,
+          "top": 126,
+          "right": 377,
+          "bottom": 238
+        },
+        "account": "Account A"
       },
       "pageErrors": []
     },
@@ -1405,10 +1936,57 @@
           "top": 126,
           "right": 377,
           "bottom": 220
-        }
+        },
+        "account": "Account C"
       },
       "loaded": {
-        "firstMessage": 1
+        "firstMessage": 1,
+        "account": "Account C"
+      },
+      "pageErrors": []
+    },
+    {
+      "view": "phone-390",
+      "scheme": "dark",
+      "lang": "en",
+      "state": "image",
+      "caption": 1,
+      "launchedWith": {
+        "count": 1,
+        "images": 1,
+        "prompt": "Compare the two export screens and list what differs"
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 0,
+          "top": 97,
+          "right": 390,
+          "bottom": 844
+        },
+        "message": {
+          "left": 13,
+          "top": 126,
+          "right": 377,
+          "bottom": 238
+        },
+        "composer": {
+          "left": 13,
+          "top": 747,
+          "right": 377,
+          "bottom": 831
+        }
+      },
+      "receipt": {
+        "message": {
+          "left": 13,
+          "top": 126,
+          "right": 377,
+          "bottom": 238
+        },
+        "account": "Account A"
       },
       "pageErrors": []
     },
@@ -1476,10 +2054,57 @@
           "top": 126,
           "right": 377,
           "bottom": 220
-        }
+        },
+        "account": "Account C"
       },
       "loaded": {
-        "firstMessage": 1
+        "firstMessage": 1,
+        "account": "Account C"
+      },
+      "pageErrors": []
+    },
+    {
+      "view": "phone-390",
+      "scheme": "dark",
+      "lang": "uk",
+      "state": "image",
+      "caption": 1,
+      "launchedWith": {
+        "count": 1,
+        "images": 1,
+        "prompt": "Порівняй два екрани експорту й перелічи відмінності"
+      },
+      "sent": {
+        "firstMessage": 1,
+        "loadingShape": 1,
+        "statusSentence": 0,
+        "pane": {
+          "left": 0,
+          "top": 97,
+          "right": 390,
+          "bottom": 844
+        },
+        "message": {
+          "left": 13,
+          "top": 126,
+          "right": 377,
+          "bottom": 238
+        },
+        "composer": {
+          "left": 13,
+          "top": 747,
+          "right": 377,
+          "bottom": 831
+        }
+      },
+      "receipt": {
+        "message": {
+          "left": 13,
+          "top": 126,
+          "right": 377,
+          "bottom": 238
+        },
+        "account": "Account A"
       },
       "pageErrors": []
     }

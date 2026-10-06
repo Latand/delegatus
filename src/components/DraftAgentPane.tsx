@@ -376,8 +376,10 @@ function OpeningCardRows({ title }: { title: string }) {
 }
 
 /** The opening of the conversation: the window's head on the board (the phone names a conversation in its
-    top bar instead), the first message as the feed's own row, and the loading shape where the answer will be. */
-function OpeningFeed({ text, status, phone }: { text: string; status: React.ReactNode; phone: boolean }) {
+    top bar instead), the first message as the feed's own row, and the loading shape where the answer will be.
+    The row is handed the same local record the launch seeds into the conversation's outbox, so it carries the
+    same image count under the text and keeps its height when the launched conversation takes the pane over. */
+function OpeningFeed({ text, images, at, status, phone }: { text: string; images: number; at: number; status: React.ReactNode; phone: boolean }) {
   return (
     <>
       {phone ? null : (
@@ -387,7 +389,7 @@ function OpeningFeed({ text, status, phone }: { text: string; status: React.Reac
         </div>
       )}
       <div data-draft-opening="" className={`draft-opening flex min-h-0 flex-1 flex-col gap-3 overflow-hidden ${phone ? "pt-1" : ""}`}>
-        <FeedMessageRow entry={null} canonical={{ text }} />
+        <FeedMessageRow entry={images ? { id: "draft-opening", text, images, at, state: "delivering" } : null} canonical={{ text }} />
         <FeedSkeleton latestOnly className="!flex-none !justify-start !px-0 !pb-1 !pt-0" />
         {status}
       </div>
@@ -815,6 +817,8 @@ export function DraftAgentPane({
             : spawnImageNegotiation.status === "loading" ? t("draft.sourceFolderPending") : t("draft.sourceFolderUnknown");
 
   /* The title the launched card will carry: the launch's own title without the engine it leads with. */
+  /* The count the launch seeds into the conversation's outbox (submitAttempt and the adoption above). */
+  const openingImages = attempt?.request?.images.length ?? 0;
   const openingTitle = (attempt?.request?.title ?? "").replace(/^[^·]*·\s*/, "") || attempt?.prompt.split("\n")[0] || "";
   const { inputRef } = composer;
   /* The cursor is in the field the moment the draft opens. */
@@ -842,7 +846,16 @@ export function DraftAgentPane({
       {sent ? <OpeningCardRows key="card-rows" title={openingTitle} /> : null}
       <div key="window" data-draft-window="" className={`draft-window flex min-w-0 flex-col gap-2 ${sent || isMobile ? "min-h-0 flex-1" : ""}`}>
       {sent
-        ? <OpeningFeed key="feed" text={attempt!.prompt || t("draft.imagesOnly")} status={launchStatus} phone={isMobile} />
+        ? <OpeningFeed
+          key="feed"
+          /* An images-only launch reads as the conversation will draw it: the image count and no words. Only a
+             reload that no longer holds the images falls back to saying they were there. */
+          text={attempt!.prompt || (openingImages ? "" : t("draft.imagesOnly"))}
+          images={openingImages}
+          at={attempt!.at}
+          status={launchStatus}
+          phone={isMobile}
+        />
         : isMobile ? <div key="room" className="min-h-0 flex-1" /> : null}
       <form
         key="form"
