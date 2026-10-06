@@ -17966,7 +17966,7 @@ describe("prototype review on a task: the card's button, the review and the orch
    * in full, and a close while speech is still transcribed asks first. Measured at 1440, 1000 and 390, in English and
    * Ukrainian, light and dark: nothing overlaps and nothing leaves its frame.
    * A card that waits on its prototype says so in drawn words at every desktop
-   * width, the line over the picture parts the variant's name from the caption,
+   * width and on the phone's board, the line over the picture parts the variant's name from the caption,
    * the slider's two labels stand clear of both drawn pictures, and a delivery
    * line keeps its mark on the first line of its words.
    *
@@ -18148,6 +18148,28 @@ describe("prototype review on a task: the card's button, the review and the orch
         };
         const settle = () => page.waitForTimeout(250);
         const posts = () => page.evaluate(() => (window as unknown as { protoPosts: { taskId: string; retry?: boolean }[] }).protoPosts);
+        /* Each task card on the phone's board: whether it waits, the words
+           that say why, and its lines measured against each other and the card. */
+        const phoneCards = () => page.evaluate(() => [...document.querySelectorAll<HTMLElement>('[data-phone-card^="task:"]')].map((cardElement) => {
+          const frame = cardElement.getBoundingClientRect();
+          const drawn = (element: Element) => element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0;
+          const lines = [...cardElement.children].filter(drawn);
+          const line = cardElement.querySelector<HTMLElement>("[data-phone-card-prototype]");
+          const words = line?.querySelector<HTMLElement>("[data-phone-card-prototype-words]") ?? null;
+          const overlaps: string[] = [];
+          for (let i = 0; i < lines.length; i += 1) for (let j = i + 1; j < lines.length; j += 1) {
+            const a = lines[i]!.getBoundingClientRect(), b = lines[j]!.getBoundingClientRect();
+            if (a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5) overlaps.push(`#${i + 1} × #${j + 1}`);
+          }
+          return {
+            task: cardElement.dataset.phoneCard!.slice("task:".length), needs: cardElement.dataset.needs === "1" || cardElement.dataset.edge === "warning",
+            prototype: line && drawn(line) ? words?.textContent?.trim() ?? "" : null,
+            mark: Boolean(line?.querySelector("[data-phone-card-prototype-mark]")?.getBoundingClientRect().width),
+            clipped: Boolean(words && words.scrollWidth > words.clientWidth + 0.5),
+            reasons: [...cardElement.querySelectorAll<HTMLElement>("[data-phone-card-prototype-words], [data-phone-card-badge], [data-phone-card-ask]")].filter(drawn).map((element) => element.textContent?.trim() ?? "").filter(Boolean),
+            overlaps, outside: lines.flatMap((element, at) => { const b = element.getBoundingClientRect(); return b.left < frame.left - 0.5 || b.right > frame.right + 0.5 || b.top < frame.top - 0.5 || b.bottom > frame.bottom + 0.5 ? [`#${at + 1}`] : []; }),
+          };
+        }));
         const closeReview = async () => {
           await page.keyboard.press("Escape");
           await page.waitForSelector(REVIEW, { state: "detached", timeout: 5_000 });
@@ -18168,6 +18190,22 @@ describe("prototype review on a task: the card's button, the review and the orch
               await row.waitFor({ timeout: 10_000 });
               await row.scrollIntoViewIfNeeded();
             };
+            /* The phone's card has no review button, so a card that waits only
+               on its prototype says so on a line of its own. */
+            const cards = await phoneCards();
+            record("cards", cards);
+            const byTask = Object.fromEntries(cards.map((entry) => [entry.task, entry]));
+            for (const task of ["t-search", "t-upload", "t-links"]) if (!byTask[task]) failures.push(`${label}: the phone board draws no card for ${task}`);
+            for (const entry of cards) {
+              if (entry.needs && !entry.reasons.length) failures.push(`${label}: the phone card of ${entry.task} waits on the operator without a word why`);
+              if (entry.overlaps.length || entry.outside.length || entry.clipped) failures.push(`${label}: the phone card of ${entry.task} overlaps ${entry.overlaps.join(", ")}, leaves the card ${entry.outside.join(", ")} or clips its prototype line: ${JSON.stringify(entry.prototype)}`);
+            }
+            for (const task of ["t-search", "t-upload"]) if (byTask[task]?.prototype !== tr("proto.notice.ready") || !byTask[task]?.mark) failures.push(`${label}: the waiting phone card of ${task} reads ${JSON.stringify(byTask[task]?.prototype)} with the mark ${byTask[task]?.mark}`);
+            /* A card with a reason of its own keeps it and adds nothing. */
+            if (byTask["t-links"]?.prototype !== null || !byTask["t-links"]?.reasons.length) failures.push(`${label}: the phone card of t-links reads ${JSON.stringify(byTask["t-links"])}`);
+            if (cards.some((entry) => !entry.needs && entry.prototype !== null)) failures.push(`${label}: a phone card that waits on nothing says a prototype is ready`);
+            await page.locator('[data-phone-card="task:t-search"]').first().scrollIntoViewIfNeeded();
+            await shot("cards");
           } else {
             await page.waitForSelector("[data-prototype-button]", { state: "attached", timeout: 30_000 });
             const tab = page.locator('.tabs-nav [data-tab="assigned"]');
@@ -18492,6 +18530,10 @@ describe("prototype review on a task: the card's button, the review and the orch
             await shot("task-row-decided");
             await page.goBack();
             await page.waitForTimeout(400);
+            /* The choice clears the card's line; the card that still waits keeps its own. */
+            const after = await phoneCards();
+            record("cards-after-choice", after.filter((entry) => entry.task === "t-search" || entry.task === "t-upload"));
+            if (after.find((entry) => entry.task === "t-search")?.prototype !== null || after.find((entry) => entry.task === "t-upload")?.prototype !== tr("proto.notice.ready")) failures.push(`${label}: after the choice the phone cards read ${JSON.stringify(after.map((entry) => [entry.task, entry.prototype]))}`);
           }
 
           /* The choice took exactly this review out of the count. */

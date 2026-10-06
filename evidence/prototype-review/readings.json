@@ -733,7 +733,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/6/2026, 5:12:51 PM",
+      "time": "10/6/2026, 9:00:00 PM",
       "posts": [
         {
           "taskId": "t-search",
@@ -2012,7 +2012,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/6/2026, 5:13:08 PM",
+      "time": "10/6/2026, 9:00:18 PM",
       "posts": [
         {
           "taskId": "t-search",
@@ -3291,7 +3291,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "06.10.2026, 17:13:26",
+      "time": "06.10.2026, 21:00:36",
       "posts": [
         {
           "taskId": "t-search",
@@ -4570,7 +4570,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "06.10.2026, 17:13:44",
+      "time": "06.10.2026, 21:00:56",
       "posts": [
         {
           "taskId": "t-search",
@@ -5890,7 +5890,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/6/2026, 5:14:02 PM",
+      "time": "10/6/2026, 9:01:15 PM",
       "posts": [
         {
           "taskId": "t-search",
@@ -7210,7 +7210,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/6/2026, 5:14:19 PM",
+      "time": "10/6/2026, 9:01:33 PM",
       "posts": [
         {
           "taskId": "t-search",
@@ -8530,7 +8530,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "06.10.2026, 17:14:35",
+      "time": "06.10.2026, 21:01:50",
       "posts": [
         {
           "taskId": "t-search",
@@ -9850,7 +9850,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "06.10.2026, 17:14:54",
+      "time": "06.10.2026, 21:02:08",
       "posts": [
         {
           "taskId": "t-search",
@@ -10397,6 +10397,177 @@
       ],
       "button": 0
     },
+    "phone-390-en-light-cards": [
+      {
+        "task": "t-pending",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-longtitle",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-onboarding",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-links",
+        "needs": true,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [
+          "permission prompt",
+          "gpt-5.6·16m"
+        ],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-search",
+        "needs": true,
+        "prototype": "Prototype ready",
+        "mark": true,
+        "clipped": false,
+        "reasons": [
+          "Prototype ready"
+        ],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-upload",
+        "needs": true,
+        "prototype": "Prototype ready",
+        "mark": true,
+        "clipped": false,
+        "reasons": [
+          "Prototype ready"
+        ],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-export",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-merge-a",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-verify-a",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-disk",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-limits",
+        "needs": true,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [
+          "needs a decision · diagnose"
+        ],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-auth",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-attach",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-interrupt",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-compact",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-voice",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      }
+    ],
     "phone-390-en-light-needs-you": {
       "count": 6,
       "tab": 6,
@@ -10847,7 +11018,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/6/2026, 5:15:12 PM",
+      "time": "10/6/2026, 9:02:25 PM",
       "posts": [
         {
           "taskId": "t-search",
@@ -10885,6 +11056,30 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-light-cards-after-choice": [
+      {
+        "task": "t-upload",
+        "needs": true,
+        "prototype": "Prototype ready",
+        "mark": true,
+        "clipped": false,
+        "reasons": [
+          "Prototype ready"
+        ],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-search",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      }
+    ],
     "phone-390-en-light-one-variant-geometry": {
       "regions": {
         "header": [
@@ -11262,6 +11457,177 @@
       ],
       "button": 0
     },
+    "phone-390-en-dark-cards": [
+      {
+        "task": "t-pending",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-longtitle",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-onboarding",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-links",
+        "needs": true,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [
+          "permission prompt",
+          "gpt-5.6·16m"
+        ],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-search",
+        "needs": true,
+        "prototype": "Prototype ready",
+        "mark": true,
+        "clipped": false,
+        "reasons": [
+          "Prototype ready"
+        ],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-upload",
+        "needs": true,
+        "prototype": "Prototype ready",
+        "mark": true,
+        "clipped": false,
+        "reasons": [
+          "Prototype ready"
+        ],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-export",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-merge-a",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-verify-a",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-disk",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-limits",
+        "needs": true,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [
+          "needs a decision · diagnose"
+        ],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-auth",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-attach",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-interrupt",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-compact",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-voice",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      }
+    ],
     "phone-390-en-dark-needs-you": {
       "count": 6,
       "tab": 6,
@@ -11712,7 +12078,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/6/2026, 5:15:32 PM",
+      "time": "10/6/2026, 9:02:43 PM",
       "posts": [
         {
           "taskId": "t-search",
@@ -11750,6 +12116,30 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-dark-cards-after-choice": [
+      {
+        "task": "t-upload",
+        "needs": true,
+        "prototype": "Prototype ready",
+        "mark": true,
+        "clipped": false,
+        "reasons": [
+          "Prototype ready"
+        ],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-search",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      }
+    ],
     "phone-390-en-dark-one-variant-geometry": {
       "regions": {
         "header": [
@@ -12127,6 +12517,177 @@
       ],
       "button": 0
     },
+    "phone-390-uk-light-cards": [
+      {
+        "task": "t-pending",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-longtitle",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-onboarding",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-links",
+        "needs": true,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [
+          "запит дозволу",
+          "gpt-5.6·16 хв"
+        ],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-search",
+        "needs": true,
+        "prototype": "Прототип готовий",
+        "mark": true,
+        "clipped": false,
+        "reasons": [
+          "Прототип готовий"
+        ],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-upload",
+        "needs": true,
+        "prototype": "Прототип готовий",
+        "mark": true,
+        "clipped": false,
+        "reasons": [
+          "Прототип готовий"
+        ],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-export",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-merge-a",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-verify-a",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-disk",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-limits",
+        "needs": true,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [
+          "потрібне рішення · diagnose"
+        ],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-auth",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-attach",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-interrupt",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-compact",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-voice",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      }
+    ],
     "phone-390-uk-light-needs-you": {
       "count": 6,
       "tab": 6,
@@ -12577,7 +13138,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "06.10.2026, 17:15:52",
+      "time": "06.10.2026, 21:03:01",
       "posts": [
         {
           "taskId": "t-search",
@@ -12615,6 +13176,30 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-light-cards-after-choice": [
+      {
+        "task": "t-upload",
+        "needs": true,
+        "prototype": "Прототип готовий",
+        "mark": true,
+        "clipped": false,
+        "reasons": [
+          "Прототип готовий"
+        ],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-search",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      }
+    ],
     "phone-390-uk-light-one-variant-geometry": {
       "regions": {
         "header": [
@@ -12992,6 +13577,177 @@
       ],
       "button": 0
     },
+    "phone-390-uk-dark-cards": [
+      {
+        "task": "t-pending",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-longtitle",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-onboarding",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-links",
+        "needs": true,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [
+          "запит дозволу",
+          "gpt-5.6·16 хв"
+        ],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-search",
+        "needs": true,
+        "prototype": "Прототип готовий",
+        "mark": true,
+        "clipped": false,
+        "reasons": [
+          "Прототип готовий"
+        ],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-upload",
+        "needs": true,
+        "prototype": "Прототип готовий",
+        "mark": true,
+        "clipped": false,
+        "reasons": [
+          "Прототип готовий"
+        ],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-export",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-merge-a",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-verify-a",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-disk",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-limits",
+        "needs": true,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [
+          "потрібне рішення · diagnose"
+        ],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-auth",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-attach",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-interrupt",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-compact",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-voice",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      }
+    ],
     "phone-390-uk-dark-needs-you": {
       "count": 6,
       "tab": 6,
@@ -13442,7 +14198,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "06.10.2026, 17:16:11",
+      "time": "06.10.2026, 21:03:20",
       "posts": [
         {
           "taskId": "t-search",
@@ -13480,6 +14236,30 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-dark-cards-after-choice": [
+      {
+        "task": "t-upload",
+        "needs": true,
+        "prototype": "Прототип готовий",
+        "mark": true,
+        "clipped": false,
+        "reasons": [
+          "Прототип готовий"
+        ],
+        "overlaps": [],
+        "outside": []
+      },
+      {
+        "task": "t-search",
+        "needs": false,
+        "prototype": null,
+        "mark": false,
+        "clipped": false,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
+      }
+    ],
     "phone-390-uk-dark-one-variant-geometry": {
       "regions": {
         "header": [

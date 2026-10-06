@@ -444,6 +444,20 @@ function othersText(t: TFunction, item: PhoneCard): string | null {
   return parts.length ? parts.join(" · ") : null;
 }
 
+/** A task that waits only on its prototype review: the words the desktop
+    card's narrow foot says, with its mark. The card has no review button, so
+    this line is what says why it waits; the choice clears it. */
+function PrototypeWaitLine({ item }: { item: PhoneCard }) {
+  const { t } = useLocale();
+  if (!item.waitsOnPrototype) return null;
+  return (
+    <span data-phone-card-prototype="" className="flex min-w-0 items-center gap-[7px] text-label font-semibold text-warning">
+      <span aria-hidden data-phone-card-prototype-mark="" className="ml-[3px] h-1.5 w-1.5 shrink-0 rounded-full bg-warning shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-warning)_22%,transparent)]" />
+      <span data-phone-card-prototype-words="" className="min-w-0 truncate">{t("proto.notice.ready")}</span>
+    </span>
+  );
+}
+
 /** Who cleared a card and how long ago: the muted line a cleared card keeps
     while what it cleared is still live. */
 function ClearedLine({ item, nowMs }: { item: PhoneCard; nowMs: number }) {
@@ -510,7 +524,7 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
   const loose = item.kind === "conversation" || item.kind === "flow";
   /* High and low only, as on the desktop card; the card's label says it. */
   const priority = item.kind === "task" && card.priority !== "normal" ? card.priority : null;
-  const label = [t(item.kind === "task" ? "mobile2.kanban.openTask" : "mobile2.kanban.openRow", { title }), priority ? t(`kanban.priorityMark.${priority}`) : null, project].filter(Boolean).join(", ");
+  const label = [t(item.kind === "task" ? "mobile2.kanban.openTask" : "mobile2.kanban.openRow", { title }), priority ? t(`kanban.priorityMark.${priority}`) : null, item.waitsOnPrototype ? t("proto.notice.ready") : null, project].filter(Boolean).join(", ");
   const body = (
     <>
       {project ? (
@@ -555,6 +569,7 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
         <PipelineBlock summary={item.shown} density="card" nowMs={nowMs} taskTitle={item.kind === "task" ? title : null} aside={othersText(t, item)} />
       ) : null}
       {loose ? <LooseLine item={item} now={now} /> : <AskLine item={item} />}
+      <PrototypeWaitLine item={item} />
       <AgentsLine item={item} nowMs={nowMs} remote={remote !== null} />
       <ClearedLine item={item} nowMs={nowMs} />
       {remote ? <RemoteCardLines remote={remote} title={title} nowMs={nowMs} withLane={!item.shown} /> : null}
@@ -584,7 +599,7 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
   );
   return (
     <>
-    <Pressable onLongPress={onLongPress} lift={lift} waits={item.reasons.length > 0}>
+    <Pressable onLongPress={onLongPress} lift={lift} waits={item.reasons.length > 0 || item.waitsOnPrototype}>
       {aside ? (
         <div data-phone-card-frame={item.key} className={`${FRAME} ${tone}`} style={colour}>
           {face}
@@ -613,7 +628,7 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
         </div>
       ) : face}
     </Pressable>
-    {remoteAgents.length ? <div className="rounded-b-xl bg-card px-3 pb-1" data-phone-card-shell="" data-attention={item.reasons.length > 0 ? "needs" : undefined}><RemoteAgents rows={remoteAgents} nowMs={nowMs} /></div> : null}
+    {remoteAgents.length ? <div className="rounded-b-xl bg-card px-3 pb-1" data-phone-card-shell="" data-attention={item.reasons.length > 0 || item.waitsOnPrototype ? "needs" : undefined}><RemoteAgents rows={remoteAgents} nowMs={nowMs} /></div> : null}
     </>
   );
 }
