@@ -87,6 +87,39 @@ function runtimeIdentity(value: unknown): ViewerMcpRuntimeIdentity {
   return runtime as ViewerMcpRuntimeIdentity;
 }
 
+/** The modules `bin/mcp-server.mjs` loads from its own directory, followed
+    through every module they load in turn. The stable launcher is published
+    as exactly this set: a list kept by hand went stale the day the supervisor
+    gained two imports, and every MCP server started after that publication
+    died on its first import. A module outside the launcher's directory, or one
+    that is absent, leaves the launcher unpublishable. */
+export function mcpLauncherImports(sourceBin: string): string[] {
+  const launcher = "mcp-server.mjs";
+  const seen = new Set<string>([launcher]);
+  const pending = [launcher];
+  while (pending.length > 0) {
+    const name = pending.pop()!;
+    let source: string;
+    try {
+      source = fs.readFileSync(path.join(sourceBin, name), "utf8");
+    } catch {
+      throw new Error(`prepared MCP runtime launcher is incomplete: ${name} is missing`);
+    }
+    for (const match of source.matchAll(/^\s*(?:import|export)\b[^"'`;]*?["'](\.{1,2}\/[^"']+)["']|\bimport\s*\(\s*["'](\.{1,2}\/[^"']+)["']/gm)) {
+      const specifier = (match[1] ?? match[2])!;
+      const imported = specifier.slice(2);
+      if (!specifier.startsWith("./") || imported.includes("/")) {
+        throw new Error(`prepared MCP runtime launcher is incomplete: ${name} imports ${specifier} from outside its directory`);
+      }
+      if (seen.has(imported)) continue;
+      seen.add(imported);
+      pending.push(imported);
+    }
+  }
+  seen.delete(launcher);
+  return [...seen].sort();
+}
+
 export class McpRuntimeReleaseStore {
   private readonly releasesDir: string;
   private readonly now: () => string;
@@ -171,11 +204,8 @@ export class McpRuntimeReleaseStore {
     const sourceLauncher = path.join(sourceBin, "mcp-server.mjs");
     /* Every module the launcher imports, published before the launcher itself
        so a launcher never lands beside a missing import. */
-    const launcherImports = ["server-runtime.mjs", "appDir.mjs", "envAlias.mjs", "self-update-supervisor.mjs"];
-    if (!fs.statSync(sourceLauncher).isFile()
-      || !launcherImports.every((name) => fs.statSync(path.join(sourceBin, name)).isFile())) {
-      throw new Error("prepared MCP runtime launcher is incomplete");
-    }
+    if (!fs.statSync(sourceLauncher).isFile()) throw new Error("prepared MCP runtime launcher is incomplete");
+    const launcherImports = mcpLauncherImports(sourceBin);
     const targetBin = path.join(this.options.stableRuntimeRoot, "bin");
     fs.mkdirSync(targetBin, { recursive: true, mode: 0o700 });
     for (const name of launcherImports) this.publishExecutable(path.join(sourceBin, name), path.join(targetBin, name));

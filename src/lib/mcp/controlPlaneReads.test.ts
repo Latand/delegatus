@@ -423,6 +423,97 @@ test("get_conversation enforces tailLines through the validated transcript-path 
   expect(counts.rawScans).toBe(0);
 });
 
+function longConversationBindings() {
+  const tool = (index: number) => [
+    JSON.stringify({ type: "response_item", payload: { type: "function_call", name: "shell", call_id: `call-${index}`, arguments: JSON.stringify({ command: `echo ${index}` }) } }),
+    JSON.stringify({ type: "response_item", payload: { type: "function_call_output", call_id: `call-${index}`, output: `out-${index} ${"x".repeat(30_000)}` } }),
+  ];
+  fs.writeFileSync(transcriptPath, [
+    JSON.stringify({ type: "session_meta", payload: { id: "sess-long", timestamp: "2026-07-01T09:00:00.000Z", cwd: "/repo/project-0" } }),
+    ...Array.from({ length: 60 }, (_value, index) => [
+      JSON.stringify({ type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: `message-${index} ${"y".repeat(index === 59 ? 9_000 : 1_500)}` }] } }),
+      ...tool(index),
+    ]).flat(),
+  ].join("\n") + "\n");
+  const { injected } = dependencies({ completedTranscript: false, scans: 3 });
+  const root = path.dirname(transcriptPath);
+  const pathAllowed = (candidate: string) => {
+    try { return fs.realpathSync(candidate).startsWith(fs.realpathSync(root) + path.sep); } catch { return false; }
+  };
+  const domain = injected as unknown as {
+    targetedFileEntry(candidate: string, options?: { signal?: AbortSignal; deadlineAt?: number; tailLines?: number }): ReturnType<typeof targetedConversationAtPath>;
+  };
+  domain.targetedFileEntry = (candidate, options = {}) => targetedConversationAtPath(
+    candidate,
+    options,
+    { roots: [["codex-sessions", root]], pathAllowed },
+  );
+  return viewerMcpBindings(undefined, undefined, injected);
+}
+
+type ConversationAnswer = {
+  messages: Array<{ text: string; truncated?: true }>;
+  tools: Array<{ text: string; truncated?: true }>;
+  truncated: boolean;
+  omitted?: { messages: number; tools: number };
+  hint?: string;
+  tail: { lines: string[]; bytes: number; truncated: boolean; cutLines?: number };
+};
+
+test("get_conversation keeps the newest records inside an answer budget and full:true returns them whole", async () => {
+  const bindings = longConversationBindings();
+
+  const summary = await bindings.get_conversation({ transcriptPath, maxRecords: 500 }) as unknown as ConversationAnswer;
+  const full = await bindings.get_conversation({ transcriptPath, maxRecords: 500, full: true }) as unknown as ConversationAnswer;
+
+  /* The newest record survives, cut to its head and marked; older ones keep
+     their order until the budget is spent, and the answer counts what is not
+     in it. */
+  expect(summary.messages.at(-1)!.text).toHaveLength(4_000);
+  expect(summary.messages.at(-1)!.text.startsWith("message-59 ")).toBe(true);
+  expect(summary.messages.at(-1)!.truncated).toBe(true);
+  expect(summary.messages.at(-2)!.text.startsWith("message-58 ")).toBe(true);
+  expect(summary.messages.at(-2)).not.toHaveProperty("truncated");
+  expect(summary.messages.reduce((sum, record) => sum + record.text.length, 0)).toBeLessThanOrEqual(40_000);
+  expect(summary.tools.every((record) => record.text.length <= 1_000)).toBe(true);
+  expect(summary.tools.reduce((sum, record) => sum + record.text.length, 0)).toBeLessThanOrEqual(24_000);
+  expect(summary.omitted).toEqual({
+    messages: full.messages.length - summary.messages.length,
+    tools: full.tools.length - summary.tools.length,
+  });
+  expect(summary.omitted!.messages).toBeGreaterThan(0);
+  expect(summary.truncated).toBe(true);
+  expect(summary.hint).toContain("full:true");
+  expect(JSON.stringify(summary).length).toBeLessThan(80_000);
+
+  expect(full.messages).toHaveLength(60);
+  expect(full.messages.at(-1)!.text).toHaveLength("message-59 ".length + 9_000);
+  expect(full.tools.some((record) => record.text.length > 30_000)).toBe(true);
+  expect(full).not.toHaveProperty("omitted");
+  expect(full.truncated).toBe(false);
+  expect(JSON.stringify(full).length).toBeGreaterThan(1_800_000);
+
+  const wider = await bindings.get_conversation({ transcriptPath, maxRecords: 500, maxChars: 16_000 }) as unknown as ConversationAnswer;
+  expect(wider.messages.at(-1)!.text).toHaveLength("message-59 ".length + 9_000);
+  expect(wider.messages.at(-1)).not.toHaveProperty("truncated");
+});
+
+test("get_conversation cuts long raw tail lines and full:true returns them whole", async () => {
+  const bindings = longConversationBindings();
+
+  const tail = await bindings.get_conversation({ transcriptPath, tailLines: 6 }) as unknown as ConversationAnswer;
+  const full = await bindings.get_conversation({ transcriptPath, tailLines: 6, full: true }) as unknown as ConversationAnswer;
+
+  expect(tail.tail.lines).toHaveLength(6);
+  expect(tail.tail.cutLines).toBe(3);
+  expect(tail.tail.lines.every((line) => line.length < 4_100)).toBe(true);
+  expect(tail.tail.lines.at(-1)).toMatch(/… \[\+\d+ chars\]$/u);
+  expect(tail.tail.bytes).toBe(full.tail.bytes);
+  expect(full.tail).not.toHaveProperty("cutLines");
+  expect(full.tail.lines.at(-1)!.length).toBeGreaterThan(30_000);
+  expect(() => JSON.parse(full.tail.lines.at(-1)!)).not.toThrow();
+});
+
 test("get_conversation returns a held path tail with deadline-partial metadata", async () => {
   let clockNow = Date.now();
   const deadlineAt = clockNow + 1_000;

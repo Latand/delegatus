@@ -9,7 +9,7 @@ export interface HistoryEntry {
   by: "operator" | "auto" | "seat";
   /** `auto-on`/`auto-off`: automatic updates were switched; `target` is the
       revision they were aimed at then, or empty when there was none. */
-  kind: "build" | "restart-web" | "restart-host" | "auto-on" | "auto-off";
+  kind: "apply" | "build" | "restart-web" | "restart-host" | "auto-on" | "auto-off";
   target: string;
   from: string | null;
   outcome: "done" | "failed" | "fell-back";

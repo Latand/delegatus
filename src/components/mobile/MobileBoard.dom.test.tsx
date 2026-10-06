@@ -54,6 +54,7 @@ const { resetOrchestratorSeatCacheForTests } = await import("@/components/orches
 const { buildMobileBoard, needsDecisionPipelineRows } = await import("@/components/mobile/mobileBoardModel");
 const { launchAge, statePhrase } = await import("@/components/mobile/MobileBoard");
 const { resetPhoneKanbanPlaces } = await import("@/components/mobile/phoneKanbanPlace");
+const { resetPendingOpensForTest } = await import("@/hooks/useBoardState");
 const { pendingPipelineActs } = await import("@/components/mobile/MobilePipelineScreen");
 const { humanizeDuration } = await import("@/components/turnDuration");
 const { formatResetClock } = await import("@/components/rateLimit");
@@ -271,6 +272,7 @@ const dashboardProps = (over: Partial<React.ComponentProps<typeof ProjectDashboa
 
 let roots: Root[] = [];
 beforeEach(() => {
+  resetPendingOpensForTest();
   roots = [];
   sheetOpens = [];
   opened = [];
@@ -588,6 +590,41 @@ const page = () => dom.document.body as unknown as HTMLElement;
 const receiptNow = () => q(page(), "[data-mobile2-receipt]");
 const sheetActions = () => all(page(), "[data-phone-card-sheet] [data-phone-card-action]").map((el) => el.getAttribute("data-phone-card-action"));
 const laneCard = (root: HTMLElement) => q(root, '[data-phone-card-kind="pipeline"][data-needs="1"]');
+
+for (const kind of ["root", "manual"] as const) {
+  test(`conversation menu Reopen restores a closed ${kind} card through the board and survives a refresh`, async () => {
+    const target = kind === "root" ? running : finished;
+    if (kind === "manual") boardPrefs = { manual: [target.path] };
+    let navigations = 0;
+    const root = mount({ onUserNavigate: () => { navigations++; } });
+    expect(await waitFor(() => rowFor(root, target.path) !== null)).toBe(true);
+    inbox(root);
+    click(rowFor(root, target.path));
+    expect(await waitFor(() => q(root, '[data-testid="mobile-chat-shell"]') !== null)).toBe(true);
+    click(q(root, '[data-mobile2-open="menu"]'));
+    click(q(page(), '[data-mobile2-menu-row="close"]'));
+    expect(await waitFor(() => mutations.some((mutation) => mutation.kind === "close" && mutation.path === target.path))).toBe(true);
+    expect(boardPrefs.hidden).toContain(target.path);
+    const beforeReopen = navigations;
+
+    click(q(receiptNow()!, '[data-mobile2-receipt-undo="reopen"]'));
+    expect(await waitFor(() => mutations.some((mutation) => mutation.kind === "restore" && mutation.path === target.path))).toBe(true);
+    /* Root reconciliation stores these roots as manual members too. */
+    expect(mutations).toContainEqual({ kind: "restore", path: target.path, placement: "manual" });
+    expect(boardPrefs.hidden).not.toContain(target.path);
+    /* A restore does not run the scheme's camera/highlight flash. */
+    expect(navigations).toBe(beforeReopen);
+
+    for (const mounted of roots) flushSync(() => mounted.unmount());
+    roots = [];
+    resetMobileNavForTests();
+    const beforeRead = requestLog.filter((entry) => entry.startsWith("GET /api/board")).length;
+    const refreshed = mount();
+    expect(await waitFor(() => requestLog.filter((entry) => entry.startsWith("GET /api/board")).length > beforeRead)).toBe(true);
+    expect(await waitFor(() => rowFor(refreshed, target.path) !== null)).toBe(true);
+    expect(boardPrefs.hidden).not.toContain(target.path);
+  });
+}
 
 test("a row no task owns holds to Close card: the card leaves on the tap, nothing stops the agent, and Reopen brings it back", async () => {
   const root = mount();

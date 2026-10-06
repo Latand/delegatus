@@ -1,5 +1,10 @@
 # Self-update — design (#2007)
 
+The launcher replacement, recovery adoption, packaged release and one-click
+apply protocol now follow [Every install updates itself](self-update-every-install.md).
+The separate process restarts described below are the legacy protocol.
+
+
 ## Originating requirement
 
 Operator request, 2026-09-22, paraphrased into English from the pipeline

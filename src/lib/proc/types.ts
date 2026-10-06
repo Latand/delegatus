@@ -50,6 +50,15 @@ export interface ProcBackend {
   readPpid(pid: number): number | null;
   /** PID plus a kernel start-time token where the platform exposes one. */
   processIdentity(pid: number): string | null;
+  /**
+   * True when `pid` names a process that has already exited and only waits for
+   * its parent to collect it. Such a process keeps its pid and its start
+   * identity, and `pidAlive` still answers true for it, so a caller that needs
+   * "this process can still do work" asks this as well. False for a running
+   * process, for a pid that is gone, and wherever the platform keeps no such
+   * state (Windows).
+   */
+  processExited(pid: number): boolean;
 
   /**
    * CPU (user + system) a live process has consumed since it launched, in
