@@ -1,3 +1,4 @@
+import { isAccountMutationContention } from "@/lib/accounts/contentionMessage";
 import { currentConversationFile } from "@/lib/accounts/identity";
 import type { Locale, MessageKey, TFunction } from "@/lib/i18n";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT, orchestratorMandateStale } from "@/lib/orchestrator/prompt";
@@ -947,7 +948,7 @@ export function classifySeatFailure(
 export type SeatFailureCause = "store-busy" | "launch-timeout" | "host-unavailable";
 
 export function seatFailureCauseOf(error: string): SeatFailureCause | null {
-  if (/account (mutation is|store stayed) busy/.test(error)) return "store-busy";
+  if (isAccountMutationContention(error)) return "store-busy";
   if (/runtime host (request )?timed out/.test(error)) return "launch-timeout";
   if (error.includes("runtime host is unavailable")) return "host-unavailable";
   return null;

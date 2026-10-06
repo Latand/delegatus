@@ -2,10 +2,34 @@ import { afterAll, expect, jest, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { foreignAccountHolder } from "./accountMutation.fixture";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-account-mutation-"));
 
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
+
+test("a synchronous writer waits out a short foreign holder", async () => {
+  const { withAccountMutationLock } = await import("./accountMutation");
+  const holder = await foreignAccountHolder();
+  try {
+    holder.releaseAfter(8);
+    expect(withAccountMutationLock(() => "written")).toBe("written");
+  } finally { await holder.close(); }
+});
+
+test("synchronous contention caps an oversized wait budget and withholds holder details", async () => {
+  const { withAccountMutationLock, ACCOUNT_STORE_BUSY_MESSAGE, ACCOUNT_MUTATION_SYNC_WAIT_MS } = await import("./accountMutation");
+  const holder = await foreignAccountHolder();
+  const wait = Atomics.wait;
+  let requestedMs = 0;
+  Atomics.wait = (...args) => { requestedMs += args[3] ?? 0; return Reflect.apply(wait, Atomics, args); };
+  try {
+    expect(() => withAccountMutationLock(() => { throw new Error("must not run"); }, { waitMs: 10_000 })).toThrow(ACCOUNT_STORE_BUSY_MESSAGE);
+    expect(requestedMs).toBeGreaterThan(0);
+    expect(requestedMs).toBeLessThanOrEqual(ACCOUNT_MUTATION_SYNC_WAIT_MS);
+    expect(ACCOUNT_STORE_BUSY_MESSAGE).not.toMatch(/pid|engine|held by|account mutation/i);
+  } finally { Atomics.wait = wait; await holder.close(); }
+});
 
 test("a real registry spawn sees same-process contention before allocating, while the async path queues", async () => {
   const state = path.join(sandbox, "registry-contention-state");
@@ -79,7 +103,7 @@ test("a real registry spawn sees same-process contention before allocating, whil
   expect(JSON.parse(fs.readFileSync(result, "utf8"))).toEqual({
     syncError: {
       name: "AccountMutationBusyError",
-      message: expect.stringMatching(/account mutation is busy; held by .+pid/),
+      message: "The account store is temporarily busy; try again shortly.",
     },
     syncWaits: 0,
     receiptsBeforeRelease: 0,
@@ -431,7 +455,8 @@ test("async admission has one deadline, names the holder and removes a timed-out
     expect(settled).not.toBeNull();
     const error = settled!.error;
     expect(error).toBeInstanceOf(AccountMutationBusyError);
-    expect((error as Error).message).toContain("quota commit fixture");
+    expect((error as Error).message).toBe("The account store is temporarily busy; try again shortly.");
+    expect((error as InstanceType<typeof AccountMutationBusyError>).owner.operation).toBe("quota commit fixture");
     expect(ran).toBeFalse();
     expect(lines).toHaveLength(1);
     expect(JSON.parse(lines[0]!)).toMatchObject({ event: "account-mutation-refused", caller: "resume", holder: "quota commit fixture", holderPid: process.pid, waitMs: expect.any(Number), lockAgeMs: expect.any(Number) });

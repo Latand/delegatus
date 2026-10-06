@@ -26,6 +26,8 @@ import { DeadlineExceededError } from "@/lib/deadline";
 import { CORPUS_BODY_MARKERS, pipelineCorpus } from "@/lib/pipelines/fixtures/corpus";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { registerPipelineTick } from "@/lib/pipelines/controllerSignal";
+import { statePath } from "@/lib/configDir";
+import { initialAuto, writeAuto } from "@/lib/selfUpdate/auto";
 import { drainFile, releaseDrain, writeDrain } from "@/lib/selfUpdate/drain";
 import { listRoles } from "@/lib/roles/registry";
 import type { RoleDefinition } from "@/lib/roles/types";
@@ -518,6 +520,17 @@ test("automatic drain refuses autonomous spawns and permits operator launches", 
     await expect(as("manager")({ ...args, clientRequestId: "held-seat" })).rejects.toMatchObject({ details: { code: "launch_held_for_update" } });
     expect(spawns).toBe(0);
     await expect(as("agent")({ ...args, clientRequestId: "held-helper" })).rejects.toMatchObject({ details: { code: "launch_held_for_update" } });
+    // The refusal names what the update waits for, from the blockers its last probe recorded (#2515).
+    const autoFile = statePath("self-update", "auto.json");
+    const blockers = { turns: 2, stages: 1, operatorActiveAt: null, busy: false, unreadable: null, memoryMb: null };
+    writeAuto(autoFile, { ...initialAuto(), enabled: true, lastBlockers: blockers });
+    try {
+      await expect(as("agent")({ ...args, clientRequestId: "held-named" })).rejects.toMatchObject({
+        message: "new launches are held while the automatic update waits for 2 running turns and 1 pipeline stage to finish",
+        details: { code: "launch_held_for_update", target: "a".repeat(40), waitingFor: "2 running turns and 1 pipeline stage to finish", blockers },
+      });
+    } finally { fs.rmSync(autoFile, { force: true }); }
+    expect(spawns).toBe(0);
     await as("gateway")({ ...args, clientRequestId: "allowed-operator" });
     expect(spawns).toBe(1);
   } finally { releaseDrain(file, "mcp-test"); }

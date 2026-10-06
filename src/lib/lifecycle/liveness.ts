@@ -1,6 +1,7 @@
-import { identityAlive, livenessProbe, type LivenessProbe } from "@/lib/agent/accountLiveness";
+import { identityAlive, livenessProbe, receiptProcessEvidence, type LivenessProbe } from "@/lib/agent/accountLiveness";
 import type { AgentRegistryEntry, RegistryFile } from "@/lib/agent/registry";
-import { agentRegistry } from "@/lib/agent/registry";
+import { agentRegistry, resolveConversationAlias, structuredClaimIdentity } from "@/lib/agent/registry";
+import { sessionKeyId } from "@/lib/agent/sessionKey";
 import { isAbortError } from "@/lib/deadline";
 import { hostProviderRetryAt } from "@/lib/limitsThrottle";
 import { getPipelines } from "@/lib/pipelines/engine";
@@ -274,6 +275,11 @@ export function defaultEvidenceByteBudget(limit: number): number {
   return Math.max(1, limit) * EVIDENCE_TAIL_BYTES;
 }
 
+/** What a liveness read takes from the registry. The aliases are optional so an
+    injected snapshot that predates them still reads; production always has them. */
+export type LivenessRegistrySnapshot = Pick<RegistryFile, "entries" | "conversations">
+  & Partial<Pick<RegistryFile, "conversationAliases" | "receipts">>;
+
 export interface AgentLivenessSources {
   now(): number;
   /** The clock the phase timings are read on. Production omits it and times on
@@ -297,7 +303,7 @@ export interface AgentLivenessSources {
   listFiles?(): Promise<FileEntry[]>;
   /** One transcript by path, described with no sweep of any kind. */
   describeTranscript(transcriptPath: string): Promise<LivenessTranscript | null>;
-  registrySnapshot(): Pick<RegistryFile, "entries" | "conversations">;
+  registrySnapshot(): LivenessRegistrySnapshot;
   pipelines(): Pipeline[];
   /** Active review-loop ownership, read only to resolve detached reviewers that
       intentionally have no structured-host registry entry. */
@@ -375,12 +381,24 @@ function hostEvidence(
       }
     : null;
 
+  // Status can lag host admission or termination. Recorded live ownership is
+  // the same evidence for liveOnly and restart admission, including a child
+  // that survived termination and is still fenced by its saved identity.
+  if (tmux?.state === "alive") return tmux;
+  if (structuredEvidence?.state === "alive") return structuredEvidence;
+  const survivor = entry.structuredTerminationSurvivors?.find((identity) => identityAlive(identity, probe));
+  if (survivor) return { state: "alive", kind: "structured", pid: survivor.pid };
+  // An admitted resume claims the old row before awaiting host setup. Its
+  // controller owns that setup even while the row still says dead and has
+  // no host process. The matching writer epoch makes this a current claim.
+  if (entry.claimOwner && entry.claimEpoch > 0 && entry.structuredHost?.writerClaimEpoch === entry.claimEpoch) {
+    const owner = structuredClaimIdentity(entry.claimOwner);
+    if (owner && identityAlive(owner, probe)) return { state: "alive", kind: "structured", pid: owner.pid };
+  }
   if (!hosted) {
     const recorded = tmux ?? structuredEvidence;
     return recorded ? { ...recorded, state: "gone" } : { state: "gone", kind: "none", pid: null };
   }
-  if (tmux?.state === "alive") return tmux;
-  if (structuredEvidence?.state === "alive") return structuredEvidence;
   if (tmux) return tmux;
   if (structuredEvidence) return structuredEvidence;
 
@@ -391,35 +409,71 @@ function hostEvidence(
   return { state: young ? "unknown" : "gone", kind: "none", pid: null };
 }
 
+/** Process ownership survives control phases and later review rounds. */
 function headlessHostEvidence(
   flows: readonly Flow[],
-  transcriptPath: string,
+  transcriptPath: string | null,
   conversationId: string | null,
   probe: LivenessProbe,
+  registry: LivenessRegistrySnapshot,
 ): { state: AgentHostState; kind: "headless"; pid: number } | null {
+  const canonicalId = conversationId ? canonicalConversationId(registry, conversationId) : null;
+  let fallback: { state: AgentHostState; kind: "headless"; pid: number } | null = null;
   for (const flow of flows) {
-    if (flow.reviewerMode !== "headless" || flow.state !== "reviewing") continue;
-    const round = flow.rounds.at(-1);
-    if (!round || (!round.reviewerPath || round.reviewerPath !== transcriptPath)
-      && (!conversationId || round.reviewerConversationId !== conversationId)) continue;
-    const pid = round.reviewerPid;
-    const identity = round.reviewerIdentity;
-    if (!exactHeadlessIdentityAlive(pid, identity, probe)) continue;
-    return { state: "alive", kind: "headless", pid };
+    if (flow.reviewerMode !== "headless") continue;
+    for (const round of flow.rounds) {
+      if (!Number.isInteger(round.reviewerPid) || (round.reviewerPid ?? 0) <= 0
+        || (!transcriptPath || round.reviewerPath !== transcriptPath)
+        && (!canonicalId || !round.reviewerConversationId || canonicalConversationId(registry, round.reviewerConversationId) !== canonicalId)) continue;
+      const verdict = headlessRoundProcess(round, probe);
+      const host = { state: verdict === "unproven" ? "unknown" as const : verdict, kind: "headless" as const, pid: round.reviewerPid! };
+      if (verdict === "alive") return host;
+      if (!fallback || verdict === "unproven") fallback = host;
+    }
   }
-  return null;
+  return fallback;
 }
 
-/** Headless reviewer ownership is an actuation-grade claim. Unlike the shared
- * liveness helper, both start identities must be present and exactly equal. */
-function exactHeadlessIdentityAlive(
-  pid: number | null | undefined,
-  savedIdentity: string | null | undefined,
+/**
+ * The process verdict of the headless round that owns this conversation
+ * (#2515), including a process whose start identity cannot be proven.
+ *
+ * A headless launch writes its process only to the flow round; the registry
+ * row keeps no host for it. This is the same process evidence the liveness
+ * record uses, including when the transcript is missing or moved. A round
+ * with no recorded pid adds no process evidence to the conversation's verdict.
+ * An unbound dispatch is held separately by its launch markers.
+ */
+export function headlessReviewerProcess(
+  flows: readonly Flow[],
+  conversationId: string,
+  transcriptPath: string | null,
   probe: LivenessProbe,
-): pid is number {
-  if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0 || !savedIdentity || !probe.pidAlive(pid)) return false;
+  registry: LivenessRegistrySnapshot,
+): "alive" | "gone" | "unproven" | null {
+  const host = headlessHostEvidence(flows, transcriptPath, conversationId, probe, registry);
+  return host ? host.state === "unknown" ? "unproven" : host.state : null;
+}
+
+/**
+ * What the process a headless round records says about itself (#2515), for a
+ * bound or unbound round.
+ *
+ * `alive` is the recorded pid answering under its exact start identity. `gone`
+ * is a pid that no longer answers, or one that answers under another start
+ * identity. Anything short of either is `unproven`: no pid recorded, or an
+ * identity that was not saved or cannot be read now.
+ */
+export function headlessRoundProcess(
+  round: { reviewerPid?: number | null; reviewerIdentity?: string | null },
+  probe: LivenessProbe,
+): "alive" | "gone" | "unproven" {
+  const pid = round.reviewerPid;
+  if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return "unproven";
+  if (!probe.pidAlive(pid)) return "gone";
   const currentIdentity = probe.processIdentity(pid);
-  return Boolean(currentIdentity) && currentIdentity === savedIdentity;
+  if (!round.reviewerIdentity || !currentIdentity) return "unproven";
+  return currentIdentity === round.reviewerIdentity ? "alive" : "gone";
 }
 
 function turnStateFromEvidence(evidence: LivenessTranscriptEvidence | null, entry: LivenessTranscript): LifecycleTurnState {
@@ -516,6 +570,93 @@ export function evaluateLiveness(input: {
   return { lifecycle: "running", reason: "host_alive_turn_active" };
 }
 
+/** The part of a liveness record that says whether a process still owns it. */
+export type LivenessVerdict = Pick<AgentLivenessRecord, "lifecycle" | "reason" | "turnState">
+  & { host: Pick<AgentLivenessRecord["host"], "state"> };
+
+/**
+ * Whether a process could still be working on the conversation a record names.
+ *
+ * This is the `liveOnly` filter of `agent_activity` and the update drain's
+ * answer to "is this turn really running" (#2515). The two used to be separate
+ * readings of the same registry, and they disagreed about every host that had
+ * died: `agent_activity` listed three conversations while the drain counted
+ * ninety-three turns and held every launch for hours. One predicate, so a dead
+ * host reads the same wherever it is asked about.
+ */
+export function livenessRecordIsLive(record: LivenessVerdict): boolean {
+  return record.lifecycle !== "gone" && record.host.state !== "gone" && record.reason !== "launch_unproven_expired";
+}
+
+/** The conversation an id names once the registry's aliases are followed. */
+export function canonicalConversationId(registry: Pick<LivenessRegistrySnapshot, "conversationAliases">, conversationId: string): string {
+  return registry.conversationAliases && conversationId.startsWith("conversation_")
+    ? resolveConversationAlias({ conversationAliases: registry.conversationAliases }, conversationId as `conversation_${string}`)
+    : conversationId;
+}
+
+function canonicalConversation(
+  registry: LivenessRegistrySnapshot,
+  conversationId: string,
+): LivenessRegistrySnapshot["conversations"][string] | undefined {
+  return registry.conversations[canonicalConversationId(registry, conversationId)];
+}
+
+export interface ConversationRegistryHost {
+  /** The host verdict `agent_activity` derives from the same row. */
+  state: AgentHostState;
+  /** A process the row records still answers under its recorded identity,
+      whatever status word the row carries. */
+  processAlive: boolean;
+}
+
+/** Setup owns a conversation before its first transcript or host entry exists. */
+function receiptHostEvidence(registry: LivenessRegistrySnapshot, conversationId: string | null, probe: LivenessProbe, artifactPath?: string) {
+  const ownerId = conversationId ? canonicalConversationId(registry, conversationId) : null;
+  let gone = false;
+  let unresolved = false;
+  for (const receipt of Object.values(registry.receipts ?? {})) {
+    if ((!ownerId || canonicalConversationId(registry, receipt.conversationId) !== ownerId)
+      && (!artifactPath || receipt.artifactPath !== artifactPath)) continue;
+    const evidence = receiptProcessEvidence(receipt, probe);
+    if (evidence?.state === "alive") return { state: "alive" as const,
+      kind: receipt.transport === "structured" ? "structured" as const : "tmux" as const, pid: evidence.process.pid };
+    if (evidence?.state === "gone") gone = true;
+    else unresolved = true;
+  }
+  return gone && !unresolved ? { state: "gone" as const, kind: "none" as const, pid: null } : null;
+}
+
+/**
+ * Host evidence for a conversation's current generation, read off its registry
+ * row and launch receipt (#2515).
+ *
+ * A liveness record needs a transcript the scanner can describe, so an id whose
+ * transcript was deleted or moved has no record at all. The row still says who
+ * hosts the conversation, and that is the whole question a restart asks: `gone`
+ * proves no process owns it, and `processAlive` names one that does. Null when
+ * the registry holds no row to read, which proves nothing either way.
+ */
+export function conversationRegistryHost(
+  registry: LivenessRegistrySnapshot,
+  conversationId: string,
+  probe: LivenessProbe,
+): ConversationRegistryHost | null {
+  const conversation = canonicalConversation(registry, conversationId);
+  const generation = conversation?.generations.at(-1);
+  const entry = conversation && generation
+    ? registry.entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })] ?? entryForPath(registry, generation.path)
+    : null;
+  const registered = entry ? hostEvidence(entry, probe) : null;
+  const host = registered?.state === "alive" ? registered
+    : receiptHostEvidence(registry, conversationId, probe) ?? registered;
+  if (!host) return null;
+  return {
+    state: host.state,
+    processAlive: host.state === "alive",
+  };
+}
+
 /** Pipeline attempts indexed by the conversation and transcript they own, so a
     stalled agent can be named with its stage lineage. */
 function pipelineIndex(pipelines: Pipeline[]): {
@@ -560,13 +701,13 @@ function transcriptFromEntry(entry: FileEntry): LivenessTranscript {
 
 /** The conversation that owns a transcript, from the registry the snapshot has
     already read — a targeted lookup has no scan projection to carry one. */
-function conversationIdForPath(
-  registry: Pick<RegistryFile, "conversations">,
+export function conversationIdForPath(
+  registry: Pick<LivenessRegistrySnapshot, "conversations" | "conversationAliases">,
   transcriptPath: string,
 ): string | null {
   for (const conversation of Object.values(registry.conversations)) {
-    if (conversation.generations.some((generation) => generation.path === transcriptPath)) return conversation.id;
-    if (conversation.continuityPaths?.includes(transcriptPath)) return conversation.id;
+    if (conversation.generations.some((generation) => generation.path === transcriptPath)
+      || conversation.continuityPaths?.includes(transcriptPath)) return canonicalConversationId(registry, conversation.id);
   }
   return null;
 }
@@ -575,26 +716,35 @@ function conversationIdForPath(
     generation can predate a launch by its whole refresh cadence, so liveness
     filtered on the scan projection alone would drop a conversation that started
     a minute ago — the correctness half of not sweeping the corpus (#860). */
-function hostedTranscriptPaths(snapshot: Pick<RegistryFile, "entries">, probe: LivenessProbe): Set<string> {
+function hostedTranscriptPaths(snapshot: LivenessRegistrySnapshot, probe: LivenessProbe): Set<string> {
   const hosted = new Set<string>();
   for (const entry of Object.values(snapshot.entries)) {
     if (entry.artifactPath && hostEvidence(entry, probe).state === "alive") hosted.add(entry.artifactPath);
+  }
+  for (const receipt of Object.values(snapshot.receipts ?? {})) {
+    if (receiptProcessEvidence(receipt, probe)?.state !== "alive") continue;
+    const path = receipt.artifactPath ?? canonicalConversation(snapshot, receipt.conversationId)?.generations.at(-1)?.path;
+    if (path) hosted.add(path);
   }
   return hosted;
 }
 
 function activeHeadlessTranscriptPaths(
   flows: readonly Flow[],
-  conversations: Pick<RegistryFile, "conversations">["conversations"],
+  registry: LivenessRegistrySnapshot,
   probe: LivenessProbe,
 ): Set<string> {
   const paths = new Set<string>();
   for (const flow of flows) {
-    if (flow.reviewerMode !== "headless" || flow.state !== "reviewing") continue;
-    const round = flow.rounds.at(-1);
-    const path = round?.reviewerPath
-      ?? (round?.reviewerConversationId ? conversations[round.reviewerConversationId]?.generations.at(-1)?.path : null);
-    if (path && exactHeadlessIdentityAlive(round?.reviewerPid, round?.reviewerIdentity, probe)) paths.add(path);
+    if (flow.reviewerMode !== "headless") continue;
+    for (const round of flow.rounds) {
+      if (!Number.isInteger(round.reviewerPid) || (round.reviewerPid ?? 0) <= 0) continue;
+      const path = round.reviewerPath
+        ?? (round.reviewerConversationId ? canonicalConversation(registry, round.reviewerConversationId)?.generations.at(-1)?.path : null);
+      // Selection must retain every owner the final liveOnly predicate protects.
+      // An unreadable identity cannot drop a recorded PID before it is judged.
+      if (path && headlessRoundProcess(round, probe) !== "gone") paths.add(path);
+    }
   }
   return paths;
 }
@@ -825,7 +975,7 @@ async function livenessSnapshotWithin(
   const flows = sources.flows?.() ?? [];
   const hostedPaths = new Set([
     ...hostedTranscriptPaths(registry, sources.probe),
-    ...activeHeadlessTranscriptPaths(flows, registry.conversations, sources.probe),
+    ...activeHeadlessTranscriptPaths(flows, registry, sources.probe),
   ]);
   const indexProjectionMs = phaseClock() - projectionStartedAt;
 
@@ -835,7 +985,10 @@ async function livenessSnapshotWithin(
   const targeted = Boolean(request.transcriptPath || request.conversationId);
   if (request.transcriptPath) requestedPaths.add(request.transcriptPath);
   if (request.conversationId) {
-    const conversation = registry.conversations[request.conversationId];
+    /* Through the aliases: a journal row or a card can still hold the id a
+       conversation had before its canonical owner adopted it, and that id
+       names the same transcript (#2515). */
+    const conversation = canonicalConversation(registry, request.conversationId);
     const path = conversation?.generations.at(-1)?.path;
     if (path) requestedPaths.add(path);
   }
@@ -1010,8 +1163,12 @@ async function livenessSnapshotWithin(
     const silentForMs = lastRecordMs !== null ? Math.max(0, now - lastRecordMs) : null;
     const registryEntry = entryForPath(registry, entry.path);
     const conversationId = entry.conversationId ?? conversationIdForPath(registry, entry.path);
-    const host = headlessHostEvidence(flows, entry.path, conversationId, sources.probe)
-      ?? hostEvidence(registryEntry, sources.probe);
+    const reviewerHost = headlessHostEvidence(flows, entry.path, conversationId, sources.probe, registry);
+    const registeredHost = hostEvidence(registryEntry, sources.probe);
+    const receiptHost = receiptHostEvidence(registry, conversationId, sources.probe, entry.path);
+    // A current replacement host wins over the previous reviewer's death.
+    const host = registeredHost.state === "alive" ? registeredHost : receiptHost?.state === "alive" ? receiptHost
+      : reviewerHost ?? receiptHost ?? registeredHost;
     const providerThrottle = turnState === "busy" && host.state === "alive"
       ? hostProviderRetry(registryEntry, now)
       : { retryAt: null, throttledAt: null };
@@ -1030,6 +1187,9 @@ async function livenessSnapshotWithin(
         turnState,
         silentForMs,
         stallAfterMs,
+        // A recorded PID with an unreadable identity is held until proof of
+        // death or replacement; it is not an unbound launch aging through grace.
+        startingGraceMs: reviewerHost?.state === "unknown" ? Infinity : undefined,
         providerRetryAt: providerThrottle.retryAt,
         providerThrottleAt: providerThrottle.throttledAt,
         providerProgressAt: evidence?.providerProgressAt ?? null,
