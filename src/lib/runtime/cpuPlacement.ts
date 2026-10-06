@@ -188,17 +188,21 @@ export function planAgentCpu(workload: AgentWorkload, env: Readonly<Record<strin
 }
 
 /**
- * Wraps a first-party heavy command (a publication push and its hooks, a
- * release build) in its own work scope. `systemd-run --scope` executes the
- * command in place, so its PID, process group and inherited descriptors stay
- * the caller's.
+ * `systemd-run --scope` argv that runs `command` in its own scope under `plan`.
+ * The scope executes the command in place, so its PID, process group and
+ * inherited descriptors stay the caller's.
  */
+export function cpuScopeCommand(plan: AgentCpuPlan, unit: string, description: string, command: string, args: string[]): { command: string; args: string[] } {
+  return { command: "systemd-run", args: ["--user", "--scope", "--quiet", "--collect",
+    ...(plan.systemdVersion >= 254 ? ["--expand-environment=no"] : []),
+    `--unit=${unit}`, `--slice=${plan.slice}`, `--description=${description}`,
+    ...cpuScopeProperties(plan), "--", command, ...args] };
+}
+
+/** Wraps a first-party heavy command (a publication push and its hooks, a release build) in its own work scope. */
 export function wrapWorkCommand(command: string, args: string[], options: { label: string; env?: Readonly<Record<string, string | undefined>>; ports?: CpuPorts }): { command: string; args: string[] } {
   const plan = planAgentCpu("work", options.env ?? process.env, options.ports ?? testPorts ?? {});
   if (!plan) return { command, args };
   const label = options.label.replace(/[^a-zA-Z0-9_.-]/g, "-").slice(0, 32);
-  return { command: "systemd-run", args: ["--user", "--scope", "--quiet", "--collect",
-    ...(plan.systemdVersion >= 254 ? ["--expand-environment=no"] : []),
-    `--unit=delegatus-work-${label}-${randomUUID().slice(0, 12)}.scope`, `--slice=${plan.slice}`, "--description=Delegatus work",
-    ...cpuScopeProperties(plan), "--", command, ...args] };
+  return cpuScopeCommand(plan, `delegatus-work-${label}-${randomUUID().slice(0, 12)}.scope`, "Delegatus work", command, args);
 }

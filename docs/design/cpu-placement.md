@@ -18,9 +18,9 @@ user@<uid>.service
 └─ delegatus.slice
    ├─ delegatus.service              production, CPUWeight=1000 (after the installation files)
    └─ delegatus-agents.slice         memory budget for every agent (MemoryMax set at runtime)
-      ├─ delegatus-agent-*.scope     operator hosts: CPUWeight=1000, no CPU ceiling
+      ├─ delegatus-agent-*.scope     operator hosts and tmux panes: CPUWeight=1000, no CPU ceiling
       └─ delegatus-agents-work.slice CPUWeight=100, CPUQuota=75% of the logical CPUs
-         ├─ delegatus-agent-*.scope  pipeline and flow hosts, headless runs: CPUWeight=100, CPUQuota=300%
+         ├─ delegatus-agent-*.scope  pipeline and flow hosts, headless runs, work tmux panes: CPUWeight=100, CPUQuota=300%
          ├─ delegatus-work-*.scope   publication install and push, release install and build, workflow setup
          └─ run-*.scope              gates from scripts/gate-slot.sh
 ```
@@ -49,19 +49,31 @@ pipeline scopes there are.
 | Pipeline publication: `bun install --frozen-lockfile` and `git push` with every pre-push hook | `fencedExec` in `src/lib/pipelines/git.ts` | `delegatus-agents-work.slice/delegatus-work-publish-{install,push}-<id>.scope` | weight 100, 300% |
 | Self-update install and build of a new release; the package install of a packaged release | `realPorts().run` in `src/lib/selfUpdate/steps.ts` | `delegatus-agents-work.slice/delegatus-work-update-{install,build,package}-<id>.scope` | weight 100, 300% |
 | Viewer, runtime host, launcher, scan and search workers, recovery controller, self-update git fetch and checkout, pipeline and workflow provisioning git, observation of a running setup | production | `delegatus.service` | the service's (weight 1000 after the installation files) |
+| Operator tmux panes: board task spawns (`src/app/api/tasks/[id]/spawn/route.ts`), sibling agents (`src/lib/view/siblings.ts`), resumed terminal agents (`src/lib/agent/transcriptHost.ts`) and the tmux transport of `spawn_agent` (`src/lib/agent/spawnCommand.ts`, `src/lib/runtime/structuredSpawn.ts`), whenever the conversation holds no `pipeline` or `flow` membership | `spawnAgentWithPrompt` in `src/lib/tmux.ts`, through `placePaneInCpuScope` | `delegatus-agents.slice/delegatus-agent-<engine>-pane-<id>.scope` | weight 1000 |
+| Work tmux panes: workflow stage agents and fixers (`src/lib/workflows/engine.ts`), pane reviewers of a flow (`src/lib/flows/engine.ts`), any tmux launch whose conversation holds a `pipeline` or `flow` membership | same | `delegatus-agents-work.slice/delegatus-agent-<engine>-pane-<id>.scope` | weight 100, 300% |
+| Transcript view windows (`tail -F` of a structured host's transcript) | `spawnCommandWindow` in `src/lib/tmux.ts` | the scope tmux gives the pane | none; it only reads a file |
 | The installed `/var/tmp/llv-gate`, run by hand | outside the repository; no first-party code calls it | `app.slice/run-<id>.scope` | none; it shares the gate slots (below) |
-| Legacy tmux panes | the tmux server | the tmux server's scope | none |
 | Docker image builds and rehearsals (`deploy-staging`, `verify-candidate`) | the Docker daemon | the daemon's cgroups | none (see "Not covered") |
 
 `systemd-run --scope` executes the command in place, so the PID, process group
 and inherited descriptors of every wrapped command stay the caller's: kill
 paths, identity checks and the publication lock descriptor work unchanged.
 
+A tmux pane is placed after `new-window` returns: tmux built with systemd moves
+every new pane into its own `tmux-spawn-<uuid>.scope` before it answers, and a
+scope started inside the pane earlier can lose that race. The pane's shell then
+runs `exec systemd-run --scope … -- <default-shell> -l`, which keeps the pane's
+PID, and the agent command is typed only once `/proc/<pane>/cgroup` names the
+new scope and the pane is back at a shell. Everything the agent starts,
+detached and orphaned children included, inherits that scope. A recovered pane
+already in an agent scope is left as it is.
+
 ## Classification
 
-A structured host is work when its conversation holds a `pipeline` or `flow`
-membership; every other host serves the operator, orchestrator seats included.
-Headless runs are always work. The membership is written with the spawn receipt,
+A structured host or a tmux pane is work when its conversation holds a
+`pipeline` or `flow` membership; every other host serves the operator,
+orchestrator seats included. Headless runs and workflow stage agents are always
+work; a workflow names the class itself because its stages carry no membership. The membership is written with the spawn receipt,
 before the host starts, and a resumed host reads the same canonical
 conversation, so a stage keeps its class across restarts.
 
@@ -80,7 +92,8 @@ the reason and the setting that opts out:
 > not delegate the cpu controller. Set DELEGATUS_AGENT_CPU=off to run work
 > without CPU placement.
 
-A pipeline stage start fails with that message; a publication fails with it as
+A pipeline stage start and a work tmux pane fail with that message before any
+window exists; a publication fails with it as
 its recorded cause and pushes nothing; a gate exits 69; a workflow parks with
 it before its setup starts; a release install or build fails its update step
 with it as the step's last line and starts no child. Operator hosts never wait
@@ -114,9 +127,20 @@ The pipeline shows the reason in its detail line, for example
 `stage start held for CPU pressure since 2026-10-06T12:00:00.000Z (avg10 45% ≥ 20%)`,
 and wakes itself every five seconds to check again.
 
-A workflow's setup is held the same way before its first launch, with
-`setup held for CPU pressure since …` in the workflow's detail line; a setup
-that already started is observed whatever the pressure reads. A release install
+A workflow's setup and each of its stage agents are held the same way before
+their first launch, with `setup held for CPU pressure since …` or
+`stage start held for CPU pressure since …` in the workflow's detail line. A
+held stage stamps no start, so it launches exactly once after admission; a
+setup or stage that already started is observed and recovered whatever the
+pressure reads.
+
+A pipeline publication's `bun install --frozen-lockfile` waits before its child
+is created, inside the publication fence. The lane's detail line shows
+`publication install held for CPU pressure since …` while it waits and gets its
+previous detail back once the install starts. Closing the lane or taking over
+its delivery aborts the wait, and no install starts. The push that follows is
+not held: its gates take slots through `gate-slot.sh`, which applies its own
+admission. Remote observation and reconciliation never ask. A release install
 or build waits before its child is created and writes
 `update-build held for CPU pressure since …` (then `… deferred by CPU pressure …`)
 into the update step's visible tail and log. The wait counts against the step's
@@ -128,7 +152,8 @@ It prints `gate-slot: held for CPU pressure: …` when the hold begins and
 `gate-slot: deferred by CPU pressure for 120s …` once the budget is spent.
 
 Operator sends, receipt reconciliation, staged-launch recovery, the delivery
-queue, update observation and setup observation never consult admission. `DELEGATUS_CPU_PRESSURE=off` turns it off;
+queue, publication reconciliation, update observation and setup and stage
+observation never consult admission. `DELEGATUS_CPU_PRESSURE=off` turns it off;
 `DELEGATUS_CPU_PRESSURE_HOLD` and `DELEGATUS_CPU_PRESSURE_RELEASE` tune the
 thresholds. Tune them from measurements: while this change was built, the
 incident machine read 14–24% with dozens of agents and no incident.
@@ -253,9 +278,19 @@ All tests run by path with isolated state; the real-cgroup tests create private
   `delegatus-work-workflow-setup-…` scope, and a merger gate through
   `MergeBatch` that starts no child under high pressure, then lands in the
   private work slice on the shared slot.
+- `src/lib/runtime/cpuPlacement.scope.test.ts` drives `spawnAgentWithPrompt`
+  on a private tmux server with a fake CLI: a workflow stage, a flow pane
+  reviewer and a tmux pipeline stage land in
+  `delegatus-agents-work.slice/delegatus-agent-codex-pane-…` reading
+  `cpu.max 60000 20000` under `360000 20000`, with memory mode off; an operator
+  pane reads weight 1000 and no ceiling; the agent's ordinary descendant and its
+  orphaned `setsid` child keep the pane's scope; work refused for a missing
+  mechanism opens no window.
 - `src/lib/workflows/provision.test.ts` and `engine.test.ts`: a missing
-  mechanism refuses the setup without a child; pressure holds the first launch
-  with a visible reason, launches it once, and never holds a launched setup.
+  mechanism refuses the setup without a child; pressure holds the first setup
+  launch and every stage-agent start with a visible reason, stamps no start,
+  launches each once after ten seconds below the release threshold, never holds
+  a launched setup or stage, and admits on a failed sample.
 - `src/lib/selfUpdate/steps.test.ts`: a missing mechanism fails the install or
   build step with the reason and no child; sustained pressure starts no child,
   a recovered window starts the step once, a failed sample starts it with the
@@ -273,7 +308,9 @@ All tests run by path with isolated state; the real-cgroup tests create private
   operator hosts the agents slice, and refuses a pipeline host when the
   mechanism is missing.
 - `src/lib/pipelines/git.test.ts`: publication runs install and push in work
-  scopes and pushes nothing when the mechanism is missing.
+  scopes and pushes nothing when the mechanism is missing; sustained pressure
+  starts no install, a recovered window starts it once, a failed sample starts
+  it in its scope, and closing the lane ends the wait with no install or push.
 - `src/lib/pipelines/engine.test.ts`: CPU pressure holds a stage start with a
   visible reason, defers after 120 s, releases one launch after ten seconds
   below 10%, never holds a launched stage, and admits on a failed sample.

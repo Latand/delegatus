@@ -5,10 +5,11 @@ import { delegatusSetting } from "./cpuPlacement";
 /*
  * CPU-pressure admission for heavy work (docs/design/cpu-placement.md).
  *
- * A pipeline stage start, a workflow setup and a release install or build wait
- * while the machine's CPU pressure is high: each is held once `some avg10` reaches the hold threshold and released only
- * after the value has stayed below the release threshold for the release
- * window. Operator sends, receipt reconciliation and recovery never ask.
+ * A pipeline stage start, a workflow setup or stage-agent start, a
+ * publication's dependency install and a release install or build wait while
+ * the machine's CPU pressure is high: each is held once `some avg10` reaches
+ * the hold threshold and released only after the value has stayed below the
+ * release threshold for the release window. Operator sends, receipt reconciliation and recovery never ask.
  * A failed sample admits: the work scopes' CPU quotas still bound the work.
  * `scripts/gate-slot.sh` applies the same policy to gates.
  */
@@ -99,13 +100,20 @@ export async function waitForCpuPressure(gate: Pick<CpuPressureGate, "check"> | 
   }
 }
 
-const globalGate = globalThis as unknown as { __llvCpuPressureGate?: CpuPressureGate | null };
+const globalGate = globalThis as unknown as { __llvCpuPressureGate?: Pick<CpuPressureGate, "check"> | null; __llvCpuPressurePollMs?: number };
 /** The process-wide gate over /proc/pressure/cpu; null when turned off. */
-export function machineCpuPressureGate(): CpuPressureGate | null {
+export function machineCpuPressureGate(): Pick<CpuPressureGate, "check"> | null {
   if (globalGate.__llvCpuPressureGate !== undefined) return globalGate.__llvCpuPressureGate;
   const policy = cpuPressurePolicy();
   return globalGate.__llvCpuPressureGate = policy && new CpuPressureGate(policy, {
     sample: () => { try { return parseCpuPressure(fs.readFileSync("/proc/pressure/cpu", "utf8")); } catch { return null; } },
     now: Date.now,
   });
+}
+/** How often a waiting start samples the machine gate. */
+export function machineCpuPressurePollMs(): number { return globalGate.__llvCpuPressurePollMs ?? 2_000; }
+/** Replaces the machine gate and its poll interval; undefined restores the default. */
+export function setMachineCpuPressureForTests(gate: Pick<CpuPressureGate, "check"> | null | undefined, pollMs?: number): void {
+  globalGate.__llvCpuPressureGate = gate;
+  globalGate.__llvCpuPressurePollMs = pollMs;
 }

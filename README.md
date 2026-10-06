@@ -729,16 +729,19 @@ for a decision. See [the design](docs/design/agent-memory-isolation.md).
 ### Agent CPU
 
 On Linux with a systemd user manager, hosts the operator talks to run in
-`delegatus-agents.slice` with `CPUWeight=1000`. Pipeline and flow hosts,
-headless reviews, gates from `scripts/gate-slot.sh` (the merger's included),
-workflow setup, pipeline publication and release installs and builds run in `delegatus-agents-work.slice`: `CPUWeight=100`, 300% of a
-CPU per scope and 75% of the logical CPUs for the whole slice. This placement is
-independent of the memory mode. Where it should work and cannot, work is refused
-with the reason, a release build included; operator hosts still run.
+`delegatus-agents.slice` with `CPUWeight=1000`, tmux panes included. Pipeline
+and flow hosts, workflow stage and pane-reviewer tmux panes, headless reviews,
+gates from `scripts/gate-slot.sh` (the merger's included), workflow setup,
+pipeline publication and release installs and builds run in
+`delegatus-agents-work.slice`: `CPUWeight=100`, 300% of a CPU per scope and 75%
+of the logical CPUs for the whole slice. This placement is independent of the
+memory mode. Where it should work and cannot, work is refused with the reason,
+a release build included; operator hosts still run.
 
-A pipeline stage, workflow setup, release install or build, or gate waits while CPU pressure (`some avg10`) is at or above
-20% and starts once it has stayed below 10% for ten seconds; the wait shows in
-the pipeline's or workflow's detail line and in the update step's log. Operator
+A pipeline stage, workflow setup or stage, publication install, release install
+or build, or gate waits while CPU pressure (`some avg10`) is at or above 20%
+and starts once it has stayed below 10% for ten seconds; the wait shows in the
+pipeline's or workflow's detail line and in the update step's log. Operator
 messages never wait on it.
 
 | Variable | Effect |

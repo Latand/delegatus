@@ -15,6 +15,7 @@ import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifa
 import type { Pipeline, PipelinePublicationFailure, PipelinePublicationResult } from "./types";
 import { pathIsDeclaredOutput } from "./stageAccess";
 import { CpuContainmentUnavailable, wrapWorkCommand } from "@/lib/runtime/cpuPlacement";
+import { isCpuPressureDetail, machineCpuPressureGate, machineCpuPressurePollMs, waitForCpuPressure } from "@/lib/runtime/cpuPressure";
 import { CONTROLLER_ARTIFACT_GIT_PATHS, CONTROLLER_ARTIFACT_PATHSPECS, protectExistingControllerArtifacts } from "./controllerArtifacts";
 
 export type PreservedProvisionRef = { ref: string; sha: string; unpublishedCommits: number };
@@ -1366,6 +1367,8 @@ export function pipelinePublicationFence(pipeline: Pipeline): string {
  * to, which is a different fact from a failed publication and never a stall on
  * its own.
  */
+const PUBLICATION_INSTALL_SUBJECT = "publication install";
+
 export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, request: PipelinePublishRequest): Promise<PipelinePublishResult> {
   const operationId = crypto.randomUUID();
   const lock = path.join(pipelineArtifactsDir(pipeline.id), "publication.lock");
@@ -1461,6 +1464,28 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       }
     }, 50);
     let failureEvidence: PipelinePublicationFailure | undefined;
+    const showInstallHold = (reason: string | null, replaced: { detail: string | null } | null) => withDeliveryMutationAsync((tx) => {
+      const current = tx.get(pipeline.id);
+      if (!current || !matches(current)) return;
+      if (reason) current.stateDetail = reason;
+      else if (replaced && isCpuPressureDetail(current.stateDetail, PUBLICATION_INSTALL_SUBJECT)) current.stateDetail = replaced.detail;
+      else return;
+      tx.put(current);
+    });
+    const waitForPublicationInstall = async (): Promise<boolean> => {
+      let shown: Promise<void> = Promise.resolve();
+      let replaced: { detail: string | null } | null = null;
+      const admitted = await waitForCpuPressure(machineCpuPressureGate(), { subject: PUBLICATION_INSTALL_SUBJECT, signal: abort.signal,
+        pollMs: machineCpuPressurePollMs(),
+        onReason: (reason) => {
+          replaced ??= { detail: findPipelineRecord(pipeline.id)?.stateDetail ?? null };
+          shown = shown.then(() => showInstallHold(reason, null));
+        } });
+      await shown;
+      // The detail the hold replaced comes back: settlement reads it.
+      if (replaced) await showInstallHold(null, replaced);
+      return admitted && !abort.signal.aborted;
+    };
     // Git and network work deliberately run after boundedPatch released its lease.
     // Each real Git child inherits this kernel lock. If the Viewer dies, the
     // lock stays held until that child is gone; takeover must prove it is free.
@@ -1482,6 +1507,11 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
           return { code: 1, stdout: "", stderr: error.message };
         }
       }
+      // Preparing dependencies is heavy work that starts only when CPU
+      // pressure allows; the push is held by nothing, its gates take slots
+      // through gate-slot.sh. The lane shows the reason while it waits, and a
+      // close or takeover aborts the wait before any child exists.
+      if (preparingDependencies && !await waitForPublicationInstall()) return { code: null, stdout: "", stderr: "publication superseded" };
       if (command === "git" && args[0] === "push") writeStarted = true;
       const started = performance.now();
       const executed = await exec(launch.command, launch.args, cwd, pipelineLiteralGitEnv(env), { ...options, signal: abort.signal, inheritFd: descriptor });

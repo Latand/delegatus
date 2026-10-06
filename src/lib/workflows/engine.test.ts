@@ -866,3 +866,61 @@ test("CPU pressure holds the setup launch with a visible reason, then launches i
   expect(starts()).toBe(1);
   expect(load(wf.id).state).toBe("implementing");
 });
+
+test("CPU pressure holds every stage-agent start before its launch is stamped, then starts it once; a started stage is never held", async () => {
+  const { CpuPressureGate, DEFAULT_CPU_PRESSURE_POLICY } = await import("@/lib/runtime/cpuPressure");
+  const harness = makeHarness();
+  const { ports, state } = harness;
+  let pressure = 80; let clock = 0; let asked = 0;
+  const gate = new CpuPressureGate(DEFAULT_CPU_PRESSURE_POLICY, { sample: () => pressure, now: () => clock });
+  ports.cpuPressureHold = () => { asked += 1; return gate.check(); };
+  const wf = await createWf(ports);
+  expect(wf.template.setup ?? null).toBeNull();
+
+  for (let i = 0; i < 4; i++) await tickWorkflows([], ports);
+  expect(state.spawnCount).toBe(0);
+  expect(load(wf.id)).toMatchObject({ state: "implementing", stateDetail: "stage start held for CPU pressure since 1970-01-01T00:00:00.000Z (avg10 80% ≥ 20%)" });
+  expect(load(wf.id).stageRuns[0]!.startedAt).toBeNull();
+  clock = 120_000;
+  await tickWorkflows([], ports);
+  expect(load(wf.id).stateDetail).toStartWith("stage start deferred by CPU pressure: held since 1970-01-01T00:00:00.000Z");
+
+  pressure = 5; clock = 130_000;
+  await tickWorkflows([], ports);
+  expect(state.spawnCount).toBe(0); // the ten-second release window has only begun
+  clock = 140_000;
+  await tickWorkflows([], ports);
+  expect(state.spawnCount).toBe(1);
+  expect(load(wf.id).stateDetail).toBeNull();
+  expect(load(wf.id).stageRuns[0]!.startedAt).not.toBeNull();
+
+  // Observing the started stage never asks, whatever the pressure reads.
+  pressure = 95; const before = asked;
+  const stage0 = "/codex/rollout-held.jsonl";
+  state.cwds.set(stage0, load(wf.id).worktreeDir);
+  const claimed = entryFor(stage0, "codex", state.nowTick / 1000 + 5);
+  await tickWorkflows([claimed], ports);
+  await tickWorkflows([claimed], ports);
+  expect(asked).toBe(before);
+  expect(load(wf.id).stageRuns[0]!.agentPath).toBe(stage0);
+
+  // The next stage asks again before its own start.
+  const done = finishTurn(harness, stage0, "STAGE_DONE: API");
+  for (let i = 0; i < 3; i++) await tickWorkflows([done], ports);
+  expect(load(wf.id).stageIndex).toBe(1);
+  expect(state.spawnCount).toBe(1);
+  expect(load(wf.id).stageRuns[1]!.startedAt).toBeNull();
+  expect(load(wf.id).stateDetail).toStartWith("stage start held for CPU pressure since ");
+});
+
+test("a failed CPU-pressure sample admits a workflow stage start", async () => {
+  const { CpuPressureGate, DEFAULT_CPU_PRESSURE_POLICY } = await import("@/lib/runtime/cpuPressure");
+  const { ports, state } = makeHarness();
+  const gate = new CpuPressureGate(DEFAULT_CPU_PRESSURE_POLICY, { sample: () => { throw new Error("no /proc/pressure/cpu"); }, now: () => 0 });
+  ports.cpuPressureHold = () => gate.check();
+  const wf = await createWf(ports);
+  await tickWorkflows([], ports);
+  await tickWorkflows([], ports);
+  expect(state.spawnCount).toBe(1);
+  expect(load(wf.id).stateDetail).toBeNull();
+});

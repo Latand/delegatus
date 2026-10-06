@@ -210,3 +210,91 @@ scopeTest("a merger gate runs in the work slice, on a shared slot, and waits out
   expect(seen.group).toMatch(new RegExp(`/${slices.top}/${slices.agents}/${slices.work}/run-[^/]+\\.scope$`));
   expect([seen.weight, seen.max, seen.memory, seen.parentMax]).toEqual(["100", "60000 20000", String(8 * GIB), "360000 20000"]);
 }, 30_000);
+
+const tmuxScopeTest = reachable && spawnSync("tmux", ["-V"]).status === 0 ? test : test.skip;
+
+/**
+ * The shared tmux launch path, end to end, on a private tmux server: a fake
+ * `codex` reaches an idle composer, records its own descendant and an
+ * intentionally orphaned `setsid` child, then waits. The operator's tmux
+ * server and its panes are never addressed.
+ */
+tmuxScopeTest("tmux launches place the pane, the agent, its descendants and an orphan in the classified CPU scope", async () => {
+  const { spawnAgentWithPrompt } = await import("@/lib/tmux");
+  const { agentRegistry } = await import("@/lib/agent/registry");
+  // Unix socket names must fit even when the gate nests a long TMPDIR.
+  const tmuxTmpdir = fs.mkdtempSync("/tmp/llv-cpu-tmux-");
+  const bin = path.join(sandbox, "tmux-bin");
+  fs.mkdirSync(bin, { recursive: true });
+  const fake = path.join(bin, "codex");
+  // argv[0] `codex` is how pane_current_command and the agent scan both see the CLI.
+  fs.writeFileSync(fake, [
+    "#!/bin/bash",
+    'out="$LLV_FAKE_CODEX_OUT"',
+    'sleep 600 & echo "$!" > "$out.descendant"',
+    '(setsid sleep 600 </dev/null >/dev/null 2>&1 & echo "$!" > "$out.orphan")',
+    'echo "$$" > "$out.agent"',
+    "stty -echo",
+    "printf '\\n› \\n  ? for shortcuts\\n'",
+    "exec -a codex sleep 600",
+  ].join("\n") + "\n", { mode: 0o700 });
+  const saved = { TMUX_TMPDIR: process.env.TMUX_TMPDIR, LLV_AGENT_CPU: process.env.LLV_AGENT_CPU, LLV_AGENT_MEMORY: process.env.LLV_AGENT_MEMORY, LLV_WORK_CPU_QUOTA: process.env.LLV_WORK_CPU_QUOTA };
+  const tmuxEnv = { ...process.env, TMUX_TMPDIR: tmuxTmpdir, HOME: sandbox, SHELL: "/bin/bash" };
+  const tmux = (...args: string[]) => spawnSync("tmux", args, { env: tmuxEnv, encoding: "utf8" });
+  let serverPid: number | null = null;
+  const pids: number[] = [];
+  try {
+    expect(tmux("-f", "/dev/null", "new-session", "-d", "-x", "160", "-y", "40", "-s", "agents").status).toBe(0);
+    serverPid = Number(tmux("display-message", "-p", "#{pid}").stdout.trim());
+    expect(tmux("set-option", "-g", "default-shell", "/bin/bash").status).toBe(0);
+    Object.assign(process.env, { TMUX_TMPDIR: tmuxTmpdir, LLV_AGENT_CPU: "auto", LLV_AGENT_MEMORY: "off", LLV_WORK_CPU_QUOTA: "1800" });
+    setCpuPortsForTests(ports);
+    const registry = agentRegistry();
+    const launch = async (name: string, options: { workload?: "work" | "operator"; membership?: "pipeline" | "flow" }) => {
+      const out = path.join(sandbox, `tmux-${name}`);
+      const spec = { command: `env LLV_FAKE_CODEX_OUT=${out} ${fake} --fixture`, cwd: sandbox, windowName: `cpu-${name}`, engine: "codex" as const };
+      const begun = registry.beginSpawnRequest({ engine: "codex", cwd: sandbox, launchProfile: { title: `CPU placement ${name}` }, ...(options.membership ? { memberships: [{ kind: options.membership,
+        containerId: `${options.membership}-${prefix}`, role: options.membership === "flow" ? "reviewer" : "builder", slot: `${name}:1`, stageId: null,
+        stageOrder: 1, round: options.membership === "flow" ? 1 : null, parentConversationId: null }] } : {}) });
+      if (begun.kind === "conflict") throw new Error("fixture receipt conflicted");
+      const pane = await spawnAgentWithPrompt(spec, `cpu placement ${name}`, begun.receipt, options.workload ? { workload: options.workload } : {});
+      const read = (suffix: string) => Number(fs.readFileSync(`${out}.${suffix}`, "utf8").trim());
+      const agent = read("agent"), descendant = read("descendant"), orphan = read("orphan");
+      pids.push(pane.panePid!, agent, descendant, orphan);
+      const group = cgroupOf(pane.panePid!);
+      units.push(path.basename(group));
+      expect(ppid(descendant)).toBe(agent);
+      expect(ppid(orphan)).not.toBe(agent);
+      for (const pid of [agent, descendant, orphan]) expect(cgroupOf(pid)).toBe(group);
+      expect(group).toMatch(/\/delegatus-agent-codex-pane-[0-9a-f-]{12}\.scope$/);
+      return group;
+    };
+
+    // A workflow stage names its class; a pane reviewer and a tmux pipeline
+    // stage carry it in their receipt's membership; anything else is the operator's.
+    for (const [name, options] of [["workflow", { workload: "work" }], ["reviewer", { membership: "flow" }], ["pipeline", { membership: "pipeline" }]] as const) {
+      const group = await launch(name, options);
+      expect(path.dirname(group)).toEndWith(`/${slices.top}/${slices.agents}/${slices.work}`);
+      expect([control(group, "cpu.weight"), control(group, "cpu.max"), control(group, "memory.max"), control(path.dirname(group), "cpu.max")])
+        .toEqual(["100", "60000 20000", "max", "360000 20000"]);
+    }
+    const operator = await launch("operator", {});
+    expect(path.dirname(operator)).toEndWith(`/${slices.top}/${slices.agents}`);
+    expect([control(operator, "cpu.weight"), control(operator, "cpu.max")]).toEqual(["1000", "max 100000"]);
+
+    // Work that cannot be contained is refused before any window exists.
+    setCpuPortsForTests({ ...ports, probe: () => ({ kind: "missing", reason: "the systemd user manager does not delegate the cpu controller" }) });
+    const windows = tmux("list-windows", "-a").stdout;
+    const refused = registry.beginSpawnRequest({ engine: "codex", cwd: sandbox, launchProfile: { title: "CPU placement refused" } });
+    if (refused.kind === "conflict") throw new Error("fixture receipt conflicted");
+    await expect(spawnAgentWithPrompt({ command: `${fake} --refused`, cwd: sandbox, windowName: "cpu-refused", engine: "codex" }, "refused", refused.receipt, { workload: "work" }))
+      .rejects.toThrow("CPU containment for agent work is unavailable: the systemd user manager does not delegate the cpu controller");
+    expect(tmux("list-windows", "-a").stdout).toBe(windows);
+  } finally {
+    setCpuPortsForTests(null);
+    for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    for (const pid of pids) { try { process.kill(pid, "SIGKILL"); } catch { /* Already gone. */ } }
+    if (serverPid) { try { process.kill(serverPid, "SIGTERM"); } catch { /* Private server exited. */ } }
+    fs.rmSync(tmuxTmpdir, { recursive: true, force: true });
+  }
+}, 60_000);

@@ -58,7 +58,7 @@ export interface StageSpawn {
 export interface WorkflowPorts {
   exec: ExecPort;
   startSetup(wf: Workflow): { pid: number | null; error?: string };
-  /** A held setup start waits for CPU pressure to fall; null admits. */
+  /** A held setup or stage-agent start waits for CPU pressure to fall; null admits. */
   cpuPressureHold?(): CpuPressureHold | null;
   setupStatus(wf: Workflow): SetupStatus;
   spawnAgent(role: RoleConfig, cwd: string, prompt: string, accountId: string | null | undefined, title: string): Promise<StageSpawn>;
@@ -88,7 +88,8 @@ export function defaultPorts(): WorkflowPorts {
       const account = accountManager.resolveSpawn(role.engine, accountId);
       const spec = freshSpecFor(role.engine, cwd, { title, model: role.model, effort: role.effort, codexHome: account.engine === "codex" ? account.home : null, claudeConfigDir: account.engine === "claude" ? account.home : null, claudeProjectsDir: account.engine === "claude" ? account.transcriptRoot : null });
       const startedAtMs = Date.now();
-      const pane = await spawnAgentWithPrompt(spec, prompt);
+      // Workflow stages are pipeline work: their pane runs in a CPU work scope.
+      const pane = await spawnAgentWithPrompt(spec, prompt, undefined, { workload: "work" });
       const transcript = await resolveSpawnedTranscriptPath({
         engine: role.engine,
         knownTranscript: spec.transcript ?? null,
@@ -243,6 +244,10 @@ function advanceStage(wf: Workflow): void {
   wf.stateDetail = null;
 }
 
+/* The subjects of the visible CPU-pressure hold reasons. */
+const SETUP_HOLD_SUBJECT = "setup";
+const STAGE_HOLD_SUBJECT = "stage start";
+
 async function ensureStageAgent(
   wf: Workflow,
   run: WorkflowStageRun,
@@ -254,6 +259,11 @@ async function ensureStageAgent(
 ): Promise<"spawning" | "waiting" | "ready"> {
   if (!run.startedAt) {
     if (wf.mode === "auto" && activeDrain()) return "waiting";
+    // Only a fresh start asks; a stage whose start is stamped is observed and
+    // recovered below whatever the pressure reads.
+    const pressure = ports.cpuPressureHold?.();
+    if (pressure) { wf.stateDetail = cpuPressureHoldDetail(pressure, STAGE_HOLD_SUBJECT); return "waiting"; }
+    if (isCpuPressureDetail(wf.stateDetail, STAGE_HOLD_SUBJECT)) wf.stateDetail = null;
     /* #1279: a workflow stage is a launch of the workflow's project's work, so
        it draws its account from that project's allowed set like every other
        one. An unbound project takes the branch this always took — the engine's
@@ -332,7 +342,6 @@ function workflowGitFence(wf: Workflow, ports: WorkflowPorts) {
   return { exec, current: revalidate, release: () => clearInterval(watch) };
 }
 
-const SETUP_HOLD_SUBJECT = "setup";
 
 async function tickProvisioning(wf: Workflow, ports: WorkflowPorts, persistCheckpoint: () => void): Promise<void> {
   if (!wf.baseRef) {
