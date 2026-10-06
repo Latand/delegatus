@@ -200,6 +200,7 @@ import { nestProcessTempUnder } from "../src/lib/tempDirs";
 import { createTailscaleStub, STUB_DNS_NAME } from "../src/test-helpers/tailscaleStub";
 
 import { createCaptureDirectory } from "./capture-directory";
+import { procBackend } from "../src/lib/proc";
 import { idleCheck, idleUpdate, stoppedProcess, type Snapshot } from "../src/lib/selfUpdate/types";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
@@ -7019,6 +7020,15 @@ function seedRelayAnswers(): void {
   ];
   writeRelayAnswer(2, "rq_running", { state: "running", outcome: null, finishedAt: null, durationMs: null, delivery: null,
     input: { ...frame, conversation: [message("m90", "u_c", "Member C", "@helper what should I bring on Thursday?", 2)], respond_to: "m90", request_text: null } });
+  // Keep the invented running answer under this capture process's custody.
+  // Without its ledger entry, startup correctly settles it as interrupted.
+  const ownerIdentity = procBackend.processIdentity(process.pid);
+  if (!ownerIdentity) throw new Error("relay capture process identity unavailable");
+  fs.writeFileSync(path.join(STATE_DIR, "external-relay", "runs.json"), JSON.stringify({ v: 1, runs: [{
+    requestId: "rq_running", leaseId: "ls_bbbbbbbbbbbbbbbbbbbbbbbbbbbbb", relayId: "relay-1", targetId: "bot-1",
+    childPid: null, childIdentity: null, ownerPid: process.pid, ownerIdentity,
+    runDir: path.join(BASE, "running-relay"), startedAt: new Date(Date.now() - 2 * 60_000).toISOString(),
+  }] }) + "\n");
   writeRelayAnswer(9, "rq_handoff", { outcome: "declined:handoff", answer: { action: "handoff", text: "", reply_to: null }, durationMs: 4_200,
     input: { ...frame,
       conversation: [
