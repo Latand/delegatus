@@ -135,7 +135,7 @@ function ports(overrides: Partial<WorktreeSweepPorts> & { prs?: MergedPullReques
 const branchExists = (root: string, branch: string) =>
   spawnSync("git", ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], { cwd: root }).status === 0;
 
-test("a completed lane whose PR was squash-merged loses its worktree and its local branch", async () => {
+test("a completed squash-merged lane releases its checkout and retains its local branch", async () => {
   const root = repository();
   const { dir, tip } = lane(root, path.join(caseDir, "widgets-pipeline-aaaa"), "pipeline/aaaa");
   /* A squash merge: main never contains the lane's commit. */
@@ -151,7 +151,7 @@ test("a completed lane whose PR was squash-merged loses its worktree and its loc
   expect(report.removedBytes).toBe(report.removed[0]!.bytes);
   expect(fs.existsSync(dir)).toBe(false);
   expect(git(["worktree", "list", "--porcelain"], root)).not.toContain(dir);
-  expect(branchExists(root, "pipeline/aaaa")).toBe(false);
+  expect(branchExists(root, "pipeline/aaaa")).toBe(true);
   expect(fs.existsSync(root)).toBe(true);
   /* The resolution was on disk before the directory went. */
   const map = JSON.parse(fs.readFileSync(path.join(process.env.LLV_STATE_DIR!, "worktree-map.json"), "utf8")) as Record<string, { repo: string }>;
@@ -380,7 +380,7 @@ test("a repository registered only as a project has its merged worktree removed 
   expect(report.kept).toEqual([]);
   expect(report.removed.map((removal) => [removal.path, removal.pr!.number])).toEqual([[dir, 91]]);
   expect(fs.existsSync(dir)).toBe(false);
-  expect(branchExists(root, "manual")).toBe(false);
+  expect(branchExists(root, "manual")).toBe(true);
 });
 
 test("the gh merge source fails closed, and a complete forge cache answers without gh", async () => {
@@ -1060,8 +1060,8 @@ test("retention, local-only commits and stale remote-tracking refs preserve fini
   const safe = await sweepMergedWorktrees(ports({ pipelines: [owner], now: () => RETAIN_NOW }));
   expect(safe.removed[0]!.preservation).toBe("remote-ref");
   expect(fs.existsSync(dir)).toBe(false);
-  /* The remote holds every commit of the branch, so it goes too. */
-  expect(branchExists(root, "pipeline/local")).toBe(false);
+  /* Checkout storage is released while the local branch stays available. */
+  expect(branchExists(root, "pipeline/local")).toBe(true);
 });
 
 test.each(["merge-batch", "review-export", "attribution"])("an unowned %s checkout under a temp root follows the same retention and remote proof", async role => {
@@ -1110,7 +1110,7 @@ test("a merged batch keeps its checkout and branch for four days, including 25 m
     now: () => RETAIN_NOW + FINISHED_WORKTREE_RETENTION_MS });
   expect(after.removed[0]!.preservation).toBe("merged-pr");
   expect(fs.existsSync(batch.dir)).toBe(false);
-  expect(branchExists(batch.root, batch.branch)).toBe(false);
+  expect(branchExists(batch.root, batch.branch)).toBe(true);
 });
 
 test("landed merger state protects deferred resolve work without a process in its checkout", async () => {
@@ -1188,7 +1188,7 @@ for (const unlinked of [false, true]) test.skipIf(process.platform !== "linux")(
   const finished = await sweepMergedWorktrees({ ...batch.options, previous: resumed,
     now: () => RETAIN_NOW + FINISHED_WORKTREE_RETENTION_MS, scan: () => scanProcesses() });
   expect(finished.removed).toHaveLength(1);
-  expect(branchExists(batch.root, batch.branch)).toBe(false);
+  expect(branchExists(batch.root, batch.branch)).toBe(true);
 }, 15_000);
 
 test.skipIf(process.platform === "win32")("an aliased merger log path holds the physical run", async () => {
@@ -1333,7 +1333,7 @@ test("past retention, a remote that does not answer proves nothing and the check
   expect(branchExists(root, "pipeline/offline")).toBe(true);
 });
 
-test("a retained lane whose HEAD equals its base goes, and its branch stays unless the remote holds it", async () => {
+test("a retained lane whose HEAD equals its base releases its checkout and keeps its branch", async () => {
   const root = repository();
   git(["commit", "-q", "--allow-empty", "-m", "local base"], root);
   const dir = path.join(caseDir, "widgets-pipeline-localbase");
@@ -1346,52 +1346,35 @@ test("a retained lane whose HEAD equals its base goes, and its branch stays unle
   expect(branchExists(root, "pipeline/localbase")).toBe(true);
 });
 
-test.each(["remote-proof", "delete-command"])("a branch advanced during %s keeps its local-only commit", async phase => {
+test("a local branch advanced after checkout removal keeps its unpublished commit", async () => {
   const root = repository(); remoteRepository(root);
   const { dir, tip } = lane(root, path.join(caseDir, "advance-ref"), "topic/advance-ref");
   git(["push", "-q", "origin", "topic/advance-ref"], root);
   const owner = pipeline({ repoDir: root, worktreeDir: dir, branch: "topic/advance-ref", closedAt: OLD_TERMINAL });
   const ordinary = ports({ pipelines: [owner], now: () => RETAIN_NOW });
-  let removed = false;
-  let advanced = "";
-  const advance = () => {
-    advanced = git(["commit-tree", git(["rev-parse", `${tip}^{tree}`], root), "-p", tip, "-m", "local-only follow-up"], root);
-    git(["update-ref", "refs/heads/topic/advance-ref", advanced, tip], root);
-  };
-  const report = await sweepMergedWorktrees({ ...ordinary, git: async (args, cwd) => {
-    if (removed && phase === "delete-command" && args[0] === "update-ref" && args.includes("-d")) advance();
-    const result = await ordinary.git(args, cwd);
-    if (args[0] === "worktree" && args[1] === "remove" && result.code === 0) removed = true;
-    if (removed && phase === "remote-proof" && args[0] === "ls-remote" && !advanced) advance();
-    return result;
-  } });
+  const report = await sweepMergedWorktrees(ordinary);
+  const advanced = git(["commit-tree", git(["rev-parse", `${tip}^{tree}`], root), "-p", tip, "-m", "local-only follow-up"], root);
+  git(["update-ref", "refs/heads/topic/advance-ref", advanced, tip], root);
   expect(report.removed).toHaveLength(1);
   expect(advanced).not.toBe("");
   expect(git(["rev-parse", "refs/heads/topic/advance-ref"], root)).toBe(advanced);
   expect(git(["rev-list", "--count", `${tip}..topic/advance-ref`], root)).toBe("1");
-  expect(report.errors).toContainEqual(expect.stringContaining("retained: its proven tip could not be deleted"));
+  expect(report.errors).toEqual([]);
 });
 
-test("a lane ref made symbolic during deletion cannot delete the checked-out main branch", async () => {
+test("a symbolic lane ref and its checked-out main target survive cleanup", async () => {
   const root = repository(); remoteRepository(root);
   const { dir } = lane(root, path.join(caseDir, "symbolic-ref"), "topic/symbolic-ref");
   git(["merge", "--ff-only", "topic/symbolic-ref"], root);
   const main = git(["rev-parse", "refs/heads/main"], root);
   git(["push", "-q", "origin", "main", "topic/symbolic-ref"], root);
   const owner = pipeline({ repoDir: root, worktreeDir: dir, branch: "topic/symbolic-ref", closedAt: OLD_TERMINAL });
-  const ordinary = ports({ pipelines: [owner], now: () => RETAIN_NOW });
-  let replaced = false;
-  const report = await sweepMergedWorktrees({ ...ordinary, git: async (args, cwd) => {
-    if (args[0] === "update-ref" && args.includes("-d")) {
-      git(["symbolic-ref", "refs/heads/topic/symbolic-ref", "refs/heads/main"], root);
-      replaced = true;
-    }
-    return ordinary.git(args, cwd);
-  } });
-  expect(replaced).toBe(true);
+  git(["symbolic-ref", "refs/heads/topic/symbolic-ref", "refs/heads/main"], root);
+  const report = await sweepMergedWorktrees(ports({ pipelines: [owner], now: () => RETAIN_NOW }));
   expect(report.removed).toHaveLength(1);
   expect(git(["rev-parse", "refs/heads/main"], root)).toBe(main);
   expect(git(["symbolic-ref", "--short", "HEAD"], root)).toBe("main");
+  expect(git(["symbolic-ref", "refs/heads/topic/symbolic-ref"], root)).toBe("refs/heads/main");
 });
 
 test.each(["attached", "detached"].flatMap(attachment => ["final-status", "final-head", "last-files"].map(phase => [attachment, phase])))("an %s commit attempted during %s keeps its checkout and source", async (attachment, phase) => {
@@ -1506,16 +1489,34 @@ test("a branch attached to a new checkout after removal is retained", async () =
   git(["push", "-q", "origin", "topic/reattach-ref"], root);
   const other = path.join(caseDir, "new-owner");
   const owner = pipeline({ repoDir: root, worktreeDir: dir, branch: "topic/reattach-ref", closedAt: OLD_TERMINAL });
-  const ordinary = ports({ pipelines: [owner], now: () => RETAIN_NOW });
-  const report = await sweepMergedWorktrees({ ...ordinary, git: async (args, cwd) => {
-    const result = await ordinary.git(args, cwd);
-    if (args.join(" ") === "rev-parse --verify --quiet refs/heads/topic/reattach-ref")
-      git(["worktree", "add", "-q", other, "topic/reattach-ref"], root);
-    return result;
-  } });
+  const report = await sweepMergedWorktrees(ports({ pipelines: [owner], now: () => RETAIN_NOW }));
+  git(["worktree", "add", "-q", other, "topic/reattach-ref"], root);
   expect(report.removed).toHaveLength(1);
   expect(branchExists(root, "topic/reattach-ref")).toBe(true);
   expect(git(["symbolic-ref", "--short", "HEAD"], other)).toBe("topic/reattach-ref");
+});
+
+test("a new checkout acquiring the lane branch at deletion retains its ref and source", async () => {
+  const root = repository(); remoteRepository(root);
+  const branch = "topic/late-branch-owner";
+  const { dir, tip } = lane(root, path.join(caseDir, "old-branch-owner"), branch);
+  git(["push", "-q", "origin", branch], root);
+  const other = path.join(caseDir, "late-branch-owner");
+  const owner = pipeline({ repoDir: root, worktreeDir: dir, branch, closedAt: OLD_TERMINAL });
+  const ordinary = ports({ pipelines: [owner], now: () => RETAIN_NOW });
+  let acquired = false;
+  const report = await sweepMergedWorktrees({ ...ordinary, git: async (args, cwd) => {
+    if (args[0] === "update-ref" && args.includes("-d")) {
+      git(["worktree", "add", "-q", other, branch], root);
+      acquired = true;
+    }
+    return ordinary.git(args, cwd);
+  } });
+  if (!acquired) git(["worktree", "add", "-q", other, branch], root);
+  expect(report.removed).toHaveLength(1);
+  expect(branchExists(root, branch)).toBe(true);
+  expect(git(["rev-parse", "HEAD"], other)).toBe(tip);
+  expect(fs.readFileSync(path.join(other, `${branch.replace(/\W/g, "-")}.txt`), "utf8")).toBe(`${branch}\n`);
 });
 
 test("a checkout made by hand outside a temp root is never retained, however old", async () => {
@@ -2063,7 +2064,7 @@ test.each(["skip-worktree", "assume-unchanged"])("hidden tracked edits under %s 
   fs.writeFileSync(file, original);
   git(["update-index", `--no-${flag}`, "README.md"], dir);
   expect((await sweepMergedWorktrees(options)).removed).toHaveLength(1);
-  expect(branchExists(root, branch)).toBe(false);
+  expect(branchExists(root, branch)).toBe(true);
 });
 
 test.each(["none", "skip-worktree", "assume-unchanged"].flatMap(flag =>

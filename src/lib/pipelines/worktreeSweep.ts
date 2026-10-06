@@ -21,11 +21,13 @@ import { pipelineLiteralGitEnv } from "./git";
  * Every pipeline gets its own `git worktree add` checkout and nothing removed
  * them: on 2026-09-25 the workstation held about 470 of them, 250 GB, and
  * `/home` was at 98%. This sweep removes a linked worktree of a registered
- * repository, and the local branch it had checked out, once the pull request
+ * repository once the pull request
  * that branch delivered is merged. The pull request's state is read from the
  * forge cache the forge sweep keeps (#2059), or from `gh` when that cache holds
  * no complete read of the repository, never from ancestry against the base
  * branch: a squash merge leaves the branch's commits outside the base for ever.
+ * Local branch refs stay: another checkout can acquire a ref while cleanup is
+ * yielding, and retaining that ref does not retain the checkout's disk bulk.
  *
  * Registered repositories are the ones a pipeline ran in and the ones the
  * operator created a project from; every linked worktree git lists for them is
@@ -901,7 +903,7 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
       }
       /** The merged PR whose head contains what the checkout has checked out
           now, or why none does. */
-      const prove = async (): Promise<{ pr: MergedPullRequest | null; anchor: string; head: string; preservation: "merged-pr" | "remote-ref" | "base"; branch: string | null } | WorktreeKept> => {
+      const prove = async (): Promise<{ pr: MergedPullRequest | null; head: string; preservation: "merged-pr" | "remote-ref" | "base"; branch: string | null } | WorktreeKept> => {
         const current = await checkedOut(ports.git, worktree);
         if (!current) return { ...base, reason: "unmerged-commits", detail: "HEAD unreadable" };
         const freshOwners = ownersOf(ownershipPipelines(), worktree);
@@ -917,12 +919,12 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
           if (present.code !== 0) continue;
           known = true;
           const ancestor = await ports.git(["merge-base", "--is-ancestor", current.head, pr.headRefOid], root);
-          if (ancestor.code === 0) return { pr, anchor: pr.headRefOid, head: current.head, preservation: "merged-pr", branch: current.branch };
+          if (ancestor.code === 0) return { pr, head: current.head, preservation: "merged-pr", branch: current.branch };
         }
         if (retained) {
           const remote = await onRemote(current.head);
-          if (remote) return { pr: null, anchor: current.head, head: current.head, preservation: "remote-ref", branch: current.branch };
-          if (freshOwners.some((owner) => owner.baseRef === current.head)) return { pr: null, anchor: current.head, head: current.head, preservation: "base", branch: current.branch };
+          if (remote) return { pr: null, head: current.head, preservation: "remote-ref", branch: current.branch };
+          if (freshOwners.some((owner) => owner.baseRef === current.head)) return { pr: null, head: current.head, preservation: "base", branch: current.branch };
           return { ...base, reason: "local-only-commits", detail: remote === null
             ? "no remote of the repository answered, so its commits are not proven kept elsewhere"
             : "a commit of HEAD is in no ref a remote advertises, and HEAD is not its pipeline's base" };
@@ -1017,24 +1019,6 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
         report.removed.push(removal);
         report.removedBytes += bytes;
       } finally { releaseHead(); }
-      /* The lane branch goes with it when its tip is contained in the merged
-         head or the remotes hold every commit of it. A base proof covers the
-         checkout's HEAD only, never a branch tip. Delete exactly the proven
-         tip: a network proof can yield while somebody advances the branch. */
-      const branches = new Set<string>(proof.branch ? [proof.branch] : []);
-      for (const owner of owners) if (owner.branch) branches.add(owner.branch);
-      for (const branch of branches) {
-        const tip = await ports.git(["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], root);
-        if (tip.code !== 0) continue;
-        const kept = proof.preservation === "merged-pr"
-          ? (await ports.git(["merge-base", "--is-ancestor", tip.stdout.trim(), proof.anchor], root)).code === 0
-          : await onRemote(tip.stdout.trim()) === true;
-        if (!kept) continue;
-        const checkouts = await ports.git(["worktree", "list", "--porcelain", "-z"], root);
-        if (checkouts.code !== 0 || parseWorktreeList(checkouts.stdout).some(other => other.branch === branch)) continue;
-        const deleted = await ports.git(["update-ref", "--no-deref", "-d", `refs/heads/${branch}`, tip.stdout.trim()], root);
-        if (deleted.code !== 0) report.errors.push(`${root}: branch ${branch} retained: its proven tip could not be deleted`);
-      }
     }
 
     // Retained, settled pipeline checkouts keep their source and private files.
