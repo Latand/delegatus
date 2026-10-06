@@ -14,6 +14,8 @@ import { mutateTasks } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
+import { withPrototypeReviewSummaries } from "@/lib/prototypeReview/read";
+import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -93,7 +95,9 @@ export async function PATCH(
   if (LINE_EDIT_KEYS.some((key) => Object.hasOwn(body, key))) {
     return NextResponse.json({ ok: true, taskId: result.task.id, revision: taskRevision(result.task), detailsLength: result.task.details?.length ?? 0, updatedAt: result.task.updatedAt, ...extras });
   }
-  return NextResponse.json({ ok: true, task: result.task, ...extras });
+  const task = withPrototypeReviewSummaries([result.task])[0]!;
+  if (req.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER)) delete task.prototypeReview;
+  return NextResponse.json({ ok: true, task, ...extras });
 }
 
 export async function DELETE(_req: NextRequest, ctx: TaskRouteContext): Promise<NextResponse<{ ok: true } | ApiError>> {

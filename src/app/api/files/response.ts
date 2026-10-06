@@ -1,5 +1,6 @@
 import { stateWriteHealth } from "@/lib/state/diskFull";
 import { filesReadSummary } from "@/lib/filesReadSummary";
+import { withPrototypeReviewSummaries, prototypeReviewNotices } from "@/lib/prototypeReview/read";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -930,7 +931,8 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     pipelines: summary?.pipelines ?? pipelines,
     ...(summary ? { readProjection: "board-summary" as const } : {}),
     workflows,
-    tasks: tasks.tasks,
+    tasks: withPrototypeReviewSummaries(tasks.tasks),
+    prototypeReviewNotices: prototypeReviewNotices(tasks.tasks),
     /* #2059: map lookups against the forge cache only; the sweep, not this
        request, talks to GitHub. */
     workLinks: workLinksForBoard(pipelines, tasks.tasks),

@@ -1731,7 +1731,7 @@ async function refineBoardTask(args: McpToolArgs, dependencies: ViewerMcpDomainD
   const byId = new Map(result.tasks.map((task) => [task.id, task] as const));
   return { ...taskTextLanguageWarnings(text, dependencies), refined: result.refined, changedFields: [...new Set(Object.values(changes).flat())], changedFieldsByTask: changes, tasks: result.refined.map((entry) => {
     const task = byId.get(entry.taskId)!;
-    return fullAnswer(args) ? task : compactTask(task);
+    return fullAnswer(args) ? taskWithoutPrototypeDetails(task) : compactTask(task);
   }), omittedRecordCount: fullAnswer(args) ? 0 : result.refined.length, ...answerHint(args, "get_task(taskId) or update_task with full:true returns the full task.") };
 }
 
@@ -4834,7 +4834,13 @@ function taskWithLinks(task: import("@/lib/tasks/types").BoardTask, dependencies
   const source = dependencies.pipelineSelectionSource?.();
   const pipelineIds = source ? boardSelection(source.filename, "pipelines").links(task.id)
     : (dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines).filter(pipeline => pipeline.taskIds?.includes(task.id)).map(pipeline => pipeline.id);
-  return { ...task, pipelineIds };
+  return { ...taskWithoutPrototypeDetails(task), pipelineIds };
+}
+
+/** Prototype contents have their own project-scoped read capability. */
+function taskWithoutPrototypeDetails(task: import("@/lib/tasks/types").BoardTask) {
+  const { prototypeReviews: _rounds, prototypeReviewReplica: _replica, prototypeReview: _summary, ...publicTask } = task;
+  return publicTask;
 }
 
 const taskById = new WeakMap<object, Map<string, TaskPipelineReadModel>>();
@@ -4851,7 +4857,7 @@ function taskReadModel(dependencies: ViewerMcpDomainDependencies) {
       const ids = links.get(id) ?? [];
       ids.push(pipeline.id); links.set(id, ids);
     }
-    model = tasks.map(task => ({ ...task, pipelineIds: links.get(task.id) ?? [] }));
+    model = tasks.map(task => ({ ...taskWithoutPrototypeDetails(task), pipelineIds: links.get(task.id) ?? [] }));
     byPipelines.set(pipelines, model);
     taskById.set(model, new Map(model.map(task => [task.id, task])));
   }
@@ -6697,6 +6703,16 @@ export function viewerMcpBindings(
     lifecycle_events: (args, context) => lifecycleEvents(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     request_attention: (args, context) => requestAttention(args, domainDependencies, context),
     suggest_replies: (args) => Promise.resolve(suggestReplies(args, domainDependencies)),
+    publish_prototype_review: (args,context) => {
+      const capability = callerCapability();
+      if (!capability) throw new Error("prototype publication requires an identified caller");
+      return viewerControlForCall(controlDependencies,context).post("/api/prototype-reviews",args,{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
+    },
+    read_prototype_review: (args,context) => {
+      const capability = callerCapability();
+      if (!capability) throw new Error("prototype reads require an identified caller");
+      return viewerControlForCall(controlDependencies,context).post("/api/prototype-reviews/read",withoutKeys(args,["clientRequestId"]),{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
+    },
     dismiss_attention: (args) => dismissAttentionTool(args, domainDependencies),
     bridge_report: (args, context) => bridgeReport(args, domainDependencies, viewerControlForCall(controlDependencies, context)),
     bridge_directive: (args, context) => bridgeDirective(args, viewerControlForCall(controlDependencies, context), domainDependencies),

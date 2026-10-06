@@ -7,6 +7,7 @@ import type { Database as BunDatabase } from "bun:sqlite";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { prototypePublishSchema } from "@/lib/prototypeReview/input";
 
 import { FOCUS_TARGET_SHAPES } from "@/lib/attention/targets";
 import { statePath } from "@/lib/configDir";
@@ -85,6 +86,8 @@ export const MCP_TOOL_NAMES = [
   "lifecycle_events",
   "request_attention",
   "suggest_replies",
+  "publish_prototype_review",
+  "read_prototype_review",
   "dismiss_attention",
   "bridge_report",
   "bridge_directive",
@@ -139,6 +142,7 @@ export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
      clientRequestId must answer from the receipt rather than re-offer drafts
      under a question the operator has since answered. */
   "suggest_replies",
+  "publish_prototype_review",
   /* Clears a needs-you flag the operator is shown, durably and attributed. A
      replayed clientRequestId must answer with the first result rather than
      clear again something that asked anew since. */
@@ -186,6 +190,7 @@ export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
 
 /** Explicit allowlist: read-like tools with durable effects still need keys. */
 export const OPTIONAL_READ_KEY_TOOLS = new Set<McpToolName>([
+  "read_prototype_review",
   "message_receipt", "list_conversations", "search_transcripts", "get_conversation",
   "conversation_deliverability", "conversation_messages", "get_pipeline", "board_snapshot",
   "list_flows", "get_flow", "list_pipelines", "list_tasks", "get_task",
@@ -2421,6 +2426,30 @@ function recoveryAnswer(
   return { ...shared, ok: true, toolName, clientRequestId: requestId, replayed };
 }
 
+/** Generic board replies cannot expose task-private review history. */
+function withoutPrototypeTaskFields<T>(value: T): T {
+  const seen = new WeakMap<object, unknown>();
+  const visit = (item: unknown): unknown => {
+    if (!item || typeof item !== "object") return item;
+    if (seen.has(item)) return seen.get(item);
+    if (!Array.isArray(item) && Object.getPrototypeOf(item) !== Object.prototype && Object.getPrototypeOf(item) !== null) return item;
+    if (Array.isArray(item)) {
+      const copy: unknown[] = []; seen.set(item, copy);
+      for (const child of item) copy.push(visit(child));
+      return copy;
+    }
+    const record = item as Record<string, unknown>;
+    const task = typeof record.id === "string" && typeof record.project === "string" && typeof record.status === "string";
+    const copy: Record<string, unknown> = {}; seen.set(item, copy);
+    for (const [key, child] of Object.entries(record)) {
+      if (task && ["prototypeReviews", "prototypeReviewReplica", "prototypeReview"].includes(key)) continue;
+      Object.defineProperty(copy, key, { value: visit(child), enumerable: true, writable: true, configurable: true });
+    }
+    return copy;
+  };
+  return visit(value) as T;
+}
+
 export function createMcpToolService(
   bindings: McpToolBindings,
   receipts: McpReceiptStore,
@@ -2462,6 +2491,7 @@ export function createMcpToolService(
         ? undefined
         : Math.max(0, context.deadlineAt - Date.now());
       const finish = (result: McpToolResult, outcome: McpTimingOutcome, unfinishedAgeMs?: number): McpToolResult => {
+        result = withoutPrototypeTaskFields(result);
         const serializationStartedAt = performance.now();
         let resultSizeBytes: number | undefined;
         try {
@@ -3195,6 +3225,8 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Authority is the same as request_attention's, and for the same reason \u2014 this writes into the surface they are answering in: the operator's own session or a designated orchestrator seat. A worker or unidentified caller is refused (SUGGEST_REPLIES_NOT_PERMITTED) with nothing recorded.",
     "The drafts always land under your OWN message: conversationId defaults to your conversation, and naming any other one is refused. To offer drafts elsewhere, ask that conversation's own session to offer them.",
   ].join(" "),
+  publish_prototype_review: "Publish a prototype review on a TASK. In a pipeline omit taskId: the server binds your stage to its pipeline's task. Outside a pipeline supply taskId in your own project. Short form: title, dir, variants [{number:1..9,name,description}]; immediate files use variant-N or vN, viewport width, en/uk and caption in their filenames. Matching -original and -changed suffixes form before/after pairs. Full form: variants with frames [{path,originalPath?,caption,width?,lang?}] and videos [{path,caption}]. Every variant needs a short name, one or two lines about its character and differences, and media. Delegatus copies PNG/JPEG/WebP and MP4/WebM to local state; nothing is uploaded. Bounds: 9 variants, 240 files including originals, 4 MiB/image, 64 MiB/video, 48 MiB images and 192 MiB total. Read roots match the image viewer: home/worktrees, stage scratch and evidence roots (normally /var/tmp); unreadable sources refuse the whole review with a copy instruction. Same clientRequestId replays the original publication. The operator opens the task review, chooses one variant or a combination and comments; read_prototype_review returns the saved decision and history.",
+  read_prototype_review: "Read a task's prototype reviews, newest waiting round, chosen variant numbers, exact operator comment, time and delivery state. Pipeline callers may omit taskId; other callers supply it. Only your own project is readable. Media URLs are installation-local and absent where copies are unavailable. This tool makes no choice and sends no message.",
   dismiss_attention: [
     "Clear a needs-you flag the operator is shown, without answering anything (docs/design/needs-attention.md): a conversation's question, plan, prompt or undelivered message, a lane parked on a decision or a spent review budget, or everything on a task's card stops raising needs-you until something newer asks. Nothing else moves \u2014 no question is answered, no lane changes state, no message is dropped \u2014 and the card says who cleared it.",
     "Authority is the same as request_attention's: the operator's own root/gateway session or the target project's designated orchestrator seat. A worker or unidentified caller is refused (DISMISS_NOT_PERMITTED) with nothing recorded, so a stage agent cannot clear its own question off the operator's board.",
@@ -3458,6 +3490,8 @@ const taskStepsInputSchema = z.array(z.object({
 })).max(TASK_STEPS_LIMIT).describe("Up to twenty checklist steps. Pipeline references derive live step motion; other references are links.");
 
 export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
+  publish_prototype_review: prototypePublishSchema,
+  read_prototype_review: z.object({ clientRequestId: clientRequestIdSchema.optional(), taskId: z.string().min(1).optional() }).strict(),
   spawn_agent: z.object({
     clientRequestId: clientRequestIdSchema,
     cwd: z.string().min(1).describe("Existing working directory for the new agent."),
