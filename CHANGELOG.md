@@ -111,6 +111,11 @@ guarantees for the 1.x series.
   it, which cost tens of seconds of CPU on each resume of a large thread. It
   now reads each frame once ([#2569]).
 
+### Security
+- Two dependencies were updated for published security advisories:
+  `@modelcontextprotocol/sdk` to 1.31.0 (GHSA-6qxp-vccf-f47h) and `sharp`
+  to 0.35.5 (GHSA-wq5f-xc86-pv6w).
+
 ### Maintainer notes
 - Main and release-tag image builds run in a publication slot of their own,
   so they no longer queue behind pull request builds; at most one pull
