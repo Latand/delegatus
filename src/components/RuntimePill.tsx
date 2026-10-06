@@ -861,10 +861,11 @@ export function switchHoldReason(t: TFunction, reason: string): string {
 // Desktop popover — a WAI-APG menu with an in-place Model/Speed drill-down.
 // ---------------------------------------------------------------------------
 
-type Panel = "root" | "model" | "speed" | "account";
+export type RuntimePanel = "root" | "model" | "speed" | "account";
+type Panel = RuntimePanel;
 
 /** A per-conversation account choice on a structured conversation (#1846). */
-interface AccountChoice {
+export interface AccountChoice {
   /** The account the conversation runs on now. */
   runsOn: string;
   /** Where the next message goes: the intended account while a pick waits, else `runsOn`. */
@@ -905,7 +906,7 @@ interface PanelProps {
   onClose: () => void;
 }
 
-function RuntimePopover({
+export function RuntimePopover({
   t, engine, modelOptions, account, nameOf, accountChoice, face, efforts, speedShown, speedDetail, panel, setPanel,
   effortLocked, modelLocked, speedLocked, lockReason,
   onSelectEffort, onSelectModel, onSelectFast, onClose, at, owner,
@@ -1250,7 +1251,7 @@ function MenuRow({
 // radio rows, no submenu, stays open on select.
 // ---------------------------------------------------------------------------
 
-function RuntimeSheet({
+export function RuntimeSheet({
   t, engine, modelOptions, account, nameOf, accountChoice, owner, face, efforts, speedShown, speedDetail,
   effortLocked, modelLocked, speedLocked, lockReason, limit = null,
   onSelectEffort, onSelectModel, onSelectFast, onClose,
