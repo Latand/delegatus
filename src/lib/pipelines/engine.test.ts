@@ -22188,3 +22188,44 @@ for (const parked of [false, true]) {
     });
   }
 }
+
+for (const mode of ["running", "pinned-park", "pool-park"] as const) {
+  for (const wrapper of ["task-notification", "wakeup"] as const) {
+    test.each(["native-human", "ledger-human", "harness"] as const)(`Claude ${mode} ${wrapper} %s authorship controls quota recovery`, async author => {
+      const f = await providerRecoveryHarness("claude", "rate_limit", "You've hit your session limit", 120_000, mode !== "pool-park");
+      const lane = loadPipelines()[0]!;
+      if (mode !== "running") lane.runs[0]!.attempts[0]!.providerRecoveryBudget = { tries: 3, startedAt: f.h.ports.now(),
+        ...(mode === "pool-park" ? { triedAccounts: [LIMITED_ACCOUNT, SPARE_ACCOUNT] } : {}) };
+      if (mode === "pool-park") f.h.ports.allowedAccountIds = () => [LIMITED_ACCOUNT, SPARE_ACCOUNT];
+      savePipelines([lane]);
+      f.h.ports.resolveProjectSpawn = () => f.now() >= f.resetsAt! * 1_000 + 60_000
+        ? { kind: "available", account: { engine: "claude", accountId: LIMITED_ACCOUNT, kind: "managed", home: "/account", transcriptRoot: "/account/sessions", env: { NODE_ENV: "test" } } }
+        : { kind: "exhausted", resetsAt: f.resetsAt, allowedAccountIds: mode === "pool-park" ? [LIMITED_ACCOUNT, SPARE_ACCOUNT] : [LIMITED_ACCOUNT] };
+      await tickPipelines([], f.h.ports);
+      const initial = f.now();
+      f.advance(1_000);
+      const text = `<${wrapper}>Please wait for my review before continuing.</${wrapper}>`;
+      const notice = (at: number) => ({ type: "assistant", timestamp: new Date(at).toISOString(), isApiErrorMessage: true, error: "rate_limit",
+        message: { model: "<synthetic>", stop_reason: "end_turn", content: [{ type: "text", text: "You've hit your session limit" }] } });
+      const file = stageTranscript(`claude-native-wrapper-${mode}-${wrapper}-${author}`, [notice(initial),
+        { type: "user", uuid: "wrapper-user", isMeta: false, timestamp: f.h.ports.now(), message: { content: text },
+          ...(author === "native-human" ? {} : { origin: { kind: wrapper }, promptSource: "system" }) }, notice(f.now() + 500)]);
+      if (author === "ledger-human") {
+        const { FileClaudeDeliveryLedger } = await import("@/lib/runtime/claudeStreamBrokerHost");
+        const ledger = new FileClaudeDeliveryLedger();
+        const session = path.basename(file, ".jsonl");
+        ledger.recordQueued(session, { id: "wrapper-human-delivery", text, origin: { kind: "operator" } }, "turn-started");
+        ledger.confirmDelivered(session, "wrapper-human-delivery", "wrapper-user");
+      }
+      readFixtures(f.h, { "/codex/stage-1.jsonl": file });
+      await tickPipelines([], f.h.ports);
+      if (mode !== "running" && author === "harness") expect(loadPipelines()[0]!.stateDetail).toMatch(/Automatic retry|Автоповтор/);
+      f.advance(180_000);
+      await tickPipelines([], f.h.ports);
+      await tickPipelines([], f.h.ports);
+      expect(f.sends).toHaveLength(mode === "running" && author === "harness" ? 1 : 0);
+      expect(f.h.spawnInputs).toHaveLength(mode !== "running" && author === "harness" ? 2 : 1);
+      if (author !== "harness") expect(loadPipelines()[0]!.stateDetail).toContain("newer stage activity");
+    });
+  }
+}

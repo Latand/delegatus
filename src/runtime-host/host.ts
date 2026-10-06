@@ -180,8 +180,13 @@ export class RuntimeHost {
         result = request.method === "operation" && event.operationId
           ? { operationId: event.operationId, state: "accepted", seq: appended.seq, revision: appended.revision }
           : appended;
-      } else if (request.method === "command") {
-        result = this.journal.executeOperation(request.params?.command as RuntimeOperationCommand);
+      } else if (request.method === "command" || request.method === "guarded-command") {
+        const command = request.params?.command as RuntimeOperationCommand;
+        if (request.method === "guarded-command" && !(command?.kind === "send" && command.onlyIfIdle
+          || command?.kind === "kill" && command.onlyIfIdle && command.providerRecovery)) {
+          throw new Error("guarded runtime command requires a recovery fence");
+        }
+        result = this.journal.executeOperation(command);
         setImmediate(() => { void this.recoverConsumersBestEffort(); });
       } else if (request.method === "operation-status") {
         const currentRetryLeaf = request.params?.currentRetryLeaf;

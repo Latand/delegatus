@@ -1,6 +1,6 @@
 import fs from "node:fs";
 
-import { claudeUserText, isClaudeTurnWindowMeta } from "@/lib/claudeProtocolUser";
+import { claudeUserText, isClaudeInterruptSentinelText, isClaudeTurnWindowMeta } from "@/lib/claudeProtocolUser";
 import { claudeMessageProvenance } from "@/lib/runtime/claudeMessageProvenance";
 import { RECOVERY_NOTICE_ORIGIN } from "@/lib/runtime/recoveryNotices";
 import { decodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText";
@@ -315,12 +315,16 @@ function stagePrompts(records: RecordLike[], codex: boolean, transcriptPath: str
     const text = claudeUserText(recordValue(record.message)?.content).trim();
     if (!text && !recordsValue(recordValue(record.message)?.content).some(part => part.type === "image")) return [];
     const kind = stringValue(record.origin) ?? stringValue(recordValue(record.origin)?.kind);
-    const human = kind === "human" || kind === "operator" || record.promptSource === "typed";
-    if (!human && (kind === "task-notification" || kind === "task" || kind === "wakeup"
-      || record.turnOrigin === "task_notification" || record.turnOrigin === "wakeup"
-      || record.promptSource !== "sdk" && /^<(?:task-notification|wakeup)\b/.test(text))) return [{ ts, origin: "harness" as const }];
-    if (!human && isClaudeTurnWindowMeta(record)) return [];
     const author = provenance[stringValue(record.uuid) ?? ""];
+    const human = kind === "human" || kind === "operator" || record.promptSource === "typed" || author?.origin === "operator";
+    if (!human && (kind === "task-notification" || kind === "task" || kind === "wakeup"
+      || record.turnOrigin === "task_notification" || record.turnOrigin === "wakeup")) return [{ ts, origin: "harness" as const }];
+    // Native human rows may have no authorship fields. Their prose alone
+    // cannot establish a harness wake or a metadata envelope.
+    const metadata = record.isMeta === true || record.isCompactSummary === true || "interruptedMessageId" in record
+      || record.promptSource === "command" || record.promptSource === "system"
+      || record.interruptedByShutdown === true && isClaudeInterruptSentinelText(text);
+    if (!human && metadata && isClaudeTurnWindowMeta(record)) return [];
     return [{ ts, origin: !human && author?.origin === "agent" && (author.senderRole === "pipeline" || author.senderRole === RECOVERY_NOTICE_ORIGIN.role) ? "pipeline" as const : "external" as const }];
   });
 }
