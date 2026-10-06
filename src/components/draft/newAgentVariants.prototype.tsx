@@ -97,6 +97,9 @@ const BOARD_CSS = `
 [data-na-sheet][data-na-tight] textarea { max-height: 58px; }
 [data-na-phone] [role="radio"] { position: relative; }
 [data-na-phone] [role="radio"]::before { content: ""; position: absolute; inset: -9px 0; }
+[data-na-phone] [data-na-more] button { position: relative; }
+[data-na-phone] [data-na-more] button::before { content: ""; position: absolute; inset: -8px 0; }
+[data-na-draft] [role="radio"][aria-checked="false"] { border-color: var(--border-default); }
 .kb [data-na-anchor-open], [data-na-anchor-open] { background: var(--surface-well) !important; color: var(--color-primary) !important; }
 `;
 
@@ -200,10 +203,26 @@ function chosenValueWidth(select: HTMLSelectElement): number {
   return Math.ceil(width);
 }
 
+/** Which cells share a row: all of them, or pairs, with a cell that needs more than half the grid on a row of its own. */
+function runtimeRows(needs: number[], width: number): number[][] {
+  const count = needs.length;
+  const cell = Math.max(RUNTIME_CELL, ...needs);
+  if (width >= count * cell + (count - 1) * RUNTIME_GAP) return [needs.map((_, index) => index)];
+  const half = (width - RUNTIME_GAP) / 2;
+  const rows: number[][] = [];
+  for (let index = 0; index < count; index += 1) {
+    const pair = index + 1 < count && needs[index]! <= half && needs[index + 1]! <= half;
+    rows.push(pair ? [index, index + 1] : [index]);
+    if (pair) index += 1;
+  }
+  return rows;
+}
+
 /**
  * Model, effort, speed and account as one grid of captioned cells: one row when the widest chosen value fits
- * a cell (never under 150 px each, gaps counted), two columns otherwise, and an odd last cell takes the whole row. The selects are the product's own, in the order
- * `ReasoningControls` and `LaunchAccountSelect` render them; the grid only seats each under its caption.
+ * a cell (never under 150 px each, gaps counted), two columns otherwise. A value that half the grid would cut
+ * takes the whole row, and so does a cell left without a neighbour. The selects are the product's own, in
+ * the order `ReasoningControls` and `LaunchAccountSelect` render them; the grid only seats each under its caption.
  */
 function RuntimeGrid({ parts, roomy }: { parts: DraftLayoutParts; roomy?: boolean }) {
   const captions = useCaptions();
@@ -212,17 +231,16 @@ function RuntimeGrid({ parts, roomy }: { parts: DraftLayoutParts; roomy?: boolea
   const grid = useRef<HTMLDivElement | null>(null);
   const cells = [captions.model, captions.effort, ...(launch.engine === "codex" ? [captions.speed] : []), ...(launch.accounts.length ? [captions.account] : [])];
   const count = cells.length;
-  const [wide, setWide] = useState(false);
+  const [seating, setSeating] = useState("");
   const chosen = `${launch.engine}/${launch.model}/${launch.effort}/${launch.speed}/${launch.accountId ?? ""}/${captions.account}`;
   useLayoutEffect(() => {
     const element = grid.current;
     if (!element) return;
     let live = true;
-    /* One row only when the widest chosen value fits a cell: the cells are equal, and the gaps take their share. */
     const measure = () => {
       if (!live) return;
-      const cell = Math.max(RUNTIME_CELL, ...[...element.querySelectorAll<HTMLSelectElement>(":scope > select")].map(chosenValueWidth));
-      setWide(element.clientWidth >= count * cell + (count - 1) * RUNTIME_GAP);
+      const needs = [...element.querySelectorAll<HTMLSelectElement>(":scope > select")].map(chosenValueWidth);
+      setSeating(runtimeRows(needs, element.clientWidth).map((row) => row.join(",")).join("|"));
     };
     measure();
     const observer = new ResizeObserver(measure);
@@ -233,15 +251,19 @@ function RuntimeGrid({ parts, roomy }: { parts: DraftLayoutParts; roomy?: boolea
       observer.disconnect();
     };
   }, [count, chosen]);
-  const columns = wide ? count : Math.min(2, count);
-  const order = (index: number, select: boolean) => Math.floor(index / columns) * 2 * columns + (select ? columns : 0) + (index % columns);
-  const whole = (index: number) => columns === 2 && count % 2 === 1 && index === count - 1;
+  /* Until the grid is measured, and whenever the cells changed since, pairs: the seating every width can hold. */
+  const measured = seating ? seating.split("|").map((row) => row.split(",").map(Number)) : [];
+  const rows = measured.flat().length === count ? measured : runtimeRows(cells.map(() => 0), 2 * RUNTIME_CELL);
+  const columns = Math.max(...rows.map((row) => row.length));
+  const seat = new Map(rows.flatMap((row, line) => row.map((cell, place) => [cell, { line, place, whole: columns > 1 && row.length === 1 }] as const)));
+  const order = (index: number, select: boolean) => seat.get(index)!.line * 2 * columns + (select ? columns : 0) + seat.get(index)!.place;
+  const whole = (index: number) => seat.get(index)!.whole;
   const scope = `[data-na-runtime="${id}"]`;
   return (
-    <div ref={grid} data-na-runtime={id} data-na-columns={columns} className="grid min-w-0 gap-x-1.5 gap-y-0.5" style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
+    <div ref={grid} data-na-runtime={id} data-na-columns={columns} data-na-rows={rows.length} className="grid min-w-0 gap-x-1.5 gap-y-0.5" style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
       <style>{`${scope} > select { width: 100%; min-width: 0; }${cells.map((_, index) => `${scope} > select:nth-of-type(${index + 1}) { order: ${order(index, true)};${whole(index) ? " grid-column: 1 / -1;" : ""} }`).join("")}`}</style>
       {cells.map((caption, index) => (
-        <span key={caption} className={`${CAPTION} ${index >= columns ? "pt-1" : ""}`} style={{ order: order(index, false), gridColumn: whole(index) ? "1 / -1" : undefined }}>{caption}</span>
+        <span key={caption} className={`${CAPTION} ${seat.get(index)!.line > 0 ? "pt-1" : ""}`} style={{ order: order(index, false), gridColumn: whole(index) ? "1 / -1" : undefined }}>{caption}</span>
       ))}
       <ReasoningControls
         engine={launch.engine}
@@ -257,6 +279,38 @@ function RuntimeGrid({ parts, roomy }: { parts: DraftLayoutParts; roomy?: boolea
       <LaunchAccountSelect draft={launch} disabled={parts.fieldsDisabled} roomy={roomy} />
     </div>
   );
+}
+
+/**
+ * What a scrolling column of fields says at an edge that cuts it: a fade over the edge, and at the lower one
+ * a chip that names what is hidden and scrolls to it. `surface` is the colour the column stands on.
+ */
+function MoreCues({ above, below, surface, onMore }: { above: boolean; below: boolean; surface: string; onMore: () => void }) {
+  const captions = useCaptions();
+  return (
+    <>
+      {above ? <span aria-hidden data-na-more="above" className="pointer-events-none absolute inset-x-0 top-0 h-5 border-t border-border" style={{ background: `linear-gradient(to bottom, ${surface}, transparent)` }} /> : null}
+      {below ? (
+        <div data-na-more="below" className="pointer-events-none absolute inset-x-0 bottom-0 flex h-14 items-end justify-center pb-1.5" style={{ background: `linear-gradient(to top, ${surface} 40%, transparent)` }}>
+          <button
+            type="button"
+            aria-label={captions.more}
+            title={captions.more}
+            onClick={onMore}
+            className="pointer-events-auto inline-flex h-7 items-center gap-1 rounded-full border border-border bg-raised pl-1.5 pr-2 text-caption font-semibold text-secondary shadow-1 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          >
+            <ChevronDown className="h-3.5 w-3.5 shrink-0" aria-hidden />
+            {captions.more}
+          </button>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+/** One press of the chip: most of what the column shows, so the last field read stays in sight. */
+function scrollOn(column: HTMLElement | null) {
+  column?.scrollBy({ top: Math.max(48, column.clientHeight - 56) });
 }
 
 function Field({ label, aside, children }: { label: string; aside?: ReactNode; children: ReactNode }) {
@@ -301,16 +355,42 @@ function Shell({ look, parts, phone, className, children }: { look: NewAgentLook
   );
 }
 
-/** The phone's pane: what scrolls sits above, gathered at the foot; the composer never leaves the bottom edge. */
+/**
+ * The phone's pane: what scrolls sits above, gathered at the foot; the composer never leaves the bottom edge.
+ * When the settings hold more than the pane shows, each cut edge says so the way look 3's sheet does.
+ */
 function PhonePane({ look, parts, settings }: { look: NewAgentLook; parts: DraftLayoutParts; settings: ReactNode }) {
+  const fields = useRef<HTMLDivElement | null>(null);
+  const [cut, setCut] = useState({ above: false, below: false });
+  useLayoutEffect(() => {
+    const column = fields.current;
+    if (!column) return;
+    const read = () => {
+      const above = column.scrollTop > 1;
+      const below = column.scrollHeight - column.clientHeight - column.scrollTop > 1;
+      setCut((current) => (current.above === above && current.below === below ? current : { above, below }));
+    };
+    read();
+    const observer = new ResizeObserver(read);
+    observer.observe(column);
+    if (column.firstElementChild) observer.observe(column.firstElementChild);
+    column.addEventListener("scroll", read, { passive: true });
+    return () => {
+      observer.disconnect();
+      column.removeEventListener("scroll", read);
+    };
+  }, []);
   return (
     <Shell look={look} parts={parts} phone className="h-full min-h-0 flex-1 gap-2 bg-card p-3">
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-        <div className="mt-auto flex min-w-0 flex-col gap-2">
-          <Source parts={parts} />
-          <Launching parts={parts} />
-          {settings}
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        <div ref={fields} data-na-fields="" className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+          <div className="mt-auto flex min-w-0 flex-col gap-2">
+            <Source parts={parts} />
+            <Launching parts={parts} />
+            {settings}
+          </div>
         </div>
+        <MoreCues above={cut.above} below={cut.below} surface="var(--surface-card)" onMore={() => scrollOn(fields.current)} />
       </div>
       <Prompt parts={parts} leftSlot={null} />
     </Shell>
@@ -475,8 +555,8 @@ interface SheetPlace {
  * The fields are a captioned column that scrolls on its own; the composer, its
  * thumbnails and its errors are the sheet's foot and never leave the window.
  * When the column holds more than the window shows, the foot shortens its
- * prompt and each cut edge says so: a fade, and below it a chevron that scrolls
- * to the next fields. The sheet starts under the board's bar and names the task
+ * prompt and each cut edge says so: a fade, and below it a chip that scrolls
+ * to the next fields; the phone's pane says it the same way. The sheet starts under the board's bar and names the task
  * it was opened for.
  */
 function AnchoredSheet(parts: DraftLayoutParts) {
@@ -585,25 +665,11 @@ function AnchoredSheet(parts: DraftLayoutParts) {
             <div ref={fields} data-na-fields="" className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto px-3 pb-3 pt-1.5">
               {column(false)}
             </div>
-            {cut.above ? <span aria-hidden data-na-more="above" className="pointer-events-none absolute inset-x-0 top-0 h-5 border-t border-border" style={{ background: "linear-gradient(to bottom, var(--surface-raised), transparent)" }} /> : null}
-            {cut.below ? (
-              <div data-na-more="below" className="pointer-events-none absolute inset-x-0 bottom-0 flex h-14 items-end justify-center pb-1.5" style={{ background: "linear-gradient(to top, var(--surface-raised) 40%, transparent)" }}>
-                <button
-                  type="button"
-                  aria-label={captions.more}
-                  title={captions.more}
-                  onClick={() => fields.current?.scrollBy({ top: fields.current.clientHeight - 56 })}
-                  className="pointer-events-auto inline-flex h-6 items-center gap-1 rounded-full border border-border bg-raised pl-1.5 pr-2 text-caption font-semibold text-secondary shadow-1 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                >
-                  <ChevronDown className="h-3.5 w-3.5 shrink-0" aria-hidden />
-                  {captions.more}
-                </button>
-              </div>
-            ) : null}
+            <MoreCues above={cut.above} below={cut.below} surface="var(--surface-raised)" onMore={() => scrollOn(fields.current)} />
           </div>
           <div data-na-foot="" className="flex shrink-0 flex-col gap-2 border-t border-border px-3 pb-3 pt-2.5">
             <Launching parts={parts} />
-            <Prompt parts={parts} leftSlot={parts.composerProps.leftSlot} />
+            <Prompt parts={parts} leftSlot={null} />
           </div>
         </section>,
         document.body,

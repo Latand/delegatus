@@ -17962,8 +17962,9 @@ describe("creating a new agent: today's draft and three numbered looks", () => {
    * phone, light and dark, en and uk: empty, runtime chosen, a long prompt, an attachment, a refused launch,
    * the narrowest column, and the draft a task card's own «+ Agent» opens. Five more states are drawn once per
    * look, at 1440 in the light theme in English: a handoff draft, the reviewer's and the deployer's own
-   * fields, a signed-out account, and an image capability that could not be read. Look 3 adds `scrolled`
-   * wherever its field column is cut: the column after its «More fields below» chip was pressed. Design evidence only: the
+   * fields, a signed-out account, and an image capability that could not be read. `scrolled` is added wherever
+   * a field column is cut (look 3's sheet, and every look's pane on the phone): the column after its «More
+   * fields below» chip was pressed. Design evidence only: the
    * frames and the contact sheets go to `NEW_AGENT_OUT`, outside the repository, and the block asserts that
    * every look keeps every option of the draft and measures what each look promises about its geometry.
    *
@@ -18124,23 +18125,47 @@ describe("creating a new agent: today's draft and three numbered looks", () => {
                 select.parentElement!.append(probe);
                 const needs = Math.ceil(probe.getBoundingClientRect().width);
                 probe.remove();
-                return [{ name, text, top: Math.round(rect.top), has: Math.round(rect.width), needs, cut: needs > Math.round(rect.width) }];
+                /* A select that takes the whole grid stands on its own row on purpose. */
+                const whole = rect.width >= select.parentElement!.clientWidth - 1;
+                return [{ name, text, top: Math.round(rect.top), has: Math.round(rect.width), needs, cut: needs > Math.round(rect.width), whole }];
               });
             }, { pane: tr("draft.paneAria"), selects: [tr("draft.modelAria"), tr("draft.reasoningAria"), tr("draft.speedAria"), tr("draft.accountAria", { engine: "Codex" })] });
-            /* What the rearranged looks promise about the runtime: no value cut, and no select alone on its row. */
+            /* What the rearranged looks promise about the runtime, at every size: no value cut, and no select
+               left alone beside an empty cell. A value half the grid would cut takes the whole row. */
             const runtimeGeometry = async (state: string) => {
               const selects = await runtimeSelects();
               const rows = new Map<number, number>();
               for (const select of selects) rows.set(select.top, (rows.get(select.top) ?? 0) + 1);
-              const geometry = { cut: selects.filter((select) => select.cut).map((select) => select.text), alone: [...rows.values()].filter((count) => count === 1).length, rows: rows.size, spare: selects.length ? Math.min(...selects.map((select) => select.has - select.needs)) : null };
+              const geometry = { cut: selects.filter((select) => select.cut).map((select) => select.text), alone: selects.filter((select) => rows.get(select.top) === 1 && !select.whole).length, rows: rows.size, spare: selects.length ? Math.min(...selects.map((select) => select.has - select.needs)) : null };
               if (look > 0) {
                 expect(selects.length, `${label(state)} runtime selects`).toBe(4);
                 expect(geometry.alone, `${label(state)} a select alone on its row`).toBe(0);
-                /* The phone draws its selects at 16 px, where the product's own «speed: default» is wider than
-                   half a 320 px pane; the desktop widths are the ones the looks answer for. */
-                if (!view.touch) expect(geometry.cut, `${label(state)} values cut`).toEqual([]);
+                expect(geometry.cut, `${label(state)} values cut`).toEqual([]);
               }
               return geometry;
+            };
+            /* The phone's settings scroll above the composer. Whenever they hold more than the pane shows, the
+               cue stands over the cut edge, above the composer and inside the window. */
+            const phoneColumn = () => inner.evaluate((name) => {
+              const pane = [...document.querySelectorAll<HTMLElement>(`[aria-label="${name}"]`)].find((element) => element.getClientRects().length);
+              const column = pane?.querySelector<HTMLElement>("[data-na-fields]");
+              return column ? { scrollHeight: column.scrollHeight, clientHeight: column.clientHeight, scrollTop: Math.round(column.scrollTop) } : null;
+            }, tr("draft.paneAria"));
+            const phoneCue = async (state: string, owed: boolean) => {
+              if (!view.touch || look === 0) return null;
+              const column = await phoneColumn();
+              expect(column, `${label(state)} the phone's field column`).not.toBeNull();
+              const cut = column!.scrollHeight - column!.clientHeight - column!.scrollTop > 1;
+              const cue = draft.locator('[data-na-more="below"]');
+              if (owed) expect(cut, `${label(state)} fields cut on the phone`).toBe(true);
+              expect(await cue.count(), `${label(state)} cue over cut fields`).toBe(cut ? 1 : 0);
+              if (cut) {
+                const cueBox = await box(cue.locator("button"));
+                const field = await box(prompt);
+                expect(cueBox.bottom, `${label(state)} cue above the composer`).toBeLessThanOrEqual(field.top);
+                expect(within(cueBox), `${label(state)} cue in the window`).toBe(true);
+              }
+              return { fields: column, cue: cut ? 1 : 0 };
             };
             /* Look 2 says the runtime, the folder and the role on one row. */
             const oneRow = async (state: string) => {
@@ -18231,7 +18256,7 @@ describe("creating a new agent: today's draft and three numbered looks", () => {
               await draft.locator(`select[aria-label="${tr("draft.reasoningAria")}"]`).first().selectOption("high");
               await prompt.fill(SHORT[lang]);
               await shoot("narrow");
-              readings.push({ look, view: view.name, scheme, lang, state: pass, width, geometry: { ...await runtimeGeometry("narrow"), summaryWords: await oneRow("narrow"), ...await closeGeometry("narrow") }, pageErrors });
+              readings.push({ look, view: view.name, scheme, lang, state: pass, width, geometry: { ...await runtimeGeometry("narrow"), summaryWords: await oneRow("narrow"), ...await closeGeometry("narrow"), ...await phoneCue("narrow", false) }, pageErrors });
             } else {
               await shoot("empty");
               /* The role comes first: it sets the runtime its preset names. Then Codex, pressed only when the
@@ -18247,11 +18272,15 @@ describe("creating a new agent: today's draft and three numbered looks", () => {
               await draft.locator(`select[aria-label="${tr("draft.speedAria")}"]`).first().selectOption("fast");
               await shoot("chosen");
               const chosen = { ...await runtimeGeometry("chosen"), summaryWords: await oneRow("chosen"), ...await closeGeometry("chosen") };
+              /* With the Builder role the columns of looks 1 and 3 hold more than a 390 px phone shows. */
+              const owed = look === 1 || look === 3;
               await prompt.fill(LONG[lang]);
               await shoot("long");
+              await phoneCue("long", owed);
               await prompt.fill(SHORT[lang]);
               await draft.locator('input[type="file"]').first().setInputFiles(shots);
               await shoot("attachment");
+              await phoneCue("attachment", false);
               /* The refusal is read with the long prompt and both images in place: the tallest a draft gets. */
               await prompt.fill(LONG[lang]);
               const launchButton = draft.getByRole("button", { name: tr("composer.launchAgent") }).first();
@@ -18260,6 +18289,29 @@ describe("creating a new agent: today's draft and three numbered looks", () => {
               await refusal.first().waitFor({ timeout: 10_000 });
               await shoot("error");
               const refused: Record<string, unknown> = { ...chosen };
+              const phone = await phoneCue("error", owed);
+              if (phone) {
+                Object.assign(refused, phone);
+                if (phone.cue) {
+                  /* Pressing the cue brings the role's parameters up, and the upper edge then says what went above. */
+                  await draft.locator('[data-na-more="below"] button').click();
+                  await page.waitForTimeout(200);
+                  const after = await phoneColumn();
+                  expect(after!.scrollTop, label("cue scrolls the fields")).toBeGreaterThan(0);
+                  expect(await draft.locator('[data-na-more="above"]').count(), label("cue over what scrolled away")).toBe(1);
+                  if (owed) {
+                    const reached = await inner.evaluate((names) => {
+                      const pane = [...document.querySelectorAll<HTMLElement>(`[aria-label="${names.pane}"]`)].find((element) => element.getClientRects().length);
+                      const column = pane!.querySelector<HTMLElement>("[data-na-fields]")!.getBoundingClientRect();
+                      const first = pane!.querySelector(`[role="group"][aria-label="${names.parameters}"] select`)!.getBoundingClientRect();
+                      return first.top >= column.top && first.bottom <= column.bottom;
+                    }, { pane: tr("draft.paneAria"), parameters: tr("draft.roleParameters") });
+                    expect(reached, label("role parameters after the cue")).toBe(true);
+                  }
+                  Object.assign(refused, { scrolledTo: after!.scrollTop });
+                  await shoot("scrolled");
+                }
+              }
               if (!view.touch && look > 0) {
                 await reveal("runtime");
                 const engines = await box(draft.getByRole("radiogroup"));

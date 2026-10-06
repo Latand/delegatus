@@ -132,15 +132,30 @@ Three things are shared by every look.
   the 6 px gaps between cells counted. The width a value needs is the
   browser's own: the grid reads it from a copy of the select that holds that
   one option. Otherwise the grid has two columns, so Codex reads as two rows
-  of two and no select is left alone on a row. An odd last cell (Claude with
-  an account) takes the whole row. Look 2 at 1000x700 is the case that
-  decided this: its open «runtime» group gave each of four cells about 145 px,
-  and «Account B · активний» lost its last letter under the arrow. The group
-  now stands as two rows of two there.
+  of two. A value that half the grid would cut takes the whole row, and so
+  does a cell left without a neighbour (Claude with an account, or the speed
+  once the account below it has a row of its own), so no select stands beside
+  an empty cell and no chosen value is cut at any size. Two cases decided
+  this. Look 2 at 1000x700: its open «runtime» group gave each of four cells
+  about 145 px, and «Account B · активний» lost its last letter under the
+  arrow; the group stands as two rows of two there. The phone, where selects
+  are drawn at 16 px: at 390 px in Ukrainian the account needs more than half
+  the pane, so the model and the effort share a row and the speed and the
+  account take one each; at 320 px the same happens in English.
 - **The engine chips at the 32 px step** (`roomy`), the size the orchestrator's
-  create panel uses. On the phone each chip's touch area is 44 px tall.
+  create panel uses, and every chip outlined: the chosen one in its engine's
+  colour, the others in the default border. Three boxes read as three
+  choices, and the first chip's edge stands on the edge of the fields under
+  it. On the phone each chip's touch area is 44 px tall.
 - **A caption over every field**: model, effort, speed, account, directory,
-  role. The role block is `RoleSection` without its strip.
+  role. The role block is `RoleSection` without its strip. Two captions repeat
+  a word of the product's own default option under them («Effort» over
+  «effort: default», «Speed» over «speed: default»); a shipped look would
+  shorten those options to «default».
+- **A cut column says so.** Wherever a column of fields scrolls (look 3's
+  sheet, and the settings of every look on the phone) an edge that hides
+  fields fades out, and the lower one carries a chip, «More fields below»,
+  that scrolls to them when pressed.
 
 ### Look 1. The composer is the card
 
@@ -155,7 +170,9 @@ draft is about 300 px tall in place of 620.
 On the phone the pane adds no heading, because the phone's own header already
 says «New agent · draft». The settings gather above the composer, the close
 button ends the engine row, and the composer stays on the bottom edge while the
-settings scroll.
+settings scroll. With a role chosen and a long prompt the settings hold more
+than the pane shows: the lower edge then fades under the «More fields below»
+chip, and one press brings the role's parameters up.
 
 ### Look 2. One line, opened where asked
 
@@ -189,7 +206,10 @@ edge says so: the fields fade out under a chip, «More fields below», that
 scrolls to them when pressed, and the upper edge fades the same way once
 something has scrolled above it. A role's parameters, or the deployer's
 required field, are never cut without that sign. On the phone the same column
-fills the pane.
+fills the pane above the composer and carries the same sign at its cut edge.
+There look 3 differs from look 1 in one caption («Agent engine» over the
+chips): a phone has no button to hang a sheet from, so both are the phone's
+own full-screen pane.
 
 ## 5. Where each option is
 
@@ -223,7 +243,7 @@ fills the pane.
 | The blank area's hint («Choose an engine and a directory, write the first prompt…») and the engine badge above it | `:1002` to `:1008` | 1, 2, 3 | The field's placeholder says the same in six words, and the blank area is gone with the fixed height. |
 | The handoff hint («The new agent will first read the parent conversation's transcript…») | `:1007` | 1, 2, 3 | The seeded prompt of a handoff draft already says which file the agent reads. |
 | The handoff source's path as a line of text | `:1009` to `:1013` | 1, 2, 3 | It stays as the tooltip of the line that names the source. |
-| The «new agent» chip under the field, whose tooltip says whether the launch is structured or a tmux window | `:898` to `:903` | 1, 2; on the phone 1, 2, 3 | The heading, the rail and the placeholder say «new agent»; the placeholder also differs between the two kinds of launch. Look 3 keeps the chip on the desktop; on the phone it is gone in all three. |
+| The «new agent» chip under the field, whose tooltip says whether the launch is structured or a tmux window | `:898` to `:903` | 1, 2, 3 | The heading, the rail and the placeholder say «new agent»; the placeholder also differs between the two kinds of launch. |
 | The card's own title («Untitled task») and foot around the draft | board | 1, 2 | Two titles for one draft. |
 | The draft card itself and its fixed conversation height | board | 3 (card), 1 and 2 (height) | Look 3 seats no card; looks 1 and 2 are as tall as their content. |
 | The 4 px engine-coloured bar and the status dot of the header | `:931`, `:934` | 1, 2, 3 | The chosen engine chip and the launch button carry the engine's colour. |
@@ -254,7 +274,9 @@ them is a change to the role catalog's copy.
 focus order, its keyboard handling, and summary strings in both languages. An
 option costs one press more than today. A summary is only as good as its
 longest value: at 760 px the runtime is cut after the effort, and the full
-value is one press away.
+value is one press away. On the phone the pane is the whole screen and the
+composer keeps its bottom edge, so a draft on defaults is two rows under about
+420 px of empty pane, the way a conversation looks before its first message.
 
 **Look 3.** The largest change. A sheet needs placement, a focus trap, and a
 rule for a press outside it that never loses a long prompt. The board loses the
@@ -268,13 +290,15 @@ column scrolls inside the sheet, and the sheet has to say so, which is one
 more piece of chrome (the chip over the cut edge). In return the columns never move when a draft
 opens.
 
-**All three, on the phone at 320 px.** The phone draws its selects at 16 px.
-In a two-column grid the account label is cut there: «Account B · active» by
-18 to 26 px at 320 px, and «Account B · активний» by 9 to 17 px at 390 px and
-by 44 to 52 px at 320 px, where the product's own «швидкість: дефолт» is cut
-as well. The driver records each of these under `cut`; at 390 px in English
-nothing is cut. One column would show them whole and leave every select alone
-on its row.
+**All three, on the phone.** The phone draws its selects at 16 px, and half a
+pane does not hold every value: «Account B · активний» at 390 px, «Account B ·
+active» and the product's own «швидкість: дефолт» at 320 px. The runtime grid
+gives each such value the whole row, so the grid is three rows where the
+desktop has two (model and effort, speed, account), about 60 px taller. The
+driver reads `cut` empty at 390 and 320 px in both languages and both themes.
+With the Builder role and a long prompt the settings of looks 1 and 3 are
+taller than the pane; the chip over the cut edge is the price, as in look 3's
+sheet.
 
 ## 7. Recommendation
 
@@ -307,17 +331,18 @@ opens) at 1440x900, 1000x700 and a 390 px phone, light and dark, in English and
 Ukrainian. Five more states are drawn once per look, at 1440 in the light
 theme in English: a handoff draft, the reviewer's field, the deployer's field,
 a signed-out account, and an image capability that could not be read. Look 3
-adds one frame wherever its field column is cut (at 1000x700): the column after
-the «More fields below» chip was pressed. That is 344 frames, one contact sheet per look beside today's form, and one sheet
+adds one frame wherever its field column is cut (at 1000x700), and every look
+adds one wherever the phone's settings are cut: the column after the «More
+fields below» chip was pressed. That is 352 frames, one contact sheet per look beside today's form, and one sheet
 comparing all four. The frames and sheets are written outside the repository
 and are not committed.
 
 Beside the options, the driver measures what the looks promise
 (`geometry` in `evidence/new-agent-redesign/options.json`):
 
-- looks 1 to 3, every size: four runtime selects, none alone on its row; on
-  the desktop widths (1440, 1000, 760) no chosen value is cut by its select.
-  A value is cut when the select is narrower than the browser draws the same
+- looks 1 to 3, every size (1440, 1000, 760, and the phone at 390 and 320):
+  four runtime selects, none beside an empty cell, and no chosen value cut by
+  its select. A value is cut when the select is narrower than the browser draws the same
   select around that one value (`spare` is the smallest difference, in px,
   among the four). The earlier measure compared the text's width with the box
   less 16 px for the arrow, which is less than Chrome's arrow takes, and it
@@ -334,6 +359,12 @@ Beside the options, the driver measures what the looks promise
   chip stands over the cut edge, above the foot and inside the window, and at
   1000x700 with the Builder role it has to be there; pressing it scrolls the
   column, and the upper edge then carries its own fade;
+- looks 1 to 3, the phone: whenever the settings hold more than the pane
+  shows, the «More fields below» chip stands over the cut edge, above the
+  prompt field and inside the window; with the Builder role and the long
+  prompt at 390 px looks 1 and 3 have to show it, pressing it scrolls the
+  column until the role's first parameter is in sight, and the upper edge then
+  carries its own fade;
 - looks 1 to 3, the desktop widths: the image picker is the last control of
   the composer's row, and the close button is on another row or at least
   24 px from it; look 2, every size: the close button is at least 24 px from
