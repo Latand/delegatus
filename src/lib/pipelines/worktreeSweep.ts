@@ -254,9 +254,21 @@ function rebuildable(ignored: string): boolean {
   const name = segments.at(-1) ?? "";
   // Git can also report an artifact's ignored descendant directly. Output
   // directory names inside evidence do not establish regenerability.
-  if (segments.includes(".artifacts")) return name.endsWith(".pyc");
+  if (segments.includes(".artifacts")) return false;
   if (segments.some((segment) => REBUILDABLE_DIRECTORIES.has(segment) || segment.endsWith(".egg-info"))) return true;
   return REBUILDABLE_FILES.has(name) || name.endsWith(".tsbuildinfo") || name.endsWith(".pyc");
+}
+
+/** Conventional Python cache entries need their source input. Sourceless
+    exports and symlinked inputs remain for inspection. */
+function bytecodeInput(file: string): boolean {
+  const directory = path.dirname(file);
+  const name = path.basename(file);
+  const cached = name.match(/^(.+)\.cpython-\d+(?:\.opt-\d+)?\.pyc$/);
+  const source = path.basename(directory) === "__pycache__" && cached
+    ? path.join(path.dirname(directory), `${cached[1]}.py`) : file.slice(0, -1);
+  try { return fs.lstatSync(source).isFile(); }
+  catch { return false; }
 }
 
 /** Git can collapse an ignored bytecode container to one directory. Prove
@@ -273,7 +285,7 @@ function onlyRebuildableContents(directory: string): boolean {
         const child = path.join(current, entry.name);
         if (entry.name === ".git") return false;
         if (entry.isDirectory()) pending.push(child);
-        else if (!entry.isFile() || !entry.name.endsWith(".pyc")) return false;
+        else if (!entry.isFile() || !entry.name.endsWith(".pyc") || !bytecodeInput(child)) return false;
       }
     }
     return true;
@@ -307,6 +319,8 @@ function virtualenvRoot(worktree: string, ignored: string): string | null {
 function disposableIgnored(worktree: string, ignored: string, checked: Map<string, boolean>): boolean {
   const target = path.join(worktree, ignored);
   if (emptyDirectory(target)) return true;
+  if (ignored.split("/").includes(".artifacts")) return false;
+  if (ignored.endsWith(".pyc") && !bytecodeInput(target)) return false;
   if (virtualenvRoot(worktree, ignored)) return onlyRebuildableContents(target);
   let generated: string | null = null;
   if (rebuildable(ignored)) {
@@ -409,14 +423,20 @@ export function parseWorktreeList(raw: string): ListedWorktree[] {
 }
 
 /** Bytes a removal frees: allocated blocks of entries with a single link,
-    without following symlinks; a lower bound past the entry limit. */
-export async function exclusiveBytes(directory: string, excludedDirectories: readonly string[] = []): Promise<number> {
+    without following symlinks; a lower bound past the entry limit. Consumer
+    walks share directory identities to attribute namespace aliases once. */
+export async function exclusiveBytes(directory: string, excludedDirectories: readonly string[] = [], seenDirectories = new Set<string>()): Promise<number> {
   const excluded = new Set<string>();
   for (const excludedDirectory of excludedDirectories) {
     try { const stat = fs.statSync(excludedDirectory); excluded.add(`${stat.dev}:${stat.ino}`); }
     catch { /* An unavailable directory contributes no measured bytes. */ }
   }
-  try { const stat = fs.statSync(directory); if (excluded.has(`${stat.dev}:${stat.ino}`)) return 0; }
+  try {
+    const stat = fs.statSync(directory);
+    const identity = `${stat.dev}:${stat.ino}`;
+    if (excluded.has(identity) || seenDirectories.has(identity)) return 0;
+    seenDirectories.add(identity);
+  }
   catch { return 0; }
   let bytes = 0;
   let visited = 0;
@@ -434,8 +454,10 @@ export async function exclusiveBytes(directory: string, excludedDirectories: rea
       const child = path.join(current, entry.name);
       try {
         const stat = await fs.promises.lstat(child);
-        if (entry.isDirectory() && excluded.has(`${stat.dev}:${stat.ino}`)) continue;
         if (entry.isDirectory()) {
+          const identity = `${stat.dev}:${stat.ino}`;
+          if (excluded.has(identity) || seenDirectories.has(identity)) continue;
+          seenDirectories.add(identity);
           bytes += stat.blocks * 512;
           pending.push(child);
         } else if (stat.nlink <= 1) {
@@ -603,6 +625,69 @@ function registrationHold(root: string, directory: string, target: string,
     }
     return registered ? null : { path: directory, reason: "missing" };
   } catch { return { path: directory, reason: "uncommitted", detail: "worktree registration could not be refreshed" }; }
+}
+
+/** Git commits and ref updates honor these locks. Keep HEAD and every
+    symbolic destination stable from the preservation proof through removal. */
+function lockCheckoutHead(directory: string, accessible: (directory: string) => string): (() => void) | null {
+  const locks: { file: string; dev: number; ino: number }[] = [];
+  const release = () => {
+    for (const lock of locks.reverse()) try {
+      const stat = fs.lstatSync(lock.file);
+      if (stat.dev === lock.dev && stat.ino === lock.ino) fs.unlinkSync(lock.file);
+    } catch { /* Removal can already have removed the checkout metadata. */ }
+  };
+  try {
+    const pointer = fs.readFileSync(path.join(accessible(directory), ".git"), "utf8").trim();
+    if (!pointer.startsWith("gitdir: ")) return null;
+    const metadata = path.resolve(directory, pointer.slice(8));
+    const common = path.resolve(metadata, fs.readFileSync(accessible(path.join(metadata, "commondir")), "utf8").trim());
+    if (fs.existsSync(accessible(path.join(common, "reftable")))) return null;
+    const claim = (file: string) => {
+      const reached = accessible(file);
+      fs.mkdirSync(path.dirname(reached), { recursive: true });
+      const fd = fs.openSync(reached, "wx", 0o600);
+      try { const stat = fs.fstatSync(fd); locks.push({ file: reached, dev: stat.dev, ino: stat.ino }); }
+      finally { fs.closeSync(fd); }
+    };
+    claim(path.join(metadata, "HEAD.lock"));
+    let value = fs.readFileSync(accessible(path.join(metadata, "HEAD")), "utf8").trim();
+    for (let depth = 0; value.startsWith("ref: "); depth++) {
+      const ref = value.slice(5);
+      if (depth >= 8 || !ref.startsWith("refs/heads/") || ref.split("/").some(part => !part || part === "." || part === "..") || /[\\\s]/.test(ref)) throw new Error("unsupported HEAD reference");
+      claim(path.join(common, `${ref}.lock`));
+      try { value = fs.readFileSync(accessible(path.join(common, ref)), "utf8").trim(); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; value = "packed"; }
+    }
+    return release;
+  } catch { release(); return null; }
+}
+
+/** Status can precede the arrival of a new ignored file. Inventory the
+    filesystem after the last asynchronous read; unknown contents stay. */
+function freshIgnored(worktree: string, tracked: string): string[] {
+  const files = new Set(tracked.split("\0").filter(Boolean));
+  const directories = new Set<string>();
+  for (const file of files) {
+    const parts = file.split("/");
+    for (let depth = 1; depth < parts.length; depth++) directories.add(parts.slice(0, depth).join("/"));
+  }
+  const pending = [""];
+  const checked = new Map<string, boolean>();
+  let visited = 0;
+  try {
+    while (pending.length) {
+      const relative = pending.pop()!;
+      for (const entry of fs.readdirSync(path.join(worktree, relative), { withFileTypes: true })) {
+        if (++visited > MEASURE_ENTRY_LIMIT) return ["inspection limit"];
+        const name = relative ? `${relative}/${entry.name}` : entry.name;
+        if (name === ".git" || files.has(name)) continue;
+        if (entry.isDirectory() && directories.has(name)) pending.push(name);
+        else if (!disposableIgnored(worktree, name, checked)) return [name];
+      }
+    }
+    return [];
+  } catch { return ["unreadable contents"]; }
 }
 
 /** One sweep. Never throws for one worktree; its failure is kept with a reason. */
@@ -864,51 +949,58 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
         keep({ ...base, reason: "map-write-failed" });
         continue;
       }
-      /* A commit made since the status read leaves the checkout clean, so the
-         removal below would not refuse it: HEAD is proven again last. */
-      proof = await prove();
-      if ("reason" in proof) {
-        keep(proof);
-        continue;
-      }
-      removal = { ...removal, pr: proof.pr ? { number: proof.pr.number, url: proof.pr.url } : null, preservation: proof.preservation, branch: proof.branch };
-      const finalListing = await ports.git(["worktree", "list", "--porcelain", "-z"], root);
-      if (finalListing.code !== 0) { keep({ ...base, reason: "uncommitted", detail: "worktree registration could not be refreshed" }); continue; }
-      const finalWorktrees = parseWorktreeList(finalListing.stdout);
-      const finalEntry = finalWorktrees.find(other => resolve(other.path) === worktree);
-      if (!finalEntry || finalEntry.prunable) { keep({ ...base, reason: "missing" }); continue; }
-      if (finalEntry.locked) { keep({ ...base, reason: "locked" }); continue; }
-      const finalNested = finalWorktrees.find(other => resolve(other.path) !== worktree && inside(resolve(other.path), worktree));
-      if (finalNested) { keep({ ...base, reason: "holds-worktree", detail: finalNested.path }); continue; }
-      const finalStatus = await ports.git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], worktree);
-      const finalClass = classifyStatus(finalStatus.stdout, true);
-      if (finalStatus.code !== 0 || finalClass.changed.length) { keep({ ...base, reason: "uncommitted" }); continue; }
-      const finalHead = await ports.git(["rev-parse", "--verify", "HEAD"], worktree);
-      if (finalHead.code !== 0 || finalHead.stdout.trim() !== proof.head) {
-        keep({ ...base, reason: retained ? "local-only-commits" : "unmerged-commits", detail: "HEAD changed after its preservation proof" });
-        continue;
-      }
-      const finalIgnored = keptIgnored(accessible(worktree), finalClass.ignored);
-      const registration = registrationHold(root, worktree, worktree, accessible);
-      if (registration) { keep({ ...registration, ...base }); continue; }
-      if (finalIgnored.length) { keep({ ...base, reason: "ignored-files" }); continue; }
-      const finalBusy = heldBy(readGuards(), worktree, entry.branch);
-      if (finalBusy) { keep({ ...finalBusy, ...base }); continue; }
-      if (dryRun) {
+      const releaseHead = dryRun ? () => {} : lockCheckoutHead(worktree, accessible);
+      if (!releaseHead) { keep({ ...base, reason: "locked", detail: "HEAD could not be held through removal" }); continue; }
+      try {
+        /* A commit made since the status read leaves the checkout clean, so the
+           removal below would not refuse it: HEAD is proven again last. */
+        proof = await prove();
+        if ("reason" in proof) {
+          keep(proof);
+          continue;
+        }
+        removal = { ...removal, pr: proof.pr ? { number: proof.pr.number, url: proof.pr.url } : null, preservation: proof.preservation, branch: proof.branch };
+        const finalListing = await ports.git(["worktree", "list", "--porcelain", "-z"], root);
+        if (finalListing.code !== 0) { keep({ ...base, reason: "uncommitted", detail: "worktree registration could not be refreshed" }); continue; }
+        const finalWorktrees = parseWorktreeList(finalListing.stdout);
+        const finalEntry = finalWorktrees.find(other => resolve(other.path) === worktree);
+        if (!finalEntry || finalEntry.prunable) { keep({ ...base, reason: "missing" }); continue; }
+        if (finalEntry.locked) { keep({ ...base, reason: "locked" }); continue; }
+        const finalNested = finalWorktrees.find(other => resolve(other.path) !== worktree && inside(resolve(other.path), worktree));
+        if (finalNested) { keep({ ...base, reason: "holds-worktree", detail: finalNested.path }); continue; }
+        const finalStatus = await ports.git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], worktree);
+        const finalClass = classifyStatus(finalStatus.stdout, true);
+        if (finalStatus.code !== 0 || finalClass.changed.length) { keep({ ...base, reason: "uncommitted" }); continue; }
+        const finalHead = await ports.git(["rev-parse", "--verify", "HEAD"], worktree);
+        if (finalHead.code !== 0 || finalHead.stdout.trim() !== proof.head) {
+          keep({ ...base, reason: retained ? "local-only-commits" : "unmerged-commits", detail: "HEAD changed after its preservation proof" });
+          continue;
+        }
+        const finalIgnored = keptIgnored(accessible(worktree), finalClass.ignored);
+        const trackedNow = await ports.git(["ls-files", "--cached", "-z"], worktree);
+        if (trackedNow.code !== 0) { keep({ ...base, reason: "uncommitted" }); continue; }
+        const newlyIgnored = freshIgnored(accessible(worktree), trackedNow.stdout);
+        const registration = registrationHold(root, worktree, worktree, accessible);
+        if (registration) { keep({ ...registration, ...base }); continue; }
+        if (finalIgnored.length || newlyIgnored.length) { keep({ ...base, reason: "ignored-files" }); continue; }
+        const finalBusy = heldBy(readGuards(), worktree, entry.branch);
+        if (finalBusy) { keep({ ...finalBusy, ...base }); continue; }
+        if (dryRun) {
+          report.removed.push(removal);
+          report.removedBytes += bytes;
+          remaining.delete(worktree);
+          continue;
+        }
+        /* Never `--force`: git refuses a checkout that changed since the status read. */
+        const removed = await ports.git(["worktree", "remove", worktree], root);
+        if (removed.code !== 0) {
+          keep({ ...base, reason: "remove-failed", detail: (removed.stderr || removed.stdout).trim() });
+          continue;
+        }
+        remaining.delete(worktree);
         report.removed.push(removal);
         report.removedBytes += bytes;
-        remaining.delete(worktree);
-        continue;
-      }
-      /* Never `--force`: git refuses a checkout that changed since the status read. */
-      const removed = await ports.git(["worktree", "remove", worktree], root);
-      if (removed.code !== 0) {
-        keep({ ...base, reason: "remove-failed", detail: (removed.stderr || removed.stdout).trim() });
-        continue;
-      }
-      remaining.delete(worktree);
-      report.removed.push(removal);
-      report.removedBytes += bytes;
+      } finally { releaseHead(); }
       /* The lane branch goes with it when its tip is contained in the merged
          head or the remotes hold every commit of it. A base proof covers the
          checkout's HEAD only, never a branch tip. Delete exactly the proven
@@ -1011,8 +1103,9 @@ export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<W
       }
     }
   }
-  for (const kept of report.kept) {
-    kept.bytes = await exclusiveBytes(accessible(kept.path));
+  const seenKept = new Set<string>();
+  for (const kept of [...report.kept].sort((a, b) => a.path.split(path.sep).length - b.path.split(path.sep).length)) {
+    kept.bytes = await exclusiveBytes(accessible(kept.path), [], seenKept);
     report.keptBytes[kept.reason] = (report.keptBytes[kept.reason] ?? 0) + kept.bytes;
   }
   return report;

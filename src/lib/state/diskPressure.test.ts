@@ -292,13 +292,18 @@ test.skipIf(process.platform === "win32")("scratch, nested worktrees and other r
   const other = path.join(temp, "llv-other");
   const tempWorktree = path.join(other, "checkout");
   for (const directory of [worktree, tempWorktree]) fs.mkdirSync(directory, { recursive: true });
+  const nested = path.join(worktree, "nested");
+  const alias = path.join(fixture, "checkout-alias");
+  fs.mkdirSync(nested);
+  fs.symlinkSync(worktree, alias);
+  fs.writeFileSync(path.join(nested, "bulk"), Buffer.alloc(16 * 1024, 1));
   fs.writeFileSync(path.join(scratch, "bulk"), Buffer.alloc(256 * 1024, 1));
   fs.writeFileSync(path.join(worktree, "bulk"), Buffer.alloc(128 * 1024, 1));
   fs.writeFileSync(path.join(tempWorktree, "bulk"), Buffer.alloc(64 * 1024, 1));
   fs.writeFileSync(path.join(other, "role.log"), Buffer.alloc(32 * 1024, 1));
   process.env.LLV_STATE_DIR = state;
   const caches = new Map();
-  const worktrees = [worktree, tempWorktree];
+  const worktrees = [worktree, tempWorktree, nested, alias, path.join(alias, "nested")];
   const options = { caches, worktrees, tempRoots: [{ path: scratch, via: "" }, { path: temp, via: "" }],
     roots: [{ role: "state", directory: state }], now: () => Date.parse("2026-10-06T12:00:00Z"),
     probe: () => ({ volume: "fixture", freeBytes: GiB }) };

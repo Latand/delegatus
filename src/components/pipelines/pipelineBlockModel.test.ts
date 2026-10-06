@@ -98,6 +98,13 @@ function parked(overrides: Partial<Pipeline> = {}): Pipeline {
 }
 const nameOf = (entry: PipelineStage) => entry.id[0]!.toUpperCase() + entry.id.slice(1);
 
+test("provisioning names its disk wait and clears the reason after recovery", () => {
+  const stateDetail = "waiting for disk space: temp has 0.50 GiB free (needs 2.00 GiB); retries automatically";
+  expect(pipelineReason(t, parked({ state: "provisioning", stateDetail }), nameOf)).toBe(stateDetail);
+  expect(pipelineReason(t, parked({ state: "running", stateDetail: null }), nameOf)).toBeNull();
+  expect(pipelineReason(t, parked({ state: "provisioning", stateDetail: null }), nameOf)).toBeNull();
+});
+
 test("a decision is answered with Skip and Retry on the stage it waits on, a stop after the last fix with Accept as is and Review again", () => {
   const decision = pipelineAnswers(parked(), nameOf)!;
   expect(decision.kind).toBe("decision");

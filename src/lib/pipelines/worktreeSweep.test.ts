@@ -18,6 +18,7 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import {
   FINISHED_WORKTREE_RETENTION_MS,
   classifyStatus,
+  exclusiveBytes,
   forgeCacheMergedPullRequests,
   ghMergedPullRequests,
   hostTempWorktreeAccess,
@@ -1156,10 +1157,14 @@ test("artifact source, reports and media stay while root dependencies are trimme
 
 test("an ignored container of Python bytecode is proven rebuildable from its actual contents", async () => {
   const root = repository();
-  fs.appendFileSync(path.join(root, ".git/info/exclude"), "scripts/\n");
+  fs.appendFileSync(path.join(root, ".git/info/exclude"), "scripts/__pycache__/\n");
+  fs.mkdirSync(path.join(root, "scripts"));
+  fs.writeFileSync(path.join(root, "scripts/module.py"), "result = 42\n");
+  git(["add", "scripts/module.py"], root);
+  git(["commit", "-q", "-m", "preserved bytecode input"], root);
   const { dir, tip } = lane(root, path.join(caseDir, "bytecode"), "topic/bytecode");
-  fs.mkdirSync(path.join(dir, "scripts"));
-  fs.writeFileSync(path.join(dir, "scripts/module.pyc"), "bytecode");
+  fs.mkdirSync(path.join(dir, "scripts/__pycache__"));
+  fs.writeFileSync(path.join(dir, "scripts/__pycache__/module.cpython-312.pyc"), "bytecode");
   expect((await sweepMergedWorktrees(ports({ repositories: [root], prs: [merged(122, "topic/bytecode", tip)] }))).removed).toHaveLength(1);
 });
 
@@ -1246,28 +1251,92 @@ test("a lane ref made symbolic during deletion cannot delete the checked-out mai
   expect(git(["symbolic-ref", "--short", "HEAD"], root)).toBe("main");
 });
 
-test("a detached commit made during the final status read preserves the checkout and source", async () => {
+test.each(["attached", "detached"].flatMap(attachment => ["final-status", "final-head", "last-files"].map(phase => [attachment, phase])))("an %s commit attempted during %s keeps its checkout and source", async (attachment, phase) => {
   const root = repository();
   const { dir, tip } = lane(root, path.join(caseDir, "final-status-commit"), "topic/final-status-commit");
-  git(["checkout", "--detach", "-q"], dir);
+  if (attachment === "detached") git(["checkout", "--detach", "-q"], dir);
   const owner = pipeline({ repoDir: root, worktreeDir: dir, branch: "topic/final-status-commit" });
   const ordinary = ports({ pipelines: [owner], prs: [merged(170, owner.branch, tip)] });
   let statuses = 0;
-  let local = "";
+  let attempted = false;
   const report = await sweepMergedWorktrees({ ...ordinary, git: async (args, cwd) => {
     const result = await ordinary.git(args, cwd);
-    if (args[0] === "status" && ++statuses === 2) {
+    const inject = phase === "final-status" ? args[0] === "status" && ++statuses === 2
+      : phase === "final-head" ? args.join(" ") === "rev-parse --verify HEAD"
+      : args.join(" ") === "ls-files --cached -z";
+    if (inject && !attempted) {
+      attempted = true;
       fs.writeFileSync(path.join(dir, "unique.txt"), "private detached work");
       git(["add", "unique.txt"], dir);
-      git(["commit", "-q", "-m", "private detached work"], dir);
-      local = git(["rev-parse", "HEAD"], dir);
+      const commit = spawnSync("git", ["-c", "user.name=Sweep Test", "-c", "user.email=sweep@example.invalid", "commit", "-q", "-m", "private detached work"], { cwd: dir, encoding: "utf8" });
+      expect(commit.status).not.toBe(0);
+      expect(commit.stderr).toContain("cannot lock ref 'HEAD'");
     }
     return result;
   } });
   expect(report.removed).toEqual([]);
-  expect(report.kept[0]!.reason).toBe("unmerged-commits");
-  expect(git(["rev-parse", "HEAD"], dir)).toBe(local);
+  expect(attempted).toBe(true);
+  expect(report.kept[0]!.reason).toBe(phase === "last-files" ? "ignored-files" : "remove-failed");
+  expect(git(["rev-parse", "HEAD"], dir)).toBe(tip);
   expect(fs.readFileSync(path.join(dir, "unique.txt"), "utf8")).toBe("private detached work");
+  // Releasing the sweep's locks lets retained work be committed normally.
+  git(["commit", "-q", "-m", "retained detached work"], dir);
+  expect(git(["rev-parse", "HEAD"], dir)).not.toBe(tip);
+});
+
+test.each(["final-head", "last-files"])("new ignored evidence during %s survives the final inventory", async phase => {
+  const root = repository();
+  fs.appendFileSync(path.join(root, ".git/info/exclude"), ".artifacts/\nsrc/private/\n");
+  fs.mkdirSync(path.join(root, "src"));
+  fs.writeFileSync(path.join(root, "src/public.ts"), "export {};\n");
+  git(["add", "src/public.ts"], root);
+  git(["commit", "-q", "-m", "tracked directory"], root);
+  const { dir, tip } = lane(root, path.join(caseDir, "late-evidence"), "topic/late-evidence");
+  const ordinary = ports({ repositories: [root], prs: [merged(171, "topic/late-evidence", tip)] });
+  const captures = [path.join(dir, ".artifacts/unique.log"), path.join(dir, "src/private/trace.zip")];
+  let wrote = false;
+  const report = await sweepMergedWorktrees({ ...ordinary, git: async (args, cwd) => {
+    const result = await ordinary.git(args, cwd);
+    if (cwd === dir && args.join(" ") === (phase === "final-head" ? "rev-parse --verify HEAD" : "ls-files --cached -z")) {
+      for (const capture of captures) {
+        fs.mkdirSync(path.dirname(capture), { recursive: true });
+        fs.writeFileSync(capture, "unique evidence");
+      }
+      wrote = true;
+    }
+    return result;
+  } });
+  expect(wrote).toBe(true);
+  expect(report.removed).toEqual([]);
+  expect(report.kept[0]!.reason).toBe("ignored-files");
+  for (const capture of captures) expect(fs.readFileSync(capture, "utf8")).toBe("unique evidence");
+});
+
+test.each([".artifacts/only.pyc", "scripts/only.pyc", "only.pyc"])("sourceless bytecode %s stays", async relative => {
+  const root = repository();
+  fs.appendFileSync(path.join(root, ".git/info/exclude"), ".artifacts/\nscripts/\n*.pyc\n");
+  const { dir, tip } = lane(root, path.join(caseDir, "bytecode-evidence"), "topic/bytecode-evidence");
+  const artifact = path.join(dir, relative);
+  fs.mkdirSync(path.dirname(artifact), { recursive: true });
+  fs.writeFileSync(artifact, "unique bytecode without retained source");
+  const report = await sweepMergedWorktrees(ports({ repositories: [root], prs: [merged(172, "topic/bytecode-evidence", tip)] }));
+  expect(report.removed).toEqual([]);
+  expect(report.kept[0]!.reason).toBe("ignored-files");
+  expect(fs.readFileSync(artifact, "utf8")).toBe("unique bytecode without retained source");
+});
+
+test("kept nested checkouts contribute their allocated bytes once", async () => {
+  const root = repository();
+  const outer = lane(root, path.join(caseDir, "outer-report"), "topic/outer-report");
+  const inner = lane(root, path.join(outer.dir, "node_modules/inner"), "topic/inner-report");
+  fs.writeFileSync(path.join(inner.dir, "unique.log"), Buffer.alloc(256 * 1024, 1));
+  const physical = await exclusiveBytes(outer.dir);
+  const report = await sweepMergedWorktrees(ports({ repositories: [root], prs: [merged(173, "topic/outer-report", outer.tip)] }));
+  expect(report.removed).toEqual([]);
+  expect(report.kept).toHaveLength(2);
+  expect(report.kept.reduce((sum, row) => sum + (row.bytes ?? 0), 0)).toBe(physical);
+  expect(Object.values(report.keptBytes).reduce((sum, bytes) => sum + (bytes ?? 0), 0)).toBe(physical);
+  expect(fs.existsSync(inner.dir)).toBe(true);
 });
 
 test("a branch attached to a new checkout after removal is retained", async () => {
@@ -1279,7 +1348,7 @@ test("a branch attached to a new checkout after removal is retained", async () =
   const ordinary = ports({ pipelines: [owner], now: () => RETAIN_NOW });
   const report = await sweepMergedWorktrees({ ...ordinary, git: async (args, cwd) => {
     const result = await ordinary.git(args, cwd);
-    if (args[0] === "worktree" && args[1] === "remove" && result.code === 0)
+    if (args.join(" ") === "rev-parse --verify --quiet refs/heads/topic/reattach-ref")
       git(["worktree", "add", "-q", other, "topic/reattach-ref"], root);
     return result;
   } });

@@ -2255,11 +2255,11 @@ const evidence = {
   admitted: null as { pipeline: Pipeline; task: BoardTask } | null,
   /* Every `/api/attention` call, as the page made it. */
   attentionCalls: [] as Array<{ url: string; method: string }>,
-  admitLane(title: string) {
+  admitLane(title: string, stateDetail: string | null = null) {
     evidence.admitted = {
       pipeline: pipeline("p-admitted", title, "t-admitted", "provisioning",
         [stage("build", "builder", "review"), stage("review", "reviewer", null)], [],
-        { stageId: "build", state: "pending", input: null, activatedBy: null }, { createdAt: new Date().toISOString() }),
+        { stageId: "build", state: "pending", input: null, activatedBy: null }, { createdAt: new Date().toISOString(), stateDetail }),
       task: task("t-admitted", "assigned", title, "", 0),
     };
   },

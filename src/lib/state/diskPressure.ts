@@ -207,8 +207,8 @@ export async function readDiskPressure(ports: {
     import("@/lib/pipelines/store"),
     import("@/lib/pipelines/worktreeSweep"),
   ]);
-  const pipelines = ports.roots ? [] : loadPipelinesForList();
-  const sweep = ports.roots ? null : readWorktreeSweepReport();
+  const pipelines = ports.roots || ports.worktrees ? [] : loadPipelinesForList();
+  const sweep = ports.roots || ports.worktrees ? null : readWorktreeSweepReport();
   const worktrees = ports.worktrees ?? [...new Set([...pipelines.map(row => row.worktreeDir), ...(sweep?.kept ?? []).map(row => row.path)].filter(Boolean))];
   const tempRoots = ports.tempRoots ?? (ports.roots ? [] : sweepRoots(scanProcesses(), [...ownTempRoots(), statePath("scratch")]));
   const accessible = hostTempWorktreeAccess(tempRoots).accessiblePath;
@@ -226,13 +226,13 @@ export async function readDiskPressure(ports: {
     target.measuring = (async () => {
       const measuredAt = new Date(now()).toISOString();
       const worktreePaths = worktrees.map(accessible);
-      const stateBytes = await exclusiveBytes(directory, worktreePaths);
+      const seenDirectories = new Set<string>();
+      const stateBytes = await exclusiveBytes(directory, worktreePaths, seenDirectories);
       let worktreeBytes = 0;
       // Nested linked checkouts must be measured once, through the outer one.
       for (const worktree of worktrees.filter(candidate => !worktrees.some(other => other !== candidate && candidate.startsWith(other + path.sep))))
-        worktreeBytes += await exclusiveBytes(accessible(worktree), [directory]);
+        worktreeBytes += await exclusiveBytes(accessible(worktree), [directory], seenDirectories);
       let tempBytes = 0;
-      const measuredTemp = new Set<string>();
       for (const root of tempRoots) {
         const base = root.via + root.path;
         try {
@@ -243,11 +243,7 @@ export async function readDiskPressure(ports: {
             // Scratch is part of state. Other owned roots can contain both a
             // checkout and independent role files; exclude only the checkout.
             if (canonicalChild === directory || canonicalChild.startsWith(directory + path.sep)) continue;
-            const stat = fs.statSync(child);
-            const identity = `${stat.dev}:${stat.ino}`;
-            if (measuredTemp.has(identity)) continue;
-            measuredTemp.add(identity);
-            tempBytes += await exclusiveBytes(child, [directory, ...worktreePaths]);
+            tempBytes += await exclusiveBytes(child, [directory, ...worktreePaths], seenDirectories);
           }
         } catch { /* An inaccessible root has no attributable consumer count. */ }
       }

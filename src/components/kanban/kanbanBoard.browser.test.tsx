@@ -18613,6 +18613,62 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
 });
 
 describe("disk warning destinations", () => {
+  browserTest("waiting lanes name free space and clear the reason after recovery", async () => {
+    const out = path.resolve(".artifacts/disk-warning-destinations");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    const detail = "waiting for disk space: temp has 0.50 GiB free (needs 2.00 GiB); retries automatically";
+    const reasonSelector = '[data-pipeline-reason="p-admitted"]';
+    type DiskLaneEvidence = { admitLane(title: string, detail: string): void; admitted: { pipeline: Pipeline } };
+    try {
+      for (const size of [{ width: 1440, height: 900 }, { width: 390, height: 844 }])
+        for (const lang of ["en", "uk"] as const)
+          for (const scheme of ["light", "dark"] as const) {
+            const { context, page, pageErrors } = await openFixture(browser, size.width < 640 ? server.base : `${server.base}?scenario=issue1820-quiet`, size, scheme, lang, "reduce", size.width < 640);
+            try {
+              try { await page.waitForSelector(size.width < 640 ? "[data-phone-kanban]" : "[data-kanban-board]"); }
+              catch (error) {
+                await page.screenshot({ path: path.join(out, `lane-${size.width}-${lang}-${scheme}-unavailable.png`) });
+                throw error;
+              }
+              await page.evaluate(detail => {
+                (window as unknown as { evidence: DiskLaneEvidence }).evidence.admitLane("Prepare a checkout", detail);
+                document.dispatchEvent(new Event("visibilitychange"));
+              }, detail);
+              if (size.width < 640) await page.locator('[data-phone-kanban-tab="assigned"]').click();
+              const reason = page.locator(reasonSelector).first();
+              await reason.waitFor({ state: "visible" });
+              await reason.scrollIntoViewIfNeeded();
+              expect(await reason.innerText()).toContain(detail);
+              const geometry = await reason.evaluate(element => {
+                const box = element.getBoundingClientRect();
+                return { width: box.width, right: box.right, bottom: box.bottom, scrollWidth: element.scrollWidth, clientWidth: element.clientWidth };
+              });
+              expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth);
+              expect(geometry.right).toBeLessThanOrEqual(size.width);
+              expect(geometry.bottom).toBeLessThanOrEqual(size.height);
+              const frame = `lane-${size.width}-${lang}-${scheme}`;
+              await page.screenshot({ path: path.join(out, frame + "-waiting.png") });
+              await page.evaluate(() => {
+                const lane = (window as unknown as { evidence: DiskLaneEvidence }).evidence.admitted.pipeline;
+                lane.state = "running";
+                lane.stateDetail = null;
+                document.dispatchEvent(new Event("visibilitychange"));
+              });
+              await page.waitForSelector(reasonSelector, { state: "hidden" });
+              expect(await page.locator('[data-pipeline="p-admitted"][data-lane-state="running"]').count()).toBeGreaterThan(0);
+              expect(pageErrors).toEqual([]);
+              await page.screenshot({ path: path.join(out, frame + "-recovered.png") });
+              readings.push({ frame, waiting: detail, recovered: true, ...geometry });
+            } finally { await context.close(); }
+          }
+      fs.mkdirSync("evidence/disk-pressure", { recursive: true });
+      fs.writeFileSync("evidence/disk-pressure/waiting-lanes.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
+
   browserTest("critical temp and state notices describe admission and fit desktop and phone", async () => {
     const out = path.resolve(".artifacts/disk-warning-destinations");
     fs.mkdirSync(out, { recursive: true });
