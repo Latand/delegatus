@@ -1,5 +1,6 @@
 import type { CompanionEvent, CompanionMode, Delivery, Id, Proposal, Recipient } from "./contract";
 import { admitDelegationProposal, type GateRefusal } from "./gate";
+import { liveProposalRefusal } from "./liveGate";
 
 /**
  * The one reducer the voice companion reads (#2519, design note §6). It joins
@@ -16,10 +17,8 @@ import { admitDelegationProposal, type GateRefusal } from "./gate";
  *    milliseconds that played;
  *  - the mouth stays active until playback stops, whenever generation ended;
  *  - input speech interrupts playback and leaves delivered work alone;
- *  - a confirmation is shown only for an explicit request (the gate of
- *    `gate.ts`) and stays only while that request is the operator's last
- *    word: newer input, finished or not, or a corrected source withdraws it,
- *    and a later confirmation finds nothing to confirm;
+ *  - Live proposals carry server admission; optional input refusals veto them.
+ *    The simulator retains its completed-input gate. Delivery needs a tap;
  *  - a tool result, a settlement and an answer count only
  *    when they bind the whole frozen delivery: proposal, call, message key,
  *    recipient and operation.
@@ -69,6 +68,7 @@ export type DelegationStage =
   | "failed";
 
 export interface DelegationView {
+  notice: "REPLY_PENDING" | "DELIVERY_UNCONFIRMED" | null;
   callId: Id;
   instruction: string;
   stage: DelegationStage;
@@ -82,6 +82,7 @@ export interface DelegationView {
 }
 
 export interface CompanionState {
+  closure: { reason: Extract<CompanionEvent, { type: "session.closed" }>["reason"]; incomplete: boolean } | null;
   mode: CompanionMode | null;
   generation: number;
   phase: CompanionPhase;
@@ -95,6 +96,8 @@ export interface CompanionState {
   lines: readonly SpeechLine[];
   calls: readonly ToolCallView[];
   delegation: DelegationView | null;
+  /** Confirmed requests retain their own cards while newer proposals arrive. */
+  deliveryCards: readonly DelegationView[];
   /** The response whose audio is playing, for an interrupt. */
   playing: { responseId: Id; itemId: Id } | null;
   error: string | null;
@@ -110,8 +113,9 @@ const TEXT_LIMIT = 4_000;
 const ID_LIMIT = 200;
 
 export const INITIAL_COMPANION_STATE: CompanionState = {
+  closure: null,
   mode: null, generation: 0, phase: "offline", mouth: 0, playedMs: 0, revision: 0, lines: [], calls: [], delegation: null,
-  playing: null, error: null, seen: new Set(), levelSeq: -1, reports: new Set(),
+  playing: null, error: null, seen: new Set(), levelSeq: -1, reports: new Set(), deliveryCards: [],
 };
 
 const validId = (value: unknown): value is Id => typeof value === "string" && value.length > 0 && value.length <= ID_LIMIT;
@@ -175,12 +179,16 @@ const operatorInputs = (lines: readonly SpeechLine[]) =>
 
 /**
  * A waiting proposal, read against the operator's lines as they are now. It is
- * withdrawn once the gate no longer admits it: the operator spoke again, or
- * the input it was frozen from reads differently.
+ * withdrawn once its admission rule refuses it. Live uses only a soft veto;
+ * the simulator also checks the completed request's identity and wording.
  */
 function standing(delegation: DelegationView | null, lines: readonly SpeechLine[]): DelegationView | null {
   if (!delegation?.proposal || delegation.stage !== "awaiting-confirmation") return delegation;
   const { proposal } = delegation;
+  if (proposal.authority === "live-model") {
+    const reason = liveProposalRefusal(proposal.instruction, operatorInputs(lines));
+    return reason ? { ...delegation, stage: "cancelled", refusal: reason } : delegation;
+  }
   const verdict = admitDelegationProposal({
     sourceItemId: proposal.sourceItemId, instruction: proposal.instruction, inputs: operatorInputs(lines),
     ...(delegation.sourceText === null ? {} : { frozenSourceText: delegation.sourceText }),
@@ -194,6 +202,31 @@ function cut(lines: readonly SpeechLine[], itemId: Id, playedMs: number, revisio
 }
 
 export function reduceCompanion(state: CompanionState, event: CompanionEvent): CompanionState {
+  const next = reduceCurrent(state, event);
+  if (next === state) return state;
+  const deliveryEvent = ["delegation.tool.result", "delegation.delivery.settled", "orchestrator.answer"].includes(event.type);
+  if (next.delegation === state.delegation && !deliveryEvent) return next;
+  const cards = [...state.deliveryCards];
+  const reports = new Set(next.reports);
+  if (deliveryEvent) {
+    for (let i = 0; i < cards.length; i++) {
+      if (cards[i].callId === next.delegation?.callId) continue;
+      // Apply the same complete identity join to each retained delivery. Only
+      // its card changes; a concurrent answer cannot replace the latest ask.
+      const reduced = reduceCurrent({ ...state, delegation: cards[i] }, event);
+      cards[i] = reduced.delegation ?? cards[i];
+      for (const report of reduced.reports) reports.add(report);
+    }
+  }
+  if (next.delegation?.delivery) {
+    const index = cards.findIndex(row => row.delivery?.clientMessageId === next.delegation!.delivery!.clientMessageId);
+    if (index < 0) cards.push(next.delegation);
+    else cards[index] = next.delegation;
+  }
+  return { ...next, deliveryCards: cards.slice(-CALL_HISTORY), reports };
+}
+
+function reduceCurrent(state: CompanionState, event: CompanionEvent): CompanionState {
   if (!wellFormed(event)) return state;
   if (event.generation < state.generation) return state;
   let base = state;
@@ -218,10 +251,14 @@ export function reduceCompanion(state: CompanionState, event: CompanionEvent): C
 
   switch (event.type) {
     case "session.ready":
-      return next({ mode: event.mode, phase: "idle", error: null });
+      return next({ mode: event.mode, phase: "idle", error: null, closure: null });
     case "session.closed": {
       const lines = base.playing ? cut(base.lines, base.playing.itemId, base.playedMs, revision) : base.lines;
-      return next({ phase: "offline", playing: null, mouth: 0, lines, error: event.reason === "operator" ? null : event.reason });
+      const delegation = base.delegation && ["proposed", "awaiting-confirmation"].includes(base.delegation.stage)
+        ? { ...base.delegation, stage: "cancelled" as const, refusal: "session_closed" } : base.delegation;
+      return next({ phase: "offline", playing: null, mouth: 0, lines, closure: { reason: event.reason, incomplete: event.incomplete ?? false },
+        delegation,
+        error: ["operator", "tool"].includes(event.reason) ? null : event.reason === "cap" ? "CAP_REACHED" : "PROVIDER_ERROR" });
     }
     case "input.speech.started": {
       /* Barge-in: the mouth stops at once. The line keeps the text that was
@@ -241,11 +278,12 @@ export function reduceCompanion(state: CompanionState, event: CompanionEvent): C
       const lines = upsertLine(base.lines, event.speaker, event.itemId, revision, (line) => ({ text: bounded(line.text + event.delta) }));
       return next({ lines, delegation: event.speaker === "operator" ? standing(base.delegation, lines) : base.delegation });
     }
-    case "transcript.final": {
+    case "transcript.final":
+    case "transcript.snapshot": {
       if (!validId(event.itemId)) return base;
       /* The final transcript replaces the provisional text. It says nothing
          about playback, so a cut line stays cut. */
-      const lines = upsertLine(base.lines, event.speaker, event.itemId, revision, () => ({ text: bounded(event.text), final: true }));
+      const lines = upsertLine(base.lines, event.speaker, event.itemId, revision, () => ({ text: bounded(event.text), final: event.type === "transcript.final" || event.final }));
       return next({ lines, delegation: event.speaker === "operator" ? standing(base.delegation, lines) : base.delegation });
     }
     case "response.started":
@@ -279,7 +317,7 @@ export function reduceCompanion(state: CompanionState, event: CompanionEvent): C
     case "delegation.tool.called": {
       if (!validId(event.callId)) return base;
       /* A tool call is a candidate and nothing more: it opens no delivery. */
-      return next({ delegation: { callId: event.callId, instruction: bounded(event.instruction), stage: "proposed", proposal: null, sourceText: null, delivery: null, refusal: null, answer: null } });
+      return next({ delegation: { callId: event.callId, instruction: bounded(event.instruction), stage: "proposed", proposal: null, sourceText: null, delivery: null, refusal: null, answer: null, notice: null } });
     }
     case "delegation.confirmation.required": {
       const { proposal } = event;
@@ -287,7 +325,9 @@ export function reduceCompanion(state: CompanionState, event: CompanionEvent): C
       /* The same gate the adapter applied, read against the lines this reducer
          holds: a confirmation for anything but an explicit request is refused. */
       const inputs = operatorInputs(base.lines);
-      const verdict = admitDelegationProposal({ sourceItemId: proposal.sourceItemId, instruction: proposal.instruction, inputs });
+      const reason = proposal.authority === "live-model" ? liveProposalRefusal(proposal.instruction, inputs) : null;
+      const verdict = proposal.authority === "live-model" ? (reason ? { admit: false as const, reason } : { admit: true as const })
+        : admitDelegationProposal({ sourceItemId: proposal.sourceItemId, instruction: proposal.instruction, inputs });
       if (!verdict.admit) return next({ delegation: { ...base.delegation, stage: "refused", refusal: verdict.reason } });
       const sourceText = inputs.find((input) => input.itemId === proposal.sourceItemId)?.text ?? null;
       return next({ delegation: { ...base.delegation, stage: "awaiting-confirmation", proposal, sourceText, instruction: bounded(proposal.instruction) } });
@@ -319,12 +359,12 @@ export function reduceCompanion(state: CompanionState, event: CompanionEvent): C
       if ((current.stage !== "sending" && !recovering) || !proposal || delivery.proposalId !== proposal.proposalId || delivery.callId !== proposal.callId
         || event.callId !== proposal.callId || !sameRecipient(delivery.recipient, proposal.recipient) || !validId(delivery.clientMessageId)
         || (result.status !== "unknown" && !validId(delivery.operationId))) return next({});
-      return next({ delegation: { ...current, stage: result.status, delivery } });
+      return next({ delegation: { ...current, stage: result.status, delivery, notice: result.status === "unknown" ? "DELIVERY_UNCONFIRMED" : "REPLY_PENDING" } });
     }
     case "delegation.delivery.settled": {
       const current = base.delegation;
       if (!current || current.stage === "answered" || !settles(current.delivery, event.delivery)) return next({});
-      return next({ delegation: { ...current, stage: event.status, delivery: event.delivery } });
+      return next({ delegation: { ...current, stage: event.status, delivery: event.delivery, notice: event.status === "failed" ? "DELIVERY_UNCONFIRMED" : "REPLY_PENDING" } });
     }
     case "orchestrator.answer": {
       const current = base.delegation;
@@ -333,7 +373,7 @@ export function reduceCompanion(state: CompanionState, event: CompanionEvent): C
       if (!current || !answers(current.delivery, event.delivery) || !validId(event.reportId) || base.reports.has(event.reportId)) return next({});
       return next({
         reports: new Set(base.reports).add(event.reportId),
-        delegation: { ...current, stage: "answered", answer: { reportId: event.reportId, status: event.status, text: bounded(event.text) } },
+        delegation: { ...current, stage: "answered", notice: null, answer: { reportId: event.reportId, status: event.status, text: bounded(event.text) } },
       });
     }
     case "error":

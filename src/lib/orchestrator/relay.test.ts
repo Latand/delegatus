@@ -236,23 +236,20 @@ for (const engine of ["claude", "codex"] as const) test(`voice confirmation reac
   realAdmission();
   const { CompanionStorage } = await import("@/lib/voiceCompanion/storage");
   const { CompanionAdmission } = await import("@/lib/voiceCompanion/admission");
-  const { orchestratorSeatFor } = await import("./seats");
+  const { companionDeliveryPaths } = await import("@/lib/voiceCompanion/deliveryPaths");
   let loseReply = true;
   const paths = {
-    recipient: () => ({ project: "voice-project", conversationId: recipient.id, seatEpoch: orchestratorSeatFor("voice-project").active!.seatEpoch, engine }),
-    send: async (binding: { sessionId: string; proposalId: string; delivery: { clientMessageId: string; recipient: { conversationId: string } }; text: string }) => {
-      const response = await orchestratorPOST(request(undefined, { project: "voice-project", conversationId: binding.delivery.recipient.conversationId,
-        clientMessageId: binding.delivery.clientMessageId, text: binding.text, voiceDelegatus: { sessionId: binding.sessionId, proposalId: binding.proposalId } }, { "sec-fetch-site": "same-origin" }));
-      const body = await response.json();
-      if (!response.ok) throw new Error(body.code);
+    recipient: companionDeliveryPaths.recipient,
+    receipt: companionDeliveryPaths.receipt,
+    send: async (binding: Parameters<typeof companionDeliveryPaths.send>[0]) => {
+      const result = await companionDeliveryPaths.send(binding);
       if (loseReply) { loseReply = false; throw new Error("fixture lost response"); }
-      return { status: "queued" as const, operationId: body.operationId as string };
+      return result;
     },
     reports: () => [],
   };
   const admission = new CompanionAdmission(new CompanionStorage(), paths);
-  const session = admission.create({ project: "voice-project", locale: "en" });
-  admission.input(session.id, { itemId: "source", text: "Ask the orchestrator to review the plan.", final: true });
+  const session = admission.create({ project: "voice-project", locale: "en", authority: "live-model" });
   const proposal = admission.propose(session.id, "call", "source", "Review the plan")!;
   const confirm = { type: "confirmation" as const, proposalId: proposal.proposalId, decision: "send" as const, via: "tap" as const };
   await admission.confirm(session.id, confirm);
@@ -263,6 +260,11 @@ for (const engine of ["claude", "codex"] as const) test(`voice confirmation reac
   expect(delivered).toHaveLength(1);
   expect(Object.values(registry.readOnlySnapshot().heldDeliveries)[0].command.origin).toEqual({ kind: "operator", channel: "voice-delegatus" });
   expect(reopened.session(session.id).proposals[proposal.proposalId].status).toBe("queued");
+  const held = Object.values(registry.readOnlySnapshot().heldDeliveries)[0];
+  registry.recordDeliveryOutcome(held.id, "delivered", null, "delivered");
+  await reopened.pollReceipts(session.id);
+  expect(reopened.session(session.id).proposals[proposal.proposalId].status).toBe("delivered");
+  expect(delivered).toHaveLength(1);
   expect((await orchestratorPOST(request(undefined, { project: "voice-project", conversationId: recipient.id, clientMessageId: "forged", text: "forged",
     voiceDelegatus: { sessionId: session.id, proposalId: proposal.proposalId } }, { "sec-fetch-site": "same-origin" }))).status).toBe(409);
 });

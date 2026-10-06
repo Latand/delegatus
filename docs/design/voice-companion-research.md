@@ -30,54 +30,204 @@ exposes voice, with no numeric speed parameter; pacing belongs in the Live instr
 The shared adapter mode `official-realtime` remains the contract's existing name.
 The older API discussion below is the dated research snapshot.
 
-Completion constraint discovered before writing the adapter: the official
-[input transcript contract](https://github.com/openai/openai-python/blob/main/src/openai/types/live/input_transcript_delta_event.py)
-explicitly has no complete turns or transcript-done event. Its fragment offsets
-and a delegation offset do not prove a completed operator request. Delivery must
-remain closed until the application establishes that completion; provider arrival
-order or silence alone cannot confer delegation authority.
+## Operator decision 2026-10-06: input completion
+
+Operator's answer, seat chat, verbatim (Ukrainian):
+
+> в сенсі, там ж дуплекс взагалі, ні? хай воно буде включено. глянь як це вже зроблено зараз тут в композері де такий значок живої розмови.
+
+GPT-Live `gpt-live-1` is the confirmed API choice. The conversation stays
+hands-free and full duplex, including delegation. There is no per-phrase
+end-input control, separate transcription pass or transcription charge.
+The model raises a proposal with its composed request text; the card shows that
+full text and the operator's Send tap authorizes delivery. Input fragments are
+best-effort context and record material. Missing or partial fragments never
+block a proposal. An explicit recent refusal can withdraw it.
+
+The next amendment corrects the instruction to reuse composer implementation.
+The old code was read for cases; the companion implementation imports none of it.
+
+## Operator amendment 2026-10-06, second
+
+Verbatim relayed amendment:
+
+> Orchestrator, second amendment from the operator (2026-10-06, ~12:35 Kyiv, seat chat, voice transcript). It CORRECTS point 2 of the decision answer you received at the start of this attempt and adds three requirements. Apply it in this stage, and record it verbatim in docs/design/voice-companion-research.md (section "Operator amendment 2026-10-06, second") and in the PR body, because later stages read those.
+>
+> His words, verbatim (Russian, as transcribed):
+> "А мне кажется, что есть смысл, чтобы он... Ведение текста, перебивание, обработку событий. Заново, потому что мы писали тот код давно и не факт, что он полностью правильный. Также то, что ты говоришь про кнопки завершения, это тоже неправильно. Кнопка завершения вообще-то быть должна, но при этом ещё нужно добавить тогда ещё инструмент, и вообще, чтобы можно было эти инструменты расширять. Инструмент по завершению разговора, то есть если я скажу агенту «завершить», он должен сам уметь себя завершить. Также... То, что нету... Типа нету завершения моего этого, то вот по паузе или как оно там делает, то вот эти сообщения, наверное, и нужно тогда отделять. Была какая-то такая же штука, но он как-то отделял, мне кажется, или нет. Или как-то это просто подумать, может быть, как склеивать в отдельные сообщения, вот. Но это можно продумать дизайн. Правильный. И вроде бы уже даже продумывал."
+>
+> What it means for the build (the reading is the orchestrator's; where his words and this reading differ, his words win):
+>
+> 1. WRITE THE LIVE HANDLING FRESH. Do NOT reuse the composer voice's code for transcript handling, barge-in and event handling (src/lib/realtime/codexRealtimeClient.ts, src/lib/runtime/codexRealtimeTranscript.ts and neighbours). It was written long ago and he does not trust it to be right. Write the companion's event handling, interruption and transcript reduction new, against the official GPT-Live documentation you verified today, with tests on the documented event shapes through your fake provider. You may read the old code to learn which cases exist; treat it as a list of cases to cover, never as a source to copy or import. Leave the composer voice itself untouched.
+>
+> 2. ENDING THE CONVERSATION. There is a visible control that ends the voice conversation (hang up), always reachable while a session is open. In addition the voice model gets a tool that ends the conversation: when the operator says to finish ("завершить", "закончим", "end the call" and the like), the model calls it and the session closes cleanly by itself, with usage settled and the companion returning to its idle shape. Let the model say a short closing line first if the API allows the tool call after speech; never cut the operator off mid-sentence on a false trigger, so the instructions tie the tool to an explicit request to end. (This is about ending the whole conversation. There is still no per-phrase "I finished speaking" button; the conversation stays hands-free duplex.)
+>
+> 3. TOOLS ARE EXTENSIBLE. The voice model's tools come from one registry: each tool is a declared entry (name, description for the model, parameter schema, server-side handler, and a class such as read-only board / proposal / session control), and adding a tool is adding an entry, with the allowlist and the project fence applied by the registry rather than per tool. The six read-only board tools, the delegation proposal and the new end-conversation tool are all entries in it. Document in the research note how to add one.
+>
+> 4. SEGMENTING THE OPERATOR'S SPEECH INTO MESSAGES. Since the API gives no "operator finished" event, design how his fragments become separate messages in the strip: where one message ends and the next begins (pause length, the model starting an answer, a tool call, an interruption), and how fragments that belong together are glued, so the record reads as distinct utterances. He believes this was already thought through once: before designing, look for it in docs/design/voice-companion-research.md, the prototype on the base branch (its bubble splitting rules) and the old transcript reducer, and search prior conversations with search_transcripts (for example "voice transcript segmentation", "склеивать реплики", "bubble split pause"). Reuse a design you find if it holds up; otherwise write the rule and its reasons in the research note. This segmentation is for display and the record; delegation authority stays as decided: the model's proposal, the card with the full text, and his tap on Send.
+>
+> Everything else stands: GPT-Live gpt-live-1, delegation enabled, read-only board tools, unhurried speech, key kept server-side, monthly cap, no paid call and no real key in tests. The interface stage after you will need: the end control's hook, the session-ended-by-tool event, and the segmented operator messages as normalized events; name them in the handoff section.
+
+### Implemented Live handling and display segmentation
+
+The [Live transcript contract](https://github.com/openai/openai-python/blob/main/src/openai/types/live/input_transcript_delta_event.py)
+provides fragments and timeline intervals, with no item or completed-turn event.
+The [delegation event](https://github.com/openai/openai-python/blob/main/src/openai/types/live/delegation_created_event.py)
+contains metadata; with Responses delegation the composed request arrives in the
+finished function item's `arguments`. Only `response.output_item.done` executes
+a registry entry. Streamed arguments and arguments-done events execute nothing.
+Streams are joined by outer `delegation_id` and their own response identity;
+usage is recorded even when delegation correlation is absent.
+
+The prototype's `splitSpeech` already cuts long display text at sentence or
+clause boundaries. The old transcript reducer handles native item identities and
+speaker-local streams, which Live does not supply. Searches for "voice transcript
+segmentation", "склеивать реплики" and "bubble split pause" found the current
+amendment and prototype requirements, with no settled Live segmentation rule.
+The companion therefore has a fresh `LiveTranscript` reducer:
+
+- Keep separate operator and companion streams. Append exact fragments in
+  delivery order, preserving spaces and repeated words. Whole snapshots repair
+  a consumer that missed an event.
+- A gap of at least 1,500 ms between the next fragment's `start_ms` and the
+  previous fragment's `end_ms` starts another display message. A gap in packet
+  arrival alone creates no boundary. The threshold keeps short pauses in one
+  thought together and separates a subsequent thought.
+- The first fragment of a new companion segment seals preceding operator
+  input. A delegation's `offset_ms` does the same. Input that overlaps that
+  timeline position remains open, so duplex overlap does not split every phrase.
+- Later fragments whose intervals fit a sealed segment repair that segment.
+  New operator speech after a sealed segment starts a new operator message and
+  cuts local playback presentation. An interruption leaves the generated text
+  and the measured played duration in the record.
+- Bound segments at 4,000 characters and retained history at 64 segments. Closing
+  the session seals the remaining display segments. `final` on a snapshot means
+  that display boundary; it carries no consent or proof of completed speech.
+
+WebRTC carries audio; the server sideband owns tools and accounting. Browser
+playback uses an analyser over the received media stream, gated by actual audio
+playback and muting. Provider transcript timing never drives the mouth. Local
+microphone detection drops current output on barge-in; input mute keeps output
+available. Speech captions and measured audio segments have no provider-supplied
+word alignment; their association is best effort and never proves which words
+were heard. Explicit interrupt also asks Live to yield without canceling
+already confirmed work.
+
+### Registry extension
+
+`src/lib/voiceCompanion/tools.ts` declares the six board reads, the delegation
+proposal and `end_conversation`. Each entry owns its name, model description,
+strict parameter schema, class and server handler. Both the provider definitions
+and execution allowlist derive from those entries. Add one entry there to add a
+tool, then test its behavior through `runCompanionTool`; no second allowlist or
+provider switch is needed. The registry validates all arguments, verifies the
+session is open, and binds its canonical project before any handler runs.
+Record-specific board reads also verify the selected record belongs to that
+project. Never add a generic MCP dispatcher or another write path to this registry.
+
+`end_conversation` requires an explicit request to finish the whole call in both
+live and backend instructions. Quoted words, conditions and finishing work are
+insufficient. The prompt asks for a short goodbye before calling when possible.
+Live exposes no played-speech-completed event, so the server promises clean
+finalization and never claims that a closing line was heard. The tool returns its
+real result, then the server requests `session.close`, drains `session.closed`
+and settles usage. The browser's explicit `stop()` remains the hangup control.
+
+### Accounting and recovery
+
+Rates verified 2026-10-06: [Live](https://developers.openai.com/api/docs/models/gpt-live-1)
+$0.05/minute, billed per second; [Luna](https://developers.openai.com/api/docs/models/gpt-6-luna)
+$0.10/M input, $0.01/M cached input, $0.50/M output, with the documented large
+input premium. The configuration pins standard service tier, 512 output tokens,
+no reasoning effort and no hosted paid tools. Every backend response is accounted
+separately by response ID, including failed/incomplete and uncorrelated responses.
+Voice duration is cumulative, with the documented 15-second WebRTC initialization
+minimum credited against the running total. Duplicate or reordered totals never
+reduce recorded use or count it twice. No extra transcription is requested.
+
+A session reserves $0.27 for its first five minutes of voice and close drain, plus
+$0.20 per backend response, initially two responses. One prepaid response remains
+as headroom while each subsequent response is observed. Failure to reserve the
+next allowance starts closure and prevents further tool execution or continuation.
+Observed cost is visible during the call; unused reservations release only after
+confirmed finalization, including backend finals received after `session.closed`.
+A bounded drain retains the reservation if a final receipt never arrives.
+Voice renews in five-minute reservation windows while
+there is room under the cap. Cap reductions, UTC month rollover and a missing
+browser heartbeat close the session. Provider billing
+can continue during finalization; final accounting retains actual usage even if
+it exceeds the estimate. A transport loss retains the full reservation and marks
+usage incomplete instead of claiming a zero charge. Cap values below the initial
+$0.67 reservation refuse a real session. The demo remains free.
+
+Mint request IDs bind the project, locale and SDP digest. Retry recovers the same
+mint while it is owned; a restart never silently mints another paid session.
+The explicit server hangup path closes an orphan and retains incomplete usage.
+Confirmed deliveries keep their original send key and recipient across media
+closure, restart and receipt recovery. The existing relay supplies the voice
+channel provenance for Claude and Codex. Terminal receipt observation settles a
+queue; only a report with the original directive key, canonical project and
+frozen manager identity answers that request. Unrelated reports leave it pending.
+Correlated reports are emitted to the card and appended to Live for speech while
+the voice session is open. After hangup, confirmed work keeps a read-only observer
+until a terminal report or failed receipt arrives; it opens no media or paid
+session. Unmount disposes that observer. A subsequent start retires the old
+session's presentation; its durable delivery and reports remain in server storage.
 
 ### Server stage handoff
 
-This draft contains the settings and owner-only key routes, UTC monthly usage
-reservations, the explicit server read allowlist over existing board paths,
-completed-input admission, durable voice relay provenance through Claude and
-Codex, correlated report replay, and the candidate GPT-Live configuration with
-calm speech instructions. It incorporates the prototype's placement and rise
-fixes from its moved base. No provider call or real credential access was used.
+Backend scope D/E/F/G is implemented; the next stage owns the production settings
+form, desktop mount, final compact look and rendered measurements. The moved
+prototype base was merged, including its placement and motion repairs. Composer
+voice and the installed Codex CLI were left untouched. No paid call or real key
+was used; all provider tests use synthetic credentials and a local documented-event
+fake with isolated state, HOME and TMPDIR and a closed Viewer control port.
 
-The Live session minting, media adapter, documented-event fake provider and
-provider usage settlement remain unfinished pending the input-completion
-decision. The configuration is currently unmounted. Terminal queue receipts
-must also be observed by that integration; a queued admission alone establishes
-neither completed delivery nor a reply. This stage supplies no new rendered
-evidence; the next visual stage owns the final look and its measurements.
+Typed interfaces for the visual stage:
 
-The completion options are an explicit end-input gesture plus separately
-completed transcription (recommended), disabling Live delegation until a
-completion contract exists, or an operator-approved silence heuristic. The first
-option adds a UI control and transcription charges to the spend accounting.
-It preserves ordinary hands-free Live conversation and gives the server a
-completed input to inspect before offering delegation.
+- `useVoiceCompanionSettings(open)` exposes off-by-default enable/backend/cap,
+  key availability and environment precedence, month/usage/reservations and
+  incomplete finalization, `refresh`, `update` and write-only `saveKey`.
+  Clear the settings form's key input after success. Mounting starts no call.
+- Construct one stable `OfficialVoiceCompanionAdapter` from
+  `src/lib/voiceCompanion/liveAdapter.ts` and pass it to
+  `useVoiceCompanion(adapter)`. The existing `createSimulatedCompanion` implements
+  the same contract for the demo choice. `start({ project, locale })` starts only
+  on operator action; `command` handles mute, interruption and tap-only
+  confirmation; awaited `stop()` is the always-reachable hangup control.
+  `refresh()` re-reads receipt/report events without opening media; pending
+  confirmed deliveries also refresh automatically after hangup. The hook disposes
+  the read-only observer on unmount.
+- `CompanionState.closure` exposes `{ reason, incomplete }`;
+  `session.closed` with `reason: "tool"` is the session-ended-by-tool event.
+  Return to the idle tile after it. Preserve the end control during connection
+  startup and while the session is open; ending never requires an input-final
+  gesture. Adapter unmount releases microphone, peer and transport ownership.
+- `transcript.snapshot` carries `speaker`, stable display `itemId`, accumulated
+  `text`, display `final`, and provider `startMs`/`endMs`; `state.lines` supplies
+  the segmented operator messages. Continue splitting long text into the
+  prototype's clause-based bubbles. Playback events alone drive `state.mouth`.
+- `state.calls` exposes all eight real tool lifecycles. `state.delegation`
+  supplies the full proposal/recipient, delivery, correlated answer and
+  `notice` (`REPLY_PENDING` or `DELIVERY_UNCONFIRMED`). Render those with
+  `companionErrorMessage(code, locale)`, which includes English and Ukrainian.
+  `state.deliveryCards` retains each confirmed request and its own correlated
+  answer while a newer proposal is shown; concurrent replies never replace the
+  newest proposal card.
 
-The next visual stage can consume these typed hooks:
+Verification for this backend stage: 363 tests passed across 21 exact test files,
+each in an isolated process with temporary state, HOME and TMPDIR and the Viewer
+control endpoint on a closed port. Coverage includes the production route and
+relay seams, both engines' durable provenance, replay/restart, correlated and
+concurrent reports, admission refusals, key permissions/environment precedence,
+cap renewal, cumulative usage and reordered finals, registry fencing, microphone
+permission races, ICE cancellation, played RMS and interruption. TypeScript,
+ESLint and whitespace checks passed. Provider traffic was replaced by the local
+fake or injected synthetic HTTP/WebSocket transports. Visual evidence belongs
+to the following interface stage.
 
-- `useVoiceCompanionSettings(open)` exposes settings, key availability and
-  environment precedence, usage/reservations, busy/error state, `refresh`,
-  `update` and write-only `saveKey`. The settings form clears its key input after
-  a successful save. Mounting the hook opens no voice session.
-- `useVoiceCompanion(adapter)` exposes the shared `CompanionState`, explicit
-  `start({ project, locale })`, typed `command` and awaited `stop`. It subscribes
-  to normalized events and releases adapter ownership on unmount. It already
-  accepts the demo simulator. The official adapter is pending the decision above.
-
-Focused isolated checks cover key permissions/no echo/env precedence, cap
-reservations/restart/month rollover, malformed state, gate refusals and input
-ordering, tap-only confirmation, seat rotation, response-loss retry through both
-engines, project succession, report correlation under concurrent messages, read
-allowlist/project fences/output bounds at the persistence/liveness/transcript
-seams, normalized receipt recovery and hook ownership. Publication checks are
-recorded in the draft PR; this text claims no live voice or final UI acceptance.
+The historical research and simulated prototype record below remains dated;
+these operator amendments and the implemented handoff govern the integration.
 
 ## Verdict and scope
 

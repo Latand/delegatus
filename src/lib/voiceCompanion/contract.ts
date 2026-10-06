@@ -3,7 +3,7 @@
  * docs/design/voice-companion-research.md §6).
  *
  * These are normalized application events. The simulator emits them from a
- * script; a future official-realtime adapter derives them from provider,
+ * script; the official-realtime adapter derives them from provider,
  * playback and delivery/report events. The companion consumes one reducer
  * over this stream and has no branch for either source.
  *
@@ -25,6 +25,7 @@ export type Recipient = {
 };
 
 export type Proposal = {
+  authority?: "live-model";
   proposalId: Id;
   callId: Id;
   sourceItemId: Id;
@@ -45,11 +46,13 @@ export type CompanionMode = "simulated" | "official-realtime";
 
 export type Payload =
   | { type: "session.ready"; mode: CompanionMode }
-  | { type: "session.closed"; reason: "operator" | "transport" | "error" }
+  | { type: "session.closed"; reason: "operator" | "tool" | "cap" | "transport" | "error"; incomplete?: boolean }
   | { type: "input.speech.started"; itemId: Id }
   | { type: "input.speech.stopped"; itemId: Id }
   | { type: "transcript.delta"; speaker: "operator" | "companion"; itemId: Id; responseId?: Id; delta: string }
   | { type: "transcript.final"; speaker: "operator" | "companion"; itemId: Id; responseId?: Id; text: string }
+  /** Whole display segment; final marks a display boundary, never consent. */
+  | { type: "transcript.snapshot"; speaker: "operator" | "companion"; itemId: Id; text: string; final: boolean; startMs?: number; endMs?: number }
   | { type: "response.started"; responseId: Id; itemId: Id }
   | { type: "response.generated"; responseId: Id; status: "completed" | "cancelled" | "failed" }
   | { type: "playback.started"; responseId: Id; itemId: Id }
@@ -98,6 +101,10 @@ export interface VoiceCompanionAdapter {
   command(command: CompanionCommand): Promise<void>;
   /** drains ownership cleanup; idempotent */
   close(): Promise<void>;
+  /** Optional read-only delivery observation, including after media hangup. */
+  refresh?(): Promise<void>;
+  /** Unmount also releases delivery observation. */
+  dispose?(): Promise<void>;
 }
 
 /** The presentation channel a confirmed voice delegation carries into the

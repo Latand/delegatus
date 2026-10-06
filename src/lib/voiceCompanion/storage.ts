@@ -25,10 +25,16 @@ export interface StoredProposal {
   state: "pending" | "cancelled" | "admitted";
   delivery?: Delivery;
   text?: string;
-  status?: "delivered" | "queued" | "unknown";
+  status?: "delivered" | "queued" | "unknown" | "failed";
   reports: string[];
 }
 export interface StoredSession {
+  authority?: "live-model";
+  providerId?: string;
+  mintRequestId?: string;
+  mintDigest?: string;
+  answerSdp?: string;
+  usage?: { seconds: number; responses: Record<string, { usd: number | null; complete: boolean }> };
   id: string;
   project: string;
   locale: Locale;
@@ -40,7 +46,7 @@ export interface StoredSession {
   events: CompanionEvent[];
   seq: number;
 }
-interface Charge { month: string; usd: number; reserved: boolean; incomplete: boolean }
+interface Charge { month: string; usd: number; observedUsd?: number; reserved: boolean; incomplete: boolean }
 export interface CompanionDocument {
   version: 1;
   settings: Pick<CompanionSettings, "enabled" | "backend" | "monthlyCapUsd">;
@@ -58,11 +64,19 @@ function sessionValid(key: string, session: unknown): boolean {
     || !Number.isSafeInteger(session.generation) || (session.generation as number) < 1 || !Number.isFinite(session.createdAt)
     || !Number.isSafeInteger(session.seq) || (session.seq as number) < 0 || !Array.isArray(session.inputs)
     || !Array.isArray(session.events) || session.events.length > 512 || !record(session.proposals)) return false;
+  if (session.authority !== undefined && session.authority !== "live-model") return false;
+  if (session.providerId !== undefined && !identifier(session.providerId)) return false;
+  if (session.mintRequestId !== undefined && !identifier(session.mintRequestId)) return false;
+  if (session.mintDigest !== undefined && (typeof session.mintDigest !== "string" || !/^[a-f0-9]{64}$/.test(session.mintDigest))) return false;
+  if (session.answerSdp !== undefined && (typeof session.answerSdp !== "string" || session.answerSdp.length > 96_000)) return false;
+  if (session.usage !== undefined && (!record(session.usage) || typeof session.usage.seconds !== "number" || !Number.isFinite(session.usage.seconds)
+    || session.usage.seconds < 0 || !record(session.usage.responses) || Object.values(session.usage.responses).some(row => !record(row)
+      || typeof row.complete !== "boolean" || (row.usd !== null && (typeof row.usd !== "number" || !Number.isFinite(row.usd) || row.usd < 0))))) return false;
   if (session.inputs.some(input => !record(input) || !identifier(input.itemId) || typeof input.text !== "string" || typeof input.final !== "boolean")) return false;
   if (session.events.some(event => !record(event) || event.sessionId !== key || event.version !== 1 || !identifier(event.eventId)
     || !identifier(event.type) || !Number.isSafeInteger(event.seq) || !Number.isSafeInteger(event.generation) || !Number.isFinite(event.atMs))) return false;
   return Object.entries(session.proposals).every(([id, held]) => {
-    if (!record(held) || !record(held.proposal) || held.proposal.proposalId !== id || !identifier(id)
+    if (!record(held) || !record(held.proposal) || (held.proposal.authority !== undefined && held.proposal.authority !== "live-model") || held.proposal.proposalId !== id || !identifier(id)
       || !identifier(held.proposal.callId) || !identifier(held.proposal.sourceItemId) || typeof held.proposal.instruction !== "string"
       || !recipientValid(held.proposal.recipient) || canonicalProject((held.proposal.recipient as { project: string }).project) !== canonicalProject(session.project as string)
       || typeof held.sourceText !== "string" || !Number.isFinite(held.expiresAt) || !["pending", "cancelled", "admitted"].includes(held.state as string)
@@ -71,7 +85,7 @@ function sessionValid(key: string, session: unknown): boolean {
     return record(held.delivery) && held.delivery.proposalId === id && held.delivery.callId === held.proposal.callId
       && identifier(held.delivery.clientMessageId) && (held.delivery.operationId === null || identifier(held.delivery.operationId))
       && recipientValid(held.delivery.recipient) && JSON.stringify(held.delivery.recipient) === JSON.stringify(held.proposal.recipient)
-      && typeof held.text === "string" && (held.status === undefined || ["delivered", "queued", "unknown"].includes(held.status as string));
+      && typeof held.text === "string" && (held.status === undefined || ["delivered", "queued", "unknown", "failed"].includes(held.status as string));
   });
 }
 
@@ -100,7 +114,8 @@ export class CompanionStorage {
         || typeof value.settings.enabled !== "boolean" || !["demo", "official-realtime"].includes(value.settings.backend)
         || !Number.isFinite(value.settings.monthlyCapUsd) || value.settings.monthlyCapUsd < 0
         || Object.values(value.charges).some(charge => !charge || !Number.isFinite(charge.usd) || charge.usd < 0
-          || !/^\d{4}-\d{2}$/.test(charge.month) || typeof charge.reserved !== "boolean" || typeof charge.incomplete !== "boolean")
+          || !/^\d{4}-\d{2}$/.test(charge.month) || typeof charge.reserved !== "boolean" || typeof charge.incomplete !== "boolean"
+          || (charge.observedUsd !== undefined && (!Number.isFinite(charge.observedUsd) || charge.observedUsd < 0 || charge.observedUsd > charge.usd)))
         || Object.entries(value.sessions).some(([key, session]) => !sessionValid(key, session))) throw new Error("invalid state");
       return value;
     } catch (error) {
@@ -123,8 +138,8 @@ export class CompanionStorage {
     const month = new Date(this.now()).toISOString().slice(0, 7);
     const charges = Object.values(document.charges).filter(charge => charge.month === month);
     return { ...document.settings, keySource: this.keySource(), keyEnvironment: "OPENAI_API_KEY", month,
-      usageUsd: charges.filter(charge => !charge.reserved).reduce((sum, charge) => sum + charge.usd, 0),
-      reservedUsd: charges.filter(charge => charge.reserved).reduce((sum, charge) => sum + charge.usd, 0),
+      usageUsd: charges.reduce((sum, charge) => sum + (charge.reserved ? charge.observedUsd ?? 0 : charge.usd), 0),
+      reservedUsd: charges.filter(charge => charge.reserved).reduce((sum, charge) => sum + charge.usd - (charge.observedUsd ?? 0), 0),
       incomplete: charges.some(charge => charge.incomplete) };
   }
   updateSettings(update: Partial<Pick<CompanionSettings, "enabled" | "backend" | "monthlyCapUsd">>): CompanionSettings {
@@ -164,6 +179,19 @@ export class CompanionStorage {
       document.charges[key] = { month, usd, reserved: true, incomplete: false };
     });
   }
+  /** Extend a live reservation before accepting more provider work. */
+  extend(key: string, usd: number): void {
+    if (!Number.isFinite(usd) || usd < 0) throw new Error("INVALID_USAGE");
+    this.change(document => {
+      const charge = document.charges[key];
+      if (!charge?.reserved) throw new Error("INVALID_USAGE");
+      const month = new Date(this.now()).toISOString().slice(0, 7);
+      if (charge.month !== month) throw new Error("CAP_REACHED");
+      const spent = Object.values(document.charges).filter(row => row.month === month).reduce((sum, row) => sum + row.usd, 0);
+      if (spent + usd > document.settings.monthlyCapUsd) throw new Error("CAP_REACHED");
+      charge.usd += usd;
+    });
+  }
   settle(key: string, usd: number | null): void {
     if (usd !== null && (!Number.isFinite(usd) || usd < 0)) throw new Error("INVALID_USAGE");
     this.change(document => {
@@ -171,7 +199,16 @@ export class CompanionStorage {
       if (!charge?.reserved) return;
       charge.reserved = false;
       charge.incomplete = usd === null;
-      if (usd !== null) charge.usd = Math.max(0, usd);
+      if (usd !== null) charge.usd = Math.max(0, usd, charge.observedUsd ?? 0);
+    });
+  }
+  observe(key: string, usd: number): void {
+    if (!Number.isFinite(usd) || usd < 0) throw new Error("INVALID_USAGE");
+    this.change(document => {
+      const charge = document.charges[key];
+      if (!charge?.reserved) return;
+      charge.observedUsd = Math.max(charge.observedUsd ?? 0, usd);
+      charge.usd = Math.max(charge.usd, charge.observedUsd);
     });
   }
 }

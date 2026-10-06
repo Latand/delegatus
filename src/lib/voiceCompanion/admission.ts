@@ -3,6 +3,7 @@ import type { BridgeReportV1 } from "@/lib/bridge/types";
 import { canonicalProject } from "@/lib/projects/aliases";
 import type { CompanionCommand, CompanionEvent, Delivery, Locale, Payload, Proposal, Recipient } from "./contract";
 import { admitDelegationProposal, type OperatorInput } from "./gate";
+import { liveProposalRefusal } from "./liveGate";
 import { CompanionStorage, type StoredProposal, type StoredSession } from "./storage";
 
 export interface CompanionDeliveryPaths {
@@ -10,6 +11,7 @@ export interface CompanionDeliveryPaths {
   /** Existing orchestrator send path. It owns durable receipt idempotency. */
   send(binding: { sessionId: string; proposalId: string; delivery: Delivery; text: string }): Promise<{ status: "delivered" | "queued" | "unknown"; operationId: string | null }>;
   reports(project: string): BridgeReportV1[];
+  receipt?(delivery: Delivery): Promise<"delivered" | "failed" | "pending">;
 }
 const sameRecipient = (left: Recipient | null, right: Recipient) => !!left && canonicalProject(left.project) === canonicalProject(right.project)
   && left.conversationId === right.conversationId && left.seatEpoch === right.seatEpoch && left.engine === right.engine;
@@ -46,14 +48,16 @@ export function admittedVoiceBinding(input: { sessionId: string; proposalId: str
     && binding.text === input.text ? binding : null;
 }
 
-/** The server authority seam; provider fragments and model arguments grant
- * no authority. Only a completed input and a tap can consume a proposal. */
+/** The server authority seam. Live may raise a proposal without a completed
+ * transcript; delivery always consumes the operator's tap. Prototype sessions
+ * retain their completed-input policy for deterministic demo fixtures. */
 export class CompanionAdmission {
   private readonly sending = new Map<string, Promise<void>>();
   constructor(readonly storage: CompanionStorage, private readonly paths: CompanionDeliveryPaths, private readonly now = Date.now) {}
-  create(options: { project: string; locale: Locale }): StoredSession {
+  create(options: { project: string; locale: Locale; authority?: "live-model" }): StoredSession {
     const session: StoredSession = { id: randomUUID(), project: canonicalProject(options.project), locale: options.locale, generation: 1,
-      createdAt: this.now(), closed: false, inputs: [], proposals: {}, events: [], seq: 0 };
+      createdAt: this.now(), closed: false, inputs: [], proposals: {}, events: [], seq: 0,
+      ...(options.authority ? { authority: options.authority } : {}) };
     this.storage.change(document => {
       if (Object.values(document.sessions).filter(row => !row.closed).length >= 8) throw new Error("SESSION_LIMIT");
       document.sessions[session.id] = session;
@@ -70,8 +74,8 @@ export class CompanionAdmission {
   }
   events(id: string, after: number): CompanionEvent[] { return this.session(id).events.filter(event => event.seq > after); }
   /** Trusted transcript normalization only; the browser command API cannot
-   * call this or submit final text. Late finals preserve the input's position. */
-  input(id: string, input: OperatorInput): void {
+   * submit text. Live's finals mark display boundaries and grant no authority. */
+  input(id: string, input: OperatorInput, timing: { startMs?: number; endMs?: number } = {}): void {
     const cancelled = this.storage.change(document => {
       const session = document.sessions[id];
       if (!session || session.closed) throw new Error("SESSION_CLOSED");
@@ -81,13 +85,15 @@ export class CompanionAdmission {
       session.inputs = session.inputs.slice(-64);
       const removed: StoredProposal[] = [];
       for (const row of Object.values(session.proposals)) {
-        if (row.state === "pending" && !admitDelegationProposal({ ...row.proposal, inputs: session.inputs, frozenSourceText: row.sourceText }).admit) {
+        if (row.state === "pending" && (session.authority === "live-model" ? liveProposalRefusal(row.proposal.instruction, session.inputs) !== null
+          : !admitDelegationProposal({ ...row.proposal, inputs: session.inputs, frozenSourceText: row.sourceText }).admit)) {
           row.state = "cancelled"; removed.push(row);
         }
       }
       return removed;
     });
-    this.emit(id, input.final ? { type: "transcript.final", speaker: "operator", itemId: input.itemId, text: input.text }
+    this.emit(id, this.session(id).authority === "live-model" ? { type: "transcript.snapshot", speaker: "operator", itemId: input.itemId, text: input.text, final: input.final, ...timing }
+      : input.final ? { type: "transcript.final", speaker: "operator", itemId: input.itemId, text: input.text }
       : { type: "input.speech.started", itemId: input.itemId });
     for (const row of cancelled) this.emit(id, { type: "delegation.tool.result", callId: row.proposal.callId, proposalId: row.proposal.proposalId,
       result: { status: "cancelled", code: "source_changed" } });
@@ -100,13 +106,15 @@ export class CompanionAdmission {
     const proposal = this.storage.change(document => {
       const session = document.sessions[id];
       if (!session || session.closed) { refusal = "session_closed"; return null; }
-      const gate = admitDelegationProposal({ sourceItemId, instruction, inputs: session.inputs });
-      if (!gate.admit) { refusal = gate.reason; return null; }
+      const reason = session.authority === "live-model" ? liveProposalRefusal(instruction, session.inputs)
+        : (() => { const gate = admitDelegationProposal({ sourceItemId, instruction, inputs: session.inputs }); return gate.admit ? null : gate.reason; })();
+      if (reason) { refusal = reason; return null; }
       const recipient = this.paths.recipient(session.project);
       if (!recipient) { refusal = "no_orchestrator"; return null; }
       if (Object.values(session.proposals).some(row => row.state === "pending" && row.proposal.sourceItemId === sourceItemId)) { refusal = "duplicate_proposal"; return null; }
-      const proposal: Proposal = { proposalId: randomUUID(), callId, sourceItemId, instruction: instruction.trim(), recipient };
-      session.proposals[proposal.proposalId] = { proposal, sourceText: session.inputs.at(-1)!.text, expiresAt: this.now() + 120_000, state: "pending", reports: [] };
+      const proposal: Proposal = { proposalId: randomUUID(), callId, sourceItemId, instruction: instruction.trim(), recipient,
+        ...(session.authority ? { authority: session.authority } : {}) };
+      session.proposals[proposal.proposalId] = { proposal, sourceText: session.inputs.at(-1)?.text ?? "", expiresAt: this.now() + 120_000, state: "pending", reports: [] };
       return proposal;
     });
     this.emit(id, proposal ? { type: "delegation.confirmation.required", proposal }
@@ -124,8 +132,9 @@ export class CompanionAdmission {
       // original key and target; it cannot admit new work to the current seat.
       if (row.state === "admitted") return row;
       if (command.decision === "cancel") { row.state = "cancelled"; refusal = "operator_cancelled"; return null; }
-      const gate = admitDelegationProposal({ ...row.proposal, inputs: session.inputs, frozenSourceText: row.sourceText });
-      if (session.closed || this.now() > row.expiresAt || !gate.admit || !sameRecipient(this.paths.recipient(session.project), row.proposal.recipient)) {
+      const allowed = session.authority === "live-model" ? liveProposalRefusal(row.proposal.instruction, session.inputs) === null
+        : admitDelegationProposal({ ...row.proposal, inputs: session.inputs, frozenSourceText: row.sourceText }).admit;
+      if (session.closed || this.now() > row.expiresAt || !allowed || !sameRecipient(this.paths.recipient(session.project), row.proposal.recipient)) {
         row.state = "cancelled"; refusal = "proposal_changed"; return null;
       }
       row.state = "admitted";
@@ -149,6 +158,7 @@ export class CompanionAdmission {
     try { await promise; } finally { this.sending.delete(key); }
   }
   private async deliver(id: string, row: StoredProposal): Promise<void> {
+    if (row.status === "failed") return;
     const proposalId = row.proposal.proposalId;
     this.emit(id, { type: "delegation.confirmed", proposalId, via: "tap" });
     let settled = { status: row.status ?? "unknown", operationId: row.delivery!.operationId };
@@ -160,7 +170,7 @@ export class CompanionAdmission {
       const held = document.sessions[id].proposals[proposalId];
       // Another process may have recovered this receipt while the original
       // transport was still waiting. Durable evidence only moves forward.
-      const stronger = held.status === "delivered" || (held.status === "queued" && settled.status === "unknown");
+      const stronger = held.status === "delivered" || held.status === "failed" || (held.status === "queued" && settled.status === "unknown");
       const conflicting = held.delivery!.operationId !== null && settled.operationId !== null && held.delivery!.operationId !== settled.operationId;
       if (!stronger && !conflicting) {
         held.delivery!.operationId ??= settled.operationId;
@@ -168,8 +178,24 @@ export class CompanionAdmission {
       }
       return { delivery: held.delivery!, status: held.status ?? "unknown" };
     });
-    this.emit(id, { type: "delegation.tool.result", callId: row.proposal.callId, proposalId,
-      result: receipt });
+    if (receipt.status === "failed") this.emit(id, { type: "delegation.delivery.settled", delivery: receipt.delivery, status: "failed" });
+    else this.emit(id, { type: "delegation.tool.result", callId: row.proposal.callId, proposalId,
+      result: { status: receipt.status, delivery: receipt.delivery } });
+  }
+  async pollReceipts(id: string): Promise<void> {
+    if (!this.paths.receipt) return;
+    for (const row of Object.values(this.session(id).proposals)) {
+      if (!row.delivery?.operationId || row.status === "delivered" || row.status === "failed") continue;
+      const status = await this.paths.receipt(row.delivery);
+      if (status === "pending") continue;
+      this.storage.change(document => {
+        const session = document.sessions[id];
+        const held = session.proposals[row.proposal.proposalId];
+        if (held.status === "delivered" || held.status === "failed") return;
+        held.status = status;
+        appendEvent(session, { type: "delegation.delivery.settled", delivery: held.delivery!, status }, this.now());
+      });
+    }
   }
   pollReplies(id: string): CompanionEvent[] {
     const session = this.session(id);

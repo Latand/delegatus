@@ -9,6 +9,7 @@ export interface VoiceCompanionHook {
   start(options: { locale: Locale; project: string }): Promise<void>;
   command(command: CompanionCommand): Promise<void>;
   stop(): Promise<void>;
+  refresh(): Promise<void>;
 }
 
 interface Snapshot { adapter: VoiceCompanionAdapter | null; sessionId: string | null; state: CompanionState; retired: ReadonlySet<string>; awaitingReady: boolean }
@@ -34,7 +35,7 @@ export function useVoiceCompanion(adapter: VoiceCompanionAdapter): VoiceCompanio
   useEffect(() => {
     let active = true;
     const unsubscribe = adapter.subscribe(event => { if (active) dispatch({ type: "event", adapter, event }); });
-    return () => { active = false; unsubscribe(); void adapter.close(); };
+    return () => { active = false; unsubscribe(); void (adapter.dispose?.() ?? adapter.close()); };
   }, [adapter]);
   const start = useCallback(async (options: { locale: Locale; project: string }) => {
     dispatch({ type: "start", adapter });
@@ -43,5 +44,6 @@ export function useVoiceCompanion(adapter: VoiceCompanionAdapter): VoiceCompanio
   }, [adapter]);
   const command = useCallback((value: CompanionCommand) => adapter.command(value), [adapter]);
   const stop = useCallback(() => adapter.close(), [adapter]);
-  return { state: snapshot.adapter === adapter ? snapshot.state : INITIAL_COMPANION_STATE, start, command, stop };
+  const refresh = useCallback(() => adapter.refresh?.() ?? Promise.resolve(), [adapter]);
+  return { state: snapshot.adapter === adapter ? snapshot.state : INITIAL_COMPANION_STATE, start, command, stop, refresh };
 }

@@ -11,6 +11,56 @@ const { CompanionStorage } = await import("./storage");
 const { CompanionAdmission } = await import("./admission");
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
+test("Live proposals need no completed transcript, remain pending during duplex speech, and require a tap", async () => {
+  let sends = 0;
+  const admission = new CompanionAdmission(new CompanionStorage(), {
+    recipient: () => ({ project: "duplex", conversationId: "conversation_duplex", seatEpoch: 1, engine: "claude" }),
+    send: async () => { sends++; return { status: "queued", operationId: "duplex-operation" }; }, reports: () => [],
+  });
+  const session = admission.create({ project: "duplex", locale: "en", authority: "live-model" });
+  const proposal = admission.propose(session.id, "live-call", "live-delegation", "Review the plan")!;
+  expect(proposal).toMatchObject({ authority: "live-model", instruction: "Review the plan" });
+  admission.input(session.id, { itemId: "fragment", text: "and please", final: false });
+  expect(admission.session(session.id).proposals[proposal.proposalId].state).toBe("pending");
+  await admission.confirm(session.id, { type: "confirmation", proposalId: proposal.proposalId, decision: "send", via: "speech" });
+  expect(sends).toBe(0);
+  await admission.confirm(session.id, { type: "confirmation", proposalId: proposal.proposalId, decision: "send", via: "tap" });
+  expect(sends).toBe(1);
+});
+
+test("an explicit refusal in the recent Live fragments withdraws a pending proposal", async () => {
+  const admission = new CompanionAdmission(new CompanionStorage(), {
+    recipient: () => ({ project: "refusal", conversationId: "conversation_refusal", seatEpoch: 1, engine: "codex" }),
+    send: async () => { throw new Error("must never send"); }, reports: () => [],
+  });
+  const session = admission.create({ project: "refusal", locale: "uk", authority: "live-model" });
+  const proposal = admission.propose(session.id, "refusal-call", "delegation", "Перевір план")!;
+  admission.input(session.id, { itemId: "refusal-fragment", text: "ні, не надсилай", final: false });
+  await admission.confirm(session.id, { type: "confirmation", proposalId: proposal.proposalId, decision: "send", via: "tap" });
+  expect(admission.session(session.id).proposals[proposal.proposalId].state).toBe("cancelled");
+  expect(admission.propose(session.id, "other-call", "other-delegation", "Перевір план")).toBeNull();
+});
+
+test("terminal queue receipts settle once after restart, with no second send", async () => {
+  let sends = 0;
+  let status: "pending" | "delivered" | "failed" = "pending";
+  const paths = { recipient: () => ({ project: "terminal", conversationId: "conversation_terminal", seatEpoch: 1, engine: "codex" as const }),
+    reports: () => [], send: async () => { sends++; return { status: "queued" as const, operationId: "terminal-operation" }; }, receipt: async () => status };
+  const admission = new CompanionAdmission(new CompanionStorage(), paths);
+  const session = admission.create({ project: "terminal", locale: "en", authority: "live-model" });
+  const proposal = admission.propose(session.id, "terminal-call", "terminal-delegation", "Review it")!;
+  await admission.confirm(session.id, { type: "confirmation", proposalId: proposal.proposalId, via: "tap", decision: "send" });
+  admission.retire(session.id);
+  const reopened = new CompanionAdmission(new CompanionStorage(), paths);
+  await reopened.pollReceipts(session.id);
+  expect(reopened.session(session.id).proposals[proposal.proposalId].status).toBe("queued");
+  status = "delivered";
+  await reopened.pollReceipts(session.id);
+  await reopened.pollReceipts(session.id);
+  expect(sends).toBe(1);
+  expect(reopened.events(session.id, 0).filter(event => event.type === "delegation.delivery.settled")).toHaveLength(1);
+});
+
 test("the production admission seam refuses whole-input retractions and spoken approval", async () => {
   const storage = new CompanionStorage();
   let sends = 0;

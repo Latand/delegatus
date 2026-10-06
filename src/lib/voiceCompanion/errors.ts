@@ -5,6 +5,8 @@ const messages = {
   KEY_FROM_ENV: ["The key comes from OPENAI_API_KEY. Change it in the environment.", "Ключ задано через OPENAI_API_KEY. Змініть його в оточенні."],
   CAP_REACHED: ["The monthly voice spend cap has been reached.", "Досягнуто місячної межі витрат на голос."],
   MICROPHONE_REFUSED: ["Microphone access was refused. Allow it to start voice.", "Доступ до мікрофона відхилено. Дозвольте його, щоб почати розмову."],
+  AUDIO_REFUSED: ["Allow audio playback in the browser to hear Delegatus.", "Дозвольте відтворення звуку в браузері, щоб чути Делегатуса."],
+  FINALIZATION_INCOMPLETE: ["The call ended without confirmed final usage. Its reserved cost is retained.", "Розмова завершилася без підтвердження підсумкових витрат. Зарезервовану суму збережено."],
   PROVIDER_ERROR: ["The voice provider could not continue. Try starting a new session.", "Голосовий сервіс не зміг продовжити. Спробуйте почати нову розмову."],
   no_orchestrator: ["This project has no designated orchestrator.", "У цьому проєкті немає призначеного оркестратора."],
   DELIVERY_UNCONFIRMED: ["Delivery is unconfirmed. Recover the original send before retrying.", "Доставку не підтверджено. Перевірте початкове надсилання перед повтором."],
