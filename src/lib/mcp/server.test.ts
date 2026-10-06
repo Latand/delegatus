@@ -1922,6 +1922,8 @@ describe("MCP tool service", () => {
         "lifecycle_events",
         "request_attention",
         "suggest_replies",
+        "publish_prototype_review",
+        "read_prototype_review",
         "dismiss_attention",
         "bridge_report",
         "bridge_directive",
@@ -1941,7 +1943,7 @@ describe("MCP tool service", () => {
         "telegram_bot_send_document",
         "telegram_bot_messages",
       ]);
-      const optionalReadKeys = new Set(["message_receipt", "list_conversations", "search_transcripts", "get_conversation", "conversation_deliverability", "conversation_messages", "get_pipeline", "board_snapshot", "list_flows", "get_flow", "list_pipelines", "list_tasks", "get_task", "deployment_status", "resources", "get_orchestrator", "account_limits"]);
+      const optionalReadKeys = new Set(["message_receipt", "list_conversations", "search_transcripts", "get_conversation", "conversation_deliverability", "conversation_messages", "get_pipeline", "board_snapshot", "list_flows", "get_flow", "list_pipelines", "list_tasks", "get_task", "deployment_status", "resources", "get_orchestrator", "account_limits", "read_prototype_review"]);
       for (const tool of listed.tools) {
         if (optionalReadKeys.has(tool.name)) expect(tool.inputSchema.required ?? []).not.toContain("clientRequestId");
         else expect(tool.inputSchema.required).toContain("clientRequestId");
