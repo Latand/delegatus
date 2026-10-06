@@ -133,12 +133,53 @@ def parse_time(value):
     return datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
+OBLIGATION_STATES = {"owed", "submitted", "delivered", "discharged", "failed"}
+
+
+def text(value):
+    return isinstance(value, str) and bool(value)
+
+
+def count(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def obligation_flaw(record):
+    """The first field that keeps a record from naming the conversation it cut,
+    or None. The fields are the ones the Viewer itself requires before it acts
+    on a record, with the stage and checkpoint shapes the inventory reports."""
+    if record.get("version") != 1:
+        return "version"
+    for field in ["conversationId", "hostKey", "path"]:
+        if not text(record.get(field)):
+            return field
+    if record.get("engine") not in ["claude", "codex"]:
+        return "engine"
+    if record.get("reason") not in ["viewer-release", "viewer-restart"]:
+        return "reason"
+    if record.get("state") not in OBLIGATION_STATES:
+        return "state"
+    if not (record.get("resolution") is None or isinstance(record["resolution"], str)):
+        return "resolution"
+    stage = record.get("stage")
+    if stage is not None and not (isinstance(stage, dict) and text(stage.get("pipelineId"))
+                                  and (stage.get("stageId") is None or text(stage["stageId"]))
+                                  and (stage.get("attempt") is None or count(stage["attempt"]))):
+        return "stage"
+    checkpoint = record.get("checkpoint")
+    tasks = checkpoint.get("backgroundTasks", []) if isinstance(checkpoint, dict) else None
+    if not (isinstance(tasks, list) and all(text(task) for task in tasks)):
+        return "checkpoint"
+    return None
+
+
 def interrupted_conversations(state, since, hosts=()):
     """The conversations whose turn this switch cut, as the Viewers recorded
     them: an incumbent at release, the booting successor at restart, and the
-    records it could not read. Each conversation names its pipeline stage when
-    it ran one; a stage the preflight protected names it from that capture when
-    the record does not. A state with no record directory recorded no cut."""
+    records it could not read or that are too incomplete to name a
+    conversation. Each conversation names its pipeline stage when it ran one;
+    a stage the preflight protected names it from that capture when the record
+    does not. A state with no record directory recorded no cut."""
     directory = pathlib.Path(state) / "interruption-obligations"
     records = {}
     unreadable = []
@@ -178,17 +219,20 @@ def interrupted_conversations(state, since, hosts=()):
         except (KeyError, TypeError, ValueError, AttributeError):
             unreadable.append(record["id"] + ":recordedAt")
             continue
-        conversation = record.get("conversationId")
+        flaw = obligation_flaw(record)
+        if flaw:
+            unreadable.append(record["id"] + ":" + flaw)
+            continue
+        conversation = record["conversationId"]
         stage = record.get("stage")
         host = protected.get(conversation)
         if not stage and host:
             stage = {"pipelineId": host.get("pipelineId"), "stageId": host.get("stageId"), "attempt": host.get("attempt")}
-        checkpoint = record.get("checkpoint") or {}
         listed.append({"conversationId": conversation, "recordedAt": record["recordedAt"],
-                       "reason": record.get("reason"), "state": record.get("state"),
+                       "reason": record["reason"], "state": record["state"],
                        "resolution": record.get("resolution"), "stage": stage or None,
-                       "backgroundTasks": checkpoint.get("backgroundTasks") or []})
-    return sorted(listed, key=lambda entry: (entry["recordedAt"], entry["conversationId"] or "")), unreadable
+                       "backgroundTasks": record["checkpoint"].get("backgroundTasks", [])})
+    return sorted(listed, key=lambda entry: (entry["recordedAt"], entry["conversationId"])), unreadable
 
 
 def write_json(destination, body):

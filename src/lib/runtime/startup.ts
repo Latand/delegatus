@@ -7,11 +7,10 @@ import { agentRegistry, resolveConversationAlias, structuredClaimIdentity, type 
 import { effectiveClaudePermissionMode } from "@/lib/agent/cli";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { activeOrchestratorSeats, type OrchestratorSeat } from "@/lib/orchestrator/seats";
-import { captureProcessIdentity, processIdentityMayOwn, processIdentityStatus } from "@/lib/processIdentity";
+import { captureProcessIdentity, processIdentityMayOwn, processIdentityStatus, sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { assertDarwinStructuredRuntime } from "@/lib/proc/darwinIdentity";
 import { readStableTailRecords } from "@/lib/scanner/activity";
 import { loadPipelinesForStartup, pipelineRegistryHealth, withPipelineStartupAdmission } from "@/lib/pipelines/store";
-import { BACKGROUND_TASK_WAIT_LIMIT_MS, pendingBackgroundTasks, readBackgroundTaskLedger } from "@/lib/pipelines/backgroundTasks";
 
 import {
   adoptClaudeRegistryHosts,
@@ -31,7 +30,7 @@ import {
   completeStructuredDeliveryQueueStartup,
   hasStructuredDeliveryController,
   hasStructuredDeliveryHost,
-  recordDemotionInterruption,
+  handOverHostForDemotion,
   releaseStructuredDeliveryHostsForDemotion,
   type DemotionInterruptionOptions,
 } from "./structuredDeliveryController";
@@ -40,7 +39,7 @@ import { enqueueStructuredMessage } from "./structuredMessageDelivery";
 import { INTERRUPTED_CODEX_CONTINUATION_TEXT, RECOVERY_NOTICE_ORIGIN } from "./recoveryNotices";
 import { delegatusOriginForRecipient } from "./agentMessageAuthor";
 import { claudeHostLaunchPaths, materializeStructuredHostAccess, recoverPendingStructuredSpawns, structuredHostAccessPolicy } from "./structuredSpawn";
-import { conversationTurnLiveness, readTranscriptEvidence, transcriptEvidenceFromRecords, type TranscriptEventKind, type TurnLivenessDependencies } from "./liveness";
+import { backgroundWorkAwaitedAtCut, conversationTurnLiveness, readTranscriptCutEvidence, readTranscriptEvidence, transcriptCutEvidenceFromRecords, transcriptEvidenceFromRecords, type TranscriptEventKind, type TurnLivenessDependencies } from "./liveness";
 import { markStructuredHostStartupProgress, type StructuredHostStartupPhase } from "./startupStatus";
 import { startupDiagnostic } from "../startupDiagnostics";
 import { launchServiceTier } from "./codexTurnProfile";
@@ -396,6 +395,9 @@ function recordOrchestratorRestartObligations(
  * The capture runs once per boot, before any claim can replace the process, and
  * reads the transcript only: the registry row may still name the old process,
  * alive for a few seconds more, which says nothing about whether it survives.
+ * A transcript whose tail cannot be read whole proves no turn, so it records
+ * no cut: a record is what authorizes a stage's fresh attempt and what the
+ * deploy verdict lists, and neither may rest on a guess.
  */
 interface RestartCutTarget {
   conversationId: ViewerConversationId;
@@ -430,6 +432,7 @@ async function restartCutTargets(
     ...unresolved.map((obligation) => registry.canonicalConversationId(obligation.conversationId)),
   ]);
   const targets: RestartCutTarget[] = [];
+  const self = captureProcessIdentity(process.pid);
   for (const conversation of Object.values(snapshot.conversations)) {
     const generation = conversation.generations.at(-1);
     if ((conversation.engine !== "claude" && conversation.engine !== "codex") || !generation || conversation.supersededBy) continue;
@@ -438,30 +441,22 @@ async function restartCutTargets(
     const hostKey = sessionKeyId({ engine: conversation.engine, sessionId: generation.id });
     const entry = snapshot.entries[hostKey];
     /* Only a structured row a previous Viewer hosted: a pane belongs to its
-       terminal, and a row this process already claimed is its own work. An
-       idle row is a Claude turn that ended, cut only when background work
-       outlived it. */
+       terminal, and a row this process already claimed is its own work. The
+       whole identity is compared: a predecessor whose pid this process was
+       given is still a predecessor. An idle row is a Claude turn that ended,
+       cut only when background work outlived it. */
     if (!entry?.structuredHost || entry.host !== null) continue;
     const live = entry.status === "live";
     if (!live && !(entry.status === "idle" && conversation.engine === "claude")) continue;
-    if (entry.claimOwner && structuredClaimIdentity(entry.claimOwner)?.pid === process.pid) continue;
-    let evidence;
-    try {
-      evidence = await readTranscriptEvidence(conversation.engine, generation.path);
-    } catch {
-      continue;
-    }
+    const claimant = entry.claimOwner ? structuredClaimIdentity(entry.claimOwner) : null;
+    if (claimant && sameRecordedProcessIdentity(self, claimant)) continue;
+    const evidence = await readTranscriptCutEvidence(conversation.engine, generation.path).catch(() => null);
+    if (!evidence?.verified) continue;
     const stage = interruptionStageOf(snapshot.memberships, conversationId);
-    const at = evidence.lastEventAt;
+    const at = evidence.lastWork?.at ?? null;
     /* The same window bounds every adoption a turn claim alone asks for. */
     if (at !== null && now - at > startupTurnMaxAgeMs()) continue;
-    let backgroundTasks: string[] = [];
-    if (at !== null && evidence.turn === "terminal" && conversation.engine === "claude" && now - at <= BACKGROUND_TASK_WAIT_LIMIT_MS) {
-      const ledger = await readBackgroundTaskLedger(generation.path).catch(() => null);
-      backgroundTasks = ledger ? pendingBackgroundTasks(ledger, now).map((task) => task.kind === "wakeup"
-        ? "a scheduled wakeup"
-        : `${task.kind === "monitor" ? "monitor" : "background task"} ${task.id}`) : [];
-    }
+    const backgroundTasks = await backgroundWorkAwaitedAtCut(conversation.engine, generation.path, evidence, now);
     const inFlight = live && (at === null
       ? stage !== null && evidence.turn !== "terminal"
       : evidence.turn === "busy" || (stage !== null && evidence.turn === "unknown"));
@@ -473,7 +468,7 @@ async function restartCutTargets(
       hostKey,
       path: generation.path,
       claimEpoch: entry.claimEpoch,
-      lastEvent: { kind: evidence.kind, at },
+      lastEvent: { kind: evidence.lastWork?.kind ?? null, at },
       backgroundTasks,
       stage,
       answeredBy: stage ? STAGE_CUT_RESOLUTION
@@ -485,10 +480,11 @@ async function restartCutTargets(
   return targets;
 }
 
-/** Records each cut once. The boundary is the cut itself, the transcript's
-    last event, so a later boot that finds the same silent turn lands on the
-    record this boot wrote, and one the agent resumed and was cut again in gets
-    its own. Every engine's continuation is keyed by that record. */
+/** Records each cut once. The boundary is the cut itself, the newest record
+    the agent's work wrote, so a later boot that finds the same silent turn
+    lands on the record this boot wrote whatever the CLI appended on its way
+    down, and one the agent resumed and was cut again in gets its own. Every
+    engine's continuation is keyed by that record. */
 function recordRestartCuts(
   store: InterruptionObligationStore,
   targets: readonly RestartCutTarget[],
@@ -794,23 +790,23 @@ function assertEligibleHostsResolved(
  *
  * The generic Codex nudge below is keyed by the claim, which every boot and
  * every generation renews, so it would answer such a cut once more on each of
- * them. A record names its cut by the transcript's last event; a transcript
- * that moved since is a new turn the record does not name. A pipeline stage's
- * cuts are its controller's whatever the transcript did.
+ * them. A record names its cut by the newest record of the agent's work; a
+ * transcript whose work moved since is a new turn the record does not name.
+ * A pipeline stage's cuts are its controller's whatever the transcript did.
  */
 function cutsAnsweredByRecord(
   registry: AgentRegistry,
   obligations: readonly InterruptionObligation[],
-  lastEventByHost: ReadonlyMap<string, number | null>,
+  lastWorkByHost: ReadonlyMap<string, number | null>,
   recordedCuts: ReadonlyMap<string, number | null> | undefined,
 ): Set<string> {
   const memberships = registry.readOnlySnapshot().memberships;
   const answered = new Set<string>();
   for (const [hostKey, at] of recordedCuts ?? []) {
-    if (!lastEventByHost.has(hostKey) || lastEventByHost.get(hostKey) === at) answered.add(hostKey);
+    if (!lastWorkByHost.has(hostKey) || lastWorkByHost.get(hostKey) === at) answered.add(hostKey);
   }
   for (const obligation of obligations) {
-    const at = lastEventByHost.get(obligation.hostKey) ?? null;
+    const at = lastWorkByHost.get(obligation.hostKey) ?? null;
     if ((at !== null && obligation.checkpoint.lastEventAt === at)
       || interruptionStageOf(memberships, registry.canonicalConversationId(obligation.conversationId))) {
       answered.add(obligation.hostKey);
@@ -964,6 +960,7 @@ async function refreshStructuredTranscriptState(
   assertActive: () => void = () => {},
   lastEventByHost: Map<string, number | null> = new Map(),
   hostKeys: ReadonlySet<string> | null = null,
+  lastWorkByHost: Map<string, number | null> = new Map(),
 ): Promise<ReadonlySet<string>> {
   const snapshot = registry.readOnlySnapshot();
   const observedAt = new Date().toISOString();
@@ -989,6 +986,9 @@ async function refreshStructuredTranscriptState(
         const tail = await readStableTailRecords(generation.path);
         lastEventByHost.set(hostKey, tail.integrity === "complete"
           ? transcriptEvidenceFromRecords(tail.records, conversation.engine, null).lastEventAt
+          : null);
+        lastWorkByHost.set(hostKey, tail.integrity === "complete" && conversation.engine !== "copilot"
+          ? transcriptCutEvidenceFromRecords(tail.records, conversation.engine).lastWork?.at ?? null
           : null);
         if (tail.integrity !== "complete") {
           unreadable.add(hostKey);
@@ -1488,9 +1488,10 @@ async function adoptStructuredHostsPass(
     totalHosts: null,
   });
   const lastEventByHost = new Map<string, number | null>();
+  const lastWorkByHost = new Map<string, number | null>();
   const unreadableTranscripts = await (dependencies.refreshTranscriptState && !resumeDeferred
     ? dependencies.refreshTranscriptState(registry)
-    : refreshStructuredTranscriptState(registry, assertActive, lastEventByHost, resumeDeferred))
+    : refreshStructuredTranscriptState(registry, assertActive, lastEventByHost, resumeDeferred, lastWorkByHost))
     ?? new Set<string>();
   // Read under the existing lease, then release before any host or transcript I/O.
   // Each writer claim below re-resolves pipeline evidence in its own short hold.
@@ -1517,7 +1518,7 @@ async function adoptStructuredHostsPass(
       interruptions.list().filter(interruptionObligationUnresolved),
     );
     const interruptionHostKeys = new Set(unresolvedInterruptions.map((obligation) => obligation.hostKey));
-    const answeredCutHostKeys = cutsAnsweredByRecord(registry, interruptions.list(), lastEventByHost,
+    const answeredCutHostKeys = cutsAnsweredByRecord(registry, interruptions.list(), lastWorkByHost,
       startupPasses.get(registry)?.recordedCuts);
     let interruptedHostKeys: ReadonlySet<string> = interruptionHostKeys;
     const retainedRecoveryHostKeys = () => new Set([...orchestratorHostKeys, ...interruptedHostKeys]);
@@ -2006,9 +2007,9 @@ export function structuredStartupHosts(): readonly AdoptedStructuredHost[] {
  * these retained handle sets.
  *
  * Such a host can be running a turn — its engine outlived the previous Viewer
- * — so the release records the continuation it owes first, exactly as the
- * published path does (#1835). A host whose record fails is left running and
- * the failure is reported. */
+ * — or waiting on background work, so the release records the continuation
+ * it owes first, exactly as the published path does (#1835). A host whose
+ * record fails is left running and the failure is reported. */
 export async function releaseUnpublishedStartupHostsForDemotion(
   options: DemotionInterruptionOptions = {},
 ): Promise<void> {
@@ -2018,14 +2019,8 @@ export async function releaseUnpublishedStartupHostsForDemotion(
   const released = new Set<string>();
   const outcomes = await Promise.allSettled(unpublished.map(async ({ key, host }) => {
     const state = await host.health();
-    if ((state.status !== "active" && state.status !== "attention")
-      || state.pid === null || state.processStartIdentity === null) return;
-    const identity = captureProcessIdentity(state.pid, undefined, state.processStartIdentity);
-    if (!registry.markStructuredHostHandoff(key, identity)) {
-      throw new Error("unpublished startup host changed before release handover");
-    }
     try {
-      await recordDemotionInterruption(registry, key, state, options);
+      if (!await handOverHostForDemotion(registry, key, state, options)) return;
     } catch (error) {
       console.error("[viewer release] interrupted turn could not be recorded; leaving its unpublished host running", {
         hostKey: sessionKeyId(key), error,

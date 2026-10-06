@@ -3,6 +3,8 @@ import os from "node:os";
 
 import { turnStateFromRecords } from "@/lib/accounts/migration/turnState";
 import type { AgentRegistry, ProcessIdentity, RegistryFile } from "@/lib/agent/registry";
+import { BACKGROUND_TASK_WAIT_LIMIT_MS, pendingBackgroundTaskNames } from "@/lib/pipelines/backgroundTasks";
+import { lastAgentWorkIndex } from "@/lib/pipelines/durableEvidence";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { procBackend } from "@/lib/proc";
 import { readStableTailRecords } from "@/lib/scanner/activity";
@@ -355,6 +357,64 @@ export async function readTranscriptEvidence(
   /* An unparseable tail supplies no turn evidence; retain mtime for diagnostics. */
   if (tail.integrity !== "complete") return { lastEventAt: null, kind: null, lastWriteAt, turn: "unknown" };
   return transcriptEvidenceFromRecords(tail.records, engine, lastWriteAt);
+}
+
+/**
+ * What a transcript proves about a turn a release or a restart may have cut.
+ *
+ * A cut is named by the newest record the agent's own work wrote. The records
+ * a CLI writes as it exits or resumes (Codex token counts and turn aborts, a
+ * shutdown interrupt, a replayed meta prompt, a synthetic no-response) land
+ * after the cut and move the transcript's newest event under a turn nobody
+ * resumed, so a cut named by that event would be recorded again on every boot.
+ */
+export interface TranscriptCutEvidence {
+  /** False when the artifact exists and its tail could not be read whole:
+      corrupt, truncated mid-record, or growing under the read. Nothing may be
+      claimed from it. A file that does not exist yet is verified and empty. */
+  verified: boolean;
+  turn: TranscriptLivenessEvidence["turn"];
+  /** The newest record of the agent's work, or null when it wrote none. */
+  lastWork: { at: number; kind: TranscriptEventKind | null } | null;
+}
+
+export function transcriptCutEvidenceFromRecords(
+  records: RecordLike[],
+  engine: "claude" | "codex",
+): TranscriptCutEvidence {
+  const end = lastAgentWorkIndex(records, engine === "codex");
+  const work = end < 0 ? null : transcriptEvidenceFromRecords(records.slice(0, end + 1), engine, null);
+  return {
+    verified: true,
+    turn: transcriptEvidenceFromRecords(records, engine, null).turn,
+    lastWork: work?.lastEventAt != null ? { at: work.lastEventAt, kind: work.kind } : null,
+  };
+}
+
+export async function readTranscriptCutEvidence(
+  engine: "claude" | "codex",
+  transcriptPath: string,
+  read: typeof readStableTailRecords = readStableTailRecords,
+): Promise<TranscriptCutEvidence> {
+  const unverified: TranscriptCutEvidence = { verified: false, turn: "unknown", lastWork: null };
+  if (!transcriptPath) return unverified;
+  if (!fs.existsSync(transcriptPath)) return { ...unverified, verified: true };
+  const tail = await read(transcriptPath);
+  return tail.integrity === "complete" ? transcriptCutEvidenceFromRecords(tail.records, engine) : unverified;
+}
+
+/** The harness background work a Claude turn that has ended still waits on,
+    named for its continuation. The work is a child of the engine process, so
+    whatever ends that process ends the work and its completion notice. */
+export async function backgroundWorkAwaitedAtCut(
+  engine: "claude" | "codex",
+  transcriptPath: string,
+  evidence: TranscriptCutEvidence,
+  now: number,
+): Promise<string[]> {
+  if (engine !== "claude" || evidence.turn !== "terminal" || !evidence.lastWork
+    || now - evidence.lastWork.at > BACKGROUND_TASK_WAIT_LIMIT_MS) return [];
+  return pendingBackgroundTaskNames(transcriptPath, now);
 }
 
 /**

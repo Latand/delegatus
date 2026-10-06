@@ -356,9 +356,11 @@ export function interruptionObligationStore(
   return {
     list,
     record(input) {
-      const covering = list().find((existing) => coversSameCut(existing, input));
-      if (covering) return { obligation: covering, created: false };
       const id = interruptionObligationId(input);
+      /* The id is the cut: a record already under it is this cut's, in
+         whatever state it has reached, and is never written over. */
+      const covering = list().find((existing) => existing.id === id || coversSameCut(existing, input));
+      if (covering) return { obligation: covering, created: false };
       const obligation: InterruptionObligation = {
         version: 1,
         id,

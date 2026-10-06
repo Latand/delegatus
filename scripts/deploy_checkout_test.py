@@ -296,6 +296,27 @@ class InterruptedConversations(unittest.TestCase):
                                       "interruption-obligations.pending.jsonl:2",
                                       "interruption-continuation-undated:recordedAt"])
 
+    def test_a_record_too_incomplete_to_name_its_conversation_is_unreadable(self):
+        self.write({"id": "interruption-continuation-bare", "recordedAt": "2026-10-06T23:00:00Z"})
+        for name, change in [("anonymous", {"conversationId": None}), ("stageless", {"stage": {"stageId": "build"}}),
+                             ("attempt", {"stage": {"pipelineId": "lane", "stageId": "build", "attempt": "1"}}),
+                             ("tasks", {"checkpoint": {"backgroundTasks": "background task b1"}}),
+                             ("checkpoint", {"checkpoint": None}), ("state", {"state": "pending"}),
+                             ("reason", {"reason": None})]:
+            self.write(obligation(name, "conversation_" + name, "2026-10-06T23:00:01.000Z", **change))
+        self.write(obligation("stale", "conversation_stale", "2026-10-06T21:00:00.000Z", conversationId=None))
+        self.write(obligation("whole", "conversation_whole", "2026-10-06T23:00:02.000Z",
+                              stage={"pipelineId": "lane", "stageId": None, "attempt": None}))
+        pending = self.state / "interruption-obligations.pending.jsonl"
+        pending.write_text(json.dumps({"id": "interruption-continuation-journal", "recordedAt": "2026-10-06T23:00:03Z"}) + "\n")
+        listed, unreadable = deploy.interrupted_conversations(self.state, "2026-10-06T22:00:00+00:00")
+        self.assertEqual([(entry["conversationId"], entry["stage"]) for entry in listed],
+                         [("conversation_whole", {"pipelineId": "lane", "stageId": None, "attempt": None})])
+        self.assertEqual(sorted(unreadable), sorted(
+            "interruption-continuation-" + flaw for flaw in [
+                "bare:version", "anonymous:conversationId", "stageless:stage", "attempt:stage", "tasks:checkpoint",
+                "checkpoint:checkpoint", "state:state", "reason:reason", "journal:version"]))
+
     def test_an_unreadable_record_directory_raises_rather_than_listing_nothing(self):
         self.directory.rmdir()
         self.directory.write_text("not a directory")
@@ -451,6 +472,16 @@ class CheckoutIntegration(unittest.TestCase):
         self.assertTrue(all(result["serving"][r]["since"] for r in ["launcher", "viewer", "runtimeHost"]))
         self.assertEqual(sum("restart" in c for c in self.commands), 1)
         self.assertTrue(all("stop" not in c and "kill" not in c for c in self.commands))
+
+    def test_an_incomplete_interruption_record_keeps_a_healthy_switch_from_passing(self):
+        directory = self.state / "interruption-obligations"
+        directory.mkdir()
+        deploy.write_json(directory / "interruption-continuation-broken.json",
+                          {"id": "interruption-continuation-broken", "recordedAt": "2999-01-01T00:00:00Z"})
+        result = deploy.run_switch(self.adapter, TARGET, samples=3, interval=2, timeout=5)
+        self.assertEqual(result["verdict"], "needs_decision")
+        self.assertEqual(result["interrupted"], [])
+        self.assertEqual(result["interruptedUnreadable"], ["interruption-continuation-broken:version"])
 
     def assert_stage_verdict(self, attempts, verdict, outcome, attempt):
         self.attempts = attempts

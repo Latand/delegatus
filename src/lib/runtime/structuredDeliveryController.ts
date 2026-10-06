@@ -30,7 +30,7 @@ import { projectEngineHostEvent } from "./engineHostEvents";
 import { observeCodexSubagentEvent } from "./codexSubagentDetection";
 import { PermissionRequestGuard } from "./permissionGuard";
 import { permissionDenialRecorder, resolvePermissionAttendance } from "./permissionDenials";
-import { conversationTurnLiveness, readTranscriptEvidence, type TurnLivenessDependencies } from "./liveness";
+import { backgroundWorkAwaitedAtCut, conversationTurnLiveness, readTranscriptCutEvidence, type TurnLivenessDependencies } from "./liveness";
 import {
   interruptionObligationDirectory,
   interruptionObligationStore,
@@ -1949,15 +1949,16 @@ async function orchestratorSeatFor(
  * Writes the continuation this release owes a host whose turn is in flight
  * (#1835), before anything releases it. The host's own active turn is the
  * evidence; the registry's turn word only backs it up, so a host that finished
- * its turn before the release is owed nothing. Every demotion path that
- * releases a host calls this first: the published hosts below, and the ones
- * startup adopted but had not yet published.
+ * its turn before the release is owed nothing unless `backgroundTasks` names
+ * work that turn left running. Every demotion path that releases a host
+ * reaches this through `handOverHostForDemotion`.
  */
 export async function recordDemotionInterruption(
   registry: AgentRegistry,
   key: SessionKey,
   current: HostState,
   options: DemotionInterruptionOptions,
+  backgroundTasks: readonly string[] = [],
 ): Promise<void> {
   const snapshot = registry.readOnlySnapshot();
   const hostKey = sessionKeyId(key);
@@ -1969,10 +1970,10 @@ export async function recordDemotionInterruption(
      a Copilot turn cut the same way is resumed by the operator (slice 1). */
   if (conversation.engine === "copilot") return;
   const turnRef = current.activeTurnRef ?? entry.structuredHost?.activeTurnRef ?? null;
-  if (turnRef === null && conversation.turn.state !== "busy") return;
+  if (turnRef === null && conversation.turn.state !== "busy" && backgroundTasks.length === 0) return;
   const conversationId = registry.canonicalConversationId(conversation.id);
   const generation = conversation.generations.at(-1)!;
-  const transcript = await readTranscriptEvidence(conversation.engine, generation.path).catch(() => null);
+  const transcript = await readTranscriptCutEvidence(conversation.engine, generation.path).catch(() => null);
   let seat: { project: string; seatEpoch: number } | null = null;
   try {
     seat = await orchestratorSeatFor(registry, conversationId, options.seats);
@@ -1990,7 +1991,11 @@ export async function recordDemotionInterruption(
     turnRef,
     boundary: options.boundary ?? "viewer-release",
     reason: "viewer-release",
-    checkpoint: { lastEventKind: transcript?.kind ?? null, lastEventAt: transcript?.lastEventAt ?? null },
+    checkpoint: {
+      lastEventKind: transcript?.lastWork?.kind ?? null,
+      lastEventAt: transcript?.lastWork?.at ?? null,
+      ...(backgroundTasks.length > 0 ? { backgroundTasks: [...backgroundTasks] } : {}),
+    },
     seat,
     /* Still owed: the stage stays held until the successor boots and hands
        the cut to the stage's controller instead of continuing it. */
@@ -2003,6 +2008,44 @@ export async function recordDemotionInterruption(
   }
 }
 
+/** The harness background work an idle Claude host's ended turn still waits
+    on. Releasing the host ends that work with its process, and the completion
+    notice that would have woken the agent with it. */
+async function idleHostBackgroundWork(registry: AgentRegistry, key: SessionKey): Promise<string[]> {
+  if (key.engine !== "claude") return [];
+  const conversation = Object.values(registry.readOnlySnapshot().conversations).find((candidate) =>
+    candidate.engine === key.engine && candidate.generations.at(-1)?.id === key.sessionId);
+  const transcriptPath = conversation && !conversation.supersededBy ? conversation.generations.at(-1)!.path : null;
+  if (!transcriptPath) return [];
+  const evidence = await readTranscriptCutEvidence("claude", transcriptPath);
+  return evidence.verified ? backgroundWorkAwaitedAtCut("claude", transcriptPath, evidence, Date.now()) : [];
+}
+
+/**
+ * Hands one host over to the successor before its release, recording what the
+ * release cuts: a turn in flight, or the background work an idle Claude host
+ * was waiting on. False when the release cuts nothing, so the host is simply
+ * released. Throws when the host could not be marked or its record written;
+ * the caller then leaves it running.
+ */
+export async function handOverHostForDemotion(
+  registry: AgentRegistry,
+  key: SessionKey,
+  current: HostState,
+  options: DemotionInterruptionOptions,
+): Promise<boolean> {
+  if (current.pid === null || current.processStartIdentity === null) return false;
+  const inFlight = current.status === "active" || current.status === "attention";
+  const backgroundTasks = current.status === "idle" ? await idleHostBackgroundWork(registry, key) : [];
+  if (!inFlight && backgroundTasks.length === 0) return false;
+  if (!registry.markStructuredHostHandoff(
+    key,
+    captureProcessIdentity(current.pid, undefined, current.processStartIdentity),
+  )) throw new Error(`structured host ${sessionKeyId(key)} changed before Viewer demotion`);
+  await recordDemotionInterruption(registry, key, current, options, backgroundTasks);
+  return true;
+}
+
 /** Releases every engine host owned by this Viewer before release demotion.
  *
  * Structured engines run outside the Viewer container namespace, so exiting
@@ -2011,8 +2054,9 @@ export async function recordDemotionInterruption(
  * claim each durable row on its bounded startup retry. All releases begin in
  * one turn so several slow engine shutdowns consume one grace window.
  *
- * A host whose turn is in flight is cut by this release, so the continuation
- * it is owed is recorded first (#1835); the store retries the record and falls
+ * A host whose turn is in flight is cut by this release, and so is an idle
+ * Claude host still waiting on background work, so the continuation it is
+ * owed is recorded first (#1835); the store retries the record and falls
  * back to its pending journal. A host whose obligation still could not be
  * written anywhere is not released: cutting its turn would leave no trace that
  * a continuation is owed, so its engine keeps the turn and the failure is
@@ -2033,14 +2077,11 @@ export async function releaseStructuredDeliveryHostsForDemotion(
     const registry = unpublishedLaunchHosts.get(sessionKeyId(key))?.registry ?? state.activeRegistry;
     try {
       const current = await host.health();
-      if ((current.status !== "active" && current.status !== "attention")
-        || current.pid === null
-        || current.processStartIdentity === null) return;
-      if (!registry?.markStructuredHostHandoff(
-        key,
-        captureProcessIdentity(current.pid, undefined, current.processStartIdentity),
-      )) throw new Error(`structured host ${sessionKeyId(key)} changed before Viewer demotion`);
-      await recordDemotionInterruption(registry, key, current, options);
+      if (registry) await handOverHostForDemotion(registry, key, current, options);
+      else if ((current.status === "active" || current.status === "attention")
+        && current.pid !== null && current.processStartIdentity !== null) {
+        throw new Error(`structured host ${sessionKeyId(key)} changed before Viewer demotion`);
+      }
     } catch (error) {
       unrecorded.add(sessionKeyId(key));
       console.error("[viewer release] host could not be handed over with its interrupted turn recorded; leaving it running", {

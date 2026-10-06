@@ -478,7 +478,8 @@ export type PipelineStageAttempt = {
       `cause` is absent on records written before causes were told apart. */
   restartContext?: {
     previousAttempt: number;
-    transcriptPath: string;
+    /** Null when the attempt was cut before its transcript was discovered. */
+    transcriptPath: string | null;
     cause?: PipelineStageInterruptionCause;
     /** The interrupted attempt's newest message, bounded, for the replacement's first message. */
     lastReport?: string;

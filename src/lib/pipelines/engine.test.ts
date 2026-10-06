@@ -18036,6 +18036,85 @@ test("an open turn a restart cut is named a restart and its replacement, cut aga
   expect(parked.runs[0]!.attempts).toHaveLength(2);
 });
 
+/* The restart came before the first attempt's transcript was discovered: the
+   host is gone, no path resolves, and only the recorded cut names the cause. */
+test.each([
+  { case: "seen at once", waitedForHostDeath: false },
+  { case: "seen after a host-death wait began", waitedForHostDeath: true },
+] as const)("a first launch cut before its transcript was discovered spends the one restart attempt, $case", async ({ waitedForHostDeath }) => {
+  const h = harness();
+  const attempt = await restartCutStage(h, [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }]);
+  const first = loadPipelines()[0]!;
+  Object.assign(first.runs[0]!.attempts[0]!, { agentPath: null, sessionId: null });
+  savePipelines([first]);
+  const pathFor = h.ports.pathForConversation;
+  h.ports.pathForConversation = (id) => id === attempt.conversationId ? null : pathFor(id);
+  h.setConversationActive(false);
+  if (waitedForHostDeath) {
+    /* The engine ticked before the booting Viewer recorded the cut. */
+    await tickPipelines([], h.ports);
+    expect(loadPipelines()[0]!.stateDetail).toContain("stage host died without output");
+  }
+  const cuts = new Map([[attempt.conversationId!, h.ports.now()]]);
+  Object.assign(h.ports, { cuts, conversationRestartCut: (id: string) => cuts.has(id) ? { recordedAt: cuts.get(id)! } : null });
+  for (let tick = 0; tick < 3; tick += 1) {
+    h.advanceWallClock(60_000);
+    await tickPipelines([], h.ports);
+  }
+
+  const replaced = loadPipelines()[0]!;
+  expect(replaced.runs[0]!.attempts).toHaveLength(2);
+  expect(replaced.runs[0]!.attempts[0]).toMatchObject({ state: "failed", error: "interrupted by a Delegatus restart; replaced by a fresh stage attempt" });
+  expect(replaced.runs[0]!.attempts[1]!.restartContext).toEqual({ previousAttempt: 1, transcriptPath: null, cause: "restart" });
+  expect(replaced.runs[0]!.attempts[1]!.input).toBe(replaced.runs[0]!.attempts[0]!.input);
+  expect(h.spawnInputs).toHaveLength(2);
+  expect(h.spawnInputs[1]!.cwd).toBe(replaced.worktreeDir);
+  expect(h.spawnInputs[1]!.prompt).toContain("Build");
+  expect(h.spawnInputs[1]!.prompt).toContain("stage attempt 1 was interrupted by a Delegatus restart.");
+  expect(h.spawnInputs[1]!.prompt).toContain("it was cut before it wrote a transcript");
+  expect(h.spawnInputs[1]!.prompt).not.toContain("died without output");
+  expect(h.spawnInputs[1]!.prompt).not.toContain("null");
+
+  /* The replacement is cut by the next restart after some interim prose. */
+  const replacement = replaced.runs[0]!.attempts[1]!;
+  replacement.paneId = null;
+  savePipelines([replaced]);
+  cutByRestart(h, h.ports, replacement, h.ports.now(), "Interim: the build is half done.");
+  for (const boot of ["second-boot", "third-boot"]) {
+    h.advanceWallClock(5 * 60_000);
+    await tickPipelines([], { ...h.ports, restartRecoveryBootId: () => boot });
+    await tickPipelines([], { ...h.ports, restartRecoveryBootId: () => boot });
+  }
+
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.stateDetail).toBe(RESTART_CUT_AGAIN);
+  expect(parked.runs[0]!.attempts).toHaveLength(2);
+  expect(h.spawnInputs).toHaveLength(2);
+});
+
+test("a restart cut recorded after a host-death wait began replaces that relaunch with the one restart attempt", async () => {
+  const h = harness();
+  const attempt = await restartCutStage(h, [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null }]);
+  h.setConversationActive(false);
+  h.durableTurns.set(attempt.agentPath!, { turn: "busy", message: null, launchOnly: true });
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.stateDetail).toContain("stage host died without output");
+
+  const recordedAt = h.ports.now();
+  h.ports.conversationRestartCut = () => ({ recordedAt });
+  for (let tick = 0; tick < 3; tick += 1) {
+    h.advanceWallClock(60_000);
+    await tickPipelines([], h.ports);
+  }
+
+  const lane = loadPipelines()[0]!;
+  expect(lane.runs[0]!.attempts).toHaveLength(2);
+  expect(lane.runs[0]!.attempts[0]!.error).toBe("interrupted by a Delegatus restart; replaced by a fresh stage attempt");
+  expect(lane.runs[0]!.attempts[1]!.restartContext).toMatchObject({ previousAttempt: 1, cause: "restart" });
+  expect(h.spawnInputs[1]!.prompt).not.toContain("died without output");
+});
+
 test.each(["idle-to-working", "busy-to-terminal"] as const)("restart recovery drops stale evidence for %s before dispatch", async (race) => {
   const h = harness();
   await create(h.ports, [{ id: "build", kind: "run", engine: "codex", model: "gpt-5.6-sol", prompt: "Build", next: null }] as never);

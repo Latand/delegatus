@@ -274,14 +274,16 @@ function terminalProviderMessageFromRecords(
 
 const CODEX_BOOKKEEPING_TYPES = new Set(["token_count", "turn_aborted"]);
 
-function agentEventAt(records: RecordLike[], codex: boolean): number | null {
+/** Index of the newest dated record the agent's own work wrote, or -1. The
+    bookkeeping a CLI writes as it exits or resumes is passed over. */
+export function lastAgentWorkIndex(records: RecordLike[], codex: boolean): number {
   for (let index = records.length - 1; index >= 0; index -= 1) {
     const record = records[index]!;
     const at = Date.parse(String(record.timestamp ?? ""));
     if (!Number.isFinite(at)) continue;
     if (codex) {
       const type = stringValue(recordValue(record.payload)?.type);
-      if (type && !CODEX_BOOKKEEPING_TYPES.has(type)) return at;
+      if (type && !CODEX_BOOKKEEPING_TYPES.has(type)) return index;
       continue;
     }
     if (record.type !== "user" && record.type !== "assistant") continue;
@@ -290,9 +292,14 @@ function agentEventAt(records: RecordLike[], codex: boolean): number | null {
     const content = stringValue(message?.content) ?? claudeAssistantText(record);
     if (record.type === "user" && (record.interruptedByShutdown === true || "interruptedMessageId" in record
       || /^\s*\[Request interrupted by user(?: for tool use)?\]\s*$/.test(content))) continue;
-    return at;
+    return index;
   }
-  return null;
+  return -1;
+}
+
+function agentEventAt(records: RecordLike[], codex: boolean): number | null {
+  const index = lastAgentWorkIndex(records, codex);
+  return index < 0 ? null : Date.parse(String(records[index]!.timestamp));
 }
 
 /** Whether a Claude stage attempt ended on a provider failure the CLI gave up

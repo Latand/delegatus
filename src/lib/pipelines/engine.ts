@@ -4058,7 +4058,9 @@ async function replaceInterruptedStageAttempt(
   // Termination can take long enough for the old turn to finish or make new
   // progress. Preserve that evidence and let the normal settlement path read
   // it before changing the original attempt or reserving a replacement.
-  const latest = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath!, undefined, attempt.startedAt);
+  const latest = attempt.agentPath
+    ? await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, undefined, attempt.startedAt)
+    : null;
   /* The stop ended a live host. A CLI appends undated bookkeeping as it exits,
      and an undated newest record is dated by the file, so the transcript's
      newest record moves under a turn that stays open. What was decided before
@@ -4135,7 +4137,7 @@ function startReplacementAttempt(
   replacement.input = attempt.input;
   replacement.activatedBy = attempt.activatedBy ? { ...attempt.activatedBy } : null;
   const lastReport = cutAttemptReport(durable);
-  replacement.restartContext = { previousAttempt: attempt.n, transcriptPath: attempt.agentPath!, cause, ...(lastReport ? { lastReport } : {}) };
+  replacement.restartContext = { previousAttempt: attempt.n, transcriptPath: attempt.agentPath, cause, ...(lastReport ? { lastReport } : {}) };
   replacement.restartRecovery = { ...recovery, replacedAttempt: attempt.n };
   attempt.restartRecovery.replacementAttempt = replacement.n;
   setCursorState(pipeline, stage.id, "pending");
@@ -4166,6 +4168,10 @@ function restartCutOf(attempt: PipelineStageAttempt, durable: StageTurnEvidence 
   return (worked ?? 0) <= unixMs(cut.recordedAt);
 }
 
+function pendingHostDeathWait(attempt: PipelineStageAttempt): boolean {
+  return attempt.providerWait?.condition.kind === "host_death";
+}
+
 /**
  * A stage whose host a service restart took down is retried once.
  *
@@ -4181,6 +4187,10 @@ async function recoverRestartCutStage(
   pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
   durable: StageTurnEvidence | null | undefined, ports: PipelinePorts, persist: () => void,
 ): Promise<boolean> {
+  /* A host-death wait is the timer before a relaunch that has not happened.
+     The recorded restart names what ended the host, so its attempt takes
+     that relaunch's place. */
+  if (pendingHostDeathWait(attempt)) delete attempt.providerWait;
   const epoch = await ports.runtimeHostEpoch?.() ?? "unknown";
   const bootId = `${ports.restartRecoveryBootId?.() ?? PIPELINE_RECOVERY_BOOT_ID}:${epoch}`;
   return replaceInterruptedStageAttempt(pipeline, stage, attempt, ports, persist, bootId, durable?.lastRecordAt ?? null,
@@ -4645,7 +4655,7 @@ function restartStagePrompt(prompt: string, attempt: PipelineStageAttempt): stri
   const report = context.lastReport
     ? ` Its last message before it was cut said:\n\n> ${context.lastReport.replace(/\n/g, "\n> ")}\n\nIts changes remain in this worktree; check its status and keep the uncommitted work.`
     : "";
-  return `${prompt}\n\nThis is a fresh attempt because stage attempt ${context.previousAttempt} ${context.cause ? INTERRUPTION_WORDS[context.cause].handover : "was interrupted"}.${report} Continue the same stage input and use its transcript for reference: ${context.transcriptPath}.`;
+  return `${prompt}\n\nThis is a fresh attempt because stage attempt ${context.previousAttempt} ${context.cause ? INTERRUPTION_WORDS[context.cause].handover : "was interrupted"}.${report} Continue the same stage input${context.transcriptPath ? ` and use its transcript for reference: ${context.transcriptPath}` : "; it was cut before it wrote a transcript, so check the worktree for anything it left"}.`;
 }
 
 async function spawnRunStage(
@@ -5151,13 +5161,11 @@ async function tickRunStage(
   }
   if (!attempt.agentPath) {
     if ((structuredActive === false || paneActive === false) && !attempt.report) {
-      /* A restart replacement the next restart cut before it wrote anything
-         has spent its stage's one automatic attempt. */
-      if (attempt.restartContext?.cause === "restart" && restartCutOf(attempt, null, ports)) {
-        park(pipeline, RESTART_REPLACEMENT_CUT_AGAIN, attempt);
-        persist();
-        return;
-      }
+      /* A restart that cut the attempt before its transcript was found owns
+         it like any other cut: the one fresh attempt, or the park when this
+         attempt is that one. */
+      if (restartCutOf(attempt, null, ports)
+        && await recoverRestartCutStage(pipeline, stage, attempt, null, ports, persist)) return;
       await recoverProviderCut(pipeline, stage, attempt, { condition: { kind: "host_death", scope: null, resetLabel: null, label: "stage host died without output" },
         text: "stage host died without output", ts: unixMs(attempt.startedAt) + 1, resetsAt: null }, ports, persist);
       return;
@@ -5243,10 +5251,12 @@ async function tickRunStage(
   if (attempt.report && !reportTurnFinished(attempt, durable) && structuredActive !== false && !hostUnavailablePastGrace) return;
   /* A turn a service restart cut is the restart's: its one fresh attempt, or
      the park when it is that attempt, comes before every other recovery here.
-     A provider wait already under way keeps its own. */
-  const restartCut = !oomDeath && !heldForDeployCut && !attempt.report
-    && !providerRecoveryOwnsTurn(attempt, durable) && restartCutOf(attempt, durable, ports);
+     A provider wait already under way keeps its own, except the timer before
+     a host-death relaunch while the host is still gone: the restart is what
+     ended that host. */
   const hostGone = hostUnavailablePastGrace || structuredActive === false || paneActive === false || Boolean(unregisteredHostDeath);
+  const restartCut = !oomDeath && !heldForDeployCut && !attempt.report
+    && ((hostGone && pendingHostDeathWait(attempt)) || !providerRecoveryOwnsTurn(attempt, durable)) && restartCutOf(attempt, durable, ports);
   // OOM recovery owns the slot immediately after recorded reports.
   const terminalProviderMessage = durable?.turn === "terminal" ? durable.terminalProviderMessage : null;
   const notice = terminalProviderMessage && terminalProviderMessage.ts > unixMs(attempt.startedAt)

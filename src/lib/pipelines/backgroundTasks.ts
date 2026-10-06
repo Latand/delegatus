@@ -207,6 +207,16 @@ export function pendingBackgroundTasks(ledger: BackgroundTaskLedger, nowMs: numb
   return liveBackgroundTasks(heldBackgroundTasks(ledger), nowMs);
 }
 
+/** The work a transcript still holds at `nowMs`, each named for the message
+    that tells its agent the work went down with a restart. Empty when the
+    transcript cannot be read. */
+export async function pendingBackgroundTaskNames(transcriptPath: string, nowMs: number): Promise<string[]> {
+  const ledger = await readBackgroundTaskLedger(transcriptPath).catch(() => null);
+  return ledger ? pendingBackgroundTasks(ledger, nowMs).map((task) => task.kind === "wakeup"
+    ? "a scheduled wakeup"
+    : `${task.kind === "monitor" ? "monitor" : "background task"} ${task.id}`) : [];
+}
+
 /** One line naming the held tasks, for a state detail or a refusal. */
 export function describeBackgroundTasks(tasks: readonly RunningBackgroundTask[]): string {
   return tasks.map((task) => task.kind === "wakeup"

@@ -21,7 +21,9 @@ guarantees for the 1.x series.
   restart killed, gets one message saying so, so it re-checks what it was
   waiting for. The checkout deploy verdict lists the conversations its
   restart interrupted, with the pipeline stage when there is one; when those
-  records cannot be read, it says the list is unknown and does not pass.
+  records cannot be read or are incomplete, it says the list is unknown and
+  does not pass. A stage transcript that cannot be read whole is never taken
+  as proof of a cut.
 
 ## [1.10.0] — 2026-10-06
 
