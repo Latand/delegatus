@@ -314,6 +314,11 @@ Two consequences shape the rule:
    termination. `conversationRegistryHost` derives its process verdict from
    that same host projection, so readable transcripts and missing transcripts
    agree about ownership.
+   Corpus selection also retains bound headless PIDs whose identity is
+   unproven, using the same `headlessRoundProcess` verdict before filtering
+   the completed inventory. It follows conversation aliases when only a bound
+   id names the transcript, and keeps recovery bounded at 64 paths. A missing
+   PID or a proven dead or reused PID receives no process selection priority.
 
    A fallback transcript path resolves its canonical owner through the same
    registry generations, continuity paths and aliases as the liveness read.

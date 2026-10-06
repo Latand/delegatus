@@ -427,16 +427,6 @@ export function headlessReviewerProcess(
   return host ? host.state === "unknown" ? "unproven" : host.state : null;
 }
 
-/** Headless reviewer ownership is an actuation-grade claim. Unlike the shared
- * liveness helper, both start identities must be present and exactly equal. */
-function exactHeadlessIdentityAlive(
-  pid: number | null | undefined,
-  savedIdentity: string | null | undefined,
-  probe: LivenessProbe,
-): pid is number {
-  return headlessRoundProcess({ reviewerPid: pid, reviewerIdentity: savedIdentity }, probe) === "alive";
-}
-
 /**
  * What the process a headless round records says about itself (#2515), for a
  * bound or unbound round.
@@ -689,16 +679,19 @@ function hostedTranscriptPaths(snapshot: Pick<RegistryFile, "entries">, probe: L
 
 function activeHeadlessTranscriptPaths(
   flows: readonly Flow[],
-  conversations: Pick<RegistryFile, "conversations">["conversations"],
+  registry: LivenessRegistrySnapshot,
   probe: LivenessProbe,
 ): Set<string> {
   const paths = new Set<string>();
   for (const flow of flows) {
     if (flow.reviewerMode !== "headless") continue;
     const round = flow.rounds.at(-1);
+    if (!round || !Number.isInteger(round.reviewerPid) || (round.reviewerPid ?? 0) <= 0) continue;
     const path = round?.reviewerPath
-      ?? (round?.reviewerConversationId ? conversations[round.reviewerConversationId]?.generations.at(-1)?.path : null);
-    if (path && exactHeadlessIdentityAlive(round?.reviewerPid, round?.reviewerIdentity, probe)) paths.add(path);
+      ?? (round.reviewerConversationId ? canonicalConversation(registry, round.reviewerConversationId)?.generations.at(-1)?.path : null);
+    // Selection must retain every owner the final liveOnly predicate protects.
+    // An unreadable identity cannot drop a recorded PID before it is judged.
+    if (path && headlessRoundProcess(round, probe) !== "gone") paths.add(path);
   }
   return paths;
 }
@@ -801,7 +794,7 @@ export async function agentLivenessSnapshot(
   const flows = sources.flows?.() ?? [];
   const hostedPaths = new Set([
     ...hostedTranscriptPaths(registry, sources.probe),
-    ...activeHeadlessTranscriptPaths(flows, registry.conversations, sources.probe),
+    ...activeHeadlessTranscriptPaths(flows, registry, sources.probe),
   ]);
   const indexProjectionMs = phaseClock() - projectionStartedAt;
 

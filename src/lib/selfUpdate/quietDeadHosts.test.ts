@@ -211,6 +211,42 @@ test.each(["host", "survivor"] as const)("liveOnly and drain share recorded live
   } finally { child.kill(); await child.exited; }
 });
 
+test.each(["missing", "unreadable", "aliased"] as const)("corpus liveOnly and drain retain a bound headless owner with %s identity", async (identityState) => {
+  const child = Bun.spawn(["sleep", "60"]);
+  const identity = captureProcessIdentity(child.pid)!;
+  const owner = ended("settled");
+  reviewFlow("flow_inventory_unproven", owner.artifactPath, "reviewing", {
+    reviewerPid: child.pid, reviewerIdentity: identityState === "unreadable" ? identity.startIdentity : null,
+    reviewerPath: identityState === "aliased" ? null : owner.artifactPath,
+    reviewerConversationId: identityState === "aliased" ? "conversation_inventory_alias" : owner.conversation.id,
+  });
+  const production = productionLivenessSources();
+  const entry = await production.describeTranscript(owner.artifactPath);
+  // The completed inventory predates this owner and still calls it idle.
+  const sources = { ...production, selectInventory: undefined,
+    listFiles: async () => [{ ...entry, activity: "idle", activityReason: null, mtime: (Date.now() - 2 * FIVE_MINUTES) / 1000 }] as never,
+    registrySnapshot: () => {
+      const disk = production.registrySnapshot();
+      return identityState === "aliased" ? { ...disk, conversationAliases: { ...disk.conversationAliases, conversation_inventory_alias: owner.conversation.id } } : disk;
+    },
+    probe: { ...production.probe, processIdentity: (pid: number) => identityState === "unreadable" && pid === child.pid ? null : production.probe.processIdentity(pid) },
+  };
+  const p = { ...ports([row(owner, "hosted")]), flows: loadFlows, turnLiveness: turnEvidenceReader(() => sources) };
+  try {
+    const targeted = await agentLivenessSnapshot({ conversationId: owner.conversation.id }, sources);
+    expect(targeted.conversations).toMatchObject([{ host: { state: "unknown" } }]);
+    expect(targeted.conversations.filter(livenessRecordIsLive)).toHaveLength(1);
+    const selected = await agentLivenessSnapshot({ liveOnly: true }, sources);
+    expect(selected.conversations.filter((record) => record.conversationId === owner.conversation.id).filter(livenessRecordIsLive)).toHaveLength(1);
+    expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: false, blockers: { turns: 1 } });
+    child.kill();
+    await child.exited;
+    expect((await agentLivenessSnapshot({ liveOnly: true }, sources)).conversations
+      .filter((record) => record.conversationId === owner.conversation.id).filter(livenessRecordIsLive)).toHaveLength(0);
+    expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
+  } finally { saveFlows([]); child.kill(); await child.exited; }
+});
+
 /** A stored review flow whose newest round is `round`, read back through the flow store. */
 function reviewFlow(id: string, implementerPath: string, state: string, round: Record<string, unknown>): void {
   const at = new Date().toISOString();

@@ -1099,29 +1099,36 @@ test.each(ownerSelectionCases)("verified owner survives recovery: cached=$activi
 });
 
 test.each([
-  { name: "missing saved identity", saved: null, current: "start", alive: true },
-  { name: "unreadable current identity", saved: "start", current: null, alive: true },
-  { name: "reused PID", saved: "old-start", current: "start", alive: true },
-  { name: "dead PID", saved: "start", current: "start", alive: false },
+  { name: "missing saved identity", saved: null, current: "start", alive: true, pid: 4242 },
+  { name: "unreadable current identity", saved: "start", current: null, alive: true, pid: 4242 },
+  { name: "reused PID", saved: "old-start", current: "start", alive: true, pid: 4242 },
+  { name: "dead PID", saved: "start", current: "start", alive: false, pid: 4242 },
+  { name: "missing PID", saved: null, current: "start", alive: true, pid: null },
 ].flatMap((identity) => [false, true].map((present) => ({ ...identity, present }))))(
-  "unverified headless owner gets no selection or recovery priority: $name present=$present",
-  async ({ saved, current, alive, present }) => {
+  "headless selection shares the process ownership verdict: $name present=$present",
+  async ({ saved, current, alive, pid, present }) => {
     const candidate = "/transcripts/unverified.jsonl";
     const fallback = "/transcripts/scan-live.jsonl";
     const generation = publishedGeneration([
       fileEntry({ path: fallback, activity: "live", mtime: NOW / 1000 }),
       ...(present ? [fileEntry({ path: candidate, activity: "idle" })] : []),
     ]);
+    const held = pid !== null && alive && (!saved || !current || saved === current);
     const snapshot = await agentLivenessSnapshot({ project: "viewer", liveOnly: true, limit: 1 }, corpusSources(generation, {
       probe: { now: () => NOW, pidAlive: () => alive, processIdentity: () => current },
       flows: () => [{ reviewerMode: "headless", state: "reviewing", rounds: [{
-        reviewerPath: candidate, reviewerPid: 4242, reviewerIdentity: saved,
+        reviewerPath: candidate, reviewerPid: pid, reviewerIdentity: saved,
       }] }] as unknown as Flow[],
-      // corpusSources throws if an unverified path reaches describeTranscript.
+      describeTranscript: async (target) => {
+        expect(held).toBe(true);
+        expect(target).toBe(candidate);
+        return { path: target, project: "viewer", title: "candidate", engine: "codex", mtimeMs: NOW - 60_000,
+          sizeBytes: 4096, conversationId: null, activity: null, activityReason: null };
+      },
       transcriptEvidence: async () => ({ turn: "busy", lastRecordTs: NOW - 1_000 }),
     }));
-    expect(snapshot.conversations.map((row) => row.transcriptPath)).toEqual([fallback]);
-    expect(snapshot.selection).toMatchObject({ recovered: 0, recoveryTruncated: false, selected: 1, hydrated: 1 });
+    expect(snapshot.conversations.map((row) => row.transcriptPath)).toEqual([held ? candidate : fallback]);
+    expect(snapshot.selection).toMatchObject({ recovered: held && !present ? 1 : 0, recoveryTruncated: false, selected: 1, hydrated: 1 });
   },
 );
 
