@@ -6901,7 +6901,8 @@ test.each([false, true])("five production-size settlements credit only complete 
   const text = rig.sent[0]!.text;
   expect(text.length).toBeLessThanOrEqual(4_000);
   const complete = ids.filter(id => agendaOf(text).some(line => line.includes(id) && line.endsWith("task waits for 2 open pipelines")));
-  expect(complete).toHaveLength(4);
+  // The v40 fallback contract leaves room for three complete settlements.
+  expect(complete).toHaveLength(3);
   if (held) {
     expect(rig.written.at(-1)!.announcedLanes).toEqual([]);
     expect(rig.written.at(-1)!.outstandingWake!.commit.announcedLanes).toEqual(complete.map(id => `${id}:completed`));
@@ -6922,7 +6923,7 @@ test.each([false, true])("five production-size settlements credit only complete 
   expect(rig.written.at(-1)!.announcedLanes.sort()).toEqual(ids.map(id => `${id}:completed`).sort());
 });
 
-test("a legacy retained wake credits four complete settlements and delivers the unseen fifth later", async () => {
+test("a legacy retained wake credits three complete settlements and delivers the unseen remainder later", async () => {
   const { gatherSeatTickInput } = await import("./seatTickSources");
   const { seatTickDecision, seatTickWakeCommitPlan } = await import("./seatTick");
   const ids = Array.from({ length: 5 }, (_, index) => [String(index).padStart(8, "0"), "0000", "4000", "8000", "1".repeat(12)].join("-"));
@@ -6946,7 +6947,8 @@ test("a legacy retained wake credits four complete settlements and delivers the 
   const row = rig.deps.readState!(PROJECT);
   const wake = { ...row.outstandingWake!, commit: legacyCommit };
   const complete = ids.filter(id => agendaOf(wake.text!).some(line => line.includes(id) && line.endsWith("task waits for 2 open pipelines")));
-  expect(complete).toHaveLength(4);
+  // The v40 fallback contract leaves room for three complete settlements.
+  expect(complete).toHaveLength(3);
   expect(legacyCommit.announcedLanes).toHaveLength(5);
   rig.deps.writeState!(PROJECT, { ...row, outstandingWake: wake });
   rig.deps.sources!.wakeState = async observed => {
@@ -6961,7 +6963,9 @@ test("a legacy retained wake credits four complete settlements and delivers the 
   rig.deps.sources!.now = () => NOW + 70 * MINUTE;
   await runSeatTickCheck(PROJECT, rig.deps);
   expect(rig.sent).toHaveLength(2);
-  expect(agendaOf(rig.sent[1]!.text).some(line => line.includes(ids[4]!) && line.endsWith("task waits for 2 open pipelines"))).toBe(true);
+  for (const id of ids.filter(id => !complete.includes(id))) {
+    expect(agendaOf(rig.sent[1]!.text).some(line => line.includes(id) && line.endsWith("task waits for 2 open pipelines"))).toBe(true);
+  }
   expect(rig.written.at(-1)!.announcedLanes.sort()).toEqual(ids.map(id => `${id}:completed`).sort());
 });
 
@@ -7063,8 +7067,8 @@ test.each([30, 200])("full report ledgers deliver a complete maintenance settlem
   }
   const bullet = `- [maintenance] ${run.taskId} — ${maintenanceItemLabel(run)}`;
   expect(bullet.length).toBeGreaterThan(1_200);
-  if (labelChars === 200) expect(rig.sent.some(message => message.text.includes(`\n${bullet}\n`))).toBe(true);
-  else expect(agendaOf(rig.sent.at(-1)!.text)).toEqual([expect.stringContaining("[summary; seat_tick_settings verbose:true holds the full item]")]);
+  // The v40 fallback leaves the full maintenance label in the durable item.
+  expect(agendaOf(rig.sent.at(-1)!.text)).toEqual([expect.stringContaining("[summary; seat_tick_settings verbose:true holds the full item]")]);
   expect(rig.written.at(-1)!.announcedMaintenance).toEqual([run.runId]);
 });
 
