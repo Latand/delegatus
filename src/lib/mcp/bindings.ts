@@ -758,7 +758,7 @@ export interface ViewerMcpDomainDependencies {
       project-scoped `agent_activity` consumes the SAME completed generation
       `board_snapshot` reads instead of forcing a private whole-corpus sweep.
       Partial harnesses that build fixed sources may ignore the argument. */
-  livenessSources(catalog?: { completedFileScan?: CompletedGenerationRead }): AgentLivenessSources;
+  livenessSources(catalog?: { completedFileScan?: CompletedGenerationRead; catalogBudgetMs?: number }): AgentLivenessSources;
   queryLifecycleEvents: typeof queryLifecycleEvents;
   pollLifecycleDigest: typeof pollLifecycleDigest;
   refreshLifecycleJournal: typeof refreshLifecycleJournal;
@@ -2145,6 +2145,7 @@ function callDeadlineExceeded(context: McpToolCallContext): boolean {
 const PARTIAL_CONVERSATION_DEADLINE_HINT = "Returned records parsed before the internal read deadline; use tailLines with conversationId for the cheapest recent transcript view.";
 const PARTIAL_CONVERSATION_OVERSIZE_HINT = "Returned a bounded tail of this oversized transcript; use tailLines with conversationId for a smaller raw tail.";
 const PARTIAL_CONVERSATION_RECORD_HINT = "More parsed records are available; raise maxRecords up to 500 or use tailLines with conversationId.";
+const PARTIAL_CONVERSATION_BUDGET_HINT = "Record text is cut and older records are omitted to fit the answer budget; full:true returns complete records, and conversation_messages pages them.";
 const MCP_CONVERSATION_CATALOG_BUDGET_MS = 250;
 /* readSession intentionally parses at most the final 8 MiB. Keep the response
    honest when a larger transcript has an omitted prefix. */
@@ -2561,6 +2562,67 @@ async function searchTranscripts(
   } });
 }
 
+/* The default get_conversation answer is a summary a caller can hold: on a
+   32 MB transcript the unbounded one was 2 MB of tool output, 504,000 tokens.
+   Each record keeps its head, the newest records keep their place inside one
+   text budget per list, and full:true returns everything as before. */
+const CONVERSATION_MESSAGE_CHARS = 4_000;
+const CONVERSATION_TOOL_CHARS = 1_000;
+const CONVERSATION_MESSAGE_TEXT_BUDGET = 40_000;
+const CONVERSATION_TOOL_TEXT_BUDGET = 24_000;
+const CONVERSATION_TAIL_LINE_CHARS = 4_000;
+
+/** The newest records that fit `budget` characters of text, oldest first, each
+    cut to `maxChars` after secret redaction. The newest record always stays. */
+function boundedConversationRecords(
+  records: readonly SessionRecord[],
+  maxChars: number,
+  budget: number,
+): { records: SessionRecord[]; omitted: number; cut: number } {
+  const kept: SessionRecord[] = [];
+  let spent = 0;
+  let cut = 0;
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    const record = records[index]!;
+    const redacted = hardenedRedact(record.text);
+    const cost = Math.min(redacted.length, maxChars);
+    if (kept.length > 0 && spent + cost > budget) break;
+    spent += cost;
+    if (redacted.length > maxChars) {
+      cut += 1;
+      kept.push({ ...record, text: redacted.slice(0, maxChars), truncated: true } as SessionRecord);
+    } else kept.push(record);
+  }
+  return { records: kept.reverse(), omitted: records.length - kept.length, cut };
+}
+
+/** Raw tail lines cut to `maxChars` after secret redaction; a cut line says how
+    much of it is missing. */
+function boundedTailLines(lines: readonly string[], maxChars: number): { lines: string[]; cutLines: number } {
+  let cutLines = 0;
+  const bounded = lines.map((line) => {
+    const redacted = hardenedRedact(line);
+    if (redacted.length <= maxChars) return line;
+    cutLines += 1;
+    return `${redacted.slice(0, maxChars)}… [+${redacted.length - maxChars} chars]`;
+  });
+  return { lines: bounded, cutLines };
+}
+
+function conversationTailAnswer(
+  tail: { lines: string[]; bytes: number; truncated: boolean },
+  args: McpToolArgs,
+) {
+  if (fullAnswer(args)) return { lines: tail.lines, bytes: tail.bytes, truncated: tail.truncated };
+  const bounded = boundedTailLines(tail.lines, Math.max(1, Math.min(16_000, integer(args.maxChars, CONVERSATION_TAIL_LINE_CHARS))));
+  return {
+    lines: bounded.lines,
+    bytes: tail.bytes,
+    truncated: tail.truncated,
+    ...(bounded.cutLines > 0 ? { cutLines: bounded.cutLines } : {}),
+  };
+}
+
 async function getConversation(
   args: McpToolArgs,
   dependencies: Pick<ViewerMcpDomainDependencies, "listFiles" | "completedFileScan" | "targetedFileEntry" | "selectedContext">,
@@ -2597,7 +2659,7 @@ async function getConversation(
       project: answer.record.project,
       engine: answer.record.engine,
       scanned: false,
-      tail: { lines: answer.tail.lines, bytes: answer.tail.bytes, truncated: answer.tail.truncated },
+      tail: conversationTailAnswer(answer.tail, args),
       ...selectedContextEcho(selected.target),
     });
   }
@@ -2623,11 +2685,7 @@ async function getConversation(
       title: entry.title,
       engine: entry.engine,
       scanned: false,
-      tail: {
-        lines: targeted.tail.lines,
-        bytes: targeted.tail.bytes,
-        truncated: targeted.tail.truncated,
-      },
+      tail: conversationTailAnswer(targeted.tail, args),
       ...(targeted.truncated === true ? {
         truncated: true,
         hint: targeted.hint ?? PARTIAL_CONVERSATION_DEADLINE_HINT,
@@ -2642,24 +2700,37 @@ async function getConversation(
   const maxRecords = Math.max(1, Math.min(500, integer(args.maxRecords, 100)));
   const recordTruncated = session.messages.length > maxRecords || session.tools.length > maxRecords;
   const oversized = entry.size > MCP_CONVERSATION_PARSE_WINDOW_BYTES;
-  const truncated = partialAtDeadline || oversized || recordTruncated;
+  const full = fullAnswer(args);
+  const requestedChars = args.maxChars === undefined ? null : Math.max(1, Math.min(16_000, integer(args.maxChars, CONVERSATION_MESSAGE_CHARS)));
+  const messages = full
+    ? { records: session.messages.slice(-maxRecords), omitted: 0, cut: 0 }
+    : boundedConversationRecords(session.messages.slice(-maxRecords), requestedChars ?? CONVERSATION_MESSAGE_CHARS, CONVERSATION_MESSAGE_TEXT_BUDGET);
+  const tools = full
+    ? { records: session.tools.slice(-maxRecords), omitted: 0, cut: 0 }
+    : boundedConversationRecords(session.tools.slice(-maxRecords), requestedChars ?? CONVERSATION_TOOL_CHARS, CONVERSATION_TOOL_TEXT_BUDGET);
+  const budgetTruncated = messages.omitted + tools.omitted + messages.cut + tools.cut > 0;
+  const truncated = partialAtDeadline || oversized || recordTruncated || budgetTruncated;
   const hint = targeted.hint
     ?? (partialAtDeadline
       ? PARTIAL_CONVERSATION_DEADLINE_HINT
       : oversized
         ? PARTIAL_CONVERSATION_OVERSIZE_HINT
-        : recordTruncated
-          ? PARTIAL_CONVERSATION_RECORD_HINT
-          : undefined);
+        /* Raising maxRecords cannot widen an answer its budget already cut. */
+        : budgetTruncated
+          ? PARTIAL_CONVERSATION_BUDGET_HINT
+          : recordTruncated
+            ? PARTIAL_CONVERSATION_RECORD_HINT
+            : undefined);
   return redactPayload({
     conversationId: (conversation?.id ?? entry.conversationId ?? requestedId) || null,
     transcriptPath: entry.path,
     project: entry.project,
     title: entry.title,
     engine: entry.engine,
-    messages: session.messages.slice(-maxRecords),
-    tools: session.tools.slice(-maxRecords),
+    messages: messages.records,
+    tools: tools.records,
     truncated,
+    ...(messages.omitted > 0 || tools.omitted > 0 ? { omitted: { messages: messages.omitted, tools: tools.omitted } } : {}),
     ...(hint ? { hint } : {}),
     ...selectedContextEcho(selected.target),
   });
@@ -5100,10 +5171,18 @@ async function deploymentStatus(
   });
 }
 
+/* An ordinary resources read answers inside a second. A process holding no
+   observation waits this long for its first collection, then reports it
+   pending; fresh:true keeps the complete wait its caller asked for. */
+const MCP_RESOURCES_COLLECTION_BUDGET_MS = 750;
+
 async function resources(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): Promise<McpToolPayload> {
   const requestedAt = new Date().toISOString();
   const fresh = args.fresh === true;
-  const result = dependencies.readResourcesWithDiagnostic ? await dependencies.readResourcesWithDiagnostic(fresh) : null;
+  const result = dependencies.readResourcesWithDiagnostic
+    ? await dependencies.readResourcesWithDiagnostic(fresh, { waitMs: MCP_RESOURCES_COLLECTION_BUDGET_MS })
+    : null;
+  const pending = result?.diagnostic.status === "pending";
   const payload = result?.payload ?? await dependencies.readResources(fresh);
   const capturedAt = payload.system?.capturedAt ?? null;
   const capturedMs = capturedAt === null ? NaN : Date.parse(capturedAt);
@@ -5132,7 +5211,8 @@ async function resources(args: McpToolArgs, dependencies: ViewerMcpDomainDepende
     refreshRequested: fresh,
     refreshSucceeded: fresh && result ? result.diagnostic.status === "complete" && result.diagnostic.cache.status === "miss" : null,
     cache: result?.diagnostic.cache.status ?? "unknown",
-    reason: result?.diagnostic.degradedReason ?? null,
+    reason: pending ? "collecting" : result?.diagnostic.degradedReason ?? null,
+    ...(pending ? { pending: true } : {}),
   } });
 }
 
@@ -5495,6 +5575,15 @@ async function conversationMigration(args: McpToolArgs, control: ViewerControlDe
  * it never echoes a pipeline's own claim about a stage. A stall observed here
  * is also journaled (#686), so the sweep leaves a durable record.
  */
+/* A process that holds no completed generation answers agent_activity with
+   the hosts the registry names and `catalog: "pending"` after this wait,
+   rather than holding the caller for a whole-corpus scan. */
+const MCP_ACTIVITY_CATALOG_BUDGET_MS = 650;
+/* The whole agent_activity answer, the catalog wait included: hosts not yet
+   described and tails not yet read are reported as pending evidence, and the
+   next call takes what those reads returned. */
+const MCP_ACTIVITY_ANSWER_BUDGET_MS = 800;
+
 async function agentActivity(
   args: McpToolArgs,
   dependencies: ViewerMcpDomainDependencies,
@@ -5514,7 +5603,10 @@ async function agentActivity(
   try {
     /* The catalog the board already reads. One completed generation serves both,
        so this call opens no scan of its own. */
-    const sources = dependencies.livenessSources({ completedFileScan: dependencies.completedFileScan });
+    const sources = dependencies.livenessSources({
+      completedFileScan: dependencies.completedFileScan,
+      catalogBudgetMs: MCP_ACTIVITY_CATALOG_BUDGET_MS,
+    });
     const snapshot = await agentLivenessSnapshot({
       conversationId: text(args.conversationId) || undefined,
       transcriptPath: (text(args.transcriptPath) || text(args.path)) || undefined,
@@ -5523,6 +5615,7 @@ async function agentActivity(
       stallAfterMs: typeof args.stallAfterMs === "number" ? args.stallAfterMs : undefined,
       limit: typeof args.limit === "number" ? args.limit : undefined,
       signal: deadline.signal,
+      answerBudgetMs: MCP_ACTIVITY_ANSWER_BUDGET_MS,
       /* A call with less time left than the standard evidence budget degrades
          the remaining rows to the scan projection rather than spending a budget
          its caller will not be there to receive. */
@@ -5537,9 +5630,23 @@ async function agentActivity(
     const filtered = { ...snapshot, conversations, count: conversations.length,
       stalledCount: conversations.filter(row => row.lifecycle === "stalled").length,
       stalledConfirmedCount: conversations.filter(row => row.lifecycle === "stalled" && row.evidenceSource === "transcript").length };
+    const catalog = snapshot.selection.cacheStatus;
+    const unverifiedCount = conversations.filter(row => row.evidenceSource === "projection").length;
+    /* A targeted call names transcripts, hosted or not; the count says which. */
+    const undescribed = snapshot.selection.recoveryPending > 0
+      ? { [snapshot.selection.scope === "targeted" ? "undescribedTargetCount" : "undescribedHostCount"]: snapshot.selection.recoveryPending }
+      : {};
     return redactPayload({ ...(fullAnswer(args) ? filtered : compactLiveness(filtered)), journaled: journal.appended,
       excludedGoneCount, omittedRecordCount: fullAnswer(args) ? 0 : conversations.length,
       unselectedCount: Math.max(0, snapshot.selection.matched - snapshot.selection.selected),
+      /* Every projection says what it could not confirm. `pending`: no
+         generation completed inside the budget, so the rows are the hosts the
+         registry names. `stale`: the rows are an earlier generation's while a
+         newer one is still being read. */
+      ...(catalog === "pending" || catalog === "stale" ? { catalog } : {}),
+      ...(unverifiedCount > 0 || snapshot.selection.recoveryPending > 0
+        ? { evidence: "pending", unverifiedCount, ...undescribed }
+        : {}),
       ...answerHint(args, "includeGone:true includes dead hosts; compact:false or full:true returns evidence fields. Narrow by conversationId or project when unselectedCount is positive.") });
   } finally {
     deadline.release();

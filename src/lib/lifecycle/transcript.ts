@@ -147,6 +147,21 @@ export async function readLivenessTranscriptEvidence(
   };
 }
 
+/**
+ * What a transcript file is right now. A tail read kept from an earlier call is
+ * evidence only while this still names the file it was read from; a catalog row
+ * cannot answer that, because it is as old as its generation. Null for a path
+ * that is not a readable file.
+ */
+export async function transcriptFileIdentity(transcriptPath: string): Promise<string | null> {
+  try {
+    const stat = await fs.promises.stat(transcriptPath, { bigint: true });
+    return stat.isFile() ? `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}` : null;
+  } catch {
+    return null;
+  }
+}
+
 /** The scanner root a transcript belongs to, by path prefix alone — no walk. */
 function rootForPath(transcriptPath: string): [RootKey, string] | null {
   let best: [RootKey, string] | null = null;
