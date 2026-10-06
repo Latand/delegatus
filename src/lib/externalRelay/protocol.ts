@@ -1,5 +1,9 @@
 import { z } from "zod";
 
+// JSON Schema maxLength counts Unicode code points, including astral characters.
+const boundedString = (max: number) =>
+  z.string().refine((value) => [...value].length <= max, { message: `expected at most ${max} Unicode code points` });
+
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
 const leaseId = z.string().regex(/^[A-Za-z0-9_-]{22,64}$/);
 const bearerSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
@@ -7,14 +11,14 @@ const pollSecretKey = "poll_secret" as const;
 const label = z
   .string()
   .min(1)
-  .max(128)
+  .refine((value) => [...value].length <= 128)
   .regex(/^[^\x00-\x1f\x7f]*$/);
 const time = z.iso.datetime({ offset: true });
 export const ownerSchema = z.object({
   namespace: z.string().regex(/^[a-z0-9_.-]{1,32}$/),
   id,
   display_name: label,
-  handle: z.string().max(64).nullable(),
+  handle: boundedString(64).nullable(),
 });
 export const targetSchema = z.object({
   target_id: id,
@@ -42,10 +46,10 @@ export const livenessSchema = z.object({
 export const descriptorSchema = z.object({
   protocol: z.literal("delegatus-relay"),
   versions: z.array(z.number().int().min(1)).min(1),
-  name: z.string().min(1).max(64),
-  description: z.string().max(1000),
-  api_base: z.url().max(2048),
-  icon_url: z.string().max(2048).optional(),
+  name: boundedString(64).refine((value) => value.length > 0),
+  description: boundedString(1000),
+  api_base: z.url().refine((value) => [...value].length <= 2048),
+  icon_url: boundedString(2048).nullish(),
   kinds: z.array(z.string()).min(1),
   liveness: livenessSchema,
   limits: z.object({
@@ -74,7 +78,7 @@ export const pairingStatusSchema = z
     ]),
     owner: ownerSchema.optional(),
     targets: z.array(targetSchema).max(100).optional(),
-    reason: z.string().max(300).optional(),
+    reason: boundedString(300).optional(),
   })
   .superRefine((value, context) => {
     if (value.status === "awaiting_install" && (!value.owner || !value.targets))
@@ -90,48 +94,43 @@ const messageSchema = z.object({
   id,
   author: z.object({
     key: id,
-    name: z.string().max(128),
+    name: boundedString(128),
     self: z.boolean(),
-    tags: z.array(z.string().max(32)).max(4).optional(),
+    tags: z.array(boundedString(32)).max(4).optional(),
   }),
   sent_at: time,
-  text: z.string().max(16000),
+  text: boundedString(16000),
   reply_to: id.nullable(),
 });
 // requester_context (relay.md §A.8): who asked, the chat's short-term memory
 // and the service's tools for the requester's role. All optional, so a request
 // without them reads, and is answered, exactly as before.
 const requesterSchema = z.object({
-  author_key: id,
-  role: z.enum(["member", "admin"]),
-  rights: z
-    .object({
-      can_restrict_members: z.boolean().optional(),
-      can_delete_messages: z.boolean().optional(),
-      can_change_info: z.boolean().optional(),
-    })
-    .optional(),
+  key: id,
+  is_admin: z.boolean(),
+  can_restrict_members: z.boolean(),
+  can_delete_messages: z.boolean(),
+  is_anonymous_admin: z.boolean(),
   is_owner: z.boolean(),
-  anonymous: z.boolean(),
 });
 const toolSchema = z.object({
-  name: z.string().regex(/^[^\x00-\x1f\x7f]{1,64}$/),
-  summary: z.string().max(240),
+  name: boundedString(64).refine((value) => value.length > 0),
+  summary: boundedString(240),
   mode: z.enum(["direct", "handoff"]),
 });
 export const inputSchema = z.object({
-  instructions: z.string().max(32000),
-  owner_instructions: z.string().max(16000).nullable(),
+  instructions: boundedString(32000),
+  owner_instructions: boundedString(16000).nullable(),
   documents: z
     .array(
-      z.object({ title: z.string().max(200), text: z.string().max(16000) }),
+      z.object({ title: boundedString(200), text: boundedString(16000) }),
     )
     .max(20),
   conversation: z.array(messageSchema).max(200),
   respond_to: id.nullable(),
-  request_text: z.string().max(4000).nullable(),
+  request_text: boundedString(4000).nullable(),
   requester: requesterSchema.nullish(),
-  short_term_memory: z.string().max(10000).nullish(),
+  short_term_memory: boundedString(16000).nullish(),
   tools: z
     .array(toolSchema)
     .max(128)

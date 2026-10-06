@@ -7012,10 +7012,10 @@ function seedRelayAnswers(): void {
   });
   const frame = { instructions: "You answer as the club's helper. Plain text, at most three sentences.", owner_instructions: "Friendly and brief.", documents: [] };
   const tools = [
-    { name: "search_docs", summary: "Search the club's documents.", mode: "handoff" },
-    { name: "mute_participant", summary: "Mute a participant for a while.", mode: "handoff" },
-    { name: "create_poll", summary: "Post a poll in the chat.", mode: "handoff" },
-    { name: "generate_image", summary: "Draw a picture and post it.", mode: "handoff" },
+    { name: "lookup_notes", summary: "Search the club's documents.", mode: "handoff" },
+    { name: "restrict_member", summary: "Mute a participant for a while.", mode: "handoff" },
+    { name: "poll_attendees", summary: "Post a poll in the chat.", mode: "handoff" },
+    { name: "draw_picture", summary: "Draw a picture and post it.", mode: "handoff" },
   ];
   writeRelayAnswer(2, "rq_running", { state: "running", outcome: null, finishedAt: null, durationMs: null, delivery: null,
     input: { ...frame, conversation: [message("m90", "u_c", "Member C", "@helper what should I bring on Thursday?", 2)], respond_to: "m90", request_text: null } });
@@ -7026,7 +7026,7 @@ function seedRelayAnswers(): void {
         message("m72", "u_a", "Admin A", "@helper mute the person posting promo links, for an hour", 9, "m71"),
       ],
       respond_to: "m72", request_text: null,
-      requester: { author_key: "u_a", role: "admin", rights: { can_restrict_members: true, can_delete_messages: true }, is_owner: false, anonymous: false },
+      requester: { key: "u_a", is_admin: true, can_restrict_members: true, can_delete_messages: true, is_owner: false, is_anonymous_admin: false },
       short_term_memory: "The Thursday meetup moved to the north pier this week.", tools } });
   const longAnswer = "The meetup is on Thursday at 18:30 at the north pier, because the hall is being painted this week. "
     + "Bring a warm layer: it gets windy by the water after sunset. If you are new, look for the blue flag by the cafe; someone will meet you there. "
@@ -7038,7 +7038,7 @@ function seedRelayAnswers(): void {
         message("m55", "u_b", "Member B", "@helper when and where is the next meetup? [Voice message, 0:12. Transcript: and is it the usual route or something new?]", 34),
       ],
       respond_to: "m55", request_text: null,
-      requester: { author_key: "u_b", role: "member", is_owner: false, anonymous: false }, short_term_memory: null, tools: tools.filter((tool) => tool.name !== "mute_participant") } });
+      requester: { key: "u_b", is_admin: false, can_restrict_members: false, can_delete_messages: false, is_owner: false, is_anonymous_admin: false }, short_term_memory: null, tools: tools.filter((tool) => tool.name !== "restrict_member") } });
   writeRelayAnswer(80, "rq_hard_cap", { outcome: "failed:hard_cap", durationMs: 1_800_000, delivery: "unconfirmed",
     input: { ...frame, conversation: [message("m30", "u_d", "Member D", "@helper summarise everything from last month", 80)], respond_to: "m30", request_text: null } });
   writeRelayAnswer(140, "rq_busy", { outcome: "declined:busy", engine: null, model: null, durationMs: 300,

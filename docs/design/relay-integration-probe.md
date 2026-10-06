@@ -145,22 +145,21 @@ claim feature is independent. This corrects the reported premise without adding
 the deferred conversation lifecycle. The authoritative `relay.md` update belongs
 to slice 1; this stage has authority to write this probe document only.
 
-## Wire-shape requests before additive fields freeze
+## Wire contract after the service cross-check
 
-Four small contract changes/clarifications are requested. Their names below are
-proposed canonical spellings; no external service field shape is inferred from
-private implementation code.
+The initial wire-shape proposals were superseded by the service cross-check.
+The accepted contract is documented in `relay.md` §A.5 and §A.8 and covered by
+service-built fixtures in `src/lib/externalRelay/fixtures/service-wire/`.
+The slice 0 transport result above still stands.
 
 1. **Fix context placement and bounds.** Put `requester`, `short_term_memory` and
    `tools` under `Request.input`. Use requester
-   `{author_key, role, rights, is_owner, anonymous}`, where `author_key` follows
-   `Message.author.key`'s existing opaque-key domain, `role` is `member` or `admin`,
-   and `rights` has the boolean fields `can_restrict_members`,
-   `can_delete_messages`, `can_change_info`; absent rights are false. Owner and anonymous
-   status are independent flags. Use tool rows `{name, summary, mode}` with
+   `{key, is_admin, can_restrict_members, can_delete_messages,
+   is_anonymous_admin, is_owner}`: an opaque `key` matching the triggering
+   `Message.author.key` and five required booleans derived by the service. Use tool rows `{name, summary, mode}` with
    `mode: direct | handoff`, unique names of at most 64 characters, summaries of
-   at most 240 characters and at most 128 rows. Bound short-term memory to 10,000
-   characters. Omitted requester/memory and omitted or empty tools preserve the
+   at most 200 code points and at most 100 rows. Bound short-term memory to
+   16,000 Unicode code points. All string bounds count code points. Omitted requester/memory and omitted or empty tools preserve the
    legacy input; nullable requester/memory also mean absent. Objects remain open
    to unknown fields. **Reason:** one parser and prompt shape, consistent author
    references, bounded input and additive compatibility. Flags inform the model;
@@ -169,7 +168,8 @@ private implementation code.
 2. **Separate context from executable reads.** Use exactly `requester_context`
    in descriptor/claim features for slice 1. Reserve independent `direct_reads`
    for slice 2. Send enriched role/tool fields only after the context capability
-   is advertised; a tool gets `direct` only when the install also negotiated
+   is advertised both at enqueue and in the claim that takes the request;
+   a tool gets `direct` only when the install also negotiated
    executable reads. Until then list callable service tools as `handoff`.
    **Reason:** a context-capable one-shot install has no read transport. A direct
    label must correspond to an available operation, and old installs retain
@@ -178,8 +178,9 @@ private implementation code.
 3. **Freeze the hand-off completion.** Extend the declined reason enum with
    `handoff`, gated by the claim's `requester_context` feature. Delegatus maps
    internal `{action: "handoff", text: "", reply_to: null}` to
-   `outcome: "declined", reason: "handoff", detail: null, retry_after_s: null`,
-   with the current lease attached by the runner. The service resumes its own
+   `outcome: "declined", reason: "handoff", retry_after_s: null`, with
+   `detail` set to the runner's fixed `HANDOFF_DETAIL` and the current lease
+   attached by the runner. The service resumes its own
    prepared request even when ordinary fallback is disabled. No model text,
    action arguments or claimed role is forwarded in that completion.
    **Reason:** the accepted action hand-off needs a distinct completion with
@@ -188,7 +189,8 @@ private implementation code.
    fails today's schema. `answered` continues to carry only reply/ignore.
 4. **Keep media in the current text envelope and budget serialized bytes.**
    Append trigger/replied-media transcript, description or explicit unavailable
-   status to their existing `Message.text`, retaining the 16,000-character cap.
+   status to their existing `Message.text`. The service bounds the trigger
+   and replied message to 12,000 code points; the wire schema permits 16,000.
    Preserve the trigger and replied message before trimming older history.
    The entire enriched claim response must fit the advertised
    `limits.max_response_bytes` after UTF-8 JSON serialization; memory and index
@@ -270,7 +272,7 @@ capture infrastructure. This document introduces no rendered UI and claims no
 UI verification.
 
 **Contract documentation.** Update `relay.md` Part A schemas, features, §A.8
-frame and completion semantics from the four wire requests. Update Part B's
+frame and completion semantics from the accepted wire contract. Update Part B's
 implemented-state description and read-only record inspection; keep the separate
 long-lived `chat_conversations` delta labelled deferred. Pairing, polling,
 account selection, progress, hard caps and profile tripwire retain their behavior.
@@ -337,6 +339,6 @@ their transport prerequisites.
   storage dependency; a later direct-action decision may justify one.
 
 The originating requirement is covered by the per-engine probe and measured
-fallback, the item 4 source ledger, and the four explicit wire requests above.
+fallback, the item 4 source ledger, and the accepted wire contract above.
 The next implementation slice has concrete seams and acceptance checks; no
 operator-only decision is needed to complete this probe stage.

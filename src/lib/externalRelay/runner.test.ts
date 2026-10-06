@@ -11,7 +11,7 @@ import { advertisedSlots, HANDOFF_DETAIL, memberLimitDetail, runClaimedRequest, 
 import { relayActivity } from "./activity";
 import { dropRun, externalRelayFile, readRunLedger, updateRelayStore, type PairedRelay } from "./store";
 import { confirmRelayPairing } from "./pairing";
-import { contextRequest, sampleRequest } from "./protocol.test";
+import { contextRequest, sampleRequest, serviceClaims } from "./protocol.test";
 import { listAnswerRecords, readAnswerRecord } from "./answers";
 import { startTestRelay } from "./testRelay";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-runner-test-"));
@@ -811,7 +811,7 @@ test("the member limit declines a member past it, per chat, and never counts the
       input: { ...sampleRequest.input, requester },
     }, undefined, { command: script });
   };
-  const member = { author_key: "u_m", role: "member", is_owner: false, anonymous: false };
+  const member = { key: "u_m", is_admin: false, can_restrict_members: false, can_delete_messages: false, is_owner: false, is_anonymous_admin: false };
   try {
     expect(await ask(1, member)).toMatchObject({ outcome: "answered" });
     expect(await ask(2, member)).toMatchObject({ outcome: "answered" });
@@ -822,19 +822,79 @@ test("the member limit declines a member past it, per chat, and never counts the
     expect(retry).toBeLessThanOrEqual(3600);
     expect(readAnswerRecord("relay_1", "target_limit", "rq_limit_3")).toMatchObject({
       outcome: "declined:member_limit", admitted: false, chatKey: "chat_key_aaaaaaaaaaaa",
-      requester: { authorKey: "u_m", role: "member", isOwner: false, anonymous: false },
+      requester: member,
     });
     // Another chat counts on its own; admins and the owner are not counted.
     expect(await ask(4, member, "chat_key_bbbbbbbbbbbb")).toMatchObject({ outcome: "answered" });
-    expect(await ask(5, { ...member, role: "admin" })).toMatchObject({ outcome: "answered" });
+    expect(await ask(5, { ...member, is_admin: true })).toMatchObject({ outcome: "answered" });
     expect(await ask(6, { ...member, is_owner: true })).toMatchObject({ outcome: "answered" });
     // Another member is not affected; 0 and null are no limit; no requester block is never counted.
-    expect(await ask(7, { ...member, author_key: "u_other" })).toMatchObject({ outcome: "answered" });
+    expect(await ask(7, { ...member, key: "u_other" })).toMatchObject({ outcome: "answered" });
     expect(await ask(8, member, undefined, { memberLimitPerHour: 0 })).toMatchObject({ outcome: "answered" });
     expect(await ask(9, member, undefined, { memberLimitPerHour: null })).toMatchObject({ outcome: "answered" });
     expect(await ask(10, null)).toMatchObject({ outcome: "answered" });
     expect(completions.filter((body) => body.reason === "member_limit")).toHaveLength(1);
   } finally {
+    await server.close();
+  }
+}, 60_000);
+
+test("service-built roles answer and the real runner and poller emit cross-check bodies", async () => {
+  const { ensureExternalRelayPollers, stopExternalRelayPollers } = await import("./poller");
+  const completions: unknown[] = [];
+  let claimBody: unknown;
+  const server = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/targets")) return { body: { targets: [{ target_id: "t_target", name: "Target", answered_by: "install", fallback: "service" }] } };
+    if (req.url?.endsWith("/claim")) {
+      claimBody = body;
+      stopExternalRelayPollers();
+      return { status: 204 };
+    }
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: req.url?.endsWith("/complete") ? { status: "accepted", duplicate: false } : { status: "ok" } };
+  });
+  const paired = relay(`${server.origin}/v1`);
+  paired.id = "relay_wire";
+  paired.targets[0] = { ...paired.targets[0]!, id: "t_target", memberLimitPerHour: null };
+  const command = stub(`const a=process.argv.slice(2);await Bun.stdin.text();await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Done',reply_to:null}));`);
+  const fixture = (role: string) => serviceClaims.find(({ name }) => name === `claimed_rc_${role}.json`)!.body.request;
+  try {
+    for (const role of ["member", "admin", "owner", "anonymous_admin"]) {
+      const request = { ...fixture(role), request_id: `rq_wire_${role}` };
+      expect(await runClaimedRequest(paired, request, undefined, { command })).toMatchObject({ outcome: "answered" });
+      expect(readAnswerRecord(paired.id, "t_target", request.request_id)).toMatchObject({
+        requester: request.input.requester, input: request.input, admitted: true,
+      });
+    }
+    const member = fixture("member");
+    const handoff = await runClaimedRequest(paired, { ...member, request_id: "rq_wire_handoff" }, undefined, { command: handoffStub(path.join(root, "wire-handoff-seen")) });
+    expect(handoff).toMatchObject({ outcome: "declined", reason: "handoff", detail: HANDOFF_DETAIL, retry_after_s: null });
+
+    paired.id = "relay_wire_limit";
+    paired.targets[0]!.memberLimitPerHour = 1;
+    expect(await runClaimedRequest(paired, { ...member, request_id: "rq_wire_first" }, undefined, { command })).toMatchObject({ outcome: "answered" });
+    const limited = await runClaimedRequest(paired, { ...member, request_id: "rq_wire_limit" }, undefined, { command });
+    expect(limited).toMatchObject({ outcome: "declined", reason: "member_limit", detail: "This member reached 1 answer in the last hour in this chat." });
+    expect(limited?.outcome === "declined" && limited.retry_after_s).toBeGreaterThan(3500);
+    expect(limited?.outcome === "declined" && [...limited.detail!].length).toBeLessThanOrEqual(200);
+    // These fixtures use the same key as the counted member; the role flags exempt them.
+    for (const role of ["admin", "owner"])
+      expect(await runClaimedRequest(paired, { ...fixture(role), request_id: `rq_wire_exempt_${role}`, input: { ...fixture(role).input, requester: { ...fixture(role).input.requester, key: member.input.requester.key } } }, undefined, { command })).toMatchObject({ outcome: "answered" });
+
+    updateRelayStore((store) => ({ ...store, relays: [paired] }));
+    ensureExternalRelayPollers();
+    const deadline = Date.now() + 5000;
+    while (!claimBody && Date.now() < deadline) await Bun.sleep(10);
+    expect(claimBody).toEqual({ wait_s: 25, kinds: ["answer"], features: ["requester_context"], slots: [{ target_id: "t_target", free: 1 }] });
+    if (process.env.LLV_RELAY_WIRE_OUTPUT) {
+      fs.mkdirSync(path.dirname(process.env.LLV_RELAY_WIRE_OUTPUT), { recursive: true });
+      fs.writeFileSync(process.env.LLV_RELAY_WIRE_OUTPUT, JSON.stringify({
+        handoff, member_limit: limited, claim_body: claimBody,
+        completions_on_wire: completions.filter((body) => ["handoff", "member_limit"].includes((body as { reason?: string }).reason ?? "")),
+      }, null, 2) + "\n");
+    }
+  } finally {
+    stopExternalRelayPollers();
     await server.close();
   }
 }, 60_000);

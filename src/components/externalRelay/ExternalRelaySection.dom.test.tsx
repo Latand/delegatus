@@ -540,8 +540,8 @@ const handoffRecord = {
   input: {
     conversation: [{ id: "m9", author: { key: "u_a", name: "Admin A", self: false }, text: "@helper mute him for an hour", reply_to: null }],
     respond_to: "m9", request_text: null,
-    requester: { author_key: "u_a", role: "admin", is_owner: false, anonymous: false },
-    tools: [{ name: "mute_participant", summary: "Mute a participant", mode: "handoff" }],
+    requester: { key: "u_a", is_admin: true, can_restrict_members: false, can_delete_messages: false, is_owner: false, is_anonymous_admin: false },
+    tools: [{ name: "restrict_member", summary: "Mute a participant", mode: "handoff" }],
   },
 };
 function answersRoute(list: unknown = exchanges) {
@@ -582,12 +582,40 @@ test("recent answers open from the target row, list the kept exchanges and show 
   expect(exchange.textContent).toContain("Admin A · Admin");
   expect(exchange.textContent).toContain("Claude · Opus 5.5");
   expect(exchange.textContent).toContain("Received the result");
-  expect(exchange.querySelector("[data-external-relay-exchange-input]")?.textContent).toContain("\"mute_participant\"");
+  expect(exchange.querySelector("[data-external-relay-exchange-input]")?.textContent).toContain("\"restrict_member\"");
   // Read-only: no composer, no field to type into.
   expect(exchange.querySelector("textarea, input")).toBeNull();
   await click(Array.from(exchange.querySelectorAll("button")).find((button) => button.textContent === "Back to recent answers"));
   expect(row.querySelector("[data-external-relay-answer-list]")).toBeTruthy();
 });
+
+for (const locale of ["en", "uk"] as const)
+  for (const [role, flags, labels] of [
+    ["member", { is_admin: false, is_owner: false, is_anonymous_admin: false }, { en: "Member", uk: "Учасник" }],
+    ["admin", { is_admin: true, is_owner: false, is_anonymous_admin: false }, { en: "Admin", uk: "Адміністратор" }],
+    ["owner", { is_admin: false, is_owner: true, is_anonymous_admin: false }, { en: "Member · the owner", uk: "Учасник · власник" }],
+    ["anonymous admin", { is_admin: true, is_owner: false, is_anonymous_admin: true }, { en: "Admin · anonymous", uk: "Адміністратор · анонімно" }],
+  ] as const)
+    test(`the exchange shows service role flags for ${role} (${locale})`, async () => {
+      setLocale(locale);
+      try {
+        accounts({ claude: [signedIn("main")] });
+        answers.relay = { relays: [relay({ targets: [target({ engine: "claude", model: "opus", answered_by: "install" })] })], pending: [], status: [] };
+        route((url) => {
+          if (url === ANSWERS_URL) return jsonResponse(exchanges);
+          if (url === `${ANSWERS_URL}/rq_2`) return jsonResponse({ answer: {
+            ...handoffRecord, input: { ...handoffRecord.input, requester: { ...handoffRecord.input.requester, ...flags } },
+          } });
+          return undefined;
+        });
+        const host = await mount(<ExternalRelaySection />);
+        await click(host.querySelector("[data-external-relay-answers-toggle]"));
+        await click(host.querySelector("[data-external-relay-answer=rq_2]"));
+        expect(host.querySelector("[data-external-relay-exchange=rq_2]")?.textContent).toContain(`Admin A · ${labels[locale]}`);
+      } finally {
+        setLocale("en");
+      }
+    });
 
 test("recent answers in Ukrainian, empty and expired", async () => {
   setLocale("uk");

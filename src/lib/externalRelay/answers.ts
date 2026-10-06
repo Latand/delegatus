@@ -22,12 +22,7 @@ const safeId = /^[A-Za-z0-9_-]{1,64}$/;
 
 export type RelayAnswerDelivery = "accepted" | "refused" | "unconfirmed";
 /** Who asked, as the service's requester block says. Recorded, never trusted for access. */
-export type RelayAnswerRequester = {
-  authorKey: string;
-  role: "member" | "admin";
-  isOwner: boolean;
-  anonymous: boolean;
-};
+export type RelayAnswerRequester = ExternalRelayRequester;
 export type RelayAnswerRecord = {
   v: 1;
   requestId: string;
@@ -137,7 +132,7 @@ export function answerRecorder(base: {
     claimedAt: typeof base.claimedAt === "string" ? base.claimedAt : null,
     chatKey: base.chatKey ?? null,
     requester: base.requester
-      ? { authorKey: base.requester.author_key, role: base.requester.role, isOwner: base.requester.is_owner, anonymous: base.requester.anonymous }
+      ? { ...base.requester }
       : null,
     admitted: false,
     profile: null,
@@ -278,7 +273,7 @@ export function countMemberAnswers(scope: {
   relayId: string;
   targetId: string;
   chatKey: string | null;
-  authorKey: string;
+  requesterKey: string;
   sinceMs: number;
 }): { count: number; oldestMs: number | null } {
   let count = 0;
@@ -289,7 +284,7 @@ export function countMemberAnswers(scope: {
     // Newest first: the rest started before the window.
     if (started < scope.sinceMs) break;
     const record = readRecord(file);
-    if (!record?.admitted || record.requester?.authorKey !== scope.authorKey || (record.chatKey ?? null) !== scope.chatKey) continue;
+    if (!record?.admitted || record.requester?.key !== scope.requesterKey || (record.chatKey ?? null) !== scope.chatKey) continue;
     count += 1;
     oldestMs = started;
   }

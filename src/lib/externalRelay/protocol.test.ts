@@ -1,5 +1,13 @@
 import { expect, test } from "bun:test";
-import { checkedAnswer, requestSchema } from "./protocol";
+import fs from "node:fs";
+import path from "node:path";
+import { checkedAnswer, descriptorSchema, requestSchema } from "./protocol";
+
+const fixtureDir = path.join(import.meta.dir, "fixtures/service-wire");
+export const serviceClaims = fs.readdirSync(fixtureDir)
+  .filter((name) => /^claimed_.*\.json$/.test(name))
+  .sort()
+  .map((name) => ({ name, body: JSON.parse(fs.readFileSync(path.join(fixtureDir, name), "utf8")) }));
 export const sampleRequest = {
   request_id: "rq_1",
   lease_id: "ls_Zq3vN8bY1xKp4LmT0aW9rE",
@@ -37,17 +45,18 @@ export const contextRequest = {
   input: {
     ...sampleRequest.input,
     requester: {
-      author_key: "u1",
-      role: "admin",
-      rights: { can_restrict_members: true, x_future: 1 },
+      key: "u1",
+      is_admin: true,
+      can_restrict_members: true,
+      can_delete_messages: false,
       is_owner: false,
-      anonymous: false,
+      is_anonymous_admin: false,
       x_future: 1,
     },
     short_term_memory: "The meetup moved to Friday.",
     tools: [
-      { name: "search_docs", summary: "Search the chat's documents", mode: "direct" },
-      { name: "mute_participant", summary: "Mute a participant", mode: "handoff", x_future: 1 },
+      { name: "lookup_notes", summary: "Search the chat's documents", mode: "direct" },
+      { name: "restrict_member", summary: "Mute a participant", mode: "handoff", x_future: 1 },
     ],
     x_future: 1,
   },
@@ -107,13 +116,14 @@ test("requester_context fields are optional and additive", () => {
   const parsed = requestSchema.parse(contextRequest);
   // Unknown fields inside the new objects are ignored.
   expect(parsed.input.requester).toEqual({
-    author_key: "u1",
-    role: "admin",
-    rights: { can_restrict_members: true },
+    key: "u1",
+    is_admin: true,
+    can_restrict_members: true,
+    can_delete_messages: false,
     is_owner: false,
-    anonymous: false,
+    is_anonymous_admin: false,
   });
-  expect(parsed.input.tools?.[1]).toEqual({ name: "mute_participant", summary: "Mute a participant", mode: "handoff" });
+  expect(parsed.input.tools?.[1]).toEqual({ name: "restrict_member", summary: "Mute a participant", mode: "handoff" });
   expect(parsed.input.short_term_memory).toBe("The meetup moved to Friday.");
   // null means absent, as for the other nullable inputs.
   expect(
@@ -128,10 +138,10 @@ test("requester_context fields are optional and additive", () => {
   expect(withInput({ tools: [tool("same"), tool("same")] })).toBe(false);
   expect(withInput({ tools: [{ ...tool("t"), summary: "s".repeat(241) }] })).toBe(false);
   expect(withInput({ tools: [{ ...tool("t"), mode: "auto" }] })).toBe(false);
-  expect(withInput({ short_term_memory: "m".repeat(10000) })).toBe(true);
-  expect(withInput({ short_term_memory: "m".repeat(10001) })).toBe(false);
-  expect(withInput({ requester: { ...contextRequest.input.requester, role: "owner" } })).toBe(false);
-  expect(withInput({ requester: { ...contextRequest.input.requester, author_key: "has space" } })).toBe(false);
+  expect(withInput({ short_term_memory: "m".repeat(16000) })).toBe(true);
+  expect(withInput({ short_term_memory: "m".repeat(16001) })).toBe(false);
+  expect(withInput({ requester: { ...contextRequest.input.requester, is_admin: "yes" } })).toBe(false);
+  expect(withInput({ requester: { ...contextRequest.input.requester, key: "has space" } })).toBe(false);
 });
 test("handoff is an answer only when the request lists the service's tools", () => {
   const handoff = { action: "handoff", text: "I would mute them", reply_to: "m1" };
@@ -152,4 +162,55 @@ test("a request's chat key is kept when valid and dropped when malformed", () =>
   expect(malformed.success).toBe(true);
   expect(malformed.data?.chat).toBeUndefined();
   expect(requestSchema.parse(sampleRequest).chat).toBeUndefined();
+});
+
+for (const { name, body } of serviceClaims)
+  test(`service-built wire fixture parses: ${name}`, () => {
+    expect(requestSchema.parse(body.request)).toEqual(body.request);
+  });
+
+test("the requester requires a key and exactly five boolean flags", () => {
+  const requester = requestSchema.parse(contextRequest).input.requester!;
+  expect(Object.keys(requester).sort()).toEqual([
+    "can_delete_messages", "can_restrict_members", "is_admin", "is_anonymous_admin", "is_owner", "key",
+  ]);
+  for (const field of Object.keys(requester)) {
+    const missing = { ...requester } as Record<string, unknown>;
+    delete missing[field];
+    expect(requestSchema.safeParse({ ...contextRequest, input: { ...contextRequest.input, requester: missing } }).success).toBe(false);
+    expect(requestSchema.safeParse({ ...contextRequest, input: { ...contextRequest.input, requester: { ...requester, [field]: 1 } } }).success).toBe(false);
+  }
+});
+
+test("input string bounds count Unicode code points", () => {
+  const passes = (input: Record<string, unknown>) => requestSchema.safeParse({
+    ...sampleRequest, input: { ...sampleRequest.input, ...input },
+  }).success;
+  const message = (text: string) => [{ ...sampleRequest.input.conversation[0], text }];
+  expect(passes({ conversation: message("😀".repeat(12000)) })).toBe(true);
+  for (const [max, input] of [
+    [16000, (text: string) => ({ conversation: message(text) })],
+    [16000, (text: string) => ({ short_term_memory: text })],
+    [16000, (text: string) => ({ owner_instructions: text })],
+    [32000, (text: string) => ({ instructions: text })],
+    [4000, (text: string) => ({ request_text: text })],
+    [16000, (text: string) => ({ documents: [{ title: "Test", text }] })],
+    [200, (title: string) => ({ documents: [{ title, text: "Test" }] })],
+    [128, (name: string) => ({ conversation: [{ ...sampleRequest.input.conversation[0], author: { key: "u1", name, self: false } }] })],
+    [64, (name: string) => ({ tools: [{ name, summary: "Test", mode: "handoff" }] })],
+    [240, (summary: string) => ({ tools: [{ name: "test", summary, mode: "handoff" }] })],
+  ] as const) {
+    expect(passes(input("😀".repeat(max)))).toBe(true);
+    expect(passes(input("😀".repeat(max + 1)))).toBe(false);
+  }
+});
+
+test("a descriptor allows a null or absent icon URL", () => {
+  const descriptor = {
+    protocol: "delegatus-relay", versions: [1], name: "Test", description: "Test",
+    api_base: "https://relay.example/v1", kinds: ["answer"], liveness: sampleRequest.liveness,
+    limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
+  };
+  for (const icon_url of [null, undefined, "https://relay.example/icon.png"])
+    expect(descriptorSchema.safeParse({ ...descriptor, icon_url }).success).toBe(true);
 });

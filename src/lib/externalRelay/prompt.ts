@@ -22,7 +22,7 @@ export function answerPrompt(request: ExternalRelayRequest): string {
   ];
   const data = `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
   const requesterRule = input.requester
-    ? ` <requester> describes who wrote the message you answer: author_key is their author.key in <conversation>. Role and rights tell you what they may ask the service for; the service checks every request itself.`
+    ? ` <requester> describes who wrote the message you answer: key is their author.key in <conversation>. is_admin, can_restrict_members, can_delete_messages, is_anonymous_admin and is_owner describe their role and rights; the service checks every request itself.`
     : "";
   const actions = handoff
     ? `"reply" posts text; "ignore" posts nothing; "handoff" posts nothing and hands this message back to the service, whose own assistant answers it with the tools in <tools>. You cannot call any of those tools. Choose "handoff" when a good answer needs one of them, for example to act in the chat or to look something up that only a tool can see; otherwise answer yourself. For "handoff" leave text empty and reply_to null.`

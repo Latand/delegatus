@@ -100,7 +100,7 @@ const declined = (
 /** The line a hand-off carries (§A.8). It is the install's own words: nothing the model wrote. */
 export const HANDOFF_DETAIL = "The agent handed this request to the service's own assistant.";
 export const memberLimitDetail = (limit: number) =>
-  `This member reached ${limit} answers in the last hour in this chat.`;
+  `This member reached ${limit} ${limit === 1 ? "answer" : "answers"} in the last hour in this chat.`;
 const failed = (lease_id: string, reason: string): ExternalRelayCompletion => ({
   lease_id,
   outcome: "failed",
@@ -221,7 +221,7 @@ export async function runClaimedRequest(
       relayId: relay.id,
       targetId: target.id,
       chatKey: request.chat?.key ?? null,
-      authorKey: requester.author_key,
+      requesterKey: requester.key,
       sinceMs: now - RELAY_MEMBER_LIMIT_WINDOW_MS,
     });
     if (used.count >= limit)

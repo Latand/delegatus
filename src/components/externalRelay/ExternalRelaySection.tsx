@@ -380,7 +380,7 @@ type ReceivedInput = {
   conversation?: { id?: unknown; author?: { key?: unknown; name?: unknown }; text?: unknown }[];
   respond_to?: unknown;
   request_text?: unknown;
-  requester?: { author_key?: unknown; role?: unknown; is_owner?: unknown; anonymous?: unknown } | null;
+  requester?: { key?: unknown; is_admin?: unknown; is_owner?: unknown; is_anonymous_admin?: unknown } | null;
   tools?: unknown[];
 };
 /** The message a received input answers, its author's name, and the request text, all as plain strings. */
@@ -451,7 +451,7 @@ function RecentAnswers({ relayId, targetId }: { relayId: string; targetId: strin
                     <dt className={term}>{t("externalRelay.answers.outcome")}</dt>
                     <dd data-external-relay-exchange-outcome={record.outcome ?? "running"} className={detail}>{outcome(record)}</dd>
                     {record.delivery ? <><dt className={term}>{t("externalRelay.answers.delivery")}</dt><dd className={detail}>{t(DELIVERY_KEYS[record.delivery])}</dd></> : null}
-                    {requester && typeof requester.role === "string" ? <><dt className={term}>{t("externalRelay.answers.askedBy")}</dt><dd className={detail}>{[received.author, t(requester.role === "admin" ? "externalRelay.answers.role.admin" : "externalRelay.answers.role.member"), requester.is_owner === true ? t("externalRelay.answers.role.owner") : null, requester.anonymous === true ? t("externalRelay.answers.role.anonymous") : null].filter(Boolean).join(" · ")}</dd></> : null}
+                    {requester && typeof requester.is_admin === "boolean" ? <><dt className={term}>{t("externalRelay.answers.askedBy")}</dt><dd className={detail}>{[received.author, t(requester.is_admin === true ? "externalRelay.answers.role.admin" : "externalRelay.answers.role.member"), requester.is_owner === true ? t("externalRelay.answers.role.owner") : null, requester.is_anonymous_admin === true ? t("externalRelay.answers.role.anonymous") : null].filter(Boolean).join(" · ")}</dd></> : null}
                     {Array.isArray(tools) && tools.length ? <><dt className={term}>{t("externalRelay.answers.tools")}</dt><dd className={detail}>{tools.length}</dd></> : null}
                   </dl>
                   <section className="space-y-1">

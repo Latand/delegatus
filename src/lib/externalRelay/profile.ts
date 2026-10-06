@@ -24,4 +24,4 @@ export function memberLimitFor(target: Pick<RelayTargetSettings, "memberLimitPer
 }
 /** The owner and chat admins, as the service's requester block says, are not counted. */
 export const exemptFromMemberLimit = (requester: ExternalRelayRequester) =>
-  requester.is_owner || requester.role === "admin";
+  requester.is_owner || requester.is_admin;
