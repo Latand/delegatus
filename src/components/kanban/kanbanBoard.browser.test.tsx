@@ -204,14 +204,29 @@ describe("shipped role defaults rendered evidence", () => {
           const rows: Record<string, unknown>[] = [];
           expect(await page.locator("[data-mapping-nudge]").count()).toBe(0);
           expect(await page.locator("[data-mapping-reset]").count()).toBe(0);
-          expect(await page.locator("[data-mapping-row]").count()).toBe(17);
-          for (const id of ["reviewer", "architect", "prod-auditor", "merger"]) {
+          expect(await page.locator("[data-mapping-row]").count()).toBe(18);
+          for (const [id, expectedEffort, expectedCost] of [
+            ["reviewer", "xhigh", "very-heavy"],
+            ["architect", "xhigh", "very-heavy"],
+            ["prod-auditor", "xhigh", "very-heavy"],
+            ["merger", "high", "heavy"],
+            ["issue-reporter", "high", "moderate"],
+          ]) {
             const row = page.locator(`[data-mapping-row="${id}"]`);
             await row.scrollIntoViewIfNeeded();
             const effort = await row.locator("select").nth(1).inputValue();
             const cost = await row.locator("[data-cost-class]").getAttribute("data-cost-class");
-            expect(effort).toBe(id === "merger" ? "high" : "xhigh");
-            expect(cost).toBe(id === "merger" ? "heavy" : "very-heavy");
+            expect(effort).toBe(expectedEffort);
+            expect(cost).toBe(expectedCost);
+            if (id === "issue-reporter") {
+              expect(await row.innerText()).toContain(translate(locale, "onboarding.agents.role.issueReporter"));
+              expect(await row.locator("select").first().inputValue()).toBe("claude-sonnet-5-5");
+            }
+            const controlsFit = await row.locator("select").evaluateAll((controls) => controls.every((control) => {
+              const rect = control.getBoundingClientRect();
+              return rect.width > 0 && rect.left >= 0 && rect.right <= innerWidth;
+            }));
+            expect(controlsFit).toBe(true);
             expect(await row.locator("[data-mapping-nudge]").count()).toBe(0);
             await page.screenshot({ path: path.join(out, `${locale}-${width}-${id}.png`) });
             rows.push({ id, effort, cost, nudge: false });
@@ -19002,4 +19017,176 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
     if (failures.length) throw new Error(failures.join("\n"));
     expect(failures).toEqual([]);
   }, 3_600_000);
+});
+
+describe("issue report advisory preview", () => {
+  /* PR #2530: the operator decides on this message, so it has to show which
+     lines become public, that approving publishes them, and what each hint
+     points at, with the replies in reach. */
+  const COPY = {
+    en: { heading: "PREVIEW", from: "PUBLISHED FROM HERE", to: "PUBLISHED UP TO HERE", titleLabel: "Title", below: "Everything below this line stays in this chat.",
+      judgment: "Agent's privacy judgment", legacy: "No agent judgment was recorded for this preview.", hints: "Detector hints", none: "None found.", warning: "Warning: ",
+      port: "a port", closing: ["files exactly the title and body above", "public issue in the Delegatus repository", "readable by anyone"], unprevented: "Hints do not prevent this.",
+      approve: "Yes, publish as a public issue", reply: "Yes, publish report " },
+    uk: { heading: "ПОПЕРЕДНІЙ ПЕРЕГЛЯД", from: "ПУБЛІКУЄТЬСЯ ЗВІДСИ", to: "ПУБЛІКУЄТЬСЯ ДОСЮДИ", titleLabel: "Назва", below: "Усе нижче цього рядка лишається в цьому чаті.",
+      judgment: "Оцінка приватності від агента", legacy: "Для цього перегляду оцінку агента не записано.", hints: "Підказки детекторів", none: "Нічого не знайдено.", warning: "Попередження: ",
+      port: "порт", closing: ["із назви й тексту вище", "публічний issue в репозиторії Delegatus", "може прочитати будь-хто"], unprevented: "Підказки цьому не перешкоджають.",
+      approve: "Так, публікуй як публічний issue", reply: "Так, публікуй звіт " },
+  } as const;
+  const DOTTED = "203.0.113.22:8898";
+
+  browserTest("the preview bounds the published text, quotes hints verbatim, says approving publishes, and keeps the replies in reach", async () => {
+    const out = path.resolve(".artifacts/issue-report-hints/rendered");
+    fs.rmSync(out, { recursive: true, force: true });
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    try {
+      for (const variant of ["many", "none", "long", "legacy"] as const) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const width of [1440, 390]) {
+        const phone = width === 390;
+        const height = phone ? 844 : 900;
+        const copy = COPY[lang];
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=agent-report&report-preview=${variant}`, { width, height }, scheme, lang, "reduce", phone);
+        try {
+          if (phone) await page.locator("[data-mobile2-seat-card]").click();
+          const preview = page.locator("[data-tts-message]").filter({ hasText: copy.heading }).first();
+          await preview.waitFor();
+          const drafts = page.locator("[data-reply-suggestion]");
+          await drafts.first().waitFor();
+          const frame = (position: string) => page.screenshot({ path: path.join(out, `${variant}-${lang}-${scheme}-${width}-${position}.png`) });
+
+          /* The order a reader meets the parts in: the bounded text, the line that ends it, then the review. */
+          const text = await preview.innerText();
+          const lines = text.split("\n").map((line) => line.trim());
+          const at = (needle: string) => lines.findIndex((line) => line.includes(needle));
+          const order = [at(copy.from), at(copy.titleLabel), at("Delegatus refuses a requested launch"), at("The requested agent starts."), at(copy.to), at(copy.below),
+            at(variant === "legacy" ? copy.legacy : copy.judgment), at(copy.hints), at(copy.closing[0])];
+          expect(order.every((index) => index >= 0)).toBe(true);
+          expect(order).toEqual([...order].sort((left, right) => left - right));
+          expect(new Set(order).size).toBe(order.length);
+          for (const marker of [copy.from, copy.to]) expect(lines.filter((line) => line.includes(marker))).toHaveLength(1);
+          expect(lines[at(copy.below)]).toBe(copy.below);
+          const closing = lines.at(-1)!;
+          for (const fact of [...copy.closing, copy.unprevented]) expect(closing).toContain(fact);
+
+          const review = lines.slice(at(copy.hints) + 1, at(copy.closing[0]));
+          const hintLines = review.filter((line) => line.includes(" · "));
+          let dotted: string | null = null;
+          if (variant === "many") {
+            /* A span with dots, a colon and digits reads as the body wrote it. */
+            dotted = hintLines.find((line) => line.endsWith(DOTTED))?.replace(/^•\s*/, "") ?? null;
+            expect(dotted).toBe(`${copy.port} · ${lang === "en" ? "body, line" : "текст, рядок"} 8: ${DOTTED}`);
+            expect(lines.slice(0, at(copy.to)).some((line) => line.includes(DOTTED))).toBe(true);
+            expect(hintLines.length).toBeGreaterThan(6);
+            expect(review.some((line) => line.startsWith(copy.warning))).toBe(true);
+            expect(hintLines.some((line) => line.includes(copy.warning))).toBe(false);
+          }
+          if (variant === "none") expect(review.join(" ")).toContain(copy.none);
+          for (const line of hintLines) {
+            expect(line).not.toContain("\\");
+            expect(line.slice(0, line.indexOf(": "))).not.toMatch(/_|\(written\)/);
+          }
+
+          /* As the chat rests: the end of the message, with the replies under it. */
+          const reach = async () => page.evaluate(() => {
+            const box = (node: Element | null) => { const rect = node?.getBoundingClientRect(); return rect ? { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom } : null; };
+            const row = document.querySelector("[data-reply-suggestions]");
+            const field = [...document.querySelectorAll("textarea")].find((node) => node.getBoundingClientRect().height > 0) ?? null;
+            return { placement: row?.getAttribute("data-reply-suggestions") ?? null, row: box(row), approve: box(row?.querySelector("[data-reply-suggestion]") ?? null), composer: box(field) };
+          });
+          expect(await drafts.allInnerTexts()).toHaveLength(3);
+          expect((await drafts.first().innerText()).trim()).toBe(copy.approve);
+          const resting = await reach();
+          await frame("end");
+          /* Walked by the wheel, as a reader does: the feed follows its own end until the operator moves it. */
+          const walkTo = async (target: ReturnType<typeof preview.locator>, block: "start" | "center") => {
+            const move = await target.evaluate((node, where) => {
+              let feed: HTMLElement | null = node.parentElement;
+              while (feed && !(/auto|scroll/.test(getComputedStyle(feed).overflowY) && feed.scrollHeight > feed.clientHeight + 1)) feed = feed.parentElement;
+              const box = feed!.getBoundingClientRect();
+              const rect = node.getBoundingClientRect();
+              const wanted = where === "start" ? box.top + 12 : box.top + box.height / 2 - rect.height / 2;
+              return { x: box.left + box.width / 2, y: box.top + box.height / 2, by: rect.top - wanted };
+            }, block);
+            await page.mouse.move(move.x, move.y);
+            await page.mouse.wheel(0, move.by);
+            await page.waitForTimeout(250);
+          };
+          await walkTo(preview, "start");
+          const top = await reach();
+          await frame("top");
+          const visible: Record<string, boolean> = {};
+          for (const marker of [copy.from, copy.to]) {
+            const line = preview.locator("b").filter({ hasText: marker });
+            await walkTo(line, "center");
+            /* The marker is drawn inside the feed, clear of the composer and the floating replies. */
+            visible[marker] = await line.evaluate((node) => {
+              const rect = node.getBoundingClientRect();
+              const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+              return hit === node || node.contains(hit) || Boolean(hit?.contains(node));
+            });
+            expect(visible[marker]).toBe(true);
+            await frame(marker === copy.from ? "start" : "boundary");
+          }
+          for (const placed of [resting, top]) {
+            expect(placed.row).not.toBeNull();
+            expect(placed.composer).not.toBeNull();
+            if (phone) {
+              expect(placed.row!.left).toBeGreaterThanOrEqual(0);
+              expect(placed.row!.right).toBeLessThanOrEqual(width);
+              expect(placed.approve!.left).toBeGreaterThanOrEqual(0);
+              expect(placed.approve!.right).toBeLessThanOrEqual(width);
+              expect(placed.row!.top).toBeGreaterThanOrEqual(0);
+              expect(placed.row!.bottom).toBeLessThanOrEqual(placed.composer!.top);
+              expect(placed.composer!.bottom).toBeLessThanOrEqual(height);
+            }
+          }
+
+          const geometry = await preview.evaluate((node) => {
+            const rect = node.getBoundingClientRect();
+            const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+            const boxes: DOMRect[] = [];
+            while (walker.nextNode()) {
+              const range = document.createRange();
+              range.selectNodeContents(walker.currentNode);
+              /* A table and a code block scroll sideways inside their own box. */
+              if (walker.currentNode.parentElement?.closest("table, pre")) continue;
+              boxes.push(...[...range.getClientRects()].filter((box) => box.width > 0));
+            }
+            return { left: rect.left, right: rect.right,
+              textLeft: Math.min(...boxes.map((box) => box.left)),
+              textRight: Math.max(...boxes.map((box) => box.right)) };
+          });
+          expect(geometry.left).toBeGreaterThanOrEqual(0);
+          expect(geometry.right).toBeLessThanOrEqual(width);
+          expect(geometry.textLeft).toBeGreaterThanOrEqual(0);
+          expect(geometry.textRight).toBeLessThanOrEqual(width);
+
+          /* Approving takes two actions on every surface: the draft lands in the field, and nothing is sent. */
+          let approval: { field: string; sent: number; draftsLeft: number } | null = null;
+          if (variant === "many" && scheme === "light") {
+            if (phone) await drafts.first().tap(); else await drafts.first().click();
+            const field = page.locator("textarea").filter({ visible: true }).first();
+            await page.waitForFunction((prefix) => [...document.querySelectorAll("textarea")].some((node) => node.value.startsWith(prefix)), copy.reply);
+            approval = {
+              field: await field.inputValue(),
+              sent: await page.locator("[data-tts-message], [data-outbox-row]").filter({ hasText: copy.reply }).count(),
+              draftsLeft: await drafts.count(),
+            };
+            expect(approval.field).toBe(`${copy.reply}${"a".repeat(64)}`);
+            expect(approval.sent).toBe(0);
+            expect(approval.draftsLeft).toBe(3);
+            await frame("approve-tapped");
+          }
+          expect(pageErrors).toEqual([]);
+          readings.push({ variant, lang, scheme, width, markers: { from: copy.from, to: copy.to, below: copy.below }, order, closing, hintLines: hintLines.length, dotted,
+            replies: await drafts.allInnerTexts(), resting, top, geometry, approval, pageErrors });
+        } finally { await context.close(); }
+      }
+      const evidence = path.resolve("evidence/issue-report-hints/rendered.json");
+      fs.mkdirSync(path.dirname(evidence), { recursive: true });
+      fs.writeFileSync(evidence, JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 900_000);
 });

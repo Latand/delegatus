@@ -24,6 +24,7 @@ import { accountIdFromPath } from "@/lib/accounts/badge";
 import { conversationIdentity } from "@/lib/accounts/identity";
 import { activeCardMigration, cardMigrationState, migrationHoldsDelivery, migrationHoldsSends, migrationTargetName } from "@/lib/accounts/migration";
 import { getLocale, useLocale } from "@/lib/i18n";
+import { splitRelayMessageText } from "@/lib/orchestrator/relayText";
 import type { FileEntry } from "@/lib/types";
 import type { RuntimeReceipt } from "@/components/runtime/runtimeModel";
 import type { RuntimeVoiceTranscriptSegment } from "@/lib/runtime/contracts";
@@ -105,6 +106,7 @@ import {
   deliveryWaitText,
   type DeliveryWait,
 } from "./runtime/deliveryWait";
+import { DeliveryCheckCard } from "./runtime/DeliveryCheckCard";
 import { ReceiptChip, runtimeReceiptStatusText } from "./runtime/ReceiptChip";
 import {
   deliveryAttemptGroups,
@@ -485,27 +487,33 @@ export function RuntimeComposerReceipts({
     admittedAt: group.current.admittedAt ?? group.current.at,
     nowMs: now,
   });
+  const unknownStatusText = (receipt: RuntimeReceipt): string => t(receipt.status === "failed"
+    ? "composer.deliveryCheckEnded" : "composer.deliveryChecking");
+  const handoverActive = (receipt: RuntimeReceipt): boolean => receipt.status === "delivering" || receipt.status === "applying";
+  const unknownDetail = (receipt: RuntimeReceipt): string => t(handoverActive(receipt)
+    ? "composer.deliveryDiscardHandover"
+    : receipt.status === "failed" ? "composer.deliveryCheckEndedDetail" : "composer.deliveryCheckingDetail");
   const receiptStatusText = (receipt: RuntimeReceipt): string => receiptHasUnknownFate(receipt)
-    ? t("composer.deliveryChecking")
+    ? unknownStatusText(receipt)
     : runtimeReceiptStatusText(t, receipt);
+  /* The two controls at the size the settled chips use (`ReceiptChip`): a
+     44px touch target on a phone, a caption-height pill on the desktop. */
+  const uncertainButtonClass = "min-h-11 rounded-full border border-border bg-canvas px-3 py-0.5 text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 sm:min-h-0 sm:px-2";
+  /* #1560: an injection gets the verdict and NO controls. Both of these
+     re-arm or end the original operation, and the journal refuses either
+     for this kind — the engine does not deduplicate a second insertion,
+     and discarding would claim the operator ended something that may be
+     sitting in the thread. The reason line beside this says what is
+     actually known, which is the whole truth available. A retained
+     attachment copy with a known operation offers Re-check (#1647).
+     Unconfirmed local admission replays its retained envelope explicitly. */
   const uncertainControls = (receipt: RuntimeReceipt) => (
-    <span className="flex min-w-0 flex-wrap items-center justify-end gap-1.5" data-operation={receipt.operationId}>
-      <span role="status" className="text-caption text-warning">{t("composer.deliveryChecking")}</span>
-      {/* #1560: an injection gets the verdict and NO controls. Both of these
-          re-arm or end the original operation, and the journal refuses either
-          for this kind — the engine does not deduplicate a second insertion,
-          and discarding would claim the operator ended something that may be
-          sitting in the thread. The reason line beside this says what is
-          actually known, which is the whole truth available. A retained
-          attachment copy with a known operation offers Re-check (#1647).
-          Unconfirmed local admission replays its retained envelope explicitly. */}
-      {(!receipt.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX) || localRecoveryKeys.has(receipt.idempotencyKey)) && isRetryableReceipt(receipt) ? <>
-        {alternateRetry(receipt)
-          ? <button type="button" data-receipt-uncertain-retry disabled={actionsDisabled} className="min-h-11 rounded-full border border-border px-3" onClick={() => onRetry(receipt, "uncertain")}>{t("runtime.receipt.retry")}</button>
-          : <button type="button" disabled={actionsDisabled} className="min-h-11 rounded-full border border-border px-3" onClick={() => onRecheck?.(receipt)}>{t("composer.payloadRecheck")}</button>}
-        {onDiscard ? <button type="button" data-receipt-discard disabled={actionsDisabled} className="min-h-11 rounded-full border border-border px-3" onClick={() => onDiscard(receipt)}>{t("runtime.receipt.discard")}</button> : null}
-      </> : null}
-    </span>
+    (!receipt.operationId.startsWith(UNCONFIRMED_RECEIPT_PREFIX) || localRecoveryKeys.has(receipt.idempotencyKey)) && isRetryableReceipt(receipt) ? <>
+      {alternateRetry(receipt)
+        ? <button type="button" data-receipt-uncertain-retry disabled={actionsDisabled} className={`${uncertainButtonClass} hover:border-accent/45`} onClick={() => onRetry(receipt, "uncertain")}>{t("runtime.receipt.retry")}</button>
+        : <button type="button" disabled={actionsDisabled} className={`${uncertainButtonClass} hover:border-accent/45`} onClick={() => onRecheck?.(receipt)}>{t("composer.payloadRecheck")}</button>}
+      {onDiscard ? <button type="button" data-receipt-discard disabled={actionsDisabled || handoverActive(receipt)} title={handoverActive(receipt) ? t("composer.deliveryDiscardHandover") : undefined} className={`${uncertainButtonClass} hover:text-danger`} onClick={() => onDiscard(receipt)}>{t("runtime.receipt.discard")}</button> : null}
+    </> : null
   );
   /* A cause with its own wording is said once: an earlier attempt refused for
      it is in the row's counter, and its line would be the chip's line again. */
@@ -551,14 +559,29 @@ export function RuntimeComposerReceipts({
   /* A cause that says what to do in its own detail leaves the row to the cause:
      "send again" beside it was the action said twice, and on a phone it took
      the width the cause needed. */
-  const noticeLabel = t(noticeUnknown
-    ? "composer.deliveryChecking"
-    : noticeFailure?.saysWhatToDo ? "composer.deliveryFailed" : "composer.deliveryNotDelivered");
+  const noticeLabel = noticeUnknown
+    ? unknownStatusText(notice!.current)
+    : t(noticeFailure?.saysWhatToDo ? "composer.deliveryFailed" : "composer.deliveryNotDelivered");
   const noticeLine = notice
     ? noticeFailure?.cause
       ? `${noticeLabel} — ${noticeFailure.cause}`
       : noticeLabel
     : null;
+  /* The notice line already says the status of the delivery it speaks for, so
+     that delivery's card does not say it again; any other one names its own. */
+  const unknownCard = (receipt: RuntimeReceipt) => (
+    <DeliveryCheckCard
+      key={receipt.operationId}
+      operationId={receipt.operationId}
+      text={receipt.text ? stripTaskReferenceLines(receipt.text) : null}
+      status={unknownStatusText(receipt)}
+      statusShown={notice?.current.operationId !== receipt.operationId}
+      detail={unknownDetail(receipt)}
+      pending={!receiptIsTerminal(receipt.status)}
+    >
+      {uncertainControls(receipt)}
+    </DeliveryCheckCard>
+  );
   const noticeAttemptLabel = notice && notice.attempts.length > 1
     ? t("runtime.receipt.attemptCount", { count: notice.attempts.length })
     : null;
@@ -589,6 +612,10 @@ export function RuntimeComposerReceipts({
   const problemBadgeCount = notice ? uncertainCurrent.length : problemReceipts.length;
   const busyRetry = pendingReceipts.some((receipt) => typeof receipt.reason === "string" && RECOVERABLE_BUSY_RETRY_REASONS.has(receipt.reason));
   const receiptSummaryLabel = t("runtime.receipt.summary", { count: visibleAttempts.length + textlessProblems.length });
+  /* A relay's fixed preamble would fill the one truncated line and hide the
+     handoff's own words, so the preview starts at those. */
+  const summaryText = visibleAttempts[0]?.text ? stripTaskReferenceLines(visibleAttempts[0].text) : null;
+  const summaryPreview = summaryText ? splitRelayMessageText(summaryText)?.body ?? summaryText : null;
   const disclosureLabel = t(detailsOpen ? "runtime.receipt.hideDetails" : "runtime.receipt.showDetails");
   const summaryAriaLabel = noticeLine
     ? `${disclosureLabel}. ${noticeLine}${noticeAttemptLabel ? `. ${noticeAttemptLabel}` : ""}`
@@ -639,7 +666,7 @@ export function RuntimeComposerReceipts({
               <ChevronRight className="h-3 w-3 shrink-0 text-muted transition-transform duration-150 group-open:rotate-90 motion-reduce:transition-none" aria-hidden />
               {notice ? (
                 <>
-                  <CircleAlert className="h-3 w-3 shrink-0 text-danger" aria-hidden />
+                  <CircleAlert className={`h-3 w-3 shrink-0 ${noticeUnknown ? "text-warning" : "text-danger"}`} aria-hidden />
                   {/* At rest: status word + terse cause on one truncating line;
                       the whole sentence rides on hover. */}
                   <span
@@ -666,9 +693,9 @@ export function RuntimeComposerReceipts({
                   <span
                     className="min-w-[3rem] flex-1 truncate text-right text-muted"
                     data-receipt-preview
-                    title={visibleAttempts[0]?.text ? stripTaskReferenceLines(visibleAttempts[0].text) : undefined}
+                    title={summaryPreview ?? undefined}
                   >
-                    {visibleAttempts[0]?.text ? stripTaskReferenceLines(visibleAttempts[0].text) : null}
+                    {summaryPreview}
                   </span>
                 </>
               )}
@@ -767,7 +794,10 @@ export function RuntimeComposerReceipts({
               </div>
             ) : null}
             <div
-              className="max-h-36 space-y-1 overflow-y-auto border-t border-border/70 p-1.5"
+              /* A card for an unconfirmed delivery holds the message, its one
+                 sentence and two 44px controls on a phone, which the settled
+                 rows' cap would cut through. */
+              className={`${unknownReceipts.length ? "max-h-60" : "max-h-36"} space-y-1 overflow-y-auto border-t border-border/70 p-1.5`}
               data-runtime-receipt-details
             >
               {attemptGroups.map((group) => {
@@ -793,6 +823,7 @@ export function RuntimeComposerReceipts({
                   && !uncertain
                   && typeof receipt.reason === "string"
                   && RECOVERABLE_BUSY_RETRY_REASONS.has(receipt.reason);
+                if (unknownFate) return unknownCard(receipt);
                 return (
                   <div
                     key={receipt.operationId}
@@ -820,7 +851,7 @@ export function RuntimeComposerReceipts({
                           <span className="sr-only">{t("runtime.receipt.attemptCount", { count: group.attempts.length })}</span>
                         </Badge>
                       ) : null}
-                      {unknownFate ? uncertainControls(receipt) : <ReceiptChip
+                      <ReceiptChip
                         receipt={receipt}
                         wait={wait}
                         actionsDisabled={actionsDisabled}
@@ -833,7 +864,7 @@ export function RuntimeComposerReceipts({
                               : undefined}
                         onEdit={editable(receipt) ? () => onEdit(receipt) : undefined}
                         onDiscard={discardable && onDiscard ? () => onDiscard(receipt) : undefined}
-                      />}
+                      />
                       {/* A settled problem is dismissible (issue #264 rule 3):
                           the dismissal records every settled attempt of the
                           row and persists, while a still-moving attempt in the
@@ -878,7 +909,7 @@ export function RuntimeComposerReceipts({
                         className="min-w-0 max-w-full text-right text-caption text-muted"
                         data-receipt-uncertain-why
                       >
-                        {unknownFate ? t("composer.deliveryCheckingDetail") : deliveryUncertainWhy(t, wait!)}
+                        {deliveryUncertainWhy(t, wait!)}
                       </span>
                     ) : null}
                     {history.length ? (
@@ -898,6 +929,7 @@ export function RuntimeComposerReceipts({
                   dismissal the standalone pills used to carry. */}
               {textlessRows.map((bucket) => {
                 const receipt = bucket[0]!;
+                if (receiptHasUnknownFate(receipt)) return unknownCard(receipt);
                 return (
                   <div
                     key={receipt.operationId}
@@ -915,15 +947,12 @@ export function RuntimeComposerReceipts({
                         <span className="sr-only">{t("runtime.receipt.attemptCount", { count: bucket.length })}</span>
                       </Badge>
                     ) : null}
-                    {receiptHasUnknownFate(receipt) ? uncertainControls(receipt) : <ReceiptChip
+                    <ReceiptChip
                       receipt={receipt}
                       actionsDisabled={actionsDisabled}
                       onRetry={isRetryableReceipt(receipt) && receipt.status === "failed" ? () => retryFailed(receipt) : undefined}
-                    />}
-                    {receiptHasUnknownFate(receipt) && receipt.reason ? (
-                      <span className="w-full break-words text-right text-caption text-muted" data-receipt-uncertain-why>{t("composer.deliveryCheckingDetail")}</span>
-                    ) : null}
-                    {onDismiss && !receiptHasUnknownFate(receipt) && receiptIsTerminal(receipt.status) ? (
+                    />
+                    {onDismiss && receiptIsTerminal(receipt.status) ? (
                       <button
                         type="button"
                         aria-label={t("runtime.receipt.dismiss")}
@@ -4070,7 +4099,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       const body = (await response.json().catch(() => ({}))) as { operationId?: string; receipt?: RuntimeReceipt; error?: string };
       const accepted = body.receipt && rememberRuntimeReceipt(body.receipt, receipt, mode !== "uncertain", body.operationId);
       if (!response.ok || !accepted) {
-        setStatus({ kind: "err", text: body.error ?? t("common.failedSend") });
+        setStatus({ kind: "err", text: t("composer.deliveryRetryFailed") });
         return;
       }
     } catch {
@@ -4105,9 +4134,11 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       const body = (await response.json().catch(() => ({}))) as { operationId?: string; receipt?: RuntimeReceipt; error?: string };
       const accepted = body.receipt && rememberRuntimeReceipt(body.receipt, receipt, false, body.operationId);
       if (!response.ok || !accepted) {
-        setStatus({ kind: "err", text: body.error ?? t("common.failedSend") });
+        setStatus({ kind: "err", text: t(response.status === 409
+          ? "composer.deliveryDiscardBusy" : "composer.deliveryDiscardFailed") });
         return;
       }
+      if (body.receipt?.reason === "delivery-discarded") dismissReceipts([receipt.operationId]);
     } catch {
       setStatus({ kind: "err", text: t("common.serverUnavailable") });
     } finally {
