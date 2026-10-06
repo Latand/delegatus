@@ -1464,7 +1464,9 @@ The relay service checks again before posting.
 **[rc] Requester context.** A service that implements the feature sends
 three more `Input` fields, only when `requester_context` was listed both
 in the stored claim at enqueue and in the claim that takes the request.
-Each is optional; absent and null mean the same, and a request without them is answered exactly as above.
+Each is optional. For requester and memory, absent and null mean the same.
+The tool index is an array; absent or empty adds no hand-off action.
+A request without the additions is answered exactly as above.
 
 | Field | Written by | Meaning |
 |---|---|---|
