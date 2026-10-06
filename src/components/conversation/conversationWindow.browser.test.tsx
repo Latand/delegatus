@@ -1929,12 +1929,16 @@ describe("delivery outcome settlement", () => {
         try {
           const line = page.locator("[data-delivery-notice-cause]");
           await line.waitFor();
-          expect(await line.textContent()).toBe(translate(lang, "composer.deliveryChecking"));
+          /* The notice line speaks for a send that has ended, so an unknown
+             outcome there is a check that is over: since #2545 it reads
+             "Delivery unconfirmed", and "Checking delivery…" belongs to a
+             delivery still in flight, which the card case below draws. */
+          expect(await line.textContent()).toBe(translate(lang, "composer.deliveryCheckEnded"));
           expect(await page.locator("[data-delivery-notice-retry]").getAttribute("aria-label"))
             .toBe(translate(lang, "composer.payloadRecheck"));
           await page.locator("[data-delivery-notice-retry]").click();
           expect(await page.locator("[data-fixture-sends]").textContent()).toBe("0");
-          await page.screenshot({ path: path.join(out, `checking-${key}.png`), fullPage: true });
+          await page.screenshot({ path: path.join(out, `unconfirmed-${key}.png`), fullPage: true });
           await page.locator("[data-confirm-delivery]").click();
           await page.waitForFunction(() => !document.querySelector("[data-runtime-receipt-stack]"));
           await page.screenshot({ path: path.join(out, `delivered-${key}.png`), fullPage: true });

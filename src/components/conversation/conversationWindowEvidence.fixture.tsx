@@ -1071,13 +1071,15 @@ function AgentImagesFixture() {
 }
 
 function DeliverySettlementFixture() {
-  const [status, setStatus] = useState<"checking" | "delivered" | "failed">("checking");
+  /* `unconfirmed` is a send that ended without anyone learning whether it
+     arrived: the only unknown outcome the notice line speaks for. */
+  const [status, setStatus] = useState<"unconfirmed" | "delivered" | "failed">("unconfirmed");
   const [sends, setSends] = useState(0);
   const receipt: RuntimeReceipt = {
     operationId: "settlement-operation", idempotencyKey: "settlement-key",
-    conversationId: "conversation_settlement", kind: "send", status: status === "checking" ? "failed" : status,
+    conversationId: "conversation_settlement", kind: "send", status: status === "unconfirmed" ? "failed" : status,
     text: "Please check the release.", at: new Date().toISOString(), revision: 1,
-    reason: status === "checking" ? "delivery was started by an earlier executor" : null,
+    reason: status === "unconfirmed" ? "delivery was started by an earlier executor" : null,
     resend: status === "failed" ? "safe" : status === "delivered" ? "not-needed" : "verify-first",
   };
   return <div data-evidence-case="delivery-settlement" className="min-h-dvh bg-canvas p-4 text-primary">
