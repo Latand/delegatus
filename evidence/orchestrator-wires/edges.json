@@ -1,0 +1,133 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "holdMs": 60000,
+  "fadeMs": 1600,
+  "frames": [
+    {
+      "form": "desktop",
+      "frame": "scrolled-under",
+      "geometry": {
+        "cardTop": 98.875,
+        "scrollerTop": 149
+      },
+      "ports": 0,
+      "portsOutside": 0,
+      "rings": 0,
+      "ringsOutside": 0,
+      "onHead": 0,
+      "stubs": [
+        "↑ +1"
+      ],
+      "drawn": {
+        "layer": true,
+        "paused": true,
+        "wires": [],
+        "stubs": [
+          "↑ +1"
+        ],
+        "seatPort": 1,
+        "dots": 1,
+        "overflow": false
+      }
+    },
+    {
+      "form": "desktop",
+      "frame": "scrolled-partly",
+      "ports": 1,
+      "portsOutside": 0,
+      "rings": 0,
+      "ringsOutside": 0,
+      "onHead": 0,
+      "stubs": []
+    },
+    {
+      "form": "phone",
+      "frame": "scrolled-under",
+      "geometry": {
+        "cardTop": 118.375,
+        "scrollerTop": 168.75
+      },
+      "ports": 0,
+      "portsOutside": 0,
+      "rings": 0,
+      "ringsOutside": 0,
+      "onHead": 0,
+      "stubs": [
+        "↑ +1"
+      ],
+      "drawn": {
+        "layer": true,
+        "paused": true,
+        "wires": [],
+        "stubs": [
+          "↑ +1"
+        ],
+        "seatPort": 0,
+        "dots": 1,
+        "overflow": false
+      }
+    },
+    {
+      "form": "phone",
+      "frame": "scrolled-partly",
+      "ports": 1,
+      "portsOutside": 0,
+      "rings": 0,
+      "ringsOutside": 0,
+      "onHead": 0,
+      "stubs": []
+    },
+    {
+      "form": "desktop",
+      "frame": "late-delta",
+      "layer": true,
+      "paused": false,
+      "wires": [
+        {
+          "taskId": "t-links",
+          "tone": "needs",
+          "flows": false,
+          "opacity": 1,
+          "crossed": 0,
+          "corners": 2
+        }
+      ],
+      "stubs": [],
+      "seatPort": 1,
+      "dots": 0,
+      "overflow": false
+    },
+    {
+      "form": "desktop",
+      "frame": "reduce-during-pulse",
+      "layer": true,
+      "paused": false,
+      "wires": [
+        {
+          "taskId": "t-upload",
+          "tone": "live",
+          "flows": true,
+          "opacity": 1,
+          "crossed": 0,
+          "corners": 2
+        }
+      ],
+      "stubs": [],
+      "seatPort": 1,
+      "dots": 0,
+      "overflow": false,
+      "animations": 0
+    },
+    {
+      "form": "desktop",
+      "frame": "reduce-during-fade",
+      "layer": false,
+      "paused": false,
+      "wires": [],
+      "stubs": [],
+      "seatPort": 0,
+      "dots": 0,
+      "overflow": false
+    }
+  ]
+}

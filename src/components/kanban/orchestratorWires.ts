@@ -14,6 +14,9 @@ import { ORCHESTRATOR_WIRE_FADE_MS, ORCHESTRATOR_WIRE_HOLD_MS, type LinkTone, ty
 
 /** The board's own card flight (`fly()` in KanbanBoard.tsx); a move's wire lands with the card. */
 const CARD_FLIGHT_MS = 450;
+/** A port closer than this to the column's visible edge is clipped: its card is counted at the edge. */
+const PORT_CLEARANCE = 6;
+const REDUCED_MOTION = "(prefers-reduced-motion: reduce)";
 const SVG = "http://www.w3.org/2000/svg";
 
 export interface WiresHost {
@@ -47,7 +50,7 @@ export interface OrchestratorWires {
 
 interface Wire {
   taskId: string;
-  /** When the seat last acted on the card, on this client's clock. */
+  /** When the seat last acted on the card, from the action's record, on the layer's clock. */
   at: number;
   /** A move waits for the card's own flight. */
   showFrom: number;
@@ -64,7 +67,7 @@ interface Wire {
 interface Point { x: number; y: number }
 type Box = Pick<DOMRect, "left" | "top" | "right" | "bottom" | "width" | "height">;
 type Spot =
-  | { wire: Wire; card: Box; column: Box; node: HTMLElement }
+  | { wire: Wire; card: Box; column: Box; node: HTMLElement; view: Box }
   | { wire: Wire; hidden: "above" | "below"; column: Box; view: Box; status: string }
   | { wire: Wire; hidden: "away"; status: string | null };
 
@@ -76,7 +79,7 @@ function svg<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string,
 
 /** Reduced motion, or a document that cannot animate: a wire appears and goes without motion. */
 function reducedMotion(node: Element): boolean {
-  return typeof node.animate !== "function" || (typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  return typeof node.animate !== "function" || (typeof window.matchMedia === "function" && window.matchMedia(REDUCED_MOTION).matches);
 }
 
 function escape(value: string): string {
@@ -99,6 +102,7 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
   let shared: SVGGElement | null = null;
   let marks: HTMLDivElement | null = null;
   let resized: ResizeObserver | null = null;
+  let motionQuery: MediaQueryList | null = null;
   let seatFade: Animation | null = null;
   const stubs = new Map<string, { chip: HTMLElement; wire: SVGPathElement; fade: Animation[] | null }>();
   let seatDot: SVGCircleElement | null = null;
@@ -133,6 +137,21 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
   function gone(animation: Animation, node: Element) { void animation.finished.then(() => node.remove(), () => node.remove()); }
 
   const schedule = () => { if (layer && !frame) frame = window.requestAnimationFrame(() => { frame = 0; update(); }); };
+  /* Reduced motion switched on while a wire shows: every pulse and fade stops where it is, the wires
+     stay still, and a wire whose hold is over goes at once. */
+  const onMotionPreference = () => {
+    if (!layer) return;
+    if (reduced()) {
+      for (const motion of [...motions, ...fades]) motion.cancel();
+      motions.clear();
+      fades.clear();
+      for (const wire of wires.values()) { wire.fade = null; wire.ring?.node.remove(); wire.ring = null; }
+      for (const stub of stubs.values()) stub.fade = null;
+      seatFade = null;
+    }
+    expire();
+    schedule();
+  };
   const onVisibility = () => {
     if (!layer) return;
     layer.toggleAttribute("data-paused", document.hidden);
@@ -157,6 +176,8 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
     window.addEventListener("scroll", schedule, { capture: true, passive: true });
     window.addEventListener("resize", schedule);
     document.addEventListener("visibilitychange", onVisibility);
+    motionQuery = typeof window.matchMedia === "function" ? window.matchMedia(REDUCED_MOTION) : null;
+    motionQuery?.addEventListener?.("change", onMotionPreference);
     /* A seat or a column that changes size moves the cards without a render. */
     if (typeof ResizeObserver === "function") {
       resized = new ResizeObserver(schedule);
@@ -169,6 +190,8 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
     window.removeEventListener("scroll", schedule, { capture: true });
     window.removeEventListener("resize", schedule);
     document.removeEventListener("visibilitychange", onVisibility);
+    motionQuery?.removeEventListener?.("change", onMotionPreference);
+    motionQuery = null;
     resized?.disconnect();
     resized = null;
     if (frame) window.cancelAnimationFrame(frame);
@@ -199,9 +222,11 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
     const bottom = Math.min(view.bottom, window.innerHeight);
     if (card.right < 0 || card.left > window.innerWidth - 8 || view.right < 8 || view.left > window.innerWidth - 8) return { wire, hidden: "away", status };
     const clip: Box = { left: columnRect.left, right: columnRect.right, width: columnRect.width, top, bottom, height: bottom - top };
-    if (card.top + 30 > bottom) return { wire, hidden: "below", column: columnRect, view: clip, status };
-    if (card.bottom - 30 < top) return { wire, hidden: "above", column: columnRect, view: clip, status };
-    return { wire, card, column: columnRect, node };
+    /* A port the column has scrolled out of view would be painted over the column's header or past its foot. */
+    const port = portY(card);
+    if (port > bottom - PORT_CLEARANCE) return { wire, hidden: "below", column: columnRect, view: clip, status };
+    if (port < top + PORT_CLEARANCE) return { wire, hidden: "above", column: columnRect, view: clip, status };
+    return { wire, card, column: columnRect, node, view: clip };
   }
 
   /** Where a wire leaves the seat: its right edge at the bus when the seat is at
@@ -311,10 +336,10 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
         const action = wire.pending;
         wire.pending = null;
         wire.ring?.node.remove();
-        wire.ring = still ? null : pulse(action, group.children[0] as SVGPathElement, d, spot.node);
+        wire.ring = still ? null : pulse(action, group.children[0] as SVGPathElement, d, spot.node, spot.view);
       } else if (wire.ring) {
-        /* The ring stays on what it rings while the board scrolls under it. */
-        if (wire.ring.node.isConnected && wire.ring.round.isConnected) ringAt(wire.ring.node, rect(wire.ring.round));
+        /* The ring stays on what it rings while the board scrolls under it, inside the column's visible part. */
+        if (wire.ring.node.isConnected && wire.ring.round.isConnected) ringAt(wire.ring.node, rect(wire.ring.round), spot.view);
         else { wire.ring.node.remove(); wire.ring = null; }
       }
     }
@@ -371,14 +396,19 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
   }
 
   /* The variant's pulse: a new lane's wire grows from the seat, a dot runs down the wire, the card (or the lane) is ringed. */
-  function ringAt(ring: SVGRectElement, box: Box) {
+  function ringAt(ring: SVGRectElement, box: Box, clip: Box) {
+    const top = Math.max(box.top - 3, clip.top);
+    const bottom = Math.min(box.bottom + 3, clip.bottom);
     ring.setAttribute("x", String(box.left - 3));
-    ring.setAttribute("y", String(box.top - 3));
+    ring.setAttribute("y", String(top));
     ring.setAttribute("width", String(box.width + 6));
-    ring.setAttribute("height", String(box.height + 6));
+    ring.setAttribute("height", String(Math.max(0, bottom - top)));
+    /* A sliver at the column's edge rings nothing. */
+    if (bottom - top < 8) ring.setAttribute("visibility", "hidden");
+    else ring.removeAttribute("visibility");
   }
 
-  function pulse(action: SeatAction, path: SVGPathElement, d: string, card: HTMLElement): Wire["ring"] {
+  function pulse(action: SeatAction, path: SVGPathElement, d: string, card: HTMLElement, clip: Box): Wire["ring"] {
     if (!marks || !shared) return null;
     const grows = action.kind === "pipeline" || action.kind === "task";
     if (grows && typeof path.getTotalLength === "function") {
@@ -401,7 +431,7 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
     if (action.kind === "move") return null;
     const round = (action.pipelineId ? card.querySelector<HTMLElement>(`[data-pipeline="${escape(action.pipelineId)}"]`) : null) ?? card;
     const ring = svg("rect", { rx: 14, class: "oa-ring" });
-    ringAt(ring, rect(round));
+    ringAt(ring, rect(round), clip);
     shared.before(ring);
     gone(track(ring.animate(
       [{ opacity: 0, strokeWidth: 8 }, { opacity: 1, strokeWidth: 2, offset: 0.15 }, { opacity: 1, offset: 0.8 }, { opacity: 0 }],
@@ -447,12 +477,18 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
       if (!actions.length || !seatNode()) return;
       const clock = now();
       const still = reduced();
+      let fresh = false;
       for (const action of actions) {
+        /* The action's own time on the layer's clock: a wire read late has only the rest of its minute. */
+        const at = Math.min(clock, action.at + (frozenAt === null ? offset : frozenAt - Date.now()));
         const prior = wires.get(action.taskId);
+        if (clock - at >= ORCHESTRATOR_WIRE_HOLD_MS || (prior && prior.at >= at)) continue;
         prior?.fade?.cancel();
         const showFrom = action.kind === "move" && !still && !prior?.group ? clock + CARD_FLIGHT_MS : clock;
-        wires.set(action.taskId, { taskId: action.taskId, at: clock, showFrom, pending: action, group: prior?.group ?? null, ring: prior?.ring ?? null, fading: false, fade: null });
+        wires.set(action.taskId, { taskId: action.taskId, at, showFrom, pending: action, group: prior?.group ?? null, ring: prior?.ring ?? null, fading: false, fade: null });
+        fresh = true;
       }
+      if (!fresh) return;
       mount();
       expire();
       update();

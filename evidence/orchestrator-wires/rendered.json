@@ -53,8 +53,8 @@
       "overflow": false,
       "stats": {
         "updates": 8,
-        "totalMs": 41.29999989271164,
-        "maxMs": 10.5,
+        "totalMs": 47.00000011920929,
+        "maxMs": 17.200000047683716,
         "rectReads": 63,
         "wires": 3,
         "stubs": 0,
@@ -79,7 +79,7 @@
           "taskId": "t-onboarding",
           "tone": "live",
           "flows": true,
-          "opacity": 0.671116,
+          "opacity": 0.601213,
           "crossed": 0,
           "corners": 2
         },
@@ -87,7 +87,7 @@
           "taskId": "t-rounds",
           "tone": "live",
           "flows": true,
-          "opacity": 0.671116,
+          "opacity": 0.603401,
           "crossed": 0,
           "corners": 2
         }
@@ -98,8 +98,8 @@
       "overflow": false,
       "stats": {
         "updates": 13,
-        "totalMs": 72.69999992847443,
-        "maxMs": 10.5,
+        "totalMs": 78.1000000834465,
+        "maxMs": 17.200000047683716,
         "rectReads": 123,
         "wires": 3,
         "stubs": 0,
@@ -127,8 +127,8 @@
       "overflow": false,
       "stats": {
         "updates": 15,
-        "totalMs": 92.09999996423721,
-        "maxMs": 11.600000023841858,
+        "totalMs": 93.80000013113022,
+        "maxMs": 17.200000047683716,
         "rectReads": 140,
         "wires": 1,
         "stubs": 0,
@@ -147,8 +147,8 @@
       "overflow": false,
       "stats": {
         "updates": 16,
-        "totalMs": 99.19999998807907,
-        "maxMs": 11.600000023841858,
+        "totalMs": 98.60000014305115,
+        "maxMs": 17.200000047683716,
         "rectReads": 145,
         "wires": 0,
         "stubs": 0,
@@ -187,10 +187,10 @@
       "dots": 1,
       "overflow": false,
       "stats": {
-        "updates": 9,
-        "totalMs": 22.80000001192093,
-        "maxMs": 9.5,
-        "rectReads": 53,
+        "updates": 8,
+        "totalMs": 26.799999952316284,
+        "maxMs": 10,
+        "rectReads": 48,
         "wires": 1,
         "stubs": 0,
         "elements": 10
@@ -216,10 +216,10 @@
       "dots": 0,
       "overflow": false,
       "stats": {
-        "updates": 30,
-        "totalMs": 49.6000000834465,
-        "maxMs": 9.5,
-        "rectReads": 222,
+        "updates": 29,
+        "totalMs": 74.39999985694885,
+        "maxMs": 10,
+        "rectReads": 217,
         "wires": 1,
         "stubs": 0,
         "elements": 8
@@ -235,23 +235,23 @@
           "taskId": "t-rounds",
           "tone": "live",
           "flows": true,
-          "opacity": 0.677905,
+          "opacity": 0.632875,
           "crossed": 0,
           "corners": 2
         }
       ],
       "stubs": [],
       "seatPort": 0,
-      "dots": 1,
+      "dots": 0,
       "overflow": false,
       "stats": {
-        "updates": 74,
-        "totalMs": 114.30000013113022,
-        "maxMs": 9.5,
-        "rectReads": 592,
+        "updates": 68,
+        "totalMs": 161.49999970197678,
+        "maxMs": 12.300000011920929,
+        "rectReads": 544,
         "wires": 1,
         "stubs": 0,
-        "elements": 9
+        "elements": 8
       }
     },
     {
@@ -274,10 +274,10 @@
       "dots": 0,
       "overflow": false,
       "stats": {
-        "updates": 96,
-        "totalMs": 140.30000019073486,
-        "maxMs": 9.5,
-        "rectReads": 764,
+        "updates": 90,
+        "totalMs": 188.39999961853027,
+        "maxMs": 12.300000011920929,
+        "rectReads": 716,
         "wires": 1,
         "stubs": 0,
         "elements": 8
@@ -294,10 +294,10 @@
       "dots": 0,
       "overflow": false,
       "stats": {
-        "updates": 97,
-        "totalMs": 142.30000019073486,
-        "maxMs": 9.5,
-        "rectReads": 768,
+        "updates": 91,
+        "totalMs": 189.89999961853027,
+        "maxMs": 12.300000011920929,
+        "rectReads": 720,
         "wires": 0,
         "stubs": 0,
         "elements": 0
@@ -332,8 +332,8 @@
       "overflow": false,
       "stats": {
         "updates": 5,
-        "totalMs": 25.80000001192093,
-        "maxMs": 8.199999988079071,
+        "totalMs": 26.099999964237213,
+        "maxMs": 9,
         "rectReads": 43,
         "wires": 2,
         "stubs": 0,
@@ -361,8 +361,8 @@
       "overflow": false,
       "stats": {
         "updates": 3,
-        "totalMs": 5.699999988079071,
-        "maxMs": 4.300000011920929,
+        "totalMs": 3.099999964237213,
+        "maxMs": 1.899999976158142,
         "rectReads": 15,
         "wires": 1,
         "stubs": 0,
@@ -381,8 +381,8 @@
       "overflow": false,
       "stats": {
         "updates": 3,
-        "totalMs": 5.699999988079071,
-        "maxMs": 4.300000011920929,
+        "totalMs": 3.099999964237213,
+        "maxMs": 1.899999976158142,
         "rectReads": 15,
         "wires": 0,
         "stubs": 0,

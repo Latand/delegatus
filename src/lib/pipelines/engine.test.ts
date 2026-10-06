@@ -9624,6 +9624,8 @@ test("retry and skip recover a completed pane-hosted semantic contradiction", as
       state: "pending",
       input: action === "retry-stage" ? null : "Skipped by operator.",
       activatedBy: action === "retry-stage" ? null : { stageId: "plan", attempt: 1, edge: "pass" },
+      /* The hand that put the cursor there, for the attempt it launches. */
+      launchedBy: { actor: { kind: "operator" }, at: expect.any(String) },
     });
   }
 });

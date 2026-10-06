@@ -4,7 +4,7 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
-import { ORCHESTRATOR_BURST_LIMIT, orchestratorLinks, seatActions } from "./orchestratorArrows";
+import { ORCHESTRATOR_BURST_LIMIT, ORCHESTRATOR_WIRE_HOLD_MS, orchestratorLinks, seatActions } from "./orchestratorArrows";
 
 /* The link rule and the seat's actions (docs/design/orchestrator-arrows.md §2, §5). */
 
@@ -75,6 +75,8 @@ describe("orchestratorLinks", () => {
 describe("seatActions", () => {
   const actions = (before: { tasks?: BoardTask[]; pipelines?: Pipeline[] }, after: { tasks?: BoardTask[]; pipelines?: Pipeline[] }, seat: (string | null)[] = [SEAT]) =>
     seatActions({ tasks: before.tasks ?? [], pipelines: before.pipelines ?? [] }, { tasks: after.tasks ?? [], pipelines: after.pipelines ?? [] }, seat, NOW);
+  const ms = (secondsAgo: number) => NOW - secondsAgo * 1_000;
+  const hand = (actor: unknown, secondsAgo = 3) => ({ launchedBy: { actor, at: at(secondsAgo) } });
 
   test("a board that did not change holds no action", () => {
     const tasks = [task("a", "assigned", [], { statusBy: { actor: seatActor, from: "inbox", at: at(5) } })];
@@ -83,10 +85,10 @@ describe("seatActions", () => {
     expect(actions({ tasks, pipelines }, { tasks: [...tasks], pipelines: [...pipelines] })).toEqual([]);
   });
 
-  test("a new lane the seat made is a started pipeline on each of its tasks", () => {
+  test("a new lane the seat made is a started pipeline on each of its tasks, timed from its creation", () => {
     expect(actions({ pipelines: [] }, { pipelines: [lane("p1", ["a", "b"], "running", { createdAt: at(2) })] })).toEqual([
-      { kind: "pipeline", taskId: "a", pipelineId: "p1" },
-      { kind: "pipeline", taskId: "b", pipelineId: "p1" },
+      { kind: "pipeline", taskId: "a", pipelineId: "p1", at: ms(2) },
+      { kind: "pipeline", taskId: "b", pipelineId: "p1", at: ms(2) },
     ]);
   });
 
@@ -106,54 +108,71 @@ describe("seatActions", () => {
       task("c", "assigned", [], { statusBy: { actor: { kind: "agent", role: "builder", conversationId: "conversation_worker" }, from: "inbox", at: at(1) } }),
       task("d", "assigned"),
     ];
-    expect(actions({ tasks: before }, { tasks: after })).toEqual([{ kind: "move", taskId: "a", pipelineId: null }]);
+    expect(actions({ tasks: before }, { tasks: after })).toEqual([{ kind: "move", taskId: "a", pipelineId: null, at: ms(1) }]);
   });
 
   test("a second move by the seat is a new action, and the same record read again is not", () => {
     const first = task("a", "assigned", [], { statusBy: { actor: seatActor, from: "inbox", at: at(30) } });
     const second = task("a", "blocked", [], { statusBy: { actor: seatActor, from: "assigned", at: at(1) } });
-    expect(actions({ tasks: [first] }, { tasks: [second] })).toEqual([{ kind: "move", taskId: "a", pipelineId: null }]);
+    expect(actions({ tasks: [first] }, { tasks: [second] })).toEqual([{ kind: "move", taskId: "a", pipelineId: null, at: ms(1) }]);
     expect(actions({ tasks: [first] }, { tasks: [{ ...first, text: "Renamed" } as BoardTask] })).toEqual([]);
   });
 
+  test("an action is timed from its record: one read late keeps the rest of its minute, one past the minute is none", () => {
+    const before = [task("a", "inbox")];
+    const moved = (secondsAgo: number) => [task("a", "assigned", [], { statusBy: { actor: seatActor, from: "inbox", at: at(secondsAgo) } })];
+    expect(actions({ tasks: before }, { tasks: moved(30) })).toEqual([{ kind: "move", taskId: "a", pipelineId: null, at: ms(30) }]);
+    expect(actions({ tasks: before }, { tasks: moved(300) })).toEqual([]);
+    expect(actions({ tasks: before }, { tasks: moved(ORCHESTRATOR_WIRE_HOLD_MS / 1_000) })).toEqual([]);
+    /* A record ahead of this clock reads as now. */
+    expect(actions({ tasks: before }, { tasks: moved(-20) })).toEqual([{ kind: "move", taskId: "a", pipelineId: null, at: NOW }]);
+  });
+
   test("a task the seat created is an action; a row that only gained an old record is not", () => {
-    expect(actions({ tasks: [] }, { tasks: [task("a", "inbox", [], { statusBy: { actor: seatActor, from: null, at: at(1) } })] })).toEqual([{ kind: "task", taskId: "a", pipelineId: null }]);
+    expect(actions({ tasks: [] }, { tasks: [task("a", "inbox", [], { statusBy: { actor: seatActor, from: null, at: at(1) } })] })).toEqual([{ kind: "task", taskId: "a", pipelineId: null, at: ms(1) }]);
     expect(actions({ tasks: [] }, { tasks: [task("a", "inbox", [], { statusBy: { actor: seatActor, from: null, at: at(86_400) } })] })).toEqual([]);
   });
 
-  test("a relaunch the seat recorded is a launched stage; the engine's own next stage is not", () => {
-    const before = lane("p1", ["a"], "running", { runs: [run("build", { startedAt: at(600), state: "failed" })] });
-    const relaunched = lane("p1", ["a"], "running", {
-      runs: [run("build", { startedAt: at(600), state: "failed" }, { startedAt: at(1) })],
-      remoteAction: { id: "r", action: "retry-stage", state: "settled", fence: "f", at: at(3), actor: seatActor },
-    });
-    expect(actions({ pipelines: [before] }, { pipelines: [relaunched] })).toEqual([{ kind: "stage", taskId: "a", pipelineId: "p1" }]);
-    const advanced = lane("p1", ["a"], "running", { runs: [run("build", { startedAt: at(600), state: "passed" }), run("review", { startedAt: at(1), activatedBy: { stageId: "build", attempt: 1, edge: "pass" } })] });
+  test("an attempt the seat launched by hand is a launched stage, timed from its start", () => {
+    const before = lane("p1", ["a"], "needs_decision", { runs: [run("build", { startedAt: at(600), state: "failed" })] });
+    const relaunched = lane("p1", ["a"], "running", { runs: [run("build", { startedAt: at(600), state: "failed" }, { startedAt: at(1), ...hand(seatActor) })] });
+    expect(actions({ pipelines: [before] }, { pipelines: [relaunched] })).toEqual([{ kind: "stage", taskId: "a", pipelineId: "p1", at: ms(1) }]);
+  });
+
+  test("the engine's own launches never draw, whatever the seat did on the lane before", () => {
+    /* The lane already holds a settled seat retry, a seat review grant and a seat acceptance, and build #2 the seat launched. */
+    const history = {
+      remoteAction: { id: "r", action: "retry-stage", state: "settled", fence: "f", at: at(40), actor: seatActor },
+      reviewGrants: [{ clientRequestId: "g", stageId: "review", rounds: 1, actor: seatActor, at: at(30) }],
+      reviewAcceptances: [{ clientRequestId: "h", stageId: "review", actor: seatActor, at: at(20) }],
+    };
+    const build = [{ startedAt: at(600), state: "failed" }, { startedAt: at(40), state: "passed", ...hand(seatActor, 40) }];
+    const before = lane("p1", ["a"], "running", { ...history, runs: [run("build", ...build)] });
+    const advanced = lane("p1", ["a"], "running", { ...history, runs: [run("build", ...build), run("review", { startedAt: at(1), activatedBy: { stageId: "build", attempt: 2, edge: "pass" } })] });
     expect(actions({ pipelines: [before] }, { pipelines: [advanced] })).toEqual([]);
   });
 
-  test("a relaunch by the operator, and one with no writer on record, draw nothing", () => {
-    const before = lane("p1", ["a"], "running", { runs: [run("build", { startedAt: at(600), state: "failed" })] });
-    const runs = [run("build", { startedAt: at(600), state: "failed" }, { startedAt: at(1) })];
-    expect(actions({ pipelines: [before] }, { pipelines: [lane("p1", ["a"], "running", { runs, remoteAction: { id: "r", action: "retry-stage", state: "settled", fence: "f", at: at(3), actor: { kind: "operator" } } })] })).toEqual([]);
-    expect(actions({ pipelines: [before] }, { pipelines: [lane("p1", ["a"], "running", { runs })] })).toEqual([]);
-    /* A relaunch the seat recorded long before this attempt is not this attempt's. */
-    expect(actions({ pipelines: [before] }, { pipelines: [lane("p1", ["a"], "running", { runs, remoteAction: { id: "r", action: "retry-stage", state: "settled", fence: "f", at: at(7_200), actor: seatActor } })] })).toEqual([]);
+  test("a launch by the operator, by another agent, or with no hand on record draws nothing", () => {
+    const before = lane("p1", ["a"], "needs_decision", { runs: [run("build", { startedAt: at(600), state: "failed" })] });
+    const launched = (extra: Record<string, unknown>) => lane("p1", ["a"], "running", { runs: [run("build", { startedAt: at(600), state: "failed" }, { startedAt: at(1), ...extra })] });
+    expect(actions({ pipelines: [before] }, { pipelines: [launched(hand({ kind: "operator" }))] })).toEqual([]);
+    expect(actions({ pipelines: [before] }, { pipelines: [launched(hand({ kind: "agent", role: "builder", conversationId: "conversation_worker" }))] })).toEqual([]);
+    expect(actions({ pipelines: [before] }, { pipelines: [launched({})] })).toEqual([]);
+    /* An attempt the board sees only long after it started is history. */
+    const late = lane("p1", ["a"], "running", { runs: [run("build", { startedAt: at(600), state: "failed" }, { startedAt: at(300), ...hand(seatActor, 301) })] });
+    expect(actions({ pipelines: [before] }, { pipelines: [late] })).toEqual([]);
   });
 
-  test("an attempt the seat's decision answer created is a launched stage", () => {
-    const before = lane("p1", ["a"], "needs_decision", { runs: [run("build", { startedAt: at(600), state: "needs_decision" })] });
-    const answered = (actor: unknown) => lane("p1", ["a"], "running", {
-      runs: [run("build", { startedAt: at(600), state: "needs_decision" }, { startedAt: at(1), decisionAnswerId: "answer-1" })],
-      decisionAnswers: [{ clientRequestId: "answer-1", stageId: "build", attempt: 1, nextAttempt: 2, actor, at: at(2) }],
-    });
-    expect(actions({ pipelines: [before] }, { pipelines: [answered(seatActor)] })).toEqual([{ kind: "stage", taskId: "a", pipelineId: "p1" }]);
-    expect(actions({ pipelines: [before] }, { pipelines: [answered({ kind: "operator" })] })).toEqual([]);
+  test("a draft the seat started is a started pipeline once its first attempt runs; the operator's start is not", () => {
+    const draft = lane("p1", ["a"], "draft", { srcConversationId: "conversation_other", createdAt: at(86_400) });
+    const startedBy = (actor: unknown) => lane("p1", ["a"], "running", { srcConversationId: "conversation_other", createdAt: at(86_400), runs: [run("build", { startedAt: at(2), ...hand(actor, 20) })] });
+    expect(actions({ pipelines: [draft] }, { pipelines: [startedBy(seatActor)] })).toEqual([{ kind: "pipeline", taskId: "a", pipelineId: "p1", at: ms(2) }]);
+    expect(actions({ pipelines: [draft] }, { pipelines: [startedBy({ kind: "operator" })] })).toEqual([]);
   });
 
-  test("one action per card, a started pipeline before a move", () => {
+  test("one action per card, a started pipeline before a move, at the later of their times", () => {
     const moved = task("a", "assigned", [], { statusBy: { actor: seatActor, from: "inbox", at: at(1) } });
-    expect(actions({ tasks: [task("a", "inbox")] }, { tasks: [moved], pipelines: [lane("p1", ["a"], "running", { createdAt: at(1) })] })).toEqual([{ kind: "pipeline", taskId: "a", pipelineId: "p1" }]);
+    expect(actions({ tasks: [task("a", "inbox")] }, { tasks: [moved], pipelines: [lane("p1", ["a"], "running", { createdAt: at(4) })] })).toEqual([{ kind: "pipeline", taskId: "a", pipelineId: "p1", at: ms(1) }]);
   });
 
   test("a burst above the limit is no action at all, and the limit itself still draws", () => {

@@ -2009,9 +2009,10 @@ const params = new URLSearchParams(location.search);
 /* The orchestrator's wires (docs/design/orchestrator-arrows.md). The seat made the lanes on five open
    tasks and spawned the export implementer; `&many=1` fills the board to about a hundred cards, a third
    of them the seat's. `orchestratorAct` makes somebody act: the record changes the way that writer's own
-   write changes it (a `statusBy` on a moved or created task, a new lane, a relaunch record beside a new
-   attempt) and the board reloads it as it reloads any change. Nothing here draws: the product's own
-   layer reads the records. */
+   write changes it (a `statusBy` on a moved or created task, a new lane, a new attempt carrying the
+   `launchedBy` the engine writes for a launch by hand) and the board reloads it as it reloads any
+   change; `ago` dates the act that many ms back, as a delta read after a connection gap. Nothing here
+   draws: the product's own layer reads the records. */
 if (ARROWS) {
   const seatId = orchestrator.conversationId!;
   for (const lane of pipelines) if (["p-search", "p-upload", "p-links", "p-limits", "p-rounds"].includes(lane.id)) lane.srcConversationId = seatId;
@@ -2035,7 +2036,7 @@ if (ARROWS) {
     });
   }
 }
-type SeatAct = { by?: "seat" | "operator" | "agent" | "nobody" } & (
+type SeatAct = { by?: "seat" | "operator" | "agent" | "nobody"; ago?: number } & (
   | { kind: "move"; taskId: string; to: TaskStatus }
   | { kind: "pipeline"; taskId: string }
   | { kind: "stage"; taskId: string }
@@ -2043,12 +2044,12 @@ type SeatAct = { by?: "seat" | "operator" | "agent" | "nobody" } & (
 const arrowCard = (taskId: string) => document.querySelector<HTMLElement>(`[data-kanban-board] .card[data-id="task:${CSS.escape(taskId)}"], [data-phone-card="task:${CSS.escape(taskId)}"]`);
 /** Apply every act in one board update, as one delta carries them. */
 async function orchestratorAct(acts: SeatAct | SeatAct[]): Promise<{ landed: boolean }> {
-  const at = new Date().toISOString();
   const landed: Array<() => boolean> = [];
   let touchedTasks = false;
   let touchedLanes = false;
   for (const act of Array.isArray(acts) ? acts : [acts]) {
     const who = act.by ?? "seat";
+    const at = new Date(Date.now() - (act.ago ?? 0)).toISOString();
     const actor = who === "operator" ? { kind: "operator" as const }
       : { kind: "agent" as const, role: who === "seat" ? "orchestrator" : "builder", conversationId: who === "seat" ? orchestrator.conversationId! : exportImpl.conversationId! };
     const statusBy = (from: TaskStatus | null): Pick<BoardTask, "statusBy"> => (who === "nobody" ? {} : { statusBy: { actor, from, at } });
@@ -2076,17 +2077,15 @@ async function orchestratorAct(acts: SeatAct | SeatAct[]): Promise<{ landed: boo
       touchedLanes = true;
       landed.push(() => !!arrowCard(act.taskId)?.querySelector(`[data-pipeline="${id}"]`) || !!document.querySelector(`[data-phone-card="task:${CSS.escape(act.taskId)}"][data-phone-card-pipeline="${id}"]`));
     } else {
-      /* The lane's running stage is launched again: a new attempt, and the relaunch on the lane's record with its writer. */
+      /* The lane's running stage is launched again by hand: a new attempt that carries its launcher, as the engine writes it. */
       const position = pipelines.findIndex((entry) => entry.taskIds.includes(act.taskId) && entry.cursor);
       const lane = pipelines[position]!;
       const runs = (lane.runs as unknown as { stageId: string; attempts: Record<string, unknown>[] }[]).map((run) => run.stageId !== lane.cursor!.stageId ? run : {
         ...run,
-        attempts: [...run.attempts.map((entry) => entry.state === "running" ? { ...entry, state: "failed", completedAt: at } : entry), attempt(run.attempts.length + 1, "running", null, { startedAt: at })],
+        attempts: [...run.attempts.map((entry) => entry.state === "running" ? { ...entry, state: "failed", completedAt: at } : entry),
+          attempt(run.attempts.length + 1, "running", null, { startedAt: at, ...(who === "nobody" ? {} : { launchedBy: { actor, at } }) })],
       });
-      pipelines[position] = {
-        ...lane, runs,
-        ...(who === "nobody" ? {} : { remoteAction: { id: `relaunch-${revision++}`, action: "retry-stage", state: "settled", fence: "fixture", at, settledAt: at, actor } }),
-      } as unknown as Pipeline;
+      pipelines[position] = { ...lane, runs } as unknown as Pipeline;
       touchedLanes = true;
     }
   }

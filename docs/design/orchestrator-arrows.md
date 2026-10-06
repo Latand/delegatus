@@ -337,15 +337,27 @@ read is where the board stands and holds no action.
 
 | Action | Read from | The seat's when |
 | --- | --- | --- |
-| Starts a pipeline | a `pipelines` row that was not there | the link rule of §2 holds for the lane (`srcConversationId` or the deputy is the seat) |
-| Launches a stage | a newly started attempt on a lane the seat owns | the lane's own record names the seat as the hand: the decision answer that created the attempt, or a relaunch (`remoteAction`), a review grant or an accepted head recorded within ten minutes before it started |
+| Starts a pipeline | a `pipelines` row that was not there, or the first attempt of a draft that started | the link rule of §2 holds for the new lane (`srcConversationId` or the deputy is the seat); for a draft, the attempt's `launchedBy.actor` is the seat |
+| Launches a stage | a newly started attempt | the attempt's `launchedBy.actor` is the seat's conversation |
 | Moves a task | the task row's `statusBy` changed | `statusBy.actor` is the seat's conversation |
 | Creates a task | a `tasks` row that was not there, `statusBy.from` null | `statusBy.actor` is the seat's conversation |
 
-An attempt the engine started by following a pass or fail edge has none of
-those records, and neither has a relaunch nobody recorded: the launcher is
-unknown and nothing is drawn. A record older than ten minutes when the board
-first sees it is history and draws nothing.
+**`launchedBy`.** `{ actor, at }`, written by the engine where a hand puts the
+cursor on a stage to launch: `start`, `retry-stage` (local, and a review-loop
+retry once its remote check settles), `resolve-decision`, `continue-review`,
+`accept-head` and `skip-stage`. It rides the cursor, and the next attempt the
+engine makes takes it and clears it, so it names exactly one attempt. A cursor
+that moves along a pass or fail edge is a fresh record without it, and the
+engine's own relaunches (a cut host, memory, an interrupted turn) come after
+the hand's attempt has taken it: an attempt the engine started has no
+`launchedBy`, its launcher is unknown and nothing is drawn.
+
+**When.** An action's minute runs from its record: `statusBy.at` for a move or
+a create, `createdAt` for a new lane and the attempt's `startedAt` for a launch.
+A delta the board reads late keeps only the rest of that minute, one older than
+the minute draws nothing, and a time ahead of the board's clock reads as now.
+A newer action on a card restarts its minute; an older one read after it
+changes nothing.
 
 **`statusBy`.** `{ actor, from, at }` on the task row, `actor` in the
 `PauseResumeActor` shape. `update_task` and `create_task` write the caller (the
@@ -362,14 +374,20 @@ animation frame; it reads the seat, the acted-on cards and their columns and
 nothing else. `evidence/orchestrator-wires/cost.json` holds the readings on the
 hundred-card board with twelve cards wired. The flow pauses in a hidden tab,
 and a wire whose minute ends there goes without a fade. Under reduced motion a
-wire appears and goes with no motion at all.
+wire appears and goes with no motion at all; switched on while a wire shows,
+the dot, the ring and any fade stop at once and the wire stays still. That
+preference is listened to only while the layer exists.
+
+**Scrolled cards.** A card whose port (its top plus 22 px, 20 on the phone)
+the column has scrolled out of the scroller's visible part is counted at that
+edge, so no port is painted over a column header or past the column's foot. A
+pulse ring is clipped to the scroller's visible part.
 
 **Left out.** The pointer emphasis of Variant 1 and the operations line of
 Variant 3, which §7 recommended beside Variant 2: the decision asked for
 neither, and the second would be new chrome. Captions on an action
 (*Orchestrator launched Review*): the wire and the ring say it, and the card
-already shows the stage. A writer on a stage attempt itself: the launch rule
-above reads the records that exist.
+already shows the stage.
 
 ## Reproducing the frames
 
