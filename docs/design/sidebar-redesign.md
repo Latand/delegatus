@@ -97,7 +97,7 @@ No frame has a page error. The only frames whose sidebar is wider than its own b
 |---|---|---|---|---|
 | F1 | Brand | Header, mark and name | Mark on the rail; name in the opened header | Header |
 | F2 | Hide the rail | Header square | Opened header; at rest the rail is already 56 px | Header square |
-| F3 | Header menu, all fourteen entries | Header, same component | Bottom of the rail, opens upward; also the opened header | Header, same component |
+| F3 | Header menu, all fourteen entries | Header, same component | The opened header; the button at the bottom of the rail serves keyboard and touch | Header, same component |
 | F4 | Filter | Field with a search glyph | Search button on the rail opens the sidebar with the field focused | As 1 |
 | F5 | Add a folder | Square beside the filter; a labelled button on first run | Folder button on the rail opens the sidebar with the form | As 1 |
 | F6 | Overview | First row, grid icon, totals of both marks | Grid tile | As 1 |
@@ -120,7 +120,7 @@ No frame has a page error. The only frames whose sidebar is wider than its own b
 
 **1.** The conversation count leaves the unselected rows. Reset times need one click (the detail control) or a hover. An engine line shows one window, the tightest, where today shows all. The crown control and the detail control are 22 px squares; today's smallest rail control is 24 px.
 
-**2.** A monogram names a project only to someone who already knows the list,, and two projects can share one. Opening on hover will sometimes open by accident, and the opened sidebar covers 264 px of the board while it is open. Every function that needs text is two steps away. The rail carries more new behaviour than the other two together (hover timing, focus, Escape, docking), so it is the most expensive to finish and test.
+**2.** A monogram names a project only to someone who already knows the list,, and two projects can share one. Opening on hover will sometimes open by accident, and the opened sidebar covers 264 px of the board while it is open. Every function that needs text is two steps away. With a pointer the rail opens before a click lands on it, so the menu button at the bottom of the rail is covered by the opened sidebar and the menu is used from the opened header (the `rail-menu` frame shows this); the prototype leaves that seam unresolved. The rail carries more new behaviour than the other two together (hover timing, focus, Escape, docking), so it is the most expensive to finish and test.
 
 **3.** The sidebar is 16 px wider. A busy project takes up to three lines, so a long list scrolls sooner than in variant 1 (11 of 16 rows visible against 16 of 16). The question line is one more place where a conversation title is shown and cut. The row height changes as agents start and stop, so rows move more.
 
