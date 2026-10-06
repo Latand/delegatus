@@ -167,6 +167,10 @@ already durable; kept under Deferred.
   receipt, a flow round, or a host this Viewer holds.
 - **Claim**: a statement that work exists which names no process: a journal
   session row, a pipeline stage, a review flow.
+- **Writer epoch**: the structured claim an entry's host columns were written
+  under, `structuredHost.writerClaimEpoch`, and 0 for an entry that records no
+  structured columns. A journal row's writer epoch is the number its
+  `writerClaim` ends with, and 0 when it carries none (R5, source 3).
 - **Binding**: the conversation an owner is shown under and found by. Binding
   is used for display and for custody lookups. It never chooses evidence.
 
@@ -244,19 +248,60 @@ For a live owner in the host role:
 2. **Row reference**: `structuredHost.activeTurnRef` of the owner's own entry,
    for an entry without a tmux host.
 3. **Journal row**: the session row whose `sessionKey` equals the owner's
-   entry key, when it claims a turn (`sessionClaimsOpenTurn`,
-   `structuredDeliveryController.ts:544`: a running or interrupt-requested
-   turn, an active turn id, a registering or recovering host). A row under
-   another key says nothing about this owner. Production rows carry the full
-   key: a host publishes under its entry's key and the fallback under the
-   current generation's. When the snapshot omits the conversation, one keyed
-   read fetches it, for live owners only.
+   entry key **and whose writer epoch equals the entry's**, when it claims a
+   turn (`sessionClaimsOpenTurn`, `structuredDeliveryController.ts:544`: a
+   running or interrupt-requested turn, an active turn id, a registering or
+   recovering host). A row under another key or at another writer epoch says
+   nothing about this owner. Production rows carry the full key: a host
+   publishes under its entry's key and the fallback under the current
+   generation's. When the snapshot omits the conversation, one keyed read
+   fetches it, for live owners only.
 4. **Tail**: the turn state of the owner's own transcript (R3): `busy`, `idle`,
    or unknown when the file is missing, has no turn marker, or its tail was
    torn.
 
 No source is reached through a conversation id, through a path another row
-shares, or through another row's key.
+shares, through another row's key, or through another writer's epoch.
+
+**How a journal row names its writer.** A host's publication carries
+`writerClaim`, the `<claimOwner>:<writerClaimEpoch>` of its entry
+(`structuredDeliveryController.ts:666`). The journal merges each publication
+over the row it replaces (`src/runtime-host/journal.ts:2480`), so a later
+publication that omits the field, such as the fallback's relabel or a turn
+event, keeps the epoch of the writer that last published. A row whose
+`writerClaim` is missing or null has writer epoch 0: the fallback
+(`registrySessionProjection`) writes none, and neither did any publication
+from before the field existed. The epoch alone decides:
+
+- the claim owner in the fence is the Viewer that controls the host (R6), so a
+  successor claimed by the same Viewer carries the same owner string, and only
+  the epoch tells the two writers apart;
+- `claimStructuredHost` (`registry.ts:7021`) raises the epoch for every new
+  claim and writes it into the host columns, and only a writer that holds the
+  claim at that epoch can change those columns afterwards
+  (`setStructuredHostClaimed`, `registry.ts:6924`). A row at the entry's epoch
+  was therefore published by the writer that recorded the entry's current
+  host;
+- a release (`releaseStructuredHostClaim`, `registry.ts:7119`) clears the owner
+  and keeps the epoch, so a host whose claim was released still matches the
+  rows its last writer published. This pass found no path that removes an
+  entry, so an epoch is never reused under one key.
+
+**Rows without a fence.** A row without a fence matches only an entry at
+epoch 0, and there it binds by key alone, as before. Two kinds of entry are at
+epoch 0: one with no structured columns (a tmux host, whose row is the
+fallback's copy of that entry's own status), and one whose columns no claim
+has written yet. The production paths read for this pass record a structured
+host process only through a claim; the epoch-0 columns they seed
+(`pendingColumns`, `structuredSpawn.ts:1505`, and the recovery at `:668`)
+carry no process. A live structured host is therefore at epoch 1 or later,
+and a row without a fence never speaks for one.
+
+**An adopted wrapper** is the one case where a new epoch records the same
+process as the old one. The old row then says nothing about it, and the host
+loses no evidence: the claim copies the host columns, `activeTurnRef`
+included, into the new epoch, and the new writer's handle and publications
+speak from then on.
 
 ### R6 — A writer claim is an owner only when it is doing setup
 
@@ -293,12 +338,12 @@ or `unhosted`, is judged by its handle and its tail.
 | alive | setup | not read | holds | `setup` |
 | alive | reviewer | not read | holds | `reviewer` |
 | alive | host | handle busy | holds | `host-turn` |
-| alive | host | no handle, and the row reference or the journal row claims a turn | holds | `turn-claimed` |
+| alive | host | no handle, and the row reference or the owner's journal row (R5 source 3: its key and writer epoch) claims a turn | holds | `turn-claimed` |
 | alive | host | tail busy | holds | `turn-open` |
 | alive | host | none of the above, tail idle | released | `turn-settled` |
 | alive | host | none of the above, tail unknown | unknown | `turn-unread` |
 
-Read top to bottom; the first matching row decides. Two consequences worth
+Read top to bottom; the first matching row decides. Three consequences worth
 stating:
 
 - a handle that says idle supersedes the row reference and the journal row,
@@ -307,7 +352,11 @@ stating:
   it: only the host that would run the turn can say none was admitted;
 - a busy verdict needs one positive sign from the owner's own sources, and an
   idle verdict needs a settled tail and no sign of a turn. A live process with
-  neither is unknown.
+  neither is unknown;
+- a row that an earlier writer of the same entry published is no sign of a
+  turn for the host recorded now. A successor host that is idle, with no row
+  reference and a settled tail, is released at once, whatever its
+  predecessor's row still says.
 
 A reading that throws is no verdict. It holds admission through
 `blockers.unreadable`, as today, and is read again by the next probe.
@@ -346,17 +395,20 @@ as it writes.
 
 A journal session row does two things and no more:
 
-- it is turn evidence for the owners of the entry its session key names (R5,
-  source 3);
+- it is turn evidence for the host its session key's entry records under the
+  row's writer epoch (R5, source 3), and for no other owner;
 - when it claims a turn and the registry holds nothing it names (no entry
   under its key, no conversation or receipt under its id, no entry or
   generation at its path), it is an unresolved claim, judged by R8.
 
 When the registry does hold what the row names, the census has already asked
-every process recorded there. A registry row that records no live process and
-is past its launch grace proves that nothing owns the conversation, and the
-journal's labels do not reopen it. The snapshot's inactive cap therefore
-bounds display only.
+every process recorded there. A row at another writer epoch than its entry's
+did not come from the writer of the host the entry records now: that host is
+judged on its own sources, and the row, while it still claims a turn, counts
+in `blockers.discounted`. A registry row that
+records no live process and is past its launch grace proves that nothing owns
+the conversation, and the journal's labels do not reopen it. The snapshot's
+inactive cap therefore bounds display only.
 
 ### R10 — A stage or a flow holds through every owner bound to it
 
@@ -394,15 +446,18 @@ and registry health are unchanged.
 
 The verdict of an owner is a function of the records that name its process
 and artifact, its own transcript, its own handle and the journal row under
-its own key. Adding, removing or changing any record that names a different
-process leaves it unchanged, including records under the same conversation,
-the same session key or the same transcript path.
+its own key at its own writer epoch. Adding, removing or changing any record
+that names a different process leaves it unchanged, including records under
+the same conversation, the same session key or the same transcript path, and
+a journal row that an earlier writer of the same entry published.
 
 This is the property the last fourteen rounds attacked one instance at a
 time. It is checked directly: for a fixture owner, every verdict in R7 is
 recomputed after a sibling row, an earlier generation, a successor generation,
-an alias, a receipt and a foreign journal row are added in turn, in each
-process state, and must be equal.
+an alias, a receipt and a foreign journal row are added in turn, and after
+the conversation's journal row is set to a turn claim published under an
+earlier writer epoch of the owner's own entry, in each process state, and
+must equal the verdict without that record.
 
 ### `agent_activity` reads the same primitive
 
@@ -433,6 +488,13 @@ a transcript.
 | collision, dead × 2 | as above with the entry's process killed | quiet | pass | R4 |
 | collision, reused × 2 | as above with the pid under another start identity | quiet | pass | R4 |
 
+The writer epoch of R5 source 3 leaves all fifteen as decided above. Only one
+pair has a journal row that claims a turn, the stale-journal pair, and that
+row is keyed to the first generation, whose owner R4 releases. Every other
+row in the suite is the fallback's relabel, which claims no turn: it writes a
+null turn id and an `unknown` or `idle` turn under a `dead` or `unhosted`
+host.
+
 ### The four findings
 
 | Finding | Rule that removes it |
@@ -440,7 +502,35 @@ a transcript.
 | 1. Synthesized owner hides the real entry's artifact | R2 (no synthesized owner), R3 (own artifact) |
 | 2. A finished host's own writer claim held as setup | R6a for the reproduced shape, R6b for the production shape |
 | 3. A finished sibling inherits the first row's gone host | R1, R5; the shared record through the `agent_activity` section |
-| 4. A dead generation's journal claim attributed to its successor | R4, R5 source 3, R9 |
+| 4. A dead generation's journal claim attributed to its successor | R4, R5 source 3, R9; under one session key, the writer epoch of R5 source 3 (next section) |
+
+### The successor-epoch case
+
+Raised by the critique of the first revision of this document, and confirmed
+there against the real `AgentRegistry` and `RuntimeJournal`. It is finding 4
+under one session key: process A publishes a running turn and a turn id with
+writer epoch 1; its claim is released and it exits; `claimStructuredHost` and
+`setStructuredHostClaimed` record a live process B under the same key at
+epoch 2, `idle`, with no row reference. B's transcript ends in
+`task_complete`, this Viewer holds no handle, and the journal row is still
+A's. Keyed by session key alone, that row held B as `turn-claimed` with no
+bound, so B inherited A's evidence. An isolated probe for this revision also
+showed that a fallback-shaped relabel of that row keeps A's `writerClaim`, and
+that B's claim carries the same owner string as A's when one Viewer makes
+both, with epoch 2 in place of 1.
+
+| Variant | Expected | Decided by |
+| --- | --- | --- |
+| B idle, no row reference, settled tail, no handle; the row is A's at epoch 1 | released at once, `turn-settled`; the row counts in `blockers.discounted` | R5 source 3: epoch 1 is not B's epoch 2, so the row says nothing about B. R7 releases B. R9 counts the row |
+| as above, with A's turn id written by a later turn event, which carries no fence | released at once | the merged row keeps epoch 1; same rules |
+| B's handle reports a turn | holds, `host-turn` | R5 source 1, R7 |
+| B's row reference names a turn | holds, `turn-claimed` | R5 source 2, R7 |
+| B's tail is open | holds, `turn-open` | R5 source 4, R7 |
+| B's writer republishes the row at epoch 2 with a turn id, tail settled | holds, `turn-claimed`, with no bound | R5 source 3 at B's epoch, R7 |
+| B's claim is released while B lives, and the row is B's at epoch 2 | holds while the row claims a turn | R5 source 3: a release keeps the epoch |
+| a claim at epoch 2 with no live host process, setup in flight | holds, `setup`, while the claimant lives | R6 |
+| A is still alive at epoch 1 under the same key (no successor) | A's row is A's evidence: holds, `turn-claimed` | R5 source 3 at A's epoch |
+| B is the same process as A, adopted from a terminal row at epoch 2 | judged on B's handle, the row reference the claim carried over, and the tail | R5, "An adopted wrapper" |
 
 ### Earlier rounds and the standing controls
 
@@ -455,7 +545,7 @@ a transcript.
 | A writer claim with no host process and no receipt | R6: setup owner |
 | An admitted resume with an open receipt over a settled transcript | R2: the receipt's admission owner is a setup owner |
 | A receipt judged before its conversation exists: live, unowned, dead, reused | R2 and R7 for live, dead, reused; R8 for unowned |
-| A turn id on idle journal labels over a settled transcript | R5 source 3, R7 `turn-claimed` |
+| A turn id on idle journal labels over a settled transcript | R5 source 3, R7 `turn-claimed`. The fixture's row has no fence and its entry is at epoch 0, so the row matches as before; in production the same row carries the epoch of the host that admitted the turn |
 | A dead or reused owner releases at once | R4 |
 | A settled idle turn stays quiet while its host lives | R7 `turn-settled` |
 | An id nothing resolves releases after five minutes and stays counted | R8, R9 |
@@ -517,15 +607,17 @@ against this specification with a fresh one.
 
 1. **Census, pure.** `src/lib/lifecycle/owners.ts`: `registryOwners(registry,
    flows, probe)` returning owners with their role, identities, artifact,
-   entry key and binding, plus ownerless records. R6 lives here; this
-   Viewer's own identity and the session keys it holds are passed in, so the
-   function stays pure.
+   entry key, writer epoch and binding, plus ownerless records. R6 lives
+   here; this Viewer's own identity and the session keys it holds are passed
+   in, so the function stays pure.
    `hostEvidence` and `entryForPath` in `liveness.ts` are re-expressed on it.
    No behaviour change for `agent_activity` except the live-row preference.
 2. **Owner evidence.** In `src/lib/selfUpdate/instance.ts`, an owner reader
    replaces `turnEvidenceReader`: process state first; for live host owners
-   only, the handle by session key, the row reference, the keyed journal row
-   and the tail. One three-line accessor in
+   only, the handle by session key, the row reference, the journal row
+   matched by key and writer epoch, and the tail. The row's epoch is parsed
+   from the end of its `writerClaim` in one small function beside the reader,
+   0 when the field is missing or null. One three-line accessor in
    `structuredDeliveryController.ts` returns the held host for a session key,
    next to `hasStructuredDeliveryHost` (`:1842`). #2511 works in that file;
    the addition touches no existing line.
@@ -539,7 +631,22 @@ against this specification with a fresh one.
    - `quietFallback.test.ts` carried over unchanged in its cases; its six
      sites that wrap or replace the old `turnLiveness` port are pointed at the
      new one;
-   - the R12 property test;
+   - the R12 property test, with the earlier-epoch journal row among its
+     perturbations;
+   - the successor-epoch cases of the case map, built through the real
+     `claimStructuredHost`, `setStructuredHostClaimed` and
+     `releaseStructuredHostClaim`, with the journal row published in the shape
+     production writes, `writerClaim` included. The acceptance is the first
+     row of that table: B idle with a settled tail is released on the first
+     probe, with no five-minute wait, while A's row still claims a turn. The
+     busy and current-epoch variants hold, and the turn-event variant
+     releases;
+   - the fixtures of `quietFallback.test.ts`, `quiet.test.ts` and
+     `quietDeadHosts.test.ts` publish rows with no `writerClaim` over entries
+     at writer epoch 0, or over claimed entries whose custody comes from setup
+     (R6) and not from the row. They keep their expectations under the epoch
+     rule. A carried case that would only pass by matching a row across
+     epochs is a defect in that case, and the pull request names it;
    - one case for R6b that no fixture covers today: a terminal status, a live
      host this Viewer holds, the claim owned by the test process and a
      settled transcript give a release; the same fixture with a handle that
@@ -593,7 +700,7 @@ selection rule in `quiet.ts`.
 | a finished or idle owner releases immediately | R4, R7 `process-gone` and `turn-settled` |
 | a busy one holds | R7 `host-turn`, `turn-claimed`, `turn-open`, `setup`, `reviewer` |
 | unknown holds with a bounded timeout and a visible reason | R8, reason codes in R11 |
-| every repro case and the four findings mapped to a rule | Case map |
+| every repro case and the four findings mapped to a rule | Case map, including the successor-epoch case |
 | what to keep and delete from #2555, and the smallest build | the two sections above |
 | no code changes beyond the document | this file is the only change |
 
@@ -607,6 +714,18 @@ and at #2555 head; the review report and the recorded run of the repro suite
 above was traced by hand through R1–R11. Nothing was executed against the
 design, since it has no implementation yet.
 
+The revision for the successor-epoch case read the registry's claim, release
+and host-write paths and the journal's session merge on `main`, and ran one
+probe against the real `AgentRegistry` and `RuntimeJournal` under a private
+`HOME`, `TMPDIR`, `LLV_STATE_DIR` and `XDG_CONFIG_HOME`, with
+`LLV_VIEWER_CONTROL_URL` on a closed port. The probe confirmed three facts R5
+relies on: a fallback-shaped publication with no `writerClaim` leaves the
+earlier writer's fence on the row; a release clears the entry's owner and
+keeps epoch 1; a successor claim by the same Viewer records the new process at
+epoch 2 under the same owner string. The rows that `decisive.test.ts`,
+`quietFallback.test.ts` at #2555 head and `quietDeadHosts.test.ts` write were
+read for their fence and their entries' epochs.
+
 ## Decisions taken in this pass
 
 - **A live process is released by a clock only when nothing shows work.** The
@@ -615,10 +734,15 @@ design, since it has no implementation yet.
   its process lives, and `main` releases it at once when its journal row
   claims nothing. The bound sits between the two and follows the
   requirement's wording.
-- **The journal row stays as turn evidence, scoped to its own key.** Dropping
-  it would simplify the reader, and `main` pins the opposite since #2532: a
-  settled transcript under a live process proves nothing until the host says
-  it is idle.
+- **The journal row stays as turn evidence, scoped to its own key and writer
+  epoch.** Dropping it would simplify the reader, and `main` pins the opposite
+  since #2532: a settled transcript under a live process proves nothing until
+  the host says it is idle.
+- **The writer epoch alone binds a row to its writer.** Comparing the whole
+  `writerClaim` string would fail twice: the owner half is the controlling
+  Viewer, the same for A and B when one Viewer claims both, and a released
+  claim clears the entry's owner while the host and its epoch stay. The epoch
+  is already written on both sides, so the check costs no new state.
 - **The handle binds by session key.** A health that names another pid makes
   the handle its own owner, which keeps a replacement host visible when the
   registry row lags.
@@ -637,6 +761,15 @@ Known limits of this specification:
 - The stage rules of R10 keep a stage while any process of its conversation
   lives, idle or busy, as they do today. Narrowing that is the pipeline
   controller's concern and is outside this requirement.
+- The journal keeps one row per conversation, so a tmux entry can inherit a
+  fence from a structured host that wrote the row earlier. Its epoch then
+  differs from the tmux entry's 0, and that host is judged on its tail alone:
+  busy holds, settled releases, unreadable holds for the five minutes of R8.
+  Before this rule the fallback's copy of a `live` status held it.
+- A row without a fence binds by key alone at epoch 0, so a replacement
+  recorded under the same key at epoch 0 would still inherit it. No production
+  path read for this pass records a process there (R5, "Rows without a
+  fence"); a test fixture that writes one through `upsert` can.
 
 ## Deferred — not currently justified
 
@@ -666,3 +799,8 @@ of owners. Memory held nothing relevant. The transcripts hold the #2532 and
 #2555 lanes and their reviews, which this document builds on; none of them
 proposes a per-process model. The claim about who owns a writer claim was
 checked against the code as it is now, as cited in R6.
+
+For the revision: searches for the journal row's writer fence, a successor
+under the same session key and a stale row across writer epochs found the
+critique that raised the case and nothing earlier that binds journal evidence
+to an epoch. Memory held nothing relevant.
