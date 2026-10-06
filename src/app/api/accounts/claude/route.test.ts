@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { clearAccountTestState } from "@/lib/accounts/accountsStoreFixture";
 import { resetLegacyDocumentStoresForTests } from "@/lib/state/legacyDocumentStore";
 import { afterAll, beforeEach, expect, test } from "bun:test";
@@ -571,4 +572,61 @@ test("managed Claude removal reports a corrupt registry as locked", async () => 
 
   expect(response.status).toBe(409);
   await expect(response.json()).resolves.toEqual(expect.objectContaining({ code: "accounts_locked" }));
+});
+
+for (const kind of ["local", "foreign", "queued", "timeout"] as const) test(`provider edit queues catalog admission behind a ${kind} holder`, async () => {
+  const { withAccountHolder } = await import("@/lib/accounts/accountMutation.fixture");
+  const { ACCOUNT_STORE_BUSY_MESSAGE } = await import("@/lib/accounts/accountMutation");
+  const provider = { baseUrl: "https://provider.example.test", model: "model-large", smallFastModel: null };
+  const opaque = crypto.randomUUID();
+  const account = createManagedClaudeAccount("Provider contention", { config: provider, token: opaque });
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = (async () => Response.json({ data: [{ id: "model-large" }] })) as unknown as typeof globalThis.fetch;
+  try {
+    const response = await withAccountHolder(kind, () => PATCH(new NextRequest("http://127.0.0.1/api/accounts/claude", {
+      method: "PATCH", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify({ id: account.id, label: "Edited provider", provider }),
+    })));
+    if (kind === "timeout") {
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({ error: ACCOUNT_STORE_BUSY_MESSAGE, code: "account_store_busy" });
+    } else {
+      expect({ status: response.status, body: await response.json() }).toMatchObject({ status: 200 });
+    }
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+for (const kind of ["local", "foreign", "queued", "timeout"] as const) test(`provider create queues catalog admission behind a ${kind} holder`, async () => {
+  const { withAccountHolder } = await import("@/lib/accounts/accountMutation.fixture");
+  const { ACCOUNT_STORE_BUSY_MESSAGE } = await import("@/lib/accounts/accountMutation");
+  const provider = { baseUrl: "https://provider.example.test", model: "model-large", smallFastModel: null };
+  const opaque = crypto.randomUUID();
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = (async () => Response.json({ data: [{ id: "model-large" }] })) as unknown as typeof globalThis.fetch;
+  try {
+    const response = await withAccountHolder(kind, () => POST(new NextRequest("http://127.0.0.1/api/accounts/claude", {
+      method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify({ label: "New provider", provider: { ...provider, token: opaque } }),
+    })));
+    if (kind === "timeout") {
+      expect(response.status).toBe(503);
+      expect(await response.json()).toMatchObject({ error: ACCOUNT_STORE_BUSY_MESSAGE, code: "account_store_busy" });
+    } else {
+      expect({ status: response.status, body: await response.json() }).toMatchObject({ status: 201 });
+    }
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+for (const kind of ["local", "foreign", "queued", "timeout"] as const) test(`orphan cleanup queues catalog admission behind a ${kind} holder`, async () => {
+  const { withAccountHolder } = await import("@/lib/accounts/accountMutation.fixture");
+  const { ACCOUNT_STORE_BUSY_MESSAGE } = await import("@/lib/accounts/accountMutation");
+  const response = await withAccountHolder(kind, () => remove(new NextRequest("http://127.0.0.1/api/accounts/claude", {
+    method: "DELETE", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: JSON.stringify({ cleanupOrphans: true }),
+  })));
+  if (kind === "timeout") {
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ error: ACCOUNT_STORE_BUSY_MESSAGE, code: "account_store_busy" });
+  } else {
+    expect({ status: response.status, body: await response.json() }).toMatchObject({ status: 200 });
+  }
 });

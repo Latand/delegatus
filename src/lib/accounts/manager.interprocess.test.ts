@@ -130,11 +130,11 @@ async function selectionRemovalRace(engine: "claude" | "codex"): Promise<void> {
   }
 }
 
-test("an aligned compatibility sync skips transaction admission", () => {
+test("an aligned compatibility sync skips transaction admission", async () => {
   const registry = agentRegistry();
   const revision = accountMutationRevisionForTests();
 
-  syncCompatibilityRouting(registry);
+  await syncCompatibilityRouting(registry);
 
   expect(accountMutationRevisionForTests()).toBe(revision);
 });
@@ -320,7 +320,7 @@ async function controllerSelectionRace(): Promise<void> {
         while (!fs.existsSync(${JSON.stringify(releasePath)})) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
         return value;
       };
-      syncCompatibilityRouting(registry);
+      await syncCompatibilityRouting(registry);
     `],
     env,
     stdout: "ignore",

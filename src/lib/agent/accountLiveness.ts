@@ -117,6 +117,18 @@ export function identityAlive(identity: ProcessIdentity | null | undefined, prob
   return current === null || current === identity.startIdentity;
 }
 
+/** Recorded launch custody and host processes, without applying an age rule.
+    Settlement releases the admission owner; a recorded host can still work. */
+export function receiptProcessEvidence(receipt: SpawnReceipt, probe: LivenessProbe):
+  { state: "alive"; process: ProcessIdentity } | { state: "gone" } | null {
+  const open = OPEN_RECEIPT_STATES.has(receipt.state);
+  const processes = [open ? receipt.admissionOwner : null, receipt.verifiedHost?.agent, receipt.pane?.panePid]
+    .filter((identity): identity is ProcessIdentity => !!identity && Number.isInteger(identity.pid) && identity.pid > 0);
+  const live = processes.find((identity) => identityAlive(identity, probe));
+  if (live) return { state: "alive", process: live };
+  return processes.length || !open ? { state: "gone" } : null;
+}
+
 function withinGrace(timestamp: string | null | undefined, probe: LivenessProbe): boolean {
   const recordedAt = timestamp ? Date.parse(timestamp) : Number.NaN;
   if (!Number.isFinite(recordedAt)) return false;
@@ -143,8 +155,7 @@ export function entryIsLive(entry: AgentRegistryEntry, probe: LivenessProbe): bo
  */
 export function receiptIsLive(file: RegistryFile, receipt: SpawnReceipt, probe: LivenessProbe): boolean {
   if (!OPEN_RECEIPT_STATES.has(receipt.state)) return false;
-  if (identityAlive(receipt.admissionOwner, probe)) return true;
-  if (identityAlive(receipt.verifiedHost?.agent, probe) || identityAlive(receipt.pane?.panePid, probe)) return true;
+  if (receiptProcessEvidence(receipt, probe)?.state === "alive") return true;
   const entry = receipt.key ? file.entries[sessionKeyId(receipt.key)] : undefined;
   if (entry && entryIsLive(entry, probe)) return true;
   return withinGrace(receipt.createdAt, probe);
