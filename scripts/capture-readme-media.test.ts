@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { judgeRenderBack, RENDER_BACK_TILE, RENDER_BACK_TILE_LIMIT, ringClipPath, type RingBox } from "./capture-readme-media";
+import { judgeRenderBack, RENDER_BACK_TILE, RENDER_BACK_TILE_LIMIT, ringClipPath, type RingBox, withPointSize } from "./capture-readme-media";
 
 const box = (overrides: Partial<RingBox> = {}): RingBox => ({
   width: 200,
@@ -75,4 +75,15 @@ test("a shift across the whole frame fails even when every tile stays under the 
 
 test("a map of the wrong size is refused", () => {
   expect(() => judgeRenderBack(new Uint8Array(10), 4, 4)).toThrow("expected 16");
+});
+
+test("a unitless page size from a newer cairo is written back in points", () => {
+  const head = '<svg xmlns="http://www.w3.org/2000/svg" width="960" height="600" viewBox="0 0 960 600">';
+  expect(withPointSize(`${head}<filter width="100%" height="100%"/></svg>`))
+    .toBe('<svg xmlns="http://www.w3.org/2000/svg" width="960pt" height="600pt" viewBox="0 0 960 600"><filter width="100%" height="100%"/></svg>');
+});
+
+test("a page size already in points is left alone", () => {
+  const svg = '<svg width="294pt" height="636pt" viewBox="0 0 294 636"></svg>';
+  expect(withPointSize(svg)).toBe(svg);
 });

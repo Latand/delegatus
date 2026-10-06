@@ -84,7 +84,7 @@ function claudeConversations(dirs: Record<DemoProject, string>): Conversation[] 
       pace: 70,
       steps: [
         { user: "Take the open harbor-api work: idempotent refunds first, then the webhook retries and the key rotation. The ledger move waits for finance." },
-        { say: "On it. I opened a pipeline for **Idempotent refunds** (Build, Review, Verify) and started the webhook retries and the key rotation beside it. The ledger task stays in Blocked until finance answers.\n\nI'll report each stage as it lands, and bring you any decision the spec leaves open." },
+        { say: "On it. I opened a pipeline for **Idempotent refunds** (Build, Review, Verify) and started the webhook retries and the key rotation beside it. The ledger task waits until finance answers.\n\nI'll report each stage as it lands, and bring you any decision the spec leaves open." },
       ],
     },
     {
@@ -563,6 +563,10 @@ export function seedDemoHome(home: string, stateDir: string, now: number): DemoL
     system: { ramTotal: 32 * 2 ** 30, ramAvailable: 19 * 2 ** 30, swapTotal: 8 * 2 ** 30, swapUsed: 0, capturedAt: iso(now) },
     sessions: [],
   });
+  /* The install-ping notice is a first-start toast over the composer; a
+     reader of the README has long since answered it. */
+  fs.mkdirSync(path.join(stateDir, "telemetry", "preferences"), { recursive: true });
+  fs.writeFileSync(path.join(stateDir, "telemetry", "preferences", "noticeDismissed"), "true");
 
   assertNoRepositoryLeak(home);
   return { ...layout, files };
@@ -649,6 +653,12 @@ export async function seedDemoOrchestrator(layout: DemoLayout & { files: Record<
   fs.writeFileSync(path.join(stateDir, "orchestrator-seats.json"), `${JSON.stringify({
     schemaVersion: 1, nextSeatEpoch: 2, seats: { [project]: seat }, pending: {}, revocations: [], history: [], rollbacks: {},
   }, null, 2)}\n`, "utf8");
+
+  /* A seat that was never woken is due a wake on the first tick, and the
+     capture hosts nothing: recovery would resume this seat in a pane, a stray
+     process and a "resume" card on the board. Its last wake is recent. */
+  const { readSeatTickState, writeSeatTickState } = await import("@/lib/monitor/seatTickState");
+  writeSeatTickState(project, { ...readSeatTickState(project), seatEpoch: 1, lastWakeAt: iso(now - 60_000) });
 
   const { appendBridgeReports } = await import("@/lib/bridge/store");
   const report = (key: string, minutesAgo: number, kind: "status" | "completed" | "review_verdict", body: string) => ({

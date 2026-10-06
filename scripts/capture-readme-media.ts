@@ -67,7 +67,8 @@ export type ReadmeShot = {
   description: string;
 };
 
-const DESKTOP = { width: 1280, height: 800 };
+/* Wide enough for the sidebar and all four status columns. */
+const DESKTOP = { width: 1440, height: 896 };
 /* A phone frame at 392 × 848 px: Chrome printed a 390 × 844 px page as
    293.04 × 633.12 pt instead of 292.5 × 633, so its vector drew the frame a
    fraction smaller than its PNG. Sizes in multiples of 8 px print exact. */
@@ -83,7 +84,8 @@ export const SHOTS: ReadmeShot[] = [
   {
     id: "board",
     target: { kind: "project", project: "harbor-api" },
-    viewport: DESKTOP,
+    /* In progress holds the wide share, so all four columns need more room. */
+    viewport: { width: 1728, height: 944 },
     requiredText: ["Idempotent refunds", "Rotate webhook signing keys", "Move invoices to the new ledger", "Document refund error codes", "needs a decision · build"],
     absentText: ["tmux", "Untitled task"],
     prepare: foldOrchestrator,
@@ -92,7 +94,8 @@ export const SHOTS: ReadmeShot[] = [
   {
     id: "orchestrator",
     target: { kind: "project", project: "harbor-api" },
-    viewport: DESKTOP,
+    /* Below 800 px the seat folds its Reports log away. */
+    viewport: { width: 1440, height: 800 },
     requiredText: ["Orchestrator", "Reports", "Take the open harbor-api work", "Paginate GET /charges is done", "review verdict"],
     /* A seat nothing hosts reads as finished, with the resume banner. */
     absentText: ["tmux", "Untitled task", "has not reported anything yet", "finished", "has finished its run"],
@@ -101,7 +104,7 @@ export const SHOTS: ReadmeShot[] = [
   {
     id: "conversation",
     target: { kind: "conversation", key: "refunds-builder" },
-    viewport: { width: 1280, height: 960 },
+    viewport: { width: 1440, height: 1080 },
     requiredText: ["Idempotency-Key", "4 pass", "UPDATE"],
     prepare: async (page) => {
       await clickLabel(page, "Open as a full pane");
@@ -156,7 +159,7 @@ export const SHOTS: ReadmeShot[] = [
     id: "phone-board",
     target: { kind: "project", project: "harbor-api" },
     viewport: PHONE,
-    requiredText: ["Inbox", "Assigned", "Blocked", "Done", "Back off webhook retries", "Idempotent refunds"],
+    requiredText: ["Inbox", "In progress", "Waiting", "Done", "Back off webhook retries", "Idempotent refunds"],
     absentText: ["Untitled task"],
     prepare: async (page) => {
       await page.locator('[data-phone-kanban-tab="assigned"]').first().click();
@@ -175,7 +178,7 @@ export function buildCaptureEnvironment(root: string, source = process.env): Nod
   const state = path.join(config, "agent-log-viewer", "state");
   return {
     NODE_ENV: "production",
-    PATH: source.PATH,
+    PATH: [path.join(root, "bin"), source.PATH].filter(Boolean).join(path.delimiter),
     HOME: home,
     TMPDIR: tmp,
     TMP: tmp,
@@ -194,6 +197,8 @@ export function buildCaptureEnvironment(root: string, source = process.env): Nod
     LLV_REAPER_ENABLED: "0",
     LLV_RESOURCES_FIXTURE: path.join(state, "resources.json"),
     NEXT_TELEMETRY_DISABLED: "1",
+    /* A production server: without this it would send the install ping. */
+    DELEGATUS_TELEMETRY: "0",
     TZ: "UTC",
     LANG: "C.UTF-8",
     LC_ALL: "C.UTF-8",
@@ -209,6 +214,8 @@ async function materialize(env: NodeJS.ProcessEnv, now: number) {
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   }
   fs.writeFileSync(env.LLV_CODEX_BINARY!, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  /* The same stub answers for claude, found first on PATH. */
+  fs.writeFileSync(path.join(path.dirname(env.LLV_CODEX_BINARY!), "claude"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
   const layout = seedDemoHome(env.HOME!, env.LLV_STATE_DIR!, now);
   /* The account modules resolve their directories from this process's
      environment, so point it at the demo home before loading them. */
@@ -263,6 +270,14 @@ function collectOutput(child: ChildProcess): () => string {
 
 /* ── vector conversion ──────────────────────────────────────────────────── */
 
+/** cairo 1.18 writes the page size unitless (`width="960"`, CSS px) where
+    older builds wrote points (`width="960pt"`); a unitless size would draw
+    the frame at three quarters of its width in the README. The root
+    element's size is put back in points, which is what the page measures. */
+export function withPointSize(svg: string): string {
+  return svg.replace(/(<svg\b[^>]*?\bwidth=")([\d.]+)(" height=")([\d.]+)(")/, "$1$2pt$3$4pt$5");
+}
+
 /** Returns how many raster tiles the vector frame embeds. Chrome prints CSS
     gradients (the board's dot grid, column washes) as image patterns; they
     carry no text, and the full-frame PNG they are rendered into is what the
@@ -279,7 +294,7 @@ export function pdfToSvg(pdf: Buffer, target: string, scratchParent: string): nu
     const svg = fs.existsSync(svgPath) ? fs.readFileSync(svgPath, "utf8") : "";
     if (!svg.trimEnd().endsWith("</svg>")) throw new Error(`pdftocairo failed: ${conversion.stderr || conversion.stdout}`);
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, svg);
+    fs.writeFileSync(target, withPointSize(svg));
     return (svg.match(/<image\b/g) ?? []).length;
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
@@ -351,6 +366,52 @@ type MaskedSurface = { token: string; pseudo: "" | "::before" | "::after"; ring:
     which both steps carry as a vector clip; the live page and its PNG keep the
     product's own CSS, and the render-back comparison checks that the two agree.
     Returns the masks that are not rings, which stay as they are. */
+/** The halo's gradient composed over the opaque colour behind it, so every
+    stop is opaque. poppler turns a radial gradient with alpha stops into a
+    dark disc, which printed a running stage's glow as a black ring. */
+export function haloOverBackground(gradient: string, background: [number, number, number]): string {
+  const over = (value: number, alpha: number, behind: number) => Math.round(value * alpha + behind * (1 - alpha));
+  const channel = (value: string) => Number(value) * 255;
+  const [br, bg, bb] = background;
+  const composed = (r: number, g: number, b: number, a: number) => `rgb(${over(r, a, br)}, ${over(g, a, bg)}, ${over(b, a, bb)})`;
+  return gradient
+    .replace(/color\(srgb ([\d.e-]+) ([\d.e-]+) ([\d.e-]+)(?: \/ ([\d.e-]+))?\)/g, (_, r, g, b, a) => composed(channel(r), channel(g), channel(b), Number(a ?? 1)))
+    .replace(/rgba\((\d+(?:\.\d+)?), (\d+(?:\.\d+)?), (\d+(?:\.\d+)?), ([\d.]+)\)/g, (_, r, g, b, a) => composed(Number(r), Number(g), Number(b), Number(a)))
+    .replace(/\btransparent\b/g, `rgb(${br}, ${bg}, ${bb})`);
+}
+
+/** Pins each running model glyph's halo (a `::before` radial gradient) as
+    opaque stops over its backdrop (haloOverBackground), so the print paints
+    the glow the screen shows. Returns how many halos were pinned. */
+export async function pinGlyphHalosForPrint(page: Page): Promise<number> {
+  const halos = await page.evaluate(() => {
+    const found: { index: number; gradient: string; backdrop: [number, number, number] }[] = [];
+    const opaque = (element: Element | null): [number, number, number] => {
+      for (let node = element; node; node = node.parentElement) {
+        const match = getComputedStyle(node).backgroundColor.match(/rgba?\((\d+), (\d+), (\d+)(?:, ([\d.]+))?\)/);
+        if (match && (match[4] === undefined || Number(match[4]) === 1)) return [Number(match[1]), Number(match[2]), Number(match[3])];
+      }
+      return [0, 0, 0];
+    };
+    document.querySelectorAll<HTMLElement>(".mglyph").forEach((glyph, index) => {
+      const halo = getComputedStyle(glyph, "::before");
+      if (halo.opacity !== "1" || halo.backgroundImage === "none") return;
+      glyph.dataset.printHalo = String(index);
+      found.push({ index, gradient: halo.backgroundImage, backdrop: opaque(glyph) });
+    });
+    return found;
+  });
+  const rules = halos.map(({ index, gradient, backdrop }) => `.mglyph[data-print-halo="${index}"]::before { background-image: ${haloOverBackground(gradient, backdrop)} !important; animation: none !important; }`);
+  return await page.evaluate((rules) => {
+    if (rules.length) {
+      const style = document.createElement("style");
+      style.textContent = rules.join("\n");
+      document.head.append(style);
+    }
+    return rules.length;
+  }, rules);
+}
+
 export async function unmaskRingsForPrint(page: Page): Promise<{ rings: number; otherMasks: string[] }> {
   const surfaces: MaskedSurface[] = await page.evaluate(() => {
     const found: MaskedSurface[] = [];
@@ -604,6 +665,9 @@ async function main(): Promise<void> {
   } finally {
     fs.closeSync(seatHold);
     stop();
+    /* A tmux server the page caused lives on the capture's own socket
+       directory; stop that one server and nothing else. */
+    spawnSync("tmux", ["kill-server"], { env, stdio: "ignore" });
     await new Promise((resolve) => setTimeout(resolve, 800));
     if (serverPid !== undefined && server.exitCode === null) process.kill(serverPid, "SIGKILL");
   }
@@ -636,7 +700,9 @@ async function captureShots(repoRoot: string, baseUrl: string, layout: Layout, c
     fs.mkdirSync(EVIDENCE_DIR, { recursive: true });
     for (const shot of SHOTS) {
       if (only && !only.includes(shot.id)) continue;
-      const context = await browser.newContext({ viewport: shot.viewport, deviceScaleFactor: 2, colorScheme: "dark", isMobile: shot.viewport.width < 600, hasTouch: shot.viewport.width < 600 });
+      /* Reduced motion: a running stage keeps its halo and drops the pulse,
+         which Chrome prints at another phase than the screen shows. */
+      const context = await browser.newContext({ viewport: shot.viewport, deviceScaleFactor: 2, colorScheme: "dark", reducedMotion: "reduce", isMobile: shot.viewport.width < 600, hasTouch: shot.viewport.width < 600 });
       const page = await context.newPage();
       /* Runs at real time until the frame is frozen below. */
       await page.clock.install();
@@ -677,6 +743,37 @@ async function captureShots(repoRoot: string, baseUrl: string, layout: Layout, c
       const rasterFindings = [...inspectPaths([png]).keys()].filter((finding) => !finding.startsWith("provenance_"));
       if (rasterFindings.length) throw new Error(`${shot.id}: the gate finds ${rasterFindings.join(", ")} in the rendered frame`);
       await page.emulateMedia({ media: "screen", colorScheme: "dark" });
+      /* The print is one page the size of the screen: a card that crosses its
+         bottom edge must stay on it, where an unbreakable box would move to a
+         second page and leave a hole in the first. */
+      await page.addStyleTag({ content: "* { break-inside: auto !important; break-before: auto !important; break-after: auto !important; }" });
+      /* A board card (`content-visibility: auto`) the screen draws can print
+         as skipped. Each card that meets the viewport already has its real
+         size, so making it visible keeps its box; cards off screen stay as
+         they are. */
+      /* The board's scrolling boxes take their height from the viewport, and
+         under the seat the print gave the column bodies none. Each one keeps
+         the height the screen gave it. */
+      await page.evaluate(() => {
+        for (const element of document.querySelectorAll<HTMLElement>(".kb *")) {
+          const style = getComputedStyle(element);
+          if (!/(auto|scroll|hidden)/.test(style.overflowY)) continue;
+          const height = element.getBoundingClientRect().height;
+          if (height > 0) element.style.setProperty("height", `${height}px`, "important");
+        }
+      });
+      await page.evaluate(() => {
+        for (const element of document.querySelectorAll<HTMLElement>(".kb .card")) {
+          if (getComputedStyle(element).contentVisibility !== "auto") continue;
+          const box = element.getBoundingClientRect();
+          if (!(box.bottom > 0 && box.top < innerHeight && box.right > 0 && box.left < innerWidth)) continue;
+          /* `auto` also contains layout, style and paint; keep that, or the
+             card's rows settle a pixel or two away from the screen's. */
+          element.style.setProperty("content-visibility", "visible", "important");
+          element.style.setProperty("contain", "layout style paint", "important");
+        }
+      });
+      const halos = await pinGlyphHalosForPrint(page);
       const unmasked = await unmaskRingsForPrint(page);
       if (unmasked.otherMasks.length) process.stdout.write(`${shot.id}: masks left to the render-back check: ${unmasked.otherMasks.join("; ")}\n`);
       const printOptions = {
@@ -724,7 +821,7 @@ async function captureShots(repoRoot: string, baseUrl: string, layout: Layout, c
         sha256: sha256(svg),
       });
       await context.close();
-      process.stdout.write(`captured ${shot.id} → ${png} (render-back worst tile ${renderBackVerdict.worstTile.mean}, ${unmasked.rings} rings clipped)\n`);
+      process.stdout.write(`captured ${shot.id} → ${png} (render-back worst tile ${renderBackVerdict.worstTile.mean}, ${unmasked.rings} rings clipped, ${halos} halos pinned)\n`);
     }
   } finally {
     await browser.close();
