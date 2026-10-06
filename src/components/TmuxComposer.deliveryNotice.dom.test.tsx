@@ -485,3 +485,73 @@ for (const locale of ["uk", "en"] as const) {
     mounted.cleanup();
   });
 }
+
+for (const locale of ["uk", "en"] as const) {
+  test(`a relay whose delivery is being checked is one compact left-aligned card (${locale})`, async () => {
+    setLocale(locale);
+    const { relayMessageText } = await import("@/lib/orchestrator/relayText");
+    const handoff = `Please pick up the release notes.\n\n${"The second paragraph is long enough to need the expand control. ".repeat(4)}`;
+    const discards: string[] = [];
+    const retries: string[] = [];
+    const unknown = receipt({ operationId: "relay-check", resend: "verify-first",
+      reason: "delivery was started by an earlier executor", text: relayMessageText(handoff, "Atlas") });
+    const mounted = mount({ receipts: [unknown], onDiscard: r => discards.push(r.operationId), onRetry: r => retries.push(r.operationId) });
+    try {
+      const checking = translate(locale, "composer.deliveryCheckEnded");
+      expect(mounted.summary().querySelector("[data-delivery-notice-cause]")?.textContent).toBe(checking);
+      click(mounted.summary());
+      const card = mounted.host.querySelector<HTMLElement>("[data-delivery-check-card]")!;
+      expect(card.getAttribute("data-operation")).toBe(unknown.operationId);
+      /* The status is read once: the notice line shows it, the card keeps it
+         for assistive technology only. */
+      const visible = [...mounted.host.querySelectorAll<HTMLElement>("[data-runtime-receipt-stack] *")]
+        .filter(node => node.children.length === 0 && node.textContent === checking && !node.closest(".sr-only"));
+      expect(visible).toHaveLength(1);
+      expect(card.querySelector('[role="status"]')!.className).toBe("sr-only");
+      /* The preamble is a short label; the handoff is what the operator reads. */
+      expect(card.querySelector("[data-receipt-relay-label]")!.textContent).toBe(translate(locale, "composer.relayLabel", { project: "Atlas" }));
+      const message = card.querySelector<HTMLElement>("[data-receipt-message]")!;
+      expect(message.textContent).toBe(handoff);
+      expect(card.textContent).not.toContain("carries no operator authority");
+      expect(card.className).toContain("text-left");
+      expect(card.innerHTML).not.toContain("text-right");
+      expect(message.className).toContain("line-clamp-2");
+      const toggle = card.querySelector<HTMLButtonElement>("[data-receipt-message-toggle]")!;
+      expect(toggle.textContent).toBe(translate(locale, "composer.messageExpand"));
+      click(toggle);
+      expect(message.className).not.toContain("line-clamp-2");
+      expect(toggle.getAttribute("aria-expanded")).toBe("true");
+      expect(toggle.textContent).toBe(translate(locale, "composer.messageCollapse"));
+      /* The two controls that existed, at the settled chip's size. */
+      const buttons = [...card.querySelectorAll<HTMLButtonElement>("button")].filter(button => button !== toggle);
+      expect(buttons.map(button => button.textContent)).toEqual([
+        translate(locale, "runtime.receipt.retry"), translate(locale, "runtime.receipt.discard"),
+      ]);
+      for (const button of buttons) expect(button.className).toContain("sm:min-h-0");
+      click(buttons[0]!);
+      click(buttons[1]!);
+      expect(retries).toEqual([unknown.operationId]);
+      expect(discards).toEqual([unknown.operationId]);
+    } finally { mounted.cleanup(); }
+  });
+}
+
+test("a delivery the notice does not speak for names its own status and a short message has no expand control", async () => {
+  setLocale("en");
+  const { relayMessageText } = await import("@/lib/orchestrator/relayText");
+  const first = receipt({ operationId: "check-newer", resend: "verify-first", text: "first", at: "2026-08-31T10:00:02.000Z" });
+  const second = receipt({ operationId: "check-older", status: "uncertain", resend: "verify-first", text: relayMessageText("second", "Atlas"), at: "2026-08-31T10:00:01.000Z" });
+  const mounted = mount({ receipts: [first, second], onDiscard: () => {} });
+  try {
+    click(mounted.summary());
+    const cards = [...mounted.host.querySelectorAll<HTMLElement>("[data-delivery-check-card]")];
+    expect(cards.map(card => card.querySelector('[role="status"]')!.className === "sr-only")).toEqual([true, false]);
+    expect(cards[1]!.querySelector('[role="status"]')!.textContent).toBe(translate("en", "composer.deliveryChecking"));
+    expect(mounted.host.querySelector("[data-receipt-message-toggle]")).toBeNull();
+    expect(cards.map(card => Boolean(card.querySelector("[data-receipt-relay-label]")))).toEqual([false, true]);
+    /* With no settled failure the summary previews the message, and a relay's
+       preview starts at the handoff's own words. */
+    rerender(mounted, { receipts: [second], onDiscard: () => {} });
+    expect(mounted.summary().querySelector("[data-receipt-preview]")!.textContent).toBe("second");
+  } finally { mounted.cleanup(); }
+});

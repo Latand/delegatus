@@ -1876,3 +1876,118 @@ describe("delivery outcome settlement", () => {
     } finally { await browser.close(); served.stop(); }
   }, 120_000);
 });
+
+describe("delivery check card", () => {
+  /*
+   * The card for a delivery whose fate is unconfirmed, above the production
+   * composer: an English handoff relayed by another project's orchestrator.
+   * Three widths, both languages, both schemes. `LLV_DELIVERY_CARD_SIDE=before`
+   * runs the same case over a checkout that still draws the earlier card and
+   * records its geometry under `before`; the default records `after` and gates
+   * it. Geometry goes to `evidence/delivery-check-card/card.json`; frames to
+   * `.artifacts/delivery-check-card/`, which is not committed.
+   */
+  const side = process.env.LLV_DELIVERY_CARD_SIDE === "before" ? "before" : "after";
+  const VIEWPORTS = [
+    { name: "desktop-1440", width: 1440, height: 900, touch: false },
+    { name: "pane-1000", width: 1000, height: 800, touch: false },
+    { name: "phone-390", width: 390, height: 844, touch: true },
+  ] as const;
+
+  browserTest("the card is compact, says its status once and stays clear of the composer", async () => {
+    const out = path.resolve(".artifacts/delivery-check-card");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    try {
+      for (const viewport of VIEWPORTS) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser,
+          `${served.base}?case=delivery-check-card&lang=${lang}`, { width: viewport.width, height: viewport.height },
+          scheme, lang, "reduce", viewport.touch);
+        const key = `${viewport.name}-${lang}-${scheme}`;
+        try {
+          const status = translate(lang, side === "before" ? "composer.deliveryChecking" : "composer.deliveryCheckEnded");
+          await page.locator("[data-runtime-receipt-stack] > summary").click();
+          await page.locator("[data-receipt-discard]").waitFor();
+          const read = () => page.evaluate((statusText) => {
+            const box = (element: Element) => { const r = element.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, height: r.height, width: r.width }; };
+            const stack = document.querySelector("[data-runtime-receipt-stack]")!;
+            const details = document.querySelector("[data-runtime-receipt-details]")!;
+            const card = details.firstElementChild as HTMLElement;
+            const message = card.querySelector("[data-receipt-message]") as HTMLElement;
+            const messageStyle = getComputedStyle(message);
+            const buttons = [...card.querySelectorAll("[data-receipt-uncertain-retry], [data-receipt-discard]")].map(box);
+            const field = document.querySelector("textarea")!;
+            /* Elements whose own text is the status and that take up room. */
+            const statusShown = [...stack.querySelectorAll("*")].filter((node) =>
+              node.children.length === 0 && node.textContent?.trim() === statusText
+              && (node as HTMLElement).getBoundingClientRect().width > 1).length;
+            const cardStyle = getComputedStyle(card);
+            const children = [...card.children].filter((child) => getComputedStyle(child).position !== "absolute");
+            const used = children.reduce((sum, child) => sum + child.getBoundingClientRect().height, 0)
+              + parseFloat(cardStyle.rowGap || "0") * Math.max(0, children.length - 1)
+              + parseFloat(cardStyle.paddingTop) + parseFloat(cardStyle.paddingBottom);
+            return {
+              stack: box(stack), card: box(card), field: box(field),
+              messageAlign: messageStyle.textAlign,
+              messageWidth: Math.round(message.getBoundingClientRect().width),
+              messageLines: Math.round(message.getBoundingClientRect().height / parseFloat(messageStyle.lineHeight)),
+              buttonHeights: buttons.map((button) => Math.round(button.height)),
+              statusShown,
+              boilerplateShown: card.textContent!.includes("carries no operator authority"),
+              /* Column cards only: room the card holds beyond its own rows. */
+              cardSlack: cardStyle.flexDirection === "column" ? Math.round(card.getBoundingClientRect().height - used) : null,
+              detailsScrolls: details.scrollHeight > details.clientHeight + 1,
+              /* Both controls are inside the part of the list that is drawn. */
+              controlsInView: buttons.every((button) => button.bottom <= details.getBoundingClientRect().bottom + 0.5
+                && button.top >= details.getBoundingClientRect().top - 0.5),
+              overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+            };
+          }, status);
+          const reading = await read();
+          readings[key] = reading;
+          await page.screenshot({ path: path.join(out, `${side}-${key}.png`), fullPage: true });
+          expect(pageErrors).toEqual([]);
+          expect(reading.overflowX).toBe(0);
+          if (side === "after") {
+            expect(reading.statusShown).toBe(1);
+            expect(["left", "start"]).toContain(reading.messageAlign);
+            expect(reading.messageLines).toBeLessThanOrEqual(2);
+            expect(reading.boilerplateShown).toBe(false);
+            expect(reading.cardSlack).toBeLessThanOrEqual(1);
+            expect(reading.detailsScrolls).toBe(false);
+            expect(reading.controlsInView).toBe(true);
+            /* The settled chips' size: a caption-height pill with a mouse, the
+               44px touch target on a phone. */
+            for (const height of reading.buttonHeights) {
+              if (viewport.touch) expect(height).toBe(44);
+              else expect(height).toBeLessThanOrEqual(24);
+            }
+            /* Nothing of the card reaches the field under it. */
+            expect(reading.stack.bottom).toBeLessThanOrEqual(reading.field.top);
+            expect(await page.locator("[data-receipt-relay-label]").textContent())
+              .toBe(translate(lang, "composer.relayLabel", { project: "Atlas" }));
+            /* Expanding shows the whole handoff and still clears the field. */
+            await page.locator("[data-receipt-message-toggle]").click();
+            const expanded = await read();
+            expect(expanded.messageLines).toBeGreaterThan(2);
+            expect(expanded.controlsInView).toBe(true);
+            expect(expanded.stack.bottom).toBeLessThanOrEqual(expanded.field.top);
+            expect(expanded.overflowX).toBe(0);
+            await page.screenshot({ path: path.join(out, `${side}-${key}-expanded.png`), fullPage: true });
+            await page.locator("[data-receipt-message-toggle]").click();
+            await page.locator("[data-receipt-uncertain-retry]").click();
+            expect(await page.locator("[data-fixture-retries]").textContent()).toBe("1");
+            await page.locator("[data-receipt-discard]").click();
+            await page.waitForFunction(() => !document.querySelector("[data-runtime-receipt-stack]"));
+          }
+        } finally { await context.close(); }
+      }
+      const file = "evidence/delivery-check-card/card.json";
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      const recorded = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown> : {};
+      fs.writeFileSync(file, JSON.stringify({ ...recorded, [side]: readings }, null, 2) + "\n");
+    } finally { await browser.close(); served.stop(); }
+  }, 300_000);
+});

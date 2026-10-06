@@ -34,6 +34,7 @@ import { setRuntimeUiEnabledForTests } from "@/hooks/runtimeBus";
 import { OVERVIEW_CONTEXT, OVERVIEW_SLICE, viewBus } from "@/hooks/viewPresenceBus";
 import type { RuntimeReceipt } from "@/components/runtime/runtimeModel";
 import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
+import { relayMessageText } from "@/lib/orchestrator/relayText";
 
 import { LiveTurnRows } from "./LiveTurnRows";
 import { OutboxBubblesView } from "./OutboxBubbles";
@@ -75,6 +76,7 @@ const ECHO = `You are the Orchestrator. Drive work through the production Viewer
 
 export type ConversationWindowCase =
   | "delivery-settlement"
+  | "delivery-check-card"
   | "lifecycle"
   | "long-history"
   | "queued"
@@ -1077,9 +1079,67 @@ function DeliverySettlementFixture() {
   </div>;
 }
 
+/* The operator's report: an English handoff relayed by another project's
+   orchestrator, its delivery left unconfirmed, drawn above the production
+   composer in the slot the pane gives its receipts. Discard removes it, as the
+   pane does once the discard is recorded. */
+const CHECK_CARD_HANDOFF = [
+  "The release notes for the next version are drafted and need a second reader before they go out.",
+  "Please check the three upgrade steps against the migration guide, confirm the storage note still holds for installs that skipped a version, and tell me which paragraphs to cut.",
+  "Nothing here is urgent. Reply in this conversation when you are done.",
+].join("\n\n");
+
+function DeliveryCheckCardFixture() {
+  const { t } = useLocale();
+  const [discarded, setDiscarded] = useState(false);
+  const [retries, setRetries] = useState(0);
+  const composer = useComposer({
+    initialText: () => "",
+    persistText: () => undefined,
+    submit: () => undefined,
+    acceptFiles: true,
+    holdInputWhileBusy: false,
+  });
+  const receipt: RuntimeReceipt = {
+    operationId: "check-card-operation", idempotencyKey: "check-card-key",
+    conversationId: "conversation_check_card", kind: "send", status: "failed",
+    text: relayMessageText(CHECK_CARD_HANDOFF, "Atlas"), at: new Date().toISOString(), revision: 1,
+    reason: "delivery was started by an earlier executor", resend: "verify-first",
+  };
+  return (
+    <div data-evidence-case="delivery-check-card" className="flex h-dvh flex-col bg-canvas px-4 py-6 text-primary">
+      <div data-evidence-transcript className="my-3 flex min-h-0 flex-1 items-start justify-start">
+        <div className="max-w-[75%] whitespace-pre-wrap break-words rounded-surface border border-border px-4 py-2.5">Ready for the next task.</div>
+      </div>
+      <ComposerBar
+        composer={composer}
+        placeholder={t("composer.placeholderSend")}
+        textareaAriaLabel={t("composer.sendStructuredAria")}
+        imageAriaLabel={t("composer.addAttachments")}
+        leftSlot={null}
+        sendSlot={{ kind: "send", label: t("composer.sendToAgent") }}
+        sendLabelIdle={t("composer.sendToAgent")}
+        sendLabelRecording={t("composer.sendToAgent")}
+        sendIdleClassName="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control bg-accent text-canvas"
+        showImage
+        receipts={discarded ? undefined : (
+          <RuntimeComposerReceipts
+            receipts={[receipt]}
+            onRetry={() => setRetries(count => count + 1)}
+            onEdit={() => {}}
+            onDiscard={() => setDiscarded(true)}
+          />
+        )}
+      />
+      <span data-fixture-retries hidden>{retries}</span>
+    </div>
+  );
+}
+
 function Fixture({ id }: { id: ConversationWindowCase }) {
   const { t } = useLocale();
   if (id === "delivery-settlement") return <DeliverySettlementFixture />;
+  if (id === "delivery-check-card") return <DeliveryCheckCardFixture />;
   if (id === "agent-images") return <AgentImagesFixture />;
   if (id === "auth-terminal" || id === "clean-terminal") return <TerminalFixture id={id} />;
   if (id === "dead-host-composer") return <DeadComposerFixture file={DEAD_FILE} id={id} />;
