@@ -2482,6 +2482,12 @@ export class RuntimeJournal {
       const merged = baseSession(scope.id, { ...(previous ?? {}), ...payload }, event.revision);
       merged.attentionIds = strings(payload.attentionIds ?? previous?.attentionIds);
       merged.recentReceipts = receipts(previous?.recentReceipts);
+      /* The status mark: what a named writer published. Any other write,
+         including a payload that carries a mark of its own, keeps the record. */
+      const mark = typeof payload.writerClaim === "string" && "host" in payload && "turn" in payload && "activeTurnId" in payload
+        ? { sessionKey: merged.sessionKey, writerClaim: payload.writerClaim, host: merged.host, turn: merged.turn, activeTurnId: merged.activeTurnId }
+        : previous?.writerStatus;
+      if (mark) merged.writerStatus = mark;
       this.upsertEntity("session", scope.id, event.revision, merged, event.seq);
       return;
     }

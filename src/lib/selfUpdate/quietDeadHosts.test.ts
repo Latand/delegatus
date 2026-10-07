@@ -1,5 +1,5 @@
 /* #2515 at the production seam: the drain's own liveness wiring
-   (`productionDeps().quiet.turnLiveness`), a real registry whose rows are ended
+   (`productionDeps().quiet.owners`), a real registry whose rows are ended
    by the registry's own writers, and real transcripts under a scanner root.
    Only what the Viewer reads from other processes is replaced: the journal's
    session rows, the pipelines, and the operator's presence. */
@@ -14,7 +14,7 @@ import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { newRound, reserveReviewerSpawn, tickFlows } from "@/lib/flows/engine";
 import { loadFlows, saveFlows } from "@/lib/flows/store";
-import { agentLivenessSnapshot, livenessRecordIsLive, productionLivenessSources } from "@/lib/lifecycle/liveness";
+import { agentLivenessSnapshot, livenessRecordIsLive, productionLivenessSources, type AgentLivenessSources } from "@/lib/lifecycle/liveness";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 import { bindStructuredDeliveryQueue, publishStructuredDeliveryHost } from "@/lib/runtime/structuredDeliveryController";
 import { FakeEngineHost } from "@/lib/runtime/fixtures/fakeEngineHost";
@@ -22,7 +22,7 @@ import type { RuntimeHostClient } from "@/lib/runtime/client";
 import { spawnStructuredConversation } from "@/lib/runtime/structuredSpawn";
 import { RuntimeJournal } from "../../runtime-host/journal";
 
-import { productionDeps, turnEvidenceReader } from "./instance";
+import { ownerCensusReader, productionDeps } from "./instance";
 import { flowAwaitingAdmission } from "./drain";
 import { probeQuiet, quietDispatchVersion, type QuietPorts } from "./quiet";
 import type { Snapshot } from "./types";
@@ -94,12 +94,29 @@ function ended(turn: "open" | "settled") {
   return fixture;
 }
 
+/**
+ * The production owner reader, scoped to this fixture. Every test here shares
+ * one registry, so the turn pass sees only the owners the journal rows of the
+ * test name, as the complete owner set this fixture supplies alongside its
+ * fake snapshot. Stage and flow custody still read the whole census, and the
+ * snapshot is complete, so no keyed read is needed. The whole census is
+ * covered over the real journal in quietFallback and quietOwners.
+ */
+function read(sources: () => AgentLivenessSources = productionLivenessSources): NonNullable<QuietPorts["owners"]> {
+  const reader = ownerCensusReader(sources, { readSession: async () => null });
+  return async (sessions, probe) => {
+    const census = await reader(sessions, probe);
+    const named = new Set(sessions.flatMap((session) => census.bound({ conversationId: session.conversationId,
+      artifactPath: session.artifactPath, sessionKey: session.sessionKey }).map((item) => item.id)));
+    return { ...census, owners: census.owners.filter((owner) => named.has(owner.id)),
+      ownerless: census.ownerless.filter((record) => named.has(record.id)) };
+  };
+}
+
 function ports(sessions: unknown[], pipelines: unknown[] = []): QuietPorts {
   return { ...productionDeps({ ...process.env }).quiet!,
     runtimeSnapshot: async () => ({ sessions }) as never,
-    // This fixture supplies the complete owner set alongside its fake snapshot.
-    // Real capped journal + registry inventory is covered in quietFallback.
-    turnOwners: async sessions => sessions,
+    owners: read(),
     pipelines: () => pipelines as never,
     flows: () => [], seats: () => [], presence: () => [], registryHealth: () => [],
     controllerBusyReason: async () => null, memoryAvailableMb: () => 8_192 };
@@ -365,7 +382,7 @@ test.each(["missing", "unreadable", "aliased"] as const)("corpus liveOnly and dr
     },
     probe: { ...production.probe, processIdentity: (pid: number) => identityState === "unreadable" && pid === child.pid ? null : production.probe.processIdentity(pid) },
   };
-  const p = { ...ports([row(owner, "hosted")]), flows: loadFlows, turnLiveness: turnEvidenceReader(() => sources) };
+  const p = { ...ports([row(owner, "hosted")]), flows: loadFlows, owners: read(() => sources) };
   try {
     const targeted = await agentLivenessSnapshot({ conversationId: owner.conversation.id }, sources);
     expect(targeted.conversations).toMatchObject([{ host: { state: "unknown" } }]);
@@ -546,8 +563,11 @@ test("a transcript no registry row ever hosted releases its stage once it has ag
   const journal = journalOf("orphan", [orphan]);
   const p = { ...ports([], [lane("lane_orphan_transcript", "running", { conversationId: orphan.conversationId, agentPath: path })]), runtimeSnapshot: async () => journal.snapshot() };
   try {
-    expect(await p.turnLiveness!(orphan, {})).toMatchObject({ record: { reason: "launch_unproven_expired", host: { state: "unknown" } }, registryHost: null });
-    expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: true, blockers: { turns: 0, stages: 0, discounted: 1 } });
+    // The registry names nothing the row or the stage names, and the transcript's newest record is past the grace (R8, R9).
+    const census = await p.owners!(journal.snapshot().sessions, {});
+    expect(census.names(orphan)).toBe(false);
+    expect(await census.tail(orphan)).toMatchObject({ turn: "busy", lastRecordAt: old.getTime() });
+    expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: true, blockers: { turns: 0, stages: 0, discounted: 0, unresolved: 1 } });
   } finally { journal.close(); }
 });
 
@@ -555,8 +575,10 @@ test("a dead host whose transcript shows no turn state releases its stage", asyn
   const dead = ended("open");
   writeFileSync(dead.artifactPath, JSON.stringify({ timestamp: new Date().toISOString(), type: "session_meta", payload: { id: dead.key.sessionId, cwd: directory } }) + "\n");
   const p = ports([row(dead, "hosted")], [lane("lane_unknown_turn", "running", { conversationId: dead.conversation.id, agentPath: dead.artifactPath })]);
-  expect(await p.turnLiveness!({ conversationId: dead.conversation.id, artifactPath: dead.artifactPath }, {}))
-    .toMatchObject({ record: { host: { state: "gone" }, turnState: "unknown" }, registryHost: { state: "gone", processAlive: false } });
+  const census = await p.owners!([], {});
+  const reference = { conversationId: dead.conversation.id, artifactPath: dead.artifactPath };
+  expect(census.bound(reference).filter((item) => "process" in item && item.process === "alive")).toEqual([]);
+  expect(await census.tail(reference)).toMatchObject({ turn: "unknown" });
   expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: true, blockers: { turns: 0, stages: 0, discounted: 1 } });
 });
 
@@ -625,8 +647,7 @@ for (const missingIdentity of [false, true]) {
   rmSync(reviewerPath);
   const p = { ...ports([], [lane("lane_identity_gap", "reviewing", { conversationId: previous.conversation.id, agentPath: previous.artifactPath, flowId: "flow_identity_gap" })]), flows: loadFlows };
   if (!missingIdentity) {
-    const { turnEvidenceReader } = await import("./instance");
-    p.turnLiveness = turnEvidenceReader(() => { const sources = productionLivenessSources(); return { ...sources, probe: { ...sources.probe, processIdentity: (pid: number) => pid === child.pid ? null : sources.probe.processIdentity(pid) } }; });
+    p.owners = read(() => { const sources = productionLivenessSources(); return { ...sources, probe: { ...sources.probe, processIdentity: (pid: number) => pid === child.pid ? null : sources.probe.processIdentity(pid) } }; });
   }
   try {
     expect(Bun.spawnSync(["kill", "-0", String(child.pid)]).exitCode).toBe(0);
@@ -634,8 +655,7 @@ for (const missingIdentity of [false, true]) {
       expect(await probeQuiet(snapshot, p, at, true)).toMatchObject({ quiet: false, blockers: { stages: 1 } });
     }
     /* Readable evidence of a replaced process releases the bound stage. */
-    const { turnEvidenceReader } = await import("./instance");
-    p.turnLiveness = turnEvidenceReader();
+    p.owners = read();
     const changed = loadFlows()[0]!;
     changed.rounds.at(-1)!.reviewerIdentity = `${identity.startIdentity}-replaced`;
     saveFlows([changed]);
@@ -667,8 +687,9 @@ test("attack: an aliased live headless owner without a journal artifact path pro
   const p = {...ports([]), runtimeSnapshot: async () => journal.snapshot()};
   try {
     rmSync(reviewer.artifactPath);
-    const direct = await p.turnLiveness!({conversationId: reviewer.conversation.id, artifactPath: reviewer.artifactPath}, {});
-    expect(direct.headlessReviewerProcess).toBe("alive");
+    const census = await p.owners!(journal.snapshot().sessions, {});
+    expect(census.bound({ conversationId: reviewer.conversation.id, artifactPath: reviewer.artifactPath })
+      .filter((item) => "role" in item && item.role === "reviewer")).toMatchObject([{ process: "alive" }]);
     const result = await probeQuiet(snapshot, p, Date.now(), true);
     expect(result).toMatchObject({quiet:false, blockers:{turns:1}});
     reviewFlow("flow_alias", reviewer.artifactPath, "reviewing", { reviewerConversationId: reviewer.conversation.id,
@@ -751,8 +772,9 @@ for (const replaced of [false, true]) {
     const fixture = boundHeadlessReviewer(identity, replaced ? `${identity.startIdentity}-replaced` : identity.startIdentity);
     try {
       if (!replaced) { child.kill(); await child.exited; }
-      const evidence = await fixture.p.turnLiveness!(fixture.session, {});
-      expect(evidence).toMatchObject({ record: { host: { state: "gone" } }, headlessReviewerProcess: "gone", registryHost: { processAlive: false } });
+      const census = await fixture.p.owners!(fixture.journal.snapshot().sessions, {});
+      expect(census.bound(fixture.session).filter((item) => "process" in item && item.process === "alive")).toEqual([]);
+      expect(census.bound(fixture.session).filter((item) => "role" in item && item.role === "reviewer")).toMatchObject([{ process: "gone" }]);
       expect(await agentActivity(fixture.reviewer.conversation.id)).toMatchObject([{ host: { state: "gone" } }]);
       expect(await probeQuiet(snapshot, fixture.p, Date.now(), true))
         .toMatchObject({ quiet: true, blockers: { turns: 0, stages: 0, discounted: 1 } });
@@ -828,8 +850,10 @@ for (const unproven of [false, true]) for (const binding of ["conversation", "pa
         flow.rounds.at(-1)!.reviewerConversationId = null;
         saveFlows([flow]);
       }
-      expect(await fixture.p.turnLiveness!(fixture.session, {}))
-        .toMatchObject({ headlessReviewerProcess: "gone", registryHost: { processAlive: true } });
+      const census = await fixture.p.owners!(fixture.journal.snapshot().sessions, {});
+      const bound = census.bound(fixture.session).filter((item) => "role" in item);
+      expect(bound.filter((item) => "role" in item && item.role === "reviewer")).toMatchObject([{ process: "gone" }]);
+      expect(bound.filter((item) => "role" in item && item.role === "host")).toMatchObject([{ process: "alive" }]);
       expect(await probeQuiet(snapshot, fixture.p, Date.now(), true))
         .toMatchObject({ quiet: false, blockers: { turns: 1, stages: 1 } });
       fixture.p.runtimeSnapshot = async () => ({ ...fixture.journal.snapshot(), sessions: [] });
@@ -1037,8 +1061,11 @@ test("independent attack: a deleted transcript cannot hide a live path-only fixi
   })]), flows: loadFlows, runtimeSnapshot: async () => journal.snapshot() };
   try {
     const now = Date.now();
+    // The implementer's process holds its stage. With no transcript it shows
+    // no sign of a turn, so its own turn is unknown: counted, and bounded (R8).
     for (const at of [now, now + FIVE_MINUTES, now + 12 * 60 * 60_000]) {
-      expect(await probeQuiet(snapshot, p, at, true)).toMatchObject({ quiet: false, blockers: { stages: 1, unresolved: 0 } });
+      expect(await probeQuiet(snapshot, p, at, true)).toMatchObject({ quiet: false, blockers: { stages: 1, unresolved: 1,
+        turns: at === now ? 1 : 0, unresolvedBlocking: at === now ? 1 : 0 } });
     }
     child.kill();
     await child.exited;
@@ -1154,13 +1181,14 @@ test.each(["generation", "continuity", "alias"] as const)("fallback ownership fo
     else owner.continuityPaths.push(previous.artifactPath);
   }
   rmSync(previous.artifactPath);
-  const read = turnEvidenceReader(() => ({ ...productionLivenessSources(), registrySnapshot: () => disk }));
+  const owners = read(() => ({ ...productionLivenessSources(), registrySnapshot: () => disk }));
   const request = { conversationId: "flow:legacy:implementer", artifactPath: previous.artifactPath };
+  const live = async () => (await owners([], {})).bound(request).filter((item) => "process" in item && item.process === "alive").length;
   try {
-    expect(await read(request, {})).toMatchObject({ record: null, registryHost: { processAlive: true } });
+    expect(await live()).toBe(1);
     child.kill();
     await child.exited;
-    expect(await read(request, {})).toMatchObject({ record: null, registryHost: { state: "gone", processAlive: false } });
+    expect(await live()).toBe(0);
   } finally { child.kill(); await child.exited; }
 });
 
@@ -1184,9 +1212,10 @@ test("a path-only owner reads its current hosted turn even when registry and tra
   try {
     await bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true, hostlessSettleIntervalMs: 0 });
     await publishStructuredDeliveryHost({ key: fixture.key, host });
-    const read = productionDeps({ ...process.env }).quiet!.turnLiveness!;
-    expect(await read({ conversationId: "flow:legacy:implementer", artifactPath: fixture.artifactPath }, {}))
-      .toMatchObject({ record: null, registryHost: { state: "gone", processAlive: false }, currentTurnIdle: false });
+    // The held host names no process the ended row records, so its handle is an owner of its own (R2, R5).
+    const census = await read()([], {});
+    expect(census.bound({ conversationId: "flow:legacy:implementer", artifactPath: fixture.artifactPath }))
+      .toMatchObject([{ role: "host", process: "alive", handle: "busy" }]);
   } finally {
     await bindStructuredDeliveryQueue([], { registry, client: null });
     journal.close();
@@ -1230,7 +1259,7 @@ test.each(["live", "missing", "unreadable", "reused"] as const)("a %s previous r
       listFiles: async () => [{ ...described, activity: "idle", activityReason: null, mtime: (Date.now() - 12 * FIVE_MINUTES) / 1000 }] as never,
       probe: { ...production.probe, processIdentity: (pid: number) => identityState === "unreadable" && pid === child.pid ? null : production.probe.processIdentity(pid) },
     };
-    const p = { ...fixture.p, turnLiveness: turnEvidenceReader(() => sources) };
+    const p = { ...fixture.p, owners: read(() => sources) };
     const held = identityState !== "reused";
     const now = Date.now();
     for (const at of [now, now + FIVE_MINUTES, now + 12 * 60 * 60_000]) {
@@ -1264,9 +1293,10 @@ test("an expired unregistered path-only attempt releases its stage", async () =>
   const journal = journalOf("path-only-expired-stage", [{ ...row(orphan, "hosted"), sessionKey: { engine: "codex", sessionId: "legacy-path-owner" } }]);
   const p = { ...ports([], [lane("lane_path_only", "running", { conversationId: null, agentPath: artifactPath })]), runtimeSnapshot: async () => journal.snapshot() };
   try {
-    const direct = await p.turnLiveness!({ conversationId: "stage:lane_path_only", artifactPath }, {});
-    expect(direct).toMatchObject({ record: { host: { state: "unknown" }, reason: "launch_unproven_expired", turnState: "busy" }, registryHost: null });
-    expect(livenessRecordIsLive(direct.record!)).toBe(false);
+    const census = await p.owners!(journal.snapshot().sessions, {});
+    const reference = { conversationId: "stage:lane_path_only", artifactPath };
+    expect(census.names(reference)).toBe(false);
+    expect(await census.tail(reference)).toMatchObject({ turn: "busy", lastRecordAt: Date.parse(old) });
     const now = Date.now();
     for (const at of [now, now + FIVE_MINUTES, now + 12 * 60 * 60_000]) {
       expect(await probeQuiet(snapshot, p, at, true)).toMatchObject({ quiet: true, blockers: { turns: 0, stages: 0 } });
@@ -1282,8 +1312,9 @@ test("a live path-only attempt remains protected beyond the unresolved bound", a
   const p = ports([], [lane("lane_path_only_live", "running", { conversationId: null, agentPath: fixture.artifactPath })]);
   try {
     const now = Date.now();
-    const direct = await p.turnLiveness!({ conversationId: "stage:lane_path_only_live", artifactPath: fixture.artifactPath }, {});
-    expect(direct).toMatchObject({ registryHost: { processAlive: true } });
+    const census = await p.owners!([], {});
+    expect(census.bound({ conversationId: "stage:lane_path_only_live", artifactPath: fixture.artifactPath }))
+      .toMatchObject([{ role: "host", process: "alive" }]);
     for (const at of [now, now + FIVE_MINUTES, now + 12 * 60 * 60_000]) expect(await probeQuiet(snapshot, p, at, true)).toMatchObject({ quiet: false, blockers: { stages: 1 } });
   } finally { child.kill(); await child.exited; }
 });
@@ -1326,7 +1357,7 @@ test.each(["missing", "unreadable", "unbound"] as const)("a %s stage owner has a
   if (binding === "missing") rmSync(artifactPath!);
   const p = ports([], [lane("lane_unresolved_path", "running", { conversationId: null, agentPath: artifactPath })]);
   // Simulate a scanner read that cannot describe the still-named artifact.
-  if (binding === "unreadable") p.turnLiveness = turnEvidenceReader(() => ({ ...productionLivenessSources(), describeTranscript: async () => null }));
+  if (binding === "unreadable") p.owners = read(() => ({ ...productionLivenessSources(), describeTranscript: async () => null }));
   const now = Date.now();
   expect(await probeQuiet(snapshot, p, now, true)).toMatchObject({ quiet: false, blockers: { stages: 1, unresolved: 1, unresolvedBlocking: 1 } });
   // Reloaded attempt objects retain the same unresolved identity.
@@ -1392,7 +1423,7 @@ test.each((["missing", "dead", "live"] as const).flatMap((state) =>
   });
   if (parent === "parked") Object.assign(stage, { state: "needs_decision", cursor: { stageId: "build", state: "needs_decision" } });
   const p = { ...ports([], parent === "standalone" ? [] : [stage]), flows: loadFlows,
-    turnLiveness: turnEvidenceReader(() => ({ ...production, registrySnapshot: () => disk })) };
+    owners: read(() => ({ ...production, registrySnapshot: () => disk })) };
   try {
     const now = Date.now();
     for (const at of [now, now + FIVE_MINUTES - 1, now + FIVE_MINUTES, now + 12 * 60 * 60_000]) {

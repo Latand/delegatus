@@ -1100,6 +1100,7 @@ async function projectDeadStructuredSpawn(
         runtimeSettings: runtimeSettingsCapability(key.engine),
       },
       activeTurnId: null,
+      writerClaim: null,
     },
   });
 }

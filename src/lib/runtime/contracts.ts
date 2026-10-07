@@ -572,12 +572,27 @@ export interface RuntimeInjectionBinding {
   writerClaim: string;
 }
 
+export interface RuntimeWriterStatus {
+  sessionKey: { engine: RuntimeEngine; sessionId: string };
+  writerClaim: string;
+  host: RuntimeHostAxis;
+  turn: RuntimeTurnAxis;
+  activeTurnId: string | null;
+}
+
 export interface RuntimeSession {
   /** Fresh keyed session reads derive this from all open operations and native
       queue entries. Absence is insufficient evidence for automatic retirement. */
   retirementBlocked?: boolean;
   /** Structured writer identity published with this session generation. */
   writerClaim?: string | null;
+  /** What the row's writer last published: its session key, its fence and the
+      three status fields it left on the row. Set only by a publication that
+      names a writer and carries all three; every other write keeps it, so the
+      statement stays that writer's whatever a later write did to the row's own
+      status. The update drain reads it while the row still carries the same
+      fence (docs/design/update-drain-liveness.md, R5). */
+  writerStatus?: RuntimeWriterStatus;
   diagnostics?: RuntimeHostDiagnostics;
   conversationId: string;
   sessionKey: { engine: RuntimeEngine; sessionId: string };

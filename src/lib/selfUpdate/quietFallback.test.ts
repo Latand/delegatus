@@ -16,7 +16,7 @@ import type { Pipeline, PipelineCursorState } from "@/lib/pipelines/types";
 import type { Flow } from "@/lib/flows/types";
 import { RuntimeJournal } from "../../runtime-host/journal";
 import type { SessionHostMetadata } from "../../runtime-host/journalSessionMetadata";
-import { productionDeps, registeredTurnOwnerReader } from "./instance";
+import { ownerCensusReader, productionDeps } from "./instance";
 import { probeQuiet, type QuietPorts } from "./quiet";
 import type { Snapshot } from "./types";
 
@@ -27,7 +27,7 @@ let child: ReturnType<typeof Bun.spawn>;
 
 function ports(journal: RuntimeJournal): QuietPorts {
   return { ...productionDeps().quiet!, runtimeSnapshot: async () => journal.snapshot(),
-    turnOwners: registeredTurnOwnerReader(() => f.client),
+    owners: ownerCensusReader(productionLivenessSources, { readSession: (query) => f.client.readSession!(query) }),
     pipelines: () => [], flows: () => [], seats: () => [], presence: () => [],
     registryHealth: () => [], controllerBusyReason: async () => null, memoryAvailableMb: () => 8_192 };
 }
@@ -91,7 +91,9 @@ function journalRow(overrides: Partial<RuntimeSession> = {}) {
   f.journal.append({ scope: { type: "session", id: f.conversation.id }, kind: "session-status",
     producer: { kind: "codex-app-server", eventKey: randomUUID() },
     payload: { sessionKey: f.key, hostKind: "codex-app-server", host: "hosted", turn: "running", provenance: "structured",
-      artifactPath: f.file, cwd: f.dir, accountId: "fixture", activeTurnId: "running-turn", ...overrides } });
+      artifactPath: f.file, cwd: f.dir, accountId: "fixture", activeTurnId: "running-turn",
+      // A host's own publication carries its writer's fence, at the epoch the fixture entry records.
+      writerClaim: "fixture:0", ...overrides } });
 }
 
 async function fallback(status: "dead" | "unhosted" | "idle") {
@@ -143,9 +145,9 @@ for (const status of ["dead", "unhosted", "idle"] as const) {
       await fallback(status);
       inactiveHistory();
       snapshotSelection(indexed);
-      const p = ports(f.journal), reader = p.turnLiveness!;
-      const asked: string[] = [];
-      p.turnLiveness = async (row, probe) => { asked.push(row.conversationId); return reader(row, probe); };
+      const p = ports(f.journal), reader = p.owners!;
+      const asked: (string | null)[] = [];
+      p.owners = async (rows, probe) => { const census = await reader(rows, probe); asked.push(...census.owners.map(owner => owner.binding)); return census; };
       expect((await activity())[0]).toMatchObject({ host: { state: "alive" }, turnState: "busy" });
       expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: false, blockers: { turns: 1, stages: 0 } });
       expect(asked.filter(id => id === f.conversation.id)).toHaveLength(1);
@@ -180,9 +182,13 @@ for (const status of ["dead", "unhosted", "idle"] as const) {
       await fallback(status);
       inactiveHistory();
       snapshotSelection(true);
-      const p = ports(f.journal), reader = p.turnLiveness!;
+      const p = ports(f.journal), reader = p.owners!;
       let asked = false;
-      p.turnLiveness = async (row, probe) => { if (row.conversationId === f.conversation.id) asked = true; return reader(row, probe); };
+      p.owners = async (rows, probe) => {
+        const census = await reader(rows, probe);
+        if (census.owners.some(owner => owner.binding === f.conversation.id)) asked = true;
+        return census;
+      };
       expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: true, blockers: { turns: 0, stages: 0 } });
       expect(asked).toBe(true);
     });
@@ -341,9 +347,13 @@ for (const host of ["hosted", "unhosted", "dead", "conflict"] satisfies RuntimeH
     test(`shared busy verdict is read for ${host}/${turn} with no active turn id`, async () => {
       await fallback("idle");
       journalRow({ host, turn, activeTurnId: null });
-      const p = ports(f.journal), reader = p.turnLiveness!;
+      const p = ports(f.journal), reader = p.owners!;
       let reads = 0;
-      p.turnLiveness = async (row, probe) => { reads++; return reader(row, probe); };
+      p.owners = async (rows, probe) => {
+        const census = await reader(rows, probe);
+        reads += census.owners.filter(owner => owner.binding === f.conversation.id).length;
+        return census;
+      };
       expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: false, blockers: { turns: 1 } });
       expect(reads).toBe(1);
     });
@@ -408,6 +418,9 @@ test("an active registry turn retains custody over a previous settled transcript
   expect((await activity())[0]).toMatchObject({ turnState: "idle" });
   expect(await probeQuiet(snapshot, ports(f.journal), Date.now(), true)).toMatchObject({ quiet: false, blockers: { turns: 1 } });
   const idle = Object.assign(new FakeEngineHost(), { onStateChange: () => () => {} });
+  // The held host reports the process the entry records, so its handle speaks for it (R5).
+  const idleHealth = await idle.health();
+  idle.health = async () => ({ ...idleHealth, pid: child.pid });
   await bindStructuredDeliveryQueue([{ key: f.key, host: idle }], { registry: f.registry, client: f.client, hostlessSettleIntervalMs: 0 });
   expect(await probeQuiet(snapshot, ports(f.journal), Date.now(), true)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
 });
@@ -515,17 +528,22 @@ for (const hidden of [false, true]) {
     expect(byPath).toMatchObject({ host: { state: "alive" }, turnState: "busy" });
     const p = ports(f.journal);
     const asked: (string | null)[] = [];
-    const read = p.turnLiveness!;
-    p.turnLiveness = async (row, probe) => {
-      if (row.conversationId === f.conversation.id) asked.push(row.artifactPath);
-      return read(row, probe);
+    const reachable: (string | null)[] = [];
+    const read = p.owners!;
+    p.owners = async (rows, probe) => {
+      const census = await read(rows, probe);
+      asked.push(...census.owners.filter(owner => owner.binding === f.conversation.id).map(owner => owner.artifactPath));
+      // The successor records no process, so it adds no owner (R2); its path
+      // still reaches every owner of the conversation (R10).
+      reachable.push(...census.bound({ artifactPath: current }).map(owner => owner.artifactPath));
+      return census;
     };
     const now = Date.now();
     for (const at of [now, now + 300_000]) {
       expect(await probeQuiet(snapshot, p, at, true)).toMatchObject({ quiet: false, blockers: { turns: 1, stages: 0, unresolved: 0 } });
     }
     expect(asked).toContain(f.file);
-    expect(asked).toContain(current);
+    expect(reachable).toContain(f.file);
     child.kill();
     await child.exited;
     expect(await probeQuiet(snapshot, p, now, true)).toMatchObject({ quiet: true, blockers: { turns: 0, stages: 0 } });
@@ -621,22 +639,26 @@ test("unreadable shared evidence holds even a settled fallback row", async () =>
   settleTranscript();
   await fallback("idle");
   const p = ports(f.journal);
-  p.turnLiveness = async () => { throw new Error("fixture evidence unavailable"); };
-  expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: false, blockers: { turns: 1 } });
+  p.owners = async () => { throw new Error("fixture evidence unavailable"); };
+  // A reading that throws is no verdict: it holds admission as unreadable (R7).
+  expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: false, blockers: { unreadable: "fixture evidence unavailable" } });
 });
 
 test("a held reservation with a readable owner path retains stage custody", async () => {
   await fallback("idle");
   const p = ports(f.journal);
   p.runtimeSnapshot = async () => ({ sessions: [] });
-  const reader = p.turnLiveness!;
-  let reads = 0;
-  p.turnLiveness = async (row, probe) => { reads++; return reader(row, probe); };
+  const reader = p.owners!;
+  let reached = 0;
+  p.owners = async (rows, probe) => {
+    const census = await reader(rows, probe);
+    // The path-only stage reaches the conversation's owner through its path (R10).
+    reached = census.bound({ artifactPath: f.file }).length;
+    return census;
+  };
   p.pipelines = () => [stage({ conversationId: null, launchId: null, agentPath: f.file, activation: { phase: "reserved" } }, "running", "spawning")];
   expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: false, blockers: { stages: 1 } });
-  // The path-only stage and the independently inventoried conversation each
-  // ask the shared reader; neither identity substitutes for the other.
-  expect(reads).toBe(2);
+  expect(reached).toBe(1);
   child.kill();
   await child.exited;
   expect(await probeQuiet(snapshot, p, Date.now(), true)).toMatchObject({ quiet: true, blockers: { stages: 0 } });
