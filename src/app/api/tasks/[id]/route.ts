@@ -15,6 +15,7 @@ import type { BoardTask } from "@/lib/tasks/types";
 import { OPERATOR_PAUSE_RESUME_ACTOR } from "@/lib/pauseResumeActor";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
+import { taskForResponse } from "@/lib/prototypeReview/read";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -94,7 +95,7 @@ export async function PATCH(
   if (LINE_EDIT_KEYS.some((key) => Object.hasOwn(body, key))) {
     return NextResponse.json({ ok: true, taskId: result.task.id, revision: taskRevision(result.task), detailsLength: result.task.details?.length ?? 0, updatedAt: result.task.updatedAt, ...extras });
   }
-  return NextResponse.json({ ok: true, task: result.task, ...extras });
+  return NextResponse.json({ ok: true, task: taskForResponse(req, result.task), ...extras });
 }
 
 export async function DELETE(_req: NextRequest, ctx: TaskRouteContext): Promise<NextResponse<{ ok: true } | ApiError>> {

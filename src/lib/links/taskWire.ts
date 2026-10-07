@@ -7,6 +7,9 @@
  */
 import { boundedRepository, MAX_WORK_LINKS, type StoredWorkLink } from "@/lib/forge/workLinks";
 import { readTaskIconInput } from "@/lib/tasks/taskIcon";
+import { prototypeReviewReplica } from "@/lib/prototypeReview/model";
+import { isPrototypeReplica } from "@/lib/prototypeReview/replica";
+import type { PrototypeReviewReplica } from "@/lib/prototypeReview/types";
 import { TASK_COLORS, TASK_DETAILS_LIMIT, TASK_SYNC_GROUPS, TASK_TEXT_LIMIT, type BoardTask, type TaskBoardVisibility, type TaskColor, type TaskPlacement, type TaskStatus, type TaskSyncGroup } from "@/lib/tasks/types";
 
 import { isStamp } from "./stamp";
@@ -17,6 +20,7 @@ export type WireTask = {
   color?: TaskColor; icon?: string; priority?: "high" | "low"; placement: TaskPlacement; pos?: { x: number; y: number };
   workLinks?: StoredWorkLink[]; machine: string; handover?: { to: string };
   createdAt: string; updatedAt: string; s: Record<TaskSyncGroup, string>;
+  prototypeReviewReplica?: PrototypeReviewReplica;
 };
 export type WireGone = { id: string; project: string; gone: string };
 export type WireStub = { id: string; project: string; withheld: string };
@@ -24,10 +28,9 @@ export type WireRow = WireTask | WireGone | WireStub;
 
 /** v3 adds the optional board arrival preference; v2 peers reject unknown row fields. */
 export const TASK_BOARD_WIRE_VERSION = 3;
-/** v4 keeps the v3 row shape and asks already-consumed v3 initiators to replay
- * both directions once. Their existing capability-upgrade path persists the
- * confirmation, including when only the accepting install has upgraded. */
-export const TASK_WIRE_VERSION = 4;
+/** v5 adds public prototype metadata; capability upgrade replays both sides. */
+export const TASK_PROTOTYPE_WIRE_VERSION = 5;
+export const TASK_WIRE_VERSION = TASK_PROTOTYPE_WIRE_VERSION;
 
 export const isWireGone = (row: WireRow): row is WireGone => "gone" in row;
 export const isWireStub = (row: WireRow): row is WireStub => "withheld" in row;
@@ -43,8 +46,9 @@ export class MalformedRow extends Error { constructor(readonly field: string) { 
 
 /** The row as it leaves this machine, or a withheld stub when a stored field
     breaks a bound (a repository written before the bound existed). */
-export function encodeTask(task: BoardTask, self: { id: string; prefix: string }, options: { includeBoard?: boolean } = {}): { row: WireTask | WireStub; bytes: number } {
+export function encodeTask(task: BoardTask, self: { id: string; prefix: string }, options: { includeBoard?: boolean; includePrototypeReview?: boolean } = {}): { row: WireTask | WireStub; bytes: number } {
   const s = Object.fromEntries(TASK_SYNC_GROUPS.map((group) => [group, effectiveStamp(task, group, self.prefix)])) as Record<TaskSyncGroup, string>;
+  const replica = options.includePrototypeReview !== false ? prototypeReviewReplica(task) : undefined;
   const row: WireTask = {
     id: task.id, project: task.project, text: task.text,
     ...(options.includeBoard !== false && task.board !== undefined ? { board: task.board } : {}),
@@ -55,8 +59,20 @@ export function encodeTask(task: BoardTask, self: { id: string; prefix: string }
     ...(task.workLinks?.length ? { workLinks: task.workLinks } : {}),
     machine: task.machine ?? self.id, ...(task.handover ? { handover: task.handover } : {}),
     createdAt: task.createdAt, updatedAt: task.updatedAt, s,
+    ...(replica ? { prototypeReviewReplica: replica } : {}),
   };
-  const bytes = Buffer.byteLength(JSON.stringify(row));
+  let bytes = Buffer.byteLength(JSON.stringify(row));
+  // Keep task sync available as review history grows. Prefer the waiting round,
+  // then recent history; the summary survives even an oversized media manifest.
+  if (row.prototypeReviewReplica && bytes > MAX_WIRE_ROW_BYTES) {
+    row.prototypeReviewReplica = { ...row.prototypeReviewReplica, rounds: [...row.prototypeReviewReplica.rounds], historyTruncated: true };
+    while (row.prototypeReviewReplica.rounds.length && bytes > MAX_WIRE_ROW_BYTES) {
+      const rounds = row.prototypeReviewReplica.rounds;
+      const index = rounds.findIndex(round => round.id !== row.prototypeReviewReplica!.summary.waitingReviewId);
+      rounds.splice(index < 0 ? 0 : index, 1);
+      bytes = Buffer.byteLength(JSON.stringify(row));
+    }
+  }
   try {
     if (bytes > MAX_WIRE_ROW_BYTES) throw new MalformedRow("size");
     validateWireTask(row);
@@ -78,13 +94,14 @@ function validWorkLink(value: unknown): value is StoredWorkLink {
     && Object.keys(value).length === 5;
 }
 
-const GROUP_KEYS = new Set(["id", "project", "text", "details", "status", "color", "icon", "priority", "placement", "pos", "workLinks", "machine", "handover", "createdAt", "updatedAt", "s", "board"]);
+const GROUP_KEYS = new Set(["id", "project", "text", "details", "status", "color", "icon", "priority", "placement", "pos", "workLinks", "machine", "handover", "createdAt", "updatedAt", "s", "board", "prototypeReviewReplica"]);
 
 function validateWireTask(row: Record<string, unknown>): asserts row is WireTask {
   const fail = (field: string): never => { throw new MalformedRow(field); };
   for (const key of Object.keys(row)) if (!GROUP_KEYS.has(key)) fail(key);
   if (typeof row.id !== "string" || !UUID.test(row.id)) fail("id");
   if (typeof row.project !== "string" || !PROJECT.test(row.project)) fail("project");
+  if (row.prototypeReviewReplica !== undefined && !isPrototypeReplica(row.prototypeReviewReplica, row.id as string, row.project as string)) fail("prototypeReviewReplica");
   if (typeof row.text !== "string" || !row.text.trim() || row.text.length > TASK_TEXT_LIMIT) fail("text");
   if (row.details !== undefined && (typeof row.details !== "string" || row.details.length > TASK_DETAILS_LIMIT)) fail("details");
   if (row.board !== undefined && row.board !== "hidden" && row.board !== "shown") fail("board");
@@ -106,6 +123,7 @@ function validateWireTask(row: Record<string, unknown>): asserts row is WireTask
 /** Receiver side: a row that breaks a bound fails its whole page. */
 export function decodeWireRow(value: unknown): WireRow {
   if (!object(value)) throw new MalformedRow("row");
+  if (Buffer.byteLength(JSON.stringify(value)) > MAX_WIRE_ROW_BYTES) throw new MalformedRow("size");
   if ("gone" in value || "withheld" in value) {
     const stamp = "gone" in value ? value.gone : value.withheld;
     if (Object.keys(value).length !== 3 || typeof value.id !== "string" || !UUID.test(value.id) || typeof value.project !== "string" || !PROJECT.test(value.project) || !isStamp(stamp)) throw new MalformedRow("row");
@@ -118,7 +136,7 @@ export function decodeWireRow(value: unknown): WireRow {
 /** A group's value in wire form, for the equality the `o` rule compares. */
 export function wireGroup(row: WireTask, group: TaskSyncGroup): string {
   switch (group) {
-    case "text": return JSON.stringify([row.text, row.details ?? null]);
+    case "text": return JSON.stringify([row.text, row.details ?? null, ...(row.prototypeReviewReplica !== undefined ? [row.prototypeReviewReplica] : [])]);
     case "status": return JSON.stringify(row.status);
     case "look": return JSON.stringify([row.color ?? null, row.icon ?? null, row.priority ?? null]);
     case "place": return JSON.stringify([row.placement, row.pos ?? null]);
