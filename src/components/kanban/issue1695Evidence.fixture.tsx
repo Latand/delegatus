@@ -32,6 +32,7 @@ import { withTaskCompletion } from "@/lib/tasks/completion";
 import { admissionSnapshot } from "@/lib/tasks/groupHide";
 import { getRuntimeBus } from "@/hooks/runtimeBus";
 import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
+import type { PrototypeDeliveryState, PrototypeMediaView, PrototypeReviewSummary, PrototypeRoundView } from "@/lib/prototypeReview/types";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
@@ -2533,6 +2534,91 @@ function mockRender(width: number, height: number, hue: number, label: string, p
   g.fillText(label, pad, Math.max(14, height * 0.05));
   return canvas.toDataURL("image/png");
 }
+/* The prototype review (`&proto=1`): five tasks, one per state the card's
+   button draws, answered the way `GET` and `POST /api/tasks/:id/prototypes`
+   answer them. The search task waits with four variants: new pictures, two
+   original/changed pairs, forty pictures in one variant and a video. Upload
+   waits with one variant, whose name is the 60 characters the schema admits and whose
+   second caption runs to its 200, and saves into a project with no orchestrator;
+   export is decided and its pictures are retired; links carries a decided
+   first round and a waiting second; disk is decided and its message failed.
+   `&proto=elsewhere` answers the search task as a linked installation does. */
+const PROTO = params.get("proto");
+const protoPosts: unknown[] = [];
+const protoRounds: Record<string, PrototypeRoundView[]> = {};
+const protoSaveState: Record<string, PrototypeDeliveryState> = { "t-upload": "no-orchestrator" };
+function protoSummary(rounds: PrototypeRoundView[]): PrototypeReviewSummary {
+  const latest = rounds.at(-1)!;
+  const waiting = rounds.findLast((round) => !round.decision);
+  return {
+    latestReviewId: latest.id, waitingReviewId: waiting?.id ?? null, title: latest.title, rounds: rounds.length, createdAt: (waiting ?? latest).createdAt,
+    ...(latest.decision ? { decision: { chosen: latest.variants.filter((variant) => latest.decision!.chosen.includes(variant.number)).map(({ number, name }) => ({ number, name })), comment: latest.decision.comment, at: latest.decision.at, delivery: latest.decision.delivery.state } } : {}),
+  };
+}
+function protoPublish(): void {
+  for (const [taskId, rounds] of Object.entries(protoRounds)) {
+    const held = tasks.find((entry) => entry.id === taskId);
+    if (held) Object.assign(held, { prototypeReview: protoSummary(rounds) });
+  }
+}
+if (PROTO) {
+  let mediaId = 0;
+  const gone = PROTO === "elsewhere";
+  const image = (width: number, height: number, hue: number, label: string, phone = false, available = true): PrototypeMediaView => ({
+    id: `m${mediaId += 1}`, mime: "image/png", bytes: 48_000, available: available && !gone, url: available && !gone ? mockRender(width, height, hue, label, phone) : null,
+  });
+  const round = (id: string, taskId: string, title: string, ago: number, variants: PrototypeRoundView["variants"], over: Partial<PrototypeRoundView> = {}): PrototypeRoundView => ({
+    id, taskId, project: PROJECT, title, createdAt: iso(ago), source: { conversationId: null }, variants, ...over,
+  });
+  const decided = (chosen: number[], comment: string, ago: number, state: PrototypeDeliveryState): NonNullable<PrototypeRoundView["decision"]> => ({
+    chosen, comment, at: iso(ago), delivery: { state, retryable: state !== "sent" },
+  });
+  protoRounds["t-search"] = [round("r-search", "t-search", L("Search results layout", "Макет результатів пошуку"), 3 * MIN, [
+    { number: 1, name: L("Compact list", "Компактний список"), description: L("One line per result with the path under the title.\nThe densest of the four; no preview.", "Один рядок на результат, шлях під назвою.\nНайщільніший із чотирьох; без попереднього перегляду."), videos: [], frames: [
+      { image: image(960, 600, 205, "compact · 1440"), caption: L("results, desktop", "результати, десктоп"), width: 1440, lang: "en" },
+      { image: image(800, 600, 205, "compact · 1000"), caption: L("results, narrow pane", "результати, вузька панель"), width: 1000, lang: "en" },
+      { image: image(390, 760, 205, "compact · 390", true), caption: L("results, phone", "результати, телефон"), width: 390, lang: "uk" },
+    ] },
+    { number: 2, name: L("Two columns", "Дві колонки"), description: L("Results on the left, the opened result on the right.\nChanges the existing results page.", "Результати ліворуч, відкритий результат праворуч.\nЗмінює наявну сторінку результатів."), videos: [], frames: [
+      { original: image(960, 600, 30, "today · 1440"), image: image(960, 600, 150, "two columns · 1440"), caption: L("results page, before and after", "сторінка результатів, до і після"), width: 1440, lang: "en" },
+      { original: image(390, 760, 30, "today · 390", true), image: image(390, 760, 150, "two columns · 390", true), caption: L("phone, before and after", "телефон, до і після"), width: 390, lang: "en" },
+      { image: image(960, 600, 150, "two columns · empty"), caption: L("nothing found", "нічого не знайдено"), width: 1440, lang: "en" },
+    ] },
+    { number: 3, name: L("Dense table", "Щільна таблиця"), description: L("A sortable table: name, path, modified, size.\nEvery state of every column is captured.", "Сортована таблиця: назва, шлях, змінено, розмір.\nЗнято кожен стан кожної колонки."), videos: [], frames:
+      Array.from({ length: 40 }, (_, at) => ({ image: image(640, 400, 260 + at * 2, `table · ${at + 1}`), caption: L(`table state ${at + 1}`, `стан таблиці ${at + 1}`), width: 1440, lang: "en" as const })) },
+    { number: 4, name: L("Cards with a preview", "Картки з переглядом"), description: L("A card per result with a thumbnail of the match.\nThe video shows the hover and the keyboard walk.", "Картка на результат із мініатюрою збігу.\nВідео показує наведення і прохід клавіатурою."), frames: [
+      { image: image(960, 600, 330, "cards · 1440"), caption: L("results, desktop", "результати, десктоп"), width: 1440, lang: "en" },
+      { image: image(390, 760, 330, "cards · 390", true), caption: L("results, phone", "результати, телефон"), width: 390, lang: "uk" },
+    ], videos: [{ media: { id: "v1", mime: "video/webm", bytes: 210_000, available: !gone, url: gone ? null : "/proto-video.webm" }, caption: L("hover and keyboard walk", "наведення і прохід клавіатурою") }] },
+  ])];
+  protoRounds["t-upload"] = [round("r-upload", "t-upload", L("Upload progress sheet", "Панель перебігу завантаження"), 9 * MIN, [
+    { number: 1, name: L("Progress under the attached file with speed, size and a stop", "Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп"), description: L("A new design: the bar sits under the attached file.\nNothing existing changes.", "Новий дизайн: смуга стоїть під прикріпленим файлом.\nНаявне не змінюється."), videos: [], frames: [
+      { image: image(960, 600, 190, "upload · running"), caption: L("uploading", "завантажується"), width: 1440, lang: "en" },
+      { image: image(960, 600, 190, "upload · resumed"), caption: L("resumed after a drop: the bar keeps what was already sent, the label names the retry, the speed returns once two samples exist, and the stop button stays where the pointer left it, so nothing jumps.", "відновлено після обриву: смуга зберігає вже надіслане, підпис називає повтор, швидкість повертається після двох замірів, а кнопка зупинки лишається там, де її залишив вказівник, тож ніщо не стрибає."), width: 1440, lang: "en" },
+    ] },
+  ])];
+  protoRounds["t-export"] = [round("r-export", "t-export", L("Export presets", "Пресети експорту"), 40 * 24 * 60 * MIN, [
+    { number: 1, name: L("Three tiles", "Три плитки"), description: L("One tile per preset.", "Плитка на кожен пресет."), videos: [], frames: [{ image: image(960, 600, 40, "tiles", false, false), caption: L("presets", "пресети"), width: 1440 }] },
+    { number: 2, name: L("Segmented control", "Сегментований перемикач"), description: L("The presets as one segmented control.", "Пресети одним сегментованим перемикачем."), videos: [], frames: [{ image: image(960, 600, 80, "segments", false, false), caption: L("presets", "пресети"), width: 1440 }] },
+    { number: 3, name: L("Advanced drawer", "Шухляда розширених"), description: L("Eleven toggles behind one disclosure.", "Одинадцять перемикачів за одним розкриттям."), videos: [], frames: [{ image: image(960, 600, 120, "drawer", false, false), caption: L("advanced", "розширені"), width: 1440 }] },
+  ], { mediaRemovedAt: iso(2 * 24 * 60 * MIN), decision: decided([2, 3], L("Take the segmented control and keep the drawer closed by default.", "Беремо сегментований перемикач, шухляда типово закрита."), 38 * 24 * 60 * MIN, "sent") })];
+  protoRounds["t-links"] = [
+    round("r-links-1", "t-links", L("Release notes links", "Посилання в нотатках релізу"), 3 * 24 * 60 * MIN, [
+      { number: 1, name: L("Inline arrows", "Стрілки в рядку"), description: L("An arrow after every repaired link.", "Стрілка після кожного виправленого посилання."), videos: [], frames: [{ image: image(960, 600, 20, "arrows"), caption: L("notes", "нотатки"), width: 1440 }] },
+      { number: 2, name: L("Footnotes", "Примітки"), description: L("Links move to numbered footnotes.", "Посилання переходять у нумеровані примітки."), videos: [], frames: [{ image: image(960, 600, 60, "footnotes"), caption: L("notes", "нотатки"), width: 1440 }] },
+    ], { decision: decided([1], L("Arrows, but smaller.", "Стрілки, але менші."), 2 * 24 * 60 * MIN, "sent") }),
+    round("r-links-2", "t-links", L("Release notes links, smaller arrows", "Посилання в нотатках релізу, менші стрілки"), 6 * MIN, [
+      { number: 1, name: L("Arrow at 12 px", "Стрілка 12 px"), description: L("The chosen arrow, two sizes down.", "Обрана стрілка, на два розміри менша."), videos: [], frames: [{ original: image(960, 600, 20, "arrows"), image: image(960, 600, 100, "arrows · 12"), caption: L("notes, before and after", "нотатки, до і після"), width: 1440 }] },
+      { number: 2, name: L("Arrow on hover", "Стрілка при наведенні"), description: L("The arrow shows only under the pointer.", "Стрілку видно лише під вказівником."), videos: [], frames: [{ image: image(960, 600, 140, "arrows · hover"), caption: L("notes", "нотатки"), width: 1440 }] },
+    ]),
+  ];
+  protoRounds["t-disk"] = [round("r-disk", "t-disk", L("Disk usage report", "Звіт про використання диска"), 5 * 60 * MIN, [
+    { number: 1, name: L("Treemap", "Деревоподібна карта"), description: L("Area by size.", "Площа за розміром."), videos: [], frames: [{ image: image(960, 600, 280, "treemap"), caption: L("report", "звіт"), width: 1440 }] },
+    { number: 2, name: L("Sorted bars", "Впорядковані смуги"), description: L("One bar per directory.", "Смуга на кожен каталог."), videos: [], frames: [{ image: image(960, 600, 310, "bars"), caption: L("report", "звіт"), width: 1440 }] },
+  ], { decision: decided([2], L("Bars. Add the reclaimable column.", "Смуги. Додайте колонку «можна звільнити»."), 4 * 60 * MIN, "failed") })];
+  protoPublish();
+  Object.assign(window, { protoPosts });
+}
 type FixtureAlbumItem = { id: string; src: string; name: string | null; ts: number; via: "read" | "named" | "pasted"; source: { key: string; conversationId: string | null; path: string; stage?: { pipelineId: string; stageId: string; attempt: number; round?: number } }; isNew: boolean };
 const albumOpened = new Map<string, number>([["t-export", Date.now()]]);
 const albumSource = (file: FileEntry, stage?: { pipelineId: string; stageId: string; attempt: number; round?: number }) => ({ key: file.conversationId ?? file.path, conversationId: file.conversationId ?? null, path: file.path, ...(stage ? { stage } : {}) });
@@ -2771,6 +2857,37 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (TICK_CARDS && (url.pathname === "/api/monitor/seat-tick/settings" || url.pathname === "/api/roles")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname.startsWith("/api/tts")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname.startsWith("/api/links")) return serverFetch(url.pathname + url.search, init);
+  if (PROTO && url.pathname === "/api/transcribe" && method === "POST") {
+    /* A transcription the driver holds back, to close the review while it is awaited. */
+    const held = (window as unknown as { protoTranscribeDelay?: number }).protoTranscribeDelay;
+    if (held) await new Promise((resolve) => setTimeout(resolve, held));
+    return json({ text: L("Take the header from the two columns and keep the dense rows of the table.", "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.") });
+  }
+  if (PROTO && /^\/api\/tasks\/[^/]+\/prototypes$/.test(url.pathname)) {
+    const taskId = decodeURIComponent(url.pathname.split("/")[3]!);
+    const rounds = protoRounds[taskId] ?? [];
+    if (method === "POST") {
+      const body = JSON.parse(String(init?.body)) as { reviewId: string; chosen?: number[]; comment?: string; retry?: true };
+      protoPosts.push({ taskId, ...body });
+      const held = rounds.find((entry) => entry.id === body.reviewId);
+      if (!held) return json({ error: "prototype review not found" }, 404);
+      if (body.retry && held.decision) {
+        /* A driver may queue what the next retries answer; with nothing queued a retry lands. */
+        const state = (window as unknown as { protoRetryAnswers?: PrototypeDeliveryState[] }).protoRetryAnswers?.shift() ?? "sent";
+        held.decision = { ...held.decision, delivery: { state, retryable: state !== "sent" } };
+      }
+      else if (!held.decision) {
+        const state = protoSaveState[taskId] ?? "sent";
+        held.decision = { chosen: [...(body.chosen ?? [])].sort((a, b) => a - b), comment: body.comment ?? "", at: new Date().toISOString(), delivery: { state, retryable: state !== "sent" } };
+      }
+      protoPublish();
+    }
+    return json({
+      taskId, rounds, waitingReviewId: rounds.findLast((entry) => !entry.decision)?.id ?? null,
+      ...(rounds.length ? { summary: protoSummary(rounds) } : {}),
+      ...(PROTO === "elsewhere" ? { unavailable: "another-installation" } : {}),
+    });
+  }
   if (ALBUM && url.pathname === "/api/task-album") {
     const ids = (url.searchParams.get("ids") ?? "").split(",").filter((id) => albumItems()[id]);
     return json({ tasks: Object.fromEntries(ids.map((id) => {
