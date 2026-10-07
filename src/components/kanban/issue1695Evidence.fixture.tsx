@@ -13,6 +13,7 @@ import { AgentMappingTable } from "@/components/onboarding/AgentMappingTable";
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
 import { ROLE_VARIANT_DEFAULTS } from "@/lib/roles/paramConfig";
 import { RuntimePill } from "@/components/RuntimePill";
+import { ResourcesFooter } from "@/components/ResourcesFooter";
 import { createRoot } from "react-dom/client";
 
 import { cancelArrivalPulse, startArrivalPulse } from "@/components/attention/arrivalPulse";
@@ -2467,11 +2468,11 @@ const evidence = {
   admitted: null as { pipeline: Pipeline; task: BoardTask } | null,
   /* Every `/api/attention` call, as the page made it. */
   attentionCalls: [] as Array<{ url: string; method: string }>,
-  admitLane(title: string) {
+  admitLane(title: string, stateDetail: string | null = null) {
     evidence.admitted = {
       pipeline: pipeline("p-admitted", title, "t-admitted", "provisioning",
         [stage("build", "builder", "review"), stage("review", "reviewer", null)], [],
-        { stageId: "build", state: "pending", input: null, activatedBy: null }, { createdAt: new Date().toISOString() }),
+        { stageId: "build", state: "pending", input: null, activatedBy: null }, { createdAt: new Date().toISOString(), stateDetail }),
       task: task("t-admitted", "assigned", title, "", 0),
     };
   },
@@ -3466,11 +3467,23 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   /* The rail's footer, so the frames that fold it away (#1802) have something
      to fold: invented machine figures and one invented limit window. */
   if (url.pathname.startsWith("/api/resources")) {
+    const diskRole = new URLSearchParams(location.search).get("disk-role");
+    const diskWarning = new URLSearchParams(location.search).get("disk-level") === "warning";
     const host = (target: string, title: string, over: Record<string, unknown>) => ({
       target, panePid: 4_100, kind: "structured", path: null, engine: "claude", title, project: LEDGER, activity: "idle", lastActiveAt: iso(6 * 60 * MIN), cwd: "/repo/ledger",
       rssBytes: 600 * 1024 ** 2, swapBytes: 0, procCount: 3, model: "opus", role: "builder", conversationId: null, stage: "implement", ownership: "owned", seat: false, turnBusy: false, ...over,
     });
     return json({
+      ...(diskRole ? { diskPressure: {
+        at: iso(0), episode: iso(MIN), warningBytes: 10 * 1024 ** 3, criticalBytes: 2 * 1024 ** 3,
+        /* `all`: one 256 GiB volume under state, worktrees and temp, with every consumer measured; `disk-level=warning` leaves it above the admission threshold. */
+        volumes: diskRole === "all"
+          ? [{ roles: ["state", "worktrees", "temp"], totalBytes: 256 * 1024 ** 3, ...(diskWarning ? { freeBytes: 8 * 1024 ** 3, level: "warning" } : { freeBytes: 1.4 * 1024 ** 3, level: "critical" }) }]
+          : [{ roles: [diskRole === "required-temp" ? "temp" : diskRole], freeBytes: 0.5 * 1024 ** 3, level: "critical", ...(diskRole === "required-temp" ? { provisioning: true } : {}) }],
+        consumers: diskRole === "all"
+          ? [{ kind: "state", bytes: 2.1 * 1024 ** 3, measuredAt: iso(0) }, { kind: "worktrees", bytes: 187 * 1024 ** 3, measuredAt: iso(0) }, { kind: "temp", bytes: 15 * 1024 ** 3, measuredAt: iso(0) }]
+          : [{ kind: "worktrees", bytes: 90 * 1024 ** 3, measuredAt: iso(0) }],
+      } } : {}),
       system: { ramTotal: 32 * 1024 ** 3, ramAvailable: 9 * 1024 ** 3, swapTotal: 8 * 1024 ** 3, swapUsed: 1024 ** 3, capturedAt: iso(30) },
       sessions: RAIL ? [
         host("host-ledger-build", "Reconciling the ledger export", { activity: "live", lastActiveAt: iso(20), rssBytes: 1_400 * 1024 ** 2, turnBusy: true }),
@@ -3542,7 +3555,12 @@ const queueTaskPreview = <div className="p-3"><NativeQueuePanel
   submit={async () => ({ ok: true })} onRefresh={() => {}} t={(key, params) => translate(UK ? "uk" : "en", key, params)}
 /><div className="mt-3"><SeatDeputyChip deputy={taskDeputy} /><DeputyBlock deputy={taskDeputy} /></div></div>;
 if (HEADER_MENU && new URLSearchParams(location.search).has("member")) void refreshTeamView();
-createRoot(document.getElementById("root")!).render(SCENARIO === "task-queue-preview" ? queueTaskPreview : SCENARIO === "service-tier" || SCENARIO === "role-defaults" ? (
+const diskDensity = new URLSearchParams(location.search).get("disk-density");
+createRoot(document.getElementById("root")!).render(diskDensity ? (
+  <div className="bg-panel" style={{ width: diskDensity === "full" ? "100%" : 248, marginTop: "auto" }}>
+    <ResourcesFooter density={diskDensity === "full" ? "full" : diskDensity === "detail" ? "detail" : "line"} />
+  </div>
+) : SCENARIO === "task-queue-preview" ? queueTaskPreview : SCENARIO === "service-tier" || SCENARIO === "role-defaults" ? (
   new URLSearchParams(location.search).has("mapping") ? <div className="p-6"><AgentMappingTable statuses={{ claude: { connected: true, account: null }, codex: { connected: true, account: null } }} layout={innerWidth < 640 ? "card" : "table"} onConnect={() => {}} /></div> : <div className="p-6" style={{ paddingTop: 400 }}>
     <RuntimePill file={{ ...searchVer2, engine: "codex", root: "codex-sessions", model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast" }} surface="structured" runtimeSettings={{ perTurnEffort: true, perTurnModel: false }} />
   </div>
