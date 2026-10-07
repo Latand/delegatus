@@ -97,8 +97,9 @@ function lane(root: string, dir: string, branch: string): { dir: string; tip: st
   fs.writeFileSync(path.join(dir, `${branch.replace(/\W/g, "-")}.txt`), `${branch}\n`);
   git(["add", "."], dir);
   git(["commit", "-q", "-m", `work on ${branch}`], dir);
-  /* Empty ignored directories have no source or evidence to preserve. */
+  /* Exercise real dependency bulk in every lane, including remote/PR removal. */
   fs.mkdirSync(path.join(dir, "node_modules", "dep"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "node_modules/dep/index.js"), "module.exports = 42;\n");
   return { dir, tip: git(["rev-parse", "HEAD"], dir) };
 }
 
@@ -522,7 +523,7 @@ test("an ignored nested repository or .env keeps the worktree; rebuildable outpu
   expect(fs.existsSync(clean.dir)).toBe(false);
 });
 
-test("the ignored-path classifier requires contents proof for directory names", () => {
+test("the ignored-path classifier recognizes baseline outputs and keeps artifacts and unknown classes", () => {
   const raw = [
     "!! node_modules", "!! packages/web/node_modules/", "!! .next/", "!! tsconfig.tsbuildinfo",
     /* A cache with its own `*` .gitignore is listed file by file. */
@@ -530,7 +531,8 @@ test("the ignored-path classifier requires contents proof for directory names", 
     "!! .env.local", "!! .claude/settings.local.json", "!! .artifacts/", "!! notes/build.md.bak",
     "R  new.ts", "old.ts", "?? notes.txt", "",
   ].join("\0");
-  expect(classifyStatus(raw)).toEqual({ changed: ["new.ts", "notes.txt"], ignored: ["node_modules", "packages/web/node_modules/", ".next/", ".ruff_cache/.gitignore", "apps/api/.pytest_cache/v/", "apps/api/src/pkg.egg-info/", ".env.local", ".claude/settings.local.json", ".artifacts/", "notes/build.md.bak"] });
+  expect(classifyStatus(raw)).toEqual({ changed: ["new.ts", "notes.txt"], ignored: [".env.local", ".claude/settings.local.json", ".artifacts/", "notes/build.md.bak"] });
+  expect(classifyStatus(raw, true).ignored).toHaveLength(11);
 });
 
 test("the guards are read again after the measurement, right before each removal", async () => {
@@ -843,6 +845,7 @@ function cacheLane() {
   const root = repository();
   fs.appendFileSync(path.join(root, ".git/info/exclude"), ".artifacts/\n");
   const { dir } = lane(root, path.join(caseDir, "widgets-pipeline-cache"), "pipeline/cache");
+  fs.rmSync(path.join(dir, "node_modules"), { recursive: true });
   fs.mkdirSync(path.join(dir, ".artifacts/cache/bundle"), { recursive: true });
   fs.writeFileSync(path.join(dir, ".artifacts/cache/bundle/cache.fixture.js"), "cache");
   fs.writeFileSync(path.join(dir, ".env"), "private fixture");
@@ -856,9 +859,67 @@ test("a settled lane trims only its proved fixture bundle without a merged PR", 
   expect(report.trimmed).toEqual([{ path: path.join(dir, ".artifacts/cache/bundle"), bytes: expect.any(Number), pipelineId: "cache" }]);
   expect(report.trimmedBytes).toBeGreaterThan(0);
   expect(fs.existsSync(path.join(dir, ".artifacts/cache/bundle"))).toBe(false);
-  for (const name of [".env", "untracked", ".git", "node_modules"]) expect(fs.existsSync(path.join(dir, name))).toBe(true);
+  for (const name of [".env", "untracked", ".git"]) expect(fs.existsSync(path.join(dir, name))).toBe(true);
   expect(report.kept).toContainEqual(expect.objectContaining({ path: dir, reason: "retention" }));
 });
+
+test.each(["on", "dry-run"] as const)("a retained settled lane trims its nonempty Next build in %s mode", async mode => {
+  const root = repository();
+  fs.appendFileSync(path.join(root, ".git/info/exclude"), ".next/\n");
+  const { dir } = lane(root, path.join(caseDir, "widgets-pipeline-next"), "pipeline/next");
+  fs.rmSync(path.join(dir, "node_modules"), { recursive: true });
+  const next = path.join(dir, ".next");
+  fs.mkdirSync(next);
+  fs.writeFileSync(path.join(next, "BUILD_ID"), "generated build");
+  const owner = pipeline({ id: "next", repoDir: root, worktreeDir: dir, branch: "pipeline/next" });
+  const report = await sweepMergedWorktrees(ports({ mode, pipelines: [owner] }));
+  expect(report.kept[0]!.reason).toBe("retention");
+  expect(report.trimmed).toEqual([{ path: next, bytes: expect.any(Number), pipelineId: "next" }]);
+  expect(report.trimmedBytes).toBeGreaterThan(0);
+  expect(fs.existsSync(next)).toBe(mode === "dry-run");
+  expect(fs.existsSync(path.join(dir, ".git"))).toBe(true);
+});
+
+test.each(["tracked", "unignored", "nested-repository", "nested-artifacts", "late-repository", "late-worktree", "late-process", "late-symlink"])("build trim preserves %s contents", async guard => {
+  const root = repository();
+  if (guard !== "tracked" && guard !== "unignored") fs.appendFileSync(path.join(root, ".git/info/exclude"), "dist/\n");
+  const { dir } = lane(root, path.join(caseDir, "widgets-pipeline-build"), "pipeline/build");
+  fs.rmSync(path.join(dir, "node_modules"), { recursive: true });
+  const output = path.join(dir, "dist");
+  fs.mkdirSync(output);
+  fs.writeFileSync(path.join(output, "index.js"), "generated output");
+  const owner = pipeline({ id: "build", repoDir: root, worktreeDir: dir, branch: "pipeline/build" });
+  if (guard === "tracked") { git(["add", "dist"], dir); git(["commit", "-q", "-m", "tracked output"], dir); }
+  if (guard === "nested-repository") git(["init", "-q", path.join(output, "source")], root);
+  if (guard === "nested-artifacts") {
+    fs.mkdirSync(path.join(output, ".artifacts"));
+    fs.writeFileSync(path.join(output, ".artifacts/capture.png"), "retained capture");
+  }
+  const outside = path.join(caseDir, "external-output");
+  fs.mkdirSync(outside); fs.writeFileSync(path.join(outside, "keep"), "keep target");
+  let checks = 0, busy = false;
+  const report = await sweepMergedWorktrees(ports({ pipelines: [owner],
+    scan: () => busy ? { ...NO_PROCESSES, processes: [{ pid: 123, paths: [dir] }] } as ProcessScan : NO_PROCESSES,
+    git: async (args, cwd) => {
+      const result = await realGit(args, cwd);
+      if (args[0] === "ls-files" && args.at(-1) === "dist" && ++checks === 2) {
+        if (guard === "late-repository") git(["init", "-q", path.join(output, "source")], root);
+        if (guard === "late-worktree") lane(root, path.join(output, "checkout"), "topic/private-build");
+        if (guard === "late-process") busy = true;
+        if (guard === "late-symlink") {
+          fs.renameSync(output, path.join(dir, "previous-dist"));
+          fs.symlinkSync(outside, output);
+        }
+      }
+      return result;
+    } }));
+  expect(report.removed).toEqual([]);
+  expect(report.trimmed).toEqual([]);
+  expect(fs.existsSync(output)).toBe(true);
+  expect(fs.readFileSync(path.join(outside, "keep"), "utf8")).toBe("keep target");
+  if (guard.startsWith("late-")) expect(checks).toBe(2);
+});
+
 test.each(["nested-worktree", "lock", "prunable", "unreadable"])("cache trim refreshes Git guards after measurement: %s", async (guard) => {
   const { root, dir, owner } = cacheLane();
   const next = path.join(dir, ".artifacts/cache/bundle");
@@ -941,6 +1002,7 @@ test("a settled lane created from a linked checkout trims its own cache", async 
   fs.appendFileSync(path.join(root, ".git/info/exclude"), ".artifacts/\n");
   const source = lane(root, path.join(caseDir, "widgets-linked"), "source/linked").dir;
   const dir = lane(root, `${source}-pipeline-cache`, "pipeline/cache").dir;
+  fs.rmSync(path.join(dir, "node_modules"), { recursive: true });
   fs.mkdirSync(path.join(dir, ".artifacts/cache/bundle"), { recursive: true });
   fs.writeFileSync(path.join(dir, ".artifacts/cache/bundle/cache.fixture.js"), "cache");
   const owner = pipeline({ id: "cache", state: "closed", repoDir: source, worktreeDir: dir, branch: "pipeline/cache" });
@@ -1287,11 +1349,10 @@ test("a settled merger state with its captured test corpus releases the batch af
   expect(after.removed).toHaveLength(1);
 });
 
-test("artifact source, reports, media and unproved root dependencies stay", async () => {
+test("artifact source, reports and media stay while root dependencies are trimmed", async () => {
   const root = repository();
   fs.appendFileSync(path.join(root, ".git/info/exclude"), ".artifacts/\n");
   const { dir, tip } = lane(root, path.join(caseDir, "widgets-pipeline-artifacts"), "pipeline/artifacts");
-  fs.writeFileSync(path.join(dir, "node_modules/dep/index.js"), "unique dependency source");
   const artifacts = path.join(dir, ".artifacts");
   fs.mkdirSync(path.join(artifacts, "probe/node_modules/pkg"), { recursive: true });
   fs.writeFileSync(path.join(artifacts, "probe/node_modules/pkg/index.js"), "generated");
@@ -1302,10 +1363,10 @@ test("artifact source, reports, media and unproved root dependencies stay", asyn
   const owner = pipeline({ id: "artifacts", repoDir: root, worktreeDir: dir, branch: "pipeline/artifacts" });
   const report = await sweepMergedWorktrees(ports({ pipelines: [owner], prs: [merged(121, owner.branch, tip)] }));
   expect(report.kept[0]!.reason).toBe("ignored-files");
-  expect(report.trimmed).toHaveLength(0);
+  expect(report.trimmed.map(row => row.path)).toEqual([path.join(dir, "node_modules")]);
   expect(fs.readFileSync(path.join(artifacts, "probe/node_modules/unique.log"), "utf8")).toBe("unique evidence");
   expect(fs.readFileSync(path.join(artifacts, "probe/.next/unique.log"), "utf8")).toBe("unique evidence");
-  expect(fs.readFileSync(path.join(dir, "node_modules/dep/index.js"), "utf8")).toBe("unique dependency source");
+  expect(fs.existsSync(path.join(dir, "node_modules"))).toBe(false);
   for (const name of ["report.md", "patch.ts", "capture.png"]) expect(fs.existsSync(path.join(artifacts, name))).toBe(true);
 });
 
@@ -1567,44 +1628,49 @@ test("self-update's release checkouts are left to self-update", async () => {
   expect(fs.existsSync(release)).toBe(true);
 });
 
-test.each(["node_modules", ".next", ".cache"].flatMap(name => ["merged", "retained"].map(state => [name, state] as const)))("unproved %s contents survive a %s lane", async (name, state) => {
+test.each(["node_modules", ".next", ".turbo", ".cache", ".parcel-cache", ".svelte-kit", "out", "dist", "build", "coverage",
+  "test-results", "playwright-report", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".hypothesis",
+  ".venv", "venv", ".tox", ".nox", "pkg.egg-info"].flatMap(name => ["merged", "remote"].map(state => [name, state] as const)))("nonempty ignored %s releases a finished %s lane", async (name, state) => {
   const root = repository(); remoteRepository(root);
   fs.appendFileSync(path.join(root, ".git/info/exclude"), `${name}/\n.artifacts/\n`);
-  const branch = "topic/unproved-output";
-  const { dir, tip } = lane(root, path.join(caseDir, "widgets-pipeline-unproved"), branch);
+  const branch = "topic/generated-output";
+  const { dir, tip } = lane(root, path.join(caseDir, "widgets-pipeline-generated"), branch);
   git(["push", "-q", "origin", branch], root);
-  const output = path.join(dir, name, "review-evidence");
+  const output = path.join(dir, name, "generated");
   fs.mkdirSync(output, { recursive: true });
-  for (const file of ["unique.log", "capture.png", "trace.zip", "source.ts"]) fs.writeFileSync(path.join(output, file), "unique evidence");
-  if (state === "retained") {
-    fs.mkdirSync(path.join(dir, ".artifacts"));
-    fs.writeFileSync(path.join(dir, ".artifacts/capture.png"), "retained capture");
-  }
-  const report = await sweepMergedWorktrees(ports({ pipelines: [pipeline({ id: "unproved", repoDir: root, worktreeDir: dir, branch, closedAt: OLD_TERMINAL })], now: () => RETAIN_NOW,
+  fs.writeFileSync(path.join(output, "output.js"), "generated output");
+  // Caches that ignore their own entries appear file-by-file in Git status.
+  fs.writeFileSync(path.join(dir, name, ".gitignore"), "*\n");
+  const report = await sweepMergedWorktrees(ports({ pipelines: [pipeline({ id: "generated", repoDir: root, worktreeDir: dir, branch, closedAt: OLD_TERMINAL })], now: () => RETAIN_NOW,
     prs: state === "merged" ? [merged(135, branch, tip)] : [] }));
-  expect(report.removed).toEqual([]);
-  expect(report.kept[0]?.reason).toBe("ignored-files");
-  for (const file of ["unique.log", "capture.png", "trace.zip", "source.ts"]) expect(fs.readFileSync(path.join(output, file), "utf8")).toBe("unique evidence");
+  expect(report.removed.map(row => row.path)).toEqual([dir]);
+  expect(report.kept).toEqual([]);
+  expect(fs.existsSync(dir)).toBe(false);
   expect(report.trimmed).toEqual([]);
   expect(branchExists(root, branch)).toBe(true);
 });
 
-test("unproved dependency source alone retains a merged checkout", async () => {
+test.each(["node_modules", "shared-output"])("an ignored %s symlink releases its checkout and keeps its target", async name => {
   const root = repository();
+  fs.appendFileSync(path.join(root, ".git/info/exclude"), `${name}\n`);
   const { dir, tip } = lane(root, path.join(caseDir, "dependency-source"), "topic/dependency-source");
-  const source = path.join(dir, "node_modules/dep/index.js");
-  fs.writeFileSync(source, "unique source");
+  if (name === "node_modules") fs.rmSync(path.join(dir, name), { recursive: true });
+  const outside = path.join(caseDir, "shared-dependencies");
+  fs.mkdirSync(outside);
+  const source = path.join(outside, "index.js");
+  fs.writeFileSync(source, "shared dependency");
+  fs.symlinkSync(outside, path.join(dir, name));
   const report = await sweepMergedWorktrees(ports({ repositories: [root], prs: [merged(136, "topic/dependency-source", tip)] }));
-  expect(report.removed).toEqual([]);
-  expect(report.kept[0]?.reason).toBe("ignored-files");
-  expect(fs.readFileSync(source, "utf8")).toBe("unique source");
+  expect(report.removed.map(row => row.path)).toEqual([dir]);
+  expect(fs.existsSync(dir)).toBe(false);
+  expect(fs.readFileSync(source, "utf8")).toBe("shared dependency");
 });
 
-for (const name of [".venv-lane", ".venv", ".cache/.venv", ".next/.venv", "node_modules/.venv"]) test(`a virtual environment ${name} preserves unique logs and source`, async () => {
+for (const name of [".venv-lane", ".venv", ".cache/.venv", ".next/.venv", "node_modules/.venv"]) test(`an artifact virtual environment ${name} preserves logs and source`, async () => {
   const root = repository();
-  fs.appendFileSync(path.join(root, ".git/info/exclude"), `${name.split("/")[0]}/\n`);
+  fs.appendFileSync(path.join(root, ".git/info/exclude"), ".artifacts/\n");
   const { dir, tip } = lane(root, path.join(caseDir, "widgets-pipeline-venv"), "topic/venv");
-  const venv = path.join(dir, name);
+  const venv = path.join(dir, ".artifacts", name);
   fs.mkdirSync(path.join(venv, "lib"), { recursive: true });
   fs.writeFileSync(path.join(venv, "pyvenv.cfg"), "home = /usr/bin\n");
   /* Python's own venv writes a `*` .gitignore, so git lists each entry. */
@@ -1826,25 +1892,30 @@ test.each(["test-results", "out", "build", "coverage", "playwright-report", "nod
   expect(fs.readFileSync(trace, "utf8")).toBe("retained trace");
 });
 
-test.each(["test-results", "playwright-report", "out", "build", "dist", "coverage"].flatMap(name =>
-  ["merged", "retained"].map(state => [name, state] as const)))("%s evidence survives a %s finished lane", async (name, state) => {
+test.each(["node_modules", ".next", ".cache", "test-results", "playwright-report", "out", "build", "dist", "coverage"].flatMap(name =>
+  ["merged", "retained", "local-only"].map(state => [name, state] as const)))("ignored %s bulk is trimmed in a %s finished lane with artifacts", async (name, state) => {
   const root = repository();
-  fs.appendFileSync(path.join(root, ".git/info/exclude"), `${name}/\n`);
+  fs.appendFileSync(path.join(root, ".git/info/exclude"), `${name}/\n.artifacts/\n`);
   remoteRepository(root);
   const branch = "topic/evidence-output";
   const { dir, tip } = lane(root, path.join(caseDir, "widgets-pipeline-evidence-output"), branch);
-  git(["push", "-q", "origin", branch], root);
+  if (state !== "local-only") git(["push", "-q", "origin", branch], root);
   const evidence = path.join(dir, name, "run");
   fs.mkdirSync(evidence, { recursive: true });
-  for (const file of ["capture.png", "trace.zip", "unique.log", "probe.ts"]) fs.writeFileSync(path.join(evidence, file), "unique retained evidence");
+  fs.writeFileSync(path.join(evidence, "output.js"), "generated output");
+  const capture = path.join(dir, ".artifacts/capture.png");
+  fs.mkdirSync(path.dirname(capture));
+  fs.writeFileSync(capture, "retained capture");
   const owner = pipeline({ id: "evidence-output", repoDir: root, worktreeDir: dir, branch, closedAt: OLD_TERMINAL });
   const report = await sweepMergedWorktrees(ports({ pipelines: [owner], now: () => RETAIN_NOW,
     prs: state === "merged" ? [merged(142, branch, tip)] : [] }));
   expect(report.removed).toEqual([]);
   expect(report.kept).toEqual([expect.objectContaining({ path: dir, reason: "ignored-files" })]);
-  for (const file of ["capture.png", "trace.zip", "unique.log", "probe.ts"]) expect(fs.readFileSync(path.join(evidence, file), "utf8")).toBe("unique retained evidence");
+  expect(fs.existsSync(path.join(dir, name))).toBe(false);
+  expect(fs.readFileSync(capture, "utf8")).toBe("retained capture");
   expect(branchExists(root, branch)).toBeTrue();
-  expect(report.trimmed.map(row => row.path)).toEqual([]);
+  expect(report.trimmed.map(row => row.path)).toContain(path.join(dir, name));
+  expect(report.trimmedBytes).toBeGreaterThan(0);
 });
 
 test("a local-path remote does not prove preservation elsewhere", async () => {
@@ -2000,11 +2071,11 @@ test.each(["role", "pipeline"])("activity while a %s checkout is young restarts 
   expect((await sweepMergedWorktrees({ ...options, previous: quiet, now: () => quietAt + FINISHED_WORKTREE_RETENTION_MS })).removed).toHaveLength(1);
 });
 
-test.each(["scripts/", "__pycache__/"])("bytecode directory %s containing a unique log stays", async ignored => {
+test.each(["scripts/", ".artifacts/__pycache__/"])("bytecode directory %s containing a unique log stays", async ignored => {
   const root = repository();
   fs.appendFileSync(path.join(root, ".git/info/exclude"), ignored + "\n");
   const { dir, tip } = lane(root, path.join(caseDir, "bytecode-log"), "topic/bytecode-log");
-  const base = ignored === "scripts/" ? "scripts/__pycache__" : "__pycache__";
+  const base = ignored === "scripts/" ? "scripts/__pycache__" : ".artifacts/__pycache__";
   const log = path.join(dir, base, "run.log");
   fs.mkdirSync(path.dirname(log), { recursive: true });
   fs.writeFileSync(log, "unique evidence");
@@ -2026,7 +2097,7 @@ test.each(["intact", "missing-marker", "hardlinked"])("worktree and temp reports
   const first = await sweepMergedWorktrees(ports({ repositories: [root], tempRoots: [temp], now: () => RETAIN_NOW }));
   let report = await sweepMergedWorktrees(ports({ repositories: [root], tempRoots: [temp], previous: first,
     now: () => RETAIN_NOW + FINISHED_WORKTREE_RETENTION_MS }));
-  expect(report.kept[0]!.reason).toBe(marker === "hardlinked" ? "ignored-files" : "local-only-commits");
+  expect(report.kept[0]!.reason).toBe("local-only-commits");
   if (marker === "missing-marker") {
     fs.unlinkSync(path.join(dir, ".git"));
     report = await sweepMergedWorktrees(ports({ repositories: [root], tempRoots: [temp], previous: report,

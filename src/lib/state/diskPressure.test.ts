@@ -24,6 +24,7 @@ import {
 
 /* Every volume here is a fake probe answer: nothing reads a real disk. */
 const GiB = 1024 ** 3;
+const provisionSource = { NODE_ENV: "test" as const, TMPDIR: "/srv/agent-temp", XDG_CONFIG_HOME: "/srv/delegatus-config" };
 const probe = (free: Record<string, number>): DiskProbe => (directory) => {
   const volume = Object.keys(free).find((prefix) => directory.startsWith(prefix));
   return volume ? { volume, freeBytes: free[volume]! } : null;
@@ -65,7 +66,7 @@ test("provisioning checks its write destinations and ignores unrelated temp volu
       ? { volume: "tmpfs", freeBytes: 1.8 * GiB, totalBytes: 2 * GiB }
       : { volume: "disk", freeBytes: 500 * GiB, totalBytes: 1000 * GiB };
   };
-  expect(worktreeDiskWait("/srv/repo", "/srv/repo-pipeline-a", stub)).toBeNull();
+  expect(worktreeDiskWait("/srv/repo", "/srv/repo-pipeline-a", stub, provisionSource)).toBeNull();
   expect(visited).not.toContain("/tmp");
   expect(visited).not.toContain("/var/tmp");
   expect(visited.some(directory => path.basename(directory) === "scratch")).toBe(true);
@@ -652,8 +653,8 @@ test("MCP reads cannot close a Viewer episode based on a narrower filesystem vie
 });
 
 test("a new worktree waits only below the critical threshold, naming the volume", () => {
-  expect(worktreeDiskWait("/srv/repo", "/srv/repo-pipeline-a", probe({ "/": DISK_WARNING_BYTES - 1 }))).toBeNull();
-  const wait = worktreeDiskWait("/srv/repo", "/srv/repo-pipeline-a", probe({ "/": GiB / 2 }));
+  expect(worktreeDiskWait("/srv/repo", "/srv/repo-pipeline-a", probe({ "/": DISK_WARNING_BYTES - 1 }), provisionSource)).toBeNull();
+  const wait = worktreeDiskWait("/srv/repo", "/srv/repo-pipeline-a", probe({ "/": GiB / 2 }), provisionSource);
   expect(wait).toStartWith(DISK_SPACE_WAIT_PREFIX);
   expect(wait).toContain("0.50 GiB free");
   expect(wait).toContain("retries automatically");
