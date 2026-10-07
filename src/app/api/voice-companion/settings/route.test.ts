@@ -27,5 +27,17 @@ test("settings and the write-only key route enforce operator authority and never
   expect(locked.status).toBe(409);
   expect(await locked.json()).toEqual({ code: "KEY_FROM_ENV" });
   delete process.env.OPENAI_API_KEY;
-  expect(await (await PUT(request("PUT", { enabled: true, backend: "demo", monthlyCapUsd: 0 }))).json()).toMatchObject({ enabled: true, backend: "demo", monthlyCapUsd: 0 });
+  expect(await (await PUT(request("PUT", { enabled: true, monthlyCapUsd: 0 }))).json()).toMatchObject({ enabled: true, monthlyCapUsd: 0 });
+});
+
+test("no settings request can choose a simulator: a backend, the demo or the real voice by name, is refused and nothing changes", async () => {
+  await PUT(request("PUT", { enabled: false, monthlyCapUsd: 20 }));
+  for (const body of [{ backend: "demo" }, { enabled: true, backend: "demo" }, { backend: "official-realtime" }, { backend: "simulated" }]) {
+    const response = await PUT(request("PUT", body));
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ code: "INVALID_SETTINGS" });
+  }
+  const settings = await (await GET(request("GET"))).json() as Record<string, unknown>;
+  expect(settings).toMatchObject({ enabled: false, monthlyCapUsd: 20 });
+  expect(settings).not.toHaveProperty("backend");
 });

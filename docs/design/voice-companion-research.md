@@ -6,6 +6,45 @@ Originating requirement, 2026-10-05, controller assignment for [issue #2519](htt
 
 # Floating voice companion: research and simulator contract
 
+## Operator requirement change 2026-10-07: no demo mode
+
+This section overrides every line below that offers a demo in the product.
+Relayed requirement change (2026-10-07, about 21:45 Kyiv), verbatim in Russian:
+
+> нахуя там вообще сделано какое-то демо-режим, там не должно быть никакого
+> демо-режима, там либо включено, либо выключено. Если включено, то оно должно
+> полностью работать. … Демо-режим — это был просто для тебя, чтобы я мог
+> посмотреть, что прототип будет нормально работать. Этого не должно быть на
+> продакшене.
+
+The rule as built:
+
+1. **On or off, nothing else.** The settings dialog holds the switch, the
+   OpenAI key and the monthly cap with the month's usage. Off mounts nothing.
+   On mounts the real voice, the official live API minted by the Viewer; with
+   no key the dialog says the voice needs one, and Talk says so in the lane
+   before any microphone prompt or session request.
+2. **No backend to choose.** The settings carry no backend. The route refuses
+   a `backend` field in any form (`INVALID_SETTINGS`), so no request can
+   select a simulator. A `backend: "demo"` that an earlier build stored reads as
+   off and the next write drops the field; a stored `"official-realtime"`
+   keeps the switch as it was. The `DEMO_MODE` refusal and the demo's three
+   strings (`voiceCompanion.settings.backend.demo`, `.demoHint`,
+   `voiceCompanion.settings.key.demo`) are gone with the choice, and so are the
+   real voice's own label and hint, which named one side of a choice that no
+   longer exists.
+3. **The simulator is a fixture.** `createSimulatedCompanion` and the scripted
+   scenarios stay as test fixtures and rendered-evidence drivers. Only tests,
+   the evidence fixture and the two modules themselves import them; a test
+   reads every other source file under `src` and requires that none does
+   (`voiceCompanionProduct.dom.test.tsx`, "no settings path reaches a
+   simulator"), and the shell mounts the real adapter even when a server still
+   reports the old demo value.
+
+Where the sections below speak of the demo choice, read them as describing the
+prototype stage; `settings.json` records the dialog with no backend choice and
+the shell's mount as the real voice.
+
 ## Operator requirement change 2026-10-06: send without confirmation
 
 This section overrides every other line of this note, of the specification and
@@ -94,7 +133,8 @@ The rule as built:
 6. **Registry and ending.** Both delegation tools are entries of the one
    registry, class `delegation`; the six board reads and `end_conversation`
    (class `session-control`), with the hang-up control, are unchanged.
-7. **The demo.** The product's demo now plays a board question, one request
+7. **The demo** (removed from the product on 2026-10-07; the `demo` script
+   remains a driver scenario). The product's demo then played a board question, one request
    sent at once with its answer, and one the model asks about first ("Deleting
    the old presets cannot be undone.") that the operator confirms by saying
    "Yes, send it." with no pointer event. The driver scenarios `proposal`,
@@ -106,9 +146,9 @@ Rendered evidence, through the existing kanban driver: `proposal.json` adds
 card shows the model's reason and the whole request, nothing is sent while it
 waits, the spoken yes sends it once with no pointer event after Talk, and the
 card that says "Delivered" stands beside the character. `settings.json`
-records the demo through the shell's own mount: the first request went out
-with no button ever shown, the second was asked about with its reason and sent
-by voice. `yield.json` now reads the withdrawn card's own words in all three
+then recorded the demo through the shell's own mount; since 2026-10-07 it
+records the dialog with the switch, the key and the cap only, and the shell's
+mount as the real voice. `yield.json` now reads the withdrawn card's own words in all three
 passes, where before it had left the lane. The eight `delegation` runs of
 `scenarios.json` were measured and recorded again
 (`remeasured.changed` names them and why): the driver taps nothing after Talk,
@@ -365,7 +405,7 @@ there is room under the cap. Cap reductions, UTC month rollover and a missing
 browser heartbeat close the session. Provider billing
 can continue during finalization; final accounting retains actual usage even if
 it exceeds the estimate. A transport loss retains the full reservation and marks
-usage incomplete instead of claiming a zero charge. The demo remains free.
+usage incomplete instead of claiming a zero charge.
 
 Mint request IDs bind the project, locale and SDP digest. Retry recovers the same
 mint while it is owned; a restart never silently mints another paid session.
@@ -433,7 +473,7 @@ Typed interfaces for the visual stage:
 - Construct one stable `OfficialVoiceCompanionAdapter` from
   `src/lib/voiceCompanion/liveAdapter.ts` and pass it to
   `useVoiceCompanion(adapter)`. The existing `createSimulatedCompanion` implements
-  the same contract for the demo choice. `start({ project, locale })` starts only
+  the same contract for tests and rendered evidence; the product never mounts it. `start({ project, locale })` starts only
   on operator action; `command` handles mute, interruption and the tap on a
   confirmation the model asked for (a spoken answer arrives through the
   model's tool); awaited `stop()` is the always-reachable hangup control.
@@ -562,11 +602,8 @@ conversation does: the character stays where it is and offers Talk again.
 is mounted by the Viewer shell with the project in view. On a phone it mounts
 nothing and reads nothing. On the desktop it reads the settings once and
 mounts the companion only when they say it is on; mounting starts no call. The
-real backend is one `OfficialVoiceCompanionAdapter`; the demo choice is the
-simulator on the same contract, playing `demo` (a greeting, a board question
-answered from a read call, a request sent at once with its answer, then one the
-model asks about first and the operator confirms by voice, all sent nowhere) or, for a project with no orchestrator, `demoNoSeat`, which proposes
-nothing. The shell passes the same three surface values the fixture does
+backend is one `OfficialVoiceCompanionAdapter`, and there is no other: on is
+the real voice. The shell passes the same three surface values the fixture does
 (`hostSurfaces.ts`), so the product computes the placement the driver measures.
 The component reads the adapter through `createCompanionStore`
 (`src/hooks/useVoiceCompanion.ts`), which applies the hook's session rules
@@ -582,7 +619,7 @@ phone's menu has none), which opens its own dialog
 «Install ping», «Linked installs» and «Chat relay» open theirs. The
 companion's Settings button on a failure opens the same dialog. The switch
 comes first, and the other
-rows appear once it is on: the choice between the real voice and the demo; the
+rows appear once it is on: the
 OpenAI key in a masked field with Save; the monthly cap with the month's usage
 beside it. The key is sent once and the field is cleared whatever the answer;
 the dialog only ever learns where a key is taken from. A key in
@@ -602,14 +639,15 @@ read-only tools, none of which delegates:
 
 `demo`, `demoNoSeat`, `readThenAsk` (a read call and the proposal in the lane
 together) and `unconfirmed` (a send whose outcome stays unknown) serve the
-product's demo choice and the driver.
+driver only.
 
 **Tests at the seams.** `src/components/voiceCompanion/voiceCompanionProduct.dom.test.tsx`:
 the shell mounts nothing while off and reads nothing on a phone; turned on it
 starts no call; Talk with no key, a reached cap or no project is refused in
 words and no session route is asked for anything; the key is sent once, cleared
 and absent from the page and its storage afterwards; an environment key closes
-the field; the cap and the demo choice are written; the store renders nothing
+the field; the cap is written and the rows hold no backend choice; no settings
+path reaches a simulator, and no product module imports one; the store renders nothing
 for thirty level samples, resets on a new session and holds an old error back.
 `src/lib/voiceCompanion/companion.test.ts` plays the three new scenarios in
 both languages and requires registry read names, no delegation event and the
@@ -621,7 +659,7 @@ The records are `evidence/voice-companion/placement.json`, `edges.json`, `yield.
 
 **Default placement: no control, no page text, one place.** 48 cases, each loaded three times: 1440×900 and 1000×800, en and uk, light and dark, open and collapsed, and three fills of the orchestrator's conversation: as each scenario starts it (two rows), with the delegated row and the answer (`&delivered=1`), and with eight earlier exchanges above them, filling it to its whole height (`&full=1`). In every case the area of the character, its reserved lane and any element over controls is 0 px²; no point of what it reserves, sampled every 4 px with the companion out of the hit test, lands on a control or on any cursor other than `auto`, `default` and `text`; no point of the lane traps a click; the nearest control is 8 to 57 px away; resize handles and dragging surfaces (2 and 28 on the page at 1000 and 1440) lie 8 px away or more. **The page's text under the character and under its lane is 0 px² in all 48**, read at 1.4 s and again at 6 s, and **every case stands in the same place on all three loads and at both readings**. At 1440 the open character stands at (184, 576) over the sidebar with its 360 px lane above it, whatever the fill, and the tile at (1372, 740). At 1000 the open character stands in the conversation's empty part while there is one, at (432, 404) in English with the lane on its right and at (740, 404) in Ukrainian with it on its left (the labels have other widths, and the place is a function of the page); once the conversation holds the delegated row and the answer no place free of text and of the feed's avatars is left for the open character and its lane, and it is its tile, at (632, 112), and at (916, 588) when the conversation is full. No track of a row control, none of the room of the feed's way-back strip and no picture of a row lies under what the companion reserves (`rowTrackHits`, `tailRoomArea`, `rowPicturesUnderPx2`).
 
-**Edges, yielding, the proposal, the tint, the failures.** On the underlay, the character dropped at all four corners and the middle of all four edges at both widths (20 cases) kept every element in the viewport and in its lane, sampled every 120 ms, and the lane flipped and ran down as stated; three points of the lane outside every element passed the click to the page and a click on a bubble stayed with it, at both widths. Dropped on the composer and on the toolbar, the companion moved to a free place with 0 px² over controls; on a page of small buttons every 100 px it collapsed for want of room and stayed so when asked to open; with a control laid under a lane that held a conversation it moved by itself, at 1440 and 1000, its lane emptying before it set off and showing again where it arrived, with no frame in which a lane in sight moved on the page (`yield.json`, `controlUnderTheLane`). A proposal the model asked to confirm shows its reason, its whole text and both buttons inside the viewport, labels at 5.17:1 or better, and a spoken yes sends it once with no pointer event; at 1000 the companion has made way for the delegated row by the time it is delivered, and what went out is the confirmed proposal (`proposal.json`, `spokenAnswer[].sentShownIn`). The delegated row has its own teal background beside the internal one in the production conversation pane, for a Claude and a Codex seat, in both languages and themes, its label, tag and body at 5.62:1 or better (`tint.json`, 16 cases). The settings rows turn the companion on in the shell, take the key once without echoing it, keep the cap and offer the demo (`settings.json`, 8 cases). Every failure is said in its plain words at 280 px; the notices with a way to the settings (no key, cap reached) wrap at words in both languages, in three lines at most, with the button whole beside or under the text (`cards.json`: lines, `brokenWords`, `buttonWhole`).
+**Edges, yielding, the proposal, the tint, the failures.** On the underlay, the character dropped at all four corners and the middle of all four edges at both widths (20 cases) kept every element in the viewport and in its lane, sampled every 120 ms, and the lane flipped and ran down as stated; three points of the lane outside every element passed the click to the page and a click on a bubble stayed with it, at both widths. Dropped on the composer and on the toolbar, the companion moved to a free place with 0 px² over controls; on a page of small buttons every 100 px it collapsed for want of room and stayed so when asked to open; with a control laid under a lane that held a conversation it moved by itself, at 1440 and 1000, its lane emptying before it set off and showing again where it arrived, with no frame in which a lane in sight moved on the page (`yield.json`, `controlUnderTheLane`). A proposal the model asked to confirm shows its reason, its whole text and both buttons inside the viewport, labels at 5.17:1 or better, and a spoken yes sends it once with no pointer event; at 1000 the companion has made way for the delegated row by the time it is delivered, and what went out is the confirmed proposal (`proposal.json`, `spokenAnswer[].sentShownIn`). The delegated row has its own teal background beside the internal one in the production conversation pane, for a Claude and a Codex seat, in both languages and themes, its label, tag and body at 5.62:1 or better (`tint.json`, 16 cases). The settings rows turn the companion on in the shell, take the key once without echoing it and keep the cap, with no backend choice and the shell's mount the real voice (`settings.json`, 8 cases). Every failure is said in its plain words at 280 px; the notices with a way to the settings (no key, cap reached) wrap at words in both languages, in three lines at most, with the button whole beside or under the text (`cards.json`: lines, `brokenWords`, `buttonWhole`).
 
 **Scenarios.** Eleven scripts (the eight of the specification and three that read the board) at both widths, in en and uk, light and dark: 88 measured runs, then 88 recorded runs with screenshots, the geometry sampler and the lane reading; no frame number comes from a recorded run. The contract held in every run: no delegation event outside the delegation scenario; there, none before the explicit request, exactly one message, then the tinted row and the answer in the seat's conversation. The sampler saw no element outside the viewport, outside its lane or over a control; bubbles never exceeded 4 lines or 280 px; at most 4 bubbles and 4 calls showed at once; every bubble was as tall as its text (0 px of slack). **The page's text as it stood before Talk lay under no element of the lane in any sample of any run** (`geometry.preTalkTextUnderElementsMaxPx2`, 0 px² in all 88). **The character stood in one place from Talk to the end of the script in every run**; on the delegation runs at 1000 it made way once for the delegated row, which arrives in the empty part of the conversation it stands in, collapsing to its tile at (632, 112) within 250 ms (`stood.madeWayForTheRow`), so **when the script ended the delegated row and the answer read whole in all eight delegation runs** (`stood.delegatedRowAndAnswerAtScriptEnd`, coveredShare 0). In the frame the row appeared, 57 % of it lay under the companion at 1000 and none at 1440 (`delegatedRowAsItAppeared`). After the lane emptied the character stood off the page's text within 836 ms in every run. **Nothing in sight was carried across the page**: in no frame of any run did a lane that showed an element move on the page (`lane.carriedFrames`, 0 in all 88); the four delegation runs at 1000 emptied the lane once, before the companion took its tile (`lane.relocations`). **The newest bubble's glow ends in no line**: read from the frame taken when the script ended, the largest step between two adjacent rows of pixels from under the bubble to 4 px past the lane's end, where the page underneath is flat, is 2 levels in each of the 84 runs that end with a bubble there (`glowAtLaneEndWhenScriptEnded`; the build this replaced stepped 13 levels in the dark theme and 17 in the light one along the lane's edge). After a delegation the lane stands on no part of the conversation at rest (`afterLaneEmptied.laneOverFeedPx2`, 0), and no avatar of a row lies under the companion at rest in any run (`afterLaneEmptied.rowPicturesUnderPx2`, 0).
 

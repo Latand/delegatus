@@ -31,7 +31,7 @@ test("typed hooks start only on request, reset a new session, release ownership,
     }, command: async () => {}, close: async () => { closes++; } };
   globalThis.fetch = (async (_input, init) => {
     const body = init?.body ? JSON.parse(String(init.body)) : null;
-    return Response.json(body?.key ? { code: "KEY_FROM_ENV" } : { enabled: false, backend: "demo", monthlyCapUsd: 0, keySource: "missing",
+    return Response.json(body?.key ? { code: "KEY_FROM_ENV" } : { enabled: false, monthlyCapUsd: 0, keySource: "missing",
       keyEnvironment: "OPENAI_API_KEY", month: "2026-10", usageUsd: 0, reservedUsd: 0, incomplete: false }, { status: body?.key ? 409 : 200 });
   }) as typeof fetch;
   const seen: { voice: VoiceCompanionHook | null; settings: VoiceCompanionSettingsHook | null } = { voice: null, settings: null };

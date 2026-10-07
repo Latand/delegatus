@@ -9,7 +9,6 @@ import type { OperatorInput } from "./gate";
 
 export interface CompanionSettings {
   enabled: boolean;
-  backend: "official-realtime" | "demo";
   monthlyCapUsd: number;
   keySource: "env" | "file" | "missing";
   keyEnvironment: "OPENAI_API_KEY";
@@ -66,11 +65,11 @@ export interface StoredSession {
 interface Charge { month: string; usd: number; observedUsd?: number; reserved: boolean; incomplete: boolean }
 export interface CompanionDocument {
   version: 1;
-  settings: Pick<CompanionSettings, "enabled" | "backend" | "monthlyCapUsd">;
+  settings: Pick<CompanionSettings, "enabled" | "monthlyCapUsd">;
   charges: Record<string, Charge>;
   sessions: Record<string, StoredSession>;
 }
-const empty = (): CompanionDocument => ({ version: 1, settings: { enabled: false, backend: "official-realtime", monthlyCapUsd: 20 }, charges: {}, sessions: {} });
+const empty = (): CompanionDocument => ({ version: 1, settings: { enabled: false, monthlyCapUsd: 20 }, charges: {}, sessions: {} });
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 const identifier = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 200;
 const recipientValid = (value: unknown): boolean => record(value) && identifier(value.project) && identifier(value.conversationId)
@@ -133,12 +132,21 @@ export class CompanionStorage {
     try {
       const value = JSON.parse(fs.readFileSync(this.file(), "utf8")) as CompanionDocument;
       if (!record(value) || value.version !== 1 || !record(value.settings) || !record(value.charges) || !record(value.sessions)
-        || typeof value.settings.enabled !== "boolean" || !["demo", "official-realtime"].includes(value.settings.backend)
+        || typeof value.settings.enabled !== "boolean"
         || !Number.isFinite(value.settings.monthlyCapUsd) || value.settings.monthlyCapUsd < 0
         || Object.values(value.charges).some(charge => !charge || !Number.isFinite(charge.usd) || charge.usd < 0
           || !/^\d{4}-\d{2}$/.test(charge.month) || typeof charge.reserved !== "boolean" || typeof charge.incomplete !== "boolean"
           || (charge.observedUsd !== undefined && (!Number.isFinite(charge.observedUsd) || charge.observedUsd < 0 || charge.observedUsd > charge.usd)))
         || Object.entries(value.sessions).some(([key, session]) => !sessionValid(key, session))) throw new Error("invalid state");
+      /* Earlier builds stored a backend: the real voice, or a scripted demo the product no longer has. A stored
+         demo reads as off, so turning the companion on is the operator's own choice of the real voice; the next
+         write leaves the field out. */
+      const legacy = value.settings as typeof value.settings & { backend?: unknown };
+      if (legacy.backend !== undefined) {
+        if (legacy.backend !== "official-realtime" && legacy.backend !== "demo") throw new Error("invalid state");
+        if (legacy.backend === "demo") legacy.enabled = false;
+        delete legacy.backend;
+      }
       return value;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return empty();
@@ -164,9 +172,9 @@ export class CompanionStorage {
       reservedUsd: charges.filter(charge => charge.reserved).reduce((sum, charge) => sum + charge.usd - (charge.observedUsd ?? 0), 0),
       incomplete: charges.some(charge => charge.incomplete) };
   }
-  updateSettings(update: Partial<Pick<CompanionSettings, "enabled" | "backend" | "monthlyCapUsd">>): CompanionSettings {
-    if ((update.enabled !== undefined && typeof update.enabled !== "boolean")
-      || (update.backend !== undefined && update.backend !== "official-realtime" && update.backend !== "demo")
+  updateSettings(update: Partial<Pick<CompanionSettings, "enabled" | "monthlyCapUsd">>): CompanionSettings {
+    if (Object.keys(update).some(key => key !== "enabled" && key !== "monthlyCapUsd")
+      || (update.enabled !== undefined && typeof update.enabled !== "boolean")
       || (update.monthlyCapUsd !== undefined && (!Number.isFinite(update.monthlyCapUsd) || update.monthlyCapUsd < 0 || update.monthlyCapUsd > 10_000))) throw new Error("INVALID_SETTINGS");
     this.change(document => { Object.assign(document.settings, update); });
     return this.settings();

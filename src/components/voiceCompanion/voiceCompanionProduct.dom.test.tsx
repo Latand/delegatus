@@ -33,7 +33,7 @@ const { companionErrorMessage } = await import("@/lib/voiceCompanion/errors");
 
 const FAKE_KEY = ["fixture", "voice", "value", "42"].join("-");
 const settingsOf = (over: Partial<CompanionSettings> = {}): CompanionSettings => ({
-  enabled: false, backend: "official-realtime", monthlyCapUsd: 20, keySource: "missing", keyEnvironment: "OPENAI_API_KEY",
+  enabled: false, monthlyCapUsd: 20, keySource: "missing", keyEnvironment: "OPENAI_API_KEY",
   month: "2026-10", usageUsd: 0, reservedUsd: 0, incomplete: false, ...over,
 });
 
@@ -96,7 +96,7 @@ test("off by default the shell mounts nothing, and on a phone it does not even r
   mounted!.host.remove();
   mounted = null;
 
-  routes(settingsOf({ enabled: true, backend: "demo" }));
+  routes(settingsOf({ enabled: true }));
   await mount(<VoiceCompanionHost project="atlas" mobile />);
   expect(document.querySelector("[data-voice-companion]")).toBeNull();
   expect(harness.calls).toEqual([]);
@@ -124,7 +124,7 @@ test("turned on, it mounts without starting a call; Talk with no key or a reache
 });
 
 test("on a view with no project, Talk says to open one and starts nothing", async () => {
-  routes(settingsOf({ enabled: true, backend: "demo" }));
+  routes(settingsOf({ enabled: true }));
   await mount(<VoiceCompanionHost project={null} mobile={false} />);
   await click(document.querySelector("[data-companion-talk]"));
   expect(document.querySelector('[data-companion-notice][data-code="NO_PROJECT"] .vc-notice-text')?.textContent).toBe(companionErrorMessage("NO_PROJECT", "en"));
@@ -132,7 +132,7 @@ test("on a view with no project, Talk says to open one and starts nothing", asyn
   expect(sessionCalls()).toEqual([]);
 });
 
-test("the settings rows: the switch reveals the rest, the key is sent once and never shown again, the cap is saved, the demo is a choice", async () => {
+test("the settings rows: the switch reveals the key and the cap and nothing else, the key is sent once and never shown again, the cap is saved", async () => {
   const stored = routes(settingsOf());
   let announced = 0;
   const heard = () => { announced += 1; };
@@ -167,10 +167,11 @@ test("the settings rows: the switch reveals the rest, the key is sent once and n
     expect(stored.monthlyCapUsd).toBe(35.5);
     expect(section.querySelector("[data-voice-companion-usage]")?.textContent).toContain("$35.50");
 
-    await click(section.querySelector('[data-backend="demo"]'));
-    expect(stored.backend).toBe("demo");
-    expect(section.querySelector('[data-backend="demo"]')?.getAttribute("aria-checked")).toBe("true");
-    expect(harness.calls.filter((call) => call.method === "PUT" && call.url === "/api/voice-companion/settings").map((call) => call.body)).toEqual([{ enabled: true }, { monthlyCapUsd: 35.5 }, { backend: "demo" }]);
+    /* On is the real voice: no backend to choose, no demo, no word of one. */
+    expect(section.querySelectorAll("[data-voice-companion-backend], [data-backend], [role='radio'], [role='radiogroup']")).toHaveLength(0);
+    expect(section.querySelectorAll("input, button, select")).toHaveLength(4);
+    expect(section.textContent).not.toMatch(/demo|демо/iu);
+    expect(harness.calls.filter((call) => call.method === "PUT" && call.url === "/api/voice-companion/settings").map((call) => call.body)).toEqual([{ enabled: true }, { monthlyCapUsd: 35.5 }]);
     expect(sessionCalls()).toEqual([]);
   } finally { window.removeEventListener(COMPANION_SETTINGS_EVENT, heard); }
 });
@@ -549,4 +550,30 @@ test("collapsed during a muted conversation, the shape keeps a hang-up that ends
 test("the lost-send line is said in both languages", () => {
   expect(companionErrorMessage("SEND_UNCONFIRMED", "en")).toContain("not confirmed");
   expect(companionErrorMessage("SEND_UNCONFIRMED", "uk")).toContain("не підтверджено");
+});
+
+test("no settings path reaches a simulator: a demo an earlier server still reports mounts the real voice, and no product module imports the simulator or its scripts", async () => {
+  routes({ ...settingsOf({ enabled: true, keySource: "file" }), backend: "demo" } as CompanionSettings);
+  await mount(<VoiceCompanionHost project="atlas" mobile={false} />);
+  expect(document.querySelector<HTMLElement>("[data-voice-companion]")?.dataset.mode).toBe("official-realtime");
+  expect(document.querySelector("[data-companion-sim], .vc-sim")).toBeNull();
+
+  /* The simulator and the scenario scripts are test fixtures and rendered-evidence drivers: only tests, fixtures
+     and the two modules themselves name them. */
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const sources: string[] = [];
+  const walk = (directory: string) => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const at = path.join(directory, entry.name);
+      if (entry.isDirectory()) walk(at);
+      else if (/\.(ts|tsx|mjs)$/u.test(entry.name)) sources.push(at);
+    }
+  };
+  walk(path.resolve("src"));
+  const own = new Set(["simulator.ts", "scenarios.ts"].map((name) => path.resolve("src/lib/voiceCompanion", name)));
+  const importers = sources
+    .filter((file) => !own.has(file) && !/\.(test|fixture)\.tsx?$/u.test(file) && !/\.browser\.test\.tsx?$/u.test(file))
+    .filter((file) => /from\s+["'](?:@\/lib\/voiceCompanion|\.{1,2}(?:\/[\w.]+)*)\/(?:simulator|scenarios)["']|import\(\s*["'][^"']*voiceCompanion\/(?:simulator|scenarios)["']/u.test(fs.readFileSync(file, "utf8")));
+  expect(importers.map((file) => path.relative(process.cwd(), file))).toEqual([]);
 });

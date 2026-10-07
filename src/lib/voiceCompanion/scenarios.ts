@@ -8,10 +8,12 @@ import type { ScriptStep } from "./simulator";
  * three came with the read-only board tools (operator amendment 2026-10-06): a
  * question about the board answered from one read call, from several, and a
  * long spoken answer after one, none of which delegates. Every call carries a
- * name from the tool registry (`tools.ts`). `demo` is what the product's demo
- * choice plays; the rest exist for the browser driver (a quick way to a
- * confirmation that waits, one answered by voice, a fill of speech and calls
- * for the edge readings, a withdrawal). A request to the orchestrator is sent
+ * name from the tool registry (`tools.ts`). The rest exist for the browser
+ * driver (a quick way to a confirmation that waits, one answered by voice, a
+ * fill of speech and calls for the edge readings, a withdrawal, a whole
+ * conversation in `demo`). These scripts and the simulator that plays them are
+ * test fixtures and rendered-evidence drivers: the product has no demo, and no
+ * setting or production module reaches them. A request to the orchestrator is sent
  * at once; the model asks first only where it judges that it should.
  */
 
@@ -238,9 +240,9 @@ export function scenarioScript(name: ScenarioName, locale: Locale): ScriptStep[]
     /* A long spoken answer after one read call: the pace and the split into bubbles can be watched. */
     case "readLong":
       return [pause(400), operator(1, t.readLongAsk), reads("long", [t.readLongCall], [1200]), companion(1, t.readLongAnswer)];
-    /* The product's demo choice: a greeting, a board question answered from a read call, a request sent to the
-       orchestrator at once with its answer, then one the model asks about first and the operator confirms by
-       voice. With no orchestrator seat the demo stops before the delegation. */
+    /* A whole conversation for the driver: a greeting, a board question answered from a read call, a request sent
+       to the orchestrator at once with its answer, then one the model asks about first and the operator confirms
+       by voice. With no orchestrator seat it stops before the delegation. */
     case "demo":
       return [
         pause(500), operator(1, t.hello), companion(1, t.here), pause(400),

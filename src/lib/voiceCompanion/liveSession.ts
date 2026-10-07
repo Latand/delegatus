@@ -87,7 +87,6 @@ export class CompanionLiveSessions {
   private async mint(input: { project: string; locale: Locale; sdp: string }, requestId: string, digest: string): Promise<MintedCompanionSession> {
     const settings = this.storage.settings();
     if (!settings.enabled) throw new Error("COMPANION_DISABLED");
-    if (settings.backend === "demo") throw new Error("DEMO_MODE");
     if (!input.project.trim() || input.project.length > 200 || !["en", "uk"].includes(input.locale)
       || !input.sdp.trim() || input.sdp.length > 96_000) throw new Error("INVALID_REQUEST");
     const session = this.admission.create({ project: input.project, locale: input.locale, authority: "live-model" });

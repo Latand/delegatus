@@ -16,7 +16,7 @@ export async function PUT(req: NextRequest) {
   if (rejection) return rejection;
   try {
     const body = await companionBody(req, 1_024);
-    if (Object.keys(body).some(key => !["enabled", "backend", "monthlyCapUsd"].includes(key))) throw new Error("INVALID_SETTINGS");
+    if (Object.keys(body).some(key => !["enabled", "monthlyCapUsd"].includes(key))) throw new Error("INVALID_SETTINGS");
     return NextResponse.json(new CompanionStorage().updateSettings(body), { headers: { "Cache-Control": "no-store" } });
   } catch (error) { return companionFailure(error); }
 }

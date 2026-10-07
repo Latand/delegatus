@@ -143,7 +143,7 @@ const voice = { delivered: new URLSearchParams(location.search).get("delivered")
   /* What the settings routes were asked to write. The key itself is never kept: its length is all the driver needs. */
   settingsWrites: [] as Array<Record<string, unknown>>, keyWrites: [] as number[], settingsOpened: 0 };
 const voiceSettings = {
-  enabled: false, backend: "official-realtime" as "official-realtime" | "demo", monthlyCapUsd: 20,
+  enabled: false, monthlyCapUsd: 20,
   keySource: (new URLSearchParams(location.search).get("keysource") ?? "missing") as "env" | "file" | "missing", keyEnvironment: "OPENAI_API_KEY" as const,
   month: "2026-10", usageUsd: Number(new URLSearchParams(location.search).get("usage") ?? 0), reservedUsd: 0, incomplete: false,
 };

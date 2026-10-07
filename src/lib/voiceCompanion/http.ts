@@ -19,6 +19,6 @@ export async function companionBody(req: NextRequest, limit = 96_000): Promise<R
 }
 export function companionFailure(error: unknown): NextResponse {
   const candidate = error instanceof Error ? error.message : "";
-  const code = ["NO_KEY", "KEY_FROM_ENV", "CAP_REACHED", "INVALID_SETTINGS", "INVALID_KEY", "INVALID_REQUEST", "SESSION_CLOSED", "SESSION_UNAVAILABLE", "COMPANION_DISABLED", "DEMO_MODE", "SESSION_LIMIT", "PROJECT_REFUSED", "TOOL_NOT_ALLOWED", "PROVIDER_ERROR", "MINT_UNCERTAIN"].includes(candidate) ? candidate : "COMPANION_UNAVAILABLE";
+  const code = ["NO_KEY", "KEY_FROM_ENV", "CAP_REACHED", "INVALID_SETTINGS", "INVALID_KEY", "INVALID_REQUEST", "SESSION_CLOSED", "SESSION_UNAVAILABLE", "COMPANION_DISABLED", "SESSION_LIMIT", "PROJECT_REFUSED", "TOOL_NOT_ALLOWED", "PROVIDER_ERROR", "MINT_UNCERTAIN"].includes(candidate) ? candidate : "COMPANION_UNAVAILABLE";
   return NextResponse.json({ code }, { status: code.startsWith("INVALID") ? 400 : code === "PROVIDER_ERROR" ? 502 : 409, headers: { "Cache-Control": "no-store" } });
 }

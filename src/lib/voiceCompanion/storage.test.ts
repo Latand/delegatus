@@ -13,7 +13,8 @@ afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
 test("settings are off by default; saving a key returns availability and writes owner-only", () => {
   const storage = new CompanionStorage();
-  expect(storage.settings()).toMatchObject({ enabled: false, backend: "official-realtime", keySource: "missing" });
+  expect(storage.settings()).toMatchObject({ enabled: false, keySource: "missing" });
+  expect(storage.settings()).not.toHaveProperty("backend");
   storage.saveKey("synthetic-provider-credential");
   expect(fs.statSync(configFilePath("openai-api-key")).mode & 0o777).toBe(0o600);
   expect(JSON.stringify(storage.settings())).not.toContain("synthetic-provider-credential");
@@ -52,4 +53,26 @@ test("malformed state fails closed instead of losing reservations or session aut
     expect(() => storage.read()).toThrow("COMPANION_STATE_UNAVAILABLE");
   }
   fs.writeFileSync(statePath("voice-companion.json"), JSON.stringify(document));
+});
+
+test("a demo stored by an earlier build reads as off, the real voice stays on, and the next write drops the field; no update selects a backend", () => {
+  const file = path.join(process.env.LLV_STATE_DIR!, "voice-companion.json");
+  const stored = (backend: string, enabled: boolean) => fs.writeFileSync(file, JSON.stringify({ version: 1, settings: { enabled, backend, monthlyCapUsd: 20 }, charges: {}, sessions: {} }));
+  stored("demo", true);
+  const storage = new CompanionStorage();
+  expect(storage.settings()).toMatchObject({ enabled: false, monthlyCapUsd: 20 });
+  expect(storage.settings()).not.toHaveProperty("backend");
+  storage.updateSettings({ monthlyCapUsd: 25 });
+  const written = JSON.parse(fs.readFileSync(file, "utf8")) as { settings: Record<string, unknown> };
+  expect(written.settings).toEqual({ enabled: false, monthlyCapUsd: 25 });
+  stored("official-realtime", true);
+  expect(storage.settings()).toMatchObject({ enabled: true });
+  expect(storage.settings()).not.toHaveProperty("backend");
+  stored("something-else", true);
+  expect(() => storage.settings()).toThrow("COMPANION_STATE_UNAVAILABLE");
+  stored("official-realtime", false);
+  for (const update of [{ backend: "demo" }, { enabled: true, backend: "demo" }, { backend: "official-realtime" }]) {
+    expect(() => storage.updateSettings(update as never)).toThrow("INVALID_SETTINGS");
+  }
+  expect(storage.settings().enabled).toBe(false);
 });

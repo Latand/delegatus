@@ -20010,7 +20010,7 @@ describe("floating voice companion", () => {
             failures.push({ failure: code, lang, scheme, viewport: `${viewport.width}x${viewport.height}`, where: "a notice in the lane", ...notice });
           } finally { await context.close(); }
         }
-        /* No orchestrator: said as the conversation starts, and the demo without a seat proposes nothing. */
+        /* No orchestrator: said as the conversation starts, and the scripted conversation without a seat proposes nothing. */
         {
           const label = `no_orchestrator-${lang}`;
           const { context, page, pageErrors } = await openVoice(browser, server.base, "&script=demoNoSeat&seat=none", { viewport, scheme, lang, motion: "reduce" });
@@ -20104,7 +20104,7 @@ describe("floating voice companion", () => {
   /* The shell's own mount and the settings rows that turn it on. The fixture mounts nothing: the Viewer does, once
      the settings routes (answered here from memory) say the companion is enabled. The key typed is a made-up
      string; nothing on this page reaches a provider. */
-  browserTest("off by default; the settings rows turn the companion on in the shell, take a key without echoing it, keep the cap and offer the demo", async () => {
+  browserTest("off by default; the settings rows turn the companion on in the shell, take a key without echoing it, keep the cap, and offer no demo", async () => {
     fs.mkdirSync(HANDOFF, { recursive: true });
     const server = await serveEvidenceFixture(OUT);
     const { browser, close } = await launchOwned();
@@ -20162,11 +20162,13 @@ describe("floating voice companion", () => {
           await section.locator("[data-voice-companion-usage]", { hasText: "$35.00" }).waitFor({ timeout: 10_000 });
           expect(await section.locator("[data-voice-companion-usage]").innerText(), `${label}: usage against the new cap`).toBe(translate(lang, "voiceCompanion.settings.usage", { month: "2026-10", spent: "$3.40", cap: "$35.00" }));
           await page.screenshot({ path: path.join(HANDOFF, `settings-real-${label}.png`) });
-          /* The demo choice: the simulator, no key needed. */
-          await section.locator('[data-backend="demo"]').click();
-          await page.waitForSelector('[data-voice-companion][data-mode="simulated"]', { timeout: 10_000 });
-          expect((await writes(page)).settings[2], `${label}: the demo choice was written`).toEqual({ backend: "demo" });
-          await section.locator('[data-backend="demo"][aria-checked="true"]').waitFor({ timeout: 10_000 });
+          /* On is the real voice: the dialog offers no backend, no demo, and no word of one. */
+          const choices = await section.evaluate((node) => ({
+            backendControls: node.querySelectorAll("[data-voice-companion-backend], [data-backend], [role='radio'], [role='radiogroup']").length,
+            controls: node.querySelectorAll("input, button, select").length,
+            demoWords: /demo|демо/iu.test(node.textContent ?? ""),
+          }));
+          expect(choices, `${label}: the switch, the key and the cap, and no backend choice`).toEqual({ backendControls: 0, controls: 4, demoWords: false });
           const dialog = await page.evaluate(() => {
             const box = document.querySelector<HTMLElement>("[data-voice-companion-settings]")!.getBoundingClientRect();
             const section = document.querySelector<HTMLElement>("[data-voice-companion-setting]")!;
@@ -20174,7 +20176,7 @@ describe("floating voice companion", () => {
             return { insideViewport: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, sectionWidth: Math.round(section.getBoundingClientRect().width), overflowsDialog: section.scrollWidth > section.clientWidth + 1, cut };
           });
           expect([dialog.insideViewport, dialog.overflowsDialog, dialog.cut], `${label}: the rows fit the dialog`).toEqual([true, false, []]);
-          await page.screenshot({ path: path.join(HANDOFF, `settings-demo-${label}.png`) });
+          await page.screenshot({ path: path.join(HANDOFF, `settings-on-${label}.png`) });
           await page.keyboard.press("Escape");
           await page.waitForSelector("[data-voice-companion-settings]", { state: "detached", timeout: 10_000 });
           await page.waitForTimeout(900);
@@ -20182,42 +20184,15 @@ describe("floating voice companion", () => {
           const placed = await readCompanion(page);
           expectFree(placed, `${label}: the shell's own mount`);
           expect(placed.lane, `${label}: the lane is reserved`).not.toBeNull();
-          /* Its demo plays on the event contract: a board question answered from a read call, a request sent to the
-             orchestrator at once with its answer, then one the model asks about first and the operator confirms
-             by voice. After Talk the driver touches nothing. Nothing leaves the page: the demo's send goes nowhere. */
-          await page.locator("[data-companion-talk]").click();
-          await page.waitForSelector('[data-companion-call][data-tool="list_tasks"]', { timeout: 60_000 });
-          await page.screenshot({ path: path.join(HANDOFF, `product-demo-read-${label}.png`) });
-          const stagesSeen = new Set<string>();
-          let buttonsBeforeAnswer = 0;
-          for (let turn = 0; turn < 600 && !(await page.locator("[data-companion-reply]").count()); turn += 1) {
-            for (const stage of await page.locator("[data-companion-delegation]").evaluateAll((nodes) => nodes.map((node) => (node as HTMLElement).dataset.stage ?? ""))) stagesSeen.add(stage);
-            buttonsBeforeAnswer = Math.max(buttonsBeforeAnswer, await page.locator("[data-companion-send], [data-companion-cancel]").count());
-            await page.waitForTimeout(100);
-          }
-          expect(await page.locator("[data-companion-reply]").count(), `${label}: the first request was answered`).toBe(1);
-          expect({ buttons: buttonsBeforeAnswer, asked: stagesSeen.has("awaiting-confirmation"), sent: ["sending", "queued", "delivered"].some((stage) => stagesSeen.has(stage)) }, `${label}: the first request went out at once, with no button`).toEqual({ buttons: 0, asked: false, sent: true });
-          await page.screenshot({ path: path.join(HANDOFF, `product-demo-answer-${label}.png`) });
-          await page.locator("[data-companion-send]").waitFor({ timeout: 90_000 });
-          const demoReason = (await page.locator("[data-companion-confirm-reason]").innerText()).trim();
-          expect(demoReason, `${label}: the second request is asked about, with the model's reason`).toBe(scenarioText(lang).critical);
-          await page.waitForTimeout(400);
-          await page.screenshot({ path: path.join(HANDOFF, `product-demo-confirmation-${label}.png`) });
-          await page.waitForSelector('[data-companion-delegation][data-stage="delivered"]', { timeout: 60_000 });
-          expect(await page.locator("[data-companion-send], [data-companion-cancel]").count(), `${label}: the spoken yes sent it and the buttons left`).toBe(0);
-          await page.waitForTimeout(400);
-          await page.screenshot({ path: path.join(HANDOFF, `product-demo-confirmed-by-voice-${label}.png`) });
-          const demo = { firstRequest: { buttons: buttonsBeforeAnswer, stages: [...stagesSeen] }, secondRequest: { reason: demoReason, answeredBy: "voice", pointerEvents: 0, stage: "delivered" } };
-          expect(await page.locator("[data-voice-relay]").count(), `${label}: the demo sends nothing to the orchestrator`).toBe(0);
-          expectFree(await readCompanion(page), `${label}: the shell's mount in a conversation`, { textMayLie: true });
-          await page.locator("[data-companion-end]").click();
-          await page.waitForSelector('[data-voice-companion][data-phase="offline"]', { timeout: 10_000 });
+          /* The shell mounts the real voice and nothing else, and starts no call until Talk. */
+          expect(await page.locator('[data-voice-companion][data-mode="official-realtime"]').count(), `${label}: the shell's mount is the real voice`).toBe(1);
+          expect(await page.locator("[data-voice-companion] .vc-sim").count(), `${label}: no simulated label`).toBe(0);
           /* Turned off again, it is gone. */
           await openSettings(page);
           await page.locator("[data-voice-companion-enable]").click();
           await page.waitForSelector("[data-voice-companion]", { state: "detached", timeout: 10_000 });
           expect(pageErrors, label).toEqual([]);
-          cases.push({ viewport: `${viewport.width}x${viewport.height}`, lang, scheme, demo, mountedBeforeEnable: 0, settingsWrites: (await writes(page)).settings, keyWrites: 1, keyEchoed: false, keyFieldAfterSave: afterKey.value, keyStatus: afterKey.status, dialog, shellMount: { block: placed.block, lane: placed.lane, overlapArea: placed.overlapArea, textUnderCharacter: placed.textUnderCharacter } });
+          cases.push({ viewport: `${viewport.width}x${viewport.height}`, lang, scheme, choices, mountedBeforeEnable: 0, settingsWrites: (await writes(page)).settings, keyWrites: 1, keyEchoed: false, keyFieldAfterSave: afterKey.value, keyStatus: afterKey.status, dialog, shellMount: { block: placed.block, lane: placed.lane, overlapArea: placed.overlapArea, textUnderCharacter: placed.textUnderCharacter } });
         } finally { await context.close(); }
       }
       /* The real backend with no key refuses in words before any microphone prompt, and points at the settings;
@@ -20258,7 +20233,7 @@ describe("floating voice companion", () => {
     expect(processes.leftAfterClose, "browser processes left after close").toBe(0);
     record("settings.json", {
       driver: DRIVER, fixture: "?scenario=voice-companion&mount=product",
-      rule: "nothing is mounted until the switch in the settings dialog, reached from the header menu's Settings page, is on; the key is typed masked, sent once, cleared, and never present in the page afterwards; a key from the environment takes precedence and closes the field; the cap is kept with the month's usage beside it; the demo choice plays the simulator through the shell's own mount",
+      rule: "nothing is mounted until the switch in the settings dialog, reached from the header menu's Settings page, is on; the key is typed masked, sent once, cleared, and never present in the page afterwards; a key from the environment takes precedence and closes the field; the cap is kept with the month's usage beside it; on is the real voice, with no backend to choose and no demo, and the shell mounts it",
       note: "the settings routes are answered by the fixture from memory and the key is a made-up string; no provider, microphone or orchestrator is reached",
       cases,
     });

@@ -206,15 +206,14 @@ test("end_conversation is a registry tool and closes with final usage, without o
   expect(f.provider.attached).toBe(0);
 });
 
-test("cap and disabled/demo settings refuse minting before key access or provider calls", async () => {
+test("cap and disabled settings refuse minting before key access or provider calls", async () => {
   const f = fixture();
   f.storage.updateSettings({ monthlyCapUsd: 0 });
   await expect(f.service.start({ project: "fixture", locale: "en", sdp: "v=0" })).rejects.toThrow("CAP_REACHED");
   expect(f.provider.sessions).toHaveLength(0);
   f.storage.updateSettings({ enabled: false });
   await expect(f.service.start({ project: "fixture", locale: "en", sdp: "v=0" })).rejects.toThrow("COMPANION_DISABLED");
-  f.storage.updateSettings({ enabled: true, backend: "demo" });
-  await expect(f.service.start({ project: "fixture", locale: "en", sdp: "v=0" })).rejects.toThrow("DEMO_MODE");
+  expect(f.provider.sessions).toHaveLength(0);
 });
 
 test("a cap without room for the voice and one backend response refuses before any provider call", async () => {

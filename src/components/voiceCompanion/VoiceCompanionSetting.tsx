@@ -47,8 +47,8 @@ export function VoiceCompanionSettingsHost() {
 
 /**
  * The voice companion's rows in its settings dialog (#2519 D): the switch, the
- * choice between the real voice and the free demo, the OpenAI key, and the
- * monthly cap with the month's usage.
+ * OpenAI key, and the monthly cap with the month's usage. On is the real voice;
+ * there is no other backend to choose.
  *
  * The key field is write-only. What is typed goes to the Viewer once and is
  * cleared here; nothing ever comes back but where a key is taken from (a saved
@@ -61,7 +61,7 @@ export function VoiceCompanionSetting() {
   const [keySaved, setKeySaved] = useState(false);
   /* What is being typed into the cap; null shows the saved one. */
   const [capDraft, setCapDraft] = useState<string | null>(null);
-  const ids = { key: useId(), keyHint: useId(), cap: useId(), capHint: useId(), backend: useId() };
+  const ids = { key: useId(), keyHint: useId(), cap: useId(), capHint: useId() };
   const speech = locale === "uk" ? "uk" as const : "en" as const;
   const announce = () => window.dispatchEvent(new Event(COMPANION_SETTINGS_EVENT));
   const change = async (value: Parameters<typeof update>[0]) => { if (await update(value)) announce(); };
@@ -83,7 +83,6 @@ export function VoiceCompanionSetting() {
   };
   const money = (value: number) => `$${value.toFixed(2)}`;
   const fromEnvironment = settings?.keySource === "env";
-  const demo = settings?.backend === "demo";
   /* The masked field holds what is being typed and nothing else: no saved key is ever put into it. */
   const typed = { type: "password", value: key, onChange: (event: ChangeEvent<HTMLInputElement>) => { setKey(event.target.value); setKeySaved(false); } } as const;
   const field = "min-h-9 w-full min-w-0 rounded-[8px] border border-border bg-well px-2.5 text-[13px] text-primary placeholder:text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-55";
@@ -96,21 +95,6 @@ export function VoiceCompanionSetting() {
       <p className="text-[13px] leading-relaxed text-muted">{t("voiceCompanion.settings.explanation")}</p>
       {settings?.enabled ? (
         <div className="mt-3 flex flex-col gap-4">
-          <fieldset className="min-w-0" data-voice-companion-backend>
-            <legend id={ids.backend} className="text-[13px] font-semibold text-primary">{t("voiceCompanion.settings.backend")}</legend>
-            <div className="mt-1.5 grid grid-cols-2 gap-2" role="radiogroup" aria-labelledby={ids.backend}>
-              {(["official-realtime", "demo"] as const).map((backend) => {
-                const selected = settings.backend === backend;
-                return (
-                  <button key={backend} type="button" role="radio" aria-checked={selected} data-backend={backend} disabled={busy} onClick={() => { if (!selected) void change({ backend }); }}
-                    className={`flex min-h-11 flex-col items-start justify-center rounded-[10px] border px-3 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed ${selected ? "border-accent bg-accent/10" : "border-border hover:bg-sunken"}`}>
-                    <span className="text-[13px] font-semibold text-primary">{t(`voiceCompanion.settings.backend.${backend === "demo" ? "demo" : "real"}`)}</span>
-                    <span className="text-[11.5px] leading-snug text-muted">{t(`voiceCompanion.settings.backend.${backend === "demo" ? "demoHint" : "realHint"}`)}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </fieldset>
           <form className="min-w-0" onSubmit={(event) => void submitKey(event)} data-voice-companion-key data-key-source={settings.keySource}>
             <label htmlFor={ids.key} className="text-[13px] font-semibold text-primary">{t("voiceCompanion.settings.key")}</label>
             <div className="mt-1.5 flex gap-2">
@@ -123,7 +107,6 @@ export function VoiceCompanionSetting() {
               <span className={settings.keySource === "missing" ? "" : "font-semibold text-primary"}>{keySaved ? t("voiceCompanion.settings.key.saved") : t(`voiceCompanion.settings.key.${settings.keySource}`)}</span>{" "}
               {fromEnvironment ? null : t("voiceCompanion.settings.key.kept")}
             </p>
-            {demo ? <p className="mt-1 text-[12px] leading-snug text-muted">{t("voiceCompanion.settings.key.demo")}</p> : null}
           </form>
           <div className="min-w-0" data-voice-companion-cap>
             <label htmlFor={ids.cap} className="text-[13px] font-semibold text-primary">{t("voiceCompanion.settings.cap")}</label>

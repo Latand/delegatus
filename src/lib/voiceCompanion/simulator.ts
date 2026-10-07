@@ -12,7 +12,8 @@ import { admitDelegationProposal, type OperatorInput } from "./gate";
  * send by voice or by a tap.
  *
  * Time comes from a clock, so the same script runs on virtual time in a unit
- * test and on `requestAnimationFrame` in a browser capture.
+ * test and on `requestAnimationFrame` in a browser capture. It is a test
+ * fixture and a rendered-evidence driver only: the product never mounts it.
  */
 
 export interface SimClock {
