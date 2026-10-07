@@ -40,11 +40,11 @@ async function gone(pid: number): Promise<boolean> {
   for (let wait = 0; wait < 40 && running(pid); wait++) await Bun.sleep(50);
   return !running(pid);
 }
-async function stoppedStep(dir: string) {
+async function stoppedStep(dir: string, budgetMs = 1_000) {
   const at = performance.now();
   // The root and a helper it started, which must go with it.
   const script = `echo $$ > '${dir}/root.pid'; sleep 60 & echo $! > '${dir}/helper.pid'; wait`;
-  const error = await runSteps("pre-push", [{ name: "touched tests", command: [] }], { root: dir, deadline: { at: Date.now() + 1_000, startedAt: Date.now() }, logDir: dir, say: () => {},
+  const error = await runSteps("pre-push", [{ name: "touched tests", command: [] }], { root: dir, deadline: { at: Date.now() + budgetMs, startedAt: Date.now() }, logDir: dir, say: () => {},
     prepare: () => ({ command: ["bash", "-c", script], env: process.env }) }).then(() => null, (caught: unknown) => caught);
   const pids = ["root", "helper"].map(name => Number(real.readFileSync(path.join(dir, `${name}.pid`), "utf8")));
   started.push(...pids);
@@ -67,5 +67,20 @@ test("with neither /proc nor ps the stop says it could not find the step's proce
   const { error, elapsed } = await stoppedStep(dir);
   expect(elapsed).toBeLessThan(4_500);
   expect(error).toBeInstanceOf(ContainmentFailed);
-  expect((error as Error).message).toBe('"touched tests" was stopped at the push deadline, but the processes it started could not be listed (no /proc, and ps failed), so they may still be running; stop them before pushing again');
+  expect((error as Error).message).toBe('"touched tests" was stopped at the push deadline, but the processes it started could not be listed (no /proc, and ps failed), so they could not be proven stopped; stop them before pushing again');
+}, 30_000);
+test("a ps that answers slowly is cut off by the cleanup allowance, and the stop says what it could not prove", async () => {
+  const dir = real.mkdtempSync(path.join(tmpdir(), "gate-noproc-")); roots.push(dir);
+  // Every query takes two seconds before the real ps answers.
+  const slow = path.join(dir, "bin"); real.mkdirSync(slow);
+  real.writeFileSync(path.join(slow, "ps"), `#!/bin/sh\nsleep 2\nexec ${Bun.which("ps")} "$@"\n`, { mode: 0o755 });
+  const searched = process.env.PATH;
+  process.env.PATH = `${slow}${path.delimiter}${searched}`;
+  try {
+    const { error, elapsed } = await stoppedStep(dir, 500);
+    // The deadline and the three-second cleanup allowance, whatever ps does.
+    expect(elapsed).toBeLessThan(500 + 3_000 + 1_000);
+    expect(error).toBeInstanceOf(ContainmentFailed);
+    expect((error as Error).message).toContain("the processes it started could not be listed (no /proc, and ps did not answer within 3 s), so they could not be proven stopped; stop them before pushing again");
+  } finally { process.env.PATH = searched; }
 }, 30_000);

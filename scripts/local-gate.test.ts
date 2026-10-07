@@ -268,6 +268,45 @@ await runSteps("pre-push", [{ name: "touched tests", command: [] }], { root: ${J
     try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
   }
 }, 30_000);
+for (const budget of [null, 60_000]) test(`a group member that cannot be prepared stops the rest of its group before the hook exits (deadline: ${budget ?? "none"})`, async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "gate-prepare-")); roots.push(dir);
+  const harness = path.join(dir, "harness.ts"), output = path.join(dir, "stderr");
+  const pidFile = (name: string) => path.join(dir, `${name}.pid`);
+  // 0.154.0 is running with a helper when the 0.159.0 fixture install fails.
+  writeFileSync(harness, `import { existsSync } from "node:fs";
+import { NATIVE_GROUP, endHook, runSteps } from ${JSON.stringify(path.join(root, "scripts/local-gate.ts"))};
+const startedAt = Date.now(), budget = ${JSON.stringify(budget)};
+const members = ["native Codex 0.154.0", "native Codex 0.159.0"].map(name => ({ name, command: [], group: NATIVE_GROUP }));
+await runSteps("pre-push", members, { root: ${JSON.stringify(dir)}, deadline: budget === null ? null : { at: startedAt + budget, startedAt }, logDir: ${JSON.stringify(dir)},
+  prepare: async step => {
+    if (step.name.endsWith("0.154.0")) return { command: ["bash", "-c", "echo $$ > ${pidFile("root")}; sleep 15 & echo $! > ${pidFile("helper")}; wait"], env: process.env };
+    while (!existsSync(${JSON.stringify(pidFile("helper"))})) await Bun.sleep(10);
+    throw new Error("installing @openai/codex@0.159.0 failed (1)");
+  } }).catch((error: unknown) => endHook("pre-push", error));
+`);
+  const started = performance.now();
+  const hook = Bun.spawn({ cmd: [process.execPath, harness], cwd: dir, stdio: ["ignore", "ignore", Bun.file(output)] });
+  const code = await hook.exited;
+  const elapsed = performance.now() - started;
+  const pids = ["root", "helper"].map(name => Number(readFileSync(pidFile(name), "utf8")));
+  try {
+    // The cleanup allowance and Bun's start-up; never the helper's fifteen seconds or the deadline.
+    expect(elapsed).toBeLessThan(5_500);
+    expect(code).toBe(1);
+    // Nothing the running member started outlives the hook.
+    for (const pid of pids) expect(alive(pid), String(pid)).toBeFalse();
+    const said = readFileSync(output, "utf8");
+    expect(said).toContain("pre-push: native Codex 0.159.0: failed (installing @openai/codex@0.159.0 failed (1))");
+    expect(said).toContain('pre-push: native Codex 0.154.0: stopped when "native Codex 0.159.0" failed; nothing was judged');
+    expect(said.trimEnd().split("\n").at(-1)).toBe('pre-push: "native Codex 0.159.0" failed: installing @openai/codex@0.159.0 failed (1); gate failed');
+    // The publication names the member that failed, and reads a refusal, never a budget stop.
+    const { hookBudgetStop, publicationFailurePhase } = await import("../src/lib/pipelines/git");
+    expect(publicationFailurePhase({ step: "publishing the pipeline branch", code: 1, signal: null, durationMs: 1_000, outputTail: said })).toBe("native Codex 0.159.0");
+    expect(hookBudgetStop(said)).toBeNull();
+  } finally {
+    for (const pid of pids) try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+  }
+}, 30_000);
 test("a native Codex group names its unfinished or failed version, never a member that passed", async () => {
   const { hookBudgetStop, publicationFailureCause, publicationInterruptionCause } = await import("../src/lib/pipelines/git");
   const dir = mkdtempSync(path.join(tmpdir(), "hook-group-")); roots.push(dir);
