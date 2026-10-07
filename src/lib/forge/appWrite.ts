@@ -75,11 +75,12 @@ function refusalFrom(error: unknown, repository: string): ForgeAppWriteRefused {
  * the credential store lives; the copy under the launching home is the path
  * both sides can read.
  */
-export async function mintForgeAppToken(repository: string, source: NodeJS.ProcessEnv = process.env): Promise<ForgeAppToken> {
+export async function mintForgeAppToken(repository: string, source: NodeJS.ProcessEnv = process.env, kind: "write" | "issues" = "write"): Promise<ForgeAppToken> {
   let stdout: string;
   try {
     const helper = path.join(agentForgeDir(source), "forge-app-token.mjs");
-    ({ stdout } = await execFileAsync("bun", [helper, "token", "--repository", repository, "--json"], { timeout: MINT_TIMEOUT_MS, maxBuffer: 64 * 1024, env: source }));
+    /* `issues` asks for the permission set that files an issue and no other (#2518). */
+    ({ stdout } = await execFileAsync("bun", [helper, "token", "--repository", repository, "--json", ...(kind === "issues" ? ["--issues"] : [])], { timeout: MINT_TIMEOUT_MS, maxBuffer: 64 * 1024, env: source }));
   } catch (error) {
     throw refusalFrom(error, repository);
   }

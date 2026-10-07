@@ -377,9 +377,19 @@ function defaultAccount(): CodexAccount {
   };
 }
 
+/** Complete stored names for publication checks, including retained history.
+    This read neither recovers removals nor discovers credentials. */
+export function codexAccountsForPrivacy(): readonly { id: string; label: string }[] {
+  const loaded = readRegistry();
+  if (loaded.corrupt) throw new CorruptCodexAccountsError();
+  return [{ id: DEFAULT_ID, label: "Main" }, ...loaded.registry.accounts, ...loaded.registry.retired,
+    ...loaded.registry.removals.map((item) => ({ id: item.id, label: "" }))];
+}
+
 export function listCodexAccounts(): CodexAccount[] {
   recoverRemovalsAtStartup();
-  return [defaultAccount(), ...readRegistry().registry.accounts.map(asAccount)];
+  const loaded = readRegistry();
+  return [defaultAccount(), ...loaded.registry.accounts.map(asAccount)];
 }
 
 export class CodexLoginBusyError extends Error {
