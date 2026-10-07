@@ -8,6 +8,23 @@ guarantees for the 1.x series.
 
 ## [Unreleased]
 
+### Changed
+- **Production gets CPU priority over tests and pipeline work.** On Linux with
+  a systemd user manager, agents you talk to run with ten times the CPU weight
+  of pipeline stages, flow reviewers, workflow stages, gates, workflow setup,
+  pipeline publication and release builds. That work runs in its own slice with
+  300% of a CPU per process tree and 75% of the machine for all of it together,
+  whatever the memory mode, and hosts picked up again after a restart or moved
+  to another account keep it. A new pipeline or workflow stage, workflow setup,
+  publication install, release build or gate waits while CPU pressure is high
+  and says so in its detail line or log; your messages never wait. Where this
+  placement should work and cannot, including a slice where the kernel applies
+  no CPU controls, that work stops with the reason
+  (`DELEGATUS_AGENT_CPU=off` opts out). `node bin/install-cpu-placement.mjs`
+  writes the systemd files that give the service itself the same priority; they
+  apply after a reload and a restart you choose. Both gate scripts now share
+  one set of slots, and the merger runs its gates through `scripts/gate-slot.sh`.
+
 ### Fixed
 - **Work cut by a Delegatus restart continues by itself.** A deploy, a
   self-update or a crash recovery used to leave a pipeline stage that was
