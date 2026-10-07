@@ -25,6 +25,7 @@ import { MobileAccountsScreen, MobileBarTitle, MobileShell, type MobileShellHost
 import { topScreen, useMobileNav, useMobileNavStore, type MobileSheetName } from "./mobile/mobileNav";
 import { OverviewKanban, type OverviewPhoneDoors } from "./OverviewKanban";
 import { buildProjectSummaries } from "./projectModel";
+import { workingAgentCounts } from "./workingAgents";
 
 const noop = () => {};
 
@@ -100,7 +101,7 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
   const reconnecting = reach.kind === "reconnecting";
   const degraded = catalogFailures > 0;
   const allSummaries = useMemo(
-    () => buildProjectSummaries(files, now, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouCounts),
+    () => buildProjectSummaries(files, now, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouCounts, workingAgentCounts(files, now)),
     [files, now, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouCounts],
   );
   const summaries = useMemo(

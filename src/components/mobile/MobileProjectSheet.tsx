@@ -11,6 +11,7 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import type { Workflow } from "@/lib/workflows/types";
 
 import { buildProjectSummaries, OVERVIEW, partitionCrownedSummaries, type ProjectSummary } from "../projectModel";
+import { workingAgentCounts } from "../workingAgents";
 import { ResourcesFooter } from "../ResourcesFooter";
 import { BoardRowsSkeleton } from "../skeletons";
 import { fmtAge } from "../utils";
@@ -68,7 +69,7 @@ export function MobileProjectSheet({
 }: MobileProjectSheetProps) {
   const { t } = useLocale();
   const summaries = useMemo(
-    () => buildProjectSummaries(files, now, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouCounts),
+    () => buildProjectSummaries(files, now, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouCounts, workingAgentCounts(files, now)),
     [files, now, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouCounts],
   );
   const active = useMemo(() => summaries.filter((summary) => !archivedProjects.has(summary.project)), [summaries, archivedProjects]);

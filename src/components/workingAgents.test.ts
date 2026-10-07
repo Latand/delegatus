@@ -111,7 +111,7 @@ test("the rule: only an agent whose turn runs now is working", () => {
 });
 
 test("the sidebar row and the board header of one project read the same number", () => {
-  const rows = buildProjectSummaries(files, NOW, workflows, [], pipelines);
+  const rows = buildProjectSummaries(files, NOW, workflows, [], pipelines, {}, undefined, workingAgentCounts(files, NOW));
   const row = rows.find((summary) => summary.project === REPO)!;
   const projectFiles = files.filter((entry) => projectKey(entry) === REPO);
   const model = board(projectFiles);
@@ -140,7 +140,7 @@ test("the sidebar row and the board header of one project read the same number",
 });
 
 test("the Overview row is the sum of the rows, and the Overview board header says the same", () => {
-  const rows = buildProjectSummaries(files, NOW, workflows, [], pipelines);
+  const rows = buildProjectSummaries(files, NOW, workflows, [], pipelines, {}, undefined, workingAgentCounts(files, NOW));
   const sum = rows.reduce((total, summary) => total + summary.liveCount, 0);
   expect(sum).toBe(5);
   expect(sum).toBe(workingAgentCount(files, NOW));
@@ -154,7 +154,7 @@ test("a per-second clock and the board's 15 s clock agree at every second", () =
   for (let second = 0; second < 30; second += 1) {
     const now = NOW + second;
     const entries = [...files.filter((entry) => projectKey(entry) === REPO), crossing];
-    const row = buildProjectSummaries(entries, now).find((summary) => summary.project === REPO)!;
+    const row = buildProjectSummaries(entries, now, [], [], [], {}, undefined, workingAgentCounts(entries, now)).find((summary) => summary.project === REPO)!;
     expect(board(entries, now).totals.working).toBe(row.liveCount);
   }
 });

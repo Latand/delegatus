@@ -4,7 +4,6 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import type { Workflow } from "@/lib/workflows/types";
 
 import { attentionId } from "./attention";
-import { isWorkingAgent } from "./workingAgents";
 
 export type ActivityBand = 0 | 1 | 2 | 3;
 
@@ -170,7 +169,8 @@ export interface ProjectSummary {
   project: string;
   displayName: string;
   /** Agents working in the project now, by the one rule the board header,
-      its columns and its cards count with (`isWorkingAgent`). */
+      its columns and its cards count with (`isWorkingAgent`, handed in as
+      `workingAgentCounts`). */
   liveCount: number;
   attentionCount: number;
   /** Root conversations in the project. */
@@ -192,6 +192,13 @@ export function buildProjectSummaries(
       rail's ⏸, the panel's section and the header carry one number; a
       dismissed lane or a paused one no longer counts. */
   needsYou?: ReadonlyMap<string, number>,
+  /** Each project's working agents: `workingAgentCounts(files, now)` over the
+      same files, the selector the board header reads. It is handed in because
+      this module is also loaded by server code, which the selector's row-state
+      reading cannot join. A workflow or a lane is not an agent, so neither adds
+      to it: the conversation it starts counts once its turn runs, under the key
+      the scanner gave it. */
+  working: ReadonlyMap<string, number> = new Map(),
 ): ProjectSummary[] {
   const map = new Map<string, ProjectSummary>();
   const summaryFor = (key: string, displayName = projectDisplayName(key)): ProjectSummary => {
@@ -205,7 +212,6 @@ export function buildProjectSummaries(
   for (const file of files) {
     const summary = summaryFor(projectKey(file), projectDisplayName(projectKey(file), file.projectName));
     summary.catalogOnly = false;
-    if (isWorkingAgent(file, now)) summary.liveCount += 1;
     /* Same membership the attention queue counts (hard-blocked plus in-TTL
        stalled), so the rail badge, the global badge and the title agree. */
     if (attentionId(file, now) !== null) summary.attentionCount += 1;
@@ -220,9 +226,7 @@ export function buildProjectSummaries(
   }
   /* Workflows keep their stamped project reachable even before any transcript
      exists (provisioning, a parked setup): the row must be there for the
-     strip's retry/close controls to be reachable at all. A workflow or a lane
-     is not an agent, so neither adds to the working count: the conversation it
-     starts counts once its turn runs, under the key the scanner gave it. */
+     strip's retry/close controls to be reachable at all. */
   for (const wf of workflows) {
     if (wf.state === "closed" || !wf.project) continue;
     const summary = summaryFor(wf.project, projectDisplayName(wf.project, projectDisplayNames[wf.project]));
@@ -240,6 +244,7 @@ export function buildProjectSummaries(
   if (needsYou) {
     for (const summary of map.values()) summary.attentionCount = needsYou.get(summary.project) ?? 0;
   }
+  for (const summary of map.values()) summary.liveCount = working.get(summary.project) ?? 0;
   return [...map.values()].sort((a, b) => {
     const al = a.attentionCount > 0;
     const bl = b.attentionCount > 0;

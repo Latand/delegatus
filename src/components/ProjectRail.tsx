@@ -24,6 +24,7 @@ import { BoardRowsSkeleton } from "./skeletons";
 import { LanguageToggle } from "./LanguageToggle";
 import { LimitsFooter } from "./LimitsFooter";
 import { buildProjectSummaries, OVERVIEW, partitionCrownedSummaries, type ProjectSummary } from "./projectModel";
+import { workingAgentCounts } from "./workingAgents";
 import { PushBell } from "./PushBell";
 import { ResourcesFooter } from "./ResourcesFooter";
 import { Z } from "@/components/layers";
@@ -147,7 +148,7 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
   const [query, setQuery] = useState("");
   const [archiveOpen, setArchiveOpen] = useState(false);
   const summaries = useMemo(
-    () => buildProjectSummaries(files, now, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouCounts),
+    () => buildProjectSummaries(files, now, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouCounts, workingAgentCounts(files, now)),
     [files, now, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouCounts],
   );
   const visible = useMemo(() => {

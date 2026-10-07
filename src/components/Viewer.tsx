@@ -73,6 +73,7 @@ import { BarIslandProvider, BoardPaneProvider } from "./ProjectBar";
 import { GlobalSearch, transcriptFocusHash } from "./search/GlobalSearch";
 import { ProjectDashboard, queueColumnOpen } from "./ProjectDashboard";
 import { buildProjectSummaries, isChildConversation, OVERVIEW, projectKey, railProjectOrder } from "./projectModel";
+import { workingAgentCounts } from "./workingAgents";
 import { ProjectRail, RAIL_HIDDEN_STORAGE_KEY } from "./ProjectRail";
 import { StateWritesAlert } from "./StateWritesAlert";
 import { DeploymentStatusPill } from "./runtime/DeploymentStatusPill";
@@ -983,7 +984,7 @@ function ViewerApp() {
   /* The panel's and the sheet's sections follow the rail's project order, the
      rail's own summaries over the same inputs the rail is handed. */
   const railOrder = useMemo(
-    () => railProjectOrder(buildProjectSummaries(files, clock, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouByProject), crownedProjects, archivedProjects),
+    () => railProjectOrder(buildProjectSummaries(files, clock, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouByProject, workingAgentCounts(files, clock)), crownedProjects, archivedProjects),
     [files, clock, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouByProject, crownedProjects, archivedProjects],
   );
   useEffect(() => {
