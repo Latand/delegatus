@@ -1605,9 +1605,12 @@ async function adoptStructuredHostsPass(
     const stamp = stamps.get(key);
     if (!stamp) return false;
     /* A row this process claimed and whose endpoint it replaced is its own
-       from here on: it opened the host or retired the row. */
+       from here on: it opened the host or retired the row. A row that reads
+       dead or unhosted was retired by this pass's own cleanup or given up by
+       an owner that was alive to say so, and a release records what it cuts. */
     const claimant = entry.claimOwner ? structuredClaimIdentity(entry.claimOwner) : null;
-    if (claimant && sameRecordedProcessIdentity(self, claimant) && entry.structuredHost?.endpoint !== stamp.endpoint) {
+    if (entry.status === "dead" || entry.status === "unhosted"
+      || (claimant && sameRecordedProcessIdentity(self, claimant) && entry.structuredHost?.endpoint !== stamp.endpoint)) {
       stamps.delete(key);
       return false;
     }

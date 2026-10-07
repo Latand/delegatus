@@ -1025,7 +1025,10 @@ What the build settled, 2026-10-07:
 - **A stamp stops applying once this process owns the row.** A row this
   process claimed and whose endpoint it replaced (it opened the host, or
   retired the row) is compared no further; until then the comparison holds on
-  the claimed row, as designed.
+  the claimed row, as designed. A row that reads `dead` or `unhosted` is
+  compared no further either: this pass's own dead-wrapper cleanup wrote
+  that, or an owner that was alive to write it, and a release records what it
+  cuts.
 - **The ledger read is bounded.** `readHostTurnRecord` keeps the 256 newest
   frames recorded before the boundary: the ledger records frames in the
   transcript's order, so the anchor is the newest of them the tail holds. A
