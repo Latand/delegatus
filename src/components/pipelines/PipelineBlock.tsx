@@ -687,6 +687,7 @@ export function PipelineBlock(props: PipelineBlockProps) {
      menu of its own keeps its head row; at 390 px the chain, the age and a
      44 px ⋯ do not fit one line. */
   const chainHead = !showTitle && !graphOpen && !props.onMenu;
+  const diskWait = !managed && pipeline.state === "provisioning" ? pipelineReason(t, pipeline, nameOf) : null;
   return (
     <div className="pblock" role="group" aria-label={t("kanban.pipelineAria", { title, progress })} {...root} data-managed={managed ? "" : undefined}>
       {chainHead ? null : (
@@ -711,6 +712,7 @@ export function PipelineBlock(props: PipelineBlockProps) {
           {chainHead ? <span className="pb-tail">{acting}{controls}{opener}</span> : null}
         </div>
       )}
+      {diskWait ? <p className="pb-reason" data-pipeline-reason={pipeline.id}>{diskWait}</p> : null}
       {managed ? (
         managed.note ? <p className="pb-note" data-managed-on={managed.host}>{managed.note}</p> : null
       ) : (
@@ -996,9 +998,11 @@ function ScreenBlock(props: PipelineBlockProps & {
      hand is rare, so it is a row of its own after the stages (#2148). */
   const hasLinks = Boolean(links?.links.length || links?.noPr);
   const hasFlag = finishFlagShown(pipeline, props.taskId);
+  const diskWait = pipeline.state === "provisioning" ? pipelineReason(t, pipeline, nameOf) : null;
   return (
     <section className="pblock" aria-label={t("kanban.pipelineAria", { title: pipelineTitle(t, pipeline), progress: pipelineProgress(t, summary, nameOf) })} {...props.root}>
       {props.embedded ? null : <h2 className="pb-heading" ref={props.headingRef} data-pipeline-heading={pipeline.id}>{pipelineTitle(t, pipeline)}</h2>}
+      {diskWait ? <p className="pb-reason" data-pipeline-reason={pipeline.id}>{diskWait}</p> : null}
       {hasLinks || hasFlag ? (
         <div className="pb-links-row">
           <FinishFlag pipeline={pipeline} taskId={props.taskId} />

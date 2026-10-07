@@ -282,7 +282,7 @@ describe("automatic updates", () => {
       button(el, choice)!.click();
       await Bun.sleep(0);
       expect(posted).toEqual([{ decisionId: "drain-current", choice }]);
-      expect(accepted).toMatchObject({ auto: { decision: null } });
+      expect(accepted).toMatchObject({ snapshot: { auto: { decision: null } }, ticket: expect.any(Number) });
     } finally {
       globalThis.fetch = savedFetch;
       window.removeEventListener("llv:auto-drain-decision", observe);
@@ -297,7 +297,7 @@ describe("automatic updates", () => {
     const observe = (event: Event) => {
       flushSync(() => root!.unmount());
       host?.remove();
-      render((event as CustomEvent<Snapshot>).detail);
+      render((event as CustomEvent<{ snapshot: Snapshot }>).detail.snapshot);
     };
     window.addEventListener("llv:auto-drain-decision", observe);
     globalThis.fetch = (async () => new Response(JSON.stringify({ error: "This automatic update decision is no longer pending", code: "auto-switch-superseded", snapshot: current }), { status: 409 })) as unknown as typeof fetch;
@@ -500,6 +500,47 @@ describe("update available and what changes", () => {
     expect([...changes.querySelectorAll("[data-commit]")].map(text)).toEqual(["a1b2c3d", "b2c3d4e"]);
     click(button(el, "update"));
     expect(calls).toEqual(["update"]);
+  });
+});
+
+/* #2594: the installation answers before the work in progress is read. */
+describe("work in progress beside an available update", () => {
+  const work = (evidence: Partial<NonNullable<Snapshot["workEvidence"]>>, resumeWork?: Snapshot["resumeWork"]) => snapshot({ ...available(),
+    workEvidence: { state: "pending", since: AT, at: null, error: null, phases: null, ...evidence }, ...(resumeWork ? { resumeWork } : {}) });
+  const line = (el: HTMLElement) => el.querySelector<HTMLElement>("[data-work]");
+
+  test.each(["en", "uk"] as const)("pending, read and unreadable in %s, and the Update button stays usable", (locale) => {
+    setLocale(locale);
+    const pending = render(work({}));
+    expect(line(pending)?.dataset.work).toBe("pending");
+    expect(text(line(pending))).toBe(locale === "en" ? "Reading the work in progress…" : "Читаю роботу, що триває…");
+    expect(text(section(pending, "update"))).not.toMatch(/: 0/);
+    expect(button(pending, "update")?.disabled).toBe(false);
+    root?.unmount(); host?.remove();
+
+    const ready = render(work({ state: "ready", since: null, at: AT }, { turns: 2, stages: 1, turnList: [], stageList: [], unreadable: null }));
+    expect(line(ready)?.dataset.work).toBe("ready");
+    expect(text(line(ready))).toBe(locale === "en"
+      ? "Agent turns running: 2 · Pipeline stages running: 1 · read at 12:04"
+      : "Працюють ходи агентів: 2 · Працюють етапи пайплайна: 1 · прочитано о 12:04");
+    root?.unmount(); host?.remove();
+
+    const failed = render(work({ state: "unavailable", since: null, at: AT, error: "runtime host is unavailable" }));
+    expect(line(failed)?.dataset.work).toBe("unavailable");
+    expect(text(line(failed))).toBe(locale === "en" ? "Cannot read agent activity: runtime host is unavailable" : "Не вдалося прочитати активність агентів: runtime host is unavailable");
+  });
+
+  test("a reading that stopped at an unreadable journal shows no counts", () => {
+    setLocale("en");
+    const el = render(work({ state: "ready", since: null, at: AT }, { turns: 0, stages: 0, turnList: [], stageList: [], unreadable: "custody journal unreadable" }));
+    expect(line(el)?.dataset.work).toBe("unavailable");
+    expect(text(section(el, "update"))).toContain("Cannot read agent activity: custody journal unreadable");
+    expect(text(section(el, "update"))).not.toMatch(/running: 0/);
+  });
+
+  test("a snapshot read without the work says nothing about it", () => {
+    const el = render(snapshot(available()));
+    expect(line(el)).toBeNull();
   });
 });
 
