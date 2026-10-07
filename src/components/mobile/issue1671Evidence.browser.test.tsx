@@ -8358,3 +8358,200 @@ describe("account-switch message receipts", () => {
     }
   }, 90000);
 });
+
+/* Role memory (docs/design/role-memory.md §3.1): the operator chose the rules
+   window (variant 2) and the rule line under the stage report (variant 3).
+   The fixture's pipeline-block lane gets real lessons through the store on a
+   private state directory, the window and the card read them through the real
+   routes, and the switch is driven both ways from the project's menu. */
+describe("role memory: rules window and the rule line", () => {
+  browserTest("the card's rule line, the project's switch and row, and the rules window, desktop and 390 px, en and uk", async () => {
+    const { NextRequest } = await import("next/server");
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-role-memory-browser-"));
+    const previous = { ...process.env };
+    process.env.LLV_STATE_DIR = path.join(root, "state");
+    process.env.XDG_CONFIG_HOME = path.join(root, "config");
+    const memory = await import("@/app/api/memory/settings/route");
+    const rolesRoute = await import("@/app/api/role-memory/route");
+    const lessonsRoute = await import("@/app/api/role-memory/lessons/route");
+    const store = await import("@/lib/roleMemory/store");
+    const out = path.resolve(".artifacts/role-memory-mvp");
+    fs.mkdirSync(out, { recursive: true });
+    const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+    /* The card's lane is the fixture's `p-md-decision`, whose builder stage `implement` reported. */
+    const seed = (pipelineId: string, stageId: string, minutes: number, roleId: string, lessons: Parameters<typeof store.leaveLessons>[0]["lessons"]) => {
+      store.recordLessonRequest({ pipelineId, stageId, attempt: 1, project: "atlas", roleId, conversationId: `conversation_${pipelineId}`, at: at(minutes) });
+      store.leaveLessons({ request: { pipelineId, stageId, attempt: 1 }, source: { project: "atlas", pipelineId, stageId, attempt: 1, roleId, fixRound: stageId === "fix", conversationId: `conversation_${pipelineId}` }, lessons, none: null, now: at(minutes) });
+    };
+    store.setRoleMemoryEnabled("atlas", true);
+    seed("p-search", "build", 3 * 24 * 60, "builder", [
+      { scope: "role", rule: "Before opening a pull request, check each acceptance criterion of the pinned specification against the head, one by one.", why: "A lane met its brief and failed review on a criterion only the specification named." },
+      { scope: "project", rule: "Run the test files you touched by path; a whole-directory sweep reaches live runtime state.", why: "A sweep once stopped the host of a running conversation." },
+    ]);
+    seed("p-upload", "fix", 2 * 24 * 60, "builder", [
+      { scope: "role", rule: "Keep a fix round to the handed findings and what they reveal; a wider rewrite restarts the review from zero.", why: "A fix round that also refactored drew five new findings." },
+      { scope: "machine", rule: "Give a browser started from a pipeline stage a short temporary directory for its sockets.", why: "The driver died on the socket path limit until TMPDIR was shortened." },
+    ]);
+    seed("p-ledger", "build", 30 * 60, "builder", [
+      { scope: "role", rule: "Keep a fix round to the handed findings.", why: "Restated by a later round." },
+    ]);
+    seed("p-md-decision", "implement", 41, "builder", [
+      { scope: "role", rule: "When a change adds a branch for empty, missing or zero input, write the test for that branch in the same commit as the branch.", why: "An untested empty-list path failed review twice." },
+      { scope: "role", role: "visual-critic", rule: "Judge the 390 px Ukrainian frame first: Ukrainian labels run about a third longer than English, and clipping shows there first.", why: "A button clipped only at 390 px in Ukrainian." },
+    ]);
+    const server = await serveEvidenceFixture(path.join(root, "bundle-root"), undefined, {
+      "/api/telemetry": { enabled: false, locked: false, noticeDismissed: true },
+      "/api/team": { mode: "solo", me: null, members: [], methods: {} },
+      "/api/asks-you/key": { present: true, source: "file" },
+      "/api/memory/settings": (request: Request) => request.method === "PUT" ? memory.PUT(new NextRequest(request)) : memory.GET(new NextRequest(request)),
+      "/api/role-memory": (request: Request) => request.method === "PUT" ? rolesRoute.PUT(new NextRequest(request)) : rolesRoute.GET(new NextRequest(request)),
+      "/api/role-memory/lessons": (request: Request) => lessonsRoute.GET(new NextRequest(request)),
+      /* The project's other switches on the same page answer as a quiet install would. */
+      "/api/links/shared": { known: [{ key: "atlas" }], shared: { all: false, projects: [] } },
+    });
+    let launched: Awaited<ReturnType<typeof chromium.launchServer>> | undefined;
+    let browser: Awaited<ReturnType<typeof chromium.connect>> | undefined;
+    const cases: unknown[] = [];
+    try {
+      launched = await chromium.launchServer({ executablePath: process.env.CHROME_BIN, headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+      fs.writeFileSync(path.join(root, "browser-process.json"), JSON.stringify({ pid: launched.process().pid, closed: false }));
+      browser = await chromium.connect(launched.wsEndpoint());
+      for (const lang of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        const phone = width === 390;
+        const height = phone ? 844 : 900;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=pipeline-block&header=1&rolememory=1`, { width, height }, "light", lang, "reduce", phone);
+        try {
+          /* The switch's knob and the window settle before a frame is taken. */
+          const shot = async (name: string) => { await page.waitForTimeout(350); const file = `${phone ? "phone-390" : "desktop-1440"}-${lang}-${name}.png`; await page.screenshot({ path: path.join(out, file) }); return file; };
+          const inside = (selector: string) => page.locator(selector).first().evaluate((node) => {
+            const box = node.getBoundingClientRect();
+            const clipped = [...node.querySelectorAll<HTMLElement>("*")].filter((element) => {
+              const style = getComputedStyle(element);
+              return style.overflowX === "visible" && element.scrollWidth > element.clientWidth + 1 && element.clientWidth > 0 && !element.closest("svg");
+            }).length;
+            return { left: Math.round(box.left), top: Math.round(box.top), right: Math.round(box.right), bottom: Math.round(box.bottom), boxWidth: Math.round(box.width), boxHeight: Math.round(box.height),
+              overflow: node.scrollWidth - node.clientWidth, clipped, viewport: [innerWidth, innerHeight] };
+          });
+          /* Variant 3: the rule line under the builder's report on the card. */
+          if (phone) await page.locator('[data-phone-card="task:t-mobile"]').click();
+          const line = page.locator("[data-stage-lesson='2']").locator("visible=true").first();
+          await line.waitFor({ timeout: 30_000 });
+          await line.scrollIntoViewIfNeeded();
+          expect(await line.innerText()).toContain(translate(lang, "roleMemory.line.left", { count: 2, targets: lang === "en" ? "Builder, Visual critic" : "Білдер, Критик вигляду" }));
+          const lineBox = await line.evaluate((node) => {
+            const box = node.getBoundingClientRect(); const host = node.closest(".pblock")!.getBoundingClientRect();
+            return { left: box.left, right: box.right, height: box.height, hostLeft: host.left, hostRight: host.right, overflow: node.scrollWidth - node.clientWidth };
+          });
+          expect(lineBox.left).toBeGreaterThanOrEqual(lineBox.hostLeft - 0.5);
+          expect(lineBox.right).toBeLessThanOrEqual(lineBox.hostRight + 0.5);
+          expect(lineBox.overflow).toBeLessThanOrEqual(1);
+          cases.push({ lang, width, surface: "card", line: lineBox, file: await shot("card") });
+          /* The line opens the window on its rule. */
+          await line.click();
+          await page.locator("[data-rules-window] [data-learned-rule][data-focused]").waitFor();
+          const fromCard = await inside("[data-rules-window]");
+          expect(fromCard.left).toBeGreaterThanOrEqual(0); expect(fromCard.right).toBeLessThanOrEqual(width);
+          expect(fromCard.top).toBeGreaterThanOrEqual(0); expect(fromCard.bottom).toBeLessThanOrEqual(height);
+          expect(fromCard.overflow).toBeLessThanOrEqual(1);
+          cases.push({ lang, width, surface: "window-from-card", ...fromCard, file: await shot("window-from-card") });
+          await page.locator("[data-rules-window-close]").click();
+          await page.locator("[data-rules-window]").waitFor({ state: "detached" });
+          /* Variant 5: the stage's own conversation, as its agent saw it — the rules below the brief, the request in stage_report's answer, then leave_lesson. A tall window holds each part whole. */
+          await page.setViewportSize({ width, height: 1800 });
+          if (phone) await page.locator('[data-phone-task-lane="p-md-decision"] [data-open-conversation="implement"]').click();
+          else await page.locator('[data-kanban-board] .card[data-id="task:t-mobile"] [data-stage="implement"]').first().click();
+          /* The launch message folds after its first lines; open it whole. */
+          const fold = page.getByText(/\(\d[\d\s,]* (chars|симв\.)\)/).locator("visible=true").first();
+          await fold.waitFor({ timeout: 20_000 });
+          await fold.click();
+          const heading = page.getByText("Learned rules (Delegatus role memory)").locator("visible=true").first();
+          await heading.waitFor();
+          const reveal = async (target: ReturnType<typeof page.locator>) => { await target.evaluate((node) => node.scrollIntoView({ block: "start" })); await page.waitForTimeout(300); await target.evaluate((node) => node.scrollIntoView({ block: "start" })); };
+          /* A tool call's JSON scrolls inside its own box: bring the named line to the top of every scroller around it. */
+          const revealText = (needle: string) => page.evaluate((text) => {
+            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+            for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+              const at = node.textContent?.indexOf(text) ?? -1;
+              if (at < 0 || !(node.parentElement?.getBoundingClientRect().width)) continue;
+              const range = document.createRange(); range.setStart(node, at); range.setEnd(node, at + text.length);
+              for (let element: HTMLElement | null = node.parentElement; element; element = element.parentElement) {
+                if (element.scrollHeight > element.clientHeight + 1 && /auto|scroll/.test(getComputedStyle(element).overflowY)) element.scrollTop += range.getBoundingClientRect().top - element.getBoundingClientRect().top - 8;
+              }
+              return true;
+            }
+            return false;
+          }, needle);
+          await reveal(heading);
+          cases.push({ lang, width, surface: "stage-start", file: await shot("stage-start") });
+          /* stage_report opened: the request for a lesson in its answer. */
+          await page.getByText(/MCP tool: stage_report/).locator("visible=true").last().click();
+          const request = page.getByText("lessonRequest").locator("visible=true").first();
+          await request.waitFor();
+          await reveal(request);
+          expect(await revealText('"lessonRequest"')).toBe(true);
+          await page.waitForTimeout(200);
+          cases.push({ lang, width, surface: "stage-request", file: await shot("stage-request") });
+          await page.getByText(/MCP tool: stage_report/).locator("visible=true").last().click();
+          /* leave_lesson opened: the lessons the agent left. */
+          await page.getByText(/MCP tool: leave_lesson/).locator("visible=true").last().click();
+          const lessonsArg = page.getByText(/"lessons": \[/).locator("visible=true").first();
+          await lessonsArg.waitFor();
+          await reveal(page.getByText(/MCP tool: leave_lesson/).locator("visible=true").last());
+          expect(await revealText('"lessons": [')).toBe(true);
+          await page.waitForTimeout(200);
+          cases.push({ lang, width, surface: "stage-lesson", file: await shot("stage-lesson") });
+          await page.setViewportSize({ width, height });
+          /* Variant 2's switch and row, among the project's switches: the board's ⋯ → «Learned rules» on the desktop, the ⋯ sheet's project rules on the phone. */
+          const container = phone ? "[data-mobile2-sheet='menu']" : "[data-bar-more-menu]";
+          await page.goto(`${server.base}?scenario=pipeline-block&header=1&rolememory=1`);
+          if (phone) {
+            await page.locator('[data-mobile2-open="menu"]').first().click();
+            await page.locator('[data-mobile2-menu-row="rules"]').click();
+          } else {
+            await page.locator('[data-kanban-board] [data-bar="project"] [data-bar-more]').click();
+            await page.locator('[data-kanban-board] [data-bar-more][aria-expanded="true"]').waitFor();
+            await page.locator('[data-bar-more-menu] [data-bar-menu-head="learned-rules"]').click();
+          }
+          await page.locator("[data-learned-rules-settings] [data-learned-rules-count]").filter({ hasText: translate(lang, "roleMemory.count", { count: 6 }) }).waitFor();
+          await page.locator("[data-learned-rules-settings]").scrollIntoViewIfNeeded();
+          await page.waitForFunction(() => document.querySelector("[data-learned-rules-switch]")?.getAttribute("aria-checked") === "true");
+          /* Nothing in the row is cut, in either language. */
+          expect(await page.locator("[data-learned-rules-settings] .truncate").evaluateAll((nodes) => nodes.filter((node) => node.scrollWidth > node.clientWidth + 1).length)).toBe(0);
+          const menu = await inside(container);
+          expect(menu.left).toBeGreaterThanOrEqual(0); expect(menu.right).toBeLessThanOrEqual(width);
+          expect(menu.bottom).toBeLessThanOrEqual(height);
+          expect(menu.overflow).toBeLessThanOrEqual(1);
+          cases.push({ lang, width, surface: "project-menu", ...menu, file: await shot("project-menu") });
+          /* Switching the project off is stored; on again restores it. */
+          const control = page.locator("[data-learned-rules-switch]");
+          expect(await control.getAttribute("aria-checked")).toBe("true");
+          await control.click();
+          await page.waitForFunction(() => document.querySelector("[data-learned-rules-switch]")?.getAttribute("aria-checked") === "false");
+          expect(store.roleMemoryEnabled("atlas")).toBe(false);
+          await page.waitForFunction(() => !document.querySelector<HTMLButtonElement>("[data-learned-rules-switch]")?.disabled);
+          await control.click();
+          await page.waitForFunction(() => document.querySelector("[data-learned-rules-switch]")?.getAttribute("aria-checked") === "true");
+          expect(store.roleMemoryEnabled("atlas")).toBe(true);
+          /* The window from the row: the builder scope, its rules as coloured blocks, and the merged rule on the right. */
+          await page.locator("[data-learned-rules-open]").click();
+          await page.locator("[data-rules-window] [data-learned-rule]").first().waitFor();
+          expect(await page.locator("[data-rules-window] [data-left-rule]").count()).toBe(1);
+          const window = await inside("[data-rules-window]");
+          expect(window.right).toBeLessThanOrEqual(width); expect(window.bottom).toBeLessThanOrEqual(height);
+          expect(window.overflow).toBeLessThanOrEqual(1);
+          cases.push({ lang, width, surface: "window", ...window, file: await shot("window") });
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/role-memory-mvp", { recursive: true });
+      fs.writeFileSync("evidence/role-memory-mvp/geometry.json", JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", frames: ".artifacts/role-memory-mvp", cases }, null, 2) + "\n");
+    } finally {
+      await browser?.close(); await launched?.close(); server.stop();
+      fs.writeFileSync(path.join(root, "browser-process.json"), JSON.stringify({ pid: launched?.process().pid, closed: true }));
+      for (const name of ["LLV_STATE_DIR", "XDG_CONFIG_HOME"]) {
+        if (previous[name] === undefined) delete process.env[name]; else process.env[name] = previous[name];
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }, 240_000);
+});

@@ -102,7 +102,9 @@ import { composeStageInput } from "./stageInput";
 import { renderStagePrompt } from "./prompts";
 import { PIPELINE_ROLE_IDS, pipelineRoleLookup, resolvePipelineRole, stageRuntimeIsExplicit, validatePipelineRoleParams, type PipelineRoleLookup } from "./roles";
 import { isReadOnlyLockedRole } from "@/lib/roles/locks";
-import { launchSizingRefusal, reviewGateRefusal, type Briefer, type LaunchRuntime } from "@/lib/roles/sizing";
+import { learnedRulesForLaunch } from "@/lib/roleMemory/stage";
+import { withLearnedRules } from "@/lib/roleMemory/launch";
+import { isReviewGate, launchSizingRefusal, reviewGateRefusal, type Briefer, type LaunchRuntime } from "@/lib/roles/sizing";
 import { conversationRuntime } from "@/lib/agent/conversationRuntime";
 import { normalizeStageOutputPath } from "./stageAccess";
 import { settlePendingStageProvenance, stageProvenanceFence } from "./stageProvenance";
@@ -252,6 +254,10 @@ export interface PipelinePorts {
     /** Prior-attempt conversation this stage retry terminally supersedes
         (issue #383); attempt chains become round chains automatically. */
     supersedes?: string | null;
+    /** Role memory's learned rules (docs/design/role-memory.md §3.1), expanded
+        into the prompt only at dispatch. Never part of the persisted input or
+        the request digest, so no pipeline record holds rule text. */
+    learnedRules?: string | null;
   }, onReserved: (reservation: PipelineStageLaunchReservation) => void | Promise<void>): Promise<PipelineStageSpawn>;
   spawnReceipt(launchId: string): PipelineSpawnReceipt | null;
   /** Fresh keyed state at an asynchronous retry boundary. */
@@ -473,13 +479,6 @@ function sizingBriefer(briefer: PipelineBriefer, fallbackConversationId: string 
   if (briefer.kind === "operator") return briefer;
   const conversationId = briefer.conversationId ?? fallbackConversationId;
   return { kind: "agent", runtime: conversationId ? ports.conversationRuntime?.(conversationId) ?? null : null };
-}
-
-/** A stage that judges another stage's work, which R1 reads as reviewer work
-    whatever role it names: a review-loop stage, or the stage a conversion
-    made of one, which carries the fail edge to its fix stage. */
-function isReviewGate(stage: Pick<PipelineStage, "kind" | "onFail">): boolean {
-  return stage.kind === "review-loop" || Boolean(stage.onFail);
 }
 
 /** The sizing rules (docs/design/model-sizing-tiers.md §2) over stages already
@@ -740,7 +739,7 @@ async function spawnPipelineAgent(
       receipt: begun.receipt,
       spec,
       account,
-      "prompt": input.prompt,
+      "prompt": withLearnedRules(input.prompt, input.learnedRules),
       registry,
       client,
     });
@@ -4693,6 +4692,11 @@ async function spawnRunStage(
     }
     let spawned: PipelineStageSpawn | null = null;
     let spawnAttempt = 0;
+    /* Read once per activation, after the composer: a clean stage or a project
+       with the switch off gets none, and a failed read never holds a launch. */
+    let learnedRules: string | null = null;
+    try { learnedRules = learnedRulesForLaunch(pipeline, stage, attempt.effectiveRole.roleId ?? null); }
+    catch (error) { console.warn(`[role-memory] learned rules unavailable for ${pipeline.id}/${stage.id}: ${error instanceof Error ? error.message : String(error)}`); }
     /* Set when the spawn reached host publication and found no controller.
        The activation leaves the loop for the wall-clock wait below rather
        than sleeping here, so it costs the pipelines phase nothing. */
@@ -4729,6 +4733,7 @@ async function spawnRunStage(
         spawned = await ports.spawnAgent({
           ...spawnInput,
           clientAttemptId: callId,
+          ...(learnedRules ? { learnedRules } : {}),
         }, async (reservation) => {
           if (attempt.activation) attempt.activation.phase = "dispatching";
           attempt.launchId = reservation.launchId;

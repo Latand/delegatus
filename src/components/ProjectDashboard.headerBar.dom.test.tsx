@@ -557,11 +557,12 @@ test("⋯ draws no rule next to a group with nothing in it", async () => {
   expect(menu.querySelector('[role="separator"]')).toBeNull();
   /* #2187 §6: the project's merge setting stays when Archive and Delete stand
      down, and its Bridge reports setting (#2146): two sections of ⋯, each a
-     page. The section whose rows all stood down draws nothing. */
+     page, and role memory's switch with the way into its rules window. The
+     section whose rows all stood down draws nothing. */
   const rowsOf = (section: string) => Array.from(menu.querySelector(`[data-bar-menu-body="${section}"]`)?.children ?? []).map((child) =>
     child.hasAttribute("data-merge-on-review") ? "merge" : child.querySelector("[data-share-project-switch]") ? "share" : child.querySelector("[data-bridge-reports-switch]") ? "bridge" : child.querySelector("[data-asks-you-switch]") ? "asks" : child.tagName);
   expect([rowsOf("merging"), rowsOf("seat"), rowsOf("project")]).toEqual([["merge", "share"], ["bridge", "asks"], []]);
-  expect(Array.from(menu.querySelectorAll("[data-bar-menu-head]")).map((head) => [head.getAttribute("data-bar-menu-head"), head.getAttribute("data-bar-menu-opens")])).toEqual([["merging", "page"], ["seat", "page"], ["project", "place"]]);
+  expect(Array.from(menu.querySelectorAll("[data-bar-menu-head]")).map((head) => [head.getAttribute("data-bar-menu-head"), head.getAttribute("data-bar-menu-opens")])).toEqual([["merging", "page"], ["seat", "page"], ["learned-rules", "page"], ["project", "place"]]);
   /* A page replaces the list: its own rows and a back row, nothing else. */
   flushSync(() => (menu.querySelector('[data-bar-menu-head="seat"]') as HTMLElement).click());
   expect(menu.getAttribute("data-bar-menu-view")).toBe("seat");

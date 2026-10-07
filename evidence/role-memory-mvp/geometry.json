@@ -1,0 +1,350 @@
+{
+  "driver": "src/components/mobile/issue1671Evidence.browser.test.tsx",
+  "frames": ".artifacts/role-memory-mvp",
+  "cases": [
+    {
+      "lang": "en",
+      "width": 1440,
+      "surface": "card",
+      "line": {
+        "left": 582,
+        "right": 1010,
+        "height": 53.53125,
+        "hostLeft": 582,
+        "hostRight": 1010,
+        "overflow": 0
+      },
+      "file": "desktop-1440-en-card.png"
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "surface": "window-from-card",
+      "left": 160,
+      "top": 90,
+      "right": 1280,
+      "bottom": 810,
+      "boxWidth": 1120,
+      "boxHeight": 720,
+      "overflow": 0,
+      "clipped": 0,
+      "viewport": [
+        1440,
+        900
+      ],
+      "file": "desktop-1440-en-window-from-card.png"
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "surface": "stage-start",
+      "file": "desktop-1440-en-stage-start.png"
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "surface": "stage-request",
+      "file": "desktop-1440-en-stage-request.png"
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "surface": "stage-lesson",
+      "file": "desktop-1440-en-stage-lesson.png"
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "surface": "project-menu",
+      "left": 948,
+      "top": 44,
+      "right": 1204,
+      "bottom": 196,
+      "boxWidth": 256,
+      "boxHeight": 152,
+      "overflow": 0,
+      "clipped": 0,
+      "viewport": [
+        1440,
+        900
+      ],
+      "file": "desktop-1440-en-project-menu.png"
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "surface": "window",
+      "left": 160,
+      "top": 90,
+      "right": 1280,
+      "bottom": 810,
+      "boxWidth": 1120,
+      "boxHeight": 720,
+      "overflow": 0,
+      "clipped": 0,
+      "viewport": [
+        1440,
+        900
+      ],
+      "file": "desktop-1440-en-window.png"
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "surface": "card",
+      "line": {
+        "left": 56,
+        "right": 368,
+        "height": 53.53125,
+        "hostLeft": 12,
+        "hostRight": 378,
+        "overflow": 0
+      },
+      "file": "phone-390-en-card.png"
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "surface": "window-from-card",
+      "left": 0,
+      "top": 0,
+      "right": 390,
+      "bottom": 844,
+      "boxWidth": 390,
+      "boxHeight": 844,
+      "overflow": 0,
+      "clipped": 0,
+      "viewport": [
+        390,
+        844
+      ],
+      "file": "phone-390-en-window-from-card.png"
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "surface": "stage-start",
+      "file": "phone-390-en-stage-start.png"
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "surface": "stage-request",
+      "file": "phone-390-en-stage-request.png"
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "surface": "stage-lesson",
+      "file": "phone-390-en-stage-lesson.png"
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "surface": "project-menu",
+      "left": 0,
+      "top": 289,
+      "right": 390,
+      "bottom": 844,
+      "boxWidth": 390,
+      "boxHeight": 555,
+      "overflow": 0,
+      "clipped": 0,
+      "viewport": [
+        390,
+        844
+      ],
+      "file": "phone-390-en-project-menu.png"
+    },
+    {
+      "lang": "en",
+      "width": 390,
+      "surface": "window",
+      "left": 0,
+      "top": 0,
+      "right": 390,
+      "bottom": 844,
+      "boxWidth": 390,
+      "boxHeight": 844,
+      "overflow": 0,
+      "clipped": 0,
+      "viewport": [
+        390,
+        844
+      ],
+      "file": "phone-390-en-window.png"
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "surface": "card",
+      "line": {
+        "left": 582,
+        "right": 1010,
+        "height": 53.53125,
+        "hostLeft": 582,
+        "hostRight": 1010,
+        "overflow": 0
+      },
+      "file": "desktop-1440-uk-card.png"
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "surface": "window-from-card",
+      "left": 160,
+      "top": 90,
+      "right": 1280,
+      "bottom": 810,
+      "boxWidth": 1120,
+      "boxHeight": 720,
+      "overflow": 0,
+      "clipped": 0,
+      "viewport": [
+        1440,
+        900
+      ],
+      "file": "desktop-1440-uk-window-from-card.png"
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "surface": "stage-start",
+      "file": "desktop-1440-uk-stage-start.png"
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "surface": "stage-request",
+      "file": "desktop-1440-uk-stage-request.png"
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "surface": "stage-lesson",
+      "file": "desktop-1440-uk-stage-lesson.png"
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "surface": "project-menu",
+      "left": 948,
+      "top": 44,
+      "right": 1204,
+      "bottom": 214,
+      "boxWidth": 256,
+      "boxHeight": 170,
+      "overflow": 0,
+      "clipped": 0,
+      "viewport": [
+        1440,
+        900
+      ],
+      "file": "desktop-1440-uk-project-menu.png"
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "surface": "window",
+      "left": 160,
+      "top": 90,
+      "right": 1280,
+      "bottom": 810,
+      "boxWidth": 1120,
+      "boxHeight": 720,
+      "overflow": 0,
+      "clipped": 0,
+      "viewport": [
+        1440,
+        900
+      ],
+      "file": "desktop-1440-uk-window.png"
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "surface": "card",
+      "line": {
+        "left": 56,
+        "right": 368,
+        "height": 53.53125,
+        "hostLeft": 12,
+        "hostRight": 378,
+        "overflow": 0
+      },
+      "file": "phone-390-uk-card.png"
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "surface": "window-from-card",
+      "left": 0,
+      "top": 0,
+      "right": 390,
+      "bottom": 844,
+      "boxWidth": 390,
+      "boxHeight": 844,
+      "overflow": 0,
+      "clipped": 0,
+      "viewport": [
+        390,
+        844
+      ],
+      "file": "phone-390-uk-window-from-card.png"
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "surface": "stage-start",
+      "file": "phone-390-uk-stage-start.png"
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "surface": "stage-request",
+      "file": "phone-390-uk-stage-request.png"
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "surface": "stage-lesson",
+      "file": "phone-390-uk-stage-lesson.png"
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "surface": "project-menu",
+      "left": 0,
+      "top": 289,
+      "right": 390,
+      "bottom": 844,
+      "boxWidth": 390,
+      "boxHeight": 555,
+      "overflow": 0,
+      "clipped": 0,
+      "viewport": [
+        390,
+        844
+      ],
+      "file": "phone-390-uk-project-menu.png"
+    },
+    {
+      "lang": "uk",
+      "width": 390,
+      "surface": "window",
+      "left": 0,
+      "top": 0,
+      "right": 390,
+      "bottom": 844,
+      "boxWidth": 390,
+      "boxHeight": 844,
+      "overflow": 0,
+      "clipped": 0,
+      "viewport": [
+        390,
+        844
+      ],
+      "file": "phone-390-uk-window.png"
+    }
+  ]
+}

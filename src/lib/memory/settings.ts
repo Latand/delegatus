@@ -14,8 +14,12 @@ function settings(): Record<string, boolean> {
     return value;
   } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return {}; throw error; }
 }
+/** Whether a project is this repository, which starts with memory switched on. */
+export function isOwnProject(project: string): boolean {
+  return Boolean(ownProject) && canonicalProject(project) === canonicalProject(ownProject!);
+}
 export function sharedMemoryEnabled(project: string): boolean {
-  try { const key = canonicalProject(project); return settings()[key] ?? (Boolean(ownProject) && key === canonicalProject(ownProject!)); }
+  try { return settings()[canonicalProject(project)] ?? isOwnProject(project); }
   catch { return false; }
 }
 export function setSharedMemoryEnabled(project: string, enabled: boolean) {

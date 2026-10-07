@@ -748,90 +748,108 @@ The prototypes compare a line of its own with a count inside the report line.
 
 ## 3. The MVP and the slices after it
 
-### 3.1 MVP — what gets built
+### 3.1 MVP — what gets built (simplified)
 
-1. **Store**: the three collections (2.2), the scope keys, rendering and the
-   10 000 bound, revisions, and the versioned two-collection write every change
-   goes through.
-2. **Write path**: `leave_lesson` on the MCP server, forwarded to the Viewer;
-   `lessonRequest` on the accepted `stage_report` answer for eligible roles; one
-   sentence in the stage wrapper; rule ids on the attempt; privacy hints (2.9).
-3. **Exclusion**: `learnedMemoryExcluded` and its four call sites: the block
-   and request, the shared-memory controller for every turn, Claude's
-   per-launch settings and environment, Codex's launch flags; the two native
-   probes (2.3).
-4. **Consolidation**: triggers, the headless run, the partition contract and
-   its check, the frozen input and the commit against a moving scope, rewrite,
-   merge and archive records, cancellation when the switch goes off (2.5, 2.8).
-5. **Injection**: `definition.memory` at binding, the marker in
-   `renderStagePrompt`, expansion at the spawn port with the out-of-checkout
-   file for a block that does not fit (2.6).
-6. **Egress**: `privateMemorySpans`, the fingerprint file, and the call sites of
-   the table in 2.9.
-7. **Controls**: the switch with its data-flow line, the scope rows and pages
-   with edit, archive, restore, add, "May be published" and "Consolidate now"
-   on the Memory page, desktop and phone; the line under the stage report (2.8,
-   2.10).
-8. **A test aid**: `scripts/role-memory.ts`, run against the Viewer's own
-   routes with the operator's control key, as `scripts/rebuild-http.ts` is
-   (AGENTS.md, "Host deploy command and team authentication"):
-   - `show --repo <path> [--scope builder|project|machine]` prints each scope's
-     revisions: number, author, size, and the dispositions of a consolidation.
-     `show --stage <pipeline>:<stage>` prints what the stage's launch received:
-     the revisions it froze, or why it was excluded and which shared and native
-     memory paths were closed for it.
-   - `fill --repo <path> --scope builder` adds one fixed batch of forty
-     synthetic lessons as pending in a single revision, starts exactly one
-     consolidation, waits for it at most six minutes, and prints the verdict:
-     installed (size ≤ 10 000; the dispositions add up to the input count) or
-     refused (the reason). `--retry` runs one more consolidation; `--archive`
-     archives the batch in one action.
-   - `probe --repo <path> --rule <id>` passes the rule's text through every call
-     site of the 2.9 table in-process (the hook checks, the shim check, the
-     task mutation check, `encodeTask`, the bridge renderer, the prototype and
-     issue checks, the stage report rewrite) and prints one verdict per path.
-   - `scan --canary <text>` searches the pipeline records in `state.sqlite`
-     (attempt inputs, activations, outputs), the linked-board outbox and the
-     bridge report log for the canary and prints the count per place.
+The operator asked for an MVP «без фантазий», and the design's own challenger
+noted that the plan below had grown to three lanes. The orchestrator cut it on
+2026-10-07 to one lane, and the operator chose the surfaces the same day
+(prototype review round 2: variants 2, 3 and 5, with the comment «Треба, щоб не
+було дуже багато тексту. І зайвої інформації.»). This is what the lane builds.
 
-Tests that ship with it, all against isolated state:
+1. **Store.** One collection, `role_memory`, in `state.sqlite` through
+   `SqliteStateCollection` (`src/lib/roleMemory/store.ts`): rule rows, one row
+   per scope with its active list, revision and history, one row per stage
+   attempt that was asked for a lesson, and one row per project switch. Scopes
+   are `role:<project>:<roleId>`, `project:<project>` and `machine`, with the
+   canonical project key. Each scope renders to at most 10 000 code points.
+   Rule rows are never deleted. Nothing is written into a repository, a pull
+   request, an issue, a linked board or a bridge or relay payload.
+2. **Write path.** `stage_report`'s answer gains `lessonRequest` (the prompt of
+   2.4, shortened, as lines) on the first accepted report of an eligible
+   attempt in a project whose switch is on; a fix round's request names the
+   findings it was handed. The new MCP tool `leave_lesson` takes one to three
+   lessons (`scope` role, project or machine, an optional `role` with scope
+   role, `rule` of 20–300 characters, `why` of at most 160) or `none` with one
+   line. The server resolves the calling conversation to its attempt and takes
+   every piece of provenance from the pipeline record. The static privacy
+   detectors run over each lesson as hints: a match marks the rule ("check the
+   text") and never refuses it. Instead of a sentence in the stage wrapper, the
+   injected block itself tells the agent that the request will come, so
+   `renderStagePrompt` and its byte-stable re-render are untouched.
+3. **Who stays clean.** `learnedMemoryExcluded` (`src/lib/roleMemory/policy.ts`):
+   role reviewer, verifier or issue-reporter, or any stage the engine
+   classifies as a review gate (`isReviewGate`, now exported from
+   `src/lib/roles/sizing.ts` and read by both the engine and role memory: a
+   review-loop stage, or a stage with a fail edge), whatever role it names.
+   Such a stage gets no block and no request, `leave_lesson` refuses it, and no
+   lesson may be addressed to a clean role. The visual critic is not excluded
+   by role (2.3): it reads and writes its rules when it runs as an ordinary
+   stage, and like any role it stays clean when its stage carries a fail edge.
+4. **Consolidation, without a model.** On every append, in the same
+   transaction: a lesson that restates an active rule of its scope (nearly the
+   same words, or one inside the other) merges with it and the fuller text
+   survives; then, while the scope is over 10 000 characters, its oldest rule
+   is archived with the reason "budget". A merged or archived rule keeps its
+   record, its state, its reason and its successor, and the rules window shows
+   it under "Left the rules". Nothing is dropped for disuse.
+5. **Injection.** The engine reads the block once per activation in
+   `spawnRunStage` (`learnedRulesForLaunch`) and hands it to the spawn port as
+   `learnedRules`, a field that is neither persisted on the attempt nor part of
+   the request digest. The production port expands it into the prompt only at
+   dispatch (`withLearnedRules` in `spawnPipelineAgent`), below the brief and
+   the role scaffold and above the controller's lines, labelled "Learned rules
+   (Delegatus role memory)" with every rule's id. A block that would push the
+   message past the 32 000-byte envelope is written to
+   `statePath("role-memory/launch/learned-rules-<sha256>.md")`, mode 0600, and
+   the message points at it. No pipeline record, attempt input or composer
+   artifact in the checkout holds rule text.
+6. **Controls.** The Memory page (header menu → Settings → Memory) gains the
+   switch "Learned rules for this project" and one row, "Learned rules · n
+   rules · +k today", whose Open button shows the rules window (variant 2):
+   scopes on the left, the scope's rules as coloured blocks in the middle with
+   their size against 10 000, and what left the rules on the right; on the
+   phone a full-screen sheet with the scopes as chips. Under a stage report on
+   the card, one coloured line (variant 3): "Left 2 rules → Builder, Visual
+   critic" with the first rule, which opens the window on that rule, or a quiet
+   "No rule left" once the turn ended without one; a clean stage draws
+   nothing. The switch is on by default for this repository and off for every
+   other project. Switching it off stops both the request and the injection;
+   stored rules stay.
+7. **Privacy for the MVP** is the abstract-rule instruction in the request and
+   in the block, the detector hints, and the existing publication privacy
+   gate on everything published.
 
-- rendering and the bound in code points;
-- the partition check: every refusal reason, including an omitted id, a
-  duplicate, an id in two dispositions, a one-source merge, a rewrite without a
-  reason, a pinned id outside `kept`;
-- consolidation against a moving scope: a model answer held while an append, an
-  operator edit, an archive, a pin and a second consolidation each land, with
-  the expected rebase or discard, and a crash injected between the rule write
-  and the revision write (`injectStateWriteFaultForTests`) that leaves the
-  scope at its earlier revision with every acknowledged change present;
-- injection: byte-stable activation re-render and replay with frozen
-  revisions; the maximum three scopes in English and in Ukrainian launching and
-  replaying byte-identically; a canary rule absent from every file in the
-  checkout, ignored artifacts included, and from every persisted pipeline
-  prompt payload;
-- exclusion: a reviewer, a verifier and an issue-reporter stage on each engine
-  receive no block, no request, no shared memory at launch or on an operator
-  follow-up, and launch with native memory off; `leave_lesson` refuses them;
-- egress: an unflagged synthetic rule and its reason refused or replaced at
-  every call site of the 2.9 table; a paraphrase passing; a rule marked "May be
-  published" passing;
-- `leave_lesson` provenance taken from the server resolution; a refused
-  consolidation leaving the scope unchanged; a switched-off project's queued
-  consolidation cancelled and its running answer discarded.
+Tests on isolated state: the bound in code points, merge and archive with the
+dropped rule visible, the lane path through the real engine (a review's finding
+makes the fixer's request name it, the fixer's rule reaches a fresh builder's
+launch and no persisted pipeline record, reviewers get nothing, the switch
+stops both), `leave_lesson` and `lessonRequest` through the MCP service, and the
+oversized block as a file outside the checkout. Rendered evidence goes through
+the existing phone driver (`issue1671Evidence.browser.test.tsx`) over the
+kanban fixture, desktop and 390 px, English and Ukrainian.
 
-**Size.** This is three lanes, built in order, each mergeable alone:
+**Later.** Each of these is in sections 2.2–2.9 above and waits for a slice of
+its own:
 
-1. Store, consolidation and the egress function with its fingerprint file
-   (items 1, 4, 6 without the call sites outside the store).
-2. Write path, exclusion, injection and the egress call sites (items 2, 3, 5,
-   6), behind the switch, which starts off for every project until lane 3.
-3. Controls and the test aid (items 7, 8), which turns the switch on for this
-   repository.
-
-The launch, privacy and transaction seams in lane 2 touch shared code (the
-spawn port, the Git guard, the task and bridge encoders); a one-lane cut would
-put all of it in one review.
+- The egress system of 2.9: `privateMemorySpans` and its known-value matching
+  over every rule and reason, the HMAC fingerprint file for processes outside
+  the Viewer, the `commit-msg` and `pre-push` checks in the agent Git guard,
+  the `gh` shim extended to `pr`, `issue` and `api` bodies, the scans of staged
+  blobs and pushed ranges, the checks on task text, linked-board sync, bridge
+  reports, prototype reviews and issue reports, and the replacement of a quoted
+  rule by its id in stage reports and relays.
+- Consolidation by a model (2.5): the headless Codex turn, the partition
+  contract and its server check, the frozen input and the commit against a
+  moving scope, rewrites with before and after.
+- Closing shared memory and the engines' native memory for clean stages (2.3):
+  the `UserPromptSubmit` controller on every turn, Claude's
+  `autoMemoryEnabled` and Codex's `--disable memories` at launch, and the
+  native probes.
+- Revisions frozen at binding and the marker in the stage prompt (2.6): the
+  MVP reads the current rules at each activation.
+- Operator editing: add, edit, pin, archive and restore a rule, "May be
+  published" and "Consolidate now".
+- The test aid `scripts/role-memory.ts` (`show`, `fill`, `probe`, `scan`).
 
 ### 3.2 Slice 2
 
@@ -942,6 +960,13 @@ cramped, variant 2's window is the desktop alternative, entered from the same
 row.
 
 ## 5. Test plan for the operator (D3)
+
+For the MVP as built (3.1): steps 1–5, 7 and 10 apply, read on the Memory
+page's rules window and on the card instead of `scripts/role-memory.ts`, and
+step 1 adds no rule by hand, since editing waits for a later slice. Of step 6
+only the recheck's first message applies; closing shared and native memory
+waits. Steps 8 and 9 test the deferred egress system and model consolidation
+and wait for them; the MVP's bound is exercised by its tests.
 
 About fifty minutes and at most an hour, on a local repository with no
 remote, so nothing reaches GitHub. A pipeline with the default `publication: "internal"` never pushes or
