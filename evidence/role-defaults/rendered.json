@@ -12,6 +12,12 @@
           "nudge": false
         },
         {
+          "id": "visual-critic",
+          "effort": "high",
+          "cost": "heavy",
+          "nudge": false
+        },
+        {
           "id": "architect",
           "effort": "xhigh",
           "cost": "very-heavy",
@@ -27,6 +33,12 @@
           "id": "merger",
           "effort": "high",
           "cost": "heavy",
+          "nudge": false
+        },
+        {
+          "id": "issue-reporter",
+          "effort": "high",
+          "cost": "moderate",
           "nudge": false
         }
       ],
@@ -44,6 +56,12 @@
           "nudge": false
         },
         {
+          "id": "visual-critic",
+          "effort": "high",
+          "cost": "heavy",
+          "nudge": false
+        },
+        {
           "id": "architect",
           "effort": "xhigh",
           "cost": "very-heavy",
@@ -59,6 +77,12 @@
           "id": "merger",
           "effort": "high",
           "cost": "heavy",
+          "nudge": false
+        },
+        {
+          "id": "issue-reporter",
+          "effort": "high",
+          "cost": "moderate",
           "nudge": false
         }
       ],
@@ -76,6 +100,12 @@
           "nudge": false
         },
         {
+          "id": "visual-critic",
+          "effort": "high",
+          "cost": "heavy",
+          "nudge": false
+        },
+        {
           "id": "architect",
           "effort": "xhigh",
           "cost": "very-heavy",
@@ -91,6 +121,12 @@
           "id": "merger",
           "effort": "high",
           "cost": "heavy",
+          "nudge": false
+        },
+        {
+          "id": "issue-reporter",
+          "effort": "high",
+          "cost": "moderate",
           "nudge": false
         }
       ],
@@ -108,6 +144,12 @@
           "nudge": false
         },
         {
+          "id": "visual-critic",
+          "effort": "high",
+          "cost": "heavy",
+          "nudge": false
+        },
+        {
           "id": "architect",
           "effort": "xhigh",
           "cost": "very-heavy",
@@ -123,6 +165,12 @@
           "id": "merger",
           "effort": "high",
           "cost": "heavy",
+          "nudge": false
+        },
+        {
+          "id": "issue-reporter",
+          "effort": "high",
+          "cost": "moderate",
           "nudge": false
         }
       ],

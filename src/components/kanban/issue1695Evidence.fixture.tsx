@@ -1,3 +1,6 @@
+import { issueReportApprovalDrafts } from "@/lib/issueReports/approvalReply";
+import { issueReportPreviewText } from "@/lib/issueReports/previewText";
+import type { IssueReportFinding } from "@/lib/issueReports/scrub";
 import { enqueueOutbox, OUTBOX_LIMIT, readOutbox, seedLaunchOutbox, updateOutbox } from "@/components/conversation/outbox";
 import { DeputyBlock } from "@/components/conversation/DeputyBlock";
 import { SeatDeputyChip } from "@/components/orchestrator/SeatDeputyChip";
@@ -82,6 +85,12 @@ const ACCOUNTS = SCENARIO === "accounts" || TIER_LIMITS;
    builds on the stages board, which carries the «Not on a task» divider and a
    conversation with no task, for the insets of #2185. */
 const AGENT_REPORT = SCENARIO === "agent-report";
+/* PR #2530: the seat read a bug report's preview back and offers the replies.
+   `many` carries every kind of span a hint quotes, `none` no hint, `long` a
+   text several screens tall and `legacy` a preview stored without a judgment. */
+const REPORT_PREVIEW = AGENT_REPORT ? new URLSearchParams(location.search).get("report-preview") : null;
+const REPORT_PREVIEW_DIGEST = "a".repeat(64);
+const reportPreviewLanguage = () => (localStorage.getItem("llv_lang") === "uk" ? "uk" : "en");
 const STAGES = SCENARIO === "stages" || ACCOUNTS || AGENT_REPORT;
 /* The pipeline block in variant B (#2072 slice 3, docs/design/desktop-flat-cards.md §9):
    the variant renders' cards, with Ukrainian content when the page is uk. */
@@ -1997,6 +2006,76 @@ function transcriptOf(pathname: string): string {
       said(2 * MIN, "Search: the verifier passed on the second attempt. Nothing needs you."),
     ].join("\n")}\n`;
   }
+  if (REPORT_PREVIEW && file === orchestrator) {
+    /* Documentation-range addresses and invented names; the path and the token are joined here so no line of this file holds one. */
+    const path = ["", "home", "someone", ".config", "app", "state", "launches.json"].join("/");
+    const token = ["ghp", "0123456789abcdefghijklmnopqrstuvwxyzAB"].join("_");
+    const symptom = 'The tool answered "connection refused during startup".';
+    const expected = "## Expected behaviour\nThe requested agent starts.";
+    const bodies: Record<string, string> = {
+      many: [
+        "## Symptom", symptom, "",
+        "> the operator said the second project should start first", "",
+        "## Evidence",
+        `It read ${path} for the launch.`,
+        "The host answered from 203.0.113.22:8898 and from 198.51.100.7.",
+        `Contact someone@example.org for the trace; token ${token} was in the header.`,
+        "![screenshot of the board](board.png)", "",
+        expected,
+      ].join("\n"),
+      long: [
+        "## Symptom", symptom, "",
+        ...Array.from({ length: 9 }, (_, step) => `## Step ${step + 1}\nThe seat asked for an agent on the second project, the launch was admitted, and a moment later the tool answered that the requested launch cannot start while another one holds the project. Nothing else was running at that time.\n`),
+        "## What the tool printed", "```", "launch refused: the project is held", "retry after the holder finishes", "```", "",
+        "| Attempt | Answer |", "| --- | --- |", "| first | refused |", "| second | refused |", "",
+        expected,
+      ].join("\n"),
+    };
+    const title = REPORT_PREVIEW === "long"
+      ? "Delegatus refuses a requested launch on the second project while nothing holds it, and the refusal names a holder that finished long before the request"
+      : "Delegatus refuses a requested launch";
+    const body = bodies[REPORT_PREVIEW] ?? `## Symptom\n${symptom}\n\n${expected}`;
+    const judgment = REPORT_PREVIEW === "many" ? {
+      assessment: "I reviewed the whole text. Several details still identify a machine and one line quotes the operator; I am returning it so you can see what remains.",
+      removed: "Nothing yet in this draft.",
+      harmlessHints: "The quoted tool answer is a technical error message and identifies nobody.",
+      uncertainties: "The addresses, the path, the email, the token, the screenshot and the operator's quoted words should probably go.",
+    } : {
+      assessment: "I reviewed the whole text and judge it suitable for publication.",
+      removed: "Removed machine and account details.",
+      harmlessHints: "The quotation is a technical error message; it identifies no person or account.",
+      uncertainties: "None after reviewing the whole text.",
+    };
+    /* The hints the detectors answer for these spans, written out: the detector module reads server state and stays out of this bundle. */
+    const hint = (kind: IssueReportFinding["class"], label: string, text: string): IssueReportFinding => {
+      const start = body.indexOf(text);
+      return { class: kind, label, where: "body", lines: [body.slice(0, start).split("\n").length], reading: "written", span: { start, end: start + text.length, text } };
+    };
+    const quotation = hint("quote", "a quotation", '"connection refused during startup"');
+    const hints = REPORT_PREVIEW !== "many" ? [quotation] : [
+      quotation,
+      hint("quote", "a quoted block", "> the operator said the second project should start first"),
+      hint("path", "a local path", path),
+      hint("home_path", "a home directory path", path.slice(0, path.indexOf("/.config") + 1)),
+      hint("port", "a port", "203.0.113.22:8898"),
+      hint("ip", "an IP address", "203.0.113.22"),
+      hint("ip", "an IP address", "198.51.100.7"),
+      hint("email", "an email address", "someone@example.org"),
+      hint("domain", "a domain", "example.org"),
+      hint("secret", "a secret", token),
+      hint("credential", "a credential", token),
+      hint("image", "an embedded image; review screenshot redaction", "![screenshot of the board]("),
+    ];
+    const preview = issueReportPreviewText({
+      digest: REPORT_PREVIEW_DIGEST, title, body,
+      ...(REPORT_PREVIEW === "legacy" ? {} : {
+        privacyJudgment: judgment,
+        hints: REPORT_PREVIEW === "none" ? [] : hints,
+        hintWarnings: REPORT_PREVIEW === "many" ? ["Known-name hints are unavailable; review names and identities yourself."] : [],
+      }),
+    }, reportPreviewLanguage());
+    return `${[asked(120, "Prepare a report for me to review."), said(60, preview)].join("\n")}\n`;
+  }
   if (AGENT_REPORT && file === orchestrator) {
     return `${[
       asked(12 * MIN, "Where are we on the release? Give me the whole picture before I decide what to cut."),
@@ -3057,6 +3136,20 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/log/provenance" && FIRST_MESSAGE && FM_SEAT) {
     if (FM_HANDOVER) await fmEvidenceGate;
     return json({ messages: { [FM_SEAT_UUID]: { origin: "agent", mandate: { kind: "version", version: 1 } } }, occurrences: [{ textDigest: messageTextDigest(fmDeliveredText()), deliveredAt: iso(60), origin: "agent", mandate: { kind: "version", version: 1 } }] });
+  }
+  if (REPORT_PREVIEW && url.pathname === "/api/log/suggestions") {
+    /* The set the seat offers after reading the preview back: the tool's own approving draft beside a no and an edit. */
+    const uk = reportPreviewLanguage() === "uk";
+    const offered = url.searchParams.get("conversationId") === orchestrator.conversationId;
+    return json({ set: offered ? {
+      conversationId: orchestrator.conversationId, setId: "rsg_report_preview", at: iso(30),
+      origin: { kind: "manager", conversationId: orchestrator.conversationId, role: "orchestrator" },
+      replies: [
+        issueReportApprovalDrafts(REPORT_PREVIEW_DIGEST)[reportPreviewLanguage()],
+        uk ? { label: "Ні, не публікуй", text: "Ні, не публікуй цей звіт." } : { label: "No, do not publish", text: "No, do not publish this report." },
+        uk ? { label: "Зміни текст…", text: "Зміни текст: " } : { label: "Edit the text…", text: "Edit the text: " },
+      ],
+    } : null });
   }
   if (url.pathname === "/api/log") return json({ data: "", start: 0, offset: 0, size: 0 });
   if (url.pathname === "/api/conversations") return json({ items: files, total: files.length, nextCursor: null });

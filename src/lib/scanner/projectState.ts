@@ -9,8 +9,10 @@ import { readStateCollectionRevisions, readStateCollectionsRows } from "@/lib/st
    (dir-<hash>) instead of "Unresolved project", so pooled unresolved
    identities must re-derive.
    8: every handoff digest groups under its container directory instead of a
-   project of its own named `cwd`. */
-export const PROJECT_RESOLUTION_VERSION = 8;
+   project of its own named `cwd`.
+   9: deleted worktrees retain a trusted parent alias after the parent
+   checkout is also gone. */
+export const PROJECT_RESOLUTION_VERSION = 9;
 
 /* Project summaries depend on the attribution facts consumed by
    persistedProjects(). Hashing these stable projections keeps controller

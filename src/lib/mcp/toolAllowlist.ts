@@ -27,6 +27,8 @@ import type { McpToolArgs, McpToolName } from "./server";
  *
  *  - MAINTENANCE WRITES. A durably recorded maintainer writes task metadata
  *    only. Its boundary refuses other mutations; ordinary sessions retain B+.
+ *  - REPORTER WRITES. An issue reporter reads evidence and stores a scrubbed
+ *    issue preview. Its boundary refuses other operator-facing mutations.
  *
  * The exact-SHA deploy contract, idempotency keys, typed-target validation,
  * receipts and redaction are all enforced in their own layers and are
@@ -71,7 +73,7 @@ export type McpCallerIdentity =
 
 export type McpToolVerdict =
   | { allowed: true }
-  | { allowed: false; code: "tool_not_permitted" | "maintainer_tool_refused"; error: string };
+  | { allowed: false; code: "tool_not_permitted" | "maintainer_tool_refused" | "issue_reporter_write_refused"; error: string };
 
 const ALLOWED: McpToolVerdict = { allowed: true };
 
@@ -306,16 +308,30 @@ export function mcpToolPolicy(identity: () => McpCallerIdentity): McpToolPolicy 
   };
 }
 
-/** Maintenance changes only task metadata. New mutating tools fail closed. */
-export function permitMaintainerTool(tool: McpToolName, args: McpToolArgs): McpToolVerdict {
-  const reads: Partial<Record<McpToolName, readonly string[]>> = {
+const MUTATING_TOOL_READ_FIELDS: Partial<Record<McpToolName, readonly string[]>> = {
     seat_tick_settings: ["enabled", "wakeIntervalMinutes", "untilMinutes", "reason", "monitorPrompt", "replaceLine", "removeLine", "appendLine", "maintenance"],
     account_project_binding: ["action", "accountId", "allowedAccountIds", "bindings", "mode"],
     role_presets: ["overrides"], auto_updates: ["enabled"],
-  };
+};
+
+/** Maintenance changes only task metadata. New mutating tools fail closed. */
+export function permitMaintainerTool(tool: McpToolName, args: McpToolArgs): McpToolVerdict {
   if (["create_task", "update_task", "agent_activity", "lifecycle_events"].includes(tool)) return ALLOWED;
   if (tool === "account_project_binding" && (args.action === undefined || args.action === "list")) return ALLOWED;
-  const fields = reads[tool];
+  const fields = MUTATING_TOOL_READ_FIELDS[tool];
   if (fields && !fields.some(field => args[field] !== undefined)) return ALLOWED;
   return { allowed: false, code: "maintainer_tool_refused", error: `A board maintenance run writes the board only through create_task and update_task; ${tool} would start, stop, send or change something else, so Delegatus refused it. Put what you wanted done on your attention list.` };
+}
+
+/** #2518: reporter evidence reads may keep internal poll/cursor receipts,
+    but the only operator-facing write is a report preview. This
+    boundary runs before receipt replay, recovery or downstream dispatch. */
+export function permitIssueReporterTool(tool: McpToolName, args: McpToolArgs): McpToolVerdict {
+  if (tool === "issue_report" && (args.action === "hints" || args.action === "preview" || args.action === "show")) return ALLOWED;
+  if (tool === "pipeline_action" && args.action === "preview") return ALLOWED;
+  if (tool === "agent_activity" || tool === "lifecycle_events") return ALLOWED;
+  if (tool === "account_project_binding" && (args.action === undefined || args.action === "list")) return ALLOWED;
+  const fields = MUTATING_TOOL_READ_FIELDS[tool];
+  if (fields && !fields.some(field => args[field] !== undefined)) return ALLOWED;
+  return { allowed: false, code: "issue_reporter_write_refused", error: `An issue reporter starts no agents and no pipelines, and writes only issue_report preview; ${tool} would change something else, so Delegatus refused it. Return the evidence in your preview.` };
 }

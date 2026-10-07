@@ -7,8 +7,12 @@ import { isDeepStrictEqual } from "node:util";
 import { domainToASCII } from "node:url";
 import { inflateSync } from "node:zlib";
 
-import { decodeHTMLStrict } from "entities";
 import { preparedPrivacyText } from "./privacy-text-preparation";
+import { canonicalSensitiveText, decodeSensitiveText } from "../src/lib/privacy/canonicalText";
+import { mailboxPattern } from "../src/lib/privacy/mailbox";
+import { staticSensitiveClasses } from "../src/lib/privacy/staticDetectors";
+
+export { canonicalSensitiveText };
 
 import {
   compactSensitiveText,
@@ -76,12 +80,6 @@ const textBasenames = new Set(["CODEOWNERS", "Dockerfile", "LICENSE", "Makefile"
 const maxPublicationBytes = 32 * 1024 * 1024;
 const maxVideoStreams = 16;
 const supportedGeneratorRuntime = "bun-1.3.3";
-const credentialInputPattern = new RegExp([
-  String.raw`<in`,
-  String.raw`put\b(?=[^>]*(?:type\s*=\s*["']?password|name\s*=\s*["']?(?:api[_-]?key|password|secret|token)))`,
-  String.raw`(?=[^>]*value\s*=\s*(?:["'][^"']{4,}["']|[^\s"'=<>]{4,}))[^>]*>`,
-].join(""), "i");
-
 // Reviewed public forms, stored without publication-sensitive literals.
 // Identity normalization preserves case, punctuation and every raw code point.
 // Entries require explicit operator approval; see docs/privacy-publication.md.
@@ -1115,95 +1113,6 @@ function addFinding(findings: Map<FindingClass, number>, finding: FindingClass):
   findings.set(finding, (findings.get(finding) ?? 0) + 1);
 }
 
-function decodePercentEncoding(text: string): string {
-  return text.replace(/(?:%[0-9a-f]{2})+/gi, (encoded) => {
-    try {
-      return decodeURIComponent(encoded);
-    } catch {
-      return encoded;
-    }
-  });
-}
-
-function decodeHtmlEntities(text: string): string {
-  return decodeHTMLStrict(text);
-}
-
-function decodeCommonMarkEscapes(text: string): string {
-  return text.replaceAll(/\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g, "$1");
-}
-
-function removeDefaultIgnorables(text: string): string {
-  return text.replaceAll(/\p{Default_Ignorable_Code_Point}/gu, "");
-}
-
-function decodeJsonStringEscapes(text: string): string {
-  const escapes: Record<string, string> = {
-    '\"': '\"', "\\": "\\", "/": "/", b: "\b", f: "\f", n: "\n", r: "\r", t: "\t",
-  };
-  return text.replaceAll(/\\(?:u([0-9a-fA-F]{4})|(["\\/bfnrt]))/g, (_match, hex: string | undefined, escape: string) =>
-    hex === undefined ? escapes[escape] : String.fromCharCode(parseInt(hex, 16)));
-}
-
-/** Keep source positions only for characters a decoding step leaves untouched. */
-function decodeWithOffsets(
-  text: string,
-  decode: (value: string) => string,
-  tokens: RegExp,
-  offsets?: number[],
-): string {
-  const decoded = decode(text);
-  if (!offsets || decoded === text) return decoded;
-  const nextOffsets: number[] = [];
-  let cursor = 0;
-  const mapped = text.replace(tokens, (token: string, index: number) => {
-    for (; cursor < index; cursor += 1) nextOffsets.push(offsets[cursor]);
-    const replacement = decode(token);
-    for (let i = 0; i < replacement.length; i += 1) {
-      nextOffsets.push(replacement === token ? offsets[index + i] : -1);
-    }
-    cursor = index + token.length;
-    return replacement;
-  });
-  for (; cursor < text.length; cursor += 1) nextOffsets.push(offsets[cursor]);
-  offsets.length = decoded.length;
-  // A decoder shape outside the mapped tokens still gets scanned in full,
-  // but cannot confer a RAW exemption without proven source correspondence.
-  for (let i = 0; i < decoded.length; i += 1) offsets[i] = mapped === decoded ? nextOffsets[i] : -1;
-  return decoded;
-}
-
-function decodeSensitiveText(
-  text: string,
-  preserveDefaultIgnorables: boolean,
-  offsets?: number[],
-  jsonEscapes = false,
-): { error: boolean; text: string } {
-  const strip = preserveDefaultIgnorables ? (value: string): string => value
-    : (value: string): string => decodeWithOffsets(value, removeDefaultIgnorables, /\p{Default_Ignorable_Code_Point}/gu, offsets);
-  let decoded = strip(text);
-  for (let pass = 0; pass < 16; pass += 1) {
-    const next = strip(
-      decodeWithOffsets(
-        decodeWithOffsets(
-          decodeWithOffsets(
-            jsonEscapes ? decodeWithOffsets(decoded, decodeJsonStringEscapes, /\\(?:u[0-9a-fA-F]{4}|["\\/bfnrt])/g, offsets) : decoded,
-            decodePercentEncoding, /(?:%[0-9a-f]{2})+/gi, offsets,
-          ),
-          decodeHtmlEntities, /&[^&;\s]*;/g, offsets,
-        ),
-        decodeCommonMarkEscapes, /\\[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]/g, offsets,
-      ),
-    );
-    if (next === decoded) return { error: false, text: decoded };
-    decoded = next;
-  }
-  return { error: true, text: decoded };
-}
-
-export function canonicalSensitiveText(text: string, jsonEscapes = false): { error: boolean; text: string } {
-  return decodeSensitiveText(text, false, undefined, jsonEscapes);
-}
 
 function visibleMarkdownText(text: string, sourceOffsets?: number[]): string {
   let visible = "";
@@ -1527,23 +1436,6 @@ type EmailOccurrence = {
   localPart: string;
 };
 
-/* A mailbox the way RFC 5322 spells one. The local part is a dot-atom or a
-   quoted string, and the quoted form may carry spaces, dots and a second `@`
-   inside the quotes — it reaches a person exactly like the plain form, so
-   detection reads both rather than only the shape that is easy to match. */
-const quotedLocalPart = /"(?:[^"\\\r\n]|\\.)*"/;
-const dotAtomLocalPart = /\b[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+/;
-// These contextual code points belong to valid IDNA labels. Detection keeps
-// them; the unit exemption below depends only on its positive ASCII boundary.
-const idnaDomainLabel = String.raw`(?:[A-Z0-9\p{L}\p{M}\p{N}\p{Default_Ignorable_Code_Point}\u00B7\u0375\u05F3\u05F4\u0F0B\u30FB-]|\\x[0-9a-f]{2})+`;
-const idnaDomainSeparator = String.raw`[.\u3002\uFF0E\uFF61]`;
-const emailDomain = new RegExp(
-  `(${idnaDomainLabel}(?:${idnaDomainSeparator}${idnaDomainLabel})+)`,
-  "iu",
-);
-const emailAddressSource =
-  `(${quotedLocalPart.source}|${dotAtomLocalPart.source})@${emailDomain.source}`;
-
 // Only complete RAW package-version tokens earn this exemption. Detection
 // keeps every view intact; source correspondence is checked per occurrence.
 const packageVersionSource = String.raw`[0-9]+(?:\.[0-9]+){1,3}(?:[-+][0-9A-Za-z.-]+)?`;
@@ -1663,7 +1555,7 @@ function rawPackageVersionEnd(text: string, domainStart: number, source?: EmailT
 
 /** Every mailbox in the text that reaches a person, in the order they appear. */
 function* emailOccurrences(text: string, source?: EmailTextView["source"]): Generator<EmailOccurrence> {
-  const pattern = new RegExp(emailAddressSource, "giu");
+  const pattern = mailboxPattern();
   for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
     const following = text[pattern.lastIndex];
     const exemptVersionEnd = !match[1].startsWith('"')
@@ -1710,64 +1602,10 @@ export function sensitiveClasses(text: string): Set<FindingClass> {
   const { error, searchable: searchableText } = normalized;
   if (prepared.staticFindings === undefined) {
     if (error || known.error) findings.add("inspection_error");
-    const unixHomePattern = /(?:^|[\s"'(=:/])\/(?:home|Users)\/([A-Za-z0-9._-]+)(?:\/|$)/gm;
-    for (let match = unixHomePattern.exec(searchableText); match; match = unixHomePattern.exec(searchableText)) {
-      if (match[1].toLowerCase() === "user") continue;
-      findings.add("home_path");
-      break;
-    }
-    const windowsHomePattern = /(?:^|[\s"'(])[A-Za-z]:\\Users\\([A-Za-z0-9._-]+)(?:\\|$)/gim;
-    for (let match = windowsHomePattern.exec(searchableText); match; match = windowsHomePattern.exec(searchableText)) {
-      if (match[1].toLowerCase() === "user") continue;
-      findings.add("home_path");
-      break;
-    }
     // Decode encoded boundaries without removing their default-ignorable code
     // points. Both the original and decoded characters must meet the unit rule.
     if (emailTextViews(text).some((view) => hasEmailAddress(view.text, view.source))) findings.add("email_address");
-    const credentialAssignmentPattern = /(?:api[_-]?(?:key|token)|access[_-]?token|authorization|password|secret)\s*[:=]\s*(?:"[^"\r\n]{12,}"|'[^'\r\n]{12,}'|[^\s"'`]{12,})/i;
-    if (credentialAssignmentPattern.test(searchableText)) {
-      findings.add("credential");
-    }
-    if (/\b(?:github_pat_|gh[pousr]_|sk-|xox[baprs]-)[A-Za-z0-9_-]{12,}\b/.test(searchableText)) {
-      findings.add("credential");
-    }
-    const separator = String.raw`[^a-z0-9\r\n]{1,8}`;
-    const splitTokenPrefix = new RegExp([
-      `g${separator}i${separator}t${separator}h${separator}u${separator}b${separator}p${separator}a${separator}t`,
-      `g${separator}h${separator}[pousr]`,
-      `x${separator}o${separator}x${separator}[baprs]`,
-      `s${separator}k`,
-    ].join("|") + String.raw`[^a-z0-9\r\n]{0,8}?[_-][^a-z0-9\r\n]*`, "gi");
-    for (const line of searchableText.split(/\r?\n/)) {
-      splitTokenPrefix.lastIndex = 0;
-      for (let match = splitTokenPrefix.exec(line); match; match = splitTokenPrefix.exec(line)) {
-        const compactTail = compactSensitiveText(line.slice(match.index));
-        if (/^(?:githubpat|gh[pousr]|xox[baprs]|sk)[a-z0-9]{12,}/i.test(compactTail)) {
-          findings.add("credential");
-          break;
-        }
-      }
-      if (findings.has("credential")) break;
-    }
-    if (/\bauthorization\s*[:=]\s*(?:basic|bearer)\s+[A-Za-z0-9._~+/=-]{8,}/i.test(searchableText)) {
-      findings.add("credential");
-    }
-    if (/https?:\/\/[^\s/@:]+:[^\s/@]+@/i.test(searchableText)) {
-      findings.add("credential");
-    }
-    if (credentialInputPattern.test(searchableText)) {
-      findings.add("credential");
-    }
-    if (/\b(?:10(?:\.\d{1,3}){3}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|192\.168(?:\.\d{1,3}){2})\b/.test(searchableText)) {
-      findings.add("private_network");
-    }
-    if (/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/i.test(searchableText)) {
-      findings.add("resource_identifier");
-    }
-    if (/(?:^|\n)\s*(?:assistant|prompt|transcript|user)\s*:\s*\S/im.test(searchableText)) {
-      findings.add("transcript_content");
-    }
+    for (const finding of staticSensitiveClasses(searchableText)) findings.add(finding);
     prepared.staticFindings = [...findings];
   }
   let matchesKnownValue = knownValueMatches.get(prepared);

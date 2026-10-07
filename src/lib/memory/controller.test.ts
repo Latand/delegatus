@@ -13,6 +13,7 @@ import { memoryHookSource } from "./hook";
 import { projectInfoFromCwd } from "@/lib/scanner/describe";
 import { writeAsksYouSettings } from "@/lib/asks/settings";
 import { encodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText.server";
+import { localRepositoryProjectId, directoryProjectId } from "@/lib/projects/identity";
 import { readOperatorAsks } from "@/lib/asks/store";
 import { deliverConversationMessage } from "@/lib/delivery";
 import { offeredMemoryForTranscript } from "./offers";
@@ -20,6 +21,7 @@ import { createFeedSession } from "@/components/feed/parse";
 import { provenanceLookupFor } from "@/components/feed/messageProvenance";
 import { structuredContent } from "@/lib/runtime/structuredContent";
 import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
+import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import type { FileEntry } from "@/lib/types";
 import type { groundedRequest } from "./selection";
@@ -57,7 +59,7 @@ for (const mode of ["delayed input", "delayed body", "delayed confirmation", "co
   globalThis.fetch = (async () => {
     if (mode === "delayed input") await Bun.sleep(1100);
     if (mode === "delayed confirmation") await Bun.sleep(1050);
-    const id = memoryIndex().injectionCandidates("widget parser", project, "codex", receipt.conversationId)[0].id;
+    const id = (await memoryIndex().injectionCandidates("widget parser", project, "codex", receipt.conversationId))[0].id;
     return Response.json({ answers: { [id]: { noul: .8 } }, usage: { cost: .0001 } });
   }) as unknown as typeof fetch;
   let finished: Promise<string> = Promise.resolve("");
@@ -123,7 +125,7 @@ for (const mode of ["delayed input", "delayed body", "delayed confirmation", "co
       const lookup = provenanceLookupFor({ memoryOffers: offers }, entries.map(entry => entry.item));
       expect(lookup.memoryFor!(entries.find(entry => entry.item.kind === "user")!.item)).toEqual(["Widget parser"]);
     }
-    expect(memoryIndex().injectionCandidates("widget parser", project, "codex", receipt.conversationId).length).toBe((mode === "successful" || mode === "delayed confirmation" || mode === "contended confirmation" || mode === "restarted confirmation") ? 0 : 1);
+    expect((await memoryIndex().injectionCandidates("widget parser", project, "codex", receipt.conversationId)).length).toBe((mode === "successful" || mode === "delayed confirmation" || mode === "contended confirmation" || mode === "restarted confirmation") ? 0 : 1);
   } finally { confirmationLock.db?.exec("ROLLBACK"); confirmationLock.db?.close(); server.stop(true); }
 }, 5000);
 
@@ -528,4 +530,217 @@ for (const mode of ["unproven authorship", "expired deadline", "agent delivery",
   globalThis.fetch = (() => { throw Error("No provider call expected"); }) as unknown as typeof fetch;
   expect(await prepareForHook(request, input)).toBe("");
   expect(memoryIndex().injectionActivity().skipped).toBe(mode === "agent delivery" || mode === "no capability" ? 0 : 1);
+});
+
+for (const oldKey of ["directory", "local repository", "path", "alias", "unlinked deleted directory", "unlinked deleted path", "aliased deleted directory", "aliased deleted path"] as const) for (const sourceEngine of ["claude", "codex"] as const) test(`Claude seat operator hook selects ${sourceEngine} (${oldKey}) memories after a relay with old folder keys and no asks store`, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-seat-turn-")); roots.push(root);
+  process.env.LLV_STATE_DIR = path.join(root, "state"); delete process.env.PORT; process.env.OPENROUTER_API_KEY = "fixture";
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" }); setAgentRegistryForTests(registry);
+  // A repository acquired its remote after these memories were indexed.
+  fs.mkdirSync(path.join(root, ".git"));
+  fs.writeFileSync(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
+  fs.writeFileSync(path.join(root, ".git", "config"), '[remote "origin"]\nurl = https://example.invalid/fixture/widgets.git\n');
+  const project = projectInfoFromCwd(root)!.project;
+  const reservation = registry.beginSpawnRequest({ engine: "claude", cwd: root, explicitProject: project,
+    role: "orchestrator", origin: { kind: "operator" }, transport: "structured",
+    launchProfile: emptyLaunchProfile({ cwd: root, title: "Synthetic seat conversation" }) });
+  if (reservation.kind === "conflict") throw Error("fixture seat conflict");
+  const receipt = reservation.receipt;
+  const capability = registry.rotateSpawnCapabilityForReceipt(receipt.launchId);
+  const session = crypto.randomUUID(), transcript = path.join(root, session + ".jsonl");
+  const opening = "Review widget parser delimiter escaping";
+  const relay = "Machine wake: widget parser work is ready";
+  const prompt = "Update widget parser delimiter escaping";
+  const line = (role: string, text: string, uuid: string) => JSON.stringify({ type: role, uuid, ...(role === "user" ? { promptSource: "sdk" } : {}), message: { role, content: [{ type: "text", text }] } });
+  fs.writeFileSync(transcript, [line("user", opening, "fixture-opening"), line("assistant", "I will check the parser.", "fixture-reply"),
+    line("user", relay, "fixture-relay"), line("assistant", "The work is queued.", "fixture-machine-reply")].join("\n") + "\n");
+  registry.settleSpawn(receipt.launchId, { key: { engine: "claude", sessionId: session }, artifactPath: transcript, cwd: root,
+    accountId: null, status: "live", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
+  setSharedMemoryEnabled(project, true);
+  const ledger = new FileClaudeDeliveryLedger();
+  ledger.recordQueued(session, { id: "fixture-relay-delivery", text: relay, origin: { kind: "agent" } }, "queued-next-turn");
+  ledger.confirmDelivered(session, "fixture-relay-delivery", "fixture-relay");
+  const sources = ["older", "current", "foreign"].map((name, n) => {
+    const source = path.join(root, name + ".md");
+    fs.writeFileSync(source, sourceEngine === "claude"
+      ? `---\nname: Widget ${name} rule\ndescription: Widget parser ${name} delimiter policy.\ntype: project\n---\nWidget ${name} policy requires ${n + 2} escape characters.\n`
+      : `cwd: ${root}\n# Widget ${name} rule\n- Widget parser ${name} delimiter policy requires ${n + 2} escape characters.\n`);
+    return { path: source, engine: sourceEngine, sourceKind: sourceEngine === "claude" ? "claude_memory" as const : "rollout_summary" as const, project };
+  });
+  await memoryIndex().refresh(sources);
+  // Old-path rows have no trusted relationship unless an alias records it.
+  // A similarly named foreign folder stays outside the project's scope.
+  const deletedFolder = root + "-previous";
+  const foreignFolder = deletedFolder + "-copy";
+  expect(fs.existsSync(deletedFolder)).toBe(false);
+  expect(fs.existsSync(foreignFolder)).toBe(false);
+  const db = new Database(path.join(process.env.LLV_STATE_DIR!, "memory-index.sqlite"));
+  const previousKey = oldKey === "directory" ? directoryProjectId(root) : oldKey === "local repository" ? localRepositoryProjectId(root)!
+    : oldKey === "path" ? root.replace(/[^a-zA-Z0-9]/g, "-") : oldKey.endsWith("directory") ? directoryProjectId(deletedFolder)
+    : oldKey.endsWith("path") ? deletedFolder.replace(/[^a-zA-Z0-9]/g, "-") : "fixture-old-repository";
+  db.query("UPDATE memory_entries SET project = ? WHERE sourcePath = ?").run(previousKey, sources[0].path);
+  db.query("UPDATE memory_entries SET project = ? WHERE sourcePath = ?").run(oldKey.endsWith("path")
+    ? foreignFolder.replace(/[^a-zA-Z0-9]/g, "-") : directoryProjectId(foreignFolder), sources[2].path);
+  const expectedMemoryIds = db.query<{ id: string }, [string]>("SELECT id FROM memory_entries WHERE sourcePath = ?")
+    .all(sources[1].path).map(row => row.id);
+  if (!oldKey.startsWith("unlinked")) expectedMemoryIds.push(...db.query<{ id: string }, [string]>("SELECT id FROM memory_entries WHERE sourcePath = ?")
+    .all(sources[0].path).map(row => row.id));
+  db.close();
+  if (oldKey === "alias" || oldKey.startsWith("aliased")) fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "project-aliases.json"), JSON.stringify({ schemaVersion: 1,
+    aliases: { [previousKey]: "fixture-intermediate", "fixture-intermediate": project }, displayNames: { [project]: "Widgets" } }));
+  // Unknown deleted paths intentionally contribute no candidate. Same-folder
+  // historical keys and explicitly aliased deleted paths contribute both.
+  const expectedCandidates = oldKey.startsWith("unlinked") ? 1 : 2;
+  expect(fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "operator-asks.json"))).toBe(false);
+  expect(fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "asks-you-settings.json"))).toBe(false);
+  let decisionCalls = 0, candidateCount = 0, failDecision = false;
+  const endpoint = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(request) {
+    decisionCalls++; const body = await request.json(); candidateCount = Object.keys(body.questions).length;
+    if (failDecision) return new Response(null, { status: 503 });
+    expect(Object.keys(body.questions).sort()).toEqual(expectedMemoryIds.sort());
+    expect(body.state.latestOperatorMessage).toBe(prompt);
+    expect(body.state.precedingTurns).toContain("machine:");
+    return Response.json({ answers: Object.fromEntries(Object.keys(body.questions).map(id => [id, { noul: .9 }])), usage: { cost: .0001 } });
+  } });
+  globalThis.fetch = ((url, init) => originalFetch(String(url).includes("openrouter.ai") ? `http://127.0.0.1:${endpoint.port}` : url, init)) as typeof fetch;
+  const turn = "fixture-operator-delivery";
+  ledger.recordQueued(session, { id: turn, text: prompt, origin: { kind: "operator" } }, "queued-next-turn");
+  let pending = Promise.resolve("");
+  const hookServer = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(request) {
+    pending = prepareForHook(request, await request.json()); return Response.json({ block: await pending });
+  } });
+  const queue = path.join(root, "queue.jsonl");
+  fs.writeFileSync(queue, JSON.stringify({ id: turn, digest: crypto.createHash("sha256").update(prompt).digest("hex") }) + "\n");
+  const hook = Bun.spawn([process.execPath, "-e", memoryHookSource(`http://127.0.0.1:${hookServer.port}`, null, queue)], {
+    stdin: "pipe", stdout: "pipe", stderr: "pipe", env: { ...process.env, LLV_SPAWN_CAPABILITY: capability } });
+  try {
+    hook.stdin.write(JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, cwd: root, prompt })); hook.stdin.end();
+    expect(await hook.exited).toBe(0);
+    const output = await new Response(hook.stdout).text(); await pending;
+    expect(output).toContain("Delegatus shared memory");
+    expect(candidateCount).toBe(expectedCandidates); expect(decisionCalls).toBe(1);
+    expect(readOperatorAsks().spend.calls).toBe(1);
+    expect(readOperatorAsks().spend.usd).toBeCloseTo(.0001, 8);
+    expect(memoryIndex().injectionActivity()).toMatchObject({ decisions: 1, delivered: 1 });
+    fs.appendFileSync(transcript, line("user", prompt, "fixture-current") + "\n");
+    ledger.confirmDelivered(session, turn, "fixture-current");
+    const names = offeredMemoryForTranscript(transcript);
+    expect(names["fixture-current"]).toHaveLength(expectedCandidates); expect(names["fixture-relay"]).toBeUndefined();
+    const feed = createFeedSession({ engine: "claude", fmt: "claude", showSvc: false, lineFilter: "" });
+    const items = feed.feed(fs.readFileSync(transcript, "utf8").trim().split("\n"), 0, false).items.map(e => e.item);
+    expect(provenanceLookupFor({ memoryOffers: names }, items).memoryFor!(items.find(i => i.kind === "sysmsg" && i.deliveredMessage?.engineMessageId === "fixture-current")!)).toHaveLength(expectedCandidates);
+    expect(memoryIndex().lastTurn(project)).toBe("delivered");
+    // Codex's default operator envelope also occurs on delegated starts. The
+    // live ones are roots at depth 0 without membership, launched by another
+    // conversation. They leave the seat's last turn and the budget untouched.
+    const stagePrompt = "You are a fresh-context Reviewer. Review widget parser delimiter escaping.";
+    const stage = registry.beginSpawnRequest({ engine: "codex", cwd: root, explicitProject: project,
+      role: "reviewer", reviewsConversationId: receipt.conversationId, origin: { kind: "operator" }, transport: "structured",
+      launcher: { conversationId: receipt.conversationId, notify: true },
+      launchDisplay: { prompt: stagePrompt, echo: stagePrompt, images: 0 },
+      launchProfile: emptyLaunchProfile({ cwd: root, title: "Synthetic stage conversation" }) });
+    if (stage.kind === "conflict") throw Error("fixture stage conflict");
+    expect(stage.receipt.delegationDepth).toBe(0);
+    expect(registry.readOnlySnapshot().memberships[stage.receipt.conversationId] ?? []).toHaveLength(0);
+    const stageSession = crypto.randomUUID();
+    registry.settleSpawn(stage.receipt.launchId, { key: { engine: "codex", sessionId: stageSession }, artifactPath: path.join(root, stageSession + ".jsonl"), cwd: root,
+      accountId: null, status: "live", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
+    const stageCapability = registry.rotateSpawnCapabilityForReceipt(stage.receipt.launchId);
+    const stageRequest = new Request("http://localhost/api/memory/inject", { headers: { "x-llv-spawn-capability": stageCapability } });
+    const stageText = encodeCodexStructuredUserText(stagePrompt, undefined, null, { kind: "operator" }, messageTextDigest("synthetic-stage-start"));
+    const beforeStage = memoryIndex().injectionActivity();
+    expect(await offerForHook(stageRequest, { hook_event_name: "UserPromptSubmit", session_id: stageSession, cwd: root, prompt: stageText })).toBe("");
+    expect(memoryIndex().lastTurn(project)).toBe("delivered");
+    expect(memoryIndex().injectionActivity()).toEqual(beforeStage);
+    expect(decisionCalls).toBe(1); expect(readOperatorAsks().spend.calls).toBe(1);
+    const request = new Request("http://localhost/api/memory/inject", { headers: { "x-llv-spawn-capability": capability } });
+    const input = { hook_event_name: "UserPromptSubmit", session_id: session, cwd: root, prompt: relay, delegatus_delivery_id: "fixture-relay-delivery" };
+    expect(await offerForHook(request, input)).toBe("");
+    expect(memoryIndex().lastTurn(project)).toBe("delivered");
+    const nextTurn = "fixture-next-operator";
+    ledger.recordQueued(session, { id: nextTurn, text: prompt, origin: { kind: "operator" } }, "queued-next-turn");
+    expect(await offerForHook(request, { ...input, prompt, delegatus_delivery_id: nextTurn })).toBe("");
+    expect(memoryIndex().lastTurn(project)).toBe("noCandidates");
+    expect(decisionCalls).toBe(1);
+    const fresh = path.join(root, "fresh.md");
+    fs.writeFileSync(fresh, "---\nname: Widget integrity\ndescription: Widget checksum protects immutable release manifests.\ntype: project\n---\nWidget integrity validates sealed package manifests before promotion.\n");
+    await memoryIndex().refresh([{ path: fresh, engine: "claude", sourceKind: "claude_memory", project }]);
+    writeAsksYouSettings({ capUsd: 0 });
+    ledger.recordQueued(session, { id: "fixture-capped", text: prompt, origin: { kind: "operator" } }, "queued-next-turn");
+    expect(await offerForHook(request, { ...input, prompt, delegatus_delivery_id: "fixture-capped" })).toBe("");
+    expect(memoryIndex().lastTurn(project)).toBe("capped"); expect(decisionCalls).toBe(1);
+    expect(readOperatorAsks().spend.capped).toBe(1);
+    writeAsksYouSettings({ capUsd: 1 }); failDecision = true;
+    ledger.recordQueued(session, { id: "fixture-failed", text: prompt, origin: { kind: "operator" } }, "queued-next-turn");
+    expect(await offerForHook(request, { ...input, prompt, delegatus_delivery_id: "fixture-failed" })).toBe("");
+    expect(memoryIndex().lastTurn(project)).toBe("failed"); expect(decisionCalls).toBe(2);
+    expect(readOperatorAsks().spend.usd).toBeCloseTo(.0001, 8);
+    // A real subsequent operator submission may repeat the launch's words.
+    const human = registry.holdDelivery(stage.receipt.conversationId, stagePrompt, "synthetic-human-stage-turn", "text", [],
+      structuredContent(stagePrompt, []).contentDigest, { origin: { kind: "operator" } });
+    const humanText = encodeCodexStructuredUserText(stagePrompt, undefined, null, { kind: "operator" }, deliveryDedupToken(human.command.operationId));
+    delete process.env.OPENROUTER_API_KEY;
+    expect(await offerForHook(stageRequest, { hook_event_name: "UserPromptSubmit", session_id: stageSession, cwd: root, prompt: humanText })).toBe("");
+    expect(memoryIndex().lastTurn(project)).toBe("noKey");
+  } finally { hook.kill(); await hook.exited; await pending; hookServer.stop(true); endpoint.stop(true); }
+}, 5000);
+
+// Every structured launch brief arrives with operator origin. Drafts from the
+// new-agent form, with or without a role or a handed-over conversation, are
+// the operator's turn; launches started by another conversation or by board
+// maintenance are not, and leave the last turn and the budget untouched.
+for (const launch of ["plain draft", "draft with role", "handover draft", "launched by a conversation", "board maintenance"] as const) test(`Claude launch brief at the hook: ${launch}`, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-launch-brief-")); roots.push(root);
+  process.env.LLV_STATE_DIR = path.join(root, "state"); delete process.env.PORT; process.env.OPENROUTER_API_KEY = "fixture";
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" }); setAgentRegistryForTests(registry);
+  const project = projectInfoFromCwd(root)!.project;
+  const settle = (launchId: string, session: string) => registry.settleSpawn(launchId, { key: { engine: "claude", sessionId: session }, artifactPath: path.join(root, session + ".jsonl"), cwd: root,
+    accountId: null, status: "live", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
+  const seat = registry.beginSpawnRequest({ engine: "claude", cwd: root, explicitProject: project, role: "orchestrator", origin: { kind: "operator" }, transport: "structured",
+    launchProfile: emptyLaunchProfile({ cwd: root, title: "Synthetic seat conversation" }) });
+  if (seat.kind === "conflict") throw Error("fixture seat conflict");
+  settle(seat.receipt.launchId, crypto.randomUUID());
+  const prompt = "Update widget parser delimiter escaping";
+  const machine = launch === "launched by a conversation" || launch === "board maintenance";
+  const reservation = registry.beginSpawnRequest({ engine: "claude", cwd: root, explicitProject: project, origin: { kind: "operator" }, transport: "structured",
+    ...(launch === "draft with role" ? { role: "builder" } : launch === "launched by a conversation" ? { role: "reviewer", reviewsConversationId: seat.receipt.conversationId, launcher: { conversationId: seat.receipt.conversationId, notify: true } }
+      : launch === "board maintenance" ? { role: "maintainer", clientAttemptId: "maint_" + "0".repeat(24) } : {}),
+    ...(launch === "handover draft" ? { parentConversationId: seat.receipt.conversationId, parentSource: "explicit" as const } : {}),
+    launchDisplay: { prompt, echo: prompt, images: 0 },
+    launchProfile: emptyLaunchProfile({ cwd: root, title: "Synthetic launched conversation" }) });
+  if (reservation.kind === "conflict") throw Error("fixture launch conflict");
+  const receipt = reservation.receipt;
+  // The live machine launches are roots at depth 0 with no container membership.
+  expect(receipt.delegationDepth).toBe(0);
+  expect(registry.readOnlySnapshot().memberships[receipt.conversationId] ?? []).toHaveLength(0);
+  const session = crypto.randomUUID();
+  settle(receipt.launchId, session);
+  setSharedMemoryEnabled(project, true);
+  const source = path.join(root, "rule.md");
+  fs.writeFileSync(source, "---\nname: Widget parser rule\ndescription: Widget parser delimiter policy.\ntype: project\n---\nWidget parser policy requires two escape characters.\n");
+  await memoryIndex().refresh([{ path: source, engine: "claude", sourceKind: "claude_memory", project }]);
+  let decisionCalls = 0;
+  const endpoint = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(request) {
+    decisionCalls++; const body = await request.json();
+    return Response.json({ answers: Object.fromEntries(Object.keys(body.questions).map(id => [id, { noul: .9 }])), usage: { cost: .0001 } });
+  } });
+  globalThis.fetch = ((url, init) => originalFetch(String(url).includes("openrouter.ai") ? `http://127.0.0.1:${endpoint.port}` : url, init)) as typeof fetch;
+  const delivery = `spawn_message_${receipt.launchId}`;
+  new FileClaudeDeliveryLedger().recordQueued(session, { id: delivery, text: prompt, origin: { kind: "operator" } }, "queued-next-turn");
+  const capability = registry.rotateSpawnCapabilityForReceipt(receipt.launchId);
+  const request = new Request("http://localhost/api/memory/inject", { headers: {
+    "x-llv-spawn-capability": capability, "x-llv-memory-hook": crypto.randomUUID(), "x-llv-memory-deadline": String(Date.now() + 1500) } });
+  try {
+    const block = await prepareForHook(request, { hook_event_name: "UserPromptSubmit", session_id: session, cwd: root, prompt, delegatus_delivery_id: delivery });
+    if (machine) {
+      expect(block).toBe(""); expect(decisionCalls).toBe(0);
+      expect(memoryIndex().lastTurn(project)).toBeNull();
+      expect(memoryIndex().injectionActivity()).toMatchObject({ decisions: 0, skipped: 0 });
+      expect(readOperatorAsks().spend.calls).toBe(0);
+    } else {
+      expect(block).toContain("Delegatus shared memory"); expect(decisionCalls).toBe(1);
+      expect(memoryIndex().lastTurn(project)).toBe("prepared");
+      expect(readOperatorAsks().spend.calls).toBe(1);
+    }
+  } finally { endpoint.stop(true); }
 });
