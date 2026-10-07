@@ -480,7 +480,22 @@ test.each([
   expect(readHostTurnRecord("session", { directory })).toMatchObject({ state: "read", turn: { turnId: "T1", closed: null } });
 });
 
-test("a host turn record checks the sequence of the deltas it skips by their header alone", () => {
+test.each([
+  { shape: "names no turn", line: '{"kind":"delta","text":"lost turn id","seq":2}' },
+  { shape: "carries no text", line: '{"kind":"delta","turnId":"T1","text":27,"seq":2}' },
+  { shape: "is not JSON", line: '{"kind":"delta","turnId":"T1","text":BROKEN,"seq":2}' },
+] as const)("a host turn record holding a delta that $shape is unreadable, as the store's own load refuses it", ({ line }) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-host-turn-record-"));
+  fs.writeFileSync(path.join(directory, "session.jsonl"), [
+    JSON.stringify({ kind: "turn-started", turnId: "T1", seq: 1 }),
+    line,
+    JSON.stringify({ kind: "session-status", status: "active", seq: 3 }),
+  ].map((text) => `${text}\n`).join(""));
+  expect(readHostTurnRecord("session", { directory }).state).toBe("unreadable");
+  expect(() => new FileRuntimeEventStore(directory).load("session")).toThrow();
+});
+
+test("a host turn record checks the sequence of the deltas it skips, whatever their text holds", () => {
   const { directory } = turnLedger([
     { kind: "turn-started", turnId: "T1" },
     { kind: "delta", turnId: "T1", text: "quoted \"seq\":99} inside" },

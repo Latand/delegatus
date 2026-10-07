@@ -204,6 +204,10 @@ A candidate is asked when two more hold:
   (`LLV_HOST_ADOPTION_MAX_TURN_AGE_HOURS`, default 6 h). The activity is the
   newer of the host ledger's last write and the transcript's newest dated
   work record; when the conversation has neither, the row's last update (C1).
+  A ledger that reads unreadable, or a transcript whose tail is uncertain, is
+  dated by its file's last write, since its newest record cannot be read; a
+  file that cannot be dated at all is never provably old. Such a row is asked,
+  lands on row 1 or 2, and is held and re-probed below.
 
 Every startup pass asks the rows in its scope before it adopts, demotes or
 nudges any of them: the first pass, a startup retry, a runtime-host
@@ -444,9 +448,11 @@ difference in device, inode, size or modification time makes the ledger
 `unreadable` for this pass (row 1), whether a record was appended or the file
 was replaced. The decision never reads through `FileRuntimeEventStore.load`,
 which returns the events it parsed even when the file changed under it
-(`eventStore.ts:337-341`) (D1). The reader parses boundary and frame records
-only, newest first, and skips deltas by their kind; the modification time it
-reports is the one both stats agreed on.
+(`eventStore.ts:337-341`) (D1). The reader parses and validates every record
+it reads, newest first, deltas included, with the checks that load applies; a
+record that is not JSON or not a valid event is row 1, whatever its kind. A
+valid delta is then skipped by its kind. The modification time it reports is
+the one both stats agreed on.
 
 **A decision belongs to its pass and to the evidence it read.** Nothing is
 kept for a later pass to skip a row with (D2). A row decided again from
@@ -525,7 +531,9 @@ The releasing process is the ledger's only writer, so no append can land
 inside its synchronous read. The CLI is alive and may be writing the
 transcript, so the tail is read up to three times; a tail still uncertain
 records nothing, as the background clause does today, and the release log
-names the host.
+names the host. Rows 1 and 2 apply before B is read: a ledger that cannot be
+read, or a tail that holds no boundary for the ledger's newest turn, records
+nothing either, and the log names the host and what could not be decided.
 
 ## Finding map
 
@@ -1070,11 +1078,26 @@ What a correctness pass against the build settled, 2026-10-07:
   a non-structured transport. The reaper's dead-wrapper cleanup retains held
   rows by default.
 - **The ledger read checks its sequence.** Every record the read passes,
-  skipped deltas included (their `seq` is read from the record's closing
-  `"seq":N}`), must carry the sequence one below the record after it and be a
-  valid event. A gap, a repeat or an invalid event is `unreadable`, as
-  `FileRuntimeEventStore.load` refuses the same file: the missing record could
-  be the turn's end.
+  skipped deltas included, must carry the sequence one below the record after
+  it and be a valid event. A gap, a repeat or an invalid event is
+  `unreadable`, as `FileRuntimeEventStore.load` refuses the same file: the
+  missing record could be the turn's end.
+
+What a second correctness pass settled, 2026-10-07:
+
+- **A delta is parsed like every other record.** The read had taken a
+  delta's `seq` from its closing `"seq":N}` without parsing it, so a delta
+  that was not JSON, named no turn or carried no text read as evidence and
+  authorized a cut. Every record is now parsed and validated; a delta is
+  skipped only after that.
+- **Only provably old evidence ages out.** An unreadable ledger had dropped
+  its last write from the window, so a fresh ledger over an old transcript
+  aged out and its open turn was lost for good. Unreadable or uncertain
+  evidence is now dated by its file's last write, and evidence that cannot be
+  dated is asked.
+- **The orderly release applies rows 1 and 2 first.** An idle host's
+  unreadable ledger, or a tail with no boundary for the ledger's newest turn,
+  had still let B authorize a record. Both now record nothing.
 
 No question for the operator remains: the code, read-only counts over this
 machine's own ledgers and transcripts, three scratch runs of the existing

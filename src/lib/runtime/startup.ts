@@ -42,7 +42,7 @@ import { INTERRUPTED_CODEX_CONTINUATION_TEXT, RECOVERY_NOTICE_ORIGIN } from "./r
 import { delegatusOriginForRecipient } from "./agentMessageAuthor";
 import { claudeHostLaunchPaths, materializeStructuredHostAccess, recoverPendingStructuredSpawns, structuredHostAccessPolicy } from "./structuredSpawn";
 import { backgroundWorkAwaitedAtCut, conversationTurnLiveness, engineRecordSince, hostTurnReading, readTranscriptEvidence, restartCutDecision, transcriptCutEvidenceFromRecords, transcriptEvidenceFromRecords, type TranscriptEventKind, type TurnLivenessDependencies } from "./liveness";
-import { hostTurnRecordIdentity, readHostTurnRecord } from "./eventStore";
+import { hostTurnRecordIdentity, hostTurnRecordModifiedAt, readHostTurnRecord } from "./eventStore";
 import { holdRestartCutRow, releaseRestartCutRow, setRestartCutHeldRows } from "./restartCutHold";
 import { markStructuredHostStartupProgress, type StructuredHostStartupPhase } from "./startupStatus";
 import { startupDiagnostic } from "../startupDiagnostics";
@@ -459,6 +459,14 @@ function transcriptIdentity(transcriptPath: string): string {
   }
 }
 
+function fileModifiedAt(filename: string): number | "absent" | "unknown" {
+  try {
+    return fs.statSync(filename).mtimeMs;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? "absent" : "unknown";
+  }
+}
+
 function restartCutStampValue(ledger: string, transcript: string, entry: AgentRegistryEntry): string {
   return [ledger, transcript, entry.status, entry.structuredHost?.activeTurnRef ?? ""].join("|");
 }
@@ -529,11 +537,20 @@ async function restartCutTargets(
     };
     /* The same window bounds every adoption a turn claim alone asks for. It
        dates the newest durable activity: the host ledger's last write or the
-       transcript's newest work, and the row where the conversation has neither. */
-    const activity = Math.max(ledger.state === "read" ? ledger.mtimeMs : -Infinity, at ?? -Infinity);
-    if (now - (Number.isFinite(activity) ? activity : Date.parse(entry.updatedAt)) > startupTurnMaxAgeMs()) {
-      recognition.stamps.set(hostKey, stamp);
-      continue;
+       transcript's newest work, and the row where the conversation has neither.
+       Evidence whose records cannot be read is dated by its file's last write,
+       and evidence that cannot be dated at all is never provably old: either
+       is asked, and an undecided row is held, never aged out (C1). */
+    const ledgerWrite = ledger.state === "read" ? ledger.mtimeMs
+      : ledger.state === "absent" ? "absent" : hostTurnRecordModifiedAt(generation.id);
+    const transcriptWork = transcript === "absent" ? "absent"
+      : tail.integrity === "complete" ? at ?? "absent" : fileModifiedAt(generation.path);
+    if (ledgerWrite !== "unknown" && transcriptWork !== "unknown") {
+      const activity = Math.max(...[ledgerWrite, transcriptWork].map((date) => date === "absent" ? -Infinity : date));
+      if (now - (Number.isFinite(activity) ? activity : Date.parse(entry.updatedAt)) > startupTurnMaxAgeMs()) {
+        recognition.stamps.set(hostKey, stamp);
+        continue;
+      }
     }
     const stage = interruptionStageOf(snapshot.memberships, conversationId);
     const host = hostTurnReading(ledger);

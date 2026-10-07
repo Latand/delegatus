@@ -2036,7 +2036,9 @@ const RELEASE_TAIL_READS = 3;
  *
  * This process is the ledger's only writer, so no append can land inside the
  * synchronous read. The CLI is alive and may be writing the transcript, so
- * the tail is read up to three times; one still uncertain records nothing.
+ * the tail is read up to three times; one still uncertain records nothing, and
+ * so does a ledger that cannot be read or a tail that holds no boundary for
+ * the ledger's newest turn (rows 1 and 2).
  */
 async function idleHostCut(registry: AgentRegistry, key: SessionKey): Promise<{ backgroundTasks: string[]; selfStartedWork: boolean }> {
   const nothing = { backgroundTasks: [], selfStartedWork: false };
@@ -2059,11 +2061,22 @@ async function idleHostCut(registry: AgentRegistry, key: SessionKey): Promise<{ 
     });
     return nothing;
   }
+  /* Rows 1 and 2: a ledger that cannot be read, or a transcript slice that
+     cannot be found for its newest turn, decides nothing, and neither does
+     the background work that slice would be read for. */
+  const host = hostTurnReading(ledger);
+  const record = engineRecordSince("claude", ledger, tail);
+  if (host.state === "unreadable" || record === "unreadable" || record === "undelimited") {
+    console.error("[viewer release] an idle host's turn evidence could not be decided; recording nothing for it", {
+      hostKey: sessionKeyId(key), ledger: host.state, record,
+    });
+    return nothing;
+  }
   const evidence = transcriptCutEvidenceFromRecords(tail.records, "claude");
-  const hostClosedTurn = hostTurnReading(ledger).state === "closed";
+  const hostClosedTurn = host.state === "closed";
   return {
     backgroundTasks: await backgroundWorkAwaitedAtCut("claude", transcriptPath, evidence, Date.now(), hostClosedTurn),
-    selfStartedWork: hostClosedTurn && engineRecordSince("claude", ledger, tail) === "open",
+    selfStartedWork: hostClosedTurn && record === "open",
   };
 }
 

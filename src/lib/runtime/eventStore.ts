@@ -323,11 +323,6 @@ const HOST_TURN_RECORD_STEP_BYTES = 1024 * 1024;
     transcript tail holds; only frames that never reached the transcript stand
     between it and the boundary. */
 const HOST_TURN_RECORD_FRAMES_BEFORE = 256;
-const DELTA_RECORD_PREFIX = '{"kind":"delta"';
-/** A delta's sequence, read from its header without parsing its text: a host
-    writes `seq` last, and an unescaped `"seq":N}` closing the line can only be
-    that top-level key. */
-const DELTA_RECORD_SEQ = /"seq":(\d+)\}$/;
 
 function hostLedgerFilename(threadId: string, directory: string): string {
   return path.join(directory, `${encodeURIComponent(threadId)}.jsonl`);
@@ -349,13 +344,27 @@ export function hostTurnRecordIdentity(
   }
 }
 
+/** When a session's ledger file was last written, without reading it:
+    `absent` when there is no file, `unknown` when it cannot be stat'ed. */
+export function hostTurnRecordModifiedAt(
+  threadId: string,
+  directory: string = statePath("structured-host-events"),
+): number | "absent" | "unknown" {
+  try {
+    return fs.statSync(hostLedgerFilename(threadId, directory)).mtimeMs;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? "absent" : "unknown";
+  }
+}
+
 /**
  * One stable read of a session's ledger: one descriptor, a stat before the
  * read and one after, and a stat of the path. A file that was appended to or
  * replaced under the read is `unreadable`, never an answer from its old
- * prefix, which is what {@link FileRuntimeEventStore.load} hands back. Only
- * boundary and frame records are parsed, newest first; deltas are skipped by
- * their kind. An unterminated final line is a write the crash cut short.
+ * prefix, which is what {@link FileRuntimeEventStore.load} hands back. Every
+ * record read is parsed and validated as that load validates it, newest first,
+ * deltas included; a delta is then skipped by its kind. An unterminated final
+ * line is a write the crash cut short.
  */
 export function readHostTurnRecord(
   threadId: string,
@@ -402,13 +411,6 @@ export function readHostTurnRecord(
       return true;
     };
     const visit = (line: string): void => {
-      if (line.startsWith(DELTA_RECORD_PREFIX)) {
-        const header = DELTA_RECORD_SEQ.exec(line);
-        if (header) {
-          sequenced(Number(header[1]));
-          return;
-        }
-      }
       let event: Record<string, unknown> | null = null;
       try {
         const parsed = JSON.parse(line) as unknown;
