@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, rmSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { ALWAYS_IN_SCOPE, changedSinceBase, executedPaths, platformScope, workflowEntries } from "./ci-platform-scope";
@@ -12,6 +12,13 @@ export interface Step {
   isolated?: boolean;
   pinned?: boolean;
   codex?: string;
+  /** Passed after the Codex fixture path. */
+  selection?: string;
+  /** Consecutive steps with the same group run at once, under one phase marker. */
+  group?: string;
+  /** A check the hosted job also runs: when the push budget runs out it is
+      stopped and named as left to that job, never failed or dropped. */
+  deferrable?: boolean;
 }
 export interface PlanEnvironment {
   base: string;
@@ -30,6 +37,8 @@ const isTest = (file: string) => /\.test\.[cm]?[jt]sx?$/.test(file) && !file.inc
 const lintable = (file: string) => /\.(?:ts|tsx|js|mjs|cjs)$/.test(file);
 /** Prose the compiler never reads. Anything else can change what it checks. */
 const proseOnly = (file: string) => /\.(?:md|mdx|txt)$/i.test(file);
+
+export const NATIVE_GROUP = "native Codex";
 
 /** Pure planning: discovery and process execution happen outside this function. */
 export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvironment): Step[] {
@@ -87,7 +96,14 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
       { name: "runtime negative controls", command: ["bun", "scripts/verify-bun-runtime-controls.ts"], capped: true, isolated: true, pinned: true },
     );
   }
-  if (env.native) for (const version of env.codexVersions) steps.push({ name: `native Codex ${version}`, command: ["bun", "scripts/verify-native-codex-runtime.ts"], capped: true, isolated: true, pinned: true, codex: version });
+  if (env.native && env.codexVersions.length) {
+    // Only the engine files start the Codex executable, so only they run once
+    // per supported version. The shared contracts read no executable: one run
+    // judges them, and it is the long tail the hosted job can take.
+    const native = { command: ["bun", "scripts/verify-native-codex-runtime.ts"], capped: true, isolated: true, pinned: true, group: NATIVE_GROUP };
+    for (const version of env.codexVersions) steps.push({ ...native, name: `native Codex ${version}`, codex: version, selection: "--engine-only" });
+    steps.push({ ...native, name: "native Codex shared contracts", codex: env.codexVersions[0], selection: "--shared-only", deferrable: true });
+  }
   if (supplyChainChanged) {
     steps.push({ name: "audit retry tests", command: ["bun", "test", "./scripts/audit-with-retry.test.ts", "./scripts/supply-chain-check.test.ts"], capped: true, isolated: true });
     steps.push({ name: "supply chain", command: ["bun", "scripts/supply-chain-check.ts", "--base", env.base], capped: true });
@@ -238,8 +254,156 @@ function codexFixture(root: string, cache: string, version: string): string {
   return binary;
 }
 
-function main(mode: Mode): void {
+/** How long a push may spend in this hook when nobody says otherwise. Only
+    deferrable checks are held to it then; a person's push still waits for
+    every decisive verdict. */
+export const PUSH_BUDGET_MS = 12 * 60_000;
+export interface PushDeadline { at: number; startedAt: number; enforced: boolean }
+
+/** `LLV_GATE_PUSH_DEADLINE` (Unix ms) is set by a caller that kills the push
+    at a limit of its own, as the controller's publication does: every step
+    then ends by it, so the hook fits that limit by construction. */
+export function pushDeadline(env: Partial<NodeJS.ProcessEnv>, startedAt: number): PushDeadline {
+  const raw = env.LLV_GATE_PUSH_DEADLINE;
+  if (raw === undefined || raw === "") return { at: startedAt + PUSH_BUDGET_MS, startedAt, enforced: false };
+  const at = Number(raw);
+  if (!Number.isSafeInteger(at) || at <= 0) throw new Error("LLV_GATE_PUSH_DEADLINE must be a Unix time in milliseconds");
+  return { at, startedAt, enforced: true };
+}
+/** When a step is stopped; Infinity when nothing stops it. */
+export function stepDeadline(step: Step, deadline: PushDeadline): number {
+  return step.deferrable || deadline.enforced ? deadline.at : Infinity;
+}
+const seconds = (ms: number) => `${Math.max(0, Math.round(ms / 1000))} s`;
+export function budgetSeconds(deadline: PushDeadline): number {
+  return Math.max(0, Math.round((deadline.at - deadline.startedAt) / 1000));
+}
+/** Said for every check the push budget left to the hosted job. The colon
+    keeps it from reading as a phase marker. */
+export function deferredLine(mode: Mode, step: Step, deadline: PushDeadline, ranMs: number | null, ref = "<branch>"): string {
+  const when = ranMs === null ? "before it could start" : `after it had run ${seconds(ranMs)}`;
+  return `${mode}: left to the hosted job: "${step.name}" was stopped ${when}, when the push budget of ${budgetSeconds(deadline)} s ran out; `
+    + `its verdict comes from the "Bun runtime pin" workflow (gh workflow run bun-runtime.yml --ref ${ref})`;
+}
+/** A decisive step the enforced deadline stopped. The publication reads this
+    line as an interrupted push (src/lib/pipelines/git.ts), not as a refusal. */
+export const NO_VERDICT_PREFIX = "no verdict within the push budget of ";
+export class NoVerdict extends Error {
+  constructor(step: Step, deadline: PushDeadline, ranMs: number | null) {
+    super(`${NO_VERDICT_PREFIX}${budgetSeconds(deadline)} s: "${step.name}" ${ranMs === null ? "could not start" : `was still running after ${seconds(ranMs)} and was stopped`}; nothing was judged`);
+  }
+}
+
+function cgroupOf(pid: number | "self"): string | null {
+  try { return readFileSync(`/proc/${pid}/cgroup`, "utf8").split("\n").find(line => line.startsWith("0::"))?.slice(3) ?? null; }
+  catch { return null; }
+}
+function descendants(root: number): number[] {
+  const children = new Map<number, number[]>();
+  let entries: string[] = [];
+  try { entries = readdirSync("/proc").filter(name => /^\d+$/.test(name)); } catch { return []; }
+  for (const name of entries) {
+    try {
+      const stat = readFileSync(`/proc/${name}/stat`, "utf8");
+      const parent = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]);
+      children.set(parent, [...(children.get(parent) ?? []), Number(name)]);
+    } catch { /* exited while listed */ }
+  }
+  const found: number[] = [];
+  for (let queue = [root]; queue.length;) for (const child of children.get(queue.shift()!) ?? []) { found.push(child); queue.push(child); }
+  return found;
+}
+/** Stops the step this hook started, by its PID and the PIDs under it. When
+    gate-slot gave the step a transient scope of its own, the whole scope goes
+    too, which also reaches helpers that left the process tree. */
+function stopStep(pid: number): void {
+  const tree = [pid, ...descendants(pid)];
+  const scope = cgroupOf(pid);
+  for (const member of tree) { try { process.kill(member, "SIGKILL"); } catch { /* already gone */ } }
+  if (scope && scope !== cgroupOf("self") && scope.endsWith(".scope")) {
+    try { writeFileSync(path.join("/sys/fs/cgroup", scope, "cgroup.kill"), "1"); } catch { /* no cgroup.kill: the tree above was stopped */ }
+  }
+}
+
+interface Outcome { code: number | null; stopped: boolean; ranMs: number | null }
+async function execute(command: string[], root: string, env: NodeJS.ProcessEnv, until: number, log?: string): Promise<Outcome> {
+  if (until <= Date.now()) return { code: null, stopped: true, ranMs: null };
+  const started = Date.now();
+  const fd = log ? openSync(log, "w") : undefined;
+  let stopped = false, timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const child = fd === undefined
+      ? Bun.spawn({ cmd: command, cwd: root, env, stdio: ["inherit", "inherit", "inherit"] })
+      : Bun.spawn({ cmd: command, cwd: root, env, stdio: ["ignore", fd, fd] });
+    // A child that already exited keeps nothing to stop, and its PID may be reused.
+    if (Number.isFinite(until)) timer = setTimeout(() => { if (child.exitCode === null && !child.signalCode) { stopped = true; stopStep(child.pid); } }, Math.max(0, until - Date.now()));
+    const code = await child.exited;
+    return { code: stopped ? null : code, stopped, ranMs: Date.now() - started };
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+export interface Prepared { command: string[]; env: NodeJS.ProcessEnv }
+/** Runs the plan in order. A group runs at once and is reported once all of
+    it has settled. Resolves with the checks left to the hosted job. */
+export async function runSteps(mode: Mode, steps: readonly Step[], options: {
+  root: string; deadline: PushDeadline; logDir: string; prepare: (step: Step) => Prepared; say?: (line: string) => void; ref?: string;
+}): Promise<string[]> {
+  const { root, deadline, logDir, prepare } = options;
+  const say = options.say ?? ((line: string) => console.error(line));
+  const deferred: string[] = [];
+  // A stopped step is deferred when the hosted job also runs it, and is a
+  // missing verdict otherwise.
+  const settle = (step: Step, outcome: Outcome) => {
+    if (!outcome.stopped) return outcome.code === 0;
+    if (!step.deferrable) throw new NoVerdict(step, deadline, outcome.ranMs);
+    say(deferredLine(mode, step, deadline, outcome.ranMs, options.ref));
+    deferred.push(step.name);
+    return true;
+  };
+  for (let index = 0; index < steps.length;) {
+    const step = steps[index]!;
+    let end = index + 1;
+    if (step.group) while (end < steps.length && steps[end]!.group === step.group) end++;
+    const group = steps.slice(index, end);
+    index = end;
+    say(`${mode}: ${step.group ?? step.name}`);
+    if (!step.group) {
+      const { command, env } = prepare(step);
+      const outcome = await execute(command, root, env, stepDeadline(step, deadline));
+      if (!settle(step, outcome)) throw new Error(`${command[0]} failed (${outcome.code})`);
+      continue;
+    }
+    // Grouped steps take their machine admission together and wait for none
+    // of each other; each writes its own log, shown when it failed.
+    const prepared = group.map(member => ({ member, ...prepare(member), log: path.join(logDir, `${member.name.replace(/[^\w.-]+/g, "-")}.log`) }));
+    const outcomes = await Promise.all(prepared.map(({ member, command, env, log }) => execute(command, root, env, stepDeadline(member, deadline), log)));
+    const failed: string[] = [];
+    let missing: NoVerdict | undefined;
+    prepared.forEach(({ member, log }, at) => {
+      const outcome = outcomes[at]!;
+      try {
+        if (settle(member, outcome)) {
+          if (!outcome.stopped) say(`${mode}: ${member.name} passed in ${seconds(outcome.ranMs ?? 0)}`);
+          return;
+        }
+      } catch (error) { if (error instanceof NoVerdict) { missing ??= error; return; } throw error; }
+      failed.push(member.name);
+      if (existsSync(log)) say(readFileSync(log, "utf8").trimEnd());
+      say(`${mode}: ${member.name} failed (${outcome.code}) after ${seconds(outcome.ranMs ?? 0)}`);
+    });
+    if (failed.length) throw new Error(`${failed.join(", ")} failed`);
+    if (missing) throw missing;
+  }
+  if (deferred.length) say(`${mode}: passed; left to the hosted job: ${deferred.join(", ")}`);
+  return deferred;
+}
+
+async function main(mode: Mode): Promise<void> {
   if (process.env.LLV_SKIP_HOOKS === "1") return;
+  const deadline = pushDeadline(process.env, Date.now());
   const root = git(process.cwd(), ["rev-parse", "--show-toplevel"]);
   let base = mode === "pre-commit" ? git(root, ["merge-base", "HEAD", "origin/main"]) : "HEAD";
   if (mode === "pre-push") {
@@ -274,8 +438,7 @@ function main(mode: Mode): void {
       LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: path.join(root, "scripts/privacy-known-value-fingerprints.json"),
       LLV_PRIVACY_OCR_LANGUAGES: "eng+ukr",
     };
-    for (const step of steps) {
-      console.error(`${mode}: ${step.name}`);
+    const prepare = (step: Step) => {
       const command = [...step.command];
       const env = { ...(step.isolated ? isolated : process.env) };
       if (step.name === "privacy") Object.assign(env, privacyEnv);
@@ -284,7 +447,7 @@ function main(mode: Mode): void {
         env.PATH = `${path.dirname(runtime)}${path.delimiter}${env.PATH ?? ""}`;
       }
       if (step.name === "runtime host") command.push("--runtime", runtime);
-      if (step.codex) command.push(codexFixture(root, cache, step.codex));
+      if (step.codex) command.push(codexFixture(root, cache, step.codex), ...(step.selection ? [step.selection] : []));
       if (step.name === "Viewer build") Object.assign(env, { NODE_ENV: "production", NEXT_TELEMETRY_DISABLED: "1", NEXT_PUBLIC_RUNTIME_UI: "1" });
       // Missing named tests must not shrink a green `bun test` run.
       if (command[1] === "test") {
@@ -293,8 +456,10 @@ function main(mode: Mode): void {
           if (!isTest(file) || !existsSync(path.resolve(root, file))) throw new Error(`missing or invalid test path: ${file}`);
         }
       }
-      run(step.capped ? ["bash", "scripts/gate-slot.sh", ...command] : command, root, env);
-    }
+      return { command: step.capped ? ["bash", "scripts/gate-slot.sh", ...command] : command, env };
+    };
+    const branch = spawnSync("git", ["symbolic-ref", "--short", "-q", "HEAD"], { cwd: root, encoding: "utf8" }).stdout?.trim();
+    await runSteps(mode, steps, { root, deadline, logDir: sandbox, prepare, ...(branch ? { ref: branch } : {}) });
   } finally {
     rmSync(sandbox, { recursive: true, force: true });
   }
@@ -303,8 +468,13 @@ function main(mode: Mode): void {
 if (import.meta.main) {
   const mode = process.argv[2];
   if (mode !== "pre-commit" && mode !== "pre-push") throw new Error("usage: local-gate.ts pre-commit|pre-push");
-  try { main(mode); } catch (error) {
-    console.error(`${mode}: ${error instanceof Error ? error.message : error}; gate failed`);
-    process.exitCode = 1;
+  try { await main(mode); } catch (error) {
+    if (error instanceof NoVerdict) {
+      console.error(`${mode}: ${error.message}`);
+      process.exitCode = 75;
+    } else {
+      console.error(`${mode}: ${error instanceof Error ? error.message : error}; gate failed`);
+      process.exitCode = 1;
+    }
   }
 }

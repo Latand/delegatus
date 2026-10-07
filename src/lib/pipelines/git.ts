@@ -1199,11 +1199,28 @@ export function publicationFailureCause(failure: PipelinePublicationFailure): st
   return `git push was refused (${status}${tests})${last ? `: ${last.slice(0, 160)}` : ""}`;
 }
 
+/** What a publication's push may take, its repository hook included. */
+const PUBLICATION_PUSH_TIMEOUT_MS = 900_000;
+/** Left after the hook's deadline for git to send the pack. */
+const PUBLICATION_PACK_MARGIN_MS = 60_000;
+
+/** The hook's line for a decisive check its push budget stopped before a
+    verdict (NO_VERDICT_PREFIX in scripts/local-gate.ts): the push was
+    interrupted, it was not refused. */
+const HOOK_NO_VERDICT = /^pre-push: no verdict within the push budget of (\d+) s:/m;
+export function hookBudgetStopMs(output: string): number | null {
+  const match = HOOK_NO_VERDICT.exec(output);
+  return match ? Number(match[1]) * 1000 : null;
+}
+
 /** A push that was stopped before it reached the remote, in one line: what
     ended it and which phase the hook had announced. Evidence is absent when
     the Viewer itself died with the push. */
 export function publicationInterruptionCause(failure?: PipelinePublicationFailure): string {
   const phase = failure ? publicationFailurePhase(failure) : null;
+  if (failure?.hookBudgetMs) {
+    return `the pre-push hook's ${Math.round(failure.hookBudgetMs / 60_000)}-minute budget ran out${phase ? ` while its "${phase}" phase was still running` : ""}; it stopped without a verdict and the push did not reach the remote`;
+  }
   const ended = failure?.timedOutMs ? `the push ran past its ${Math.round(failure.timedOutMs / 60_000)}-minute limit`
     : failure?.signal ? `the push was ended by ${failure.signal}` : "the push was interrupted";
   return `${ended}${phase ? ` in the hook's "${phase}" phase` : ""} and did not reach the remote`;
@@ -1524,11 +1541,12 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
           .slice(-16).filter((line) => !tail.includes(line)).map((line) => line.slice(0, 160)).join("\n");
         // Long test diagnostics must not erase the hook's phase markers.
         const timedOut = executed.code === null ? /^command timed out after (\d+)ms/.exec(executed.stderr) : null;
+        const hookBudgetMs = preparingDependencies ? null : hookBudgetStopMs(output);
         const outputTail = phases ? `${phases}\n…\n${output.slice(-(4000 - phases.length - 3))}` : tail;
         failureEvidence = { step: preparingDependencies ? "preparing publication dependencies" : "publishing the pipeline branch",
           code: executed.code, signal: executed.signal ?? null,
           durationMs: Math.max(0, Math.round(performance.now() - started)), outputTail,
-          ...(timedOut ? { timedOutMs: Number(timedOut[1]) } : {}) };
+          ...(timedOut ? { timedOutMs: Number(timedOut[1]) } : {}), ...(hookBudgetMs ? { hookBudgetMs } : {}) };
       }
       return executed;
     };
@@ -1553,6 +1571,9 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       const detail = publicationFailureDetail(failureEvidence);
       result = result.ok ? { ...result, failure: failureEvidence, detail }
         : { ...result, failure: failureEvidence, error: detail };
+      // A hook that stopped at its budget judged nothing: retried like a push
+      // its time limit killed, never parked as the stage's own refusal.
+      if (!result.ok && failureEvidence.hookBudgetMs) result = { ...result, outcome: "not-landed" };
     }
     clearInterval(watch); watch = undefined;
     // Retain the actual child outcome before trying the kernel fence again.
@@ -1739,7 +1760,12 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
      or is refused; any other push is the one it always was. The App's
      variables are spread over the hook environment, which removes the
      Viewer's own settings first. */
-  const push = (await exec("git", ["push", pipeline.delivery?.target.remote || "origin", `${acceptedSha}:${pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`}`], pipeline.worktreeDir, { ...pipelinePublicationHookEnv(), ...engineForgeWriteEnv() }, { timeoutMs: 900_000 }));
+  /* The hook is handed the moment it must be done by, a minute before this
+     limit for git to send the pack, so it ends with its own verdict or with
+     a named missing one instead of being killed (scripts/local-gate.ts). */
+  const pushEnv = { ...pipelinePublicationHookEnv(), ...engineForgeWriteEnv(),
+    LLV_GATE_PUSH_DEADLINE: String(Date.now() + PUBLICATION_PUSH_TIMEOUT_MS - PUBLICATION_PACK_MARGIN_MS) };
+  const push = (await exec("git", ["push", pipeline.delivery?.target.remote || "origin", `${acceptedSha}:${pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`}`], pipeline.worktreeDir, pushEnv, { timeoutMs: PUBLICATION_PUSH_TIMEOUT_MS }));
   if (push.code === null) return { ok: true, sha: acceptedSha, remote: "unreachable", uncertain: true, detail: "remote write was interrupted; reconcile its outcome" };
   if (push.code !== 0) return failure("publishing the pipeline branch", push);
   const confirm = (await readRemotePipelineBranch(pipeline, exec, "confirming the published pipeline branch"));

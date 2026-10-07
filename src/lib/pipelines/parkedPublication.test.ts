@@ -657,6 +657,36 @@ test("a refused publication of a head that changed code parks at once and is nev
   } finally { h.cleanup(); }
 });
 
+test("a hook that stopped at the deadline it was handed is retried as an interrupted push, even when the stage changed code", async () => {
+  const h = fixture();
+  try {
+    trailingLane(h, 2, { "src/work.ts": "export const work = 1;\n" });
+    const { NoVerdict } = await import("../../../scripts/local-gate");
+    // The hook's own line, as scripts/local-gate.ts writes it.
+    const line = `pre-push: ${new NoVerdict({ name: "touched tests", command: [] }, { at: 840_000, startedAt: 0, enforced: true }, 830_000).message}`;
+    const handed = path.join(h.root, "deadline");
+    fs.writeFileSync(h.hook, `#!/bin/sh\necho "$LLV_GATE_PUSH_DEADLINE" > '${handed}'\necho 'pre-push: privacy' >&2\necho 'pre-push: touched tests' >&2\necho '${line}' >&2\nexit 75\n`, { mode: 0o700 });
+    let clock = Date.parse("2026-10-04T10:00:00.000Z");
+    const ports = { ...h.ports, now: () => new Date(clock).toISOString(), scheduleTick: () => {} };
+    const before = Date.now();
+    expect((await patchPipeline(h.lane.id, { action: "publish" }, ports)).error).toBeUndefined();
+    for (let n = 0; n < 8; n++) await tickPipelines([], ports);
+    // Fourteen minutes: the fifteen-minute push limit less one for the pack.
+    const deadline = Number(fs.readFileSync(handed, "utf8"));
+    expect(deadline).toBeGreaterThanOrEqual(before + 14 * 60_000);
+    expect(deadline).toBeLessThanOrEqual(Date.now() + 14 * 60_000);
+    const cause = "the pre-push hook's 14-minute budget ran out while its \"touched tests\" phase was still running; it stopped without a verdict and the push did not reach the remote";
+    expect(h.pushes()).toBe(1);
+    expect(h.current().state).toBe("running");
+    expect(h.current().stateDetail).toBe(`passed but unpublished: ${cause}; automatic retry 1 of 3 at 2026-10-04T10:01:00.000Z`);
+    expect(h.current().delivery!.operation!.result).toMatchObject({ ok: false, outcome: "not-landed", failure: { hookBudgetMs: 840_000, changedFiles: 1 } });
+    for (const wait of [60_000, 5 * 60_000, 15 * 60_000]) { clock += wait; for (let n = 0; n < 8; n++) await tickPipelines([], ports); }
+    expect(h.pushes()).toBe(4);
+    expect(h.current().state).toBe("needs_decision");
+    expect(h.current().stateDetail!.split("\n")[0]).toBe(`publishing the passed stage: ${cause}; retried 3 times. Nothing on this branch caused it: check that the hook can finish on this machine (time limit, memory, a stopped Viewer), then retry-stage.`);
+  } finally { h.cleanup(); }
+});
+
 test("a privacy refusal of an unchanged head is never retried or bypassed: the pushed commits stay unpublished", async () => {
   const h = fixture();
   try {
@@ -715,6 +745,7 @@ test("an interrupted push is named by what ended it and the phase the hook had r
   expect(publicationInterruptionCause({ ...failure, outputTail: "" })).toBe("the push was ended by SIGKILL and did not reach the remote");
   // The Viewer died with its push: nothing was retained.
   expect(publicationInterruptionCause()).toBe("the push was interrupted and did not reach the remote");
+  expect(publicationInterruptionCause({ ...failure, code: 1, signal: null, hookBudgetMs: 840_000 })).toBe("the pre-push hook's 14-minute budget ran out while its \"Linux tests\" phase was still running; it stopped without a verdict and the push did not reach the remote");
 });
 
 function missingDependencyFixture(h: ReturnType<typeof fixture>): string {

@@ -3,7 +3,8 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { discover, gateTemporaryRoot, isolatedEnvironment, pinnedBunVersion, plan, requiresMediaTools, type PlanEnvironment } from "./local-gate";
+import { discover, gateTemporaryRoot, isolatedEnvironment, NATIVE_GROUP, NoVerdict, pinnedBunVersion, plan, PUSH_BUDGET_MS, pushDeadline, requiresMediaTools, runSteps, stepDeadline, type PlanEnvironment, type PushDeadline, type Step } from "./local-gate";
+import { nativeBatches } from "./verify-native-codex-runtime";
 import { changedSinceBase } from "./ci-platform-scope";
 const root = path.resolve(import.meta.dir, "..");
 const roots: string[] = [];
@@ -39,10 +40,104 @@ test("scoped heavy steps retain pin, host interpreter and both native fixture ve
   expect(steps.find(step => step.name === "Viewer build")!.pinned).toBeTrue();
   expect(steps.find(step => step.name === "runtime host")!.pinned).toBeTrue();
   expect(steps.find(step => step.name === "runtime negative controls")!.pinned).toBeTrue();
-  expect(steps.filter(step => step.codex).map(step => step.codex)).toEqual(["0.154.0", "0.159.0"]);
+  expect(steps.filter(step => step.selection === "--engine-only").map(step => step.codex)).toEqual(["0.154.0", "0.159.0"]);
   expect(steps.some(step => step.name === "supply chain")).toBeTrue();
   expect(plan("pre-push", ["src/example.ts"], context()).some(step => step.pinned)).toBeFalse();
 });
+test("native Codex runs its engine files once per version and its shared contracts once, as one group", () => {
+  const steps = plan("pre-push", ["src/example.ts"], context({ native: true }));
+  const native = steps.filter(step => step.group === NATIVE_GROUP);
+  expect(native.map(step => [step.name, step.codex, step.selection, step.deferrable === true])).toEqual([
+    ["native Codex 0.154.0", "0.154.0", "--engine-only", false],
+    ["native Codex 0.159.0", "0.159.0", "--engine-only", false],
+    ["native Codex shared contracts", "0.154.0", "--shared-only", true],
+  ]);
+  // One contiguous group: the runner starts all three at once.
+  const first = steps.indexOf(native[0]!);
+  expect(steps.slice(first, first + native.length)).toEqual(native);
+  for (const step of native) expect(step).toMatchObject({ command: ["bun", "scripts/verify-native-codex-runtime.ts"], capped: true, isolated: true, pinned: true });
+  expect(plan("pre-push", ["src/example.ts"], context()).some(step => step.group === NATIVE_GROUP)).toBeFalse();
+});
+test("the engine and shared selections are exactly the hosted job's selection, split by who starts Codex", () => {
+  const all = nativeBatches().flat(), engine = nativeBatches("--engine-only").flat(), shared = nativeBatches("--shared-only").flat();
+  expect(new Set(all).size).toBe(all.length);
+  expect([...engine, ...shared].sort()).toEqual([...all].sort());
+  const startsCodex = /NATIVE_CODEX_QUEUE_TEST_BINARY|LLV_CODEX_HISTORY_CLI|LLV_CODEX_BINARY/;
+  // A shared file that starts the executable would be judged under one
+  // version only: it belongs in the engine lists.
+  for (const file of shared) expect(readFileSync(path.join(root, file), "utf8"), file).not.toMatch(startsCodex);
+  for (const file of engine) expect(readFileSync(path.join(root, file), "utf8"), file).toMatch(startsCodex);
+});
+test("a caller's push deadline bounds every step; without one only deferrable checks are held to the budget", () => {
+  const free = pushDeadline({}, 1_000);
+  expect(free).toEqual({ at: 1_000 + PUSH_BUDGET_MS, startedAt: 1_000, enforced: false });
+  const decisive: Step = { name: "types", command: ["bunx", "tsc"] };
+  const tail: Step = { ...decisive, name: "tail", deferrable: true };
+  expect(stepDeadline(decisive, free)).toBe(Infinity);
+  expect(stepDeadline(tail, free)).toBe(free.at);
+  const held = pushDeadline({ LLV_GATE_PUSH_DEADLINE: "5000" }, 1_000);
+  expect(held.enforced).toBeTrue();
+  expect(stepDeadline(decisive, held)).toBe(5_000);
+  expect(stepDeadline(tail, held)).toBe(5_000);
+  for (const bad of ["soon", "-1", "1.5"]) expect(() => pushDeadline({ LLV_GATE_PUSH_DEADLINE: bad }, 1_000)).toThrow("LLV_GATE_PUSH_DEADLINE");
+});
+
+function stepRunner(deadline: PushDeadline, scripts: (dir: string) => Record<string, string>) {
+  const dir = mkdtempSync(path.join(tmpdir(), "gate-steps-")); roots.push(dir);
+  const lines: string[] = [], commands = scripts(dir);
+  const run = (steps: Step[]) => runSteps("pre-push", steps, { root: dir, deadline, logDir: dir, say: line => lines.push(line),
+    prepare: step => ({ command: ["bash", "-c", commands[step.name]!], env: process.env }) }).then(() => null, (caught: unknown) => caught);
+  return { lines, run, dir };
+}
+const grouped = (name: string, deferrable = false): Step => ({ name, command: [], group: NATIVE_GROUP, ...(deferrable ? { deferrable } : {}) });
+const soon = (ms: number, enforced: boolean): PushDeadline => ({ at: Date.now() + ms, startedAt: Date.now(), enforced });
+function alive(pid: number): boolean {
+  try { return !/^\d+ \(.*\) Z/.test(readFileSync(`/proc/${pid}/stat`, "utf8")); } catch { return false; }
+}
+
+test("a group's steps run at once and report each verdict", async () => {
+  const runner = stepRunner(soon(60_000, false), () => ({ a: "sleep 1.5", b: "sleep 1.5", c: "sleep 1.5" }));
+  const started = performance.now();
+  expect(await runner.run([grouped("a"), grouped("b"), grouped("c", true)])).toBeNull();
+  expect(performance.now() - started).toBeLessThan(4_000);
+  expect(runner.lines[0]).toBe(`pre-push: ${NATIVE_GROUP}`);
+  for (const name of ["a", "b", "c"]) expect(runner.lines).toContainEqual(expect.stringMatching(new RegExp(`^pre-push: ${name} passed in \\d+ s$`)));
+}, 20_000);
+test("the budget leaves a deferrable check to the hosted job and says so; a decisive one still gets its verdict", async () => {
+  // No caller deadline: the decisive step outlives the budget and still passes.
+  const runner = stepRunner(soon(1_000, false), () => ({ engine: "sleep 2", tail: "sleep 60" }));
+  const started = performance.now();
+  expect(await runner.run([grouped("engine"), grouped("tail", true)])).toBeNull();
+  expect(performance.now() - started).toBeLessThan(15_000);
+  expect(runner.lines).toContainEqual(expect.stringMatching(/^pre-push: left to the hosted job: "tail" was stopped after it had run \d+ s, when the push budget of \d+ s ran out; its verdict comes from the "Bun runtime pin" workflow/));
+  expect(runner.lines).toContainEqual(expect.stringMatching(/^pre-push: engine passed in \d+ s$/));
+  expect(runner.lines.at(-1)).toBe("pre-push: passed; left to the hosted job: tail");
+  // Neither line reads as a phase marker to the publication.
+  for (const line of runner.lines.slice(1)) if (line.includes("hosted job")) expect(line).not.toMatch(/^pre-push: [^;:]{1,60}$/);
+}, 30_000);
+test("a caller's deadline stops a decisive step and everything it started, with no verdict", async () => {
+  const runner = stepRunner(soon(1_500, true), dir => ({ "touched tests": `sleep 60 & echo $! > '${dir}/helper.pid'; wait` }));
+  const started = performance.now();
+  const error = await runner.run([{ name: "touched tests", command: [] }]);
+  expect(error).toBeInstanceOf(NoVerdict);
+  expect((error as Error).message).toMatch(/^no verdict within the push budget of \d+ s: "touched tests" was still running after \d+ s and was stopped; nothing was judged$/);
+  expect(performance.now() - started).toBeLessThan(15_000);
+  const helper = Number(readFileSync(path.join(runner.dir, "helper.pid"), "utf8"));
+  for (let wait = 0; wait < 40 && alive(helper); wait++) await Bun.sleep(50);
+  expect(alive(helper)).toBeFalse();
+  // A step the deadline already passed never starts.
+  const lateRunner = stepRunner(soon(-1, true), dir => ({ "touched tests": `touch '${dir}/started'` }));
+  const late = await lateRunner.run([{ name: "touched tests", command: [] }]);
+  expect((late as Error).message).toContain('"touched tests" could not start');
+  expect(existsSync(path.join(lateRunner.dir, "started"))).toBeFalse();
+}, 30_000);
+test("a red verdict in a group fails the push with its log, even while the long tail is deferred", async () => {
+  const runner = stepRunner(soon(1_000, false), () => ({ "native Codex 0.154.0": "echo '(fail) installed Codex: adapter pagination [3.00ms]'; exit 1", tail: "sleep 60" }));
+  const error = await runner.run([grouped("native Codex 0.154.0"), grouped("tail", true)]);
+  expect((error as Error).message).toBe("native Codex 0.154.0 failed");
+  expect(runner.lines).toContain("(fail) installed Codex: adapter pagination [3.00ms]");
+  expect(runner.lines).toContainEqual(expect.stringMatching(/^pre-push: native Codex 0\.154\.0 failed \(1\) after \d+ s$/));
+}, 30_000);
 test("Viewer route and layout inputs select build and served-runtime verification", () => {
   for (const file of ["src/app/page.tsx", "src/app/layout.tsx", "src/components/Viewer.tsx"]) {
     const discovered = discover(root, "HEAD", [file]);
