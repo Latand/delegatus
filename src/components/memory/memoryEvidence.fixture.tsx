@@ -1,6 +1,6 @@
 import { createRoot } from "react-dom/client";
 import { renderMemoryMessageCase } from "./memoryMessageCases";
-import { TelemetrySettingsHost, openTelemetrySettings } from "@/components/telemetry/TelemetrySettings";
+import { MemoryPanel, MemoryReadingProvider } from "@/components/memory/MemoryPage";
 import { FeedItem } from "@/components/feed/FeedItem";
 import { MessageProvenanceProvider, provenanceLookupFor } from "@/components/feed/messageProvenance";
 import { createFeedSession, type Item } from "@/components/feed/parse";
@@ -18,8 +18,10 @@ const feed = createFeedSession({ engine: "claude", fmt: "claude", showSvc: false
 const items: Item[] = seat ? feed.feed(seat.lines, 0, false).items.map(entry => entry.item) : [item, short];
 const lookup = provenanceLookupFor(seat ?? { memoryOffers: { "fixture-memory-turn": titles, "fixture-short-memory-turn": ["Widget parser"] } }, items);
 createRoot(document.getElementById("root")!).render(<main className="mx-auto w-full max-w-3xl p-4 text-primary">
-  <button className="min-h-11" onClick={openTelemetrySettings}>Settings</button>
-  <TelemetrySettingsHost project="fixture-project" />
+  {/* Shared memory's page of the header menu, at the menu's width. */}
+  <section data-memory-fixture-page="" className="mb-4 w-[232px] rounded-[10px] border border-border bg-card p-1">
+    <MemoryReadingProvider project="fixture-project"><MemoryPanel /></MemoryReadingProvider>
+  </section>
   <MessageProvenanceProvider value={lookup}>
     {items.map((entry, i) => <FeedItem key={i} item={entry} />)}
   </MessageProvenanceProvider>

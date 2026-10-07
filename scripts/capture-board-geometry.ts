@@ -1341,11 +1341,14 @@ async function captureOnboarding(): Promise<void> {
             if (viewport.phone) {
               await page.waitForSelector('[data-mobile2-open="menu"]', { timeout: 60_000 });
               await page.click('[data-mobile2-open="menu"]');
+              /* The roles table is on the menu's Settings page. */
+              await page.click('[data-mobile2-menu-row="settings"]');
               await page.waitForSelector('[data-testid="menu-agent-mapping"]');
               await page.screenshot({ path: path.join(OUT_DIR, `${tag}-menu.png`) });
               await page.click('[data-testid="menu-agent-mapping"]');
             } else {
               await page.click("[data-rail-menu]");
+              await page.click("[data-rail-menu-settings]");
               await page.waitForSelector("[data-rail-menu-agent-mapping]");
               await page.screenshot({ path: path.join(OUT_DIR, `${tag}-menu.png`) });
               await page.click("[data-rail-menu-agent-mapping]");
@@ -1361,10 +1364,13 @@ async function captureOnboarding(): Promise<void> {
             await page.waitForSelector("[data-onboarding-dialog]", { state: "detached" });
             if (viewport.phone) {
               await page.click('[data-mobile2-open="menu"]');
+              /* The setup guide is under «Help and learning». */
+              await page.click('[data-mobile2-menu-row="help"]');
               await page.waitForSelector('[data-testid="menu-setup-guide"]');
               await page.click('[data-testid="menu-setup-guide"]');
             } else {
               await page.click("[data-rail-menu]");
+              await page.click("[data-rail-menu-help]");
               await page.waitForSelector("[data-rail-menu-setup-guide]");
               await page.click("[data-rail-menu-setup-guide]");
             }
@@ -1509,11 +1515,14 @@ async function captureOnboarding(): Promise<void> {
             const openGuide = async (row: "setup-guide" | "dictation") => {
               if (viewport.phone) {
                 await page.click('[data-mobile2-open="menu"]');
+                /* The guide is under «Help and learning», dictation on the Settings page. */
+                await page.click(row === "dictation" ? '[data-mobile2-menu-row="settings"]' : '[data-mobile2-menu-row="help"]');
                 await page.waitForSelector(`[data-testid="menu-${row}"]`);
                 if (row === "dictation") await page.screenshot({ path: path.join(OUT_DIR, `${tag}-menu-slice3.png`) });
                 await page.click(`[data-testid="menu-${row}"]`);
               } else {
                 await page.click("[data-rail-menu]");
+                await page.click(row === "dictation" ? "[data-rail-menu-settings]" : "[data-rail-menu-help]");
                 await page.waitForSelector(`[data-rail-menu-${row}]`);
                 if (row === "dictation") await page.screenshot({ path: path.join(OUT_DIR, `${tag}-menu-slice3.png`) });
                 await page.click(`[data-rail-menu-${row}]`);
@@ -6841,7 +6850,7 @@ async function installPingMain(): Promise<void> {
       const noticeBackground = await notice.evaluate(node => getComputedStyle(node).backgroundColor);
       if (noticeBackground === "rgba(0, 0, 0, 0)") report.failures.push(`${lang}-${width}: transparent notice`);
       await page.screenshot({ path: path.join(evidenceDir, `${lang}-${width}-notice.png`) });
-      await notice.getByRole("button", { name: translate(lang, "telemetry.settings"), exact: true }).click();
+      await notice.getByRole("button", { name: translate(lang, "headerMenu.ping"), exact: true }).click();
       const dialog = page.locator("[data-telemetry-settings]");
       await dialog.waitFor({ state: "visible" });
       const toggle = dialog.getByRole("switch");
