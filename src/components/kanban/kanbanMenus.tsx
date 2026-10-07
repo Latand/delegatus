@@ -9,12 +9,18 @@ import { TASK_COLORS, type TaskColor, type TaskStatus } from "@/lib/tasks/types"
    beside their anchor, focus moves in on open and back to the anchor on close,
    arrows walk the items, Tab and Escape close. */
 
+/* What an entry is and which group it belongs to, for the compact layout of
+   the same entries (`compactMenu.tsx`). `note` is the state of what a group
+   acts on, on the group's heading, and on an action the short line an icon
+   cell shows under it. The plain list below reads none of them. */
+interface KanbanMenuMark { id?: string; group?: string; note?: string }
+
 export type KanbanMenuItem =
-  | { type: "head"; label: string }
-  | { type: "sep" }
+  | KanbanMenuMark & { type: "head"; label: string }
+  | KanbanMenuMark & { type: "sep" }
   /* The colour labels as a row of swatches, each a radio item; `null` is none. */
-  | { type: "swatches"; label: string; value: TaskColor | null; names: (color: TaskColor | null) => string; hex: Record<TaskColor, string>; onPick: (color: TaskColor | null) => void }
-  | {
+  | KanbanMenuMark & { type: "swatches"; label: string; value: TaskColor | null; names: (color: TaskColor | null) => string; hex: Record<TaskColor, string>; onPick: (color: TaskColor | null) => void }
+  | KanbanMenuMark & {
     /* `check` is a toggle (menuitemcheckbox), drawn with the radio's tick. */
     type: "item" | "radio" | "check";
     label: string;
@@ -54,7 +60,7 @@ function place(element: HTMLElement, anchor: HTMLElement, within?: HTMLElement |
   element.style.top = `${Math.round(top)}px`;
 }
 
-function useDismiss(ref: React.RefObject<HTMLElement | null>, anchor: HTMLElement, onClose: (refocus: boolean) => void) {
+export function useMenuDismiss(ref: React.RefObject<HTMLElement | null>, anchor: HTMLElement, onClose: (refocus: boolean) => void) {
   useEffect(() => {
     const down = (event: PointerEvent) => {
       const target = event.target as Node;
@@ -75,18 +81,22 @@ function useDismiss(ref: React.RefObject<HTMLElement | null>, anchor: HTMLElemen
   }, [ref, anchor, onClose]);
 }
 
-const CheckGlyph = () => (
+export const CheckGlyph = () => (
   <svg className="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m5 12 5 5L20 7" /></svg>
 );
 
-export function KanbanMenu({ anchor, label, items, onClose }: {
+export interface KanbanMenuProps {
   anchor: HTMLElement;
   label: string;
   items: readonly KanbanMenuItem[];
   onClose: (refocus: boolean) => void;
-}) {
+  /** Which menu of the board this is (`card`, `column`, `reader`, …); `BoardMenu` lays some of them out compactly. */
+  kind?: string;
+}
+
+export function KanbanMenu({ anchor, label, items, onClose }: KanbanMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
-  useDismiss(ref, anchor, onClose);
+  useMenuDismiss(ref, anchor, onClose);
   useLayoutEffect(() => {
     if (!ref.current) return;
     place(ref.current, anchor);
@@ -175,7 +185,7 @@ export function KanbanPopover({ anchor, label, onClose, children, initialFocus =
   className?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  useDismiss(ref, anchor, onClose);
+  useMenuDismiss(ref, anchor, onClose);
   useLayoutEffect(() => {
     if (!ref.current) return;
     place(ref.current, anchor, within);
