@@ -13,6 +13,7 @@ import { AgentMappingTable } from "@/components/onboarding/AgentMappingTable";
 import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
 import { ROLE_VARIANT_DEFAULTS } from "@/lib/roles/paramConfig";
 import { RuntimePill } from "@/components/RuntimePill";
+import { ResourcesFooter } from "@/components/ResourcesFooter";
 import { createRoot } from "react-dom/client";
 
 import { cancelArrivalPulse, startArrivalPulse } from "@/components/attention/arrivalPulse";
@@ -403,6 +404,12 @@ const searchVer1 = add(conversation("search-ver-1", "Results empty for 40 s afte
 const searchVer2 = add(conversation("search-ver-2", "Re-running the rebuild with traffic", working({ plan: { current: "Re-running the rebuild with traffic" } })));
 
 if (FEED_FAILURES) { searchVer2.engine = "codex"; searchVer2.fmt = "codex"; }
+/* `&stage-switch`: the running verify conversation carries its stage membership, as a launched stage does,
+   so its runtime pill moves the attempt through the pipeline. */
+if (new URLSearchParams(location.search).has("stage-switch")) {
+  searchVer2.durableLineage = { kind: "spawn", role: "verifier", parentConversationId: null, reviewsConversationId: null,
+    memberships: [{ kind: "pipeline", containerId: "p-search", role: "verifier", slot: "verify", stageId: "verify", stageOrder: 2, round: null, parentConversationId: null }] };
+}
 /** The runtime snapshot `&runtime=structured` answers: the verify conversation on a structured host, mid-turn. */
 let snapshotReads = 0;
 function structuredSnapshot() {
@@ -2420,6 +2427,29 @@ const evidence = {
   storedPipeline(id: string) {
     return pipelines.find((entry) => entry.id === id) ?? null;
   },
+  setRuntimeSwitchPhase(pipelineId: string, stageId: string, phase: "requested" | "committed" | "rolled-back" | "failed" | "switching", outcome?: string) {
+    const record = pipelines.find(entry => entry.id === pipelineId);
+    const live = record?.runs.find(entry => entry.stageId === stageId)?.attempts.at(-1);
+    const change = live?.runtimeSwitches?.at(-1);
+    if (!live || !change) return;
+    change.phase = phase;
+    change.outcome = outcome ?? (phase === "rolled-back" ? "runtime switch failed; continued on previous runtime" : undefined);
+    if (phase === "switching" && outcome) {
+      live.state = "needs_decision";
+      record!.state = "needs_decision";
+      record!.stateDetail = outcome;
+    } else if (live.state === "needs_decision") {
+      live.state = "running";
+      if (record!.state === "needs_decision") record!.state = "running";
+      record!.stateDetail = null;
+    }
+    const seat = phase === "committed" ? change.to : change.from;
+    live.effectiveRole = { ...live.effectiveRole, engine: seat.engine, model: seat.model, effort: seat.effort, serviceTier: seat.serviceTier ?? undefined };
+    /* The conversation runs on what the attempt settled on, and the scan says so. */
+    const agent = files.find(entry => entry.conversationId === live.conversationId);
+    if (agent && seat.model) Object.assign(agent, { model: seat.model, effort: seat.effort ?? agent.effort });
+    window.dispatchEvent(new Event("llv:pipelines-changed"));
+  },
   /* K6: conversation account switches the board sent, in order. */
   accountRequests: [] as Array<Record<string, unknown>>,
   /* Reconfigures the runtime pill sent (#1846). */
@@ -2466,11 +2496,11 @@ const evidence = {
   admitted: null as { pipeline: Pipeline; task: BoardTask } | null,
   /* Every `/api/attention` call, as the page made it. */
   attentionCalls: [] as Array<{ url: string; method: string }>,
-  admitLane(title: string) {
+  admitLane(title: string, stateDetail: string | null = null) {
     evidence.admitted = {
       pipeline: pipeline("p-admitted", title, "t-admitted", "provisioning",
         [stage("build", "builder", "review"), stage("review", "reviewer", null)], [],
-        { stageId: "build", state: "pending", input: null, activatedBy: null }, { createdAt: new Date().toISOString() }),
+        { stageId: "build", state: "pending", input: null, activatedBy: null }, { createdAt: new Date().toISOString(), stateDetail }),
       task: task("t-admitted", "assigned", title, "", 0),
     };
   },
@@ -3261,9 +3291,17 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         if (ended) return json({ error: "pipeline is closed or completed" }, 409);
         const target = record.stages.find((entry) => entry.id === body.stageId);
         if (!target) return json({ error: "stage not found" }, 404);
-        if ((record.runs.find((entry) => entry.stageId === target.id)?.attempts.length ?? 0) > 0) return json({ error: "stage has already started" }, 409);
+        if (body.applyNow !== true && (record.runs.find((entry) => entry.stageId === target.id)?.attempts.length ?? 0) > 0) return json({ error: "stage has already started" }, 409);
         if (body.expectedStageDigest !== undefined && fixtureStageDigest(target) !== body.expectedStageDigest) return stageChanged("expectedStageDigest", "the stage changed since it was read; read it again before overriding it");
         if (typeof body.prompt === "string") target.prompt = body.prompt;
+        if (body.applyNow === true) {
+          const live = record.runs.find(entry => entry.stageId === target.id)?.attempts.at(-1);
+          if (!live || live.state !== "running" || record.state !== "running") return json({ error: "apply now requires a running stage" }, 409);
+          const from = { engine: live.effectiveRole.engine, model: live.effectiveRole.model, effort: live.effectiveRole.effort, serviceTier: live.effectiveRole.serviceTier ?? null, accountId: live.accountId ?? "default", conversationId: live.conversationId ?? "conversation_fixture", launchId: live.launchId, sessionId: live.sessionId, agentPath: live.agentPath };
+          const to = { ...from, engine: (body.engine ?? from.engine) as "claude" | "codex", model: typeof body.model === "string" ? body.model : from.model, effort: typeof body.effort === "string" ? body.effort : from.effort, serviceTier: typeof body.serviceTier === "string" ? body.serviceTier : from.serviceTier, accountId: typeof body.account === "string" ? body.account : from.accountId, accountPinned: typeof body.account === "string" };
+          live.runtimeSwitches = [{ id: `${id}:${target.id}:${live.n}:1`, seq: 1, requestedAt: new Date().toISOString(), actor: { kind: "operator" }, mode: to.engine === from.engine ? "fork" : "handoff", from, to, phase: "requested" }];
+          target.effectiveRole = { ...target.effectiveRole, engine: to.engine, model: to.model, effort: to.effort, serviceTier: to.serviceTier ?? undefined };
+        }
         /* #1279: a stage may name only an account the project allows; null clears the pin. */
         if (body.account !== undefined) {
           const requested = typeof body.account === "string" ? body.account.trim() : "";
@@ -3465,11 +3503,23 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   /* The rail's footer, so the frames that fold it away (#1802) have something
      to fold: invented machine figures and one invented limit window. */
   if (url.pathname.startsWith("/api/resources")) {
+    const diskRole = new URLSearchParams(location.search).get("disk-role");
+    const diskWarning = new URLSearchParams(location.search).get("disk-level") === "warning";
     const host = (target: string, title: string, over: Record<string, unknown>) => ({
       target, panePid: 4_100, kind: "structured", path: null, engine: "claude", title, project: LEDGER, activity: "idle", lastActiveAt: iso(6 * 60 * MIN), cwd: "/repo/ledger",
       rssBytes: 600 * 1024 ** 2, swapBytes: 0, procCount: 3, model: "opus", role: "builder", conversationId: null, stage: "implement", ownership: "owned", seat: false, turnBusy: false, ...over,
     });
     return json({
+      ...(diskRole ? { diskPressure: {
+        at: iso(0), episode: iso(MIN), warningBytes: 10 * 1024 ** 3, criticalBytes: 2 * 1024 ** 3,
+        /* `all`: one 256 GiB volume under state, worktrees and temp, with every consumer measured; `disk-level=warning` leaves it above the admission threshold. */
+        volumes: diskRole === "all"
+          ? [{ roles: ["state", "worktrees", "temp"], totalBytes: 256 * 1024 ** 3, ...(diskWarning ? { freeBytes: 8 * 1024 ** 3, level: "warning" } : { freeBytes: 1.4 * 1024 ** 3, level: "critical" }) }]
+          : [{ roles: [diskRole === "required-temp" ? "temp" : diskRole], freeBytes: 0.5 * 1024 ** 3, level: "critical", ...(diskRole === "required-temp" ? { provisioning: true } : {}) }],
+        consumers: diskRole === "all"
+          ? [{ kind: "state", bytes: 2.1 * 1024 ** 3, measuredAt: iso(0) }, { kind: "worktrees", bytes: 187 * 1024 ** 3, measuredAt: iso(0) }, { kind: "temp", bytes: 15 * 1024 ** 3, measuredAt: iso(0) }]
+          : [{ kind: "worktrees", bytes: 90 * 1024 ** 3, measuredAt: iso(0) }],
+      } } : {}),
       system: { ramTotal: 32 * 1024 ** 3, ramAvailable: 9 * 1024 ** 3, swapTotal: 8 * 1024 ** 3, swapUsed: 1024 ** 3, capturedAt: iso(30) },
       sessions: RAIL ? [
         host("host-ledger-build", "Reconciling the ledger export", { activity: "live", lastActiveAt: iso(20), rssBytes: 1_400 * 1024 ** 2, turnBusy: true }),
@@ -3541,7 +3591,12 @@ const queueTaskPreview = <div className="p-3"><NativeQueuePanel
   submit={async () => ({ ok: true })} onRefresh={() => {}} t={(key, params) => translate(UK ? "uk" : "en", key, params)}
 /><div className="mt-3"><SeatDeputyChip deputy={taskDeputy} /><DeputyBlock deputy={taskDeputy} /></div></div>;
 if (HEADER_MENU && new URLSearchParams(location.search).has("member")) void refreshTeamView();
-createRoot(document.getElementById("root")!).render(SCENARIO === "task-queue-preview" ? queueTaskPreview : SCENARIO === "service-tier" || SCENARIO === "role-defaults" ? (
+const diskDensity = new URLSearchParams(location.search).get("disk-density");
+createRoot(document.getElementById("root")!).render(diskDensity ? (
+  <div className="bg-panel" style={{ width: diskDensity === "full" ? "100%" : 248, marginTop: "auto" }}>
+    <ResourcesFooter density={diskDensity === "full" ? "full" : diskDensity === "detail" ? "detail" : "line"} />
+  </div>
+) : SCENARIO === "task-queue-preview" ? queueTaskPreview : SCENARIO === "service-tier" || SCENARIO === "role-defaults" ? (
   new URLSearchParams(location.search).has("mapping") ? <div className="p-6"><AgentMappingTable statuses={{ claude: { connected: true, account: null }, codex: { connected: true, account: null } }} layout={innerWidth < 640 ? "card" : "table"} onConnect={() => {}} /></div> : <div className="p-6" style={{ paddingTop: 400 }}>
     <RuntimePill file={{ ...searchVer2, engine: "codex", root: "codex-sessions", model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast" }} surface="structured" runtimeSettings={{ perTurnEffort: true, perTurnModel: false }} />
   </div>

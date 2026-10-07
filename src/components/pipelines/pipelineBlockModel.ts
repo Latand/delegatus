@@ -322,6 +322,7 @@ export function screenCurrentStageId(summary: KanbanPipeline): string | null {
  * "Implement failed · 1 finding". The caller adds the age.
  */
 export function pipelineReason(t: TFunction, pipeline: Pipeline, nameOf: (stage: PipelineStage) => string): string | null {
+  if (pipeline.state === "provisioning" && pipeline.stateDetail?.startsWith("waiting for disk space:")) return pipeline.stateDetail;
   const stop = reviewStop(pipeline);
   if (stop) return reviewStopReason(t, stop, nameOf);
   if (pipeline.state === "needs_review") {

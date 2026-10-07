@@ -2651,5 +2651,8 @@ export async function readResourcesWithDiagnostic(fresh = false, options: Resour
     noteSessionTargets([]);
     return fixtureRead(parseResourcesFixture(readFileSync(fixturePath, "utf8")), fresh);
   }
-  return withViewerSection(await resourcesReader().read(fresh, options));
+  const read = withViewerSection(await resourcesReader().read(fresh, options));
+  /* Loaded here, never by the collector worker that imports this module. */
+  const [{ readDiskPressure }, { worktreeSweepStatus }, { tempSweepStatus }] = await Promise.all([import("@/lib/state/diskPressure"), import("@/lib/pipelines/worktreeSweep"), import("@/lib/tempSweep")]);
+  return { ...read, payload: { ...read.payload, diskPressure: await readDiskPressure(), worktreeSweep: worktreeSweepStatus(), tempSweep: tempSweepStatus() } };
 }

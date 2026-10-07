@@ -4560,6 +4560,19 @@ test.each(["manager", "agent", "unidentified", "gateway"])("%s MCP spawn carries
   expect(sentHeaders?.["x-llv-autonomous-spawn"]).toBe(kind === "gateway" ? undefined : "1");
 });
 
+test("MCP apply-now forwards the actor and returns the runtime switch acknowledgement", async () => {
+  let captured: unknown;
+  const runtimeSwitch = { id: "runtime-switch-1", phase: "requested", mode: "fork" };
+  const bindings = viewerMcpBindings(undefined, undefined, {
+    patchPipeline: async (_id: string, body: unknown, _ports: unknown, actor: unknown) => { captured = { body, actor }; return { pipeline: { id: "pipeline_1", state: "running", taskIds: [] }, runtimeSwitch }; },
+    callerAttribution: () => ({ kind: "manager", conversationId: "conversation_orchestrator", role: "orchestrator" }),
+  } as never);
+  const service = createMcpToolService(bindings, { claim: async () => ({ kind: "fresh" }), complete: async () => {} } as never);
+  const answer = await service.callTool("pipeline_action", { clientRequestId: "runtime-apply", pipelineId: "pipeline_1", action: "override-stage", stageId: "build", model: "gpt-6.1-sol", applyNow: true });
+  expect(captured).toMatchObject({ body: { applyNow: true, model: "gpt-6.1-sol" }, actor: { kind: "agent", conversationId: "conversation_orchestrator" } });
+  expect(answer).toMatchObject({ ok: true, runtimeSwitch });
+});
+
 test.each([
   { id: "restart-service", button: true, unit: "delegatus.service" },
   { id: "start-service", button: true, unit: "delegatus.service" },
