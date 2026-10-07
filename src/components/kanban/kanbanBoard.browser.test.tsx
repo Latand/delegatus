@@ -6422,7 +6422,8 @@ describe("columns balanced on large screens, stage pills and heads on one line",
       };
     });
     const pills = [...board.querySelectorAll('.card[data-id^="task:t-bal-"] .pb-pills .pb-pill')].filter(pill => pill.getBoundingClientRect().width > 0).map(pill => {
-      const name = pill.querySelector(".pname");
+      /* The pill's name is .pb-name since the one pipeline block (#2072). */
+      const name = pill.querySelector(".pb-name, .pname");
       const model = pill.querySelector(".imodel");
       const parts = [pill.querySelector(".pdot"), pill.querySelector(".pident > span:first-child"), model, pill.querySelector(".reasoning-slot")].filter(Boolean);
       const r = box(pill);
@@ -6510,8 +6511,9 @@ describe("columns balanced on large screens, stage pills and heads on one line",
               for (const pill of frame.pills) {
                 const where = `${tag} ${pill.column} ${pill.stage}`;
                 if (pill.escapes.length) failures.push(`${where}: text outside the pill: ${pill.escapes.join(" | ")}`);
-                if (pill.nameLines > 1) failures.push(`${where}: the name wraps onto ${pill.nameLines} lines`);
-                if (pill.ellipsis !== "ellipsis") failures.push(`${where}: the name ends in ${pill.ellipsis}`);
+                /* A stage name is never cut: it wraps inside its pill rather than
+                   lose a word (#2072, #2363), where it once ellipsized on one line. */
+                if (pill.nameClipped) failures.push(`${where}: the name is cut (${pill.nameLines} lines, ${pill.ellipsis})`);
                 if (!pill.titleHasName) failures.push(`${where}: the title does not carry the name`);
                 if (!pill.partsInside) failures.push(`${where}: the dot, mark, model or bars leave the pill`);
                 if (pill.model?.clipped) failures.push(`${where}: the model «${pill.model.text}» is cut`);
@@ -7067,7 +7069,11 @@ describe("PR and issue chips on pipelines and task cards", () => {
     const overlaps = [], clipped = [], squeezed = [];
     let chips = 0;
     for (const row of rows) {
-      row.scrollIntoView({ block: "center" });
+      /* Where the board scrolls sideways (1440 beside the 248 px sidebar,
+         #2554) it snaps to column starts: bring the row's column in first, as
+         the operator does, then the row. */
+      row.closest(".kb .board.scroll .column")?.scrollIntoView({ block: "nearest", inline: "start" });
+      row.scrollIntoView({ block: "center", inline: "nearest" });
       const scope = row.closest(".pblock") || row.closest(".card") || row.closest("[data-mobile2-pipeline-body]")?.parentElement || document.body;
       const title = row.closest(".pblock")?.querySelector(".pb-title")
         || row.closest(".card")?.querySelector(".head .title")
@@ -7139,17 +7145,21 @@ describe("PR and issue chips on pipelines and task cards", () => {
         const label = `390-${lang}`;
         const { context, page, pageErrors } = await openFixture(browser, base, { width: 390, height: 844 }, "light", lang, "no-preference", true);
         try {
-          await page.waitForSelector('[data-mobile2-go="pipeline"]', { state: "attached", timeout: 20_000 });
+          /* The phone board is the status columns (#2072): the lane's PR is
+             passive text at the end of its task card's chain line, and the
+             task screen's lane row carries the chips. */
+          const phoneCard = '[data-phone-card="task:t-links"]';
+          await page.waitForSelector(`${phoneCard} [data-work-links-text]`, { state: "attached", timeout: 20_000 });
           await page.waitForTimeout(300);
           await page.screenshot({ path: path.join(pngDir, `phone-board-${label}.png`) });
-          /* The queue row is the pipeline card (#2072): its PR is passive text at the end of the chain line. */
-          const clause = await page.locator('[data-mobile2-go="pipeline"] [data-work-links-text]').first().textContent();
-          if (!/#2195/.test(clause ?? "")) failures.push(`${label}: the queue row does not name its PR: ${JSON.stringify(clause)}`);
-          await page.locator('[data-mobile2-go="pipeline"]').first().evaluate((element) => (element as HTMLElement).click());
-          await page.waitForSelector("[data-mobile2-links]", { state: "attached", timeout: 10_000 });
+          const clause = await page.locator(`${phoneCard} [data-work-links-text]`).first().textContent();
+          if (!/#2195/.test(clause ?? "")) failures.push(`${label}: the card does not name its lane's PR: ${JSON.stringify(clause)}`);
+          await page.locator('[data-phone-kanban-tab="assigned"]').click();
+          await page.locator(phoneCard).click();
+          await page.waitForSelector('[data-phone-task-lane="p-links"] [data-work-links]', { state: "attached", timeout: 10_000 });
           await page.waitForTimeout(300);
           gate(label, await page.evaluate(measureChips) as Reading, 1);
-          if ((frames[label] as Reading).chips < 3) failures.push(`${label}: the pipeline screen drew ${(frames[label] as Reading).chips} chips, expected the PR and its two issues`);
+          if ((frames[label] as Reading).chips < 3) failures.push(`${label}: the task screen drew ${(frames[label] as Reading).chips} chips, expected the PR and its two issues`);
           await page.screenshot({ path: path.join(pngDir, `phone-${label}.png`) });
           if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
         } finally {
@@ -7265,20 +7275,22 @@ describe("#2072 one pipeline block, desktop and phone", () => {
       return out;
     };
     /* A desktop lane row is its own scope; a phone card is the scope of the
-       block inside it, with its title and badge. */
-    const scopes = [...new Set([...document.querySelectorAll("[data-kanban-board] .card [data-pipeline], [data-mobile2-pipeline-row]")]
+       block inside it, with its title and badge: a task card on the phone's
+       status columns (#2072), or a row of the pipelines list. */
+    const PHONE = "[data-mobile2-pipeline-row], [data-phone-card][data-phone-card-pipeline]";
+    const scopes = [...new Set([...document.querySelectorAll("[data-kanban-board] .card [data-pipeline], " + PHONE)]
       .filter(el => el.getClientRects().length)
-      .map(el => el.closest("[data-mobile2-pipeline-row]") || el))];
+      .map(el => el.closest(PHONE) || el))];
     const overlaps = [], escapes = [], clipped = [], unsettled = [];
     let texts = 0, controls = 0;
     for (const scope of scopes) {
       scope.scrollIntoView({ block: "center" });
-      const card = scope.closest(".card, [data-mobile2-pipeline-row]") || scope;
+      const card = scope.closest(".card, " + PHONE) || scope;
       const frame = box(card);
       const ink = inkOf(scope);
       const hits = controlsOf(scope);
       texts += ink.length; controls += hits.length;
-      const where = scope.getAttribute("data-pipeline") || scope.getAttribute("data-mobile2-pipeline-row");
+      const where = scope.getAttribute("data-pipeline") || scope.getAttribute("data-mobile2-pipeline-row") || scope.getAttribute("data-phone-card-pipeline");
       for (const block of scope.querySelectorAll('.pblock[data-density="card"]')) {
         for (const entry of clippedOf(block, card)) clipped.push({ where, ...entry });
         /* Every fold the card settled on fits its box. */
@@ -7305,7 +7317,7 @@ describe("#2072 one pipeline block, desktop and phone", () => {
       }
     }
     const lanes = document.querySelectorAll('.pblock[data-density="task"]').length;
-    const cards = document.querySelectorAll('[data-mobile2-pipeline-row] .pblock[data-density="card"]').length;
+    const cards = [...document.querySelectorAll(PHONE)].filter(el => el.querySelector('.pblock[data-density="card"]')).length;
     /* Each long-named current stage, as its card drew it. */
     const longStages = {};
     for (const id of ${JSON.stringify(Object.keys(LONG_STAGES))}) {
@@ -7396,12 +7408,16 @@ describe("#2072 one pipeline block, desktop and phone", () => {
           const label = `390-${lang}-${scheme}`;
           const { context, page, pageErrors } = await openFixture(browser, base, { width: 390, height: 844 }, scheme, lang, "no-preference", true);
           try {
-            await page.waitForSelector("[data-mobile2-pipeline-row]", { timeout: 30_000 });
+            /* The status columns carry each lane on its task's card (#2072);
+               the pipelines list is the ⋯ menu's row since the board's
+               «N pipelines» row went (§3.1). */
+            await page.waitForSelector('[data-phone-card][data-phone-card-pipeline] .pblock[data-density="card"]', { timeout: 30_000 });
             await page.waitForTimeout(600);
             const suffix = scheme === "dark" ? lang : `light-${lang}`;
             await page.screenshot({ path: path.join(pngDir, `phone-board-390-${suffix}.png`) });
             gate(`${label}-board`, await page.evaluate(measureBlocks) as Reading, { cards: 3 });
-            await page.locator('[data-mobile2-row="pipelines"]').first().evaluate((element) => (element as HTMLElement).click());
+            await page.click('[data-mobile2-open="menu"]');
+            await page.locator('[data-mobile2-menu-row="pipelines"]').first().evaluate((element) => (element as HTMLElement).click());
             await page.waitForSelector("[data-mobile2-pipelines] [data-mobile2-pipeline-row]", { timeout: 10_000 });
             await page.waitForTimeout(400);
             await page.evaluate(() => document.querySelector("[data-mobile2-pipelines]")?.scrollTo(0, 0));
@@ -7455,6 +7471,13 @@ describe("#2072 one pipeline block, desktop and phone", () => {
     };
     /* The banner slot is the shell's, on every screen, and gated with it. */
     const banner = el => Boolean(el.closest("[data-mobile2-banner]"));
+    /* A closed details keeps its content laid out under a zero-height
+       ::details-content (its open and close animate), which no ancestor walk
+       sees: only its summary is drawn. */
+    const folded = el => {
+      const details = el.closest("details:not([open])");
+      return Boolean(details) && el.closest("summary")?.parentElement !== details;
+    };
     /* A chip's target is its box plus the reach its ::after gives it on a coarse pointer. */
     const reach = el => {
       const r = box(el);
@@ -7468,7 +7491,7 @@ describe("#2072 one pipeline block, desktop and phone", () => {
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
       if (!node.nodeValue || !node.nodeValue.trim()) continue;
       const el = node.parentElement;
-      if (!el || banner(el) || getComputedStyle(el).visibility === "hidden") continue;
+      if (!el || banner(el) || folded(el) || getComputedStyle(el).visibility === "hidden") continue;
       const clip = clipFrom(el);
       const range = document.createRange();
       range.selectNodeContents(node);
@@ -7481,7 +7504,7 @@ describe("#2072 one pipeline block, desktop and phone", () => {
     }
     const ink = [...byElement.values()];
     const controls = [...screen.querySelectorAll("button, a, [role=button]")]
-      .filter(el => !banner(el) && el.getClientRects().length && getComputedStyle(el).visibility !== "hidden")
+      .filter(el => !banner(el) && !folded(el) && el.getClientRects().length && getComputedStyle(el).visibility !== "hidden")
       .map(el => ({ el, full: reach(el), rect: intersect(reach(el), clipFrom(el.parentElement)), text: (el.getAttribute("aria-label") || el.textContent || "").trim().slice(0, 48) }))
       .filter(entry => area(entry.rect) > 0.5);
     const nested = (a, b) => a.contains(b) || b.contains(a);
@@ -7556,7 +7579,8 @@ describe("#2072 one pipeline block, desktop and phone", () => {
     { id: "p-upload", name: "running", current: "verify-backward-compatibility-and-migrations", answers: [], fold: "3", completed: false, motion: "live" },
     { id: "p-md-accept", name: "paused", current: "accept", answers: [], fold: null, completed: false, motion: "held" },
     { id: "p-md-decision", name: "decision", current: "implement", answers: ["skip-stage", "retry-stage"], fold: null, completed: false, motion: null },
-    { id: "p-review-spent", name: "review", current: "critique", answers: ["close", "continue-review"], fold: null, completed: false, motion: null },
+    /* A spent review budget answers «Accept as is» or «Review again» (#2187 S2). */
+    { id: "p-review-spent", name: "review", current: "critique", answers: ["accept-head", "continue-review"], fold: null, completed: false, motion: null },
     { id: "p-compact", name: "done", current: null, answers: [], fold: null, completed: true, motion: null },
   ] as const;
 
@@ -7602,9 +7626,11 @@ describe("#2072 one pipeline block, desktop and phone", () => {
         for (const [width, height, scheme] of [[390, 844, "dark"], [390, 844, "light"], [430, 932, "dark"]] as const) {
           const { context, page, pageErrors } = await openFixture(browser, base, { width, height }, scheme, lang, "no-preference", true);
           try {
-            await page.waitForSelector('[data-mobile2-row="pipelines"]', { timeout: 30_000 });
+            /* The pipelines list is the ⋯ menu's row since the status columns (#2072, §3.1). */
+            await page.waitForSelector('[data-mobile2-open="menu"]', { timeout: 30_000 });
             await page.waitForTimeout(500);
-            await page.locator('[data-mobile2-row="pipelines"]').first().evaluate((element) => (element as HTMLElement).click());
+            await page.click('[data-mobile2-open="menu"]');
+            await page.locator('[data-mobile2-menu-row="pipelines"]').first().evaluate((element) => (element as HTMLElement).click());
             await page.waitForSelector("[data-mobile2-pipelines] [data-mobile2-pipeline-row]", { timeout: 10_000 });
             for (const screen of SCREENS) {
               const label = `${screen.name}-${width}-${lang}-${scheme}`;
