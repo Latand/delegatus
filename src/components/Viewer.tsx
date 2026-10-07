@@ -28,6 +28,9 @@ import type { FileEntry } from "@/lib/types";
 
 import { advanceAttentionCycle, attentionExpiries, attentionId, type AttentionItem } from "./attention";
 import { AttentionHost } from "./attention/AttentionHost";
+import { PrototypeReviewHost } from "./prototypeReview/PrototypeReviewHost";
+import { openPrototypeReview } from "@/hooks/usePrototypeReview";
+import type { PrototypeReviewNotice } from "@/lib/prototypeReview/types";
 import { useDismissalOverlay } from "./attention/dismissalOverlay";
 import { clearNotice, markNoticesSeen, usePhoneNotices } from "./attention/phoneNotices";
 import { BootShell } from "./BootShell";
@@ -973,7 +976,7 @@ function ViewerApp() {
     }
     publishBlockerNames({ projects: projectDisplayNames, conversations });
   }, [updateBlockers, updateDecision, allFiles, projectDisplayNames]);
-  const needsYou = useMemo(() => buildNeedsYouQueue(files, pipelines, clock, closingPipelines, updateDecision), [files, pipelines, clock, closingPipelines, updateDecision]);
+  const needsYou = useMemo(() => buildNeedsYouQueue(files, pipelines, clock, closingPipelines, updateDecision, tasks), [files, pipelines, clock, closingPipelines, updateDecision, tasks]);
   /* The rail's ⏸, the Overview's rows and the phone's project sheet count
      this same grouping, one number per project with the panel's sections. */
   const needsYouByProject = useMemo(() => needsYouCounts(needsYou), [needsYou]);
@@ -1333,9 +1336,25 @@ function ViewerApp() {
      as it does for a pipeline link. A lane has no conversation to type the
      history entry after, so a switch writes the project's own entry and Back
      returns to the board the operator left. */
+  /* A waiting prototype review opens over its task. In another project the
+     board is switched first and the review asked for once that project is the
+     one on screen, so its dashboard is there to bring the task up. */
+  const prototypeJump = useRef<PrototypeReviewNotice | null>(null);
+  useEffect(() => {
+    const waiting = prototypeJump.current;
+    if (!waiting || waiting.project !== project) return;
+    prototypeJump.current = null;
+    openPrototypeReview({ ...waiting.target, from: "notice" });
+  }, [project]);
+  const openPrototypeEntry = useCallback((notice: PrototypeReviewNotice) => {
+    if (notice.project === project) { openPrototypeReview({ ...notice.target, from: "notice" }); return; }
+    prototypeJump.current = notice;
+    selectProject(notice.project);
+  }, [project, selectProject]);
   const openAttentionEntry = useCallback(
     (entry: MobileAttentionEntry) => {
       if (entry.kind === "update") { openSelfUpdate(); return; }
+      if (entry.kind === "prototype") { openPrototypeEntry(entry.notice); return; }
       if (entry.kind === "conversation") {
         if (entry.item.project !== project) applyProject(entry.item.project);
         requestFocus(entry.item.file.path);
@@ -1347,7 +1366,7 @@ function ViewerApp() {
       focusNonceRef.current += 1;
       setFocusRequest({ path: laneFocusPath(lane.id), nonce: focusNonceRef.current, catalog: false });
     },
-    [project, applyProject, selectProject, requestFocus],
+    [project, applyProject, selectProject, requestFocus, openPrototypeEntry],
   );
 
   useEffect(() => {
@@ -1627,6 +1646,10 @@ function ViewerApp() {
                    draws it; ‹ comes back to that screen. */
                 mobileNav.push({ kind: "pipeline", id: row.id });
               }}
+              onOpenPrototype={(notice) => {
+                close();
+                openPrototypeEntry(notice);
+              }}
               onClose={close}
               notices={noticeRows}
               onOpenNotice={(notice) => openNotice(notice, close)}
@@ -1640,7 +1663,7 @@ function ViewerApp() {
         return null;
       },
     };
-  }, [isMobile, shellEntries, toastFile, openFile, openOverOverview, mobileNav, files, allFiles, projectCatalog, projectDisplayNames, pipelines, workflows, archivedProjects, crownedProjects, project, clock, needsYouByProject, loaded, catalogFailures, selectProject, createProject, jumpToItem, phoneNotices.unseen, noticeRows, railOrder, needsOnly, needsOnlyAvailable]);
+  }, [isMobile, shellEntries, toastFile, openFile, openOverOverview, mobileNav, files, allFiles, projectCatalog, projectDisplayNames, pipelines, workflows, archivedProjects, crownedProjects, project, clock, needsYouByProject, loaded, catalogFailures, selectProject, createProject, jumpToItem, openPrototypeEntry, phoneNotices.unseen, noticeRows, railOrder, needsOnly, needsOnlyAvailable]);
 
   const shell = (
     <div className="flex h-full">
@@ -1804,6 +1827,8 @@ function ViewerApp() {
           root agent's focus handoff when there is one to answer. Renders
           nothing at all the rest of the time. */}
       <AttentionHost mobile={isMobile} />
+      {/* A task's prototype review, opened from its card or from the orchestrator's notice. */}
+      <PrototypeReviewHost tasks={tasks} />
       {/* #1054: the global "find my messages" palette. Mounted here so one
           surface serves every board and both form factors; it renders nothing
           until the header button or `/` opens it, and a selected row leaves
