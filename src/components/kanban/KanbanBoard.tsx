@@ -2597,6 +2597,11 @@ export function KanbanBoard(props: KanbanBoardProps) {
   });
   const cardCancelHold = useStableCallback(() => { const id = holdEditing; setHoldEditing(null); if (id) focusCard(id); });
 
+  /* A held launch's conversation joined the board before its task did: its
+     draft stands for it until the task's card swaps in, so it draws no card
+     of its own meanwhile (docs/design/launch-render-polish.md §3). */
+  // eslint-disable-next-line react-hooks/refs -- Read on the render the launch tick schedules; the set only narrows what is drawn.
+  const heldLaunches = new Set([...launching.current.values()].map((entry) => conversationIdentity(entry.file)));
   const columnsView = KANBAN_STATUSES.map((status) => (
     <KanbanColumnView
       key={status}
@@ -2626,6 +2631,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       actingByCard={actingByCard}
       placement={placement}
       newTask={status === "inbox" && composingTask && !props.overview ? <KanbanTaskComposer project={project} onCreated={taskCreated} onCancel={closeNewTask} /> : null}
+      heldLaunches={heldLaunches}
       onColumnMenu={(anchor) => menu.setOpen({ anchor, value: { kind: "column", status } })}
       cardProps={{
         onToggleCollapsed: toggleCollapsed,
@@ -3024,13 +3030,15 @@ type CardHandlers = Pick<
   | "projectNames" | "onOpenProject" | "onSaveHold" | "onCancelHold"
 > & { holdEditingId?: string | null };
 
-function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFiltered, collapsed, nowMs, remoteAgents, remoteAgentsByTask, remoteCards, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, agent, strip, menuOpen, widths, readerKeysByCard, panelsByCard, actingByCard, placement, newTask, onColumnMenu, cardProps }: {
+function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFiltered, collapsed, nowMs, remoteAgents, remoteAgentsByTask, remoteCards, pendingIds, editing, failedEdits, incomingEdits, onHideIdle, reading, agent, strip, menuOpen, widths, readerKeysByCard, panelsByCard, actingByCard, placement, newTask, heldLaunches, onColumnMenu, cardProps }: {
   status: TaskStatus;
   /** Which column holds the wide share and the controls that move it (#1841);
       null where every column is already full width. */
   widths: { state: KanbanWideState; wide: TaskStatus | null } | null;
   /** `+ Task`'s inline card, drawn first in Inbox. */
   newTask: ReactNode;
+  /** Conversations of launches whose draft still stands for them. */
+  heldLaunches: ReadonlySet<string>;
   editing: ReadonlyMap<string, { field: EditField; draft: string }>;
   failedEdits: ReadonlyMap<string, { field: EditField; draft: string; message: string }>;
   incomingEdits: ReadonlyMap<string, { field: EditField; value: string }>;
@@ -3092,7 +3100,9 @@ function KanbanColumnView({ status, model, mode, activeTab, filtering, emptyFilt
   if (status === "assigned") while (split > 0 && shown[split - 1]!.motion.key === "stopped") split -= 1;
   const active = shown.slice(0, split);
   const idle = shown.slice(split);
-  const unlinked = status === "inbox" ? model.unlinkedShown.filter((card) => !(holdsOnlyDrafts(card) && card.status === "assigned")) : [];
+  const held = (card: KanbanCardModel) => !card.task && !card.drafts.length && card.members.length > 0
+    && card.members.every((member) => heldLaunches.has(conversationIdentity(member.file)));
+  const unlinked = status === "inbox" ? model.unlinkedShown.filter((card) => !(holdsOnlyDrafts(card) && card.status === "assigned") && !held(card)) : [];
   const drafting = status === "assigned" ? model.unlinkedShown.filter((card) => holdsOnlyDrafts(card) && card.status === "assigned") : [];
   const unboundRemote = status === "inbox" ? remoteAgents.filter((row) => !row.task) : [];
   const empty = shown.length === 0 && unlinked.length === 0 && drafting.length === 0 && unboundRemote.length === 0 && !newTask;
