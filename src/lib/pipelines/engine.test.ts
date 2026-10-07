@@ -16430,8 +16430,8 @@ async function stagedRecoveryHarness(mode: "timeout" | "reset" | "busy" | "503" 
     const receipt = registry.readOnlySnapshot().receipts[id];
     return receipt ? { launchId: id, conversationId: receipt.conversationId, state: receipt.state,
       sessionId: receipt.state === "completed" ? receipt.key?.sessionId ?? null : null,
-      ["transcript"]: receipt.state === "completed" ? receipt.artifactPath : null, paneId: null,
-      staged: !!receipt.key, error: receipt.error } : null;
+      ["transcript"]: receipt.state === "completed" ? receipt.artifactPath : null, stagedTranscript: receipt.artifactPath ?? null,
+      paneId: null, staged: !!receipt.key, error: receipt.error } : null;
   };
   const recover = async (id: string, eligible: () => boolean) => {
     await recoverStagedStructuredLaunch(id, registry, client, { now: () => clock, eligible });
@@ -16495,6 +16495,106 @@ test("an uncertain send missing from lookup exhausts its budget without another 
   expect(f.attempt().launchId).toBe(f.launchId());
   expect(f.messages()).toBe(1);
   expect(f.starts()).toBe(1);
+});
+
+/* 2026-10-07: a fix attempt's host took its first message 110 s after launch,
+   while every recovery probe the loaded controller ran still read it queued.
+   No probe ran again, the ten-minute budget ran out on the wall clock, and the
+   lane parked on "runtime host recovery exhausted" while its agent was
+   committing the fix; its stage_report then answered STAGE_REPORT_SETTLED. */
+async function aliveStagedLaunch() {
+  const f = await stagedRecoveryHarness("absent");
+  await tickPipelines([], f.h.ports);
+  await f.wake();
+  expect(f.attempt().state).toBe("spawning");
+  // The probe stops advancing: a controller pass that overran its deadline.
+  f.h.ports.recoverStagedLaunch = async () => {};
+  const transcript = f.registry.readOnlySnapshot().receipts[f.launchId()]!.artifactPath!;
+  f.h.ports.sourcePathAllowed = (pathname) => pathname === transcript;
+  f.h.ports.durableTurnEvidence = durableStageTurnEvidence;
+  const working = () => {
+    const at = Date.parse(f.h.ports.now());
+    fs.writeFileSync(transcript, [
+      { timestamp: new Date(at - 2_000).toISOString(), type: "session_meta", payload: { id: "stage" } },
+      { timestamp: new Date(at - 1_000).toISOString(), type: "event_msg", payload: { type: "task_started" } },
+      { timestamp: new Date(at).toISOString(), type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "Fixing the findings" }] } },
+    ].map((record) => JSON.stringify(record)).join("\n") + "\n");
+  };
+  return { ...f, transcript, working };
+}
+
+test("a staged launch whose agent is working is adopted when spawn recovery spends its budget, never parked", async () => {
+  const f = await aliveStagedLaunch();
+  f.advance(10 * 60_000);
+  f.working();
+  await f.wake();
+  const pipeline = loadPipelines()[0]!;
+  expect(pipeline).toMatchObject({ state: "running", stateDetail: null, cursor: { stageId: "build", state: "running" } });
+  expect(f.attempt()).toMatchObject({ n: 1, state: "running", launchId: f.launchId(), agentPath: f.transcript, error: null });
+  expect(f.attempt().controllerWait).toBeUndefined();
+  expect(f.messages()).toBe(1);
+  expect(f.starts()).toBe(1);
+});
+
+test("a live stage host whose first message is still queued keeps the attempt watched, and a lost host parks as before", async () => {
+  const f = await aliveStagedLaunch();
+  const scheduled: number[] = [];
+  f.h.ports.scheduleTick = (delay) => { scheduled.push(delay); };
+  let hostLostAt: string | null = null;
+  f.h.ports.conversationHostUnavailableSince = async () => hostLostAt;
+  f.advance(10 * 60_000);
+  await f.wake();
+  let pipeline = loadPipelines()[0]!;
+  expect(pipeline.state).toBe("running");
+  expect(f.attempt()).toMatchObject({ state: "spawning", error: null });
+  expect(pipeline.stateDetail).toMatch(/^the stage host is alive and has not answered its first message yet; spawn recovery spent its 10-minute budget after \d+ checks and keeps watching, next check at \S+$/);
+  expect(scheduled.at(-1)).toBe(30_000);
+  // Still alive on later ticks: the detail stays one bounded line.
+  await f.wake();
+  expect(loadPipelines()[0]!.stateDetail!.length).toBeLessThan(200);
+
+  hostLostAt = f.h.ports.now();
+  await f.wake();
+  pipeline = loadPipelines()[0]!;
+  expect(pipeline).toMatchObject({ state: "needs_decision", stateDetail: expect.stringMatching(/^stage spawn recovery stopped: runtime host recovery exhausted after \d+ checks/) });
+  expect(f.attempt().state).toBe("needs_decision");
+  expect(f.messages()).toBe(1);
+});
+
+test("a spawn-recovery park whose own agent then reports is reopened on that attempt and the report is accepted", async () => {
+  const f = await aliveStagedLaunch();
+  f.advance(10 * 60_000);
+  await f.wake();
+  const parked = loadPipelines()[0]!;
+  expect(parked).toMatchObject({ state: "needs_decision", stateDetail: expect.stringContaining("stage spawn recovery stopped:") });
+  const conversationId = f.attempt().conversationId!;
+  const actor = { kind: "agent" as const, role: "builder", conversationId };
+
+  // Nothing of this attempt in its transcript yet: the park stands.
+  expect(await engineModule.reportStageCompletion({ verdict: "pass", summary: "done" }, actor, f.h.ports))
+    .toMatchObject({ status: 409, code: "STAGE_REPORT_SETTLED" });
+
+  f.working();
+  const accepted = await engineModule.reportStageCompletion({ verdict: "pass", summary: "Fixed both findings" }, actor, f.h.ports);
+  expect(accepted.error).toBeUndefined();
+  expect(accepted).toMatchObject({ attempt: 1, report: { verdict: { status: "pass" } } });
+  const reopened = loadPipelines()[0]!;
+  expect(reopened).toMatchObject({ state: "running", stateDetail: null });
+  expect(reopened.runs[0]!.attempts).toHaveLength(1);
+  expect(f.attempt()).toMatchObject({ n: 1, state: "running", launchId: f.launchId(), agentPath: f.transcript, error: null });
+  expect(f.attempt().report?.verdict.status).toBe("pass");
+});
+
+test("a spawn-recovery park left by an earlier controller reopens once its agent's turn is in the transcript", async () => {
+  const f = await aliveStagedLaunch();
+  f.advance(10 * 60_000);
+  await f.wake();
+  expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  f.working();
+  await f.wake();
+  expect(loadPipelines()[0]).toMatchObject({ state: "running", stateDetail: null });
+  expect(f.attempt()).toMatchObject({ n: 1, state: "running", agentPath: f.transcript });
+  expect(f.messages()).toBe(1);
 });
 
 test("a permanent staged publication refusal parks with its cause", async () => {

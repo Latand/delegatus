@@ -1715,6 +1715,7 @@ const SPAWN_CONTROLLER_RETRY_MAX_MS = 8_000;
     admission attempts the spawn layer makes before it records the failure. */
 const SPAWN_HOST_WAIT_BUDGET_MS = 10 * 60_000;
 const SPAWN_HOST_RETRY_MAX_MS = 60_000;
+const SPAWN_RECOVERY_PARK_PREFIX = "stage spawn recovery stopped: ";
 /** A `remote-branch` pipeline whose remote the network failed after an
     approved review asks again on this budget (#1692). Every read may hold the
     tick for its full five-second timeout, so the backoff starts at fifteen
@@ -4812,7 +4813,7 @@ async function spawnRunStage(
     if (!spawned) throw new Error("stage spawn failed without a result");
     const recovery = stagedLaunchRecovery(ports.spawnReceipt(spawned.launchId));
     if (recovery) {
-      waitForStagedLaunch(pipeline, stage, attempt, recovery, ports);
+      await waitForStagedLaunch(pipeline, stage, attempt, recovery, ports);
       if (attempt.activation) attempt.activation.phase = "settled";
       await persist();
       return;
@@ -5103,7 +5104,7 @@ async function tickRunStage(
     const receipt = ports.spawnReceipt(attempt.launchId);
     const recovery = receipt?.state === "path-pending" ? stagedLaunchRecovery(receipt) : null;
     if (recovery) {
-      waitForStagedLaunch(pipeline, stage, attempt, recovery, ports);
+      await waitForStagedLaunch(pipeline, stage, attempt, recovery, ports);
       return;
     }
   }
@@ -6512,7 +6513,7 @@ function settleNeverStartedLaunch(pipeline: Pipeline, attempt: PipelineStageAtte
   if (!receipt || receipt.conversationId !== attempt.conversationId || receipt.transcript || receipt.sessionId
     || (attempt.state === "failed" && receipt.state === "failed")) return false;
   const recovery = stagedLaunchRecovery(receipt);
-  const stoppedByController = attempt.error?.startsWith("stage spawn recovery stopped:") === true;
+  const stoppedByController = attempt.error?.startsWith(SPAWN_RECOVERY_PARK_PREFIX) === true;
   if (pipeline.state !== "closed" && !exhausted && !recovery?.stopped && !stoppedByController) return false;
   const reason = `stage launch never started: ${pipeline.state === "closed" ? "pipeline closed" : recovery?.reason ?? attempt.error ?? "spawn recovery exhausted"}`;
   if (!ports.failStageLaunch?.(attempt.launchId, attempt.conversationId, reason)) return false;
@@ -6524,15 +6525,46 @@ function settleNeverStartedLaunch(pipeline: Pipeline, attempt: PipelineStageAtte
   return true;
 }
 
-function waitForStagedLaunch(
+/** How often a stage whose host is alive is looked at again once spawn
+    recovery has spent its budget on it. */
+const STAGED_ALIVE_WATCH_MS = 30_000;
+
+/** The receipt's recovery record says only what the probes saw, and a loaded
+    controller can stop probing while the agent works (2026-10-07: the first
+    message landed 110 s in, after every probe had read it queued, and the lane
+    parked while its agent committed the fix). Before a spent budget settles
+    the launch, the agent itself is asked: a native turn of this attempt in its
+    transcript adopts the attempt as running, and a live host keeps it watched.
+    Only a launch with neither settles as before. */
+async function waitForStagedLaunch(
   pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
   recovery: StagedLaunchRecovery, ports: PipelinePorts,
-): void {
+): Promise<void> {
   if (recovery.stopped || unixMs(ports.now()) - recovery.startedAt >= STAGED_RECOVERY_BUDGET_MS) {
+    const turnPath = await attemptTurnTranscript(attempt, ports);
+    if (turnPath) {
+      delete attempt.controllerWait;
+      reopenDeliveredAttempt(pipeline, attempt, turnPath);
+      return;
+    }
+    // A probe that stopped on a concrete failure keeps its park; only a spent
+    // budget is overruled by a live host. The registry's turn liveness bounds
+    // the watch: a host that stops answering reads as unavailable.
+    const budgetSpent = !recovery.stopped || recovery.reason.startsWith("runtime host recovery exhausted");
+    if (budgetSpent && attempt.conversationId && await ports.conversationHostUnavailableSince?.(attempt.conversationId) === null) {
+      attempt.state = "spawning";
+      attempt.error = null;
+      pipeline.state = "running";
+      setCursorState(pipeline, stage.id, "spawning");
+      const next = new Date(unixMs(ports.now()) + STAGED_ALIVE_WATCH_MS).toISOString();
+      pipeline.stateDetail = `the stage host is alive and has not answered its first message yet; spawn recovery spent its ${STAGED_RECOVERY_BUDGET_MS / 60_000}-minute budget after ${recovery.checks} checks and keeps watching, next check at ${next}`;
+      ports.scheduleTick?.(STAGED_ALIVE_WATCH_MS);
+      return;
+    }
     const reason = recovery.stopped ? recovery.reason
       : `runtime host recovery exhausted after ${recovery.checks} checks; original launch and first-message operation retained; last result: ${recovery.reason}`;
     if (!settleNeverStartedLaunch(pipeline, attempt, ports, true)) {
-      park(pipeline, `stage spawn recovery stopped: ${reason}; original launch retained`, attempt);
+      park(pipeline, `${SPAWN_RECOVERY_PARK_PREFIX}${reason}; original launch retained`, attempt);
     }
     return;
   }
@@ -6601,17 +6633,28 @@ function stagedRecoveryMatches(pipeline: Pipeline, expected: StagedRecoveryObser
     && attempt.conversationId === expected.conversationId && !attempt.completedAt && !attempt.verdict;
 }
 
+/** A park whose only claim is that spawn recovery could not see the launch
+    start, which the attempt's own transcript can disprove. A park that
+    already settled the launch as never started fails the attempt instead. */
 function deliveryUnverifiedAttempt(pipeline: Pipeline, attempt: PipelineStageAttempt): boolean {
+  const error = attempt.error ?? "";
   return pipeline.state === "needs_decision" && attempt.state === "needs_decision"
     && !attempt.historical && !attempt.completedAt && !attempt.verdict && !attempt.activation
     && !pipelineSurvivorRefusal(pipeline)
     && currentStage(pipeline)?.kind === "run"
     && currentAttempt(pipeline, pipeline.cursor!.stageId) === attempt
-    && isUnverifiedDeliverySpawnFailure(attempt.error ?? "");
+    && (isUnverifiedDeliverySpawnFailure(error) || error.startsWith(SPAWN_RECOVERY_PARK_PREFIX));
 }
 
 async function deliveredAttemptPath(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts): Promise<string | null> {
-  if (!deliveryUnverifiedAttempt(pipeline, attempt) || !attempt.conversationId) return null;
+  if (!deliveryUnverifiedAttempt(pipeline, attempt)) return null;
+  return await attemptTurnTranscript(attempt, ports);
+}
+
+/** The attempt's own transcript, once it holds a native turn this attempt
+    started. Its launch receipt names it before the receipt completes. */
+async function attemptTurnTranscript(attempt: PipelineStageAttempt, ports: PipelinePorts): Promise<string | null> {
+  if (!attempt.conversationId) return null;
   const receipt = attempt.launchId ? ports.spawnReceipt(attempt.launchId) : null;
   if (receipt && receipt.conversationId !== attempt.conversationId) return null;
   const pathname = attempt.agentPath ?? ports.pathForConversation(attempt.conversationId)
@@ -7690,7 +7733,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
             pipeline.state = "running";
             setCursorState(pipeline, recoveredLaunch.stageId, "running");
           } else if (recovery) {
-            waitForStagedLaunch(pipeline, currentStage(pipeline)!, currentAttempt(pipeline, recoveredLaunch.stageId)!, recovery, controllerPorts);
+            await waitForStagedLaunch(pipeline, currentStage(pipeline)!, currentAttempt(pipeline, recoveredLaunch.stageId)!, recovery, controllerPorts);
           }
           persistPipeline();
           changed = true;
