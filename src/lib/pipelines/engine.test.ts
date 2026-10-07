@@ -11077,7 +11077,6 @@ test("a failed Claude migration retries its original operation and held continua
     }, {
       enabled: () => true, client: () => null, registry: () => registry,
       requestMigrationTick: () => {}, kick: async () => {},
-      executeSwitch: async () => registry.conversation(conversation.id)!,
     }))?.ok === true;
 
     await tickPipelines([], h.ports);

@@ -320,3 +320,18 @@ test("a proven failure of a context row offers Edit, with the reason in both lan
   expect(generic.failure?.reason).toBe(translate("en", "outbox.failure.generic"));
   expect(generic.failure?.detail).toBe("something odd");
 });
+
+test("a send held while its conversation switches accounts says so in plain words, in both languages", () => {
+  const receipt = (reason: string) => ({ operationId: "op", idempotencyKey: "key", conversationId: "c", kind: "send",
+    status: "queued", reason, at: new Date(AT).toISOString(), revision: 1 }) as OutboxEntry["deliveryReceipt"];
+  for (const locale of ["en", "uk"] as const) {
+    const switching = messageRowModel(t(locale), entry({ state: "delivering", deliveryReceipt: receipt("switching-accounts") }), { nowMs: AT + 30_000 });
+    expect(switching.phase).toBe("pending");
+    expect(switching.transport).toBe(translate(locale, "receipt.human.switchingAccounts"));
+    const afterTurn = messageRowModel(t(locale), entry({ state: "delivering", deliveryReceipt: receipt("switch-after-turn") }), { nowMs: AT + 30_000 });
+    expect(afterTurn.transport).toBe(translate(locale, "receipt.human.switchAfterTurn"));
+    const named = messageRowModel(t(locale), entry({ state: "delivering", deliveryReceipt: receipt("switching-accounts") }),
+      { nowMs: AT, switchHold: { label: "Account B" } });
+    expect(named.transport).toBe(translate(locale, "outbox.heldForSwitch", { label: "Account B" }));
+  }
+});
