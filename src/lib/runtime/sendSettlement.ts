@@ -1,5 +1,6 @@
 import {
   agentRegistry,
+  ownsItsSettlement,
   readOnlyConversationLookupFromSnapshot,
   type AgentRegistry,
   type DeliveryOperationOwner,
@@ -271,7 +272,9 @@ function deliveryForOperation(file: RegistryFile, operationId: string): HeldDeli
  */
 function retryAttemptOwner(file: RegistryFile, operationId: string): DeliveryOperationOwner | null {
   const owner = file.deliveryOperationOwners[operationId];
-  return owner?.retryOfOperationId ? owner : null;
+  /* A direct admission (A2) settles on its own row the same way: no
+     reservation answers for it. */
+  return ownsItsSettlement(owner) ? owner! : null;
 }
 
 /**
@@ -658,7 +661,7 @@ export async function settleDueSends(
     operations.add(delivery.command.operationId);
   }
   for (const [operationId, owner] of Object.entries(file.deliveryOperationOwners)) {
-    if (owner.retryOfOperationId && owner.terminalState === null) operations.add(operationId);
+    if (ownsItsSettlement(owner) && owner.terminalState === null) operations.add(operationId);
   }
   const result: SettlementSweepResult = { examined: 0, settled: [] };
   const running = ports.running ?? new Set<string>();

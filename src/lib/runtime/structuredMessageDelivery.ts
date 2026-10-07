@@ -50,7 +50,7 @@ import { recordWait, stillAtStep, type DeliveryProgressPort, type RecordedWait }
 import { STRUCTURED_DELIVERY_TIMING } from "./structuredDeliveryQueue";
 import { markStructuredRuntimeSessionRecovered } from "./startupStatus";
 import { isInterruptionObligationId } from "./interruptionObligations";
-import { RECOVERY_NOTICE_ORIGIN } from "./recoveryNotices";
+import { isInterruptedCodexContinuationId, RECOVERY_NOTICE_ORIGIN } from "./recoveryNotices";
 
 export interface StructuredMessageRequest {
   path: string;
@@ -1116,7 +1116,7 @@ export async function enqueueStructuredMessage(
     ...request,
     interruptionContinuation: dependencies.interruptionContinuation === true
       && request.origin?.role === RECOVERY_NOTICE_ORIGIN.role
-      && isInterruptionObligationId(request.clientMessageId),
+      && (isInterruptionObligationId(request.clientMessageId) || isInterruptedCodexContinuationId(request.clientMessageId)),
   });
   if (deputyRefusal) return refusedBeforeReservation({ ok: false, structured: true, outcome: "failed", ...deputyRefusal });
   if (!(dependencies.enabled ?? structuredHostsEnabled)()) return null;

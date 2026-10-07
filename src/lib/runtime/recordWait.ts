@@ -1,4 +1,4 @@
-import type { AgentRegistry } from "@/lib/agent/registry";
+import type { AgentRegistry, DeliveryOperationOwner } from "@/lib/agent/registry";
 import { ACCOUNT_MIGRATION_PASS_INTERVAL_MS } from "@/lib/accounts/migration/controllerSignal";
 import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { migrationLaneRunning } from "@/lib/accounts/migration/lanes";
@@ -68,6 +68,37 @@ export function recordWait(
       ...(wait.attempted ? { attempted: true } : {}),
     });
     const deadline = settlementDeadlineForRow(registry, { delivery: reservation });
+    progress.deadline(operationId, deadline?.deadlineAt ?? null, deadline?.policy ?? null);
+    return progress.get(operationId);
+  } catch (error) {
+    return logged(error);
+  }
+}
+
+/**
+ * {@link recordWait} for a direct-admission row (A2): a retry attempt or a
+ * hand-off, which no reservation answers for. Called in the step after the
+ * row is written and before the command that admits it leaves the process.
+ */
+export function recordDirectWait(
+  progress: DeliveryProgressPort | null,
+  registry: AgentRegistry,
+  owner: DeliveryOperationOwner,
+  wait: RecordedWait,
+): DeliveryProgressRecord | null {
+  if (!progress) return null;
+  const operationId = owner.command.operationId;
+  try {
+    progress.note(operationId, owner.runtimeConversationId, {
+      waitReason: wait.reason,
+      detail: wait.detail ?? null,
+      kind: owner.command.kind,
+      originalKey: owner.clientMessageId,
+      admittedAt: owner.createdAt,
+      nextWakeMs: wait.nextWakeMs === undefined ? ACCOUNT_MIGRATION_PASS_INTERVAL_MS : wait.nextWakeMs,
+      ...(wait.attempted ? { attempted: true } : {}),
+    });
+    const deadline = settlementDeadlineForRow(registry, { owner });
     progress.deadline(operationId, deadline?.deadlineAt ?? null, deadline?.policy ?? null);
     return progress.get(operationId);
   } catch (error) {

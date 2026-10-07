@@ -726,6 +726,30 @@ export interface DeliveryOperationOwner {
   delivery?: RuntimeDeliveryMode;
   /** The turn that delivery interrupted. */
   interruptedTurnId?: string;
+  /** A message admitted straight into the runtime journal with no reservation
+      behind it, which owns its own settlement (docs/design/
+      delivery-progress-and-drain.md, A2): the composer's Queue-for-Codex
+      hand-off. Its `deliveryId` is its own operation id. */
+  directAdmission?: "native-queue-add";
+}
+
+/** What a direct-admission row is about, when no reservation or earlier row
+    names it: the identity a reservation for the same payload would store. */
+export interface DirectAdmissionIdentity {
+  conversationId: ViewerConversationId;
+  clientMessageId: string | null;
+  /** The command the journal is handed; its operation id is the row's. */
+  command: HeldDeliveryCommandInput & { kind: HeldDeliveryCommand["kind"] };
+  /** The text the request digest covers. */
+  text: string;
+  contentDigest: string | null;
+  evidenceText: string | null;
+  evidenceImageCount: number;
+}
+
+/** Whether an owner row settles itself: a retry attempt or a direct admission. */
+export function ownsItsSettlement(owner: Pick<DeliveryOperationOwner, "retryOfOperationId" | "directAdmission"> | null | undefined): boolean {
+  return Boolean(owner?.retryOfOperationId || owner?.directAdmission);
 }
 
 /** The delivery route a settled send is recorded with (see `delivery` above). */
@@ -2387,6 +2411,17 @@ function heldDeliveryRequestDigest(
   ])).digest("hex");
 }
 
+/** The request digest a reservation for this payload would carry, for a row
+    written without one (A2): an adopted or handed-off admission and a later
+    reservation under the same key agree. */
+export function deliveryRequestDigest(
+  conversationId: ViewerConversationId,
+  text: string,
+  commandInput: HeldDeliveryCommandInput,
+): string {
+  return heldDeliveryRequestDigest(conversationId, text, canonicalHeldDeliveryCommand(commandInput, "direct-admission"));
+}
+
 /** Reverse alias traversal uses the value index, including aliases of aliases. */
 function conversationIdentities(file: RegistryFile, id: ViewerConversationId): ViewerConversationId[] {
   const canonicalId = resolveConversationAlias(file, id);
@@ -2836,6 +2871,7 @@ function normalizeDeliveryOperationOwners(
         settledAt: typeof owner.settledAt === "string"
           ? owner.settledAt
           : referencedDelivery?.deliveredAt ?? settledDelivery?.deliveredAt ?? null,
+        ...(owner.directAdmission === "native-queue-add" ? { directAdmission: owner.directAdmission } : {}),
         ...(owner.delivery === "interrupt-then-turn-started" ? { delivery: owner.delivery } : {}),
         ...(owner.delivery === "interrupt-then-turn-started" && typeof owner.interruptedTurnId === "string" && owner.interruptedTurnId
           ? { interruptedTurnId: owner.interruptedTurnId }
@@ -9344,9 +9380,79 @@ export class AgentRegistry {
    * inventing a reservation for it would be worse than admitting it.
    */
   recordDeliveryRetryAttempt(previousOperationId: string, retryOperationId: string): boolean {
-    if (!retryOperationId || retryOperationId === previousOperationId) return false;
+    return this.recordDirectAdmission({ operationId: retryOperationId, retryOf: previousOperationId }) !== null;
+  }
+
+  /**
+   * Writes the owner row of a message admitted straight into the runtime
+   * journal, before the command that admits it leaves the process
+   * (docs/design/delivery-progress-and-drain.md, A2): a retry attempt, and the
+   * composer's Queue-for-Codex hand-off. The row is the send's owner, its
+   * settlement subject and its deadline, so a lost reply leaves something the
+   * settlement can end and the progress record can be restored from.
+   *
+   * - `retryOf`: the row copies its identity from the retried operation's row
+   *   or reservation. When nothing durable names it (a continuation older code
+   *   admitted into the journal only), the caller's `identity` is adopted.
+   *   With neither, nothing is written and the answer is null: the caller does
+   *   not send.
+   * - `handOff`: a fresh direct admission, keyed by its conversation and
+   *   client message id. Its operation id is minted on the first admission and
+   *   the same for every replay of the key; a different payload under the key
+   *   is a conflict.
+   *
+   * Idempotent: an existing row for the operation is returned as it is.
+   */
+  recordDirectAdmission(
+    admission:
+      | { operationId: string; retryOf: string; identity?: DirectAdmissionIdentity }
+      | { handOff: DirectAdmissionIdentity },
+  ): DeliveryOperationOwner | null {
+    if ("retryOf" in admission && (!admission.operationId || admission.operationId === admission.retryOf)) return null;
     return this.mutate((file) => {
-      if (file.deliveryOperationOwners[retryOperationId]) return true;
+      const ownerFor = (identity: DirectAdmissionIdentity, operationId: string) => {
+        const conversationId = resolveConversationAlias(file, identity.conversationId);
+        const conversation = file.conversations[conversationId];
+        const command = canonicalHeldDeliveryCommand({ ...identity.command, operationId }, operationId);
+        return {
+          conversationId: identity.conversationId,
+          runtimeConversationId: identity.conversationId,
+          clientMessageId: identity.clientMessageId,
+          deliveryId: operationId,
+          command,
+          requestDigest: heldDeliveryRequestDigest(conversationId, identity.text, command),
+          contentDigest: identity.contentDigest,
+          targetGenerationId: conversation?.generations.at(-1)?.id ?? null,
+          evidenceText: identity.evidenceText,
+          evidenceImageCount: identity.evidenceImageCount,
+          createdAt: now(),
+          retryOfOperationId: null,
+          terminalState: null,
+          terminalDisposition: null,
+          terminalReason: null,
+          settledAt: null,
+        } satisfies DeliveryOperationOwner;
+      };
+      if ("handOff" in admission) {
+        const identity = admission.handOff;
+        const canonicalId = resolveConversationAlias(file, identity.conversationId);
+        const existing = identity.clientMessageId
+          ? conversationRows(file, "deliveryOperationOwners", canonicalId).find((owner) =>
+            owner.directAdmission === "native-queue-add" && owner.clientMessageId === identity.clientMessageId)
+          : undefined;
+        if (existing) {
+          const digest = heldDeliveryRequestDigest(canonicalId, identity.text, canonicalHeldDeliveryCommand(identity.command, existing.deliveryId));
+          if (existing.requestDigest !== digest) throw new DeliveryReservationConflictError();
+          return clone(existing);
+        }
+        const operationId = identity.command.operationId || crypto.randomUUID();
+        if (file.deliveryOperationOwners[operationId]) return clone(file.deliveryOperationOwners[operationId]);
+        const owner: DeliveryOperationOwner = { ...ownerFor(identity, operationId), directAdmission: "native-queue-add" };
+        file.deliveryOperationOwners[operationId] = owner;
+        return clone(owner);
+      }
+      const { operationId: retryOperationId, retryOf: previousOperationId, identity } = admission;
+      if (file.deliveryOperationOwners[retryOperationId]) return clone(file.deliveryOperationOwners[retryOperationId]);
       const previous = file.deliveryOperationOwners[previousOperationId];
       const delivery = previous
         ? file.heldDeliveries[previous.deliveryId]
@@ -9365,9 +9471,17 @@ export class AgentRegistry {
           evidenceImageCount: delivery.runtimeImages.length,
         }
         : null);
-      if (!source?.requestDigest) return false;
+      if (!source?.requestDigest) {
+        /* Nothing durable names the retried operation. A caller that holds
+           its whole identity (startup's continuation) has it adopted, so the
+           retry has an owner, a deadline and a record before its command. */
+        if (!identity) return null;
+        const adopted: DeliveryOperationOwner = { ...ownerFor(identity, retryOperationId), retryOfOperationId: previousOperationId };
+        file.deliveryOperationOwners[retryOperationId] = adopted;
+        return clone(adopted);
+      }
       const conversation = file.conversations[resolveConversationAlias(file, source.conversationId)];
-      file.deliveryOperationOwners[retryOperationId] = {
+      const owner: DeliveryOperationOwner = {
         conversationId: source.conversationId,
         runtimeConversationId: source.runtimeConversationId,
         clientMessageId: source.clientMessageId,
@@ -9388,7 +9502,8 @@ export class AgentRegistry {
         terminalReason: null,
         settledAt: null,
       };
-      return true;
+      file.deliveryOperationOwners[retryOperationId] = owner;
+      return clone(owner);
     });
   }
 
@@ -9437,11 +9552,12 @@ export class AgentRegistry {
   ): DeliveryOperationOwner | null {
     return this.mutate((file) => {
       const owner = file.deliveryOperationOwners[operationId];
-      if (!owner?.retryOfOperationId || (owner.terminalState !== null
+      if (!owner || !ownsItsSettlement(owner)) return owner ? clone(owner) : null;
+      if (owner.terminalState !== null
         && !(state === "delivered" && disposition === "delivered"
           && owner.terminalState === "failed" && owner.terminalDisposition === "unverified"
           && owner.terminalReason !== OPERATOR_DISCARDED_DELIVERY_REASON
-          && !owner.terminalReason?.startsWith(MIGRATION_DELIVERY_CANCELLATION_PREFIX)))) return owner ? clone(owner) : null;
+          && !owner.terminalReason?.startsWith(MIGRATION_DELIVERY_CANCELLATION_PREFIX))) return clone(owner);
       owner.terminalState = state;
       owner.terminalDisposition = state === "delivered" ? "delivered" : disposition ?? null;
       owner.terminalReason = error?.slice(0, 240) ?? null;
@@ -9449,6 +9565,12 @@ export class AgentRegistry {
       if (state === "delivered") recordDeliveryRoute(owner, route);
       return clone(owner);
     });
+  }
+
+  /** {@link settleDeliveryRetryAttempt} for every row that settles itself,
+      a direct admission included (A2). */
+  settleDirectAdmission(...attempt: Parameters<AgentRegistry["settleDeliveryRetryAttempt"]>): DeliveryOperationOwner | null {
+    return this.settleDeliveryRetryAttempt(...attempt);
   }
 
   /** {@link settleDeliveryRetryAttempt} with the write lock waited for off the

@@ -10,7 +10,7 @@ import { mergeRuntimeReceipts } from "@/components/TmuxComposer";
 import { applyEvent, installSnapshot } from "@/components/runtime/runtimeModel";
 import type { Flow } from "@/lib/flows/types";
 import { UnixRuntimeHostClient } from "@/lib/runtime/client";
-import { runtimePresentationReceipt, runtimeScope } from "@/lib/runtime/contracts";
+import { runtimePresentationReceipt, runtimeScope, terminalRetryOperationId } from "@/lib/runtime/contracts";
 import { projectEngineHostEvent } from "@/lib/runtime/engineHostEvents";
 import { LIVE_TURN_TEXT_LIMIT } from "@/lib/runtime/liveTurn";
 import { structuredContentDigest, type StructuredImageRef } from "@/lib/runtime/structuredContent";
@@ -1406,6 +1406,9 @@ test("terminal delivery retry on a replacement host mints one fresh operation", 
   const replayedAfterAnotherClick = journal.retryOperation("op-before-replacement", "key-after-reload");
 
   expect(retried.operationId).not.toBe("op-before-replacement");
+  /* The Viewer writes the attempt's row and record under this id before it
+     asks for the retry (docs/design/delivery-progress-and-drain.md, A2). */
+  expect(retried.operationId).toBe(terminalRetryOperationId("op-before-replacement"));
   expect(retried.receipt).toMatchObject({
     idempotencyKey: "key-after-replacement",
     status: "queued",

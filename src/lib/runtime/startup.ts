@@ -21,10 +21,10 @@ import {
   type AdoptedCodexHost,
   type StructuredHostAdoptionFilter,
 } from "./registry";
-import { RuntimeHostUnavailableError, runtimeHostClient, type RuntimeHostClient } from "./client";
+import { isRuntimeHostTransportFailure, RuntimeHostUnavailableError, runtimeHostClient, type RuntimeHostClient } from "./client";
 import { forEachStartupBatch } from "./startupWork";
 import type { RuntimeSession } from "./contracts";
-import type { RuntimeOperationResult } from "./contracts";
+import { terminalRetryOperationId, type RuntimeOperationResult } from "./contracts";
 import {
   bindStructuredDeliveryQueue,
   completeStructuredDeliveryQueueStartup,
@@ -36,7 +36,11 @@ import {
 } from "./structuredDeliveryController";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { enqueueStructuredMessage } from "./structuredMessageDelivery";
-import { INTERRUPTED_CODEX_CONTINUATION_TEXT, RECOVERY_NOTICE_ORIGIN } from "./recoveryNotices";
+import { INTERRUPTED_CODEX_CONTINUATION_OPERATION_PREFIX, INTERRUPTED_CODEX_CONTINUATION_TEXT, RECOVERY_NOTICE_ORIGIN } from "./recoveryNotices";
+import { ownedDeliveryProgressStore } from "./deliveryProgress";
+import { recordDirectWait, stillAtStep } from "./recordWait";
+import { structuredContentDigest } from "./structuredContent";
+import { STRUCTURED_DELIVERY_TIMING } from "./structuredDeliveryQueue";
 import { delegatusOriginForRecipient } from "./agentMessageAuthor";
 import { claudeHostLaunchPaths, materializeStructuredHostAccess, recoverPendingStructuredSpawns, structuredHostAccessPolicy } from "./structuredSpawn";
 import { conversationTurnLiveness, readTranscriptEvidence, transcriptEvidenceFromRecords, type TranscriptEventKind, type TurnLivenessDependencies } from "./liveness";
@@ -169,7 +173,6 @@ interface StructuredStartupSignals {
 }
 
 const TRANSCRIPT_REFRESH_CONCURRENCY = 16;
-const INTERRUPTED_CODEX_CONTINUATION_OPERATION_PREFIX = "recovery-continuation";
 /** Owed continuations older than this are retired unsent: a turn cut that
     long ago has been looked at by someone, and a paid turn resuming it now
     would act on a stale picture. */
@@ -496,16 +499,24 @@ async function deliverInterruptionContinuations(
   publishedHostKeys: ReadonlySet<string>,
 ): Promise<string[]> {
   const failures: string[] = [];
+  /* Each conversation's continuations are admitted one after another, every
+     conversation at once (B2): one host's unanswered admission delays no
+     other's, and each is bounded by its own calls' deadlines. */
+  const byConversation = new Map<string, InterruptionObligation[]>();
   for (const obligation of obligations) {
-    if (!publishedHostKeys.has(obligation.hostKey)) continue;
+    const conversationId = registry.canonicalConversationId(obligation.conversationId);
+    byConversation.set(conversationId, [...byConversation.get(conversationId) ?? [], obligation]);
+  }
+  const deliverOne = async (obligation: InterruptionObligation): Promise<void> => {
+    if (!publishedHostKeys.has(obligation.hostKey)) return;
     const snapshot = registry.readOnlySnapshot();
     const recorded = snapshot.entries[obligation.hostKey]?.structuredHost?.process ?? null;
     if (obligation.owner && recorded
       && recorded.pid === obligation.owner.pid
-      && recorded.startIdentity === obligation.owner.startIdentity) continue;
+      && recorded.startIdentity === obligation.owner.startIdentity) return;
     const conversation = snapshot.conversations[registry.canonicalConversationId(obligation.conversationId)];
     const generation = conversation?.generations.at(-1);
-    if (!conversation || !generation) continue;
+    if (!conversation || !generation) return;
     const result = await enqueueStructuredMessage({
       path: generation.path,
       conversationId: conversation.id,
@@ -526,7 +537,7 @@ async function deliverInterruptionContinuations(
         attempts: obligation.attempts + 1,
         ...(result.outcome === "delivered" ? { resolvedAt: new Date().toISOString(), resolution: "delivered" } : {}),
       });
-      continue;
+      return;
     }
     const error = result?.error ?? "structured delivery unavailable";
     const status = result?.status ?? 503;
@@ -540,11 +551,20 @@ async function deliverInterruptionContinuations(
       store.update(obligation.id, {
         state: "failed", attempts: obligation.attempts + 1, resolvedAt: new Date().toISOString(), resolution: error,
       });
-      continue;
+      return;
     }
     store.update(obligation.id, { attempts: obligation.attempts + 1 });
     failures.push(`${obligation.conversationId}: ${error}`);
-  }
+  };
+  await Promise.all([...byConversation.values()].map(async (group) => {
+    for (const obligation of group) {
+      try {
+        await deliverOne(obligation);
+      } catch (error) {
+        failures.push(`${obligation.conversationId}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }));
   return failures;
 }
 
@@ -652,6 +672,20 @@ function interruptedCodexConversations(
   }));
 }
 
+/**
+ * The interrupted-Codex continuation and its one retry (P19), admitted for
+ * every adopted host at once (B2) and collected: one host's failure neither
+ * delays nor skips another's, and the pass reports them after every host was
+ * tried.
+ *
+ * The continuation is an accepted send like any other: it is admitted through
+ * the ordinary structured admission under its deterministic operation id, so
+ * it has a reservation, an owner row, a deadline and a progress record before
+ * its command leaves the process, and a repeat under the same id is
+ * deduplicated by the journal. A retry of a continuation that failed in the
+ * journal writes its own row first (A2), adopting the continuation's known
+ * identity when older code left nothing durable behind it.
+ */
 async function enqueueInterruptedCodexContinuations(
   registry: AgentRegistry,
   client: RuntimeHostClient,
@@ -659,41 +693,137 @@ async function enqueueInterruptedCodexContinuations(
   interrupted: ReadonlyMap<string, ViewerConversationId>,
   existingByKey: ReadonlyMap<string, RuntimeOperationResult>,
   pendingContinuationConversationIds: ReadonlySet<string>,
-): Promise<void> {
-  for (const item of adopted) {
+): Promise<string[]> {
+  const failures: string[] = [];
+  await Promise.all(adopted.map(async (item) => {
     const key = sessionKeyId(item.key);
     const conversationId = interrupted.get(key);
-    if (!conversationId) continue;
-    if (pendingContinuationConversationIds.has(conversationId)) continue;
-    const entry = registry.readOnlySnapshot().entries[key];
-    if (!entry) throw new Error(`adopted Codex registry row disappeared: ${key}`);
-    const operationId = interruptedCodexContinuationOperationId(item.key.sessionId, entry.claimEpoch);
-    const existing = existingByKey.get(key);
-    if (existing) {
-      if (existing.receipt.status === "failed" || existing.receipt.status === "rejected") {
-        if (!existing.receipt.retryOfOperationId) {
-          await client.retryOperation(
-            existing.operationId,
-            `${existing.receipt.idempotencyKey}-retry-1`,
-            { requireHostedConversationId: conversationId },
-          );
+    if (!conversationId) return;
+    if (pendingContinuationConversationIds.has(conversationId)) return;
+    try {
+      const entry = registry.readOnlySnapshot().entries[key];
+      if (!entry) throw new Error(`adopted Codex registry row disappeared: ${key}`);
+      const operationId = interruptedCodexContinuationOperationId(item.key.sessionId, entry.claimEpoch);
+      const origin = delegatusOriginForRecipient(registry.readOnlySnapshot(), conversationId, RECOVERY_NOTICE_ORIGIN.role ?? "runtime-host");
+      const existing = existingByKey.get(key);
+      if (existing) {
+        if (existing.receipt.status === "failed" || existing.receipt.status === "rejected") {
+          if (!existing.receipt.retryOfOperationId) {
+            const failure = await retryInterruptedCodexContinuation(registry, client, conversationId, existing, origin);
+            if (failure) failures.push(`${conversationId}: ${failure}`);
+          }
+          return;
         }
-        continue;
+        if (existing.operationId === operationId
+          || existing.receipt.status !== "delivered"
+          || existing.receipt.retryOfOperationId) return;
       }
-      if (existing.operationId === operationId
-        || existing.receipt.status !== "delivered"
-        || existing.receipt.retryOfOperationId) continue;
+      const generation = registry.conversation(conversationId)?.generations.at(-1);
+      const result = await enqueueStructuredMessage({
+        path: generation?.path ?? "",
+        conversationId,
+        clientMessageId: operationId,
+        operationId,
+        kind: "send",
+        policy: "queue",
+        turnId: null,
+        text: INTERRUPTED_CODEX_CONTINUATION_TEXT,
+        images: [],
+        origin,
+      }, {
+        enabled: () => true,
+        client: () => client,
+        registry: () => registry,
+        interruptionContinuation: true,
+      });
+      if (!result) {
+        failures.push(`${conversationId}: structured delivery unavailable`);
+        return;
+      }
+      /* A definitive refusal (a 409 the journal or admission will repeat)
+         ends this continuation; anything that may have been accepted, or was
+         not admitted for now, is the next pass's under the same key. */
+      if (!result.ok && (result.transportUncertain || result.status !== 409)) {
+        failures.push(`${conversationId}: ${result.error}`);
+      }
+    } catch (error) {
+      failures.push(`${conversationId}: ${error instanceof Error ? error.message : String(error)}`);
     }
-    await client.command({
-      kind: "send",
-      operationId,
-      idempotencyKey: operationId,
+  }));
+  return failures;
+}
+
+/**
+ * The one retry of a failed continuation (A2): its row and record exist
+ * before `retryOperation` leaves the process, under the deterministic id the
+ * journal gives the attempt. A row the settlement already ended is never sent
+ * again. Answers the failure to report, or null.
+ */
+async function retryInterruptedCodexContinuation(
+  registry: AgentRegistry,
+  client: RuntimeHostClient,
+  conversationId: ViewerConversationId,
+  existing: RuntimeOperationResult,
+  origin: ReturnType<typeof delegatusOriginForRecipient>,
+): Promise<string | null> {
+  const retryOperationId = terminalRetryOperationId(existing.operationId);
+  const text = INTERRUPTED_CODEX_CONTINUATION_TEXT;
+  const row = await registry.deliveryWrite({ label: "delivery.direct-admission", operationId: retryOperationId }, () => registry.recordDirectAdmission({
+    operationId: retryOperationId,
+    retryOf: existing.operationId,
+    identity: {
       conversationId,
-      text: INTERRUPTED_CODEX_CONTINUATION_TEXT,
-      policy: "queue",
-      turnId: null,
-      origin: delegatusOriginForRecipient(registry.readOnlySnapshot(), conversationId, RECOVERY_NOTICE_ORIGIN.role ?? "runtime-host"),
+      clientMessageId: existing.receipt.idempotencyKey || existing.operationId,
+      command: { operationId: retryOperationId, kind: "send", policy: "queue", turnId: null, ...(origin ? { origin } : {}) },
+      text,
+      contentDigest: structuredContentDigest({ text, images: [] }),
+      evidenceText: text,
+      evidenceImageCount: 0,
+    },
+  }));
+  if (!row.acquired) return "the retry's delivery record could not be written";
+  if (!row.value) return "the retried continuation has no durable identity";
+  if (row.value.terminalState !== null) return null;
+  const progress = ownedDeliveryProgressStore();
+  const written = recordDirectWait(progress, registry, row.value, {
+    reason: "checking",
+    detail: "admitting to the runtime journal",
+    nextWakeMs: null,
+  });
+  try {
+    const result = await client.retryOperation(
+      existing.operationId,
+      `${existing.receipt.idempotencyKey}-retry-1`,
+      { requireHostedConversationId: conversationId },
+    );
+    const status = result.receipt.status;
+    if (status === "queued" || status === "pending") {
+      if (progress && written && stillAtStep(progress.get(retryOperationId), written)) {
+        recordDirectWait(progress, registry, row.value, { reason: "queued", nextWakeMs: STRUCTURED_DELIVERY_TIMING.retryMs });
+      }
+    }
+    return null;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    /* The journal answered with a refusal: nothing was admitted under the
+       attempt's id, so its row ends lost. Anything else may have reached the
+       journal; the row stays open for the queue, the next pass and the
+       settlement deadline, and its record says why it waits. */
+    if (error instanceof RuntimeHostUnavailableError && !isRuntimeHostTransportFailure(error)
+      && error.message !== "runtime host request cancelled") {
+      await registry.deliveryWrite({ label: "delivery.settle", operationId: retryOperationId },
+        () => registry.settleDirectAdmission(retryOperationId, "failed", message, "lost"));
+      progress?.settle(retryOperationId, "failed", message);
+      return message;
+    }
+    recordDirectWait(progress, registry, row.value, {
+      reason: "evidence-unreadable",
+      detail: `the runtime journal did not acknowledge the retry: ${message}`,
+      attempted: true,
+      nextWakeMs: STRUCTURED_DELIVERY_TIMING.retryMs,
     });
+    void kickStructuredDeliveryQueue();
+    return message;
   }
 }
 
@@ -1657,7 +1787,7 @@ async function adoptStructuredHostsPass(
         registry, client, interruptions, owedInterruptions, finalHostKeys,
       );
       reportProgress("recovering interrupted deliveries");
-      await enqueueInterruptedCodexContinuations(
+      const codexContinuationFailures = await enqueueInterruptedCodexContinuations(
         registry,
         client,
         finalCodexHosts,
@@ -1672,6 +1802,11 @@ async function adoptStructuredHostsPass(
       if (continuationFailures.length > 0) {
         throw new RuntimeHostUnavailableError(
           `interrupted turn continuation admission failed: ${continuationFailures.join("; ")}`,
+        );
+      }
+      if (codexContinuationFailures.length > 0) {
+        throw new RuntimeHostUnavailableError(
+          `interrupted Codex continuation admission failed: ${codexContinuationFailures.join("; ")}`,
         );
       }
     }
