@@ -435,6 +435,55 @@ test("a request to the orchestrator goes out at once with no button; one the mod
   } finally { await unmountNow(); await live.release(); }
 });
 
+test("two visible confirmations keep Send, Cancel, retry and a spoken/tapped race bound to their own proposal", async () => {
+  for (const firstDecision of ["send", "cancel"] as const) {
+    const live = await liveHarness();
+    try {
+      await mount(<VoiceCompanionHost project="project-a" mobile={false} />);
+      await click(document.querySelector("[data-companion-talk]"));
+      await pause();
+      const provider = live.provider.sessions[0]!.id;
+      await live.propose(provider, "Review plan A", "Plan A needs your approval.");
+      await live.propose(provider, "Delete presets B", "Deleting presets needs your approval.");
+      const cards = () => [...document.querySelectorAll<HTMLElement>("[data-companion-delegation]")];
+      const cardFor = (instruction: string) => cards().find((card) => card.querySelector("[data-companion-instruction]")?.textContent === instruction)!;
+      expect(cards().filter((card) => card.dataset.stage === "awaiting-confirmation")).toHaveLength(2);
+
+      const cardA = cardFor("Review plan A");
+      if (firstDecision === "send") {
+        /* A lost first request exposes the error and retry only on A. */
+        live.failing.command = "before";
+        await click(cardA.querySelector("[data-companion-send]"));
+        await pause(700);
+        expect(cardFor("Review plan A").querySelector('[data-companion-delegation-notice="DELIVERY_UNCONFIRMED"]')?.textContent).toBe(companionErrorMessage("SEND_UNCONFIRMED", "en"));
+        expect(cardFor("Delete presets B").querySelector('[data-companion-delegation-notice="DELIVERY_UNCONFIRMED"]')).toBeNull();
+        await click(cardFor("Review plan A").querySelector("[data-companion-send]"));
+        await pause(700);
+        expect(cardFor("Review plan A").dataset.stage).toBe("queued");
+        expect(cardFor("Delete presets B").dataset.stage).toBe("awaiting-confirmation");
+        expect(live.sent).toHaveLength(1);
+
+        /* A model answer and the tap race through the same production admission for B's proposal. */
+        const [session] = Object.values(live.storage.read().sessions);
+        const proposalB = Object.values(session.proposals).find((row) => row.proposal.instruction === "Delete presets B")!.proposal;
+        await Promise.all([
+          click(cardFor("Delete presets B").querySelector("[data-companion-send]")),
+          live.service.command(session.id, { type: "confirmation", proposalId: proposalB.proposalId, decision: "send", via: "speech", confirmationItemId: "spoken-answer-B" }),
+        ]);
+        await pause(300);
+        expect(cardFor("Delete presets B").dataset.stage).toBe("queued");
+        expect(live.sent).toHaveLength(2);
+      } else {
+        await click(cardA.querySelector("[data-companion-cancel]"));
+        await pause(500);
+        expect(cards().some((card) => card.dataset.stage === "cancelled")).toBe(true);
+        expect(cardFor("Delete presets B").dataset.stage).toBe("awaiting-confirmation");
+        expect(live.sent).toHaveLength(0);
+      }
+    } finally { await unmountNow(); await live.release(); }
+  }
+}, 15_000);
+
 test("a Send whose request or reply is lost says delivery is not confirmed, keeps the card, and another tap delivers once", async () => {
   for (const lost of ["before", "after"] as const) {
     const live = await liveHarness();

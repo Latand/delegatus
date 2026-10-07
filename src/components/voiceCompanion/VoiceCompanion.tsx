@@ -327,10 +327,10 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
   const [heldView, setHeld] = useState<{ at: Point; lane: LaneLayout | null } | null>(null);
   const [muted, setMuted] = useState(false);
   const [dragging, setDragging] = useState(false);
-  /* The proposal the operator already answered: its buttons take no second tap. */
-  const [decidedFor, setDecidedFor] = useState<string | null>(null);
-  /* The proposal whose answer never reached the Viewer, or whose reply was lost on the way back. */
-  const [unconfirmedFor, setUnconfirmedFor] = useState<string | null>(null);
+  /* Each proposal owns its pending tap and delivery error independently. */
+  const [decidedFor, setDecidedFor] = useState<ReadonlySet<string>>(() => new Set());
+  const deciding = useRef(new Set<string>());
+  const [unconfirmedFor, setUnconfirmedFor] = useState<ReadonlySet<string>>(() => new Set());
   const [now, setNow] = useState(() => Date.now());
   /* How many bubbles of the playing line are out, moved by the level samples outside React. */
   const [paced, setPaced] = useState<{ key: string; out: number } | null>(null);
@@ -842,16 +842,17 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
   };
   const end = () => { void store.stop().catch(() => undefined); };
   const toggleMute = () => { const next = !muted; setMuted(next); void store.command({ type: "mute", muted: next }).catch(() => undefined); };
-  const decide = (decision: "send" | "cancel") => {
-    const proposal = state.delegation?.proposal;
-    if (!proposal || decidedFor === proposal.proposalId) return;
-    setDecidedFor(proposal.proposalId);
-    setUnconfirmedFor(null);
+  const decide = (proposalId: string, decision: "send" | "cancel") => {
+    if (deciding.current.has(proposalId)) return;
+    deciding.current.add(proposalId);
+    setDecidedFor((current) => new Set(current).add(proposalId));
+    setUnconfirmedFor((current) => { const next = new Set(current); next.delete(proposalId); return next; });
     /* A lost request leaves the card as it was, says so, and takes another tap. The server keeps one
        delivery key per proposal, so a repeated Send recovers the first send and never adds a second. */
-    void store.command({ type: "confirmation", proposalId: proposal.proposalId, decision, via: "tap" }).catch(() => {
-      setDecidedFor((current) => (current === proposal.proposalId ? null : current));
-      setUnconfirmedFor(proposal.proposalId);
+    void store.command({ type: "confirmation", proposalId, decision, via: "tap" }).catch(() => {
+      deciding.current.delete(proposalId);
+      setDecidedFor((current) => { const next = new Set(current); next.delete(proposalId); return next; });
+      setUnconfirmedFor((current) => new Set(current).add(proposalId));
       void store.refresh().catch(() => undefined);
     });
   };
@@ -940,8 +941,8 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
         {delegation.stage === "awaiting-confirmation" ? <p className="vc-deleg-note vc-deleg-wait" data-companion-confirm-hint>{t("voiceCompanion.confirmHint")}</p> : null}
         {delegation.stage === "awaiting-confirmation" ? (
           <div className="vc-acts">
-            <button type="button" className="vc-act" data-companion-cancel disabled={decidedFor === delegation.proposal?.proposalId} onClick={() => decide("cancel")}><X size={14} aria-hidden />{t("voiceCompanion.cancel")}</button>
-            <button type="button" className="vc-act" data-primary data-companion-send disabled={decidedFor === delegation.proposal?.proposalId} onClick={() => decide("send")}><SendHorizontal size={14} aria-hidden />{t("voiceCompanion.send")}</button>
+            <button type="button" className="vc-act" data-companion-cancel disabled={!!delegation.proposal && decidedFor.has(delegation.proposal.proposalId)} onClick={() => delegation.proposal && decide(delegation.proposal.proposalId, "cancel")}><X size={14} aria-hidden />{t("voiceCompanion.cancel")}</button>
+            <button type="button" className="vc-act" data-primary data-companion-send disabled={!!delegation.proposal && decidedFor.has(delegation.proposal.proposalId)} onClick={() => delegation.proposal && decide(delegation.proposal.proposalId, "send")}><SendHorizontal size={14} aria-hidden />{t("voiceCompanion.send")}</button>
           </div>
         ) : null}
         {delegation.stage === "sending" || delegation.stage === "queued" || delegation.stage === "delivered" || delegation.stage === "answered" ? (
@@ -952,7 +953,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
           </div>
         ) : null}
         {/* What is still owed after the send: the reply tied to this request, or the proof that it arrived. */}
-        {delegation.stage === "awaiting-confirmation" && delegation.proposal && unconfirmedFor === delegation.proposal.proposalId ? <p className="vc-deleg-note vc-deleg-wait" role="alert" data-companion-delegation-notice="DELIVERY_UNCONFIRMED">{companionErrorMessage("SEND_UNCONFIRMED", speechLocaleOf(locale))}</p> : null}
+        {delegation.stage === "awaiting-confirmation" && delegation.proposal && unconfirmedFor.has(delegation.proposal.proposalId) ? <p className="vc-deleg-note vc-deleg-wait" role="alert" data-companion-delegation-notice="DELIVERY_UNCONFIRMED">{companionErrorMessage("SEND_UNCONFIRMED", speechLocaleOf(locale))}</p> : null}
         {delegation.notice && delegation.stage !== "answered" ? <p className="vc-deleg-note vc-deleg-wait" data-companion-delegation-notice={delegation.notice}>{companionErrorMessage(delegation.notice, speechLocaleOf(locale))}</p> : null}
       </div>
     );
