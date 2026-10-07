@@ -39,7 +39,8 @@ export async function publishTitleUpdate(identity: string, cleared: boolean): Pr
   const client = runtimeHostClient();
   if (!client) return;
   try {
-    const snapshot = await client.snapshot();
+    // Only the revision is read, so the voice bodies stay in the journal.
+    const snapshot = await client.snapshot(undefined, { voiceBodiesFor: [] });
     for (const event of titleUpdateEvents(identity, cleared, snapshot.filesRevision)) {
       await client.append(event);
     }
