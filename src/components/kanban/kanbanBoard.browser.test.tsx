@@ -16,6 +16,7 @@ import { REPORT_LOG_CHAT_MIN_WIDTH, REPORT_LOG_MAX_WIDTH, REPORT_LOG_MIN_WIDTH, 
 import { playPath, pointerPath, recordDrag } from "./dragFrameMeter";
 import { captureSeatMandateHandover, openFixture, serveEvidenceFixture } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
+import { ORCHESTRATOR_BURST_LIMIT, ORCHESTRATOR_WIRE_FADE_MS, ORCHESTRATOR_WIRE_HOLD_MS } from "./orchestratorArrows";
 import { clipTitle } from "./taskText";
 import { maintenanceCardText } from "@/lib/boardMaintenance/text";
 import type { MaintenanceRun } from "@/lib/boardMaintenance/types";
@@ -19670,4 +19671,467 @@ describe("issue report advisory preview", () => {
       fs.writeFileSync(evidence, JSON.stringify(readings, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
   }, 900_000);
+});
+
+describe("orchestrator wires after a seat action", () => {
+  /* docs/design/orchestrator-arrows.md, Variant 2 for a while after the seat acts
+     (`orchestratorWires.ts`). The fixture's seat owns five lanes; `orchestratorAct`
+     changes a record the way a writer's own write would, and the product's layer
+     reads it from the board's next reload. The layer's clock is moved through its
+     probe, so a minute of hold takes no minute here. */
+  const out = path.resolve(".artifacts/orchestrator-wires");
+  const seatAt = (placement: "top" | "side") => `try {
+    localStorage.setItem("llv_lang", "en");
+    localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: ${placement === "top" ? "{ atlas: true }" : "{}"}, placement: "${placement}", width: null, topWidths: {}, sideWidths: {}, heightV: 2 }));
+    ${placement === "side" ? 'localStorage.setItem("llv:rail-hidden:v1", "hidden");' : ""}
+  } catch {}`;
+  const FORMS = { desktop: { width: 1440, height: 900 }, phone: { width: 390, height: 844 } } as const;
+  type Stats = { updates: number; totalMs: number; maxMs: number; rectReads: number; wires: number; stubs: number; elements: number };
+  type Probe = { stats(reset?: boolean): Stats; advance(ms: number): void; freeze(ms?: number): void; settle(): void };
+  type Hooks = { orchestratorAct(act: unknown): Promise<{ landed: boolean }>; orchestratorWires(): Probe | null; orchestratorLinksCost(): { links: number; ms: number } };
+  const act = (page: Page, action: unknown) => page.evaluate((action) => (window as unknown as Hooks).orchestratorAct(action), action);
+  const probe = <K extends "advance" | "freeze" | "settle">(page: Page, call: K, ms?: number) => page.evaluate(({ call, ms }) => (window as unknown as Hooks).orchestratorWires()?.[call](ms as number), { call, ms });
+  const stats = (page: Page, reset = false) => page.evaluate((reset) => (window as unknown as Hooks).orchestratorWires()?.stats(reset) ?? null, reset);
+  /* What is on the page: the layer, each wire with its opacity, and whether any wire runs through a card. */
+  const drawn = (page: Page) => page.evaluate(() => {
+    const layer = document.querySelector("[data-orchestrator-wires]");
+    const cards = [...document.querySelectorAll<HTMLElement>("[data-kanban-board] .card[data-id], [data-phone-card]")].map((card) => card.getBoundingClientRect()).filter((box) => box.width > 0);
+    const wires = [...document.querySelectorAll<SVGGElement>("[data-orchestrator-wires] g[data-wire]")].map((group) => {
+      const path = group.querySelector<SVGPathElement>("path.oa-wire")!;
+      const length = path.getTotalLength();
+      let crossed = 0;
+      for (let at = 0; at <= length; at += 4) {
+        const point = path.getPointAtLength(at);
+        if (cards.some((box) => point.x > box.left + 1 && point.x < box.right - 1 && point.y > box.top + 1 && point.y < box.bottom - 1)) crossed += 1;
+      }
+      return { taskId: group.dataset.wire!, tone: group.dataset.tone, flows: group.hasAttribute("data-flow"), opacity: Number(getComputedStyle(group).opacity), crossed, corners: (path.getAttribute("d")!.match(/Q/g) ?? []).length };
+    });
+    return {
+      layer: !!layer, paused: !!layer?.hasAttribute("data-paused"), wires,
+      stubs: [...document.querySelectorAll("[data-orchestrator-wires] .oa-stub")].map((chip) => chip.textContent),
+      seatPort: document.querySelectorAll("[data-orchestrator-wires] .oa-port[data-seat]").length,
+      dots: document.querySelectorAll("[data-orchestrator-wires] .oa-dot").length,
+      overflow: document.documentElement.scrollWidth > innerWidth,
+    };
+  });
+  const open = async (browser: Browser, form: "desktop" | "phone", query: string, motion: "no-preference" | "reduce" = "no-preference", placement: "top" | "side" = "side") => {
+    const phone = form === "phone";
+    const context = await browser.newContext({ viewport: FORMS[form], colorScheme: "light", reducedMotion: motion, ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+    await context.addInitScript(seatAt(placement));
+    const page = await context.newPage();
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.goto(`${server!.base}?scenario=orchestrator-arrows${query}${phone ? "&kanban=1" : ""}`);
+    await page.locator(phone ? "[data-phone-card]" : "[data-kanban-board] .card[data-id]").first().waitFor({ state: "attached", timeout: 20_000 });
+    await page.locator(phone ? "[data-mobile2-seat-card]" : "[data-kanban-seat]").first().waitFor({ state: "attached", timeout: 20_000 });
+    await page.waitForTimeout(600);
+    const tab = async (status: string) => { if (phone) { await page.locator(`[data-phone-kanban-tab="${status}"]`).click(); await page.waitForTimeout(450); } };
+    return { context, page, pageErrors, tab, shoot: (name: string) => page.screenshot({ path: path.join(out, `${form}-${name}.png`) }) };
+  };
+  let server: Awaited<ReturnType<typeof serveEvidenceFixture>> | null = null;
+
+  browserTest("nothing at rest, a wire for a minute after each seat action, a smooth fade, on desktop and at 390 px", async () => {
+    fs.mkdirSync(out, { recursive: true });
+    server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const frames: Record<string, unknown>[] = [];
+    const record = async (page: Page, form: string, frame: string) => {
+      const state = await drawn(page);
+      frames.push({ form, frame, ...state, stats: await stats(page) });
+      return state;
+    };
+    try {
+      for (const form of ["desktop", "phone"] as const) {
+        const phone = form === "phone";
+        const { context, page, pageErrors, tab, shoot } = await open(browser, form, "");
+        try {
+          await tab("assigned");
+          /* At rest: no layer at all, so no wire, no port and no count. */
+          let state = await record(page, form, "rest");
+          expect(state.layer).toBe(false);
+          await shoot("rest");
+
+          /* Somebody else acts: the operator and a stage agent move a task, a lane is relaunched by nobody on record. */
+          expect((await act(page, { kind: "move", taskId: "t-links", to: "assigned", by: "operator" })).landed).toBe(true);
+          expect((await act(page, { kind: "move", taskId: "t-links", to: "blocked", by: "agent" })).landed).toBe(true);
+          expect((await act(page, { kind: "move", taskId: "t-links", to: "assigned", by: "nobody" })).landed).toBe(true);
+          await act(page, { kind: "stage", taskId: "t-search", by: "nobody" });
+          await act(page, { kind: "stage", taskId: "t-search", by: "operator" });
+          await act(page, { kind: "pipeline", taskId: "t-links", by: "agent" });
+          expect((await drawn(page)).layer).toBe(false);
+
+          /* The seat acts three times, one update each: three wires at once. The first action mounts the
+             layer; from there the driver holds its clock, so the two that follow happen at one instant
+             and half a second later the moved card has landed. */
+          await act(page, { kind: "stage", taskId: "t-upload" });
+          await probe(page, "freeze");
+          expect((await act(page, { kind: "move", taskId: "t-rounds", to: "blocked" })).landed).toBe(true);
+          expect((await act(page, { kind: "pipeline", taskId: "t-onboarding" })).landed).toBe(true);
+          await probe(page, "advance", 500);
+          await probe(page, "freeze", 700);
+          state = await record(page, form, "action");
+          await shoot("action");
+          expect(state.layer).toBe(true);
+          const shown = state.wires.map((wire) => wire.taskId).sort();
+          /* The phone shows the open tab's cards; the other two are a tab away. */
+          expect(shown).toEqual(phone ? ["t-upload"] : ["t-onboarding", "t-rounds", "t-upload"]);
+          for (const wire of state.wires) {
+            expect(wire.crossed).toBe(0);
+            expect(wire.corners).toBeGreaterThanOrEqual(1);
+            expect(wire.opacity).toBe(1);
+          }
+          expect(state.seatPort).toBe(phone ? 0 : 1);
+          expect(state.overflow).toBe(false);
+          /* The pulses run out, and the clock stops again: from here the driver moves it. */
+          await probe(page, "settle");
+          await probe(page, "freeze");
+          if (phone) {
+            await tab("blocked");
+            state = await record(page, form, "action-other-tab");
+            await shoot("action-other-tab");
+            expect(state.wires.map((wire) => wire.taskId)).toEqual(["t-rounds"]);
+            expect(state.wires[0]!.crossed).toBe(0);
+            await tab("assigned");
+          }
+
+          /* Forty seconds on, the seat acts on the upload card again: its minute starts over. */
+          await probe(page, "advance", 40_000);
+          await act(page, { kind: "stage", taskId: "t-upload" });
+          /* A minute after the first actions, half the fade: the two older wires are going, the restarted one is whole. */
+          await probe(page, "advance", ORCHESTRATOR_WIRE_HOLD_MS - 40_500 + ORCHESTRATOR_WIRE_FADE_MS / 2);
+          if (phone) await tab("blocked");
+          state = await record(page, form, "mid-fade");
+          await shoot("mid-fade");
+          const fading = state.wires.filter((wire) => wire.taskId !== "t-upload");
+          expect(fading.length).toBe(phone ? 1 : 2);
+          for (const wire of fading) {
+            expect(wire.opacity).toBeGreaterThan(0.05);
+            expect(wire.opacity).toBeLessThan(0.95);
+          }
+          if (phone) await tab("assigned");
+          else expect(state.wires.find((wire) => wire.taskId === "t-upload")!.opacity).toBe(1);
+          await probe(page, "settle");
+          await probe(page, "advance", ORCHESTRATOR_WIRE_FADE_MS);
+          state = await record(page, form, "restarted-only");
+          expect(state.wires.map((wire) => wire.taskId)).toEqual(["t-upload"]);
+          expect(state.wires[0]!.opacity).toBe(1);
+
+          /* A hidden tab: the flow stops, and a wire whose hold ends there goes without a fade. */
+          await page.evaluate(() => {
+            Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+            document.dispatchEvent(new Event("visibilitychange"));
+          });
+          expect((await drawn(page)).paused).toBe(true);
+          await probe(page, "advance", ORCHESTRATOR_WIRE_HOLD_MS);
+          await page.evaluate(() => {
+            Object.defineProperty(document, "hidden", { configurable: true, get: () => false });
+            document.dispatchEvent(new Event("visibilitychange"));
+          });
+          await page.waitForTimeout(100);
+          state = await record(page, form, "after");
+          expect(state.layer).toBe(false);
+          await shoot("after");
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+
+      /* The seat on top, folded to its strip: the trunks drop from the strip. */
+      {
+        const { context, page, pageErrors, shoot } = await open(browser, "desktop", "", "no-preference", "top");
+        try {
+          expect((await act(page, { kind: "pipeline", taskId: "t-onboarding" })).landed).toBe(true);
+          await act(page, { kind: "stage", taskId: "t-upload" });
+          await probe(page, "freeze", 700);
+          const state = await record(page, "desktop-seat-top", "action");
+          await shoot("seat-top-action");
+          expect(state.wires.length).toBe(2);
+          for (const wire of state.wires) expect(wire.crossed).toBe(0);
+          /* No wire runs through the row of column links between the strip and the columns. */
+          expect(await page.evaluate(() => {
+            const links = [...document.querySelectorAll<HTMLElement>("[data-kanban-board] .tabs-nav button")].map((link) => link.getBoundingClientRect()).filter((box) => box.width > 0);
+            let through = 0;
+            for (const path of document.querySelectorAll<SVGPathElement>("[data-orchestrator-wires] g[data-wire] path.oa-wire")) {
+              for (let at = 0, length = path.getTotalLength(); at <= length; at += 4) {
+                const point = path.getPointAtLength(at);
+                if (links.some((box) => point.x > box.left && point.x < box.right && point.y > box.top && point.y < box.bottom)) through += 1;
+              }
+            }
+            return { links: links.length, through };
+          })).toEqual({ links: 4, through: 0 });
+          expect(state.seatPort).toBe(1);
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+
+      /* Reduced motion: the wire is there and then it is not, and nothing moves in between. */
+      {
+        const { context, page, pageErrors } = await open(browser, "desktop", "", "reduce");
+        try {
+          expect((await act(page, { kind: "pipeline", taskId: "t-onboarding" })).landed).toBe(true);
+          let state = await record(page, "desktop-reduced", "action");
+          expect(state.wires.map((wire) => wire.taskId)).toEqual(["t-onboarding"]);
+          expect(state.dots).toBe(0);
+          expect(await page.evaluate(() => document.querySelector("[data-orchestrator-wires]")!.getAnimations({ subtree: true }).length)).toBe(0);
+          await probe(page, "advance", ORCHESTRATOR_WIRE_HOLD_MS);
+          state = await record(page, "desktop-reduced", "after");
+          expect(state.layer).toBe(false);
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/orchestrator-wires", { recursive: true });
+      fs.writeFileSync("evidence/orchestrator-wires/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", holdMs: ORCHESTRATOR_WIRE_HOLD_MS, fadeMs: ORCHESTRATOR_WIRE_FADE_MS, burstLimit: ORCHESTRATOR_BURST_LIMIT, frames }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); server = null; }
+  }, 300_000);
+
+  browserTest("a partly scrolled card keeps its port inside the column, a late delta keeps only the rest of its minute, reduced motion stops a pulse", async () => {
+    fs.mkdirSync(out, { recursive: true });
+    server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const frames: Record<string, unknown>[] = [];
+    /* Every port and ring inside its column's scroller, and no wire point on a column header. */
+    const clear = (page: Page, phone: boolean) => page.evaluate((phone) => {
+      const scrollers = [...document.querySelectorAll<HTMLElement>(phone ? "[data-phone-kanban-column]" : "[data-kanban-board] section.column[data-status] .col-body")]
+        .map((node) => node.getBoundingClientRect()).filter((box) => box.width > 0 && box.left < innerWidth && box.right > 0);
+      const heads = [...document.querySelectorAll<HTMLElement>("[data-kanban-board] .col-head")].map((node) => node.getBoundingClientRect()).filter((box) => box.width > 0);
+      const inside = (x: number, top: number, bottom: number) => scrollers.some((box) => x >= box.left - 12 && x <= box.right && top >= box.top && bottom <= box.bottom);
+      const ports = [...document.querySelectorAll<SVGCircleElement>("[data-orchestrator-wires] g[data-wire] .oa-port")]
+        .map((port) => ({ x: Number(port.getAttribute("cx")), y: Number(port.getAttribute("cy")) }));
+      const rings = [...document.querySelectorAll<SVGRectElement>("[data-orchestrator-wires] rect.oa-ring")].filter((ring) => ring.getAttribute("visibility") !== "hidden")
+        .map((ring) => ({ x: Number(ring.getAttribute("x")), top: Number(ring.getAttribute("y")), bottom: Number(ring.getAttribute("y")) + Number(ring.getAttribute("height")) }));
+      let onHead = 0;
+      for (const path of document.querySelectorAll<SVGPathElement>("[data-orchestrator-wires] g[data-wire] path.oa-wire")) {
+        for (let at = 0, length = path.getTotalLength(); at <= length; at += 2) {
+          const point = path.getPointAtLength(at);
+          if (heads.some((box) => point.x > box.left && point.x < box.right && point.y > box.top && point.y < box.bottom)) onHead += 1;
+        }
+      }
+      return {
+        ports: ports.length, portsOutside: ports.filter((port) => !inside(port.x, port.y - 3.5, port.y + 3.5)).length,
+        rings: rings.length, ringsOutside: rings.filter((ring) => !inside(ring.x + 3, ring.top, ring.bottom)).length, onHead,
+        stubs: [...document.querySelectorAll("[data-orchestrator-wires] .oa-stub")].map((chip) => chip.textContent),
+      };
+    }, phone);
+    try {
+      for (const form of ["desktop", "phone"] as const) {
+        const phone = form === "phone";
+        const { context, page, pageErrors, tab, shoot } = await open(browser, form, "");
+        try {
+          await tab("assigned");
+          /* The upload card's column scrolled so the card's top is 50 px under the scroller's top edge, mid-pulse. */
+          await act(page, { kind: "stage", taskId: "t-upload" });
+          await probe(page, "freeze", 900);
+          const scrollUnder = (by: number) => page.evaluate(({ phone, by }) => {
+            const card = document.querySelector<HTMLElement>(phone ? '[data-phone-card="task:t-upload"]' : '[data-kanban-board] .card[data-id="task:t-upload"]')!;
+            const scroller = (phone ? card.closest<HTMLElement>("[data-phone-kanban-column]") : card.closest<HTMLElement>(".col-body"))!;
+            /* A column too short to scroll gets room below its last card, as a long column has. */
+            const spacer = scroller.querySelector<HTMLElement>("[data-test-spacer]") ?? Object.assign(document.createElement("div"), { style: "height: 900px" });
+            spacer.setAttribute("data-test-spacer", "");
+            (phone ? scroller.firstElementChild! : scroller).append(spacer);
+            scroller.scrollTop += card.getBoundingClientRect().top - scroller.getBoundingClientRect().top + by;
+            return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve({ cardTop: card.getBoundingClientRect().top, scrollerTop: scroller.getBoundingClientRect().top }))));
+          }, { phone, by });
+          const geometry = await scrollUnder(50);
+          let state = await clear(page, phone);
+          frames.push({ form, frame: "scrolled-under", geometry, ...state, drawn: await drawn(page) });
+          await shoot("scrolled-under");
+          expect(state.portsOutside).toBe(0);
+          expect(state.ringsOutside).toBe(0);
+          expect(state.onHead).toBe(0);
+          expect(state.stubs).toEqual(["↑ +1"]);
+          /* Scrolled so the port is just inside: the card's own wire, still clear of the header. */
+          await scrollUnder(10);
+          state = await clear(page, phone);
+          frames.push({ form, frame: "scrolled-partly", ...state });
+          await shoot("scrolled-partly");
+          expect(state.ports).toBe(1);
+          expect(state.portsOutside).toBe(0);
+          expect(state.ringsOutside).toBe(0);
+          expect(state.onHead).toBe(0);
+          await probe(page, "settle");
+          await probe(page, "advance", ORCHESTRATOR_WIRE_HOLD_MS + ORCHESTRATOR_WIRE_FADE_MS);
+          expect((await drawn(page)).layer).toBe(false);
+          await page.evaluate(() => document.querySelectorAll("[data-test-spacer]").forEach((node) => node.remove()));
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+
+      /* A delta read after a connection gap: five minutes old draws nothing, thirty seconds old holds the rest of its minute. */
+      {
+        const { context, page, pageErrors } = await open(browser, "desktop", "");
+        try {
+          await act(page, { kind: "move", taskId: "t-links", to: "blocked", ago: 300_000 });
+          expect((await drawn(page)).layer).toBe(false);
+          await act(page, { kind: "move", taskId: "t-links", to: "assigned", ago: 30_000 });
+          /* The moved card's own flight lands first. */
+          await page.waitForTimeout(500);
+          await probe(page, "settle");
+          let state = await drawn(page);
+          frames.push({ form: "desktop", frame: "late-delta", ...state });
+          expect(state.wires.map((wire) => wire.taskId)).toEqual(["t-links"]);
+          await probe(page, "advance", ORCHESTRATOR_WIRE_HOLD_MS - 30_000 - 5_000);
+          expect((await drawn(page)).wires.map((wire) => wire.taskId)).toEqual(["t-links"]);
+          await probe(page, "advance", 5_000 + ORCHESTRATOR_WIRE_FADE_MS + 100);
+          state = await drawn(page);
+          expect(state.layer).toBe(false);
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+
+      /* Reduced motion switched on during a pulse and during a fade: the dot, the ring and the fade stop, the wire stays still. */
+      {
+        const { context, page, pageErrors, shoot } = await open(browser, "desktop", "");
+        const animations = () => page.evaluate(() => document.querySelector("[data-orchestrator-wires]")?.getAnimations({ subtree: true }).filter((animation) => animation.playState !== "finished").length ?? null);
+        try {
+          await act(page, { kind: "stage", taskId: "t-upload" });
+          expect(await animations()).toBeGreaterThan(0);
+          await page.emulateMedia({ reducedMotion: "reduce" });
+          await page.waitForTimeout(100);
+          let state = await drawn(page);
+          frames.push({ form: "desktop", frame: "reduce-during-pulse", ...state, animations: await animations() });
+          await shoot("reduce-during-pulse");
+          expect(await animations()).toBe(0);
+          expect(state.dots).toBe(0);
+          expect(state.wires.map((wire) => wire.taskId)).toEqual(["t-upload"]);
+          await page.emulateMedia({ reducedMotion: "no-preference" });
+          await probe(page, "advance", ORCHESTRATOR_WIRE_HOLD_MS + ORCHESTRATOR_WIRE_FADE_MS / 2);
+          expect(await animations()).toBeGreaterThan(0);
+          await page.emulateMedia({ reducedMotion: "reduce" });
+          await page.waitForTimeout(100);
+          state = await drawn(page);
+          frames.push({ form: "desktop", frame: "reduce-during-fade", ...state });
+          expect(state.layer).toBe(false);
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      /* A hidden tab still reads the board: a dozen seat actions there leave one paused pulse on the wire,
+         the last one, and the hold's end takes it away. */
+      {
+        const { context, page, pageErrors } = await open(browser, "desktop", "");
+        const hide = (hidden: boolean) => page.evaluate((hidden) => {
+          Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
+          Object.defineProperty(document, "visibilityState", { configurable: true, get: () => (hidden ? "hidden" : "visible") });
+          document.dispatchEvent(new Event("visibilitychange"));
+        }, hidden);
+        const held = () => page.evaluate(() => {
+          const animations = document.querySelector("[data-orchestrator-wires]")?.getAnimations({ subtree: true }) ?? [];
+          return {
+            dots: document.querySelectorAll(".oa-dot").length, rings: document.querySelectorAll(".oa-ring").length,
+            elements: document.querySelectorAll("[data-orchestrator-wires] *").length,
+            animations: animations.length, paused: animations.filter((animation) => animation.playState === "paused").length,
+          };
+        });
+        try {
+          await act(page, { kind: "stage", taskId: "t-upload" });
+          await probe(page, "settle");
+          await hide(true);
+          await probe(page, "advance", 10_000);
+          await act(page, { kind: "stage", taskId: "t-upload" });
+          const first = await held();
+          expect(first).toMatchObject({ dots: 1, rings: 1 });
+          for (let round = 0; round < 12; round++) {
+            await probe(page, "advance", 10_000);
+            await act(page, { kind: "stage", taskId: "t-upload" });
+          }
+          const twelfth = await held();
+          frames.push({ form: "desktop", frame: "hidden-tab-repeated-actions", actions: 13, first, twelfth });
+          expect(twelfth).toEqual(first);
+          /* Back in view the one pulse plays out and leaves nothing behind. */
+          await hide(false);
+          expect((await held()).dots).toBeLessThanOrEqual(1);
+          await page.waitForTimeout(3_600);
+          const played = await held();
+          frames.push({ form: "desktop", frame: "hidden-tab-returned", ...played });
+          expect(played).toMatchObject({ dots: 0, rings: 0, paused: 0 });
+          /* Two wires in the hidden tab; the older one's hold ends there, and its pulse goes with it. */
+          await hide(true);
+          await probe(page, "advance", 30_000);
+          await act(page, { kind: "stage", taskId: "t-upload" });
+          await probe(page, "advance", 30_000);
+          await act(page, { kind: "stage", taskId: "t-search" });
+          expect(await held()).toMatchObject({ dots: 2, rings: 2 });
+          await probe(page, "advance", 30_000);
+          const one = await held();
+          frames.push({ form: "desktop", frame: "hidden-tab-one-expired", ...one, drawn: await drawn(page) });
+          expect((await drawn(page)).wires.map((wire) => wire.taskId)).toEqual(["t-search"]);
+          expect(one).toMatchObject({ dots: 1, rings: 1 });
+          await probe(page, "advance", ORCHESTRATOR_WIRE_HOLD_MS);
+          expect((await drawn(page)).layer).toBe(false);
+          expect(await held()).toEqual({ dots: 0, rings: 0, elements: 0, animations: 0, paused: 0 });
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/orchestrator-wires", { recursive: true });
+      fs.writeFileSync("evidence/orchestrator-wires/edges.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", holdMs: ORCHESTRATOR_WIRE_HOLD_MS, fadeMs: ORCHESTRATOR_WIRE_FADE_MS, frames }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); server = null; }
+  }, 300_000);
+
+  browserTest("about a hundred cards: nothing at rest, a sweep draws nothing, and the cost of a dozen wires", async () => {
+    fs.mkdirSync(out, { recursive: true });
+    server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const cost: Record<string, unknown>[] = [];
+    try {
+      for (const form of ["desktop", "phone"] as const) {
+        const phone = form === "phone";
+        const { context, page, pageErrors, tab, shoot } = await open(browser, form, "&many=1");
+        try {
+          await tab("assigned");
+          const board = await page.evaluate(() => ({
+            cards: document.querySelectorAll("[data-kanban-board] .card[data-id], [data-phone-card]").length,
+            links: (window as unknown as Hooks).orchestratorLinksCost(),
+          }));
+          expect(board.cards).toBeGreaterThan(90);
+          /* At rest on the full board: no layer, and scrolling a column mounts none. */
+          const scroll = (frames: number) => page.evaluate(async ({ phone, frames }) => {
+            const scroller = document.querySelector<HTMLElement>(phone ? '[data-phone-kanban-column="assigned"]' : '[data-kanban-board] section.column[data-status="assigned"] .col-body')!;
+            for (let step = 0; step < frames; step++) {
+              scroller.scrollTop += 40;
+              await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            }
+            scroller.scrollTop = 0;
+            await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+          }, { phone, frames });
+          await scroll(5);
+          expect((await drawn(page)).layer).toBe(false);
+          await shoot("many-rest");
+
+          /* A sweep: the seat moves seven tasks in one update. Nothing is drawn. */
+          const bulk = (from: number, count: number) => Array.from({ length: count }, (_, index) => ({ kind: "move", taskId: `t-bulk-${from + index}`, to: "assigned" }));
+          expect((await act(page, bulk(0, ORCHESTRATOR_BURST_LIMIT + 1))).landed).toBe(true);
+          expect((await drawn(page)).layer).toBe(false);
+
+          /* Two updates of six actions each, the limit: twelve cards wired, the ones out of sight counted at the column's edge. */
+          await act(page, Array.from({ length: ORCHESTRATOR_BURST_LIMIT }, (_, index) => ({ kind: "stage", taskId: `t-bulk-${[26, 29, 31, 34, 35, 37][index]}` })));
+          await act(page, Array.from({ length: ORCHESTRATOR_BURST_LIMIT }, (_, index) => ({ kind: "stage", taskId: `t-bulk-${[38, 41, 43, 46, 47, 49][index]}` })));
+          await probe(page, "settle");
+          await page.waitForTimeout(150);
+          const state = await drawn(page);
+          await shoot("many-action");
+          expect(state.layer).toBe(true);
+          expect(state.wires.length + state.stubs.length).toBeGreaterThan(1);
+          for (const wire of state.wires) expect(wire.crossed).toBe(0);
+          expect(state.overflow).toBe(false);
+
+          /* Thirty scroll frames of the busiest column with the wires shown: one geometry pass each. */
+          await stats(page, true);
+          await scroll(30);
+          const scrolled = (await stats(page))!;
+          expect(scrolled.updates).toBeGreaterThan(10);
+          const reads = scrolled.rectReads / scrolled.updates;
+          const mean = scrolled.totalMs / scrolled.updates;
+          /* The design's readings for always-on wires on this board: 104 rect reads and about 4 ms a pass.
+             The reads are exact; the time moves with the machine's load, so a pass is held to one frame. */
+          expect(reads).toBeLessThanOrEqual(104);
+          expect(mean).toBeLessThan(16);
+          cost.push({ form, cards: board.cards, links: board.links.links, linksMs: board.links.ms, wired: 2 * ORCHESTRATOR_BURST_LIMIT, drawnWires: state.wires.length, counts: state.stubs, scrollFrames: 30, ...scrolled, msPerUpdate: mean, rectReadsPerUpdate: reads });
+
+          await probe(page, "advance", ORCHESTRATOR_WIRE_HOLD_MS + ORCHESTRATOR_WIRE_FADE_MS);
+          expect((await drawn(page)).layer).toBe(false);
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/orchestrator-wires", { recursive: true });
+      fs.writeFileSync("evidence/orchestrator-wires/cost.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cost }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); server = null; }
+  }, 300_000);
 });

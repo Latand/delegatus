@@ -12,6 +12,7 @@ import { taskSeatHoldingSnapshot } from "@/lib/tasks/seatHolding";
 import { taskRevision } from "@/lib/tasks/revision";
 import { mutateTasks } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
+import { OPERATOR_PAUSE_RESUME_ACTOR } from "@/lib/pauseResumeActor";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
 
@@ -57,7 +58,7 @@ export async function PATCH(
     before.status = tasks.find((task) => task.id === id)?.status ?? null;
     /* The dashboard is the operator; a group hide is refused for the task
        holding the project's orchestrator seat. */
-    const outcome = patchTask(tasks, id, body, undefined, { actor: "operator", seatHolding: taskSeatHoldingSnapshot(), workLinks: taskWorkLinkContext(loadPipelines), explicit: true });
+    const outcome = patchTask(tasks, id, body, undefined, { actor: "operator", statusActor: OPERATOR_PAUSE_RESUME_ACTOR, seatHolding: taskSeatHoldingSnapshot(), workLinks: taskWorkLinkContext(loadPipelines), explicit: true });
     return { tasks: outcome.ok ? outcome.tasks : undefined, result: outcome };
   });
   /* The refusal's code and field travel with it, as they do over MCP, so a

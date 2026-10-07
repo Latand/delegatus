@@ -31,7 +31,7 @@ import { storedTaskSteps } from "./steps";
 import { isTaskAttachment } from "./attachments";
 import { withTaskCompletion } from "./completion";
 import type { RecentCreate } from "./commands";
-import type { AssignmentState, BoardTask, TaskAssignment, TaskBoardVisibility, TaskPlacement, TaskSource, TaskStatus, TaskOrigin } from "./types";
+import type { AssignmentState, BoardTask, TaskAssignment, TaskBoardVisibility, TaskPlacement, TaskSource, TaskStatus, TaskStatusBy, TaskOrigin } from "./types";
 
 export const TASKS_FILE = statePath("tasks.json");
 
@@ -44,6 +44,9 @@ function committedRows(tasks: BoardTask[], before: ReturnType<typeof snapshotTas
     const prior = before.get(task.id);
     const completed = withTaskCompletion(task, prior ? { ...task, status: prior.status } : task);
     Object.assign(task, completed);
+    /* A writer that moved the task without naming itself leaves the earlier
+       writer's record behind; it goes, so the move is nobody's. */
+    if (prior && prior.status !== task.status && JSON.stringify(task.statusBy ?? null) === prior.statusBy) delete task.statusBy;
     if (task.status !== "done") {
       delete task.doneAt;
       delete task.doneAdmissions;
@@ -86,6 +89,13 @@ export interface TasksFileState {
 
 function isTaskStatus(value: unknown): value is TaskStatus {
   return value === "inbox" || value === "assigned" || value === "blocked" || value === "done";
+}
+
+function isTaskStatusBy(value: unknown): value is TaskStatusBy {
+  if (!value || typeof value !== "object") return false;
+  const { actor, from, at } = value as Partial<TaskStatusBy>;
+  if (typeof at !== "string" || (from !== null && !isTaskStatus(from)) || !actor || typeof actor !== "object") return false;
+  return actor.kind === "operator" || (actor.kind === "agent" && (actor.conversationId === null || typeof actor.conversationId === "string"));
 }
 
 function isAssignmentState(value: unknown): value is AssignmentState {
@@ -214,6 +224,7 @@ function coerceTask(value: unknown): BoardTask | null {
     updatedAt: raw.updatedAt!,
   };
   if (task.note !== undefined && !isTaskNote(task.note)) delete task.note;
+  if (task.statusBy !== undefined && !isTaskStatusBy(task.statusBy)) delete task.statusBy;
   // A rejected checklist must not survive the raw extension spread above.
   if (!steps) delete task.steps;
   if (!pinned) delete task.pos;
