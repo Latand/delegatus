@@ -1594,6 +1594,14 @@ export function restoreOutboxDraft(id: string, entry: OutboxEntry): void {
    so the terse cause keeps its width beside them at 390px. */
 const noticeActionClass = "relative inline-flex h-11 w-8 shrink-0 items-center justify-center rounded-control text-muted before:absolute before:inset-y-0 before:-inset-x-1.5 before:content-[''] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 sm:h-6 sm:w-6 sm:before:hidden";
 
+/** A retained message's state, and the short form it takes once a Re-check
+    has answered and left the line in place: the same state with the time. */
+const PAYLOAD_STATUS_CHECKED = {
+  "composer.payloadLocal": "composer.payloadLocalAt",
+  "composer.deliveryNotDelivered": "composer.deliveryNotDeliveredAt",
+  "composer.deliveryCheckEnded": "composer.deliveryCheckEndedAt",
+} as const;
+
 /** The dismissal id of a retained message's notice, kept with the receipt
     dismissals and apart from every operation id. */
 const payloadNoticeDismissId = (key: string) => `composer-payload-notice:${key}`;
@@ -5176,19 +5184,22 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
      message; the diagnostic sentence rides on hover; the quiet icon actions are
      the receipt notice's own. */
   const payloadNoticeLine = ({ itemKey, incomplete, status, preview, detail, checking, checkedAt, actions, onRecheck }: {
-    itemKey: string; incomplete?: boolean; status: string; preview: string; detail: string; checking: boolean; checkedAt: number | null;
+    itemKey: string; incomplete?: boolean; status: keyof typeof PAYLOAD_STATUS_CHECKED; preview: string; detail: string; checking: boolean; checkedAt: number | null;
     actions?: ReactNode; onRecheck: () => void;
   }) => (
     <div key={itemKey} {...(incomplete ? { "data-payload-incomplete": itemKey } : { "data-payload-key": itemKey })} className="flex w-full min-w-0 items-center gap-1 px-1.5 text-caption text-secondary sm:gap-1.5">
       <CircleAlert className="h-3 w-3 shrink-0 text-warning" aria-hidden />
       <span className="min-w-0 flex-1 truncate" data-payload-reason title={detail}>
-        <span className="font-semibold text-warning" role="status">{checking ? t("composer.deliveryChecking") : status}</span>
+        {/* A check that leaves the line in place answers in the status
+            itself, the one part a 390 px phone always shows: the state in its
+            short form with the time of the check, no wider than the state it
+            replaces, so the excerpt keeps its room. */}
+        {checking
+          ? <span className="font-semibold text-warning" role="status">{t("composer.deliveryChecking")}</span>
+          : checkedAt !== null
+            ? <span className="font-semibold tabular-nums text-warning" role="status" data-payload-checked>{t(PAYLOAD_STATUS_CHECKED[status], { time: hhmm(checkedAt) })}</span>
+            : <span className="font-semibold text-warning" role="status">{t(status)}</span>}
         <span data-payload-excerpt>{` — ${preview}`}</span>
-        {/* After the excerpt: on a phone the time must not squeeze out the
-            only part that says which message this line is about. */}
-        {!checking && checkedAt !== null
-          ? <span className="text-muted" data-payload-checked>{` · ${t("composer.payloadCheckedAt", { time: hhmm(checkedAt) })}`}</span>
-          : null}
         <span className="sr-only">{` · ${detail}`}</span>
       </span>
       <span className="-mr-1 flex shrink-0 items-center sm:mr-0">
@@ -5212,7 +5223,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     return payloadNoticeLine({
       itemKey: entry.key,
       incomplete: true,
-      status: t("composer.deliveryCheckEnded"),
+      status: "composer.deliveryCheckEnded",
       preview: `${entry.text || t("composer.payloadAttachments")} · ${t("composer.payloadIncomplete")}`,
       detail: `${receipt?.reason ?? t("composer.payloadUnknown")} ${t("composer.payloadMissing")}`,
       checking: check === null,
@@ -5247,7 +5258,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
           ? ` (${t("composer.payloadImages", { count: row.submission.images.length })} · ${t("composer.payloadFiles", { count: row.submission.files.length })})` : "";
         return payloadNoticeLine({
           itemKey: row.ref.key,
-          status: t(!row.envelope ? "composer.payloadLocal" : retryable ? "composer.deliveryNotDelivered" : "composer.deliveryCheckEnded"),
+          status: !row.envelope ? "composer.payloadLocal" : retryable ? "composer.deliveryNotDelivered" : "composer.deliveryCheckEnded",
           preview: text || t("composer.payloadAttachments"),
           detail: (row.refusal && !receipt
             ? t("composer.payloadRefused", { reason: row.refusal.reason })

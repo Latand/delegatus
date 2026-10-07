@@ -702,6 +702,9 @@ for (const mobile of [false, true]) test(`a tap on Re-check reads the delivery a
     /* Still unconfirmed: the line says it checked, and stays. */
     await until(() => notice(host)?.querySelector("[data-payload-checked]") !== null);
     expect(notice(host)).not.toBeNull();
+    /* The status carries the time of the check. */
+    expect(notice(host)!.querySelector('[role="status"]')!.textContent)
+      .toMatch(new RegExp(`^${translate("uk", "composer.deliveryCheckEndedAt", { time: "\\d\\d:\\d\\d" })}$`));
     delivered = true;
     flushSync(() => (notice(host)!.querySelector(`[aria-label="${translate("uk", "composer.payloadRecheck")}"]`) as HTMLButtonElement).click());
     /* Delivered: the copy settles and the notice is gone. */

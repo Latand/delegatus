@@ -2376,6 +2376,7 @@ describe("retained message notice over the composer", () => {
               height: Math.round(rect.height), width: Math.round(rect.width),
               /* How much of the message excerpt the line actually shows. */
               excerptShown: Math.round(Math.max(0, Math.min(excerpt.right, shown.right) - excerpt.left)),
+              statusWidth: Math.round((line.querySelector('[role="status"]') as HTMLElement).getBoundingClientRect().width),
               lineHeight: parseFloat(getComputedStyle(text).lineHeight),
               textHeight: Math.round(text.getBoundingClientRect().height),
               border: style.borderTopWidth, paragraphs: line.querySelectorAll("p").length,
@@ -2407,10 +2408,22 @@ describe("retained message notice over the composer", () => {
           await press();
           await owed.locator("[data-payload-checked]").waitFor();
           await page.waitForFunction((count) => Number(document.querySelector("[data-fixture-operation-reads]")?.textContent) > count, readsBefore);
-          expect(await owed.locator("[data-payload-checked]").textContent()).toContain(lang === "uk" ? "перевірено" : "checked");
           const checked = await read();
+          /* Still unconfirmed: the status itself carries the time of the
+             check, so the tap shows a result where a 390 px phone can see it. */
+          expect(checked.status).toMatch(new RegExp(`^${translate(lang, "composer.deliveryCheckEndedAt", { time: "\\d\\d:\\d\\d" })}$`));
+          expect(checked.status).not.toBe(before.status);
+          const visible = await page.evaluate(() => {
+            const status = document.querySelector('[data-payload-key="payload-notice-owed"] [role="status"]') as HTMLElement;
+            const reason = status.parentElement!.getBoundingClientRect();
+            const box = status.getBoundingClientRect();
+            return box.left >= reason.left && box.right <= reason.right + 0.5;
+          });
+          expect(visible).toBe(true);
           expect(checked.textHeight).toBeLessThanOrEqual(Math.ceil(checked.lineHeight) + 1);
-          /* The check time never takes room from the excerpt. */
+          /* The checked status is no wider than the one it replaces, so the
+             excerpt keeps its room. */
+          expect(checked.statusWidth).toBeLessThanOrEqual(before.statusWidth);
           expect(checked.excerptShown).toBeGreaterThanOrEqual(before.excerptShown);
           expect(checked.overflowX).toBe(0);
           await page.screenshot({ path: path.join(out, `${key}-checked.png`) });
