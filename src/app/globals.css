@@ -146,6 +146,14 @@ body {
   .incumbent-inline [data-seat-reports-value] {
     display: none;
   }
+  /* The switch's thumb carries the word, so without it the thumb is a round
+     knob. The pill halves its travel as well: the side-docked seat's row had
+     35 px to spare in Ukrainian with the old chip down to its glyph and dot,
+     and a knob on the full travel is 56 px wider than that chip was. */
+  .incumbent-inline .seat-tick-switch {
+    --tick-thumb: var(--tick-knob) !important;
+    --tick-travel: 30px !important;
+  }
   /* Inline only: in the dock the link is a row of its own under the identity,
      so it costs the controls nothing and stays at every width. */
   .incumbent-inline [data-orchestrator-predecessor] {
@@ -160,6 +168,59 @@ body {
   [data-seat-tick-face],
   [data-seat-reports-value] {
     display: none;
+  }
+  .seat-tick-switch {
+    --tick-thumb: var(--tick-knob) !important;
+    --tick-travel: 30px !important;
+  }
+}
+
+/*
+ * The seat tick switch (docs/design/seat-tick-slider.md, variant 4). One ramp
+ * from the app's own tokens, so the dark theme follows without a second
+ * palette: grey for off, a calm blue at 4 h, the accent at the default hour, a
+ * warm violet-magenta at 10 min. Green and amber stay with the health dot.
+ *
+ * `--tick-pos` (in stops, 0..3) and `--tick` (the colour there) are written by
+ * `SeatTickSwitch` on its own root from a spring, so the thumb, the tint behind
+ * it and the word's colour travel together. The thumb's width, the inset and
+ * the travel are the component's, which keeps a step the same number of pixels
+ * whatever the word is.
+ */
+:root {
+  --tick-0: var(--effort-empty);
+  --tick-1: color-mix(in oklch, var(--color-accent) 55%, var(--color-info));
+  --tick-2: var(--color-accent);
+  --tick-3: color-mix(in oklch, var(--color-accent) 35%, var(--color-openclaw));
+}
+.seat-tick-switch {
+  --tick-pos: 2;
+  --tick: var(--tick-2);
+  --tick-knob: 18px;
+  --tick-left: calc(var(--tick-pos) / 3 * var(--tick-travel) + var(--tick-inset));
+}
+.seat-tick-switch[data-seat-tick-surface="mobile"] {
+  --tick-knob: 28px;
+}
+.seat-tick-track {
+  width: calc(var(--tick-thumb) + var(--tick-travel) + 2 * var(--tick-inset) + 2px);
+  background: linear-gradient(
+    to right,
+    color-mix(in oklch, var(--tick) 18%, var(--color-sunken)) calc(var(--tick-left) + var(--tick-thumb) / 2),
+    var(--color-sunken) 0
+  );
+}
+.seat-tick-notch {
+  left: calc(var(--tick-notch) / 3 * var(--tick-travel) + var(--tick-inset) + var(--tick-thumb) / 2);
+}
+.seat-tick-thumb {
+  left: var(--tick-left);
+  width: var(--tick-thumb);
+  transition: box-shadow 150ms ease, border-color 150ms ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .seat-tick-thumb {
+    transition: none;
   }
 }
 

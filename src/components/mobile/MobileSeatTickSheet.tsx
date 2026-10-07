@@ -1,15 +1,16 @@
 "use client";
 
-import { ChevronRight, Timer } from "lucide-react";
+import { Timer } from "lucide-react";
 import { type CSSProperties } from "react";
 
 import { useKeyboardInset } from "@/hooks/useComposer";
 import { useLocale } from "@/lib/i18n";
 
-import { SeatTickActions, SeatTickBody, SeatTickDot, useSeatTickDraft } from "../orchestrator/SeatTickBody";
+import { SeatTickActions, SeatTickBody, useSeatTickDraft } from "../orchestrator/SeatTickBody";
+import { SeatTickSwitch } from "../orchestrator/SeatTickSwitch";
 import { seatTickReading } from "../orchestrator/seatTickView";
 import { useSeatTickSettings } from "../orchestrator/useSeatTickSettings";
-import { MobileSheet, MobileSheetRow } from "./MobileSheet";
+import { MobileSheet } from "./MobileSheet";
 
 /**
  * The seat tick on the phone (#1681): the same record, in the same order, as a
@@ -70,35 +71,33 @@ export function MobileSeatTickSheet({ project, projectName, onClose }: {
 }
 
 /**
- * The row that opens it, inside the live seat sheet (mobile v2 §5: a labelled
- * control on the phone is a row).
+ * The tick's row inside the live seat sheet (mobile v2 §5: a labelled control
+ * on the phone is a row).
  *
- * The trailing text is the desktop chip's closed summary without its «Tick:»
- * prefix — the sheet it sits in has already said which seat this is — and the
- * dot beside it is the same tone the chip carries, from the same reading.
+ * The label and its icon open the tick sheet. The trailing control is the same
+ * switch the desktop header carries, 36 px tall in the 44 px row: a tap on it
+ * opens the sheet too, and a horizontal drag changes the stop, while a vertical
+ * one still scrolls the seat sheet. The row is a group and not one button,
+ * because a slider cannot live inside a button.
  */
 export function MobileSeatTickRow({ project, onOpen }: { project: string; onOpen: () => void }) {
   const { t } = useLocale();
   const read = useSeatTickSettings(project, true);
-  const reading = seatTickReading(read, Date.now(), t);
+  const now = Date.now();
+  const reading = seatTickReading(read, now, t);
   return (
-    <MobileSheetRow
-      icon={<Timer className="h-[18px] w-[18px]" aria-hidden />}
-      label={t("seatTick.rowLabel")}
-      onSelect={onOpen}
-      ariaLabel={t("seatTick.chipAria", { line: reading.line })}
-      attrs={{ "data-mobile2-open": "tick", "data-seat-tick-row": reading.state }}
-      /* The trailing text here is a whole clause, not a word, so IT is what
-         gives way: the label, the state dot and the chevron keep their size
-         and the summary truncates between them. */
-      trailingShrinks
-      trailing={
-        <>
-          <span data-seat-tick-row-summary className="min-w-0 truncate">{reading.summary}</span>
-          <SeatTickDot tone={reading.tone} />
-          <ChevronRight className="h-3.5 w-3.5 shrink-0" aria-hidden />
-        </>
-      }
-    />
+    <div data-seat-tick-row={reading.state} className="flex min-h-11 w-full items-center gap-3 px-4 text-body font-semibold text-primary">
+      <button
+        type="button"
+        data-mobile2-open="tick"
+        aria-label={t("seatTick.chipAria", { line: reading.line })}
+        onClick={onOpen}
+        className="flex min-h-11 min-w-0 flex-1 items-center gap-3 text-left active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+      >
+        <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center text-secondary"><Timer className="h-[18px] w-[18px]" aria-hidden /></span>
+        <span className="min-w-0 truncate">{t("seatTick.rowLabel")}</span>
+      </button>
+      <SeatTickSwitch read={read} reading={reading} now={now} surface="mobile" open={false} onOpen={onOpen} />
+    </div>
   );
 }

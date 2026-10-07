@@ -202,7 +202,7 @@ async function mount(): Promise<{ root: Root }> {
 }
 
 const body = () => dom.document.body as unknown as HTMLElement;
-const chip = () => body().querySelector("[data-seat-tick-chip]") as HTMLButtonElement;
+const chip = () => body().querySelector("[data-seat-tick-chip]") as HTMLElement;
 const popover = () => body().querySelector("[data-seat-tick-popover]") as HTMLElement | null;
 const field = <T extends HTMLElement>(selector: string) => body().querySelector(selector) as T;
 /** The panel's one Save: absent while nothing changed. */
@@ -224,7 +224,7 @@ function type(element: HTMLInputElement | HTMLTextAreaElement, value: string): v
 }
 
 async function open(root: Root): Promise<void> {
-  /* A real pointer focuses the button it lands on, and the layer's focus
+  /* A real pointer focuses the control it lands on, and the layer's focus
      return is measured against that. */
   chip().focus();
   flushSync(() => chip().click());
@@ -236,10 +236,10 @@ test("the closed chip is one face and one dot: the configured schedule, and the 
   getAnswer = configured();
   const { root } = await mount();
   expect(chip().getAttribute("data-seat-tick-chip")).toBe("healthy");
-  expect(chip().textContent).toContain("every 30 min");
+  expect(chip().textContent).toContain("30 min");
   expect(chip().querySelector("[data-seat-tick-dot]")?.getAttribute("data-seat-tick-dot")).toBe("ok");
   /* One line, and it carries both halves. */
-  expect(chip().getAttribute("title")).toBe("Tick: every 30 min · last check 3m ago");
+  expect(chip().getAttribute("title")).toBe("Tick: every 30 min · last check 3m ago\nDrag to change how often the seat wakes · click for settings");
   expect(popover()).toBeNull();
 
   await open(root);
@@ -303,7 +303,7 @@ test("an enabled tick with no recent check renders as enabled AND stale, never a
   const { root } = await mount();
   expect(chip().getAttribute("data-seat-tick-chip")).toBe("stale");
   /* The face still reports the schedule the tick is configured on. */
-  expect(chip().textContent).toContain("hourly");
+  expect(chip().textContent).toContain("1 h");
   expect(chip().querySelector("[data-seat-tick-dot]")?.getAttribute("data-seat-tick-dot")).toBe("warn");
   await open(root);
   expect(field<HTMLButtonElement>("[data-seat-tick-enabled]").getAttribute("aria-checked")).toBe("true");
@@ -338,7 +338,7 @@ test("a save displays what was sent and then adopts what the route read back", a
 
   expect(puts()).toHaveLength(1);
   expect(puts()[0]!.body).toEqual({ project: PROJECT, wakeIntervalMinutes: 30, reason: "a release afternoon" });
-  expect(chip().textContent).toContain("every 30 min");
+  expect(chip().textContent).toContain("30 min");
   expect(field<HTMLTextAreaElement>("[data-seat-tick-reason]").value).toBe("a release afternoon (recorded)");
   expect(save()).toBeNull();
   expect(body().querySelector("[data-seat-tick-error]")).toBeNull();
@@ -398,7 +398,7 @@ test("Restore default sends the default with no reason, and only while there is 
   flushSync(() => restore()!.click());
   await settle(root);
   expect(puts()[0]!.body).toEqual({ project: PROJECT, enabled: true, wakeIntervalMinutes: null, untilMinutes: null });
-  expect(chip().textContent).toContain("hourly");
+  expect(chip().textContent).toContain("1 h");
   expect(restore()).toBeNull();
 });
 
@@ -424,7 +424,7 @@ test("a read that does not answer claims nothing about the tick, and neither doe
   getFails = 500;
   const refused = await mount();
   expect(chip().getAttribute("data-seat-tick-chip")).toBe("unknown");
-  expect(chip().getAttribute("title")).toBe("Tick: could not be read");
+  expect(chip().getAttribute("title")).toBe("Tick: could not be read\nDrag to change how often the seat wakes · click for settings");
   await open(refused.root);
   /* No record, so no form bound to one and no facts asserted. */
   expect(body().querySelector("[data-seat-tick-details]")).toBeNull();
@@ -443,7 +443,7 @@ test("a read that does not answer claims nothing about the tick, and neither doe
   getFails = "malformed";
   await mount();
   expect(chip().getAttribute("data-seat-tick-chip")).toBe("unknown");
-  expect(chip().getAttribute("title")).toBe("Tick: could not be read");
+  expect(chip().getAttribute("title")).toBe("Tick: could not be read\nDrag to change how often the seat wakes · click for settings");
   expect(chip().textContent).toContain("—");
 });
 
@@ -958,7 +958,7 @@ test("a refused agent write keeps the choice, names the refusal beside the picke
   expect(rolePuts()).toHaveLength(1);
   expect(body().querySelector("[data-seat-tick-agent-error]")?.textContent).toBe("invalid codex effort");
   expect(effortSelect().value).toBe("high");
-  expect(chip().textContent).toContain("every 30 min");
+  expect(chip().textContent).toContain("30 min");
   /* Only the agent change is still waiting. */
   expect(save()).not.toBeNull();
 });

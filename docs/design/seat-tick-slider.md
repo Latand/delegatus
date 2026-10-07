@@ -1,9 +1,11 @@
 # Seat tick slider: an activity slider in place of the tick chip
 
-Status: **prototypes, waiting for the operator's choice.** Four numbered
-variants are published to the task's prototype review. Nothing ships from this
-lane: no product file changed, and the prototype code lived in a scratch export
-of the repository that is gone with the stage.
+Status: **variant 4 «Перемикач» is built.** The operator chose it in the
+prototype review on 2026-10-07 with one comment, verbatim: «щоб аніімація була
+плавна і пружиніста коли переміщаєш, але лише трошки, коли відпускаєш». The
+other three variants are not built; their descriptions stay below as the record
+of what was offered. What the build adds to this design is under
+[The build](#the-build).
 
 ## Originating requirement
 
@@ -229,6 +231,53 @@ replaces the trailing summary (and its chevron) and drops its own icon, since
 the row already has one. It is 36 px tall inside the 44 px row. A tap on the
 label opens the tick sheet as today; a tap on the slider without moving opens
 it too; a horizontal drag changes the preset.
+
+## The build
+
+`SeatTickSwitch.tsx` is the control, `seatTickStops.ts` its model (stops,
+placement, words, what a stop sends, the spring). `SeatTickChip` mounts it in
+the incumbent row with the popover it always had; `MobileSeatTickRow` mounts it
+as the trailing control of the phone's row, whose label is the button that
+opens the tick sheet.
+
+**Motion, from the operator's comment.** The thumb is drawn by a damped spring
+toward where it should be, in two settings:
+
+| When | Damping ratio | What it looks like |
+|---|---|---|
+| held by the pointer | 0.4 | the thumb trails a moving pointer and swings softly past it when the pointer stops: about a quarter of the distance it was behind |
+| released, or stepped by a key | 0.65 | it settles on the stop about 7 % of the distance past it, once: roughly a pixel on a move of one stop |
+
+The colour is computed from the drawn position, so the hue travels with the
+thumb. At the ends the pill is a wall: the thumb gives against it by the
+pill's own 2 px inset and no more. Under `prefers-reduced-motion` there is no
+spring at all: the thumb is drawn where the pointer is and on the stop the
+frame after the release.
+
+**Geometry.** The travel between the first stop and the last is fixed at
+60 px on both surfaces, so a step is the same number of pixels
+whatever the word is; the thumb widens for a word longer than six characters
+and the pill widens with it. Where the row gives up the word
+(`[data-seat-tick-face]`, at the widths `globals.css` already names), the
+thumb is an 18 px round knob and the travel halves to 30 px, so the control
+is 66 px wide: the side-docked seat's row in Ukrainian had 35 px to spare
+with the old chip down to its glyph and dot, and a knob on the full travel
+pushed «Зупинити хост» 21 px outside it. The drag reads the travel that is
+drawn, so a stop is 10 px there.
+
+**Two readings the build settled.**
+
+- A release on the stop already set writes nothing, an expiry included. The
+  prototype cleared an expiry there; a drag that ends where it started is not
+  a move, and «a slider move never edits an expiry except clearing it» is kept
+  to moves.
+- A move the route refuses rolls the thumb back, as every save does, and
+  opens the settings on the desktop, where the refusal's text is shown.
+
+Rendered evidence is the «seat tick switch» block of
+`kanbanBoard.browser.test.tsx`. Its readings are
+`evidence/seat-tick-switch/readings.json`; its frames are written to
+`LLV_SEAT_TICK_SWITCH_FRAMES` and are not kept in the tree.
 
 ## The variants
 

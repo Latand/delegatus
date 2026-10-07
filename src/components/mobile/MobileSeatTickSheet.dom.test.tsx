@@ -217,7 +217,11 @@ async function mount(): Promise<Root> {
 }
 
 const body = () => dom.document.body as unknown as HTMLElement;
-const row = () => body().querySelector("[data-seat-tick-row]") as HTMLButtonElement | null;
+const row = () => body().querySelector("[data-seat-tick-row]") as HTMLElement | null;
+/** The label half of the row: the button that opens the tick sheet. */
+const rowOpen = () => row()!.querySelector('[data-mobile2-open="tick"]') as HTMLButtonElement;
+/** The switch half: its value text carries the closed summary the row used to print. */
+const rowSwitch = () => row()!.querySelector('[role="slider"]') as HTMLElement;
 const tickSheet = () => body().querySelector('[data-mobile2-sheet="tick"]') as HTMLElement | null;
 const seatSheet = () => body().querySelector('[data-mobile2-sheet="seat"]') as HTMLElement | null;
 const save = () => body().querySelector("[data-seat-tick-save]") as HTMLButtonElement | null;
@@ -235,22 +239,23 @@ function type(element: HTMLInputElement | HTMLTextAreaElement, value: string): v
 }
 
 async function openTick(root: Root): Promise<void> {
-  flushSync(() => row()!.click());
+  flushSync(() => rowOpen().click());
   await settle(root);
   expect(tickSheet()).not.toBeNull();
 }
 
-test("the live seat sheet carries the tick as a row, above Edit the mandate, with the same summary and dot", async () => {
+test("the live seat sheet carries the tick as a row, above Edit the mandate, with the switch, the same summary and dot", async () => {
   getAnswer = record();
   await mount();
   const entry = row();
   expect(entry).not.toBeNull();
   expect(entry!.className).toContain("min-h-11");
-  expect(entry!.getAttribute("data-mobile2-open")).toBe("tick");
+  expect(rowOpen().textContent).toBe("Seat tick");
   expect(entry!.getAttribute("data-seat-tick-row")).toBe("healthy");
-  /* The desktop's closed summary without its «Tick:» prefix — the sheet has
-     already said which seat this is. */
-  expect(entry!.textContent).toContain("every 60 min · last check 3m ago");
+  /* The thumb names the stop; the desktop's closed summary, without its
+     «Tick:» prefix, is the rest of the value text. */
+  expect(rowSwitch().textContent).toBe("1 h");
+  expect(rowSwitch().getAttribute("aria-valuetext")).toBe("every hour, the default. every 60 min · last check 3m ago");
   expect(entry!.querySelector("[data-seat-tick-dot]")?.getAttribute("data-seat-tick-dot")).toBe("ok");
   /* Order inside the body: the identity block, then the tick, then the mandate. */
   const sheetBody = seatSheet()!.querySelector("[data-mobile2-sheet-body]")!;
@@ -265,7 +270,8 @@ test("a paused tick reads as off on the row, with a muted dot, and the row never
   getAnswer = paused();
   await mount();
   expect(row()!.getAttribute("data-seat-tick-row")).toBe("paused");
-  expect(row()!.textContent).toContain("off since 2h ago");
+  expect(rowSwitch().textContent).toBe("off");
+  expect(rowSwitch().getAttribute("aria-valuetext")).toContain("off since 2h ago");
   expect(row()!.querySelector("[data-seat-tick-dot]")?.getAttribute("data-seat-tick-dot")).toBe("muted");
 });
 
@@ -275,8 +281,8 @@ test("an enabled tick with no recent check reads as stale on the row while its f
   });
   const root = await mount();
   expect(row()!.getAttribute("data-seat-tick-row")).toBe("stale");
-  expect(row()!.textContent).toContain("every 60 min");
-  expect(row()!.textContent).toContain("stale: last check 40m ago");
+  expect(rowSwitch().textContent).toBe("1 h");
+  expect(rowSwitch().getAttribute("aria-valuetext")).toContain("every 60 min · stale: last check 40m ago");
   await openTick(root);
   expect(body().querySelector("[data-seat-tick-status-detail]")?.textContent).toContain("Checks run every 5 min");
   expect(body().querySelector("[data-seat-tick-enabled]")?.getAttribute("aria-checked")).toBe("true");
@@ -451,4 +457,48 @@ test("N need you opens the last run's card through the board's own task-open eve
     dom.window.removeEventListener("llv:mcp-navigate", listener as never);
   }
   expect(navigated).toEqual([{ kind: "task", id: "hidden-done-card" }]);
+});
+
+/* The switch in the row (docs/design/seat-tick-slider.md, the phone). */
+function finger(type: string, x: number): void {
+  const Ctor = (dom.PointerEvent ?? dom.MouseEvent) as unknown as new (type: string, init: Record<string, unknown>) => Event;
+  const event = new Ctor(type, { bubbles: true, cancelable: true, pointerId: 3, pointerType: "touch", button: 0, clientX: x, clientY: 500 });
+  flushSync(() => { rowSwitch().dispatchEvent(event); });
+}
+
+test("a tap on the switch opens the tick sheet, exactly as the label does, and writes nothing", async () => {
+  const root = await mount();
+  expect(rowSwitch().getAttribute("data-seat-tick-surface")).toBe("mobile");
+  finger("pointerdown", 300);
+  finger("pointermove", 306);
+  finger("pointerup", 306);
+  flushSync(() => rowSwitch().click());
+  await settle(root);
+  expect(tickSheet()).not.toBeNull();
+  expect(puts()).toHaveLength(0);
+});
+
+test("a horizontal drag on the switch changes the stop from the row, without opening the sheet", async () => {
+  const root = await mount();
+  const stored = record({ changed: true });
+  stored.settings = { ...stored.settings, enabled: false, reason: "off", updatedAt: new Date().toISOString() };
+  stored.effective = { ...stored.effective, enabled: false, reason: "off", isDefault: false, configured: true, updatedAt: new Date().toISOString() };
+  putAnswers = [{ status: 200, body: stored }];
+  finger("pointerdown", 300);
+  /* A step is 20 px; two of them, from the default, is off. */
+  finger("pointermove", 280);
+  finger("pointermove", 258);
+  await new Promise((resolve) => setTimeout(resolve, 110));
+  finger("pointerup", 258);
+  flushSync(() => rowSwitch().click());
+  await settle(root);
+  expect(tickSheet()).toBeNull();
+  expect(puts()).toHaveLength(1);
+  expect(puts()[0]!.body).toEqual({
+    project: PROJECT, enabled: false, untilMinutes: null,
+    reason: "Turned off with the activity slider in the orchestrator header. Stays off until the operator moves the slider back.",
+  });
+  /* The row shows what the route read back. */
+  expect(rowSwitch().textContent).toBe("off");
+  expect(row()!.getAttribute("data-seat-tick-row")).toBe("paused");
 });
