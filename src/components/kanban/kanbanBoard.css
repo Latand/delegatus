@@ -67,7 +67,7 @@
 .kb :where(button, input):not(:where(.reader-host *, .seat *, .kb-lead *, .bar-slot *, .kb-aside *)) { font: inherit; color: inherit; }
 .kb button:not(:where(.reader-host *, .seat *, .kb-lead *, .bar-slot *, .kb-aside *)) { background: none; border: 0; padding: 0; }
 .kb :focus-visible:not(:where(.reader-host *, .seat *, .kb-lead *, .bar-slot *, .kb-aside *)) { outline: 2px solid var(--color-accent); outline-offset: 2px; border-radius: 4px; }
-.kb :where(.seat-head, .conv-head) :where(.icon-btn) { font: inherit; color: inherit; background: none; border: 0; padding: 0; }
+.kb :where(.seat-head, .conv-head) :where(.icon-btn), .kb :where(.rlatest) { font: inherit; color: inherit; background: none; border: 0; padding: 0; }
 .kb .num { font-variant-numeric: tabular-nums; }
 
 /* ── Bar ─────────────────────────────────────────────────────────────────── */
@@ -1216,6 +1216,9 @@
 .kb .reader.conv:focus { outline: none; }
 .kb .reader.conv:focus-visible { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--color-accent) 60%, transparent); }
 .kb .reader.conv.needs { border-color: color-mix(in srgb, var(--color-warning) 55%, var(--border-default)); }
+/* A stage's panel folded on its card is its head and one line of its first message. */
+.kb .reader.conv.folded { gap: 2px; padding-bottom: 6px; border-color: var(--border-default); max-height: none; }
+.kb .reader.conv.folded > :not(.conv-head):not(.rlatest) { display: none; }
 .kb .reader [data-feed-state] > .text-center { margin-top: 12px; margin-bottom: 8px; }
 /* One left edge inside an open conversation (#2185): the head, the avatars,
    the «working…» row, the live-tail marker, the control strip, the composer
@@ -1258,6 +1261,8 @@
 .kb .reader .ch-model { font: 600 var(--text-caption) ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--color-primary); background: var(--surface-well); border-radius: 999px; padding: 2px 7px; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .kb .reader .ch-tree { display: inline-flex; align-items: center; gap: 3px; font: var(--text-caption) ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--color-muted); white-space: nowrap; }
 .kb .reader .ch-tree svg { width: 11px; height: 11px; }
+.kb .reader .rlatest { text-align: left; font-size: var(--text-ui); color: var(--color-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-height: 24px; padding: 0 4px; border-radius: 6px; }
+.kb .reader .rlatest:hover { background: var(--surface-well); }
 
 /* A shelf column holding an open conversation widens to reading width; the
    board then scrolls sideways inside itself, never the page. */

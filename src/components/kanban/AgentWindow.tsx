@@ -1,6 +1,6 @@
 "use client";
 
-import { useLayoutEffect, useRef, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 
 import { useLocale } from "@/lib/i18n";
 import { RoleEmblem, frameRoleName } from "@/components/RoleFrameMark";
@@ -21,6 +21,16 @@ import type { OpenAgent } from "./openAgents";
  */
 
 export const OPEN_AGENTS_SHORTCUT = { next: "KeyJ", previous: "KeyK" } as const;
+
+const FOCUSABLE = 'a[href], button, input, select, textarea, summary, [tabindex], [contenteditable="true"]';
+
+/** What Tab can reach in the window: drawn, enabled and in the tab order. The
+    agent coming in is laid out and not drawn, so it holds no stop. */
+function tabStops(frame: HTMLElement): HTMLElement[] {
+  return [...frame.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((element) =>
+    element.tabIndex >= 0 && !element.matches(":disabled") && !element.closest("[inert]")
+    && element.getClientRects().length > 0 && getComputedStyle(element).visibility === "visible");
+}
 
 /** The header's pill. It stands in a slot of its own size whether or not
     anything is open, so its arrival moves nothing in the header. The slot is
@@ -67,13 +77,39 @@ export function AgentWindow({ agents, current, pending, onJump, onStep, onClose,
 }) {
   const { t } = useLocale();
   const count = agents.length;
+  const frameRef = useRef<HTMLElement>(null);
+  /* The window is modal: Tab and Shift+Tab go round it and never reach the
+     board, the header or the sidebar under its scrim. Listened for on the
+     document, because the reader is a portal whose key events never pass
+     through the window in React's tree. A menu or another dialog over the
+     window keeps its own keys. */
+  useEffect(() => {
+    if (pending) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Tab" || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+      const frame = frameRef.current;
+      const owner = (event.target as HTMLElement | null)?.closest?.("[role='dialog'], [role='menu'], [role='listbox']");
+      if (!frame || (owner && owner !== frame)) return;
+      const stops = tabStops(frame);
+      if (!stops.length) return;
+      const active = document.activeElement;
+      const inside = active instanceof HTMLElement && frame.contains(active);
+      const follows = (element: HTMLElement) => !!(active!.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING);
+      const wrap = !inside || (event.shiftKey ? !stops.some((element) => element !== active && !follows(element)) : !stops.some(follows));
+      if (!wrap) return;
+      event.preventDefault();
+      (event.shiftKey ? stops[stops.length - 1]! : stops[0]!).focus();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [pending]);
   return (
     <div className="agent-window-layer" {...(pending ? { "data-agent-window-pending": "" } : { "data-agent-window": current ?? "" })}>
       {/* The board under the window's margins is a flat field, so no card's
           text shows between the window and the screen's edge. */}
       <div className="aw-field" aria-hidden="true" />
       <div className="aw-scrim" data-agent-window-scrim="" aria-hidden="true" onClick={onLeave} />
-      <section className="agent-window" role="dialog" aria-modal="true" aria-label={t("kanban.openAgents.aria", { count })} data-agent-window-frame="">
+      <section ref={frameRef} className="agent-window" role="dialog" aria-modal="true" aria-label={t("kanban.openAgents.aria", { count })} data-agent-window-frame="">
         <nav className="aw-list" aria-label={t("kanban.openAgents.aria", { count })}>
           <div className="aw-head" title={t("kanban.openAgents.shortcut")}>
             <span className="num" data-open-agents-count="">{t("kanban.openAgents.head", { count })}</span>

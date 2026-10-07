@@ -166,19 +166,22 @@ export async function captureFastTtsHeaders(browser: Browser, mobile: boolean): 
           await control.click(); expect(await row.getAttribute("data-tts-phase")).toBe("idle");
         }
         if (!mobile) {
+          /* The link opened the conversation in the agent window, where its header plays. */
           await control.click(); await page.waitForFunction(() => document.querySelector('[data-tts-header][data-tts-phase="playing"]'));
-          await page.locator('[data-reader-full-toggle="conversation_export-impl"]').click();
-          const full = page.locator('[data-kanban-reader="conversation_export-impl"] [data-tts-header]');
-          expect(await full.getAttribute("data-tts-phase")).toBe("playing");
-          await page.screenshot({ path: path.join(out, `${prefix}-full-window-playing.png`) });
-          await full.click(); await page.locator('[data-reader-full-toggle="conversation_export-impl"]').click();
+          const inWindow = page.locator('[data-agent-window] [data-kanban-reader="conversation_export-impl"] [data-tts-header]');
+          expect(await inWindow.getAttribute("data-tts-phase")).toBe("playing");
+          await page.screenshot({ path: path.join(out, `${prefix}-agent-window-playing.png`) });
+          /* The seat lies under the window's scrim: the window closes first, and its pill brings it back after. */
+          await inWindow.click(); await page.keyboard.press("Escape");
+          await page.waitForFunction(() => !document.querySelector("[data-agent-window]"));
           const incumbent = page.locator('[data-orchestrator-incumbent]');
           await incumbent.scrollIntoViewIfNeeded();
           const seat = incumbent.locator('[data-tts-header]'); await seat.waitFor();
           await page.waitForFunction(() => document.querySelector('[data-orchestrator-incumbent] [data-tts-header]:enabled'));
           const seatRect = await seat.boundingBox(); expect(seatRect!.width).toBeGreaterThan(0);
           await page.screenshot({ path: path.join(out, `${prefix}-orchestrator.png`) });
-          await control.scrollIntoViewIfNeeded();
+          await page.locator("[data-open-agents-pill]").click();
+          await page.waitForSelector('[data-agent-window] [data-kanban-reader="conversation_export-impl"] [data-tts-header]:enabled');
         }
         // Loading is stoppable even on a cache hit, and a permanent provider
         // refusal returns the header to idle with a dismissible alert.

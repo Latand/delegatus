@@ -9837,7 +9837,9 @@ describe("the agent window: a click on the board opens the agent in one window, 
      empty or skeleton reader; closing one agent never takes the window off
      the screen; an incoming agent keeps one toolbar layout; the window's
      margins hold no board text; ‹ › are absent with one agent and stand in
-     one place at both widths; the focus ring follows the keyboard only.
+     one place at both widths; the focus ring follows the keyboard only; Tab
+     and Shift+Tab go round the window with one agent open and with two, and
+     never reach the board, the header or the sidebar under it.
      Frames and a frame-by-frame video per face go to AGENT_WINDOW_PNG_DIR,
      the readings to evidence/agent-window/built.json. */
   const ROUNDS = card("t-rounds");
@@ -9909,6 +9911,27 @@ describe("the agent window: a click on the board opens the agent in one window, 
       cards: Object.fromEntries(["t-rounds", "t-export"].map((id) => [id, rect(document.querySelector(`[data-kanban-board] .card[data-id="task:${id}"]`))])),
     };
   });
+  /* The window is modal for the keyboard: from its list's first row, Tab or
+     Shift+Tab pressed again and again walks round the window and comes back to
+     that row without once leaving it for the board, the header or the sidebar. */
+  const tabRound = async (page: Page, key: "Tab" | "Shift+Tab") => {
+    await page.locator("[data-agent-window] [data-open-agent-jump]").first().focus();
+    const left: string[] = [];
+    for (let press = 1; press <= 200; press++) {
+      await page.keyboard.press(key);
+      const at = await page.evaluate(() => {
+        const active = document.activeElement as HTMLElement | null;
+        return {
+          inside: !!active?.closest("[data-agent-window-frame]"),
+          first: !!active && active === document.querySelector("[data-agent-window] [data-open-agent-jump]"),
+          name: active ? `${active.tagName.toLowerCase()} «${active.getAttribute("aria-label") ?? active.textContent?.trim().slice(0, 40) ?? ""}»` : "none",
+        };
+      });
+      if (!at.inside) left.push(at.name);
+      if (at.first) return { presses: press, left };
+    }
+    return { presses: null, left };
+  };
   /* The window's margins: one flat tone, never a slice of a card. */
   const margins = async (shot: Buffer, frame: { x: number; y: number; width: number; height: number }, viewport: { width: number; height: number }) => {
     const strips = {
@@ -9983,6 +10006,12 @@ describe("the agent window: a click on the board opens the agent in one window, 
               await shot("02-one-stage");
               if (one.steps.length) fail(`‹ › shown with one agent open (${JSON.stringify(one.steps)})`);
               if (one.rows.length !== 1 || !one.rows[0]!.current) fail(`one open agent lists ${JSON.stringify(one.rows)}`);
+              await phase(page, "tab-one");
+              const trapOne = { forward: await tabRound(page, "Tab"), backward: await tabRound(page, "Shift+Tab") };
+              (steps["02-one-stage"] as Record<string, unknown>).tabRound = trapOne;
+              for (const [way, round] of Object.entries(trapOne)) {
+                if (round.left.length || round.presses === null) fail(`with one agent, ${way} Tab left the window for ${JSON.stringify(round.left.slice(0, 4))} (${round.presses ?? "never"} presses back to the first row)`);
+              }
 
               await phase(page, "escape");
               await page.keyboard.press("Escape");
@@ -10056,6 +10085,12 @@ describe("the agent window: a click on the board opens the agent in one window, 
               steps["07-closed-one"] = closedOne;
               await shot("07-closed-one");
               if (closedOne.rows.map((entry) => entry.key).join(",") !== [KEY.export, KEY.review].join(",")) fail(`after closing Build the list is ${closedOne.rows.map((entry) => entry.key).join(",")}`);
+              await phase(page, "tab-two");
+              const trapTwo = { forward: await tabRound(page, "Tab"), backward: await tabRound(page, "Shift+Tab") };
+              (steps["07-closed-one"] as Record<string, unknown>).tabRound = trapTwo;
+              for (const [way, round] of Object.entries(trapTwo)) {
+                if (round.left.length || round.presses === null) fail(`with two agents, ${way} Tab left the window for ${JSON.stringify(round.left.slice(0, 4))} (${round.presses ?? "never"} presses back to the first row)`);
+              }
 
               await phase(page, "close-all");
               await page.locator("[data-open-rail-close-all]").click();
@@ -10126,6 +10161,73 @@ describe("the agent window: a click on the board opens the agent in one window, 
     if (failures.length) throw new Error(failures.join("\n"));
     expect(failures).toEqual([]);
   }, 900_000);
+
+  /* A stage that has not started still opens its panel on the card, and the
+     panel folds to its head and one line of the stage's first message: one
+     row, cut with an ellipsis, in the secondary ink, at both widths. */
+  browserTest("a stage's panel folded on its card is its head and one ellipsised line", async () => {
+    const pngDir = process.env.AGENT_WINDOW_PNG_DIR ?? "/var/tmp/llv-agent-window-evidence";
+    const out = path.resolve(".artifacts/agent-window-folded");
+    fs.mkdirSync(out, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const MERGE = `${card("t-search")} .pb-pills [data-stage="merge"]`;
+    try {
+      for (const [viewport, lang, scheme] of [[{ width: 1440, height: 900 }, "en", "light"], [{ width: 1000, height: 800 }, "uk", "dark"]] as const) {
+        const label = `folded-${viewport.width}-${lang}-${scheme}`;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, viewport, scheme, lang);
+        try {
+          await page.waitForSelector(`${MERGE} >> visible=true`, { timeout: 30_000 });
+          await page.locator(MERGE).click();
+          const panel = page.locator(`${card("t-search")} [data-stage-detail]`);
+          await panel.waitFor();
+          await panel.locator("[data-panel-fold]").click();
+          await page.waitForSelector(`${card("t-search")} [data-stage-detail][data-collapsed="1"]`);
+          await page.mouse.move(viewport.width / 2, 12);
+          await page.waitForTimeout(300);
+          const reading = await panel.evaluate((node) => {
+            const line = node.querySelector<HTMLElement>(":scope > .rlatest")!;
+            const style = getComputedStyle(line);
+            const ink = document.createElement("span");
+            ink.style.color = "var(--color-secondary)";
+            line.append(ink);
+            const secondary = getComputedStyle(ink).color;
+            ink.remove();
+            const shown = [...node.children].filter((child) => getComputedStyle(child).display !== "none").map((child) => child.className);
+            return {
+              panel: Math.round(node.getBoundingClientRect().height),
+              gap: getComputedStyle(node).rowGap,
+              paddingBottom: getComputedStyle(node).paddingBottom,
+              line: { height: Math.round(line.getBoundingClientRect().height), whiteSpace: style.whiteSpace, textOverflow: style.textOverflow, overflow: style.overflowX, color: style.color, secondary, cut: line.scrollWidth > line.clientWidth },
+              shown,
+            };
+          });
+          await panel.screenshot({ path: path.join(pngDir, `${label}.png`) });
+          readings[label] = { ...reading, pageErrors };
+          if (reading.line.whiteSpace !== "nowrap" || reading.line.textOverflow !== "ellipsis" || reading.line.overflow !== "hidden") failures.push(`${label}: the folded line wraps (${JSON.stringify(reading.line)})`);
+          if (reading.line.height > 24) failures.push(`${label}: the folded line stands ${reading.line.height} px tall, more than one row`);
+          if (reading.line.color !== reading.line.secondary) failures.push(`${label}: the folded line is ${reading.line.color}, the secondary ink is ${reading.line.secondary}`);
+          if (reading.gap !== "2px" || reading.paddingBottom !== "6px") failures.push(`${label}: the folded panel spaces its rows ${reading.gap} apart over ${reading.paddingBottom}`);
+          if (reading.shown.length !== 2) failures.push(`${label}: the folded panel shows ${JSON.stringify(reading.shown)}`);
+          /* 70 px is what the folded panel measured before the agent window (a4e0477e6), at both faces. */
+          if (reading.panel !== 70) failures.push(`${label}: the folded panel stands ${reading.panel} px tall, 70 before the agent window`);
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/agent-window", { recursive: true });
+    fs.writeFileSync("evidence/agent-window/folded-panel.json", `${JSON.stringify({ fixture: "issue1695Evidence.fixture.tsx?scenario=stages", readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 300_000);
 
   const seedReaders = (ids: readonly string[]) => `try { localStorage.setItem("llv:kanban-readers:v1:atlas", ${JSON.stringify(JSON.stringify(ids.map((id) => ({ key: `conversation_${id}`, path: `/repo/${id}.jsonl`, folded: false }))))}); } catch {}`;
 
