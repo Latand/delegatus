@@ -1,7 +1,7 @@
 import type { FileEntry } from "@/lib/types";
 
 import { mobileRowState } from "./mobile/mobileBoardModel";
-import { isSubagent, projectKey } from "./projectModel";
+import { isSubagent, projectKey, type ProjectSummary } from "./projectModel";
 import { turnIsRunning } from "./turnDuration";
 
 /**
@@ -36,10 +36,11 @@ export function workingClock(now: number): number {
   return Math.floor(now / 15) * 15;
 }
 
-/** How many of these files are agents working now. */
-export function workingAgentCount(files: readonly FileEntry[], now: number): number {
+/** How many of these files are agents working now; with `projects`, only
+    those the sidebar groups under one of them. */
+export function workingAgentCount(files: readonly FileEntry[], now: number, projects?: ReadonlySet<string>): number {
   let count = 0;
-  for (const file of files) if (isWorkingAgent(file, now)) count += 1;
+  for (const file of files) if (isWorkingAgent(file, now) && (!projects || projects.has(projectKey(file)))) count += 1;
   return count;
 }
 
@@ -52,4 +53,17 @@ export function workingAgentCounts(files: readonly FileEntry[], now: number): Ma
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
   return counts;
+}
+
+/**
+ * The Overview's working number: the sum of the rows it shows, which are the
+ * projects that are not archived. The rail's Overview row, the Overview's top
+ * line and its board header (`KanbanModelInput.workingProjects`) count this one
+ * scope, so an archived project's agents, which keep their own count in the
+ * rail's archive section, never make two «working» numbers on one screen differ.
+ */
+export function overviewWorkingTotal(summaries: readonly ProjectSummary[], archived: ReadonlySet<string>): number {
+  let count = 0;
+  for (const summary of summaries) if (!archived.has(summary.project)) count += summary.liveCount;
+  return count;
 }

@@ -249,7 +249,8 @@ export interface KanbanModel {
     tasks: number;
     onBoard: number;
     /** Agents working now in the files the board carries: the number the
-        sidebar row of the same project shows (`workingAgentCount`). */
+        sidebar row of the same project shows (`workingAgentCount`). The
+        Overview counts its `workingProjects` only. */
     working: number;
     needsYou: number;
   };
@@ -273,6 +274,11 @@ export interface KanbanModelInput {
       count is still taken over the whole inventory, exactly as with search.
       The Overview passes `cardHasLiveWork` (#1820). */
   cardFilter?: (card: KanbanCard) => boolean;
+  /** The Overview's projects, archived ones already removed: the header counts
+      the working agents of these only, the scope of its top line and the
+      rail's Overview row (`overviewWorkingTotal`). A project's own board passes
+      none and carries only its own files. */
+  workingProjects?: ReadonlySet<string>;
   reasonFilter?: TaskReasonFilter;
   /** The project's orchestrator seat as the board last read it; null or absent
       while it is unknown. With its `previous` seats, every conversation the
@@ -833,7 +839,7 @@ export function buildKanbanModel(input: KanbanModelInput): KanbanModel {
          the same files: a hidden group's agents and the seat keep working, and
          the header says so. A decision the operator hid is not counted as
          waiting on them. */
-      working: workingAgentCount(input.files ?? [], now),
+      working: workingAgentCount(input.files ?? [], now, input.workingProjects),
       needsYou: cards.filter((card) => card.motion.key === "needs-you" && !card.hide.hidden).length,
     },
   };

@@ -11,7 +11,7 @@ import { buildTaskBands } from "@/components/scheme/taskBands";
 import { projectTaskWorkflows } from "@/components/tasks/taskWorkflowModel";
 
 import { buildProjectSummaries, projectKey } from "./projectModel";
-import { isWorkingAgent, workingAgentCount, workingAgentCounts } from "./workingAgents";
+import { isWorkingAgent, overviewWorkingTotal, workingAgentCount, workingAgentCounts } from "./workingAgents";
 
 /* The sidebar said 38 while the board said 12 for the same project at the same
    moment (2026-10-07). Both now count agents whose turn is running, with one
@@ -157,4 +157,25 @@ test("a per-second clock and the board's 15 s clock agree at every second", () =
     const row = buildProjectSummaries(entries, now, [], [], [], {}, undefined, workingAgentCounts(entries, now)).find((summary) => summary.project === REPO)!;
     expect(board(entries, now).totals.working).toBe(row.liveCount);
   }
+});
+
+test("the Overview counts one scope: its top line, its board header and the rail's Overview row leave an archived project out", () => {
+  /* One busy agent in an archived project: the Overview page lists only the
+     projects that are not archived, so none of its working numbers counts it,
+     and the rail's Overview row sums the rows the Overview shows. */
+  const ARCHIVED = "repo-archived";
+  const archivedBusy = file("archived-busy", { ...open, project: ARCHIVED, cwd: "/work/archived" });
+  const fleet = [...files, archivedBusy];
+  const archived = new Set([ARCHIVED]);
+  const rows = buildProjectSummaries(fleet, NOW, workflows, [], pipelines, {}, undefined, workingAgentCounts(fleet, NOW));
+  const shown = rows.filter((summary) => !archived.has(summary.project));
+  const projects = new Set(shown.map((summary) => summary.project));
+
+  const topLine = overviewWorkingTotal(rows, archived);
+  const header = buildKanbanModel({ bands: [], tasks: [], pipelines: [], projection: projectTaskWorkflows([], [], [], fleet), files: fleet, workingProjects: projects, now: Math.floor(NOW / 15) * 15 }).totals.working;
+  expect(topLine).toBe(5);
+  expect(header).toBe(topLine);
+  expect(shown.reduce((total, summary) => total + summary.liveCount, 0)).toBe(topLine);
+  /* The archived row keeps its own count in the rail's archive section. */
+  expect(rows.find((summary) => summary.project === ARCHIVED)?.liveCount).toBe(1);
 });

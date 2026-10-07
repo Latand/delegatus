@@ -2882,11 +2882,11 @@ export const uk: Record<keyof typeof en, Message> = {
   "dictation.connectionLost": "зʼєднання з транскрипцією обірвалось",
   "dictation.noMic": "немає доступу до мікрофона",
 
-  "overview.branchesLiveIn": {
-    one: "{count} гілка працює у {projects}",
-    few: "{count} гілки працюють у {projects}",
-    many: "{count} гілок працюють у {projects}",
-    other: "{count} гілок працюють у {projects}",
+  "overview.agentsWorkingIn": {
+    one: "{count} агент працює у {projects}",
+    few: "{count} агенти працюють у {projects}",
+    many: "{count} агентів працюють у {projects}",
+    other: "{count} агента працюють у {projects}",
   },
   "overview.projects": { one: "{count} проєкті", few: "{count} проєктах", many: "{count} проєктах", other: "{count} проєктах" },
   "overview.archived": "· {count} в архіві",

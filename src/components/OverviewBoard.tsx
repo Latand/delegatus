@@ -25,7 +25,7 @@ import { MobileAccountsScreen, MobileBarTitle, MobileShell, type MobileShellHost
 import { topScreen, useMobileNav, useMobileNavStore, type MobileSheetName } from "./mobile/mobileNav";
 import { OverviewKanban, type OverviewPhoneDoors } from "./OverviewKanban";
 import { buildProjectSummaries } from "./projectModel";
-import { workingAgentCounts } from "./workingAgents";
+import { overviewWorkingTotal, workingAgentCounts } from "./workingAgents";
 
 const noop = () => {};
 
@@ -109,7 +109,9 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
     [allSummaries, archivedProjects],
   );
   const archivedCount = allSummaries.length - summaries.length;
-  const totalLive = useMemo(() => summaries.reduce((sum, s) => sum + s.liveCount, 0), [summaries]);
+  /* Agents working in the projects shown: the board header below and the
+     rail's Overview row count the same scope. */
+  const totalLive = useMemo(() => overviewWorkingTotal(allSummaries, archivedProjects), [allSummaries, archivedProjects]);
   const liveProjects = summaries.filter((s) => s.liveCount > 0).length;
   /* The board's scope. Stable by membership, so a poll that returns the same
      projects never re-groups the whole file list. */
@@ -316,7 +318,7 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
               : !loaded
                 ? t("dash.updating")
                 : totalLive
-              ? t("overview.branchesLiveIn", { count: totalLive, projects: t("overview.projects", { count: liveProjects }) })
+              ? t("overview.agentsWorkingIn", { count: totalLive, projects: t("overview.projects", { count: liveProjects }) })
               : t("common.nothingRunning")}
           {!degraded && archivedCount ? ` ${t("overview.archived", { count: archivedCount })}` : ""}
           {/* The board below is filtered, permanently. Saying so here is what

@@ -465,7 +465,7 @@ test("the Overview keeps its fixed shares: no width control and no read of a pro
   localStorage.clear();
   localStorage.setItem("llv:kanban-wide:v1", "blocked");
   const tasks = [task("a", "assigned", "Repair old links"), task("b", "blocked", "Waiting on a review")];
-  const { host } = mount(tasks, NO_PORTS, { project: "__overview__", overview: { names: { fixture: "fixture" }, onOpenProject: () => {}, keep: () => true } });
+  const { host } = mount(tasks, NO_PORTS, { project: "__overview__", overview: { names: { fixture: "fixture" }, onOpenProject: () => {}, keep: () => true, projects: new Set(["fixture"]) } });
   expect(host.querySelector("[data-board]")?.getAttribute("data-mode")).toBe("wide");
   expect(host.querySelector("[data-col-width], [data-col-pin]")).toBeNull();
   expect(host.querySelector('.column[data-wide]')).toBeNull();
@@ -493,7 +493,7 @@ test("on a large screen a project board balances its columns; narrow, scroll, ta
   localStorage.clear();
   /* Every column holds a card: an empty one folds to a strip. */
   const tasks = [task("i", "inbox", "Sort the intake"), task("a", "assigned", "Repair old links"), task("b", "blocked", "Waiting on a review"), task("d", "done", "Ship the adapter")];
-  const overview = { project: "__overview__", overview: { names: { fixture: "fixture" }, onOpenProject: () => {}, keep: () => true } };
+  const overview = { project: "__overview__", overview: { names: { fixture: "fixture" }, onOpenProject: () => {}, keep: () => true, projects: new Set(["fixture"]) } };
   const at = (width: number, extra: Partial<KanbanBoardProps> = {}) => atBoardWidth(width, () => {
     const { host } = mount(tasks, NO_PORTS, extra);
     return { mode: host.querySelector("[data-board]")?.getAttribute("data-mode"), tracks: tracks(host), host };

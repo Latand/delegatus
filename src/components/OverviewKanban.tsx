@@ -120,8 +120,8 @@ export function OverviewKanban({ projects, displayNames, files, tasks, flows, pi
   const surfacePipelines = useMemo(() => pipelinesForProjects(pipelines, shown, files), [pipelines, shown, files]);
   const boardTasks = useMemo(() => tasks.filter((task) => shown.has(task.project)), [tasks, shown]);
   const scope = useMemo<KanbanOverviewScope>(
-    () => ({ names: displayNames, onOpenProject: onSelectProject, keep: cardHasLiveWork }),
-    [displayNames, onSelectProject],
+    () => ({ names: displayNames, onOpenProject: onSelectProject, keep: cardHasLiveWork, projects: shown }),
+    [displayNames, onSelectProject, shown],
   );
   /* The phone's pin walks the queue the bar's ⚠ sheet lists on the Overview:
      every project's. Keyed by value, since the queue is rebuilt each render. */

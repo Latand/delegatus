@@ -2931,9 +2931,9 @@ export const en = {
   "dictation.noMic": "no microphone access",
 
   // OverviewBoard
-  "overview.branchesLiveIn": {
-    one: "{count} branch running in {projects}",
-    other: "{count} branches running in {projects}",
+  "overview.agentsWorkingIn": {
+    one: "{count} agent working in {projects}",
+    other: "{count} agents working in {projects}",
   },
   "overview.projects": { one: "{count} project", other: "{count} projects" },
   "overview.archived": "· {count} archived",

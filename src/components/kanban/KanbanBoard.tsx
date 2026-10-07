@@ -112,6 +112,9 @@ export interface KanbanOverviewScope {
   /** The cards the Overview keeps. Applied exactly where search is applied,
       so a rejected card leaves the columns and no count. */
   keep: (card: KanbanCardModel) => boolean;
+  /** The projects the Overview shows, archived ones removed: the header's
+      «N working» counts these only, as the Overview's top line does. */
+  projects: ReadonlySet<string>;
 }
 
 export interface KanbanBoardProps {
@@ -452,11 +455,11 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const previousModel = useRef<KanbanModel | null>(null);
   // eslint-disable-next-line react-hooks/refs -- Identity cache: the ref only decides which equal object is kept, never what the model holds.
   const model: KanbanModel = useMemo(() => {
-    const built = buildKanbanModel({ bands, tasks: effectiveTasks, pipelines, projection, files, flows: props.flows, statusOverrides: statuses, cardFilter: props.overview?.keep, reasonFilter, seat: seatRefs, query, openReaders: unfoldedReaders, launched: isLaunchedConversation, now: modelNow });
+    const built = buildKanbanModel({ bands, tasks: effectiveTasks, pipelines, projection, files, flows: props.flows, statusOverrides: statuses, cardFilter: props.overview?.keep, workingProjects: props.overview?.projects, reasonFilter, seat: seatRefs, query, openReaders: unfoldedReaders, launched: isLaunchedConversation, now: modelNow });
     const shared = reuseKanbanModel(previousModel.current, built);
     previousModel.current = shared;
     return shared;
-  }, [bands, effectiveTasks, pipelines, projection, files, props.flows, statuses, props.overview?.keep, reasonFilter, seatRefs, query, unfoldedReaders, modelNow]);
+  }, [bands, effectiveTasks, pipelines, projection, files, props.flows, statuses, props.overview?.keep, props.overview?.projects, reasonFilter, seatRefs, query, unfoldedReaders, modelNow]);
   const cardsById = useMemo(() => {
     const map = new Map<string, KanbanCardModel>();
     for (const status of KANBAN_STATUSES) for (const card of model.columns[status].cards) map.set(card.id, card);

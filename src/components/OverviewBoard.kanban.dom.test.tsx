@@ -187,7 +187,7 @@ const SEAT_TASKS: BoardTask[] = [
 
 interface Taps { projects: string[] }
 
-function mount(files: FileEntry[], tasks: BoardTask[]): { host: HTMLElement; taps: Taps } {
+function mount(files: FileEntry[], tasks: BoardTask[], archivedProjects: ReadonlySet<string> = new Set()): { host: HTMLElement; taps: Taps } {
   const taps: Taps = { projects: [] };
   const host = dom.document.createElement("div");
   dom.document.body.appendChild(host);
@@ -199,7 +199,7 @@ function mount(files: FileEntry[], tasks: BoardTask[]): { host: HTMLElement; tap
       projectDisplayNames={NAMES}
       pipelines={[]}
       workflows={[]}
-      archivedProjects={new Set()}
+      archivedProjects={archivedProjects}
       tasks={tasks}
       flows={[]}
       loaded
@@ -331,6 +331,18 @@ test("the Overview's bar keeps its three facts; the project board's bar, put in 
      task count live elsewhere on its bar and its columns. */
   const project = mountProjectBoard();
   expect(summary(project)).toBe(translate("en", "kanban.summaryWorking", { count: 0 }));
+});
+
+test("an archived project's working agent is in neither the top line nor the board header", () => {
+  /* The Overview shows the projects that are not archived, and both of its
+     «working» numbers count those: the top line and the board header agree. */
+  const { host } = mount(FILES, TASKS, new Set([MESH]));
+  const topLine = host.querySelector<HTMLElement>("h1")?.nextElementSibling?.textContent ?? "";
+  const header = host.querySelector<HTMLElement>(".bar .summary")?.textContent ?? "";
+
+  expect(topLine).toContain(translate("en", "overview.agentsWorkingIn", { count: 2, projects: translate("en", "overview.projects", { count: 2 }) }));
+  expect(topLine).toContain(translate("en", "overview.archived", { count: 1 }));
+  expect(header).toContain(translate("en", "kanban.overviewWorking", { count: 2 }));
 });
 
 test("nothing that navigates is nested inside anything else that navigates (#699)", () => {
