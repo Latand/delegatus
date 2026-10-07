@@ -37,8 +37,9 @@ export type PipelineGitResult = ({ ok: true; sha: string; baseBranch?: string } 
     that places the file is no verdict. A commit that was killed, a hook whose
     command was missing or could not run (127, 126), output that reports a
     failed tool, configuration or machine (an errno, a stack trace, a missing
-    command), and every refusal without that evidence leave it false, and the
-    lane parks with what the hook printed. */
+    command, a privacy class outside the content ones), and every refusal
+    without that evidence leave it false, and the lane parks with what the
+    hook printed. */
 export type StageCommitRefusal = { repairable: boolean; paths: string[] };
 export type PipelineBaseResult = { ok: true; baseBranch: string; baseRef: string } | { ok: false; error: string };
 
@@ -49,16 +50,18 @@ const PRIVACY_CONTENT_FINDINGS = new Set([
   "credential", "email_address", "home_path", "known_value", "private_network", "resource_identifier", "transcript_content",
 ]);
 
-function privacyContentVerdict(lines: readonly string[]): boolean {
-  const verdict = lines.indexOf("PRIVACY GATE: FAIL");
-  if (verdict === -1) return false;
+/** The finding classes of every privacy verdict in the output. */
+function privacyFindings(lines: readonly string[]): string[] {
   const findings: string[] = [];
-  for (const line of lines.slice(verdict + 1)) {
-    const finding = /^([a-z_]+): \d+$/.exec(line);
-    if (!finding) break;
-    findings.push(finding[1]!);
-  }
-  return findings.length > 0 && findings.every((finding) => PRIVACY_CONTENT_FINDINGS.has(finding));
+  lines.forEach((line, verdict) => {
+    if (line !== "PRIVACY GATE: FAIL") return;
+    for (const report of lines.slice(verdict + 1)) {
+      const finding = /^([a-z_]+): \d+$/.exec(report);
+      if (!finding) break;
+      findings.push(finding[1]!);
+    }
+  });
+  return findings;
 }
 
 function pathAt(line: string, file: string, from = 0): number {
@@ -119,9 +122,14 @@ async function stageCommitRefusal(commit: ExecResult, staged: readonly string[] 
   }
   const lines = `${commit.stderr}\n${commit.stdout}`.split("\n").map((line) => line.trimEnd());
   const judged = typeof commit.code === "number" && commit.code !== 126 && commit.code !== 127 && !killedAtBound(commit);
-  const infrastructure = lines.map(reportedText).some((line) => INFRASTRUCTURE_FAILURE.some((pattern) => pattern.test(line)));
+  /* A privacy class that says the gate could not judge vetoes the repair
+     whatever else the hook placed: the gate runs after the whitespace check,
+     and no edit to the staged files answers it. */
+  const privacy = privacyFindings(lines);
+  const unjudged = privacy.some((finding) => !PRIVACY_CONTENT_FINDINGS.has(finding));
+  const infrastructure = unjudged || lines.map(reportedText).some((line) => INFRASTRUCTURE_FAILURE.some((pattern) => pattern.test(line)));
   const repairable = judged && !infrastructure && paths.length > 0
-    && (privacyContentVerdict(lines) || paths.some((file) => locatesDiagnostic(lines, file)));
+    && (privacy.length > 0 || paths.some((file) => locatesDiagnostic(lines, file)));
   return { repairable, paths };
 }
 

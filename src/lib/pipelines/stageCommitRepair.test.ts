@@ -71,6 +71,9 @@ function hookedRepo() {
     "if [ -f \"$(git rev-parse --git-dir)/hook-broken\" ]; then echo 'gate-slot: no slot became free within 600s' >&2; exit 1; fi",
     "if [ -f \"$(git rev-parse --git-dir)/hook-tool-missing\" ]; then echo \"checking $(git diff --cached --name-only)\" >&2; llv-test-tool-that-is-not-installed; exit 1; fi",
     "if [ -f \"$(git rev-parse --git-dir)/hook-tool-missing-after-check\" ]; then git diff --cached --check >&2; llv-test-tool-that-is-not-installed; exit 1; fi",
+    /* The project's own gate order: staged whitespace, then privacy, here with
+       a fingerprints file that does not exist, so the gate cannot judge. */
+    `if [ -f "$(git rev-parse --git-dir)/hook-privacy-unconfigured" ]; then git diff --cached --check >&2; LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE="$(git rev-parse --git-dir)/missing-fingerprints.json" '${process.execPath}' '${path.resolve("scripts/privacy-publication-gate.ts")}' --base HEAD --require-known-values --paths $(git diff --cached --name-only) >&2; exit 1; fi`,
     "if [ -f \"$(git rev-parse --git-dir)/hook-runs-staged-checks\" ]; then for check in $(git diff --cached --name-only -- '*.cjs'); do node \"$check\" || exit 1; done; fi",
     "if ! out=$(git diff --cached --check 2>&1); then echo \"pre-commit: staged whitespace — $out\" >&2; exit 1; fi",
     "",
@@ -84,7 +87,8 @@ function hookedRepo() {
   return { root, repo, exec, run, calls, subject, breakHook: () => fs.writeFileSync(path.join(repo, ".git", "hook-broken"), ""),
     loseHookTool: () => fs.writeFileSync(path.join(repo, ".git", "hook-tool-missing"), ""),
     loseHookToolAfterCheck: () => fs.writeFileSync(path.join(repo, ".git", "hook-tool-missing-after-check"), ""),
-    runStagedChecks: () => fs.writeFileSync(path.join(repo, ".git", "hook-runs-staged-checks"), "") };
+    runStagedChecks: () => fs.writeFileSync(path.join(repo, ".git", "hook-runs-staged-checks"), ""),
+    unconfigurePrivacy: () => fs.writeFileSync(path.join(repo, ".git", "hook-privacy-unconfigured"), "") };
 }
 
 function writeOutput(repo: string, relative: string, content: string) {
@@ -223,6 +227,21 @@ test("a staged check that crashes on a missing hook configuration is not repaira
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
+test("a privacy gate that could not judge is not repairable, although the whitespace check before it placed a genuine defect in the staged file", async () => {
+  const box = hookedRepo();
+  try {
+    box.unconfigurePrivacy();
+    writeOutput(box.repo, OUTPUT, "+ a line the stage wrote \n");
+    const refused = await commitPipelineStage(box.subject, "study", false, box.exec, ["evidence/draft"], box.subject.lastPassedCommit);
+    expect(refused.ok).toBe(false);
+    if (refused.ok) throw new Error("unreachable");
+    expect(refused.error).toContain(`${OUTPUT}:1: trailing whitespace.`);
+    expect(refused.error).toContain("PRIVACY GATE: FAIL");
+    expect(refused.error).toContain("configuration_error: 1");
+    expect(refused.commitRefusal).toEqual({ repairable: false, paths: [OUTPUT] });
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
 const EMFILE_REFUSAL = `pre-commit: eslint — could not open ${OUTPUT}: EMFILE: too many open files`;
 const LOCATED_EMFILE_REFUSAL = `${OUTPUT}:15:1: error: EMFILE: too many open files`;
 const PRIVACY_REFUSAL = "pre-commit: privacy\nPRIVACY GATE: FAIL\nhome_path: 1\nknown_value: 2\npre-commit: bun failed (1); gate failed";
@@ -234,6 +253,10 @@ test.each([
   ["a privacy verdict on the staged content", 1, PRIVACY_REFUSAL, true],
   ["a privacy gate that could not run", 1, "pre-commit: privacy\nPRIVACY GATE: FAIL\nconfiguration_error: 1", false],
   ["a privacy gate that lacks a tool, beside a content finding", 1, "PRIVACY GATE: FAIL\nhome_path: 1\ntool_unavailable: 1", false],
+  ["a privacy gate that could not run, after a located whitespace defect", 1, `${WHITESPACE_REFUSAL}\npre-commit: privacy\nPRIVACY GATE: FAIL\nconfiguration_error: 1\ninspection_error: 1`, false],
+  ["a privacy gate that lacks a tool, after a located lint defect", 1, `${OUTPUT}:3:1 no-unused-vars: 'x' is defined but never used\nPRIVACY GATE: FAIL\ntool_unavailable: 1`, false],
+  ["a privacy gate that could not inspect a file, beside a content finding and a located defect", 1, `${WHITESPACE_REFUSAL}\nPRIVACY GATE: FAIL\nhome_path: 1\ninspection_error: 1`, false],
+  ["a privacy content verdict after a located whitespace defect", 1, `${WHITESPACE_REFUSAL}\n${PRIVACY_REFUSAL}`, true],
   ["a resource failure that names the staged file", 1, EMFILE_REFUSAL, false],
   ["a resource failure placed at a line of the staged file", 1, LOCATED_EMFILE_REFUSAL, false],
   ["a stack frame in the staged file", 1, `TypeError: x is not a function\n    at run (/work/tree/${OUTPUT}:4:9)\n    at main (/work/tree/${OUTPUT}:9:3)`, false],
@@ -413,6 +436,7 @@ async function runningStage(h: ReturnType<typeof harness>, access: "read-only" |
 const refusal = (stderr: string): ExecResult => ({ code: 1, stdout: "", stderr });
 /** What the real hook above prints when its whitespace check is followed by a command `/bin/sh` cannot find. */
 const MISSING_TOOL_REFUSAL = `${OUTPUT}:1: trailing whitespace.\n+ a line the stage wrote \n.git/hooks/pre-commit: 3: llv-test-tool-that-is-not-installed: not found`;
+const UNCONFIGURED_PRIVACY_REFUSAL = `${WHITESPACE_REFUSAL}\n+ a line the stage wrote \npre-commit: privacy\nPRIVACY GATE: FAIL\nconfiguration_error: 1\ninspection_error: 1`;
 const study = () => loadPipelines()[0]!.runs[0]!.attempts[0]!;
 
 test.each(["read-only", "read-write"] as const)("a passed %s stage whose output a pre-commit hook refuses repairs it in the same conversation and advances without the operator", async (access) => {
@@ -492,6 +516,7 @@ test.each([
   ["a resource failure placed at a line of the stage's file", refusal(LOCATED_EMFILE_REFUSAL), `committing the passed stage: ${LOCATED_EMFILE_REFUSAL}`],
   ["a commit killed at its time limit", { code: null, signal: "SIGKILL", stdout: "", stderr: WHITESPACE_REFUSAL } as ExecResult, `committing the passed stage: ${WHITESPACE_REFUSAL}`],
   ["a hook command missing after a located defect", refusal(MISSING_TOOL_REFUSAL), `committing the passed stage: ${MISSING_TOOL_REFUSAL}`],
+  ["a privacy gate that could not run after a located defect", refusal(UNCONFIGURED_PRIVACY_REFUSAL), `committing the passed stage: ${UNCONFIGURED_PRIVACY_REFUSAL}`],
 ])("%s parks immediately and asks the stage for nothing", async (_name, answer, detail) => {
   const h = harness();
   await runningStage(h);
