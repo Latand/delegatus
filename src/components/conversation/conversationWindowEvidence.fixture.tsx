@@ -1473,6 +1473,8 @@ interface OwnStepsControls {
   /** Median and mean ms of one reading across `runs` places in the feed, and
       how many selector passes over the feed those readings made. */
   readCost: (runs: number) => { medianMs: number; meanMs: number; selectorPasses: number };
+  /** Show another conversation in the components already on the page. */
+  open: (conversation: string) => void;
 }
 
 const noop = () => undefined;
@@ -1647,13 +1649,20 @@ function mountOwnMessageSteps(root: HTMLElement): void {
     activity: "idle",
     mtime: Math.floor(Date.now() / 1000) - 120,
   } as unknown as FileEntry;
-  createRoot(root).render(
+  const pane = (shown: FileEntry) => (
     <OwnMessageStepsPane
-      file={file}
+      file={shown}
       surface={params.get("surface") === "orchestrator" ? "orchestrator" : "pane"}
       paneWidth={Math.max(0, Number(params.get("pane") ?? 0))}
-    />,
+    />
   );
+  const reactRoot = createRoot(root);
+  /* Another conversation in the same window, the way the orchestrator panel
+     and a reader hand a new file to the components they already mounted. */
+  (window as unknown as { ownSteps: Partial<OwnStepsControls> }).ownSteps.open = (conversation) => {
+    reactRoot.render(pane({ ...file, path: `/${conversation}.jsonl`, name: `${conversation}.jsonl`, conversationId: conversation, title: conversation }));
+  };
+  reactRoot.render(pane(file));
 }
 
 setLocale((params.get("lang") as Locale | null) ?? "en");

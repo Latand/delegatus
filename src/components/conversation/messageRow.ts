@@ -29,7 +29,7 @@ import type { MessageKey, TFunction } from "@/lib/i18n";
 
 import { deliveryWaitFor, deliveryWaitText, type DeliveryWaitPhase } from "@/components/runtime/deliveryWait";
 import { sentenceCauseKey } from "@/components/runtime/deliveryNotice";
-import { humanReceiptReasonKey, type HostAxis, type TurnAxis } from "@/components/runtime/runtimeModel";
+import { humanReceiptReasonKey, SWITCH_WAIT_REASONS, type HostAxis, type TurnAxis } from "@/components/runtime/runtimeModel";
 
 import { outboxStateForReceiptStatus, receiptHasUnknownFate, type OutboxEntry } from "./outbox";
 
@@ -227,6 +227,18 @@ export function transportLine(
   if (entry.deliveryReceipt?.reason && BUSY_RETRY_REASONS.has(entry.deliveryReceipt.reason)
     && (entry.state === "delivering" || entry.state === "queued")) {
     return { label: t("runtime.receipt.busyRetry"), wait: "transmitting" };
+  }
+  /* The server held this send while the conversation switches accounts and
+     said so on its receipt. The card's own switch annotation can name the
+     target; the receipt's code is what is known when it cannot. */
+  if (entry.deliveryReceipt?.reason && SWITCH_WAIT_REASONS.has(entry.deliveryReceipt.reason)
+    && (entry.state === "delivering" || entry.state === "queued")) {
+    return {
+      label: switchHold?.label && entry.deliveryReceipt.reason !== "switch-failed"
+        ? t("outbox.heldForSwitch", { label: switchHold.label })
+        : t(humanReceiptReasonKey(entry.deliveryReceipt.reason)!),
+      wait: null,
+    };
   }
   /* A server-held admission with no receipt yet says only "held". That is the
      honest answer while nothing else is known — but when the conversation's own

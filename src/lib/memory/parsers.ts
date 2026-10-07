@@ -9,6 +9,8 @@ export interface MemorySource {
   sourceKind: MemorySourceKind;
   engine: "claude" | "codex" | "shared";
   project?: string;
+  // Discovery distinguishes the engine-loaded root index from nested indexes.
+  loadedByDefault?: boolean;
 }
 
 export interface ParsedMemory {
@@ -19,6 +21,7 @@ export interface ParsedMemory {
   body: string;
   project?: string;
   writtenAt?: string;
+  keywords?: string;
 }
 
 export function parseMemory(source: MemorySource, text: string): ParsedMemory[] {
@@ -92,7 +95,7 @@ function parseCodexRegistry(text: string): ParsedMemory[] {
         if (!kind) continue;
         for (const entry of bullets(section, kind, project, title, writtenAt)) {
           entry.anchor = `${groupTitle}\0${[...new Set(cwds)].sort().join("\0")}\0${entry.anchor}`;
-          entry.body += "\n" + keywords;
+          entry.keywords = keywords;
           entries.push(entry);
         }
       }

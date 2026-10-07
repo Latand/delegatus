@@ -21,6 +21,8 @@ import { runFocusTransaction } from "@/components/attention/navigate";
 import { asksYouFixtureLines, asksYouFixtureSetting, reportLogFixturePage } from "@/components/orchestrator/reportLog/reportLogEvidence.fixture";
 import { writeProfile } from "@/components/runtimeProfile";
 import { Viewer } from "@/components/Viewer";
+import { orchestratorLinks } from "./orchestratorArrows";
+import { orchestratorWireLayers } from "./SeatActionWires";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import { resolvePipelineLinks, resolveTaskLinks, type CachedPullRequest, type FilesWorkLinks, type ForgeCacheView, type ForgeRepositoryView, type ResolvedWorkLinks } from "@/lib/forge/workLinks";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -34,6 +36,7 @@ import type { PrototypeDeliveryState, PrototypeMediaView, PrototypeReviewSummary
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
+import { refreshTeamView } from "@/components/team/teamClient";
 
 /*
  * The real Viewer on the kanban face (#1695), over invented content equivalent
@@ -100,7 +103,10 @@ const L = (en: string, uk: string) => (UK ? uk : en);
 /* A drag on a full board (the whole-card drag, docs on the smoothness gate): 48 tasks with long
    titles and descriptions over the four columns, a lane with a running stage on every second one. */
 const DRAG_BOARD = SCENARIO === "drag-board";
-const PIPELINES = SCENARIO === "pipelines" || STAGES || FLAT || SYNCED || DRAG_BOARD;
+/* The orchestrator's wires (docs/design/orchestrator-arrows.md): the pipelines board, with the seat
+   owning some of its lanes. */
+const ARROWS = SCENARIO === "orchestrator-arrows";
+const PIPELINES = SCENARIO === "pipelines" || STAGES || FLAT || SYNCED || DRAG_BOARD || ARROWS;
 /* #1846: `&runtime=structured` answers the runtime snapshot with one structured session, for the running
    verify conversation, so its composer's runtime pill and the board's account chip both draw. */
 /* The seat-noise scenario (docs/design/seat-panel-noise.md) seats the orchestrator on a structured host too,
@@ -1733,6 +1739,18 @@ if (SCENARIO === "task-motion") {
     { pausedAt: iso(10 * MIN), pausedState: "running" }));
 }
 
+/* Queued holds side by side: a worker slot wait with and without a note, and
+   a resource hold with its note and without one. */
+if (SCENARIO === "hold-kinds") {
+  pipelines.splice(0, pipelines.length);
+  tasks.splice(0, tasks.length,
+    task("hold-slot", "blocked", L("Start the review lane", "Запустити лінію ревʼю"), "", 30 * MIN, [], { hold: { kind: "worker", note: "", since: iso(30 * MIN), by: "agent" } }),
+    task("hold-slot-note", "blocked", L("Start the docs lane", "Запустити лінію документації"), "", 20 * MIN, [], { hold: { kind: "worker", note: L("Three of three workers busy", "Зайняті всі три агенти"), since: iso(20 * MIN), by: "agent" } }),
+    task("hold-resource-note", "blocked", L("Run the full build", "Запустити повну збірку"), "", 15 * MIN, [], { hold: { kind: "resource", note: L("4 GB of memory available, 8 GB needed", "Доступно 4 ГБ памʼяті, потрібно 8 ГБ"), since: iso(15 * MIN), by: "agent" } }),
+    task("hold-resource", "blocked", L("Older resource hold", "Давніша причина про ресурси"), "", 60 * MIN, [], { hold: { kind: "resource", note: "", since: iso(60 * MIN), by: "agent" } }),
+  );
+}
+
 /* `&empty=<status>` empties one column: its tasks move to Done, so the
    column's strip can be read beside the others (an empty column folds). */
 const EMPTY_COLUMN = new URLSearchParams(location.search).get("empty");
@@ -2129,6 +2147,112 @@ function transcriptOf(pathname: string): string {
 }
 
 const params = new URLSearchParams(location.search);
+
+/* The orchestrator's wires (docs/design/orchestrator-arrows.md). The seat made the lanes on five open
+   tasks and spawned the export implementer; `&many=1` fills the board to about a hundred cards, a third
+   of them the seat's. `orchestratorAct` makes somebody act: the record changes the way that writer's own
+   write changes it (a `statusBy` on a moved or created task, a new lane, a new attempt carrying the
+   `launchedBy` the engine writes for a launch by hand) and the board reloads it as it reloads any
+   change; `ago` dates the act that many ms back, as a delta read after a connection gap. Nothing here
+   draws: the product's own layer reads the records. */
+if (ARROWS) {
+  const seatId = orchestrator.conversationId!;
+  for (const lane of pipelines) if (["p-search", "p-upload", "p-links", "p-limits", "p-rounds"].includes(lane.id)) lane.srcConversationId = seatId;
+  Object.assign(exportImpl, { durableLineage: { kind: "spawn", role: "builder", depth: 1, parentConversationId: seatId, reviewsConversationId: null, memberships: [] } });
+  if (params.get("many") === "1") {
+    const areas = ["export", "search", "upload", "billing", "sign-in", "settings", "release notes", "webhooks", "invoices", "the importer", "the audit log", "notifications"];
+    const verbs = ["Tidy", "Speed up", "Document", "Harden", "Retire the old", "Translate", "Test"];
+    const spread: TaskStatus[] = [...Array(26).fill("inbox"), ...Array(34).fill("assigned"), ...Array(10).fill("blocked"), ...Array(14).fill("done")];
+    spread.forEach((status, index) => {
+      const id = `t-bulk-${index}`;
+      const title = `${verbs[index % verbs.length]} ${areas[index % areas.length]} (${index + 1})`;
+      tasks.push(task(id, status, title, "", (index + 20) * MIN));
+      const seats = (status === "assigned" && index % 3 !== 0) || (status === "blocked" && index % 2 === 0);
+      if (!seats) return;
+      const lane = status === "blocked" ? "needs_decision" : index % 4 === 0 ? "completed" : "running";
+      pipelines.push(pipeline(`p-bulk-${index}`, title, id, lane,
+        [stage("build", "builder", "review"), stage("review", "reviewer", null)],
+        [{ stageId: "build", attempts: [attempt(1, lane === "running" ? "running" : lane === "completed" ? "passed" : "needs_decision", null)] }],
+        lane === "completed" ? null : { stageId: "build", state: "running", input: null, activatedBy: null },
+        { srcConversationId: seatId }));
+    });
+  }
+}
+type SeatAct = { by?: "seat" | "operator" | "agent" | "nobody"; ago?: number } & (
+  | { kind: "move"; taskId: string; to: TaskStatus }
+  | { kind: "pipeline"; taskId: string }
+  | { kind: "stage"; taskId: string }
+  | { kind: "task"; taskId: string; title: string });
+const arrowCard = (taskId: string) => document.querySelector<HTMLElement>(`[data-kanban-board] .card[data-id="task:${CSS.escape(taskId)}"], [data-phone-card="task:${CSS.escape(taskId)}"]`);
+/** Apply every act in one board update, as one delta carries them. */
+async function orchestratorAct(acts: SeatAct | SeatAct[]): Promise<{ landed: boolean }> {
+  const landed: Array<() => boolean> = [];
+  let touchedTasks = false;
+  let touchedLanes = false;
+  for (const act of Array.isArray(acts) ? acts : [acts]) {
+    const who = act.by ?? "seat";
+    const at = new Date(Date.now() - (act.ago ?? 0)).toISOString();
+    const actor = who === "operator" ? { kind: "operator" as const }
+      : { kind: "agent" as const, role: who === "seat" ? "orchestrator" : "builder", conversationId: who === "seat" ? orchestrator.conversationId! : exportImpl.conversationId! };
+    const statusBy = (from: TaskStatus | null): Pick<BoardTask, "statusBy"> => (who === "nobody" ? {} : { statusBy: { actor, from, at } });
+    const index = tasks.findIndex((entry) => entry.id === act.taskId);
+    if (act.kind === "task") {
+      tasks.push(task(act.taskId, "inbox", act.title, "", 0, [], { createdAt: at, updatedAt: at, ...statusBy(null) }));
+      touchedTasks = true;
+      landed.push(() => !!arrowCard(act.taskId));
+    } else if (act.kind === "move") {
+      const row = { ...tasks[index]! };
+      delete row.statusBy;
+      tasks[index] = { ...row, status: act.to, ...statusBy(row.status), updatedAt: at, revision: REV(revision++) } as BoardTask;
+      touchedTasks = true;
+      landed.push(() => {
+        const card = arrowCard(act.taskId);
+        return (card?.closest<HTMLElement>("section.column[data-status]")?.dataset.status ?? card?.closest<HTMLElement>("[data-phone-kanban-column]")?.dataset.phoneKanbanColumn) === act.to;
+      });
+    } else if (act.kind === "pipeline") {
+      const id = `p-seat-${act.taskId}`;
+      pipelines.push(pipeline(id, tasks[index]!.text.split("\n")[0]!, act.taskId, "running",
+        [stage("build", "builder", "review"), stage("review", "reviewer", null)],
+        [{ stageId: "build", attempts: [attempt(1, "running", null, { startedAt: at })] }],
+        { stageId: "build", state: "running", input: null, activatedBy: null },
+        { srcConversationId: who === "seat" ? orchestrator.conversationId : null, createdAt: at }));
+      touchedLanes = true;
+      landed.push(() => !!arrowCard(act.taskId)?.querySelector(`[data-pipeline="${id}"]`) || !!document.querySelector(`[data-phone-card="task:${CSS.escape(act.taskId)}"][data-phone-card-pipeline="${id}"]`));
+    } else {
+      /* The lane's running stage is launched again by hand: a new attempt that carries its launcher, as the engine writes it. */
+      const position = pipelines.findIndex((entry) => entry.taskIds.includes(act.taskId) && entry.cursor);
+      const lane = pipelines[position]!;
+      const runs = (lane.runs as unknown as { stageId: string; attempts: Record<string, unknown>[] }[]).map((run) => run.stageId !== lane.cursor!.stageId ? run : {
+        ...run,
+        attempts: [...run.attempts.map((entry) => entry.state === "running" ? { ...entry, state: "failed", completedAt: at } : entry),
+          attempt(run.attempts.length + 1, "running", null, { startedAt: at, ...(who === "nobody" ? {} : { launchedBy: { actor, at } }) })],
+      });
+      pipelines[position] = { ...lane, runs } as unknown as Pipeline;
+      touchedLanes = true;
+    }
+  }
+  if (touchedTasks) window.dispatchEvent(new Event("llv:tasks-changed"));
+  if (touchedLanes) window.dispatchEvent(new Event("llv:pipelines-changed"));
+  const done = () => landed.every((check) => check());
+  for (let waited = 0; waited < 4_000 && !done(); waited += 50) await new Promise((resolve) => setTimeout(resolve, 50));
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  return { landed: done() };
+}
+if (ARROWS) Object.assign(window, {
+  orchestratorAct,
+  /* The product's layer, when one is mounted: at rest there is none. */
+  orchestratorWires: () => [...orchestratorWireLayers][0]?.probe ?? null,
+  /* What deriving the links costs on this board: one pass over the tasks, the lanes and the conversations. */
+  orchestratorLinksCost() {
+    const input = { seatConversationIds: [orchestrator.conversationId], pipelines, tasks, files };
+    const started = performance.now();
+    let links = 0;
+    for (let run = 0; run < 200; run++) links = orchestratorLinks(input).length;
+    return { links, ms: (performance.now() - started) / 200 };
+  },
+});
+
 let board = {
   schemaVersion: 1, revision: 1, updatedAt: new Date(0).toISOString(), pathAliases: {},
   prefs: {
@@ -2712,6 +2836,10 @@ if (SEAT_CLS) files.splice(0, files.length);
 if (LAUNCH_CLS) for (const file of files) Object.assign(file, { waitingInput: null, pendingQuestion: null });
 Object.assign(window, { launchRun });
 
+/* The header menu's driver block (kanbanBoard.browser.test.tsx, "the header's menu, built"): `&header=1`
+   hands shared memory, the key, the ping and the team to the driver, and `&member=1` signs a member in. */
+const HEADER_MENU = new URLSearchParams(location.search).has("header");
+const HEADER_ROUTES = ["/api/telemetry", "/api/memory/settings", "/api/asks-you/key", "/api/team"];
 /* The one request that leaves the page: the evidence server draws task icons from lucide (#2102). */
 const serverFetch = window.fetch.bind(window);
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -2723,6 +2851,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }) });
   if (SCENARIO === "service-tier" && url.pathname === "/api/roles") return json({ roles: ROLE_DEFAULTS.map(role => ({ ...role, promptPreview: role.promptScaffold, config: { ...role.config, ...(role.id === "reviewer" ? { serviceTier: "ultrafast" } : {}) }, shipped: { config: role.config } })) });
   if (SCENARIO === "memory-settings" && ["/api/telemetry", "/api/memory/settings", "/api/asks-you/key", "/api/asks-you"].includes(url.pathname)) return serverFetch(url.pathname + url.search, init);
+  if (HEADER_MENU && HEADER_ROUTES.includes(url.pathname)) return serverFetch(url.pathname + url.search, init);
   if (url.pathname === "/api/task-icons") return serverFetch(url.pathname + url.search);
   /* The tick panel the notice card opens reads these two; the driver answers them. */
   if (TICK_CARDS && (url.pathname === "/api/monitor/seat-tick/settings" || url.pathname === "/api/roles")) return serverFetch(url.pathname + url.search, init);
@@ -3403,6 +3532,7 @@ const queueTaskPreview = <div className="p-3"><NativeQueuePanel
   error={null} thread={{ model: null, effort: null }} cardId="conversation_task_queue" mintKey={() => "task-queue-edit"}
   submit={async () => ({ ok: true })} onRefresh={() => {}} t={(key, params) => translate(UK ? "uk" : "en", key, params)}
 /><div className="mt-3"><SeatDeputyChip deputy={taskDeputy} /><DeputyBlock deputy={taskDeputy} /></div></div>;
+if (HEADER_MENU && new URLSearchParams(location.search).has("member")) void refreshTeamView();
 createRoot(document.getElementById("root")!).render(SCENARIO === "task-queue-preview" ? queueTaskPreview : SCENARIO === "service-tier" || SCENARIO === "role-defaults" ? (
   new URLSearchParams(location.search).has("mapping") ? <div className="p-6"><AgentMappingTable statuses={{ claude: { connected: true, account: null }, codex: { connected: true, account: null } }} layout={innerWidth < 640 ? "card" : "table"} onConnect={() => {}} /></div> : <div className="p-6" style={{ paddingTop: 400 }}>
     <RuntimePill file={{ ...searchVer2, engine: "codex", root: "codex-sessions", model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast" }} surface="structured" runtimeSettings={{ perTurnEffort: true, perTurnModel: false }} />

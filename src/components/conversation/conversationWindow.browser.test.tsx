@@ -3734,6 +3734,248 @@ describe("image viewers: pinch, pan and the right click", () => {
   }, 600_000);
 });
 
+describe("a control's hint never outlives its click", () => {
+  /*
+   * Operator report: after a click on Compact its hint stayed on screen, and
+   * it was still there after switching to another orchestrator.
+   *
+   * The production strip in the orchestrator conversation, under a real
+   * mouse and a real keyboard. Chromium drops a button's focus the moment
+   * React writes `disabled` onto it, inside the commit, and React delivers no
+   * blur from there: a Hint that opened on the click's focus never heard that
+   * the focus was gone. The strip is mounted unkeyed, so that Hint was carried
+   * into the next conversation.
+   *
+   * Compact and Stop both disable themselves while their request is out; the
+   * request is held here so each is read while busy.
+   */
+
+  type Page = Awaited<ReturnType<typeof openFixture>>["page"];
+  const HINT_SHOWN_MS = 400;
+  const URL_QUERY = "?case=own-message-steps&surface=orchestrator&lang=en";
+  const compact = `button[aria-label^="${translate("en", "composer.compactAria")}"]`;
+  const stop = `button[aria-label^="${translate("en", "composer.interruptAria")}"]`;
+  const sendButton = `button[aria-label="${translate("en", "composer.sendToAgent")}"]`;
+  const HOLD = `window.heldControls = [];
+    const send = window.fetch;
+    window.fetch = async (input, init) => {
+      const url = String(input);
+      if (url === "/api/tmux" || url.startsWith("/api/conversation-host")) {
+        await new Promise((resolve) => window.heldControls.push(resolve));
+        return Response.json({ ok: true });
+      }
+      return send(input, init);
+    };`;
+
+  const hints = (page: Page) => page.evaluate(() => [...document.querySelectorAll('[role="tooltip"]')].map((node) => node.textContent));
+  const disabled = (page: Page, selector: string) => page.evaluate((query) => document.querySelector<HTMLButtonElement>(query)!.disabled, selector);
+  const release = (page: Page) => page.evaluate(() => {
+    for (const answer of (window as unknown as { heldControls: (() => void)[] }).heldControls.splice(0)) answer();
+  });
+  const switchConversation = (page: Page) => page.evaluate(() => {
+    (window as unknown as { ownSteps: { open: (conversation: string) => void } }).ownSteps.open("another-orchestrator");
+  });
+  async function rest(page: Page, selector: string): Promise<void> {
+    const box = (await page.locator(selector).first().boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.waitForTimeout(HINT_SHOWN_MS);
+  }
+  async function press(page: Page): Promise<void> {
+    await page.mouse.down();
+    await page.mouse.up();
+    await page.waitForTimeout(HINT_SHOWN_MS);
+  }
+  async function leave(page: Page): Promise<void> {
+    await page.mouse.move(40, 40, { steps: 4 });
+    await page.waitForTimeout(HINT_SHOWN_MS);
+  }
+
+  browserTest("Compact, Stop, Send and a keyboard-focus hint in Chromium", async () => {
+    const out = path.resolve(".artifacts/control-hints");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    let browser: Browser | null = null;
+    try {
+      browser = await chromium.launch(LAUNCH);
+
+      /* Compact: hover, arm, confirm, leave, answer, switch. */
+      {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}${URL_QUERY}`, { width: 1280, height: 900 }, "dark", "en");
+        try {
+          await page.waitForSelector(compact, { timeout: 20_000 });
+          await page.evaluate(HOLD);
+          await rest(page, compact);
+          expect(await hints(page)).toEqual([translate("en", "composer.compactTitle")]);
+          await press(page);
+          expect(await hints(page)).toEqual([]);
+          await press(page);
+          expect(await disabled(page, compact)).toBe(true);
+          expect(await hints(page)).toEqual([]);
+          await leave(page);
+          expect(await hints(page)).toEqual([]);
+          await release(page);
+          await page.waitForFunction((query) => !document.querySelector<HTMLButtonElement>(query)!.disabled, compact);
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([]);
+          await switchConversation(page);
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([]);
+          await page.screenshot({ path: path.join(out, "compact-after-switch.png") });
+          /* A pointer that arrives anew is still told what the control does. */
+          await rest(page, compact);
+          expect(await hints(page)).toEqual([translate("en", "composer.compactTitle")]);
+          await leave(page);
+          expect(await hints(page)).toEqual([]);
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+      }
+
+      /* Stop: one click disables it; the conversation is switched while it is busy. */
+      {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}${URL_QUERY}`, { width: 1280, height: 900 }, "dark", "en");
+        try {
+          await page.waitForSelector(stop, { timeout: 20_000 });
+          await page.evaluate(HOLD);
+          await rest(page, stop);
+          expect(await hints(page)).toEqual([translate("en", "composer.interruptTitle")]);
+          await press(page);
+          expect(await disabled(page, stop)).toBe(true);
+          expect(await hints(page)).toEqual([]);
+          await leave(page);
+          await switchConversation(page);
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([]);
+          await release(page);
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([]);
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+      }
+
+      /* Send with an empty field keeps its menu, so it stays enabled, says it
+         cannot send, and stops its own click from propagating. */
+      {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}${URL_QUERY}`, { width: 1280, height: 900 }, "dark", "en");
+        try {
+          await page.waitForSelector(sendButton, { timeout: 20_000 });
+          expect(await page.evaluate((query) => document.querySelector(query)!.getAttribute("aria-disabled"), sendButton)).toBe("true");
+          await rest(page, sendButton);
+          expect(await hints(page)).toEqual([translate("en", "composer.sendToAgent")]);
+          await press(page);
+          expect(await disabled(page, sendButton)).toBe(false);
+          expect(await hints(page)).toEqual([]);
+          await leave(page);
+          await rest(page, sendButton);
+          expect(await hints(page)).toEqual([translate("en", "composer.sendToAgent")]);
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+      }
+
+      /* Keyboard: Tab onto a control shows its hint, activating it closes the
+         hint, and so does a key pressed with the focus still on the control. */
+      {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}${URL_QUERY}`, { width: 1280, height: 900 }, "dark", "en");
+        try {
+          await page.waitForSelector(compact, { timeout: 20_000 });
+          await page.evaluate(HOLD);
+          await page.locator(stop).first().focus();
+          await page.keyboard.press("Tab");
+          await page.keyboard.press("Tab");
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await page.evaluate((query) => document.activeElement === document.querySelector(query), compact)).toBe(true);
+          expect(await hints(page)).toEqual([translate("en", "composer.compactTitle")]);
+          await page.screenshot({ path: path.join(out, "keyboard-focus.png") });
+          await page.keyboard.press("Escape");
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([]);
+          await page.keyboard.press("Shift+Tab");
+          await page.keyboard.press("Tab");
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([translate("en", "composer.compactTitle")]);
+          await page.keyboard.press("Enter");
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([]);
+          await page.keyboard.press("Enter");
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await disabled(page, compact)).toBe(true);
+          expect(await hints(page)).toEqual([]);
+          await release(page);
+          await switchConversation(page);
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([]);
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+      }
+
+      /* A hint already open when the dock is handed another conversation, with
+         no input in between: by keyboard focus on Compact, then by a pointer
+         resting on Stop. */
+      {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}${URL_QUERY}`, { width: 1280, height: 900 }, "dark", "en");
+        try {
+          await page.waitForSelector(compact, { timeout: 20_000 });
+          await page.locator(stop).first().focus();
+          await page.keyboard.press("Tab");
+          await page.keyboard.press("Tab");
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([translate("en", "composer.compactTitle")]);
+          await switchConversation(page);
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await page.evaluate(() => document.querySelector("[data-link-path]")!.getAttribute("data-link-path"))).toBe("/another-orchestrator.jsonl");
+          expect(await page.evaluate((query) => document.activeElement === document.querySelector(query), compact)).toBe(true);
+          expect(await hints(page)).toEqual([]);
+          await page.screenshot({ path: path.join(out, "open-hint-after-handoff.png") });
+          await rest(page, stop);
+          expect(await hints(page)).toEqual([translate("en", "composer.interruptTitle")]);
+          await page.evaluate(() => {
+            (window as unknown as { ownSteps: { open: (conversation: string) => void } }).ownSteps.open("third-orchestrator");
+          });
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([]);
+          /* The pointer leaves and arrives anew: the hint is back. */
+          await leave(page);
+          await rest(page, stop);
+          expect(await hints(page)).toEqual([translate("en", "composer.interruptTitle")]);
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+      }
+
+      /* Touch: a held finger still opens the hint, and lifting it closes it. */
+      {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}${URL_QUERY}`, { width: 1280, height: 900 }, "dark", "en");
+        try {
+          await page.waitForSelector(compact, { timeout: 20_000 });
+          const box = (await page.locator(compact).first().boundingBox())!;
+          const point = { x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2) };
+          const cdp = await context.newCDPSession(page);
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point] });
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([translate("en", "composer.compactTitle")]);
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([]);
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser?.close();
+      served.stop();
+    }
+  }, 240_000);
+});
+
 describe("prototype review: the orchestrator's open composer says a prototype is ready", () => {
   /*
    * The phone's half of the orchestrator's notice. With the composer put away
