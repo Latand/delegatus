@@ -233,9 +233,20 @@ cat /sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/delegatu
 ```
 
 Production and the agents branch then share `delegatus.slice`, which makes the
-1000:100 weights a real comparison. No root is needed. None of this has been
-applied on the incident machine; moving the running service waits for the
+1000:100 weights a real comparison. No root is needed. None of these files has
+been applied on the incident machine; moving the running service waits for the
 operator.
+
+Runtime values are a separate matter. Once a checkout carries this change, every
+gate it runs creates `delegatus-agents-work.slice` at runtime and sets
+`CPUWeight=100`, the aggregate `CPUQuota` and `CPUQuotaPeriodSec=20ms` as
+drop-ins under `$XDG_RUNTIME_DIR/systemd/user.control`; they last until the
+user manager restarts, and production stays where it is. While this change was
+built, pre-push gates of its own lane set those values on the incident
+machine's live work slice, the last time on 2026-10-07 at 00:26 UTC. The slice
+held no process; the three drop-ins were removed with
+`systemctl --user revert delegatus-agents-work.slice` and the empty slice was
+stopped. The production unit was not touched.
 
 ## Optional, root only: dedicated CPUs for production
 
@@ -292,6 +303,21 @@ CPU list of a sample process in each scope.
 All tests run by path with isolated state; the real-cgroup tests create private
 `llvcputest…` slices and scopes and remove them, and never touch
 `delegatus.slice`, the live agent slices or a service unit.
+
+Until this change is merged, a gate run for it (a hook, a test run through
+`gate-slot.sh`) takes a private slice, which every nested gate inherits, and
+removes it afterwards:
+
+```sh
+export LLV_GATE_SLICE=llvcputestgate$$.slice
+bash scripts/gate-slot.sh bun test ./scripts/gate-slot.test.ts   # and git push, which runs the hooks
+systemctl --user revert "$LLV_GATE_SLICE"; systemctl --user stop "$LLV_GATE_SLICE"
+# The live work slice must still read inactive with no drop-ins:
+systemctl --user show delegatus-agents-work.slice -p ActiveState -p CPUWeight -p CPUQuotaPerSecUSec -p CPUQuotaPeriodUSec -p DropInPaths
+```
+
+The affinity regressions pin to the first CPU in the test's own
+`Cpus_allowed_list`, so they run under a cpuset that leaves CPU 0 out.
 
 - `src/lib/runtime/cpuPlacement.scope.test.ts` also runs a workflow setup with
   memory mode off and its orphaned `setsid` child in a private

@@ -172,12 +172,15 @@ test.skipIf(process.platform !== "linux")("pressure that rises while a gate wait
 // The work slice's ceiling is one machine-wide value: a caller pinned to fewer
 // CPUs (a service under AllowedCPUs=0-5) sets the same quota a gate does.
 const onlineCpus = Number(spawnSync("getconf", ["_NPROCESSORS_ONLN"], { encoding: "utf8" }).stdout.trim());
-test.skipIf(process.platform !== "linux" || !Bun.which("taskset") || !(onlineCpus > 1))("runtime, installer and gate set one aggregate quota under a narrowed CPU affinity", () => {
-  const pinned = (args: string[], env: NodeJS.ProcessEnv) => spawnSync(Bun.which("taskset")!, ["-c", "0", ...args], { env, encoding: "utf8" });
+// The first CPU this process may use: a cpuset (a work slice under AllowedCPUs=6-23) can leave CPU 0 out.
+const allowedCpu = (() => { try { return /^Cpus_allowed_list:\s*(\d+)/m.exec(readFileSync("/proc/self/status", "utf8"))?.[1]; } catch { return undefined; } })();
+test.skipIf(process.platform !== "linux" || !Bun.which("taskset") || !allowedCpu || !(onlineCpus > 1))("runtime, installer and gate set one aggregate quota under a narrowed CPU affinity", () => {
+  const pinned = (args: string[], env: NodeJS.ProcessEnv) => spawnSync(Bun.which("taskset")!, ["-c", allowedCpu!, ...args], { env, encoding: "utf8" });
   const expected = `CPUQuota=${Math.floor(onlineCpus * 0.75) * 100}%`;
   const quietEnv: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: tmpdir(), NODE_ENV: "test" };
-  const affinity = pinned([process.execPath, "-e", "console.log(require('node:os').availableParallelism())"], quietEnv);
-  expect(affinity.stdout.trim()).toBe("1");
+  const affinity = pinned([process.execPath, "-e", `const os = require("node:os"); const fs = require("node:fs");
+console.log(os.availableParallelism(), /^Cpus_allowed_list:\\s*(\\S+)/m.exec(fs.readFileSync("/proc/self/status", "utf8"))[1])`], quietEnv);
+  expect([affinity.stderr, affinity.stdout.trim()]).toEqual(["", `1 ${allowedCpu}`]);
   const runtime = pinned([process.execPath, "-e", `const { cpuSettings, workSliceProperties } = await import(${JSON.stringify(join(import.meta.dir, "../src/lib/runtime/cpuPlacement.ts"))});
 console.log(workSliceProperties(cpuSettings({}).aggregateQuotaPercent).join(" "))`], quietEnv);
   expect(runtime.stderr).toBe("");

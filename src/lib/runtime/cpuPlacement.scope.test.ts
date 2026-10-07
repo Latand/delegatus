@@ -99,7 +99,9 @@ scopeTest("a work host keeps its descendants and an orphaned fixture in its quot
 
 const taskset = Bun.which("taskset");
 const onlineCpus = Number(spawnSync("getconf", ["_NPROCESSORS_ONLN"], { encoding: "utf8" }).stdout.trim());
-(reachable && taskset && onlineCpus > 1 ? test : test.skip)("a caller pinned to one CPU and a gate give the work slice the same machine-wide quota", () => {
+// The first CPU this process may use: a cpuset (a work slice under AllowedCPUs=6-23) can leave CPU 0 out.
+const allowedCpu = reachable ? /^Cpus_allowed_list:\s*(\d+)/m.exec(fs.readFileSync("/proc/self/status", "utf8"))?.[1] : undefined;
+(reachable && taskset && allowedCpu && onlineCpus > 1 ? test : test.skip)("a caller pinned to one CPU and a gate give the work slice the same machine-wide quota", () => {
   const expected = `${Math.floor(onlineCpus * 0.75) * 100 * 200} 20000`;
   // Inherited CPU settings (a hook's own gate) must not choose the quota.
   const childEnv: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: sandbox, NODE_ENV: "test",
@@ -113,13 +115,15 @@ const onlineCpus = Number(spawnSync("getconf", ["_NPROCESSORS_ONLN"], { encoding
   const lower = () => runner("systemctl", ["--user", "set-property", "--runtime", slices.pinned, "CPUQuota=100%", "CPUQuotaPeriodSec=20ms"]);
   lower();
   expect(sliceMax()).toBe("20000 20000");
-  const runtime = spawnSync(taskset!, ["-c", "0", process.execPath, "-e", `const { planAgentCpu } = await import(${JSON.stringify(path.join(import.meta.dir, "cpuPlacement.ts"))});
-planAgentCpu("work", process.env, { agentSlice: ${JSON.stringify(slices.agents)}, workSlice: ${JSON.stringify(slices.pinned)} });`], { env: childEnv, encoding: "utf8" });
-  expect([runtime.status, runtime.stderr]).toEqual([0, ""]);
+  const runtime = spawnSync(taskset!, ["-c", allowedCpu!, process.execPath, "-e", `const { planAgentCpu } = await import(${JSON.stringify(path.join(import.meta.dir, "cpuPlacement.ts"))});
+planAgentCpu("work", process.env, { agentSlice: ${JSON.stringify(slices.agents)}, workSlice: ${JSON.stringify(slices.pinned)} });
+console.log((await import("node:os")).availableParallelism());`], { env: childEnv, encoding: "utf8" });
+  expect([runtime.status, runtime.stderr, runtime.stdout.trim()]).toEqual([0, "", "1"]);
   expect(sliceMax()).toBe(expected);
   lower();
-  const gate = spawnSync(taskset!, ["-c", "0", "/bin/bash", path.join(import.meta.dir, "../../../scripts/gate-slot.sh"), "/bin/sh", "-c", REPORT], { env: childEnv, encoding: "utf8" });
+  const gate = spawnSync(taskset!, ["-c", allowedCpu!, "/bin/bash", path.join(import.meta.dir, "../../../scripts/gate-slot.sh"), "/bin/sh", "-c", `nproc; ${REPORT}`], { env: childEnv, encoding: "utf8" });
   expect(gate.status).toBe(0);
+  expect(gate.stdout.split("\n")[0]).toBe("1");
   expect(report(gate.stdout).parentMax).toBe(expected);
 }, 30_000);
 
