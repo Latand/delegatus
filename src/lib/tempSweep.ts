@@ -34,15 +34,18 @@ import { OWNED_TEMP_PREFIX } from "@/lib/tempDirs";
  * - **Never a pipeline worktree**, or a directory holding one, or holding any
  *   git checkout: registered linked merger, review and attribution checkouts
  *   are freed by the worktree sweep after its commit preservation proof,
- *   including host temp roots reached through an agent namespace. Independent
+ *   including validated host temp views in Docker. Independent
  *   repositories and unreadable trees stay for a decision: their preservation
  *   and ownership have not been proven. The report names these holds.
  *
  * In the Docker install the Viewer's `/tmp` is the container's own, while the
  * agents run on the host through the nsenter shims and fill the host's. The
- * host's temp roots are read through `/proc/<pid>/root` of an agent process
- * (one carrying the structured-host stamp) running in that mount namespace, and
- * the namespace is re-checked before every removal so a recycled pid can never
+ * host's temp roots are read through `/proc/<pid>/root` in a validated mount
+ * namespace. Stamped agents provide views of the namespaces they use. In the
+ * nsenter install, PID 1 also provides the host view while agents are idle;
+ * when procfs denies access to its root, a borrowed reader runs there with our
+ * restored credentials. It stays alive for the sweep and is released afterward.
+ * The namespace is re-checked before every removal so a recycled pid can never
  * redirect one.
  */
 

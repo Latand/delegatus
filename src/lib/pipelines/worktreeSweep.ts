@@ -104,8 +104,10 @@ import { pipelineLiteralGitEnv } from "./git";
  * the same path here as on the host, the image's own git removes it, and the
  * `/proc` scan sees every host process. A worktree outside `$HOME` is not
  * reachable from the container and is reported `missing`; it is never pruned.
- * Role checkouts under an agent namespace's temp roots are an exception: the
- * same guards and proofs run through that namespace's filesystem view and Git.
+ * Role checkouts under validated host temp views are an exception: the same
+ * guards and proofs run through that namespace's filesystem view and Git.
+ * A stamped agent, PID 1 on an idle nsenter host, or a borrowed reader with
+ * restored credentials supplies the view; the reader is released after the sweep.
  * Their canonical paths are recorded before removal as on a native install.
  */
 
