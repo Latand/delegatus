@@ -6,7 +6,7 @@ import { actingOperation } from "@/lib/deliveryActuation";
 
 import type { DeliveryProgressRecord, DeliveryProgressSink } from "./deliveryProgress";
 import { ACTIVE_DELIVERY_PHASES, type DeliveryWaitReason } from "./deliveryWaitReason";
-import { sendSettlementDeadline } from "./sendSettlement";
+import { settlementDeadlineForRow } from "./sendSettlement";
 
 /**
  * The one writer of an accepted send's progress record before the runtime
@@ -21,7 +21,7 @@ import { sendSettlementDeadline } from "./sendSettlement";
  * behind its conversation's account switch keeps the switch's reason.
  */
 
-export type DeliveryProgressPort = Pick<DeliveryProgressSink, "get" | "note" | "deadline">;
+export type DeliveryProgressPort = Pick<DeliveryProgressSink, "get" | "note" | "deadline"> & Partial<Pick<DeliveryProgressSink, "settle">>;
 
 export interface RecordedWait {
   reason: DeliveryWaitReason;
@@ -67,12 +67,24 @@ export function recordWait(
       nextWakeMs: switching || wait.nextWakeMs === undefined ? ACCOUNT_MIGRATION_PASS_INTERVAL_MS : wait.nextWakeMs,
       ...(wait.attempted ? { attempted: true } : {}),
     });
-    const deadline = sendSettlementDeadline(operationId, { registry });
+    const deadline = settlementDeadlineForRow(registry, { delivery: reservation });
     progress.deadline(operationId, deadline?.deadlineAt ?? null, deadline?.policy ?? null);
     return progress.get(operationId);
   } catch (error) {
     return logged(error);
   }
+}
+
+/** Whether a record is still at the step a writer left it on: no other
+    writer changed its reason, detail, attempt or executor, and it has not
+    ended. A stall mark changes none of these. */
+export function stillAtStep(current: DeliveryProgressRecord | null, written: DeliveryProgressRecord): boolean {
+  return Boolean(current
+    && !current.terminal
+    && current.waitReason === written.waitReason
+    && current.detail === written.detail
+    && current.attempt === written.attempt
+    && current.executorId === written.executorId);
 }
 
 /**

@@ -14,6 +14,7 @@ import { MAX_STRUCTURED_IMAGE_ENCODED_BYTES, RuntimeImageStore, runtimeImageCapa
 import { structuredContentDigest, type StructuredImageRef } from "./structuredContent";
 
 import { sendReceiptFor } from "./sendSettlement";
+import { DeliveryProgressStore } from "./deliveryProgress";
 import { deliverHeldStructuredMessage, enqueueStructuredMessage } from "./structuredMessageDelivery";
 import { recoverDeadStructuredConversation } from "./structuredRecovery";
 
@@ -3955,4 +3956,47 @@ test("a live deputy takes the Viewer's own interruption continuation and nothing
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
   }
+});
+
+test("a dead-host resume that throws leaves the accepted send recorded as awaiting-host with its deadline", async () => {
+  /* docs/design/delivery-progress-and-drain.md, P4: the reservation exists
+     before the resume, so the send is accepted, and its record says what it
+     waits on while the resume runs and after it fails. */
+  const { registry, conversation } = registryWithConversation();
+  const deadSnapshot = snapshot(conversation.id);
+  deadSnapshot.sessions[0] = { ...deadSnapshot.sessions[0]!, host: "dead" };
+  const progress = new DeliveryProgressStore(null);
+  let duringResume: ReturnType<DeliveryProgressStore["get"]> = null;
+  const client = {
+    readSession: sessionReader(async () => deadSnapshot),
+    command: async () => { throw new Error("nothing may be commanded"); },
+  } as unknown as RuntimeHostClient;
+  const result = await enqueueStructuredMessage({
+    path: artifactPath,
+    conversationId: conversation.id,
+    clientMessageId: "resume-throws",
+    text: "keep this through a failed resume",
+    hasImages: false,
+  }, {
+    enabled: () => true,
+    client: () => client,
+    registry: () => registry,
+    progress,
+    recover: async (request) => {
+      duringResume = { ...progress.get(request.operationId!)! };
+      throw new Error("recovery spawn failed");
+    },
+    kick: () => {},
+  } as never);
+
+  /* Read before matching: the matcher writes into what it inspects. */
+  const operationId = (result as { operationId: string }).operationId;
+  expect(typeof operationId).toBe("string");
+  expect(result).toMatchObject({ ok: true, outcome: "held" });
+  expect(duringResume).toMatchObject({ waitReason: "recovering-host", originalKey: "resume-throws", nextWakeAt: null });
+  const record = progress.get(operationId)!;
+  expect(record).toMatchObject({ waitReason: "awaiting-host", originalKey: "resume-throws", kind: "send", terminal: null, deadlinePolicy: "settlement-window" });
+  expect(record.detail).toContain("recovery spawn failed");
+  expect(record.deadlineAt).not.toBeNull();
+  expect(record.nextWakeAt).not.toBeNull();
 });

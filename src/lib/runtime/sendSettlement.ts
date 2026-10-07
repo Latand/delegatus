@@ -713,6 +713,32 @@ export function sendSettlementDue(operationId: string, ports: SendSettlementPort
   return subject !== null && pastSettlementDeadline(registry, file, subject, ports);
 }
 
+/**
+ * The settlement deadline of the row in hand: a reservation, or an owner row
+ * that settles itself. Keyed reads only, so an admission can ask it on every
+ * step without a whole-registry snapshot (#1983).
+ */
+export function settlementDeadlineForRow(
+  registry: AgentRegistry,
+  row: { delivery: HeldDelivery } | { owner: DeliveryOperationOwner },
+  ports: Pick<SendSettlementPorts, "windowMs" | "inTurnCeilingMs"> = {},
+): SettlementDeadline | null {
+  const subject = "owner" in row ? settlementSubject(row.owner, null) : settlementSubject(null, row.delivery);
+  if (!subject?.settleable) return null;
+  const acceptedAt = parseTime(subject.acceptedAt);
+  if (acceptedAt === null) return null;
+  const conversation = registry.conversation(subject.conversationId);
+  const generation = conversation?.generations.at(-1);
+  const entry = conversation && generation
+    ? registry.conversationDeliverySnapshot({ conversationId: conversation.id }).entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })]
+    : undefined;
+  const inTurn = Boolean(entry?.structuredHost?.activeTurnRef);
+  const span = inTurn
+    ? ports.inTurnCeilingMs ?? SEND_SETTLEMENT_IN_TURN_CEILING_MS
+    : ports.windowMs ?? SEND_SETTLEMENT_WINDOW_MS;
+  return { deadlineAt: new Date(acceptedAt + span).toISOString(), policy: inTurn ? "in-turn-ceiling" : "settlement-window" };
+}
+
 /** The settlement deadline of one accepted send, read off its durable record,
     or null for one nothing settles. */
 export function sendSettlementDeadline(operationId: string, ports: SendSettlementPorts = {}): SettlementDeadline | null {

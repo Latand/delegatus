@@ -10,8 +10,8 @@ import {
 import { structuredHostsEnabled } from "./flags";
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { advanceConversationMigration, deliveryFence } from "@/lib/accounts/migration/coordinator";
-import { ACCOUNT_MIGRATION_PASS_INTERVAL_MS, requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
-import { withConversationActuation, type ActuationLease } from "@/lib/deliveryActuation";
+import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
+import { actuationBusy, withConversationActuation, type ActuationLease } from "@/lib/deliveryActuation";
 import { deputyDeliveryRefusal } from "@/lib/orchestrator/deputies";
 import type { HeldDelivery, HeldDeliveryCommand, ViewerConversationId } from "@/lib/accounts/migration/contracts";
 
@@ -35,7 +35,7 @@ import {
 } from "./contracts";
 import { republishStructuredDeliveryHost } from "./structuredDeliveryController";
 import { recoverDeadStructuredConversation, StructuredRecoveryHeldForUpdateError, StructuredResumeUnpublishedError } from "./structuredRecovery";
-import { runtimeImageCapability, runtimeImageRefsForUploads, runtimeImageStore, type RuntimeImageUpload } from "./runtimeImageStore";
+import { runtimeImageCapability, runtimeImageRefsForUploads, runtimeImageStore, type RuntimeImageCapability, type RuntimeImageUpload } from "./runtimeImageStore";
 import { admitRuntimeImagePayload } from "./runtimeImageAdmission";
 import {
   assertStructuredTextEnvelope,
@@ -44,9 +44,9 @@ import {
   type StructuredImageRef,
 } from "./structuredContent";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
-import { ownedDeliveryProgressStore, type DeliveryProgressRecord, type DeliveryProgressSink } from "./deliveryProgress";
+import { ownedDeliveryProgressStore, type DeliveryProgressRecord } from "./deliveryProgress";
 import type { DeliveryWaitReason } from "./deliveryWaitReason";
-import { sendSettlementDeadline } from "./sendSettlement";
+import { recordWait, stillAtStep, type DeliveryProgressPort, type RecordedWait } from "./recordWait";
 import { STRUCTURED_DELIVERY_TIMING } from "./structuredDeliveryQueue";
 import { markStructuredRuntimeSessionRecovered } from "./startupStatus";
 import { isInterruptionObligationId } from "./interruptionObligations";
@@ -129,80 +129,93 @@ export interface StructuredMessageDependencies {
   progress?: DeliveryProgressPort | null;
 }
 
-type DeliveryProgressPort = Pick<DeliveryProgressSink, "get" | "note" | "deadline">;
-
 function progressPort(progress: DeliveryProgressPort | null | undefined): DeliveryProgressPort | null {
   return progress === undefined ? ownedDeliveryProgressStore() : progress;
 }
 
-/** The first progress record of an operation the journal just admitted. One
-    already there was written by the queue, which is further along. */
-function noteAdmitted(
+/**
+ * A step after a command left the process (rule a, step 4): it may race the
+ * delivery queue, which continues the same record once the journal lists the
+ * operation, so it writes only while the record is still the one this request
+ * wrote last.
+ */
+function recordWaitUnlessContinued(
   progress: DeliveryProgressPort | null,
-  admitted: { operationId: string; conversationId: string; kind: string; originalKey: string; admittedAt: string },
-): void {
+  registry: AgentRegistry,
+  reservation: HeldDelivery,
+  written: DeliveryProgressRecord | null,
+  wait: RecordedWait,
+): DeliveryProgressRecord | null {
+  if (!progress || !written) return null;
+  try {
+    if (!stillAtStep(progress.get(reservation.command.operationId), written)) return null;
+  } catch {
+    return null;
+  }
+  return recordWait(progress, registry, reservation, wait);
+}
+
+/** The ending a request decided for its own send, on its record. */
+function settleRecord(progress: DeliveryProgressPort | null, operationId: string, state: "delivered" | "failed" | "uncertain", reason: string | null): void {
   if (!progress) return;
   try {
-    if (progress.get(admitted.operationId)) return;
-    progress.note(admitted.operationId, admitted.conversationId, {
-      waitReason: "queued",
-      kind: admitted.kind,
-      originalKey: admitted.originalKey,
-      admittedAt: admitted.admittedAt,
-      nextWakeMs: STRUCTURED_DELIVERY_TIMING.retryMs,
-    });
+    progress.settle?.(operationId, state, reason);
   } catch (error) {
     console.error("[structured delivery] progress record failed", { error: error instanceof Error ? error.message : String(error) });
   }
-}
-
-/** The switch phase a send held behind its conversation's account switch
-    waits on, in the codes the hold itself writes. */
-function switchWaitReason(registry: AgentRegistry, conversationId: ViewerConversationId): DeliveryWaitReason {
-  const phase = registry.conversation(conversationId)?.migration?.phase;
-  if (phase === "failed-recoverable") return "switch-failed";
-  if (phase === "waiting-turn") return "switch-after-turn";
-  return "switching-accounts";
 }
 
 /**
- * Records what an accepted send waits on while the runtime journal does not
- * hold it yet (incident 2026-10-06): a reservation admitted during a runtime
- * outage or an account switch, or one whose claim was deferred, and every
- * retry of the account-migration drain that delivers it. The record is keyed
- * by the send's original operation, so the queue continues the same record
- * once the journal admits it, and the settlement deadline ends it. Its next
- * wake is the drain's own schedule; a drain that misses it is a lost wake the
- * watchdog replaces.
- *
- * Answers the record as written, or null when nothing was recorded.
+ * Whether a payload can be handed to a host with this image capability
+ * (Note 2). Admission and the account-migration drain both ask it, from the
+ * stored refs, so a rejection admission decided but could not write is
+ * enforced again before the drain's command.
  */
-function noteHeldWait(
-  progress: DeliveryProgressPort | null,
-  registry: AgentRegistry,
-  delivery: HeldDelivery,
-  wait: { reason: DeliveryWaitReason; detail?: string | null; attempted?: boolean },
-): DeliveryProgressRecord | null {
-  if (!progress || !delivery.command.operationId) return null;
-  const operationId = delivery.command.operationId;
-  try {
-    const switching = delivery.state === "held";
-    progress.note(operationId, delivery.runtimeConversationId, {
-      waitReason: switching ? switchWaitReason(registry, delivery.conversationId) : wait.reason,
-      detail: switching ? null : wait.detail ?? null,
-      kind: delivery.command.kind,
-      originalKey: delivery.clientMessageId,
-      admittedAt: delivery.createdAt,
-      nextWakeMs: ACCOUNT_MIGRATION_PASS_INTERVAL_MS,
-      ...(wait.attempted ? { attempted: true } : {}),
-    });
-    const deadline = sendSettlementDeadline(operationId, { registry });
-    progress.deadline(operationId, deadline?.deadlineAt ?? null, deadline?.policy ?? null);
-    return progress.get(operationId);
-  } catch (error) {
-    console.error("[structured delivery] progress record failed", { error: error instanceof Error ? error.message : String(error) });
-    return null;
+export function payloadRefusal(
+  capability: RuntimeImageCapability,
+  engine: "claude" | "codex" | "copilot",
+  refs: readonly StructuredImageRef[],
+  wantsImages = refs.length > 0,
+): { error: string; status: number } | null {
+  if (!wantsImages) return null;
+  if (!capability.supported && engine !== "codex") {
+    return { error: capability.reason ?? "structured image delivery is unavailable", status: 409 };
   }
+  const encodedBytes = refs.reduce((total, ref) => total + 4 * Math.ceil(ref.bytes / 3), 0);
+  if (encodedBytes > capability.maxEncodedBytesPerRequest) {
+    return { error: "runtime image request encoding is too large", status: 413 };
+  }
+  return null;
+}
+
+/**
+ * Ends a reservation the request itself decided cannot be delivered: a resume
+ * that cannot publish, a payload the recovered host cannot take. The write
+ * waits for the lock off the loop (rule c). Refused, nothing was written and
+ * the send stays accepted: the request answers it held, its record names the
+ * ending still owed, and the drain reaches the same ending (Note 2).
+ */
+async function endReservationForRequest(
+  registry: AgentRegistry,
+  progress: DeliveryProgressPort | null,
+  reservation: HeldDelivery,
+  failure: string,
+  refusedReason: DeliveryWaitReason = "awaiting-host",
+): Promise<{ ended: true; error: string } | { ended: false }> {
+  const operationId = reservation.command.operationId;
+  const ended = await registry.deliveryWrite({ label: "delivery.terminalize", operationId },
+    () => registry.terminalizeHeldDelivery(reservation.id, failure));
+  if (!ended.acquired) {
+    recordWait(progress, registry, reservation, { reason: refusedReason, detail: `its ending could not be written yet (${failure})` });
+    return { ended: false };
+  }
+  const error = ended.value.error ?? failure;
+  settleRecord(progress, operationId, "failed", error);
+  return { ended: true, error };
+}
+
+function acceptedHeld(operationId: string, target: string | null = null, spawned = false): StructuredMessageResult {
+  return { ok: true, structured: true, target, outcome: "held", operationId, ...(spawned ? { spawned: true } : {}) };
 }
 
 /** The reservation behind one accepted operation, read by its key. */
@@ -263,7 +276,14 @@ export interface HeldForRetry {
   waitReason?: DeliveryWaitReason;
 }
 
-export type HeldStructuredMessageOutcome = "delivered" | "failed" | "delivery-uncertain" | "held" | HeldForRetry | null;
+/** A payload the host the drain reached cannot take (Note 2): never
+    dispatched, so it ends `failed` with the cause and may be sent again. */
+export interface HeldRejection {
+  outcome: "rejected";
+  cause: string;
+}
+
+export type HeldStructuredMessageOutcome = "delivered" | "failed" | "delivery-uncertain" | "held" | HeldForRetry | HeldRejection | null;
 
 function heldForRetry(cause: string, waitReason: DeliveryWaitReason = "awaiting-host"): HeldForRetry {
   return { outcome: "held", cause, waitReason };
@@ -575,7 +595,12 @@ async function holdDuringRuntimeSynchronization(
     const generation = conversation.generations.at(-1);
     const activeAccountId = registry.engineRouting(conversation.engine).activeAccountId;
     if (activeAccountId && generation?.accountId && generation.accountId !== activeAccountId) {
-      conversation = registry.requestConversationMigrationToActiveAccount(conversation.id, { launchId: request.launchId });
+      /* Off the loop; refused before anything is reserved (rule c). */
+      const reseatFor = conversation.id;
+      const reseat = await registry.deliveryWrite({ label: "migration.reseat-request" },
+        () => registry.requestConversationMigrationToActiveAccount(reseatFor, { launchId: request.launchId }));
+      if (!reseat.acquired) return refusedBeforeReservation(deliveryFailure(new Error(REGISTRY_WRITER_BUSY)));
+      conversation = reseat.value;
     }
     /* The write lock is waited for off the event loop and kept for the write;
        one another writer keeps past its deadline reserves nothing. */
@@ -630,7 +655,7 @@ async function holdDuringRuntimeSynchronization(
         status: 409,
       };
     }
-    noteHeldWait(wait.progress, registry, reservation, wait);
+    recordWait(wait.progress, registry, reservation, wait);
     requestTick();
     return {
       ok: true,
@@ -833,17 +858,18 @@ async function recoverReclaimedMessage(
   } catch (error) {
     const failure = `${deliverabilityFailureMessage({ condition: "reclaimed" })}: ${error instanceof Error ? error.message : String(error)}`;
     if (error instanceof StructuredResumeUnpublishedError) {
-      const settled = registry.terminalizeHeldDelivery(reservation.id, failure);
+      const settled = await endReservationForRequest(registry, progress, reservation, failure);
+      if (!settled.ended) return acceptedHeld(admitted.operationId);
       return {
         ok: false,
         structured: true,
         outcome: "failed",
-        error: settled.error ?? failure,
+        error: settled.error,
         status: 503,
         operationId: admitted.operationId,
       };
     }
-    noteHeldWait(progress, registry, reservation, {
+    recordWait(progress, registry, reservation, {
       reason: "awaiting-host",
       detail: `starting a host failed: ${error instanceof Error ? error.message : String(error)}`,
     });
@@ -858,12 +884,13 @@ async function recoverReclaimedMessage(
   }
   if (!recovered) {
     const failure = deliverabilityFailureMessage({ condition: "reclaimed" });
-    const settled = registry.terminalizeHeldDelivery(reservation.id, failure);
+    const settled = await endReservationForRequest(registry, progress, reservation, failure);
+    if (!settled.ended) return acceptedHeld(admitted.operationId);
     return {
       ok: false,
       structured: true,
       outcome: "failed",
-      error: settled.error ?? failure,
+      error: settled.error,
       status: 503,
       operationId: admitted.operationId,
     };
@@ -902,17 +929,30 @@ function heldDrainProgress(
       catch { delivery = null; }
     }
     if (!delivery) return;
-    written = noteHeldWait(progress, registry, delivery, { reason, detail, attempted: !attempted });
+    written = recordWait(progress, registry, delivery, { reason, detail, attempted: !attempted });
     attempted = true;
   };
   return {
     wait,
+    /** A reconcile whose runtime read failed: the queue cannot list the
+        journal either, so the reconcile, acting on this operation, says so. */
+    unreadable(cause: string) {
+      if (!progress || !request.reconcileUncertain) return;
+      let reservation: HeldDelivery | null = null;
+      try { reservation = reservationFor(registry, operationId); }
+      catch { reservation = null; }
+      if (reservation) recordWait(progress, registry, reservation, { reason: "evidence-unreadable", detail: `the runtime journal could not be read: ${cause}` });
+    },
+    /** The payload was refused before any command. */
+    rejected(cause: string) {
+      settleRecord(progress, operationId, "failed", cause);
+    },
     /** The journal admitted the attempt: the record says so unless the queue,
         further along, already wrote it. */
     admitted() {
       if (!progress || !written) return;
       try {
-        if (progress.get(operationId) !== written) return;
+        if (!stillAtStep(progress.get(operationId), written)) return;
         progress.note(operationId, written.conversationId, {
           waitReason: "queued",
           nextWakeMs: STRUCTURED_DELIVERY_TIMING.retryMs,
@@ -932,7 +972,10 @@ export async function deliverHeldStructuredMessage(
   const registry = (dependencies.registry ?? agentRegistry)();
   const progress = heldDrainProgress(progressPort(dependencies.progress), registry, request);
   const outcome = await deliverHeldAttempt(request, dependencies, registry, progress);
-  if (typeof outcome === "object" && outcome) progress.wait(outcome.waitReason ?? "awaiting-host", outcome.cause);
+  if (typeof outcome === "object" && outcome) {
+    if (outcome.outcome === "rejected") progress.rejected(outcome.cause);
+    else progress.wait(outcome.waitReason ?? "awaiting-host", outcome.cause);
+  }
   return outcome;
 }
 
@@ -944,6 +987,7 @@ async function deliverHeldAttempt(
 ): Promise<HeldStructuredMessageOutcome> {
   const client = (dependencies.client ?? runtimeHostClient)();
   if (!client) {
+    progress.unreadable("runtime host client is unavailable");
     return heldOutcomeDuringRuntimeSynchronization(request, registry, "runtime host client is unavailable");
   }
   let session: RuntimeSession | null;
@@ -951,6 +995,7 @@ async function deliverHeldAttempt(
     session = await readRuntimeSession(client, { conversationId: request.conversationId ?? undefined, artifactPath: request.path || undefined });
   } catch (error) {
     console.error("[structured delivery] runtime session read failed", error);
+    progress.unreadable(error instanceof Error ? error.message : String(error));
     return heldOutcomeDuringRuntimeSynchronization(request, registry, error instanceof Error ? error.message : String(error));
   }
   recordStructuredRuntimeRecovery(session, dependencies.startupRecovered ?? markStructuredRuntimeSessionRecovered);
@@ -1015,7 +1060,10 @@ async function deliverHeldAttempt(
     const refs = request.imageRefs ?? [];
     const imageCapability = session.capabilities.imageInput
       ?? runtimeImageCapability(session.sessionKey.engine, false);
-    if (refs.length > 0 && !imageCapability.supported && session.sessionKey.engine !== "codex") return "failed";
+    /* The same predicate admission asks (Note 2): a rejection admission
+       decided and could not write is reached again here, before any command. */
+    const refusal = payloadRefusal(imageCapability, session.sessionKey.engine, refs);
+    if (refusal) return { outcome: "rejected", cause: refusal.error };
     const content = structuredContent(request.text, refs);
     const command = request.command ?? {
       operationId: request.deliveryId,
@@ -1198,7 +1246,12 @@ export async function enqueueStructuredMessage(
      recovery. An accepted migration fence assigns this send to the successor. */
   if (activeAccountId && generation?.accountId && generation.accountId !== activeAccountId) {
     try {
-      conversation = registry.requestConversationMigrationToActiveAccount(conversation.id, { launchId: request.launchId });
+      /* Off the loop; refused before anything is reserved (rule c). */
+      const reseatFor = conversation.id;
+      const reseat = await registry.deliveryWrite({ label: "migration.reseat-request" },
+        () => registry.requestConversationMigrationToActiveAccount(reseatFor, { launchId: request.launchId }));
+      if (!reseat.acquired) return refusedBeforeReservation(deliveryFailure(new Error(REGISTRY_WRITER_BUSY)));
+      conversation = reseat.value;
     } catch (error) {
       return deliveryFailure(error);
     }
@@ -1377,6 +1430,12 @@ export async function enqueueStructuredMessage(
     if (recoveryReservation.state === "delivery-uncertain") {
       return uncertainReservationFailure(recoveryReservation);
     }
+    /* Accepted from here: its record says the host is being resumed for it. */
+    recordWait(progress, registry, recoveryReservation, {
+      reason: "recovering-host",
+      detail: "the conversation's host is being resumed",
+      nextWakeMs: null,
+    });
   }
   let recoveredHost = false;
   /* Ownership recovery comes BEFORE capability evaluation: a dead projection
@@ -1396,17 +1455,23 @@ export async function enqueueStructuredMessage(
     } catch (error) {
       const failure = `${deliverabilityFailureMessage({ condition: "reclaimed" })}: ${error instanceof Error ? error.message : "structured host recovery failed"}`;
       if (recoveryReservation && error instanceof StructuredResumeUnpublishedError) {
-        const settled = registry.terminalizeHeldDelivery(recoveryReservation.id, failure);
+        const settled = await endReservationForRequest(registry, progress, recoveryReservation, failure);
+        if (!settled.ended) return acceptedHeld(recoveryReservation.command.operationId);
         return {
           ok: false,
           structured: true,
           outcome: "failed",
-          error: settled.error ?? failure,
+          error: settled.error,
           status: 503,
           operationId: recoveryReservation.command.operationId,
         };
       }
       if (!recoveryReservation) return ownershipUnavailable("reclaimed");
+      /* Accepted, and its resume failed: the drain retries it. */
+      recordWait(progress, registry, recoveryReservation, {
+        reason: "awaiting-host",
+        detail: `starting a host failed: ${error instanceof Error ? error.message : String(error)}`,
+      });
       requestDeliveryDrain(dependencies.kick ?? kickStructuredDeliveryQueue);
       return {
         ok: true,
@@ -1420,13 +1485,14 @@ export async function enqueueStructuredMessage(
       /* Past the reservation: a recovery ran, so this is no pre-admission refusal. */
       const failure = deliverabilityFailureMessage({ condition: "reclaimed" });
       const settled = recoveryReservation
-        ? registry.terminalizeHeldDelivery(recoveryReservation.id, failure)
+        ? await endReservationForRequest(registry, progress, recoveryReservation, failure)
         : null;
+      if (recoveryReservation && settled && !settled.ended) return acceptedHeld(recoveryReservation.command.operationId);
       return {
         ok: false,
         structured: true,
         outcome: "failed",
-        error: settled?.error ?? failure,
+        error: settled?.ended ? settled.error : failure,
         status: 503,
         ...(recoveryReservation ? { operationId: recoveryReservation.command.operationId } : {}),
       };
@@ -1453,20 +1519,18 @@ export async function enqueueStructuredMessage(
      before recovery now, so leaving it held would park an impossible message
      in the queue forever. Terminalizing it names the real reason on the
      operator's bubble and releases the key. */
-  const refuseReservedPayload = (error: string, status: number): StructuredMessageResult => {
+  /* An ending the lock refused leaves the send accepted and answered held;
+     the drain asks the same predicate before its command (Note 2). */
+  const refuseReservedPayload = async (error: string, status: number): Promise<StructuredMessageResult> => {
     if (recoveryReservation) {
-      registry.terminalizeHeldDelivery(recoveryReservation.id, error);
+      const settled = await endReservationForRequest(registry, progress, recoveryReservation, error, "checking");
+      if (!settled.ended) return acceptedHeld(recoveryReservation.command.operationId, null, recoveredHost);
       return { ok: false, structured: true, outcome: "failed", error, status, operationId: recoveryReservation.command.operationId };
     }
     return { ok: false, structured: true, outcome: "failed", error, status };
   };
-  if (wantsImages && !imageCapability.supported && activeSession.sessionKey.engine !== "codex") {
-    return refuseReservedPayload(imageCapability.reason ?? "structured image delivery is unavailable", 409);
-  }
-  const encodedImageBytes = rawImages.reduce((total, image) => total + Buffer.byteLength(image.base64), 0);
-  if (encodedImageBytes > imageCapability.maxEncodedBytesPerRequest) {
-    return refuseReservedPayload("runtime image request encoding is too large", 413);
-  }
+  const payloadRefused = payloadRefusal(imageCapability, activeSession.sessionKey.engine, refs, wantsImages);
+  if (payloadRefused) return refuseReservedPayload(payloadRefused.error, payloadRefused.status);
   let commandResult: RuntimeOperationResult | null = null;
   /* The operation a claimed reservation was accepted under. The claim leaves
      the reservation `delivery-uncertain`, so from here a throw is an accepted
@@ -1480,14 +1544,30 @@ export async function enqueueStructuredMessage(
     let reservation = await admitDurably();
     let claimedReservationId: string | null = null;
     if (reservation.state === "delivery-uncertain") {
-      reservation = registry.retryUncertainDelivery(reservation.id);
+      /* The same-key resend re-arms its reservation (P16), off the loop; one
+         the lock refused stays uncertain and answers so. */
+      const uncertain = reservation;
+      const rearmed = await registry.deliveryWrite({ label: "delivery.rearm", operationId: uncertain.command.operationId },
+        () => registry.retryUncertainDelivery(uncertain.id));
+      if (!rearmed.acquired) return uncertainReservationFailure(uncertain);
+      reservation = rearmed.value;
     }
     if (reservation.state === "held") {
       /* The switch landed between the check above and the reservation. The
          reservation exists but nothing has been handed to any engine, so
          releasing it leaves the thread untouched (#1560). */
       if (request.kind === "inject") {
-        registry.terminalizeHeldDelivery(reservation.id, "injected context cannot be held across an account switch");
+        const injected = reservation;
+        const released = await registry.deliveryWrite({ label: "delivery.terminalize", operationId: injected.command.operationId },
+          () => registry.terminalizeHeldDelivery(injected.id, "injected context cannot be held across an account switch"));
+        /* Refused for the lock: it stays held, and the switch's commit fails a
+           held injection with its own reason, or a rollback returns it to
+           this thread. Never replayed into the successor's. */
+        if (!released.acquired) {
+          recordWait(progress, registry, injected, { reason: "switching-accounts" });
+          return acceptedHeld(injected.command.operationId, recoveredHost ? null : conversation.id, recoveredHost);
+        }
+        settleRecord(progress, injected.command.operationId, "failed", "injected context cannot be held across an account switch");
         return {
           ok: false,
           structured: true,
@@ -1497,16 +1577,9 @@ export async function enqueueStructuredMessage(
           operationId: reservation.command.operationId,
         };
       }
-      noteHeldWait(progress, registry, reservation, { reason: "switching-accounts" });
+      recordWait(progress, registry, reservation, { reason: "switching-accounts" });
       (dependencies.requestMigrationTick ?? requestAccountMigrationTick)();
-      return {
-        ok: true,
-        structured: true,
-        target: recoveredHost ? null : conversation.id,
-        outcome: "held",
-        operationId: reservation.command.operationId,
-        ...(recoveredHost ? { spawned: true } : {}),
-      };
+      return acceptedHeld(reservation.command.operationId, recoveredHost ? null : conversation.id, recoveredHost);
     }
     if (reservation.state === "delivered") {
       return deliveredReservationReplay(
@@ -1517,18 +1590,12 @@ export async function enqueueStructuredMessage(
       );
     }
     if (reservation.state === "assigned" && successorAwaitsItsHost) {
-      noteHeldWait(progress, registry, reservation, {
+      recordWait(progress, registry, reservation, {
         reason: "awaiting-host",
         detail: "the account switch's successor has not published its host yet",
       });
       (dependencies.requestMigrationTick ?? requestAccountMigrationTick)();
-      return {
-        ok: true,
-        structured: true,
-        target: conversation.id,
-        outcome: "held",
-        operationId: reservation.command.operationId,
-      };
+      return acceptedHeld(reservation.command.operationId, conversation.id);
     }
     if (reservation.state !== "assigned" || !reservation.generationId) {
       return {
@@ -1540,18 +1607,41 @@ export async function enqueueStructuredMessage(
       };
     }
     const assigned = { id: reservation.id, generationId: reservation.generationId, command: reservation.command, runtimeConversationId: reservation.runtimeConversationId };
+    const accepted = reservation;
+    /* Rule (a): the record exists from the reservation on, and each step of
+       this request writes its wait on it. None of these waits has a next
+       wake: the request itself is in them, and every one is bounded (the
+       lock 5 s, the socket call 3 s, the section by its holder's bounds). */
+    let written = recordWait(progress, registry, accepted, {
+      reason: "checking",
+      detail: "claiming the delivery record",
+      nextWakeMs: null,
+    });
+    if (!dependencies.actuationLease && actuationBusy(conversation.id)) {
+      written = recordWait(progress, registry, accepted, {
+        reason: "conversation-busy",
+        detail: "an earlier send on this conversation is being admitted",
+        nextWakeMs: null,
+      }) ?? written;
+    }
     /* #1709: the claim and the command's admission to the journal run in the conversation's actuation section,
        so a send claimed after another reaches the journal after it. */
     /* A claim whose write lock another writer kept past its deadline changed
        nothing: the reservation stays assigned for the drain. */
     let claimDeferred = false;
-    const admitted = await withConversationActuation(conversation.id, async () => {
+    const admitted = await withConversationActuation(conversation.id, async (lease) => {
+      lease.act(assigned.command.operationId);
       const claim = await registry.beginDeliveryAttemptOffLoop(assigned.command.operationId, assigned.id, assigned.generationId);
       if (!claim.acquired) claimDeferred = true;
       const claimed = claim.acquired ? claim.value : null;
       if (!claimed) return null;
       claimedReservationId = claimed.id;
       claimedOperationId = claimed.command.operationId;
+      written = recordWait(progress, registry, claimed, {
+        reason: "checking",
+        detail: "admitting to the runtime journal",
+        nextWakeMs: null,
+      }) ?? written;
       commandResult = await client.command({
         kind: assigned.command.kind,
         operationId: assigned.command.operationId,
@@ -1574,28 +1664,36 @@ export async function enqueueStructuredMessage(
       return commandResult;
     }, dependencies.actuationLease ?? null);
     if (!admitted) {
-      /* A migration took the conversation, or an earlier admission still waits: the drain delivers this one in order. */
-      const requeued = claimDeferred ? reservation : registry.requeueHeldDelivery(reservation.id);
-      noteHeldWait(progress, registry, requeued, claimDeferred
+      /* A migration took the conversation, or an earlier admission still waits: the drain delivers this one in order.
+         The requeue waits for the lock off the loop; refused, the reservation stays assigned and unclaimed. */
+      let requeueRefused = false;
+      let requeued = accepted;
+      if (!claimDeferred) {
+        const requeue = await registry.deliveryWrite({ label: "delivery.requeue", operationId: accepted.command.operationId },
+          () => registry.requeueHeldDelivery(accepted.id));
+        if (requeue.acquired) requeued = requeue.value;
+        else requeueRefused = true;
+      }
+      recordWait(progress, registry, requeued, claimDeferred
         ? { reason: "checking", detail: "the writer claim waited past its lock deadline" }
-        : { reason: "conversation-busy", detail: "an earlier delivery on this conversation is still being claimed" });
+        : requeueRefused
+          ? { reason: "checking", detail: "the requeue waited past its lock deadline" }
+          : { reason: "conversation-busy", detail: "an earlier delivery on this conversation is still being claimed" });
       (dependencies.requestMigrationTick ?? requestAccountMigrationTick)();
-      return {
-        ok: true,
-        structured: true,
-        target: recoveredHost ? null : conversation.id,
-        outcome: "held",
-        operationId: reservation.command.operationId,
-        ...(recoveredHost ? { spawned: true } : {}),
-      };
+      return acceptedHeld(reservation.command.operationId, recoveredHost ? null : conversation.id, recoveredHost);
     }
     const result = admitted;
     const receipt = result.receipt;
     if (receipt.status === "rejected" || receipt.status === "failed" || receipt.status === "uncertain") {
       if (claimedReservationId && receipt.status !== "uncertain") {
-        registry.recordDeliveryOutcome(claimedReservationId, "failed", receipt.reason || "structured host delivery failed");
+        /* Off the loop; refused, the reservation stays `delivery-uncertain`
+           and the drain or the sweep projects the journal's receipt. */
+        const settledId = claimedReservationId;
+        await registry.deliveryWrite({ label: "delivery.settle", operationId: result.operationId },
+          () => registry.recordDeliveryOutcome(settledId, "failed", receipt.reason || "structured host delivery failed"));
         requestMigrationProgress(registry, conversation.id, dependencies.requestMigrationTick ?? requestAccountMigrationTick);
       }
+      settleRecord(progress, result.operationId, receipt.status === "uncertain" ? "uncertain" : "failed", receipt.reason || "structured host delivery failed");
       return {
         ok: false,
         structured: true,
@@ -1607,19 +1705,18 @@ export async function enqueueStructuredMessage(
       };
     }
     if (claimedReservationId && ["delivered", "turn-started", "steered"].includes(receipt.status)) {
-      registry.recordDeliveryOutcome(claimedReservationId, "delivered");
+      const settledId = claimedReservationId;
+      await registry.deliveryWrite({ label: "delivery.settle", operationId: result.operationId },
+        () => registry.recordDeliveryOutcome(settledId, "delivered"));
       requestMigrationProgress(registry, conversation.id, dependencies.requestMigrationTick ?? requestAccountMigrationTick);
+      settleRecord(progress, result.operationId, "delivered", null);
     }
-    /* The journal holds it now: its record exists from this moment, so a
-       queue that never reaches it still leaves a reason and a wake that the
-       watchdog finds overdue (incident 2026-10-06). */
+    /* The journal holds it now. The queue may already continue the record,
+       so this answer is written only over the record this request wrote. */
     if (receipt.status === "queued" || receipt.status === "pending") {
-      noteAdmitted(progress, {
-        operationId: result.operationId,
-        conversationId: assigned.runtimeConversationId,
-        kind: assigned.command.kind,
-        originalKey: idempotencyKey,
-        admittedAt: reservation.createdAt,
+      recordWaitUnlessContinued(progress, registry, accepted, written, {
+        reason: "queued",
+        nextWakeMs: STRUCTURED_DELIVERY_TIMING.retryMs,
       });
     }
     (dependencies.kick ?? kickStructuredDeliveryQueue)();
@@ -1641,7 +1738,22 @@ export async function enqueueStructuredMessage(
     if (!handedOver) {
       /* Thrown before the runtime answered, after the claim: the command may
          have reached the journal, so the send stays uncertain and keeps the
-         operation it was accepted with. */
+         operation it was accepted with (P7). Its record says so, counts the
+         attempt, and the queue is woken: nobody else would before its safety
+         pass, and if the journal did admit it the queue continues the same
+         record within one pass. */
+      if (claimedOperation) {
+        const claimedReservation = reservationFor(registry, claimedOperation);
+        if (claimedReservation) {
+          recordWait(progress, registry, claimedReservation, {
+            reason: "evidence-unreadable",
+            detail: `the runtime journal did not acknowledge the admission: ${failure.error}`,
+            attempted: true,
+            nextWakeMs: STRUCTURED_DELIVERY_TIMING.retryMs,
+          });
+        }
+        requestDeliveryDrain(dependencies.kick ?? kickStructuredDeliveryQueue);
+      }
       return claimedOperation
         ? { ...failure, operationId: claimedOperation, transportUncertain: true }
         : failure;

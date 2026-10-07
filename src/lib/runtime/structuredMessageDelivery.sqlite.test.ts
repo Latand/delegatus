@@ -8,7 +8,11 @@ import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { blockingWaitDiagnostics, resetBlockingWaitsForTests } from "@/lib/blockingWaits";
 import type { RuntimeHostClient } from "./client";
-import { enqueueStructuredMessage } from "./structuredMessageDelivery";
+import { drainHeldDeliveries } from "@/lib/accounts/migration/coordinator";
+import { longestLoopGap, registryLockHolder, sqliteRegistryFixture } from "@/lib/agent/registryLockHolderFixture";
+import { DeliveryProgressStore } from "./deliveryProgress";
+import { runtimeImageCapability } from "./runtimeImageStore";
+import { deliverHeldStructuredMessage, enqueueStructuredMessage } from "./structuredMessageDelivery";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-message-sqlite-"));
 
@@ -192,5 +196,131 @@ test("a send admitted while another process holds the registry write lock waits 
   } finally {
     await child.exited;
     registry.close();
+  }
+});
+
+function hostedSession(conversationId: string, artifactPath: string, sessionId: string, engine: "claude" | "codex", host: "hosted" | "dead", imageInput?: ReturnType<typeof runtimeImageCapability>) {
+  return {
+    conversationId, artifactPath,
+    sessionKey: { engine, sessionId },
+    hostKind: engine === "codex" ? "codex-app-server" : "claude-broker", host, turn: "idle",
+    capabilities: { steer: engine === "codex", structuredAttention: true, ...(imageInput ? { imageInput } : {}) },
+  };
+}
+
+test("an image reserved before a dead host recovers, whose rejection the lock refused, ends with the payload's rejection and reaches no host", async () => {
+  /* docs/design/delivery-progress-and-drain.md, Note 2: a refused ending of a
+     payload the recovered host cannot take answers held, and the drain
+     enforces the same rejection before any command. */
+  const made = sqliteRegistryFixture("llv-payload-refusal", { sqliteWriterDeadlineMs: 150 });
+  const holder = registryLockHolder(made.sqliteFilename);
+  const registry = made.registry;
+  try {
+    const artifactPath = "/sessions/payload-refusal.jsonl";
+    const conversation = registry.ensureConversation("claude", artifactPath, "default");
+    const generation = conversation.generations.at(-1)!;
+    const imageRef = { sha256: "d".repeat(64), mime: "image/png" as const, bytes: 67 };
+    const tooSmall = { ...runtimeImageCapability("claude", true), maxEncodedBytesPerRequest: 1 };
+    let recovered = false;
+    let commands = 0;
+    const client = {
+      readSession: async () => hostedSession(conversation.id, artifactPath, generation.id, "claude", recovered ? "hosted" : "dead", recovered ? tooSmall : undefined),
+      command: async () => { commands += 1; throw new Error("a rejected payload reached the host"); },
+      operationStatus: async () => null,
+    } as unknown as RuntimeHostClient;
+    const result = await enqueueStructuredMessage({
+      path: artifactPath,
+      conversationId: conversation.id,
+      clientMessageId: "payload-refused",
+      text: "",
+      images: [{ base64: Buffer.from("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489", "hex").toString("base64"), mime: "image/png" }],
+    }, {
+      enabled: () => true,
+      client: () => client,
+      registry: () => registry,
+      kick: () => {},
+      recover: async () => {
+        recovered = true;
+        await holder.hold(500);
+        return { target: null, path: artifactPath, conversationId: conversation.id as never, spawned: true };
+      },
+      storeImages: () => [imageRef],
+      previewImageRefs: () => [imageRef],
+    });
+    expect(result).toMatchObject({ ok: true, outcome: "held" });
+    const operationId = (result as { operationId: string }).operationId;
+    expect(registry.pendingDeliveries(conversation.id)).toMatchObject([{ state: "assigned", command: { operationId } }]);
+
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    await drainHeldDeliveries(conversation.id, {
+      async deliver({ delivery, path: deliveryPath, clientMessageId }) {
+        return await deliverHeldStructuredMessage({
+          conversationId: conversation.id, path: deliveryPath, deliveryId: delivery.id, clientMessageId,
+          text: delivery.text, command: delivery.command, imageRefs: delivery.runtimeImages,
+        }, { enabled: () => true, client: () => client, registry: () => registry, kick: () => {} }) ?? "delivery-uncertain";
+      },
+    }, registry);
+    expect(commands).toBe(0);
+    const owner = registry.snapshot().deliveryOperationOwners[operationId]!;
+    expect(owner).toMatchObject({ terminalState: "failed", terminalDisposition: "lost", terminalReason: "runtime image request encoding is too large" });
+  } finally {
+    await holder.close();
+    registry.close();
+    made.cleanup();
+  }
+});
+
+test("a rejected admission's settle and a refused requeue wait off the loop and leave the reservation for a later pass", async () => {
+  const made = sqliteRegistryFixture("llv-admission-writes", { sqliteWriterDeadlineMs: 150 });
+  const holder = registryLockHolder(made.sqliteFilename);
+  const registry = made.registry;
+  try {
+    const artifactPath = "/sessions/admission-writes.jsonl";
+    const conversation = registry.ensureConversation("codex", artifactPath, "default");
+    const generation = conversation.generations.at(-1)!;
+    let answer: "rejected" | "queued" = "rejected";
+    const client = {
+      readSession: async () => hostedSession(conversation.id, artifactPath, generation.id, "codex", "hosted"),
+      command: async (command: { operationId: string; idempotencyKey: string }) => {
+        if (answer === "rejected") await holder.hold(300);
+        return { operationId: command.operationId, replayed: false,
+          receipt: { operationId: command.operationId, idempotencyKey: command.idempotencyKey, status: answer, reason: answer === "rejected" ? "no-claim" : null } };
+      },
+    } as unknown as RuntimeHostClient;
+    resetBlockingWaitsForTests(() => {});
+    const { value: rejected, gapMs } = await longestLoopGap(() => enqueueStructuredMessage({
+      path: artifactPath, conversationId: conversation.id, clientMessageId: "rejected-settle", text: "rejected", policy: "queue",
+    }, { enabled: () => true, client: () => client, registry: () => registry, kick: () => {}, requestMigrationTick: () => {} }));
+    expect(rejected).toMatchObject({ ok: false, status: 409 });
+    expect(gapMs).toBeLessThan(50);
+    const rejectedOperation = (rejected as { operationId: string }).operationId;
+    expect(blockingWaitDiagnostics().longest.find((sample) => sample.label === "delivery.settle")).toMatchObject({ synchronous: false, operationId: rejectedOperation });
+    expect(blockingWaitDiagnostics().sites["registry-lock"]?.synchronousCount ?? 0).toBe(0);
+
+    /* A claim that came back empty is requeued; the lock refuses the requeue,
+       and the reservation stays assigned for the drain. */
+    answer = "queued";
+    const progress = new DeliveryProgressStore(null);
+    const emptyClaim = new Proxy(registry, {
+      get(target, property) {
+        if (property === "beginDeliveryAttemptOffLoop") {
+          return async () => { await holder.hold(500); return { acquired: true as const, value: null }; };
+        }
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const held = await enqueueStructuredMessage({
+      path: artifactPath, conversationId: conversation.id, clientMessageId: "requeue-refused", text: "requeue", policy: "queue",
+    }, { enabled: () => true, client: () => client, registry: () => emptyClaim, kick: () => {}, requestMigrationTick: () => {}, progress });
+    expect(held).toMatchObject({ ok: true, outcome: "held" });
+    const heldOperation = (held as { operationId: string }).operationId;
+    expect(registry.pendingDeliveries(conversation.id).find((item) => item.command.operationId === heldOperation)).toMatchObject({ state: "assigned", attempts: 0 });
+    expect(progress.get(heldOperation)).toMatchObject({ waitReason: "checking", originalKey: "requeue-refused" });
+    expect(progress.get(heldOperation)!.detail).toContain("requeue");
+  } finally {
+    await holder.close();
+    registry.close();
+    made.cleanup();
   }
 });

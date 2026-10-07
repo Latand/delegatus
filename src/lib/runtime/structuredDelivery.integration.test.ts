@@ -5103,3 +5103,139 @@ for (const projection of ["dead", "hosted"] as const) {
     });
   }
 }
+
+test("a lost admission acknowledgement keeps the original-key record from the reservation: its wait at once, its stall within ten seconds with the journal unavailable, its ending from the sweep, its correction from a late acknowledgement, one input", async () => {
+  /* Round 6 of the review (docs/design/delivery-progress-and-drain.md, P7):
+     the journal admits the command and the reply never comes back. The send
+     is accepted, and until now nothing recorded it. */
+  const fixture = idleHostedConversation("progress-lost-ack", "5eed0005-5555-\x34555-8555-555555555555");
+  const { registry, conversation, key } = fixture;
+  const journal = fixture.openJournal();
+  let clock = Date.now();
+  const progress = new DeliveryProgressStore(null, () => clock);
+  let unavailable = false;
+  const refuse = () => { throw new RuntimeHostUnavailableError("runtime host is unavailable"); };
+  const client = {
+    ...runtimeJournalClient(journal),
+    command: async (command: Parameters<RuntimeJournal["executeOperation"]>[0]) => {
+      journal.executeOperation(command);
+      unavailable = true;
+      return refuse();
+    },
+    operationStatus: async (operationId: string) => unavailable ? refuse() : journal.operationResult(operationId),
+    effectBatch: async (kinds: Parameters<RuntimeJournal["effectBatch"]>[1], afterEventSeq?: number) =>
+      unavailable ? refuse() : journal.effectBatch(100, kinds, afterEventSeq),
+  } as unknown as RuntimeHostClient;
+  let kicks = 0;
+  try {
+    const admitted = await enqueueStructuredMessage({
+      path: fixture.artifactPath,
+      conversationId: conversation.id,
+      clientMessageId: "lost-ack-key",
+      text: "the reply to this admission is lost",
+      policy: "queue",
+    }, { enabled: () => true, client: () => client, registry: () => registry, requestMigrationTick: () => {}, kick: () => { kicks += 1; }, progress });
+    expect(admitted).toMatchObject({ ok: false, transportUncertain: true });
+    const operationId = (admitted as { operationId: string }).operationId;
+    expect(journal.operationResult(operationId)?.receipt.status).toBe("queued");
+
+    /* Its wait, at once, under the original key, and the queue was woken. */
+    const record = progress.get(operationId)!;
+    expect(record).toMatchObject({
+      originalKey: "lost-ack-key",
+      kind: "send",
+      waitReason: "evidence-unreadable",
+      attempt: 1,
+      deadlinePolicy: "settlement-window",
+      terminal: null,
+    });
+    expect(record.detail).toContain("did not acknowledge the admission");
+    expect(record.deadlineAt).not.toBeNull();
+    expect(kicks).toBe(1);
+
+    /* Its stall, within ten seconds, with the journal unlistable. */
+    const watchdog = new StructuredDeliveryQueue({
+      effects: async () => refuse(),
+      transition: async () => {},
+      progress,
+    }, () => null, undefined, undefined, undefined, undefined, undefined, undefined, { stallMs: 4_000, now: () => clock });
+    clock += 4_000;
+    await watchdog.tick();
+    expect(Date.parse(progress.get(operationId)!.stalledSince!) - Date.parse(record.phaseSince)).toBeLessThanOrEqual(10_000);
+
+    /* Its ending, from the sweep, while the journal still cannot be read. */
+    await settleDueSends({ registry, client, progress, readMs: 500, now: () => Date.now() + 11 * 60_000 });
+    expect(progress.get(operationId)).toMatchObject({ originalKey: "lost-ack-key", terminal: { state: "uncertain" } });
+
+    /* The journal's executor had handed it over while this process could
+       not read the journal. Once it can, the terminal projection writes the
+       journal's answer onto the delivery record and the sweep's mirror
+       corrects the ending: one input, nothing sent again. */
+    const ledger = createFakeDeliveryLedger();
+    const runtimeSide = new StructuredDeliveryQueue(journalPort(journal), () => new FakeEngineHost(ledger));
+    await runtimeSide.drain();
+    unavailable = false;
+    await waitForCondition(() => ["delivered", "turn-started"].includes(journal.operationResult(operationId)?.receipt.status ?? ""), 2_000);
+    expect(await registry.recordDeliveryOutcomeForOperationOffLoop(conversation.id, operationId, "delivered", null, "delivered")).toBe(true);
+    mirrorSettledReceipts(registry, progress);
+    expect(progress.get(operationId)).toMatchObject({ originalKey: "lost-ack-key", terminal: { state: "delivered" } });
+    expect(ledger.writes.map((write) => write.id)).toEqual([operationId]);
+    void key;
+  } finally {
+    journal.close();
+  }
+});
+
+test("a send behind an earlier admission on its conversation records conversation-busy then queued, and a journal admission that does not answer is a checking step that stalls and is never a lost wake", async () => {
+  const fixture = idleHostedConversation("progress-admission-order", "5eed0006-6666-\x34666-8666-666666666666");
+  const { registry, conversation } = fixture;
+  const journal = fixture.openJournal();
+  let clock = Date.now();
+  const progress = new DeliveryProgressStore(null, () => clock);
+  let releaseFirst: (() => void) | null = null;
+  const firstEntered = Promise.withResolvers<void>();
+  const client = {
+    ...runtimeJournalClient(journal),
+    command: async (command: Parameters<RuntimeJournal["executeOperation"]>[0]) => {
+      if (command.idempotencyKey === "order-first") {
+        firstEntered.resolve();
+        await new Promise<void>((resolve) => { releaseFirst = resolve; });
+      }
+      return journal.executeOperation(command);
+    },
+  } as unknown as RuntimeHostClient;
+  const dependencies = { enabled: () => true, client: () => client, registry: () => registry, requestMigrationTick: () => {}, kick: () => {}, progress };
+  try {
+    const first = enqueueStructuredMessage({ path: fixture.artifactPath, conversationId: conversation.id, clientMessageId: "order-first", text: "first", policy: "queue" }, dependencies);
+    await firstEntered.promise;
+    const second = enqueueStructuredMessage({ path: fixture.artifactPath, conversationId: conversation.id, clientMessageId: "order-second", text: "second", policy: "queue" }, dependencies);
+    await waitForCondition(() => registry.pendingDeliveries(conversation.id).length === 2);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const [firstReservation, secondReservation] = registry.pendingDeliveries(conversation.id)
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+    const firstOperation = firstReservation!.command.operationId;
+    const secondOperation = secondReservation!.command.operationId;
+    expect(progress.get(firstOperation)).toMatchObject({ waitReason: "checking", nextWakeAt: null, originalKey: "order-first" });
+    expect(progress.get(firstOperation)!.detail).toContain("admitting to the runtime journal");
+    expect(progress.get(secondOperation)).toMatchObject({ waitReason: "conversation-busy", nextWakeAt: null, originalKey: "order-second" });
+
+    /* The watchdog marks the unanswered admission stalled, and calls nothing lost. */
+    const watchdog = new StructuredDeliveryQueue({
+      effects: async () => [],
+      transition: async () => {},
+      progress,
+    }, () => null, undefined, undefined, undefined, undefined, undefined, undefined, { stallMs: 4_000, now: () => clock });
+    clock += 5_000;
+    await watchdog.tick();
+    expect(progress.get(firstOperation)).toMatchObject({ waitReason: "checking", wakeLostAt: null });
+    expect(progress.get(firstOperation)!.stalledSince).not.toBeNull();
+
+    releaseFirst!();
+    await expect(first).resolves.toMatchObject({ ok: true, outcome: "queued" });
+    await expect(second).resolves.toMatchObject({ ok: true, outcome: "queued" });
+    expect(progress.get(firstOperation)).toMatchObject({ waitReason: "queued", terminal: null });
+    expect(progress.get(secondOperation)).toMatchObject({ waitReason: "queued", terminal: null, wakeLostAt: null });
+  } finally {
+    journal.close();
+  }
+});

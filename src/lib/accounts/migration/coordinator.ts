@@ -72,7 +72,13 @@ export interface HeldDeliveryDeferral {
   cause: string;
 }
 
-export type HeldDeliveryAttemptOutcome = "delivered" | "failed" | "delivery-uncertain" | "held" | HeldDeliveryDeferral;
+/** A payload the host cannot take, refused before any command (Note 2). */
+export interface HeldDeliveryRejection {
+  outcome: "rejected";
+  cause: string;
+}
+
+export type HeldDeliveryAttemptOutcome = "delivered" | "failed" | "delivery-uncertain" | "held" | HeldDeliveryDeferral | HeldDeliveryRejection;
 
 export interface HeldDeliveryPort {
   /* `lease` is the drain's hold on the conversation's actuation section: a delivery that must claim again inside it
@@ -1237,6 +1243,17 @@ export async function drainHeldDeliveries(
           ? await delivery.reconcileUncertain!(input)
           : await delivery.deliver(input);
         if (reconciling && outcome === "delivery-uncertain") return;
+        if (typeof outcome === "object" && outcome.outcome === "rejected") {
+          /* Not dispatched by this attempt: it ends with the payload's
+             rejection, and an assigned send that never went out may be sent
+             again. A reconciled one may have gone out earlier, so it proves
+             nothing about that. Refused for the lock, it stays claimed, and
+             the next pass reaches the same rejection before any command. */
+          const cause = outcome.cause;
+          await offLoop(registry, "delivery.reject", operationId,
+            () => registry.recordDeliveryOutcome(settled.id, "failed", cause, reconciling ? undefined : "lost"));
+          return;
+        }
         if (outcome === "held" || typeof outcome === "object") {
           if (!reconciling) {
             /* A bare `held` is progress (a resume that just published, or a runtime
