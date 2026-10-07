@@ -96,6 +96,7 @@ import { pipelineDeliveryGuidance, renderCutRetryInput, renderDecisionInput, ren
 import { composeStageInput } from "./stageInput";
 import { renderStagePrompt } from "./prompts";
 import { PIPELINE_ROLE_IDS, pipelineRoleLookup, resolvePipelineRole, stageRuntimeIsExplicit, validatePipelineRoleParams, type PipelineRoleLookup } from "./roles";
+import { isReadOnlyLockedRole } from "@/lib/roles/locks";
 import { launchSizingRefusal, reviewGateRefusal, type Briefer, type LaunchRuntime } from "@/lib/roles/sizing";
 import { conversationRuntime } from "@/lib/agent/conversationRuntime";
 import { normalizeStageOutputPath } from "./stageAccess";
@@ -10201,7 +10202,8 @@ export async function patchPipeline(
             model: req.model !== undefined ? req.model : resetRuntime ? undefined : target.model,
             effort: req.effort !== undefined ? req.effort : resetRuntime ? undefined : target.effort,
             serviceTier: req.serviceTier !== undefined ? req.serviceTier : resetRuntime ? undefined : target.serviceTier,
-            access: target.access,
+            /* A read-only-locked role takes no access from the stage it replaces. */
+            access: isReadOnlyLockedRole(roleRef?.roleId) ? undefined : target.access,
           },
           target.kind,
           ports.roleLookup,

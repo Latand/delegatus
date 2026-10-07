@@ -17,6 +17,8 @@ export type RelayTargetSettings = {
   project: string | null;
   concurrency: number;
   hardCapMinutes: number;
+  /** Answers per member per hour in each chat (§B.8); absent is the default, null or 0 no limit. */
+  memberLimitPerHour?: number | null;
 };
 export type PairedRelay = {
   id: string;

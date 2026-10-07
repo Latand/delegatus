@@ -5,6 +5,7 @@ import { useState, type ReactNode } from "react";
 import { useLocale } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 
+import { HintScope } from "../Hint";
 import { ProcessStatusControls } from "../TaskHeader";
 import { AgentControlStrip } from "../AgentControlStrip";
 import { LogFeed } from "../LogFeed";
@@ -44,39 +45,43 @@ export function OrchestratorConversation({ file, projectName, hostControls = tru
   const sendBlockedReason = !deadHost && sendCap.state === "disabled" ? t(sendCap.reason) : null;
   /* The own-message step row, straight above the composer as in `BranchPane`. */
   const [stepsMount, setStepsMount] = useState<HTMLDivElement | null>(null);
+  /* The dock keeps these components mounted while its seat is handed another
+     conversation, so a hint open on them closes with the hand-over. */
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-orchestrator-conversation={file.conversationId ?? file.path}>
-      {deadHost ? <DeadHostBanner file={file} /> : null}
-      {/* The one row here that gives room up to a growing draft, named so the
-          kanban seat can hold it at its minimum and grow past it (#1734). */}
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-composer-yields="">
-        {transcriptSlot ?? (
-          <ToolDisclosurePolicy value="collapsed">
-            <LogFeed
-              file={file}
-              showSvc={false}
-              lineFilter=""
-              onStatus={noop}
-              paused={false}
-              follow
-              setFollow={noop}
-              compact
-              stepsMount={stepsMount}
-            />
-          </ToolDisclosurePolicy>
-        )}
+    <HintScope id={file.conversationId ?? file.path}>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-orchestrator-conversation={file.conversationId ?? file.path}>
+        {deadHost ? <DeadHostBanner file={file} /> : null}
+        {/* The one row here that gives room up to a growing draft, named so the
+            kanban seat can hold it at its minimum and grow past it (#1734). */}
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-composer-yields="">
+          {transcriptSlot ?? (
+            <ToolDisclosurePolicy value="collapsed">
+              <LogFeed
+                file={file}
+                showSvc={false}
+                lineFilter=""
+                onStatus={noop}
+                paused={false}
+                follow
+                setFollow={noop}
+                compact
+                stepsMount={stepsMount}
+              />
+            </ToolDisclosurePolicy>
+          )}
+        </div>
+        {hostControls ? <ProcessStatusControls file={file} hideChip /> : null}
+        <AgentControlStrip file={file} />
+        <div ref={setStepsMount} className="contents" />
+        <TmuxComposer
+          file={file}
+          deadHost={deadHost}
+          sendBlockedReason={sendBlockedReason}
+          placeholder={t("composer.placeholderOrchestrator", { project: projectName })}
+          primaryPlace
+          taskChipsFor={file.project}
+        />
       </div>
-      {hostControls ? <ProcessStatusControls file={file} hideChip /> : null}
-      <AgentControlStrip file={file} />
-      <div ref={setStepsMount} className="contents" />
-      <TmuxComposer
-        file={file}
-        deadHost={deadHost}
-        sendBlockedReason={sendBlockedReason}
-        placeholder={t("composer.placeholderOrchestrator", { project: projectName })}
-        primaryPlace
-        taskChipsFor={file.project}
-      />
-    </div>
+    </HintScope>
   );
 }

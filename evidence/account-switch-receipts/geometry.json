@@ -1,0 +1,178 @@
+[
+  {
+    "locale": "en",
+    "width": 390,
+    "pageWidth": 390,
+    "rows": [
+      {
+        "scrollWidth": 372,
+        "clientWidth": 372,
+        "panelWidth": "374",
+        "reason": "switching-accounts"
+      },
+      {
+        "scrollWidth": 278,
+        "clientWidth": 278,
+        "panelWidth": "280",
+        "reason": "switching-accounts"
+      },
+      {
+        "scrollWidth": 372,
+        "clientWidth": 372,
+        "panelWidth": "374",
+        "reason": "switch-after-turn"
+      },
+      {
+        "scrollWidth": 278,
+        "clientWidth": 278,
+        "panelWidth": "280",
+        "reason": "switch-after-turn"
+      },
+      {
+        "scrollWidth": 372,
+        "clientWidth": 372,
+        "panelWidth": "374",
+        "reason": "switch-failed"
+      },
+      {
+        "scrollWidth": 278,
+        "clientWidth": 278,
+        "panelWidth": "280",
+        "reason": "switch-failed"
+      }
+    ],
+    "pageErrors": []
+  },
+  {
+    "locale": "en",
+    "width": 1280,
+    "pageWidth": 1280,
+    "rows": [
+      {
+        "scrollWidth": 372,
+        "clientWidth": 372,
+        "panelWidth": "374",
+        "reason": "switching-accounts"
+      },
+      {
+        "scrollWidth": 278,
+        "clientWidth": 278,
+        "panelWidth": "280",
+        "reason": "switching-accounts"
+      },
+      {
+        "scrollWidth": 372,
+        "clientWidth": 372,
+        "panelWidth": "374",
+        "reason": "switch-after-turn"
+      },
+      {
+        "scrollWidth": 278,
+        "clientWidth": 278,
+        "panelWidth": "280",
+        "reason": "switch-after-turn"
+      },
+      {
+        "scrollWidth": 372,
+        "clientWidth": 372,
+        "panelWidth": "374",
+        "reason": "switch-failed"
+      },
+      {
+        "scrollWidth": 278,
+        "clientWidth": 278,
+        "panelWidth": "280",
+        "reason": "switch-failed"
+      }
+    ],
+    "pageErrors": []
+  },
+  {
+    "locale": "uk",
+    "width": 390,
+    "pageWidth": 390,
+    "rows": [
+      {
+        "scrollWidth": 372,
+        "clientWidth": 372,
+        "panelWidth": "374",
+        "reason": "switching-accounts"
+      },
+      {
+        "scrollWidth": 278,
+        "clientWidth": 278,
+        "panelWidth": "280",
+        "reason": "switching-accounts"
+      },
+      {
+        "scrollWidth": 372,
+        "clientWidth": 372,
+        "panelWidth": "374",
+        "reason": "switch-after-turn"
+      },
+      {
+        "scrollWidth": 278,
+        "clientWidth": 278,
+        "panelWidth": "280",
+        "reason": "switch-after-turn"
+      },
+      {
+        "scrollWidth": 372,
+        "clientWidth": 372,
+        "panelWidth": "374",
+        "reason": "switch-failed"
+      },
+      {
+        "scrollWidth": 278,
+        "clientWidth": 278,
+        "panelWidth": "280",
+        "reason": "switch-failed"
+      }
+    ],
+    "pageErrors": []
+  },
+  {
+    "locale": "uk",
+    "width": 1280,
+    "pageWidth": 1280,
+    "rows": [
+      {
+        "scrollWidth": 372,
+        "clientWidth": 372,
+        "panelWidth": "374",
+        "reason": "switching-accounts"
+      },
+      {
+        "scrollWidth": 278,
+        "clientWidth": 278,
+        "panelWidth": "280",
+        "reason": "switching-accounts"
+      },
+      {
+        "scrollWidth": 372,
+        "clientWidth": 372,
+        "panelWidth": "374",
+        "reason": "switch-after-turn"
+      },
+      {
+        "scrollWidth": 278,
+        "clientWidth": 278,
+        "panelWidth": "280",
+        "reason": "switch-after-turn"
+      },
+      {
+        "scrollWidth": 372,
+        "clientWidth": 372,
+        "panelWidth": "374",
+        "reason": "switch-failed"
+      },
+      {
+        "scrollWidth": 278,
+        "clientWidth": 278,
+        "panelWidth": "280",
+        "reason": "switch-failed"
+      }
+    ],
+    "pageErrors": []
+  }
+]

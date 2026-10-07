@@ -1,11 +1,22 @@
 import { expect, test } from "bun:test";
 import { requestBody } from "../../../scripts/memory-selection";
-import { groundedRequest, selectOffers, memoryGate } from "./selection";
+import { groundedRequest, selectOffers, memoryGate, nativeMatch } from "./selection";
 import { en } from "@/lib/i18n/en";
 import { uk } from "@/lib/i18n/uk";
 
 const candidate = { id: "m_fixture", title: "Widget parser", summary: "Widget delimiters must be escaped twice.", body: "Apply this to the legacy widget parser.", engine: "claude", kind: "project_fact", scope: "project", writtenAt: "2026-10-01" };
 const input = { id: "case", prompt: "Update the widget parser for escaped delimiters", engine: "codex", project: "project-widget", context: [{ role: "user", text: "Fix widget parsing" }, { role: "assistant", text: "I will inspect the parser." }], candidates: [candidate], retrievalMs: 0, strictCount: 0 };
+test("short exact bodies deduplicate across names while distinct short rules remain eligible", () => {
+  const note = { ...candidate, title: "Widget", summary: "Widget uses paired escaping.", body: "Widget uses paired escaping." };
+  expect(nativeMatch(note, { ...note, title: "Routing", body: "\nWidget  uses\tpaired escaping.\n" })).toBe(true);
+  expect(nativeMatch(note, { ...note, body: "Widget uses single escaping." })).toBe(false);
+  expect(nativeMatch(note, { ...note, body: "Widget paired escaping uses." })).toBe(false);
+  expect(nativeMatch({ ...note, body: "Café." }, { ...note, body: "Cafe\u0301." })).toBe(true);
+  expect(nativeMatch({ ...note, body: " " }, { ...note, body: "\n" })).toBe(false);
+  expect(nativeMatch({ ...note, summary: "Widget flags enabled.", body: "Yes." }, { ...note, summary: "Widget alerts enabled.", body: "Yes." })).toBe(false);
+  expect(nativeMatch({ ...note, summary: "Pinned interpreter.", body: "Widget uses Bun." }, { ...note, summary: "Widget uses Bun.", body: "Widget uses Bun." })).toBe(true);
+});
+
 test("the live request is exactly the research grounded request, including body evidence and examples", () => {
   expect(JSON.stringify(groundedRequest(input))).toBe(JSON.stringify(requestBody(input, "grounded")));
 });

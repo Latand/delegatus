@@ -17,6 +17,8 @@ import { createRoot } from "react-dom/client";
 
 import { asksYouFixtureLines, asksYouFixtureSetting, reportLogFixturePage } from "@/components/orchestrator/reportLog/reportLogEvidence.fixture";
 import { writeProfile } from "@/components/runtimeProfile";
+import { ReceiptChip } from "@/components/runtime/ReceiptChip";
+import type { RuntimeReceipt } from "@/components/runtime/runtimeModel";
 import { Viewer } from "@/components/Viewer";
 import { getRuntimeBus } from "@/hooks/runtimeBus";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
@@ -1704,5 +1706,19 @@ function ScrollHistoryFixture() {
       onStatus={() => {}} paused={false} follow={follow} setFollow={setFollow} />
   </>;
 }
-createRoot(document.getElementById("root")!).render(new URLSearchParams(location.search).has("scroll-history")
+/** Receipt-only seat panels and messages without a feed row share this chip. */
+function SwitchReceiptFixture() {
+  return <main className="flex min-w-0 flex-col gap-4 p-2">
+    {["switching-accounts", "switch-after-turn", "switch-failed"].map(reason =>
+      [374, 280].map(width => <section key={reason + width} data-switch-receipt-row={reason} data-panel-width={width}
+        style={{ width, maxWidth: "100%" }} className="flex min-w-0 flex-col gap-2 rounded-control border border-border p-2">
+        <ReceiptChip receipt={{ operationId: reason + width, idempotencyKey: reason + width,
+          conversationId: "conversation_receipt_geometry", kind: "send", status: "queued",
+          reason, at: new Date().toISOString(), revision: 1 } as RuntimeReceipt}
+          wait={{ phase: width === 280 ? "uncertain" : "awaiting-handover", waitedMs: 120000, cause: "unknown" }} onRetry={() => {}} />
+      </section>))}
+  </main>;
+}
+createRoot(document.getElementById("root")!).render(new URLSearchParams(location.search).has("switch-receipts")
+  ? <SwitchReceiptFixture /> : new URLSearchParams(location.search).has("scroll-history")
   ? <ScrollHistoryFixture /> : <Viewer />);
