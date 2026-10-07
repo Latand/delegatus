@@ -4116,6 +4116,9 @@ export interface AgentRegistryStorageOptions {
       bound has none and an empty bound proves nothing about the origin rule. */
   mcpGrantPolicy?: McpGrantPolicy;
   sqliteFilename?: string;
+  /** How long an off-loop delivery write waits for the lock before it is
+      refused (5 s). Tests shorten it to exercise a refusal quickly. */
+  sqliteWriterDeadlineMs?: number;
   onSqliteWriterWait?: (durationMs: number) => void;
   onSqliteSnapshotLoad?: () => void;
   onSqliteRowPayloadRead?: (collection: string, count: number) => void;
@@ -4295,8 +4298,19 @@ function journalStructuredTermination(registryFilename: string, record: Record<s
     past its asynchronous deadline, and wrote nothing. */
 export const REGISTRY_WRITER_BUSY = "the delivery record's write lock is held by another writer";
 
+/** A registry write a delivery path waited for off the loop and was refused:
+    nothing was written, so the durable state is what it was before the step,
+    and the next pass resumes from it. */
+export class RegistryWriterBusyError extends Error {
+  constructor(readonly label: string) {
+    super(`${REGISTRY_WRITER_BUSY} (${label})`);
+    this.name = "RegistryWriterBusyError";
+  }
+}
+
 export class AgentRegistry {
   private readonly sqliteMode: AgentRegistrySqliteMode;
+  private readonly writerDeadlineMs: number | undefined;
   private readonly mcpGrantPolicy: McpGrantPolicy | undefined;
   private readonly sqliteStore: SqliteAgentRegistryStore | null;
   private readonly beforeDualWriteMutationReplace: (() => void) | undefined;
@@ -4351,6 +4365,7 @@ export class AgentRegistry {
       ?? backend.sqliteFilename
       ?? defaultRegistrySqliteFilename(filename);
     this.mcpGrantPolicy = storage.mcpGrantPolicy;
+    this.writerDeadlineMs = storage.sqliteWriterDeadlineMs;
     this.mirrorCheckpointMs = Math.max(0, storage.mirrorCheckpointMs ?? 5_000);
     this.now = storage.now ?? Date.now;
     this.scheduleMirrorCheckpoint = storage.scheduleMirrorCheckpoint
@@ -5197,7 +5212,49 @@ export class AgentRegistry {
     if (this.sqliteMode !== "read" && this.sqliteMode !== "sqlite") {
       return { acquired: true, value: withWaitCorrelation(correlation, operation) };
     }
-    return withWaitCorrelation(correlation, () => this.sqliteStore!.withWriter(operation, correlate ? { correlate } : {}));
+    return withWaitCorrelation(correlation, () => this.sqliteStore!.withWriter(operation, {
+      ...(correlate ? { correlate } : {}),
+      ...(this.writerDeadlineMs !== undefined ? { deadlineMs: this.writerDeadlineMs } : {}),
+    }));
+  }
+
+  /**
+   * One registry write on a delivery path, with the write lock waited for off
+   * the event loop and correlated with the operation it is made for
+   * (docs/design/delivery-progress-and-drain.md, rule c). `write` makes exactly
+   * one registry mutation and reads no snapshot before it. `{ acquired: false }`
+   * means nothing was written; each caller states what a refusal leaves.
+   */
+  async deliveryWrite<T>(
+    correlation: { label: string; operationId?: string | null },
+    write: () => T,
+    correlate?: (value: T) => { label: string; operationId?: string | null } | null,
+  ): Promise<{ acquired: true; value: T } | { acquired: false }> {
+    return this.whenWriterHeld(correlation, write, correlate);
+  }
+
+  /** {@link deliveryWrite} for a coordinator step: the value, or
+      {@link RegistryWriterBusyError} when the lock stayed held. */
+  async deliveryWriteOrBusy<T>(correlation: { label: string; operationId?: string | null }, write: () => T): Promise<T> {
+    const written = await this.whenWriterHeld(correlation, write);
+    if (!written.acquired) throw new RegistryWriterBusyError(correlation.label);
+    return written.value;
+  }
+
+  /**
+   * {@link deliveryWrite} for a caller that may not wait at all, because it
+   * runs inside another synchronous lock (account retirement holds the
+   * accounts registry file lock, whose waiters spin): one non-blocking request
+   * for the lock, and a refusal recorded with its label.
+   */
+  deliveryWriteNow<T>(
+    correlation: { label: string; operationId?: string | null },
+    write: () => T,
+  ): { acquired: true; value: T } | { acquired: false } {
+    if (this.sqliteMode !== "read" && this.sqliteMode !== "sqlite") {
+      return { acquired: true, value: withWaitCorrelation(correlation, write) };
+    }
+    return withWaitCorrelation(correlation, () => this.sqliteStore!.tryWriter(write));
   }
 
   /** Shared process-local snapshot for projections that never mutate registry

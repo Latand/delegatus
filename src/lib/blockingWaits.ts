@@ -44,6 +44,9 @@ export interface BlockingWaitSample {
   subject: string | null;
   label: string | null;
   operationId: string | null;
+  /** The lock was asked for once and refused, so nothing waited and nothing
+      was written: a write that may not wait (inside a synchronous lock). */
+  refused?: true;
   at: string;
 }
 
@@ -90,7 +93,8 @@ export function currentWaitCorrelation(): BlockingWaitCorrelation | null {
 
 /**
  * Records one wait. Waits of zero are dropped: an uncontended lock costs
- * nothing worth keeping, and the window is for the ones that did.
+ * nothing worth keeping, and the window is for the ones that did. A refusal is
+ * kept whatever it took: it is the one evidence that a write was not made.
  */
 export function recordBlockingWait(input: {
   site: BlockingWaitSite;
@@ -98,8 +102,9 @@ export function recordBlockingWait(input: {
   synchronous: boolean;
   subject?: string | null;
   correlation?: BlockingWaitCorrelation | null;
+  refused?: boolean;
 }): void {
-  if (!Number.isFinite(input.durationMs) || input.durationMs <= 0) return;
+  if (!Number.isFinite(input.durationMs) || (input.durationMs <= 0 && !input.refused)) return;
   const context = input.correlation ?? currentWaitCorrelation();
   const sample: BlockingWaitSample = {
     site: input.site,
@@ -109,6 +114,7 @@ export function recordBlockingWait(input: {
     subject: input.subject ? input.subject.slice(0, 80) : null,
     label: context?.label ? context.label.slice(0, 80) : null,
     operationId: context?.operationId ? context.operationId.slice(0, 120) : null,
+    ...(input.refused ? { refused: true as const } : {}),
     at: new Date().toISOString(),
   };
   samples.push(sample);

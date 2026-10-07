@@ -1130,6 +1130,30 @@ export class SqliteAgentRegistryStore {
     return { acquired: true, value };
   }
 
+  /**
+   * {@link withWriter} for a caller that may not wait at all: the lock is asked
+   * for once, without a busy wait, and `operation` runs in the same synchronous
+   * step when it was granted. A refusal runs nothing and is recorded with the
+   * caller's correlation. For writes made inside another synchronous lock,
+   * where neither a spin nor an `await` is safe.
+   */
+  tryWriter<T>(operation: () => T): { acquired: true; value: T } | { acquired: false } {
+    const startedAt = performance.now();
+    if (!this.tryBeginWrite()) {
+      recordBlockingWait({ site: "registry-lock-async", durationMs: performance.now() - startedAt, synchronous: false, subject: "agent-registry", refused: true });
+      return { acquired: false };
+    }
+    this.writerHeld = true;
+    try {
+      return { acquired: true, value: operation() };
+    } finally {
+      if (this.writerHeld) {
+        this.writerHeld = false;
+        try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+      }
+    }
+  }
+
   /** One request for the write lock that never waits. */
   private tryBeginWrite(): boolean {
     this.db.exec("PRAGMA busy_timeout = 0");

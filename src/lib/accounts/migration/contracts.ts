@@ -391,8 +391,10 @@ export interface SuccessorProviderPort {
     conversationId: ViewerConversationId;
     source: NativeGeneration;
     targetAccountId: string;
-    /** Persists a provider-created artifact after its path and file identity are validated. */
-    recordContinuityPath(pathname: string): void;
+    /** Persists a provider-created artifact after its path and file identity
+        are validated. The write waits for the registry lock off the loop; the
+        provider awaits it where it calls it, and a refusal throws. */
+    recordContinuityPath(pathname: string): void | Promise<void>;
   }): Promise<ProviderReceipt>;
   verify(receipt: ProviderReceipt, input: { engine: MigrationEngine; targetAccountId: string; launchProfile: LaunchProfile }): Promise<void>;
   publishHost?(receipt: ProviderReceipt, input: {

@@ -42,7 +42,9 @@ export async function reconcileAccountMigrationCycle(
   provider: SuccessorProviderPort = new RegisteredSuccessorProvider(),
   delivery: HeldDeliveryPort = deliveryPort,
 ): Promise<void> {
-  registry.compactDeliveryReservations();
+  /* Waited for off the loop; one the lock refused is skipped this cycle and
+     the next one compacts. */
+  await registry.deliveryWrite({ label: "delivery.compact" }, () => registry.compactDeliveryReservations());
   await yieldToRuntime();
   /* Quota ticks run alongside migration reconciliation, not after it: a slow
      or stuck migration pass (lock contention, wedged provider) must never

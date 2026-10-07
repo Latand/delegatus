@@ -17,6 +17,8 @@ import { emptyLaunchProfile, type MigrationEngine, type ProviderReceipt, type Su
 import { oauthFailureWithRecoveryTail } from "./fixtures/claudeRecoveryTail";
 import { CodexForkOutcomeUnknownError, RegisteredSuccessorProvider, SuccessorPendingError } from "./provider";
 import { MIGRATION_DELIVERY_CANCELLATION_PREFIX } from "./intentLiveness";
+import { createMigrationDeliveryPort } from "./deliveryPort";
+import { DeliveryProgressStore } from "@/lib/runtime/deliveryProgress";
 
 const roots: string[] = [];
 
@@ -4666,5 +4668,182 @@ describe("Codex canonical root conversation and fork recovery (#708)", () => {
       fs.readSync = originalReadSync;
       fs.closeSync = originalCloseSync;
     }
+  });
+});
+
+/* docs/design/delivery-progress-and-drain.md, rule (b): the coordinator drains
+   and advances each conversation in its own lane, waits for a pass no longer
+   than its budget, and shares successor creation through one leased permit. */
+describe("per-conversation lanes in the account-migration coordinator", () => {
+  const settle = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+  async function until(condition: () => boolean, timeoutMs = 3_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (!condition()) {
+      if (Date.now() > deadline) throw new Error("condition was not reached in time");
+      await settle(5);
+    }
+  }
+  function committedPair(store: AgentRegistry, names: [string, string]) {
+    store.reconcileConversations(names.map((name) => observation(`/${name}.jsonl`, "a", "idle")));
+    const conversations = names.map((name) => store.conversationForPath(`/${name}.jsonl`)!);
+    store.commitMigrationIntent({ engine: "codex", targetId: "b", origin: "manual", requestId: `lanes-${names.join("-")}`, expectedRevision: store.engineRouting("codex").revision });
+    return conversations;
+  }
+
+  test("a held drain that never answers on one conversation leaves another's delivered within the pass budget, a later pass serves that conversation again, and the late answer adds no input", async () => {
+    const store = registry();
+    const [first, second] = committedPair(store, ["lane-hung", "lane-free"]);
+    for (const conversation of [first!, second!]) {
+      await advanceConversationMigration(conversation.id, store, provider([`${conversation.generations[0]!.path}.successor.jsonl`]));
+    }
+    store.holdDelivery(first!.id, "hung fixture", "lane-hung-1");
+    store.holdDelivery(second!.id, "free fixture", "lane-free-1");
+    let release: (() => void) | null = null;
+    const delivered: string[] = [];
+    const port = {
+      async deliver({ clientMessageId }: { clientMessageId: string }) {
+        delivered.push(clientMessageId);
+        if (clientMessageId === "lane-hung-1") await new Promise<void>((resolve) => { release = resolve; });
+        return "delivered" as const;
+      },
+    };
+
+    const startedAt = performance.now();
+    const pass = await Promise.race([
+      reconcileMigrations(provider([]), port, store, { passBudgetMs: 50 }).then(() => "returned"),
+      settle(1_500).then(() => "still waiting"),
+    ]);
+    expect(pass).toBe("returned");
+    expect(performance.now() - startedAt).toBeLessThan(1_000);
+    expect(delivered).toEqual(["lane-hung-1", "lane-free-1"]);
+    expect(store.pendingDeliveries(second!.id)).toEqual([]);
+
+    /* A later pass skips the conversation whose lane still works. */
+    store.holdDelivery(first!.id, "after the hung one", "lane-hung-2");
+    await reconcileMigrations(provider([]), port, store, { passBudgetMs: 50 });
+    expect(delivered).toEqual(["lane-hung-1", "lane-free-1"]);
+
+    release!();
+    await until(() => store.pendingDeliveries(first!.id).every((item) => item.clientMessageId !== "lane-hung-1"));
+    await reconcileMigrations(provider([]), port, store, { passBudgetMs: 50 });
+    expect(delivered).toEqual(["lane-hung-1", "lane-free-1", "lane-hung-2"]);
+    expect(store.pendingDeliveries(first!.id)).toEqual([]);
+  });
+
+  test("a switching conversation whose provider never answers holds another switching conversation for at most one lease", async () => {
+    const store = registry();
+    const [hung, free] = committedPair(store, ["permit-hung", "permit-free"]);
+    store.holdDelivery(hung!.id, "hung switch fixture", "permit-hung-1");
+    store.holdDelivery(free!.id, "free switch fixture", "permit-free-1");
+    const calls = { create: new Map<string, number>(), verify: new Map<string, number>(), publish: new Map<string, number>() };
+    const count = (map: Map<string, number>, id: string) => map.set(id, (map.get(id) ?? 0) + 1);
+    let releaseCreate: (() => void) | null = null;
+    const switching: SuccessorProviderPort = {
+      virtualSource: true,
+      async create(input) {
+        count(calls.create, input.conversationId);
+        if (input.conversationId === hung!.id) await new Promise<void>((resolve) => { releaseCreate = resolve; });
+        const next = `/${input.conversationId}-successor.jsonl`;
+        return {
+          operationId: input.operationId,
+          nativeId: path.basename(next, ".jsonl"),
+          path: next,
+          continuityPaths: [],
+          historyHash: `hash-${input.conversationId}`,
+          host: { kind: "codex-app-server", identity: `host-${input.conversationId}`, epoch: 1, verifiedAt: "2026-07-10T12:01:00.000Z" },
+        };
+      },
+      async verify(receipt) { count(calls.verify, receipt.nativeId); },
+      async publishHost(receipt) { count(calls.publish, receipt.nativeId); },
+    };
+    const delivered: string[] = [];
+    const port = { async deliver({ clientMessageId }: { clientMessageId: string }) { delivered.push(clientMessageId); return "delivered" as const; } };
+
+    const startedAt = performance.now();
+    const pass = await Promise.race([
+      reconcileMigrations(switching, port, store, { passBudgetMs: 50, advancementLeaseMs: 50 }).then(() => "returned"),
+      settle(1_500).then(() => "still waiting"),
+    ]);
+    expect(pass).toBe("returned");
+    await until(() => delivered.includes("permit-free-1"));
+    expect(performance.now() - startedAt).toBeLessThan(1_000);
+    expect(store.conversation(free!.id)!.migration).toMatchObject({ phase: "committed" });
+    expect(store.conversation(hung!.id)!.migration?.phase).not.toBe("committed");
+    expect(delivered).toEqual(["permit-free-1"]);
+
+    /* The late answer publishes once, commits once and delivers once. */
+    releaseCreate!();
+    await until(() => delivered.includes("permit-hung-1"));
+    await reconcileMigrations(switching, port, store, { passBudgetMs: 50, advancementLeaseMs: 50 });
+    expect(store.conversation(hung!.id)!.migration).toMatchObject({ phase: "committed" });
+    expect(delivered.filter((key) => key === "permit-hung-1")).toHaveLength(1);
+    expect(calls.create.get(hung!.id)).toBe(1);
+    expect(calls.verify.get(`${hung!.id}-successor`)).toBe(1);
+    expect(calls.publish.get(`${hung!.id}-successor`)).toBe(1);
+  });
+
+  test("advancements that end within the lease never overlap", async () => {
+    const store = registry();
+    const names = ["overlap-a", "overlap-b", "overlap-c"];
+    store.reconcileConversations(names.map((name) => observation(`/${name}.jsonl`, "a", "idle")));
+    store.commitMigrationIntent({ engine: "codex", targetId: "b", origin: "manual", requestId: "overlap", expectedRevision: store.engineRouting("codex").revision });
+    let running = 0;
+    let most = 0;
+    const counted: SuccessorProviderPort = {
+      virtualSource: true,
+      async create(input) {
+        running += 1;
+        most = Math.max(most, running);
+        await settle(15);
+        running -= 1;
+        const next = `/${input.conversationId}-overlap.jsonl`;
+        return {
+          operationId: input.operationId,
+          nativeId: path.basename(next, ".jsonl"),
+          path: next,
+          continuityPaths: [],
+          historyHash: `hash-${input.conversationId}`,
+          host: { kind: "codex-app-server", identity: `host-${input.conversationId}`, epoch: 1, verifiedAt: "2026-07-10T12:01:00.000Z" },
+        };
+      },
+      async verify() {},
+    };
+    await reconcileMigrations(counted, { async deliver() { return "delivered" as const; } }, store, { passBudgetMs: 2_000, advancementLeaseMs: 1_000 });
+    for (const name of names) expect(store.conversationForPath(`/${name}.jsonl`)!.migration).toMatchObject({ phase: "committed" });
+    expect(most).toBe(1);
+  });
+
+  test("repeated passes during an unanswered drain neither erase its stall nor mark progress, and its followers show their own wait", async () => {
+    const store = registry();
+    const [conversation] = committedPair(store, ["stall-acting", "stall-other"]);
+    await advanceConversationMigration(conversation!.id, store, provider(["/stall-acting-successor.jsonl"]));
+    const acting = store.holdDelivery(conversation!.id, "acting fixture", "stall-acting-1");
+    const progress = new DeliveryProgressStore(null);
+    let calls = 0;
+    const port = createMigrationDeliveryPort({
+      progress,
+      structuredDelivery: async (request) => {
+        calls += 1;
+        progress.note(request.command!.operationId, request.runtimeConversationId!, { waitReason: "dispatching", nextWakeMs: null, kind: "send", originalKey: request.clientMessageId });
+        progress.stalled(request.command!.operationId);
+        return new Promise<never>(() => {});
+      },
+    });
+    await reconcileMigrations(provider([]), port, store, { passBudgetMs: 30 });
+    const stalled = { ...progress.get(acting.command.operationId)! };
+    expect(stalled.waitReason).toBe("dispatching");
+    expect(typeof stalled.stalledSince).toBe("string");
+
+    const follower = store.holdDelivery(conversation!.id, "follower fixture", "stall-acting-2");
+    for (let pass = 0; pass < 3; pass += 1) {
+      await reconcileMigrations(provider([]), port, store, { passBudgetMs: 30 });
+    }
+    expect(calls).toBe(1);
+    expect(progress.get(acting.command.operationId)).toMatchObject({
+      waitReason: "dispatching",
+      stalledSince: stalled.stalledSince,
+      lastProgressAt: stalled.lastProgressAt,
+    });
+    expect(progress.get(follower.command.operationId)).toMatchObject({ waitReason: "conversation-busy", terminal: null, originalKey: "stall-acting-2" });
   });
 });
