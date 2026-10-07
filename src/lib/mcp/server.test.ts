@@ -1985,6 +1985,34 @@ describe("MCP tool service", () => {
   });
 });
 
+test("create_task and update_task tell a writer which hold kind a worker slot wait takes and pass both kinds through", async () => {
+  const seen: Record<string, unknown>[] = [];
+  const bindings = Object.fromEntries(MCP_TOOL_NAMES.map((name) => [name, async () => ({})])) as unknown as McpToolBindings;
+  bindings.create_task = async (args) => { seen.push(args); return { task: { id: "task_fixture" } }; };
+  bindings.update_task = async (args) => { seen.push(args); return { task: { id: "task_fixture" } }; };
+  const server = createViewerMcpServer(createMcpToolService(bindings, new MemoryMcpReceiptStore()));
+  const client = new Client({ name: "hold-kind-test", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  try {
+    const tools = (await client.listTools()).tools;
+    for (const name of ["create_task", "update_task"]) {
+      const tool = tools.find((entry) => entry.name === name)!;
+      expect(tool.description).toContain("A wait for a free worker slot is kind worker");
+      const kind = JSON.stringify((tool.inputSchema.properties as Record<string, unknown>).hold);
+      expect(kind).toContain("worker is a wait for a free worker slot");
+      expect(kind).toContain("resource is a shortage on the machine such as memory or disk");
+      expect(kind).toContain("Unknown kinds normalize to unstated.");
+    }
+    await client.callTool({ name: "create_task", arguments: { clientRequestId: "hold-worker", project: "fixture", text: "Queued lane", hold: { kind: "worker", note: "After a lane finishes" } } });
+    await client.callTool({ name: "update_task", arguments: { clientRequestId: "hold-resource", id: "task_fixture", hold: { kind: "resource", note: "4 GB of memory available, 8 GB needed" } } });
+    expect(seen.map((args) => (args.hold as { kind: string }).kind)).toEqual(["worker", "resource"]);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
 test("a real MCP client sees typed graph edits and forwards their JSON values", async () => {
   const seen: Record<string, unknown>[] = [];
   const bindings = Object.fromEntries(MCP_TOOL_NAMES.map((name) => [name, async () => ({})])) as unknown as McpToolBindings;

@@ -16,7 +16,8 @@ import {
 import { externalRelayFile, reserveRun, readRelayStore, readRunLedger, updateRelayStore, type PairedRelay, type RelayTargetSettings } from "./store";
 import { startTestRelay } from "./testRelay";
 import { noteRelayOutcome, noteRelayProgress } from "./activity";
-import { sampleRequest } from "./protocol.test";
+import { sampleRequest } from "./request.fixture";
+import { answerRecorder, pruneAnswerRecords, readAnswerRecord, relayAnswersRoot } from "./answers";
 const root = fs.mkdtempSync(path.join(externalRelayTempRoot(), "relay-poller-test-"));
 process.env.LLV_STATE_DIR = root;
 const runDirs: string[] = [];
@@ -85,7 +86,14 @@ test("boot sweep settles dead owners, keeps live owners, and removes run directo
       ownerIdentity: procBackend.processIdentity(process.pid),
       runDir: liveDir,
     });
+    // Each run's answer record is open; only the dead owner's is settled.
+    for (const requestId of ["stale", "live"])
+      answerRecorder({ requestId, relayId: "relay", targetId: "target", targetName: null, claimedAt: null, input: { request_text: requestId } })!.begin("codex", "gpt-6-sol", { webSearch: true });
     await sweepExternalRelayOrphans();
+    expect(readAnswerRecord("relay", "target", "stale")).toMatchObject({
+      state: "finished", outcome: "failed:install_restarted", delivery: "accepted", input: { request_text: "stale" },
+    });
+    expect(readAnswerRecord("relay", "target", "live")).toMatchObject({ state: "running", outcome: null });
     expect(completed).toBe(1);
     expect(fs.existsSync(staleDir)).toBe(false);
     expect(fs.existsSync(liveDir)).toBe(true);
@@ -94,6 +102,73 @@ test("boot sweep settles dead owners, keeps live owners, and removes run directo
     await server.close();
   }
 });
+test("orphan records distinguish terminal refusal from uncertain delivery and a removed pairing", async () => {
+  const priorStore = readRelayStore();
+  let status = 409;
+  const server = await startTestRelay(() => ({ status, body: { error: { code: "unavailable", message: "No receipt" } } }));
+  try {
+    const paired = readRelayStore().relays[0]!;
+    updateRelayStore((store) => ({ ...store, relays: [{ ...paired, api_base: `${server.origin}/v1` }] }));
+    for (const code of [400, 401, 404, 409, 413, 426, 503, null]) {
+      status = code ?? 503;
+      if (code === null) updateRelayStore((store) => ({ ...store, relays: [] }));
+      const requestId = `orphan_${code ?? "removed"}`;
+      const runDir = fs.mkdtempSync(path.join(externalRelayTempRoot(), "llv-external-relay-test-"));
+      runDirs.push(runDir);
+      reserveRun({
+        requestId, leaseId: "lease", relayId: "relay", targetId: "target",
+        childPid: null, childIdentity: null, ownerPid: 999999999, ownerIdentity: "dead",
+        runDir, startedAt: new Date().toISOString(),
+      });
+      answerRecorder({ requestId, relayId: "relay", targetId: "target", targetName: null, claimedAt: null, input: {} })!.begin("codex", "gpt-6-sol", { webSearch: true });
+      await sweepExternalRelayOrphans();
+      expect(readAnswerRecord("relay", "target", requestId)).toMatchObject({
+        state: "finished", outcome: "failed:install_restarted",
+        delivery: code === 503 || code === null ? "unconfirmed" : "refused",
+      });
+      expect(readRunLedger().runs.some((run) => run.requestId === requestId)).toBe(false);
+      expect(fs.existsSync(runDir)).toBe(false);
+    }
+  } finally {
+    updateRelayStore(() => priorStore);
+    await server.close();
+  }
+});
+
+test("a failed archive settlement is reconciled after the orphan ledger entry is dropped", async () => {
+  const priorStore = readRelayStore();
+  const server = await startTestRelay(() => ({ body: { status: "accepted", duplicate: false } }));
+  const originalWrite = fs.writeFileSync;
+  const originalError = console.error;
+  const errors: string[] = [];
+  try {
+    updateRelayStore((store) => ({ ...store, relays: [{ ...priorStore.relays[0]!, api_base: `${server.origin}/v1` }] }));
+    const requestId = "orphan_write_failed";
+    const runDir = fs.mkdtempSync(path.join(externalRelayTempRoot(), "llv-external-relay-test-"));
+    runDirs.push(runDir);
+    reserveRun({ requestId, leaseId: "lease", relayId: "relay", targetId: "target", childPid: null, childIdentity: null, ownerPid: 999999999, ownerIdentity: "dead", runDir, startedAt: new Date().toISOString() });
+    answerRecorder({ requestId, relayId: "relay", targetId: "target", targetName: null, claimedAt: null, input: {} })!.begin("codex", "gpt-6-sol", { webSearch: true });
+    console.error = (...args) => { errors.push(args.join(" ")); };
+    fs.writeFileSync = ((...args: Parameters<typeof fs.writeFileSync>) => {
+      if (String(args[0]).startsWith(relayAnswersRoot() + path.sep)) throw new Error("fixture archive write failed");
+      return originalWrite(...args);
+    }) as typeof fs.writeFileSync;
+    await sweepExternalRelayOrphans();
+    fs.writeFileSync = originalWrite;
+    expect(errors.some((line) => line.startsWith("External relay answer record settle failed"))).toBe(true);
+    expect(readRunLedger().runs.some((run) => run.requestId === requestId)).toBe(false);
+    expect(readAnswerRecord("relay", "target", requestId)?.state).toBe("running");
+    pruneAnswerRecords(Date.now(), () => readRunLedger().runs);
+    expect(readAnswerRecord("relay", "target", requestId)).toMatchObject({ state: "finished", outcome: "failed:install_restarted", delivery: "unconfirmed" });
+    expect(fs.existsSync(runDir)).toBe(false);
+  } finally {
+    fs.writeFileSync = originalWrite;
+    console.error = originalError;
+    updateRelayStore(() => priorStore);
+    await server.close();
+  }
+});
+
 test("staging never starts a claim loop", () => {
   process.env.LLV_STAGING = "1";
   try {
@@ -372,6 +447,7 @@ const storedTargets = (id: string) =>
   readRelayStore().relays.find((relay) => relay.id === id)?.targets;
 test("the claim loop refreshes targets first, merges them, and advertises slots from the new list", async () => {
   const slots: unknown[] = [];
+  const features: unknown[] = [];
   const server = await startTestRelay((req, body) => {
     if (req.url?.endsWith("/targets"))
       return { body: { targets: [
@@ -380,6 +456,7 @@ test("the claim loop refreshes targets first, merges them, and advertises slots 
       ] } };
     if (req.url?.endsWith("/requests/claim")) {
       slots.push((body as { slots: unknown }).slots);
+      features.push((body as { features?: unknown }).features);
       return { status: 204 };
     }
     return { status: 404 };
@@ -401,6 +478,8 @@ test("the claim loop refreshes targets first, merges them, and advertises slots 
     ]);
     // "gone" is no longer offered and "added" waits for its settings.
     expect(slots[0]).toEqual([{ target_id: "kept", free: 2 }]);
+    // The claim lists what this install implements (§A.2 rule 11).
+    expect(features[0]).toEqual(["requester_context"]);
     expect(relayPollerStatus("loop_refresh").state).toBe("polling");
   } finally {
     stopExternalRelayPollers();

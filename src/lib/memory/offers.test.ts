@@ -39,7 +39,7 @@ test("a transcript names the file behind each added memory and the turn where no
   let score = .1, decisions = 0;
   globalThis.fetch = (async () => {
     decisions++;
-    const id = memoryIndex().injectionCandidates("widget parser", project, "codex", receipt.conversationId)[0].id;
+    const id = (await memoryIndex().injectionCandidates("widget parser", project, "codex", receipt.conversationId))[0].id;
     return Response.json({ answers: { [id]: { noul: score } }, usage: { cost: .0001 } });
   }) as unknown as typeof fetch;
   const session = crypto.randomUUID(), transcript = path.join(root, session + ".jsonl");

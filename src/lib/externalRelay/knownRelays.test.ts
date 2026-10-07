@@ -30,6 +30,7 @@ test("the icon is kept only as a file on the relay's own origin, read over the o
 
 test("a descriptor that cannot be read leaves the entry as listed; one that can adds its description and icon", () => {
   expect(knownRelayInfo(celestia, null)).toEqual({ ...celestia, description: null, iconUrl: null });
+  expect(knownRelayInfo(celestia, { description: "Test", icon_url: null })).toEqual({ ...celestia, description: "Test", iconUrl: null });
   expect(knownRelayInfo(celestia, { description: "Answers on your machine.", icon_url: "/icon.jpg" })).toEqual({
     ...celestia,
     description: "Answers on your machine.",

@@ -235,7 +235,12 @@
 .kb .board:not(.scroll):not(.tabs) { contain: strict; transition: none; }
 /* Tabs show one column and animate no width. Scroll anchoring stays on there:
    it holds a draft opened under a launched agent in the window at 1000 px. */
-.kb .board:not(.tabs), .kb .board:not(.tabs) .col-body { overflow-anchor: none; }
+.kb .board:not(.tabs) { overflow-anchor: none; }
+/* A column keeps the browser's scroll anchoring: a card above the window that
+   grows on a data refresh, or a card arriving above it, would otherwise push
+   what the operator is reading. Only a width change takes it away, because
+   there the layout helper holds the first card in the window itself. */
+.kb[data-column-layout-active] .board:not(.tabs) .col-body { overflow-anchor: none; }
 /* Promotion exists only while these real surfaces are moving. */
 .kb[data-column-layout-active] .column { transition: none; }
 .kb [data-layout-animating="card"], .kb [data-layout-animating="frame"] { transform-origin: top left; will-change: transform; }
@@ -316,6 +321,13 @@
 /* The bottom padding clears one receipt of two lines (56 px) and the stack's
    16 px foot, so a list scrolled to its end shows its last card above it. */
 .kb .col-body { contain: size layout style; flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 4px 12px 84px; display: flex; flex-direction: column; gap: 12px; scrollbar-width: thin; }
+/* A card whose contents the browser skips (`content-visibility: auto`, below)
+   has no content to stop a flex item shrinking, and this column always
+   overflows, so each skipped card was squeezed to its padding: 26 px in place
+   of the height it had been drawn at. A card scrolled far enough above the
+   window collapsed there, the cards under the pointer leapt up by its height,
+   and at the end of a long column the scroll position fell back on its own. */
+.kb .col-body > .card { flex-shrink: 0; }
 .kb .empty { border: 1px dashed var(--border-strong); border-radius: var(--radius-surface); padding: 20px 14px; text-align: center; color: var(--color-muted); font-size: var(--text-ui); }
 .kb .empty strong { display: block; color: var(--color-secondary); font-weight: 600; margin-bottom: 2px; }
 
