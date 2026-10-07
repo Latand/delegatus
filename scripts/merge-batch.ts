@@ -621,8 +621,9 @@ export class MergeBatch {
    * stops anything depends on what native main produced for the same file.
    * When a file cannot complete, the named `focus` cases run again by
    * themselves, together and then one by one if that aborts too, so a case
-   * the file reached keeps its result whatever another named case does
-   * (`only` skips the full run). Neither marks the file completed. */
+   * the file reached keeps its result whatever another named case does,
+   * a namesake included (`only` skips the full run). Neither marks the file
+   * completed. */
   private async testSample(cwd: string, files: string[], corpus: false | Record<string, string>,
     focus: { sites: TestSite[]; only?: boolean } = { sites: [] }): Promise<TestRun> {
     const started = performance.now();
@@ -650,25 +651,44 @@ export class MergeBatch {
       if (!sites.length) continue;
       // One named case that aborts must not erase another's result: when the
       // named cases cannot report together, each runs by itself.
-      if (await this.focusedSample(cwd, file, sites, corpus, sample) || sites.length === 1) continue;
-      for (const site of sites) await this.focusedSample(cwd, file, [site], corpus, sample);
+      if (sites.length > 1 && await this.focusedSample(cwd, file, sites, corpus, sample)) continue;
+      for (const site of sites) await this.focusedSample(cwd, file, [site], corpus, sample, true);
     }
     sample.elapsedMs = performance.now() - started;
     return sample;
   }
 
   /** Records the named cases' results only from a consistent report of them;
-   * returns whether there was one. */
-  private async focusedSample(cwd: string, file: string, sites: TestSite[], corpus: false | Record<string, string>, sample: TestRun): Promise<boolean> {
-    const result = await this.gateCommand(cwd, { id: "tests", args: ["bun", "test", `./${file}`], report: true, filter: testNameFilter(sites) }, corpus);
+   * returns whether there was one. `alone` runs one case without its
+   * namesakes: Bun filters by name only, so every occurrence of the name runs,
+   * and a preload fails each one before its body except the case's own. */
+  private async focusedSample(cwd: string, file: string, sites: TestSite[], corpus: false | Record<string, string>, sample: TestRun,
+    alone = false): Promise<boolean> {
+    const occurrence = sites[0]!.occurrence ?? 0;
+    const guard = alone ? join(dirname(this.stateFile), `merge-occurrence-${randomUUID()}.ts`) : undefined;
+    if (guard) writeFileSync(guard, `const { beforeEach } = require("bun:test");\nlet executed = 0;\n`
+      + `beforeEach(() => { if (executed++ !== ${occurrence}) throw new Error("merge-batch: a namesake of the case under test"); });\n`, { mode: 0o600 });
     try {
+      const filter = [...testNameFilter(sites), ...guard ? [`--preload=${guard}`] : []];
+      const result = await this.gateCommand(cwd, { id: "tests", args: ["bun", "test", `./${file}`], report: true, filter }, corpus);
       const parsed = parseReport(result.report ?? "", result.output, file, cwd, true);
       if ((result.code === 0) !== (parsed.failures.length === 0) || parsed.failures.some(site => site.kind !== "test")) return false;
+      if (guard) {
+        // The preload counted executed cases; it let the case's own body run
+        // only when every executed case shares its name and none before it
+        // was skipped.
+        const [site] = sites;
+        const executed = [...parsed.failures, ...parsed.passed].sort((a, b) => (a.occurrence ?? 0) - (b.occurrence ?? 0));
+        if (executed.some(other => other.suite !== site!.suite || other.name !== site!.name) || executed[occurrence]?.occurrence !== occurrence) return false;
+        (parsed.failures.includes(executed[occurrence]!) ? sample.failures : sample.passed).push(executed[occurrence]!);
+        return true;
+      }
       const named = new Set(sites.map(testIdentity));
       sample.failures.push(...parsed.failures.filter(site => named.has(testIdentity(site))));
       sample.passed.push(...parsed.passed.filter(site => named.has(testIdentity(site))));
       return true;
     } catch { return false; /* the named cases cannot complete: they stay unreported */ }
+    finally { if (guard) rmSync(guard, { force: true }); }
   }
 
   private async testSubject(state: RunState, files: string[], removed?: number[], stable: false | Record<string, string> = false,
