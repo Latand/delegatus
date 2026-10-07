@@ -9,6 +9,7 @@ process.env.LLV_STATE_DIR = path.join(root, "state");
 process.env.XDG_CONFIG_HOME = path.join(root, "config");
 const { CompanionStorage } = await import("./storage");
 const { CompanionAdmission } = await import("./admission");
+const { INITIAL_COMPANION_STATE, reduceCompanion } = await import("./reducer");
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
 test("a Live request needs no completed transcript and is sent at once, exactly once, with no tap", async () => {
@@ -30,6 +31,19 @@ test("a Live request needs no completed transcript and is sent at once, exactly 
   const types = admission.events(session.id, 0).map((event: CompanionEvent) => event.type);
   expect(types).not.toContain("delegation.confirmation.required");
   expect(types.slice(0, 3)).toEqual(["delegation.tool.called", "delegation.sending", "delegation.tool.result"]);
+});
+
+test("autosend admission commits its initial card event with the durable delivery key", () => {
+  const admission = new CompanionAdmission(new CompanionStorage(), {
+    recipient: () => ({ project: "durable-card", conversationId: "conversation_durable", seatEpoch: 1, engine: "codex" }),
+    send: async () => ({ status: "queued", operationId: "unused" }), reports: () => [],
+  });
+  const session = admission.create({ project: "durable-card", locale: "en", authority: "live-model" });
+  const proposal = admission.propose(session.id, "call-durable", "input-durable", "Review the plan", { autosend: true })!;
+  const stored = admission.session(session.id);
+  expect(stored.proposals[proposal.proposalId]).toMatchObject({ state: "admitted", status: "unknown", delivery: { proposalId: proposal.proposalId } });
+  expect(stored.events).toHaveLength(1);
+  expect(stored.events[0]).toMatchObject({ type: "delegation.tool.called", callId: proposal.callId, instruction: proposal.instruction });
 });
 
 test("a repeated Live delegation reuses its durable outcome and delivery key across call IDs and restart", async () => {
@@ -87,6 +101,30 @@ test("a confirmation the model asked for waits through duplex speech and is answ
   expect(admission.outcome(session.id, waiting.proposalId)).toEqual({ state: "sent", status: "queued" });
   expect(admission.awaiting(session.id)).toBeNull();
   expect(admission.events(session.id, 0).filter((event: CompanionEvent) => event.type === "delegation.confirmed")[0]).toMatchObject({ via: "speech" });
+});
+
+test("a delayed spoken confirmation remains visible after a newer proposal and a failed receipt", async () => {
+  let sends = 0;
+  const admission = new CompanionAdmission(new CompanionStorage(), {
+    recipient: () => ({ project: "delayed-card", conversationId: "conversation_delayed", seatEpoch: 1, engine: "claude" }),
+    send: async () => { sends++; return { status: "queued" as const, operationId: "delayed-operation" }; },
+    reports: () => [], receipt: async () => "failed",
+  });
+  const session = admission.create({ project: "delayed-card", locale: "en", authority: "live-model" });
+  admission.input(session.id, { itemId: "input-a", text: "Ask the orchestrator to review the plan.", final: true });
+  const a = await admission.delegate(session.id, "call-a", "input-a", "Review the plan", { confirmation: "Check before sending." });
+  admission.input(session.id, { itemId: "input-b", text: "Tell the orchestrator to deploy the release.", final: true });
+  const b = await admission.delegate(session.id, "call-b", "input-b", "Deploy the release", { confirmation: "Check before sending." });
+  if (a.state !== "awaiting" || b.state !== "awaiting") throw new Error("expected both proposals to await confirmation");
+  await admission.confirm(session.id, { type: "confirmation", proposalId: a.proposal.proposalId, decision: "send", via: "speech", confirmationItemId: "answer-a" });
+  await admission.pollReceipts(session.id);
+
+  const state = admission.events(session.id, 0).reduce(reduceCompanion, INITIAL_COMPANION_STATE);
+  expect(sends).toBe(1);
+  expect(state.delegation).toMatchObject({ callId: "call-b", stage: "awaiting-confirmation", proposal: { proposalId: b.proposal.proposalId } });
+  expect(state.deliveryCards.filter(card => card.proposal?.proposalId === a.proposal.proposalId)).toHaveLength(1);
+  expect(state.deliveryCards).toContainEqual(expect.objectContaining({ callId: "call-a", stage: "failed",
+    delivery: expect.objectContaining({ operationId: "delayed-operation" }) }));
 });
 
 test("a declined, an unanswered and an abandoned confirmation each send nothing and say why", async () => {

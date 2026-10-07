@@ -207,13 +207,19 @@ export class CompanionAdmission {
         row.text = `${proposal.instruction}\n\n[Voice Delegatus reply: report progress or the result using bridge_report with correlatesDirective equal to ${row.delivery.clientMessageId}. Keep the report tied to this request.]`;
       }
       session.proposals[proposal.proposalId] = row;
+      // The projection's first card event shares the admission commit. A
+      // restart can therefore replay the admitted delivery even if the
+      // process stops before it emits the later sending/result events.
+      appendEvent(session, { type: "delegation.tool.called", callId, sourceItemId, instruction: instruction.slice(0, 2_000) }, this.now(), this.cleaner());
+      if (proposal.confirmation) appendEvent(session, { type: "delegation.confirmation.required", proposal }, this.now(), this.cleaner());
       return proposal;
     });
     if (reusedLogicalRequest) return proposal;
-    this.emit(id, { type: "delegation.tool.called", callId, sourceItemId, instruction: instruction.slice(0, 2_000) });
-    // With no confirmation asked, the send that follows announces itself.
-    if (proposal?.confirmation) this.emit(id, { type: "delegation.confirmation.required", proposal });
-    else if (!proposal) this.emit(id, { type: "delegation.tool.result", callId, result: { status: "refused", code: refusal } });
+    // Failed admission has no proposal commit to carry its card event.
+    if (!proposal) {
+      this.emit(id, { type: "delegation.tool.called", callId, sourceItemId, instruction: instruction.slice(0, 2_000) });
+      this.emit(id, { type: "delegation.tool.result", callId, result: { status: "refused", code: refusal } });
+    }
     return proposal;
   }
   /** Admits or declines one delegation. The page can only tap; the spoken

@@ -207,19 +207,25 @@ export function reduceCompanion(state: CompanionState, event: CompanionEvent): C
   const next = reduceCurrent(state, event);
   if (next === state) return state;
   const deliveryEvent = ["delegation.tool.result", "delegation.delivery.settled", "orchestrator.answer"].includes(event.type);
-  if (next.delegation === state.delegation && !deliveryEvent) return next;
+  const retainedCardEvent = event.type === "delegation.confirmed" || deliveryEvent;
+  if (next.delegation === state.delegation && !retainedCardEvent) return next;
   const cards = [...state.deliveryCards];
   const reports = new Set(next.reports);
   if (event.type === "delegation.tool.called" && state.delegation?.stage === "sending"
     && state.delegation.callId !== event.callId && !cards.some(card => card.callId === state.delegation!.callId)) {
     // Keep the in-flight card even before its transport returns a delivery key.
     cards.push(state.delegation);
+  } else if (event.type === "delegation.tool.called" && state.delegation?.stage === "awaiting-confirmation"
+    && state.delegation.callId !== event.callId && !cards.some(card => card.callId === state.delegation!.callId)) {
+    // A backend turn can replace the current proposal before the spoken
+    // answer for this one arrives. Keep it addressable by proposal identity.
+    cards.push(state.delegation);
   }
-  if (deliveryEvent) {
+  if (retainedCardEvent) {
     for (let i = 0; i < cards.length; i++) {
       if (cards[i].callId === next.delegation?.callId) continue;
-      // Apply the same complete identity join to each retained delivery. Only
-      // its card changes; a concurrent answer cannot replace the latest ask.
+      // Apply events to their retained proposal by identity. Delivery events
+      // still pass the complete frozen-binding checks in reduceCurrent.
       const reduced = reduceCurrent({ ...state, delegation: cards[i] }, event);
       cards[i] = reduced.delegation ?? cards[i];
       for (const report of reduced.reports) reports.add(report);

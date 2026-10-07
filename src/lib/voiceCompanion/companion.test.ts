@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
 import { READ_TOOL_NAMES } from "./boardReads";
-import type { CompanionEvent, Delivery, Payload, Recipient } from "./contract";
+import type { CompanionEvent, Delivery, Payload, Proposal, Recipient } from "./contract";
 import { admitDelegationProposal, explicitDelegationRequest } from "./gate";
 import { bezierProgress, bezierSlope, maxFrameShare, riseCurve, RISE_FRAME_SHARE, RISE_FROM_REST, RISE_IN_FLIGHT, RISE_MS } from "./motion";
 import { BUBBLE_MAX_CHARS, CONTROL_SELECTOR, defaultAnchor, intersectionArea, isFree, isPassiveCursor, laneLayout, LANE_HEIGHTS, placeCollapsed, placeExpanded, splitSpeech, type Rect } from "./placement";
@@ -778,6 +778,40 @@ describe("a delivery and its answer bind the whole frozen identity", () => {
     const recovered = reduceCompanion(unknown, at({ type: "delegation.tool.result", callId: "c1", result: { status: "queued", delivery } }));
     expect(recovered.delegation).toMatchObject({ stage: "queued", delivery: { operationId: "o1" } });
     expect(reduceCompanion(recovered, at({ type: "orchestrator.answer", delivery, reportId: "recovered", status: "result", text: "Checked" })).delegation?.stage).toBe("answered");
+  });
+
+  test("a recovered autosend keeps its card through a failed receipt", () => {
+    const admitted = at({ type: "delegation.tool.called", callId: "c1", sourceItemId: "i1", instruction: "Review the plan" });
+    const proposal: Proposal = { proposalId: "p1", callId: "c1", sourceItemId: "i1", instruction: "Review the plan", recipient: RECIPIENT };
+    const recovered = run([
+      admitted,
+      at({ type: "delegation.sending", proposal }),
+      at({ type: "delegation.tool.result", callId: "c1", proposalId: "p1", result: { status: "queued", delivery } }),
+      at({ type: "delegation.delivery.settled", delivery, status: "failed" }),
+    ]);
+    expect(recovered.deliveryCards.filter(card => card.proposal?.proposalId === "p1")).toHaveLength(1);
+    expect(recovered.deliveryCards).toContainEqual(expect.objectContaining({ callId: "c1", stage: "failed", delivery }));
+  });
+
+  test("a delayed confirmation resolves and settles its retained card while a newer proposal waits", () => {
+    const proposalA: Proposal = { authority: "live-model", proposalId: "p1", callId: "c1", sourceItemId: "i1", instruction: "Review the plan", recipient: RECIPIENT,
+      confirmation: { reason: "Check before sending." } };
+    const proposalB: Proposal = { authority: "live-model", proposalId: "p2", callId: "c2", sourceItemId: "i2", instruction: "Deploy the release", recipient: RECIPIENT,
+      confirmation: { reason: "Check before sending." } };
+    const state = run([
+      at({ type: "transcript.final", speaker: "operator", itemId: "i1", text: "Ask the orchestrator to review the plan." }),
+      at({ type: "delegation.tool.called", callId: "c1", sourceItemId: "i1", instruction: proposalA.instruction }),
+      at({ type: "delegation.confirmation.required", proposal: proposalA }),
+      at({ type: "transcript.final", speaker: "operator", itemId: "i2", text: "Tell the orchestrator to deploy the release." }),
+      at({ type: "delegation.tool.called", callId: "c2", sourceItemId: "i2", instruction: proposalB.instruction }),
+      at({ type: "delegation.confirmation.required", proposal: proposalB }),
+      at({ type: "delegation.confirmed", proposalId: "p1", via: "speech", confirmationItemId: "answer-a" }),
+      at({ type: "delegation.tool.result", callId: "c1", proposalId: "p1", result: { status: "queued", delivery } }),
+      at({ type: "delegation.delivery.settled", delivery, status: "failed" }),
+    ]);
+    expect(state.delegation).toMatchObject({ callId: "c2", stage: "awaiting-confirmation", proposal: { proposalId: "p2" } });
+    expect(state.deliveryCards.filter(card => card.proposal?.proposalId === "p1")).toHaveLength(1);
+    expect(state.deliveryCards).toContainEqual(expect.objectContaining({ callId: "c1", stage: "failed", delivery }));
   });
 
   test("a tool call alone delivers nothing", () => {
