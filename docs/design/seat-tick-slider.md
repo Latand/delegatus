@@ -263,7 +263,14 @@ thumb is an 18 px round knob and the travel halves to 30 px, so the control
 is 66 px wide: the side-docked seat's row in Ukrainian had 35 px to spare
 with the old chip down to its glyph and dot, and a knob on the full travel
 pushed «Зупинити хост» 21 px outside it. The drag reads the travel that is
-drawn, so a stop is 10 px there.
+drawn, so a stop is 10 px there. An expiry's hourglass moves into the empty
+knob there: beside the pill it pushed «Зупинити хост» 9 px past the side-docked
+seat in Ukrainian.
+
+**The tint.** The tint behind the thumb is a pill of its own, from the left
+end to the thumb's far edge and the inset past it, so its right end is
+rounded around the thumb and the last stop reads as a fully tinted pill. Cut
+at the thumb's centre, it left a bare crescent in the ring beside the thumb.
 
 **Notches.** A notch marks a stop the thumb is not on. The thumb is wider
 than a step, so a notch closer to it than its half, the notch's radius and a

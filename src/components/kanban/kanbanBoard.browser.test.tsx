@@ -16571,7 +16571,7 @@ describe("seat tick switch: four stops in the seat header and the phone's seat r
     window.__tickMark = () => trace.length;
     window.__tickTrace = () => { on = false; return trace; };
   }`;
-  type Reading = { state: string; stop: string; mode: string; now: string; valueText: string; expanded: string; title: string; word: string | null; wordShown: boolean; thumbKind: string; dot: string; dotInsideTrack: boolean; until: boolean; notchesTouching: string[]; offTint?: { tint: number[]; pill: number[] }; control: { x: number; y: number; w: number; h: number }; track: { x: number; y: number; w: number; h: number }; thumb: { x: number; y: number; w: number; h: number }; thumbInsideTrack: boolean; wordFits: boolean; controlsOnOneRow: boolean | null; labelTruncated: boolean | null; labelText: string | null; pageOverflow: boolean };
+  type Reading = { state: string; stop: string; mode: string; now: string; valueText: string; expanded: string; title: string; word: string | null; wordShown: boolean; thumbKind: string; dot: string; dotInsideTrack: boolean; until: boolean; notchesTouching: string[]; offTint?: { tint: number[]; pill: number[] }; ring?: { before: number[]; after: number[] }; control: { x: number; y: number; w: number; h: number }; track: { x: number; y: number; w: number; h: number }; thumb: { x: number; y: number; w: number; h: number }; thumbInsideTrack: boolean; wordFits: boolean; controlsOnOneRow: boolean | null; labelTruncated: boolean | null; labelText: string | null; pageOverflow: boolean };
 
   /** A column of captioned crops on the page's own background, as one PNG. */
   async function sheet(file: string, rows: Array<{ caption: string; png: Buffer }>, scheme: Scheme, captionWidth: number): Promise<void> {
@@ -16726,6 +16726,17 @@ describe("seat tick switch: four stops in the seat header and the phone's seat r
                     must(tint[0] - tint[2] <= pill[0] - pill[2] + 1, `${tag}: the tint left of the off thumb is rgb(${tint.join(",")}), warmer than the pill's rgb(${pill.join(",")})`);
                     reading.offTint = { tint, pill };
                   }
+                  {
+                    /* The ring 1 px out from the thumb on either side: the tint
+                       reaches past the thumb's far edge, so the two match and
+                       no bare crescent shows beside it, the last stop included. */
+                    const mid = reading.thumb.y + reading.thumb.h / 2 - 0.5;
+                    const before = await pixel(page, reading.thumb.x - 1.5, mid);
+                    const after = await pixel(page, reading.thumb.x + reading.thumb.w + 0.5, mid);
+                    const seam = Math.max(...before.map((value, channel) => Math.abs(value - after[channel]!)));
+                    must(seam <= 4, `${tag}: the ring beside the thumb is rgb(${before.join(",")}) on its left and rgb(${after.join(",")}) on its right`);
+                    reading.ring = { before, after };
+                  }
                   must(reading.control.h === (phone ? 36 : 24), `${tag}: the control is ${reading.control.h} px tall`);
                   must(!reading.pageOverflow, `${tag}: the page scrolls sideways`);
                   if (phone) must(reading.labelTruncated === false, `${tag}: the row's label «${reading.labelText}» is truncated`);
@@ -16879,6 +16890,56 @@ describe("seat tick switch: four stops in the seat header and the phone's seat r
           readings[`768-${lang}-knob`] = reading;
         } finally {
           await context.close();
+        }
+      }
+
+      /* The seat docked to the side at 1440: the row gives up the word there
+         too, and with an expiry the hourglass rides in the knob, so every
+         control of the row stays inside the seat — «Зупинити хост» was cut
+         by 9 px in uk when the hourglass stood beside the pill. */
+      for (const lang of ["en", "uk"] as const) {
+        for (const scheme of ["light", "dark"] as const) {
+          const side: Array<{ caption: string; png: Buffer }> = [];
+          for (const state of ["until", "stale", "15m"]) {
+            const { context, page, pageErrors } = await open(1440, lang, scheme, state);
+            const tag = `side-1440-${lang}-${scheme} ${state}`;
+            try {
+              await page.locator("[data-kanban-seat] [data-seat-placement]").click();
+              await page.waitForSelector(`[data-kanban-seat].side ${CONTROL}[data-seat-tick-stop]`, { timeout: 20_000 });
+              await page.waitForTimeout(600);
+              const reading = await read(page);
+              const fit = await page.evaluate(() => {
+                const seat = document.querySelector("[data-kanban-seat]")!.getBoundingClientRect();
+                const controls = document.querySelector("[data-kanban-seat] [data-orchestrator-controls]")!;
+                const head = document.querySelector("[data-kanban-seat] .seat-head") as HTMLElement;
+                const control = controls.querySelector('[role="slider"][data-seat-tick-switch]')!;
+                const glass = control.querySelector(".seat-tick-knob-until");
+                return {
+                  seatRight: Math.round(seat.right * 10) / 10,
+                  past: [...controls.children].flatMap((child) => {
+                    const right = child.getBoundingClientRect().right;
+                    return right > seat.right + 0.5 ? [`${(child.textContent ?? "").trim() || child.tagName} ${Math.round((right - seat.right) * 10) / 10} px`] : [];
+                  }),
+                  headOverflow: head.scrollWidth > head.clientWidth,
+                  outsideHourglass: control.querySelector("[data-seat-tick-until]")?.getClientRects().length ?? 0,
+                  knobHourglass: glass ? glass.getClientRects().length : 0,
+                };
+              });
+              must(reading !== null && !reading.wordShown && reading.thumb.w === 18, `${tag}: the thumb is ${reading?.thumb.w} px with the word ${reading?.wordShown ? "shown" : "hidden"}`);
+              must(fit.past.length === 0, `${tag}: past the seat's right edge at ${fit.seatRight}: ${fit.past.join(", ")}`);
+              must(!fit.headOverflow, `${tag}: the seat's header scrolls sideways`);
+              must(reading?.controlsOnOneRow === true && !reading.pageOverflow, `${tag}: the controls wrapped or the page scrolls`);
+              must(fit.outsideHourglass === 0 && fit.knobHourglass === (state === "until" ? 1 : 0), `${tag}: hourglass beside the pill ${fit.outsideHourglass}, in the knob ${fit.knobHourglass}`);
+              must(pageErrors.length === 0, `${tag}: page errors ${pageErrors.join(" | ")}`);
+              readings[tag.replace(" ", "-")] = { ...fit, control: reading?.control, track: reading?.track, thumb: reading?.thumb };
+              side.push({ caption: state, png: await shot(page, "[data-kanban-seat] .seat-head") });
+            } catch (error) {
+              failures.push(`${tag}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+            } finally {
+              await context.close();
+            }
+          }
+          if (side.length) await sheet(path.join(FRAMES, `side-1440-${lang}-${scheme}.png`), side, scheme, 110);
         }
       }
 

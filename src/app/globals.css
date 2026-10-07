@@ -155,6 +155,14 @@ body {
     --tick-travel: 30px !important;
     --tick-clear: var(--tick-knob-clear) !important;
   }
+  /* An expiry's hourglass rides in the empty knob: beside it, it took the
+     side-docked seat's row in Ukrainian 9 px past «Зупинити хост». */
+  .incumbent-inline .seat-tick-switch [data-seat-tick-until] {
+    display: none;
+  }
+  .incumbent-inline .seat-tick-switch .seat-tick-knob-until {
+    display: block;
+  }
   /* Inline only: in the dock the link is a row of its own under the identity,
      so it costs the controls nothing and stays at every width. */
   .incumbent-inline [data-orchestrator-predecessor] {
@@ -174,6 +182,12 @@ body {
     --tick-thumb: var(--tick-knob) !important;
     --tick-travel: 30px !important;
     --tick-clear: var(--tick-knob-clear) !important;
+  }
+  .seat-tick-switch [data-seat-tick-until] {
+    display: none;
+  }
+  .seat-tick-switch .seat-tick-knob-until {
+    display: block;
   }
 }
 
@@ -215,11 +229,18 @@ body {
 }
 .seat-tick-track {
   width: calc(var(--tick-thumb) + var(--tick-travel) + 2 * var(--tick-inset) + 2px);
-  background: linear-gradient(
-    to right,
-    color-mix(in oklab, var(--tick) 18%, var(--color-sunken)) calc(var(--tick-left) + var(--tick-thumb) / 2),
-    var(--color-sunken) 0
-  );
+  background: var(--color-sunken);
+}
+/* The tint is a pill of its own from the left end to the thumb's far edge
+   and the inset past it, so its right end is rounded around the thumb and
+   at the last stop it fills the whole pill. A hard edge at the thumb's
+   centre showed in the ring as a bare crescent beside it. */
+.seat-tick-fill {
+  width: calc(var(--tick-left) + var(--tick-thumb) + var(--tick-inset));
+  background: color-mix(in oklab, var(--tick) 18%, var(--color-sunken));
+}
+.seat-tick-knob-until {
+  display: none;
 }
 /* A notch marks a stop the thumb is not on. Closer to the thumb than
    `--tick-clear` stops (the component's, from the thumb's width) it would sit

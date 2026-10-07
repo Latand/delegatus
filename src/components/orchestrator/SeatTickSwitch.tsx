@@ -386,6 +386,7 @@ export function SeatTickSwitch({ read, reading, now, surface, open, onOpen, onRe
         data-seat-tick-track
         className={`seat-tick-track relative inline-block shrink-0 rounded-full border border-border transition-colors group-hover/tick:border-[color-mix(in_oklab,var(--tick)_55%,transparent)] group-focus-visible/tick:ring-2 group-focus-visible/tick:ring-accent/40 ${phone ? "h-9" : "h-6"}`}
       >
+        <span aria-hidden className="seat-tick-fill absolute inset-y-0 left-0 rounded-full" />
         {[0, 1, 2, 3].map((stop) => (
           <span
             key={stop}
@@ -408,6 +409,7 @@ export function SeatTickSwitch({ read, reading, now, surface, open, onOpen, onRe
           }}
         >
           <span data-seat-tick-face className="whitespace-nowrap tabular-nums">{word}</span>
+          {until ? <Hourglass aria-hidden className={`seat-tick-knob-until ${phone ? "h-3.5 w-3.5" : "h-2.5 w-2.5"} text-secondary`} /> : null}
         </span>
       </span>
       {until ? <Hourglass data-seat-tick-until aria-hidden className={`${phone ? "h-3.5 w-3.5" : "h-3 w-3"} shrink-0 text-secondary`} /> : null}
