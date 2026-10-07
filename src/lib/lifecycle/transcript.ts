@@ -136,8 +136,9 @@ function rememberProviderProgress(transcriptPath: string, observed: number | nul
 export async function readLivenessTranscriptEvidence(
   engine: "claude" | "codex",
   transcriptPath: string,
+  options: { strict?: boolean } = {},
 ): Promise<LivenessTranscriptEvidence | null> {
-  const read = await readStableTailRecords(transcriptPath);
+  const read = await readStableTailRecords(transcriptPath, undefined, { strict: options.strict });
   if (read.integrity !== "complete") return null;
   const turn = turnStateFromRecords(read.records, engine);
   return {

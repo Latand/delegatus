@@ -4,7 +4,7 @@
    production owner reader and judged by `probeQuiet`. Each test names the
    table row it decides. */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, openSync, closeSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -975,5 +975,153 @@ describe("each owner on its own records", () => {
     }
     failing = false;
     expect(await probe(p, now + TWELVE_HOURS)).toMatchObject({ quiet: true, blockers: { turns: 0, unreadable: null } });
+  });
+});
+
+/* An owner's evidence read whole: every standing mark of its writer, a read
+   that fails as itself, every conversation a path binds, a round's key under
+   its own engine, and every unknown counted whichever clock releases it. */
+describe("each owner's evidence, whole", () => {
+  test("an owner's own running mark holds past its own idle mark on another row, in either order (R5, R7)", () => {
+    const fence = "structured-host:{\"pid\":1}:1";
+    const key = { engine: "codex" as const, sessionId: "session-a" };
+    const owner = { entryKey: "codex:session-a", writerEpoch: 1 };
+    const marked = (conversationId: string, turn: "idle" | "running") => ({ conversationId, sessionKey: key, host: "hosted", turn: "idle",
+      activeTurnId: null, writerClaim: fence, writerStatus: { sessionKey: key, writerClaim: fence, host: "hosted", turn,
+        activeTurnId: turn === "running" ? "own-turn" : null } }) as unknown as RuntimeSession;
+    const idle = marked("conversation_a", "idle"), running = marked("conversation_b", "running");
+    expect(journalStatement([idle, running], owner)).toBe("claimed");
+    expect(journalStatement([running, idle], owner)).toBe("claimed");
+    expect(journalStatement([idle], owner)).toBeNull();
+  });
+
+  test.each(["idle mark first", "idle mark last"])("an owner's own running mark under a second row holds past its idle mark: %s (R5, R7)", async (order) => {
+    const one = conversation(transcript("settled"));
+    const two = conversation(transcript("settled"));
+    // The journal lists rows by conversation id, so the owner's key picks the order.
+    const [first, second] = [one, two].sort((left, right) => left.id < right.id ? -1 : 1);
+    const [own, other] = order === "idle mark first" ? [first!, second!] : [second!, first!];
+    const host = spawn();
+    const claim = claimHost(own.key, own.path, host.identity, "idle");
+    publish(own.id, own.key, own.path, claim.fence, null);
+    f.registry.upsert({ ...f.registry.readOnlySnapshot().entries[sessionKeyId(own.key)]!, artifactPath: other.path });
+    const active = heldHost(host.child.pid, { status: "active", activeTurnRef: "own-turn" });
+    await bindStructuredDeliveryQueue([{ key: own.key, host: active.host }], { registry: f.registry, client: f.client, hostlessSettleIntervalMs: 0 });
+    expect(row(own.id).writerStatus).toMatchObject({ sessionKey: own.key, writerClaim: claim.fence, turn: "idle" });
+    expect(row(own.id).writerClaim).toBe(claim.fence);
+    expect(row(other.id).writerStatus).toMatchObject({ sessionKey: own.key, writerClaim: claim.fence, turn: "running" });
+    const p = ports({ owners: ownerCensusReader(productionLivenessSources, { readSession: (query) => f.client.readSession!(query), heldHosts: () => new Map() }) });
+    const held = { quiet: false, blockers: { turns: 1, discounted: 0, turnList: [{ reason: "turn-claimed" }] } };
+    expect(await probe(p)).toMatchObject(held);
+    // Foreign writes alter both rows' status and leave the marks as published.
+    event(other.id, own.key, "turn-ended", "own-turn");
+    event(own.id, own.key, "turn-started", "foreign-turn");
+    expect(await probe(p, Date.now() + TWELVE_HOURS)).toMatchObject(held);
+  });
+
+  test("a transcript the owner cannot open holds through unreadable past every bound until it can be read (R7)", async () => {
+    if (process.getuid?.() === 0) return;
+    const path = transcript("open");
+    const c = conversation(path);
+    const host = spawn();
+    claimHost(c.key, path, host.identity, "idle");
+    chmodSync(path, 0o000);
+    try {
+      expect(() => closeSync(openSync(path, "r"))).toThrow(/EACCES/);
+      const p = ports(), now = Date.now();
+      for (const at of [now, now + FIVE_MINUTES, now + TWELVE_HOURS]) {
+        expect(await probe(p, at)).toMatchObject({ quiet: false, blockers: { unreadable: expect.stringContaining("EACCES") } });
+      }
+      chmodSync(path, 0o600);
+      expect(await probe(p, now + TWELVE_HOURS)).toMatchObject({ quiet: false, blockers: { unreadable: null, turns: 1, turnList: [{ reason: "turn-open" }] } });
+    } finally {
+      chmodSync(path, 0o600);
+    }
+  });
+
+  test("a stage that names only an entry's moved path holds while any generation of that entry's conversation lives (R10)", async () => {
+    const pathA = transcript("settled");
+    const c = conversation(pathA);
+    const a = spawn();
+    const claimA = claimHost(c.key, pathA, a.identity, "idle");
+    const keyB = { engine: "codex" as const, sessionId: randomUUID() };
+    const pathB = transcript("settled", undefined, keyB.sessionId);
+    const begun = beginLegacySpawnFixture(f.registry, { engine: "codex", cwd: f.dir, transport: "structured", accountId: "fixture",
+      purpose: "resume-successor", conversationId: c.id as `conversation_${string}` });
+    if (begun.kind !== "created") throw new Error("successor receipt was not created");
+    expect(f.registry.settleSpawn(begun.receipt.launchId, { key: keyB, artifactPath: pathB, cwd: f.dir, accountId: "fixture",
+      status: "dead", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null, structuredHost: null }).kind).toBe("settled");
+    const b = spawn();
+    const claimB = claimHost(keyB, pathB, b.identity, "idle");
+    release(keyB, claimB);
+    await exit(b);
+    const pathC = transcript("settled");
+    f.registry.upsert({ ...f.registry.readOnlySnapshot().entries[sessionKeyId(keyB)]!, artifactPath: pathC });
+    expect(f.registry.readOnlySnapshot().conversations[c.id]!.generations.map((generation) => generation.path)).toEqual([pathA, pathB]);
+    const pipelines = () => [{ id: "lane_moved", task: "Finish the work", state: "running", cursor: { stageId: "stage", state: "running" },
+      runs: [{ stageId: "stage", attempts: [{ n: 1, agentPath: pathC }] }] }] as unknown as ReturnType<QuietPorts["pipelines"]>;
+    const p = ports({ pipelines }), now = Date.now();
+    expect(await probe(p, now)).toMatchObject({ quiet: false, blockers: { stages: 1, turns: 0 } });
+    expect(await probe(p, now + FIVE_MINUTES)).toMatchObject({ quiet: false, blockers: { stages: 1, turns: 0 } });
+    expect(await probe(p, now + TWELVE_HOURS)).toMatchObject({ quiet: false, blockers: { stages: 1, turns: 0 } });
+    release(c.key, claimA);
+    await exit(a);
+    // With no live owner left, the stage's settled transcript holds it for the bound and then releases it.
+    expect(await probe(p, now + TWELVE_HOURS)).toMatchObject({ quiet: false, blockers: { stages: 1, settled: 1 } });
+    expect(await probe(p, now + TWELVE_HOURS + FIVE_MINUTES)).toMatchObject({ quiet: true, blockers: { stages: 0 } });
+  });
+
+  test("a headless round describes only a launch under its own engine's key (R1, R2, R8, R12)", async () => {
+    const now = Date.now();
+    const pathA = transcript("settled");
+    const c = conversation(pathA);
+    const keyB = { engine: "codex" as const, sessionId: randomUUID() };
+    const pathB = transcript("unmarked", new Date(now).toISOString(), keyB.sessionId);
+    const begun = beginLegacySpawnFixture(f.registry, { engine: "codex", cwd: f.dir, transport: "structured", accountId: "fixture",
+      purpose: "resume-successor", conversationId: c.id as `conversation_${string}` });
+    if (begun.kind !== "created") throw new Error("successor receipt was not created");
+    expect(f.registry.settleSpawn(begun.receipt.launchId, { key: keyB, artifactPath: pathB, cwd: f.dir, accountId: "fixture",
+      status: "starting", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null, structuredHost: null }).kind).toBe("settled");
+    const claudePath = join(f.dir, "claude-review.jsonl");
+    writeFileSync(claudePath, "");
+    f.registry.upsert({ ...f.registry.readOnlySnapshot().entries[sessionKeyId(keyB)]!, key: { engine: "claude", sessionId: keyB.sessionId },
+      artifactPath: claudePath, status: "dead" });
+    const reviewer = spawn();
+    await exit(reviewer);
+    const round = (engine: string | null, path: string) => ({ n: 1, reviewerPid: reviewer.child.pid, reviewerIdentity: reviewer.identity.startIdentity,
+      reviewerPath: path, sessionId: keyB.sessionId, verdict: "APPROVE", ...(engine ? { reviewerRole: { engine } } : {}) });
+    const withRound = (r: ReturnType<typeof round> | null, flowEngine = "claude") => ports({ owners: ownerCensusReader(() => ({ ...productionLivenessSources(),
+      flows: () => r ? [{ id: "flow_review", reviewerMode: "headless", state: "completed", roles: { reviewer: { engine: flowEngine } }, rounds: [r] }] as unknown as Flow[] : [] }),
+    { readSession: (query) => f.client.readSession!(query) }) });
+    const held = { quiet: false, blockers: { turns: 1, unresolved: 1, turnList: [{ reason: "launch-unproven", unresolved: true }] } };
+    expect(await probe(withRound(null), now)).toMatchObject(held);
+    const p = withRound(round("claude", claudePath));
+    expect(await probe(p, now)).toMatchObject(held);
+    expect(await probe(p, now + FIVE_MINUTES - 1)).toMatchObject(held);
+    // A legacy round with no frozen role takes the flow's reviewer engine.
+    expect(await probe(withRound(round(null, claudePath)), now)).toMatchObject(held);
+    // A round under the Codex key, at another path, describes that launch, and its gone process releases it.
+    expect(await probe(withRound(round("codex", claudePath)), now)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
+    expect(await probe(withRound(round(null, claudePath), "codex"), now)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
+  });
+
+  test("an ownerless row past its write's grace releases at once and stays counted, also when first seen expired (R8)", async () => {
+    const pathA = transcript("settled");
+    const c = conversation(pathA);
+    const keyB = { engine: "codex" as const, sessionId: randomUUID() };
+    const pathB = transcript("unmarked", new Date().toISOString(), keyB.sessionId);
+    const begun = beginLegacySpawnFixture(f.registry, { engine: "codex", cwd: f.dir, transport: "structured", accountId: "fixture",
+      purpose: "resume-successor", conversationId: c.id as `conversation_${string}` });
+    if (begun.kind !== "created") throw new Error("successor receipt was not created");
+    expect(f.registry.settleSpawn(begun.receipt.launchId, { key: keyB, artifactPath: pathB, cwd: f.dir, accountId: "fixture",
+      status: "starting", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null, structuredHost: null }).kind).toBe("settled");
+    // The row's own write is the first clock: read every probe after it.
+    const now = Date.now() + 1;
+    const p = ports();
+    expect(await probe(p, now)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolved: 1, unresolvedBlocking: 1,
+      turnList: [{ reason: "launch-unproven", unresolved: true }] } });
+    const released = { quiet: true, blockers: { turns: 0, unresolved: 1, unresolvedBlocking: 0 } };
+    expect(await probe(p, now + FIVE_MINUTES)).toMatchObject(released);
+    expect(await probe(ports(), now + FIVE_MINUTES)).toMatchObject(released);
   });
 });

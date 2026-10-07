@@ -301,12 +301,16 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
       if (kind === "unresolved") held.add(shownAs);
       return false;
     };
-    const ownerPastBound = (item: OwnerReading | OwnerlessReading): boolean =>
-      pastBound(`${isOwner(item) ? "owner" : "ownerless"}:${item.id}:${item.artifactPath ?? ""}`, "unresolved", item.tail?.lastRecordAt ?? null, displayId(item));
     /* R8 clock 1: a hosted row with no process past its launch grace proves
        nothing owns it. */
     const expired = (record: OwnerlessReading): boolean => record.kind === "hosted-row"
       && record.updatedAt !== null && now - record.updatedAt >= UNRESOLVED_TURN_GRACE_MS;
+    /* The clocks in R8's order: an expired hosted row's own write, then the
+       newest record of the transcript the item names, then the first probe.
+       Every item is counted in `unresolved`, whichever clock releases it. */
+    const ownerPastBound = (item: OwnerReading | OwnerlessReading): boolean =>
+      pastBound(`${isOwner(item) ? "owner" : "ownerless"}:${item.id}:${item.artifactPath ?? ""}`, "unresolved",
+        !isOwner(item) && expired(item) ? item.updatedAt : item.tail?.lastRecordAt ?? null, displayId(item));
     /* What a stage reference says, from the set of owners bound to it (R10). */
     const judgeStageOwner = async (owner: StageOwner): Promise<{ verdict: "blocks" | "released" | "pending" | "settled" | "unresolved"; since: number | null }> => {
       const reference = { conversationId: owner.conversationId, artifactPath: owner.artifactPath ?? journalPaths.get(owner.conversationId) ?? null };
@@ -398,7 +402,7 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
       holding.set(owner.id, { item: owner, reason, unresolved: verdict === "unknown" });
     }
     for (const record of census.ownerless) {
-      if (expired(record) || ownerPastBound(record)) continue;
+      if (ownerPastBound(record)) continue;
       holding.set(record.id, { item: record, reason: "launch-unproven", unresolved: true });
     }
     const seats = ports.seats?.() ?? [];

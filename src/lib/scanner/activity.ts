@@ -282,8 +282,10 @@ function sameFileState(left: fs.BigIntStats, right: fs.BigIntStats): boolean {
 
 /** Reads a bounded JSONL tail whose records are safe to use for durable state.
  * The scanner's permissive, size-keyed cache serves display derivations; this
- * uncached path verifies every row and the open file's identity around I/O. */
-export async function readStableTailRecords(pathname: string, nbytes = 131_072): Promise<StableTailRead> {
+ * uncached path verifies every row and the open file's identity around I/O.
+ * `strict` keeps a missing file and a torn tail `uncertain` and throws every
+ * other I/O failure, for a caller to which a failed read is no reading. */
+export async function readStableTailRecords(pathname: string, nbytes = 131_072, options: { strict?: boolean } = {}): Promise<StableTailRead> {
   let handle: fs.promises.FileHandle | null = null;
   try {
     handle = await fs.promises.open(pathname, "r");
@@ -340,7 +342,9 @@ export async function readStableTailRecords(pathname: string, nbytes = 131_072):
       records.push(parsed as Record<string, unknown>);
     }
     return { integrity: "complete", prefixTruncated: seek > 0, records };
-  } catch {
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+    if (options.strict && code !== "ENOENT" && code !== "ENOTDIR") throw error;
     return { integrity: "uncertain", records: [] };
   } finally {
     await handle?.close().catch(() => undefined);

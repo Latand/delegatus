@@ -91,30 +91,34 @@ export function fenceEpoch(writerClaim: string | null | undefined): number | nul
 }
 
 /**
- * What one journal row says about one owner (R5, source 3): the status mark
- * that names the owner's entry key and writer, while the row still carries the
- * mark's fence. The mark's own `host`, `turn` and `activeTurnId` are read,
- * whatever later writes did to the row. A row at the owner's fence that claims
- * a turn and carries no mark was written by a journal that kept none, so who
- * set its turn is unknown.
+ * What the journal rows say about one owner (R5, source 3): every status mark
+ * that names the owner's entry key and writer, while its row still carries the
+ * mark's fence. The marks' own `host`, `turn` and `activeTurnId` are read,
+ * whatever later writes did to the rows. The owner's writer can stand on
+ * several rows at once, so they are read as a set: an idle mark on one row
+ * takes nothing from a running mark on another, whichever order the snapshot
+ * lists them in. A row at the owner's fence that claims a turn and carries no
+ * mark was written by a journal that kept none, so who set its turn is
+ * unknown.
  */
 export function journalStatement(
   rows: readonly RuntimeSession[],
   owner: { entryKey: string | null; writerEpoch: number | null },
 ): "claimed" | "unattributed" | null {
   if (owner.writerEpoch === null || owner.entryKey === null) return null;
+  let claimed = false;
   let unattributed = false;
   for (const row of rows) {
     const mark = row.writerStatus;
     if (mark) {
       if (rowKeyId(mark.sessionKey) === owner.entryKey && fenceEpoch(mark.writerClaim) === owner.writerEpoch
-        && row.writerClaim === mark.writerClaim) return sessionClaimsOpenTurn(mark) ? "claimed" : null;
+        && row.writerClaim === mark.writerClaim && sessionClaimsOpenTurn(mark)) claimed = true;
       continue;
     }
     if (rowKeyId(row.sessionKey) === owner.entryKey && fenceEpoch(row.writerClaim) === owner.writerEpoch
       && sessionClaimsOpenTurn(row)) unattributed = true;
   }
-  return unattributed ? "unattributed" : null;
+  return claimed ? "claimed" : unattributed ? "unattributed" : null;
 }
 
 /** What a handle's health says about its host's turn; null when it reports
@@ -172,14 +176,15 @@ export function ownerCensusReader(
       for (const generation of conversation.generations) engines.set(generation.path, conversation.engine);
     }
     /* A missing file or a torn tail reads as null, which R8 bounds. A read
-       that throws is no verdict: it reaches the probe as `unreadable`, and
-       the next probe reads again (R7). */
+       that fails on anything else (a denied open, an I/O error) is no
+       verdict: the strict read throws it, it reaches the probe as
+       `unreadable`, and the next probe reads again (R7). */
     const tail = (path: string | null, engine?: string | null): Promise<TailReading | null> => {
       if (!path) return Promise.resolve(null);
       if (!tails.has(path)) tails.set(path, (async () => {
         const kind = engine ?? engines.get(path) ?? (await liveness.describeTranscript(path))?.engine ?? null;
         if (!kind) return null;
-        const evidence = await liveness.transcriptEvidence(kind as "claude" | "codex", path);
+        const evidence = await liveness.transcriptEvidence(kind as "claude" | "codex", path, { strict: true });
         return evidence ? { turn: evidence.turn === "busy" ? "busy" : evidence.turn === "idle" ? "idle" : "unknown", lastRecordAt: evidence.lastRecordTs } : null;
       })());
       return tails.get(path)!;

@@ -263,17 +263,22 @@ export function registryOwners(
   }
   /* A headless launch records its process on the flow round only, so the
      hosted row it leaves with no process, at the round's own transcript or
-     under the round's own session id, is that round's process (R1). A row of
-     another generation of the same conversation is a launch of its own. */
+     under the round's own session key, is that round's process (R1). The key
+     is the round's session id under the engine its frozen role names, else
+     the flow's reviewer role for a round from before the freeze. A row of
+     another generation of the same conversation, or under another engine's
+     key, is a launch of its own. */
   const described = new Set<string>();
   for (const flow of flows) {
     if (flow.reviewerMode !== "headless") continue;
     for (const round of flow.rounds) {
       const pid = round.reviewerPid;
       if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) continue;
+      const engine = round.reviewerRole?.engine ?? flow.roles?.reviewer?.engine ?? null;
+      const roundKey = round.sessionId && engine ? rowKeyId({ engine, sessionId: round.sessionId }) : null;
       for (const record of ownerless) {
         if (record.kind === "hosted-row" && ((!!round.reviewerPath && record.artifactPath === round.reviewerPath)
-          || (!!round.sessionId && record.sessionKey?.sessionId === round.sessionId))) described.add(record.id);
+          || (roundKey !== null && record.entryKey === roundKey))) described.add(record.id);
       }
       const binding = round.reviewerConversationId ? canonical(registry, round.reviewerConversationId)
         : round.reviewerPath ? map.byPath.get(round.reviewerPath) ?? null : null;
@@ -320,6 +325,18 @@ export function censusIndex(registry: CensusRegistry): CensusIndex {
   const map = bindings(registry);
   const receiptIds = new Set(Object.values(registry.receipts ?? {}).map((receipt) => canonical(registry, receipt.conversationId)));
   const entryPaths = new Set(Object.values(registry.entries).map((entry) => entry.artifactPath));
+  /* The conversations the entries and receipts at a path are bound to. An
+     entry whose artifact moved past its generation's path is found at its own
+     path only, and its binding carries the rest of its conversation (R10). */
+  const pathBindings = new Map<string, Set<string>>();
+  const bindPath = (path: string | null | undefined, id: string | null) => {
+    if (!path || !id) return;
+    const ids = pathBindings.get(path) ?? new Set<string>();
+    ids.add(id);
+    pathBindings.set(path, ids);
+  };
+  for (const entry of Object.values(registry.entries)) bindPath(entry.artifactPath, entryBinding(map, entry));
+  for (const receipt of Object.values(registry.receipts ?? {})) bindPath(receipt.artifactPath, canonical(registry, receipt.conversationId));
   const conversation = (reference: OwnerReference): string | null => {
     const byId = reference.conversationId ? canonical(registry, reference.conversationId) : null;
     if (byId && registry.conversations[byId]) return byId;
@@ -330,9 +347,11 @@ export function censusIndex(registry: CensusRegistry): CensusIndex {
   return {
     conversation,
     boundTo(items, reference) {
+      const ids = new Set(reference.artifactPath ? pathBindings.get(reference.artifactPath) ?? [] : []);
       const id = conversation(reference);
+      if (id !== null) ids.add(id);
       const key = reference.sessionKey ? rowKeyId(reference.sessionKey) : null;
-      return items.filter((item) => (id !== null && item.binding === id)
+      return items.filter((item) => (item.binding !== null && ids.has(item.binding))
         || (!!reference.artifactPath && item.artifactPath === reference.artifactPath)
         || (key !== null && item.entryKey === key));
     },

@@ -308,11 +308,13 @@ export interface AgentLivenessSources {
   /** Active review-loop ownership, read only to resolve detached reviewers that
       intentionally have no structured-host registry entry. */
   flows?(): Flow[];
-  /** Turn state and newest-record freshness from ONE tail read. */
+  /** Turn state and newest-record freshness from ONE tail read. `strict`
+      throws an I/O failure other than a missing file, which otherwise reads
+      as null like a torn tail. */
   transcriptEvidence(
     engine: "claude" | "codex",
     transcriptPath: string,
-    options?: { signal?: AbortSignal | null },
+    options?: { signal?: AbortSignal | null; strict?: boolean },
   ): Promise<LivenessTranscriptEvidence | null>;
   /** The file a transcript path names right now, or null when it names none.
       Evidence read in an earlier call is reused only under the same identity.
