@@ -1616,7 +1616,7 @@ describe("#1695 K3 conversations inside cards", () => {
         await openMenuSection(page, "more");
         const menuItems = await page.evaluate(() => [...document.querySelectorAll('.menu [role="menuitem"]')].map((node) => node.textContent ?? ""));
         const stopItem = menuItems.find((text) => text.startsWith("Stop host"));
-        if (!stopItem?.includes("PID 4401")) failures.push(`stop host: the reader's actions offer ${JSON.stringify(menuItems)}`);
+        if (!stopItem) failures.push(`stop host: the reader's actions offer ${JSON.stringify(menuItems)}`);
         let stopConfirm: unknown = null;
         if (stopItem) {
           await page.click('.menu [role="menuitem"]:has-text("Stop host")');
@@ -1628,6 +1628,8 @@ describe("#1695 K3 conversations inside cards", () => {
           await page.screenshot({ path: path.join(OUT, "flow-stop-host-confirm.png") });
           await page.click("[data-stop-cancel]");
           if (!(stopConfirm as { cancelFocused: boolean }).cancelFocused) failures.push("stop host: the confirmation does not start on Cancel");
+          /* The menu row says only what it does; the process it stops is named in the confirmation. */
+          if (!(stopConfirm as { text: string }).text.includes("PID 4401")) failures.push(`stop host: the confirmation does not name the process: ${JSON.stringify(stopConfirm)}`);
         }
         flows.stopHost = { menuItems, stopConfirm };
 

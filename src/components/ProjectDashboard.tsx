@@ -2085,7 +2085,7 @@ function ProjectDashboardView({
         trailing: (
           <>
             {mobileRuntime !== "live" ? <Badge tone={mobileRuntime === "offline" ? "danger" : "warning"} data-connection={mobileRuntime}>{t(`runtime.${mobileRuntime}`)}</Badge> : null}
-            {t("mobile2.menu.hostTasks", { count: hostBackgroundTasks.length })}
+            {hostBackgroundTasks.length ? t("mobile2.menu.hostTasks", { count: hostBackgroundTasks.length }) : null}
           </>
         ),
         onSelect: () => mobileNav.openSheet("host"),

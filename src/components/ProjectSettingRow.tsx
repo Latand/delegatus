@@ -34,8 +34,9 @@ export function ProjectSettingRow({ label, hint, enabled, disabled, failed, vari
           {...switchProps}
           className={`relative flex shrink-0 items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-45 ${sheet ? "h-11 w-12" : "h-6 w-9"} rounded-full`}
         >
-          <span aria-hidden className={`block h-5 w-9 rounded-full border transition-colors ${enabled ? "border-accent bg-accent" : "border-border bg-well"}`}>
-            <span className={`mt-[1px] block h-4 w-4 rounded-full bg-card shadow transition-transform ${enabled ? "translate-x-[17px]" : "translate-x-[1px]"}`} />
+          {/* Off is an outlined track with a muted knob: a card-coloured knob on the well vanishes in the dark theme. */}
+          <span aria-hidden className={`block h-5 w-9 rounded-full border transition-colors ${enabled ? "border-accent bg-accent" : "border-strong bg-well"}`}>
+            <span className={`mt-[1px] block h-4 w-4 rounded-full shadow transition-transform ${enabled ? "translate-x-[17px] bg-card" : "translate-x-[1px] bg-muted"}`} />
           </span>
         </button>
       </div>

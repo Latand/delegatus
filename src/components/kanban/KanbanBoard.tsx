@@ -1661,7 +1661,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
           {
             type: "item" as const,
             id: "stopHost",
-            label: view.file.pid === null || view.file.pid === undefined ? t("task.kill") : `${t("task.kill")} · PID ${view.file.pid}`,
+            label: t("task.kill"),
             why: stop.state === "disabled" ? stop.reason : t("kanban.stopHostWhy"),
             disabled: stop.state === "disabled",
             onSelect: () => queueMicrotask(() => menu.setOpen({ anchor, value: { kind: "stop", key } })),

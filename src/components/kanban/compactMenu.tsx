@@ -42,20 +42,24 @@ function Row({ action, hint, onPick }: { action: MenuAction; hint: boolean; onPi
       role={action.type === "radio" ? "menuitemradio" : action.type === "check" ? "menuitemcheckbox" : "menuitem"}
       aria-checked={action.type === "radio" || action.type === "check" ? Boolean(action.checked) : undefined}
       aria-disabled={action.disabled ? true : undefined}
+      aria-keyshortcuts={action.kbd ?? undefined}
       title={hint ? undefined : action.why ?? undefined}
       data-cm-item={action.id ?? ""}
       onClick={() => onPick(action)}
     >
       {action.icon ?? null}
       {action.status ? <span className="st" data-status={action.status} /> : null}
-      {action.type === "radio" || action.type === "check" ? <CheckGlyph /> : null}
+      {action.type === "radio" ? <CheckGlyph /> : null}
       <span className="lbl">
         {action.label}
+        {/* The key sits by the name, raised, the way a cell's sits by its icon. */}
+        {action.kbd ? <span className="kbd" aria-hidden>{keySign(action.kbd)}</span> : null}
         {hint && action.why ? <span className="why">{action.why}</span> : null}
         {/* What a choice waits on is never folded into a tooltip. */}
         {action.warn ? <span className="why warn">{action.warn}</span> : null}
       </span>
-      {action.kbd ? <span className="kbd">{action.kbd}</span> : null}
+      {/* A setting among actions shows its state in both positions, at the end of the row, as the board's ⋯ pages do. */}
+      {action.type === "check" ? <span className="cm-switch" aria-hidden /> : null}
     </button>
   );
 }

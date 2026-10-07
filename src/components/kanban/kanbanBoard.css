@@ -700,6 +700,8 @@
 .kb .menu.cm .cm-quick [role="menuitem"][aria-disabled="true"] svg { color: var(--color-muted); }
 /* The key that does the same from the card, in the cell's corner. */
 .kb .menu.cm .cm-key { position: absolute; top: 3px; right: 5px; font-size: var(--text-caption); font-weight: 400; line-height: 1; color: var(--color-muted); }
+/* A row's key is drawn the way a cell's is: the bare sign in the muted caption, no keycap. */
+.kb .menu.cm .lbl .kbd { margin-left: 4px; border: 0; padding: 0; vertical-align: 5px; font-size: var(--text-caption); font-weight: 400; line-height: 1; color: var(--color-muted); }
 .kb .menu.cm .cm-note { margin: 1px 8px 5px; font-size: var(--text-caption); line-height: 1.3; color: var(--color-muted); }
 .kb .menu.cm .cm-val { margin-left: auto; flex: 0 1 auto; min-width: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-label); color: var(--color-muted); }
 .kb .menu.cm .cm-val.cm-colour { display: inline-flex; align-items: center; gap: 6px; }
@@ -707,6 +709,12 @@
 .kb .menu.cm .cm-chev { margin-left: auto; width: 14px; height: 14px; flex-shrink: 0; color: var(--color-muted); }
 .kb .menu.cm .cm-lane { width: 15px; height: 15px; flex-shrink: 0; color: var(--color-muted); }
 .kb .menu.cm .cm-tall .cm-lane, .kb .menu.cm .cm-tall .cm-chev { margin-top: 2px; }
+/* A setting's switch: the accent track when on, an outlined track with a muted knob when off, legible in both themes. */
+.kb .menu.cm .cm-switch { position: relative; flex-shrink: 0; width: 26px; height: 15px; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--surface-well); transition: background-color var(--motion-base), border-color var(--motion-base); }
+.kb .menu.cm .cm-switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 9px; height: 9px; border-radius: 50%; background: var(--color-muted); transition: transform var(--motion-base); }
+.kb .menu.cm [aria-checked="true"] .cm-switch { border-color: var(--color-accent); background: var(--color-accent); }
+.kb .menu.cm [aria-checked="true"] .cm-switch::after { background: var(--surface-card); transform: translateX(11px); }
+.kb .menu.cm .cm-tall .cm-switch { margin-top: 1px; }
 .kb .menu.cm .cm-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; background: var(--c, transparent); border: 1px solid var(--border-strong); }
 .kb .menu.cm .cm-dot[data-set="1"] { border-color: transparent; }
 /* A section's rows hang from its own row, under it, on one rule. */
@@ -718,7 +726,7 @@
 .kb .menu.cm .cm-back .cm-title { min-width: 0; overflow-wrap: anywhere; line-height: 1.3; }
 /* A page is the densest state: its rows sit closer so a pipeline's seven actions keep their second lines inside 360 px. */
 .kb .menu.cm .cm-page [role^="menuitem"]:not(.cm-back) { min-height: 28px; }
-.kb .menu.cm .cm-page [role^="menuitem"].cm-tall { padding-top: 2px; padding-bottom: 2px; }
+.kb .menu.cm .cm-page [role^="menuitem"].cm-tall { padding-top: 4px; padding-bottom: 4px; }
 .kb .menu.cm .cm-page .sep { margin: 2px 4px; }
 .kb .menu.cm .cm-page .why { line-height: 1.25; }
 /* In the list of a card's pipelines the state follows the title on its line and goes to the next one whole: seven pipelines are one page. */
