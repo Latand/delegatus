@@ -39,7 +39,7 @@ import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { enqueueStructuredMessage } from "./structuredMessageDelivery";
 import { INTERRUPTED_CODEX_CONTINUATION_OPERATION_PREFIX, INTERRUPTED_CODEX_CONTINUATION_TEXT, RECOVERY_NOTICE_ORIGIN } from "./recoveryNotices";
 import { ownedDeliveryProgressStore } from "./deliveryProgress";
-import { recordDirectWait, stillAtStep } from "./recordWait";
+import { recordDirectWait, stillAtStep, stillOwnsRecord } from "./recordWait";
 import { structuredContentDigest } from "./structuredContent";
 import { STRUCTURED_DELIVERY_TIMING } from "./structuredDeliveryQueue";
 import { delegatusOriginForRecipient } from "./agentMessageAuthor";
@@ -816,7 +816,9 @@ async function retryInterruptedCodexContinuation(
       progress?.settle(retryOperationId, "failed", message);
       return message;
     }
-    recordDirectWait(progress, registry, row.value, {
+    /* Only over the record written before the command: a queue that already
+       listed the retry owns it. */
+    if (stillOwnsRecord(progress, retryOperationId, written)) recordDirectWait(progress, registry, row.value, {
       reason: "evidence-unreadable",
       detail: `the runtime journal did not acknowledge the retry: ${message}`,
       attempted: true,

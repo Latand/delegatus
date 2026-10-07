@@ -66,8 +66,9 @@ export interface StructuredDeliveryQueuePort {
   reconfigureCancelled?(effect: StructuredReconfigureEffect): boolean;
   /** The failed account switch holding this conversation's messages, or null (#1846). */
   switchHold?(conversationId: string): { accountId: string; reason: string } | null;
-  /** Records that the account switch a message engaged failed, so that message and the ones after it stay held. */
-  holdForFailedSwitch?(effect: StructuredReconfigureEffect, reason: string): void | Promise<void>;
+  /** Records that the account switch a message engaged failed, so that message and the ones after it stay held.
+   * `false` means the registry refused the write: nothing was held. */
+  holdForFailedSwitch?(effect: StructuredReconfigureEffect, reason: string): void | boolean | Promise<void | boolean>;
   effects(kinds?: readonly string[], afterEventSeq?: number): Promise<StructuredDeliveryEffect[]>;
   transition(
     operationId: string,
@@ -189,7 +190,7 @@ interface DeliveryLane {
     replacesTurn: boolean;
     /** A `checking` phase: the read or write the lane is waiting on, and the
         effect it is for. Kept here until it lasts long enough to record. */
-    step?: { effect: SendEffect | InjectEffect; detail: string; recorded: boolean };
+    step?: { effect: DeliveryEffect; detail: string; recorded: boolean };
   } | null;
   /** A pass found more work for this conversation while the lane ran. */
   rerun: boolean;
@@ -773,6 +774,8 @@ export class StructuredDeliveryQueue {
   private readonly targetErrors = new Map<string, string>();
   private readonly passRetry = new RetryBackoff();
   private readonly reconfigureRetries = new Map<string, RetryBackoff>();
+  /** Failed switches whose hold is still owed, by operation: the reason to hold with. */
+  private readonly owedSwitchHolds = new Map<string, string>();
   private readonly nativeExecutionRetries = new Map<string, RetryBackoff>();
   private lastPassError: string | null = null;
   /** This executor's identity, minted per instance and never persisted beyond
@@ -939,6 +942,9 @@ export class StructuredDeliveryQueue {
     const listed = new Set(rawEffects.map((effect) => effect.payload.operationId));
     for (const operationId of this.reconfigureRetries.keys()) {
       if (!listed.has(operationId)) this.reconfigureRetries.delete(operationId);
+    }
+    for (const operationId of this.owedSwitchHolds.keys()) {
+      if (!listed.has(operationId)) this.owedSwitchHolds.delete(operationId);
     }
     const pendingIds = new Set(rawEffects.map(effect => effect.payload.operationId));
     for (const id of this.refusedSteerTurns.keys()) if (!pendingIds.has(id)) this.refusedSteerTurns.delete(id);
@@ -1266,13 +1272,16 @@ export class StructuredDeliveryQueue {
    * bound, with the moment it actually began.
    */
   private async checking<T>(lane: DeliveryLane | undefined, effect: DeliveryEffect, detail: string, wait: () => Promise<T>): Promise<T> {
-    if (!lane || !isMessageEffect(effect)) return wait();
+    /* A native add carries its message's record (A6), so its steps are
+       tracked too; it never replaces a turn. */
+    const message = isMessageEffect(effect);
+    if (!lane || (!message && !isNativeAddEffect(effect))) return wait();
     const previous = lane.current;
     const mine: NonNullable<DeliveryLane["current"]> = {
       operationId: effect.operationId,
       phase: "checking",
       since: this.timing.now(),
-      replacesTurn: effect.kind !== "inject" && effect.policy === "interrupt-active",
+      replacesTurn: message && effect.kind !== "inject" && effect.policy === "interrupt-active",
       step: { effect, detail, recorded: false },
     };
     lane.current = mine;
@@ -2672,9 +2681,14 @@ export class StructuredDeliveryQueue {
     /* #1705: cancellation settles without waiting for a turn boundary. The
        claim checks the same record again in its own transaction. */
     if (this.port.reconfigureCancelled?.(effect)) {
+      this.owedSwitchHolds.delete(effect.operationId);
       await this.transitionReconfigure(effect, "failed", { reason: "cancelled" });
       return false;
     }
+    /* A switch that already failed here and whose hold the lock refused is
+       not applied again: only its hold and its failure are still owed. */
+    const owedHold = this.owedSwitchHolds.get(effect.operationId);
+    if (owedHold !== undefined) return this.failSwitch(effect, owedHold, true, retry);
     const host = this.resolveHost(effect.conversationId);
     if (host) {
       /* A switch is applied at a turn boundary, and an unreadable state is not
@@ -2701,14 +2715,11 @@ export class StructuredDeliveryQueue {
         this.retrySoon();
         return true;
       }
-      await this.transitionReconfigure(effect, "failed", { reason: failureReason(error) });
       /* Keep the failed account hold; the unactuated messages below settle
          with its reason. Supersedence and cancellation create no failure hold. */
-      if (effect.accountId && !this.port.reconfigureCancelled?.(effect)
-        && error instanceof Error && error.name !== "StructuredReconfigureSupersededError" && error.name !== "StructuredReconfigureCancelledError") {
-        await this.port.holdForFailedSwitch?.(effect, failureReason(error));
-      }
-      return false;
+      const holds = Boolean(effect.accountId && !this.port.reconfigureCancelled?.(effect)
+        && error instanceof Error && error.name !== "StructuredReconfigureSupersededError" && error.name !== "StructuredReconfigureCancelledError");
+      return this.failSwitch(effect, failureReason(error), holds, retry);
     }
     // Journal timeouts after the executor returns cannot turn its outcome into
     // a failed switch. Read/reconcile the original receipt on a bounded retry.
@@ -2720,6 +2731,28 @@ export class StructuredDeliveryQueue {
     }
     await this.transitionReconfigure(effect, "applied");
     this.reconfigureRetries.delete(effect.operationId);
+    return false;
+  }
+
+  /**
+   * Ends a failed switch: its hold first, then its failure. The hold is the
+   * barrier the conversation's later messages wait on once the effect is no
+   * longer listed, so a hold the registry refused leaves the effect listed as
+   * it is (`applying`), still blocking them, and owed for the next pass. A
+   * restart before then finds the same listed effect and applies it again,
+   * as after a crash inside the switch (docs/design/delivery-progress-and-drain.md, C3).
+   */
+  private async failSwitch(effect: StructuredReconfigureEffect, reason: string, holds: boolean, retry: RetryBackoff): Promise<boolean> {
+    if (holds) {
+      this.owedSwitchHolds.set(effect.operationId, reason);
+      if (this.port.holdForFailedSwitch && await this.port.holdForFailedSwitch(effect, reason) === false) {
+        retry.fail();
+        this.retrySoon();
+        return true;
+      }
+    }
+    await this.transitionReconfigure(effect, "failed", { reason });
+    this.owedSwitchHolds.delete(effect.operationId);
     return false;
   }
 

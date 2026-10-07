@@ -1919,6 +1919,37 @@ test("a legacy send to an unregistered transcript path reserves the same way, an
   expect(Object.values(registry.snapshot().heldDeliveries).filter((delivery) => delivery.clientMessageId === "unknown-pid")).toEqual([]);
 });
 
+test("a legacy send naming a conversation id the registry does not hold reserves on its pid's transcript and types once per key, and with nothing addressed it is refused untyped", async () => {
+  const registry = new AgentRegistry(path.join(SANDBOX, "legacy-missing-id-registry.json"));
+  setAgentRegistryForTests(registry);
+  const transcript = path.join(SANDBOX, "missing-id.jsonl");
+  const { DeliveryProgressStore } = await import("./runtime/deliveryProgress");
+  const progress = new DeliveryProgressStore(null);
+  const typed: string[] = [];
+  const overrides = {
+    listFiles: async () => [legacyEntry(transcript, 4242)],
+    targetForKnownPid: async () => "%42",
+    sendText: async (_target: string, payload: string) => { typed.push(payload); },
+    progress,
+  };
+  const send = () => deliverConversationMessage({
+    pid: 4242, path: "", conversationId: "conversation_missing", text: "once", images: [], clientMessageId: "same-key",
+  }, overrides as never);
+  expect(await send()).toMatchObject({ ok: true });
+  expect(await send()).toMatchObject({ ok: true });
+  expect(typed).toEqual(["once"]);
+  const [reservation] = Object.values(registry.snapshot().heldDeliveries).filter((delivery) => delivery.clientMessageId === "same-key");
+  expect(reservation).toMatchObject({ state: "delivered", conversationId: registry.conversationForPath(transcript)!.id });
+  expect(progress.get(reservation!.command.operationId)).toMatchObject({ originalKey: "same-key", terminal: { state: "delivered" } });
+
+  const nothing = await deliverConversationMessage({
+    pid: null, path: "", conversationId: "conversation_missing", text: "nowhere", images: [], clientMessageId: "nowhere-key",
+  }, overrides as never);
+  expect(nothing).toMatchObject({ ok: false, status: 404, error: "conversation is unknown to the viewer" });
+  expect(typed).toEqual(["once"]);
+  expect(Object.values(registry.snapshot().heldDeliveries).filter((delivery) => delivery.clientMessageId === "nowhere-key")).toEqual([]);
+});
+
 test("a legacy send is recorded from its reservation, dispatching while the pane actuation hangs, and its hold, claim and settle wait off the loop", async () => {
   const { sqliteRegistryFixture, registryLockHolder, holdBeforeEachWrite, longestLoopGap } = await import("./agent/registryLockHolderFixture");
   const { blockingWaitDiagnostics, resetBlockingWaitsForTests } = await import("./blockingWaits");

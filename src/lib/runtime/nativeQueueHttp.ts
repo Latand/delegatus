@@ -19,7 +19,7 @@ import { API_CLIENT_ORIGIN } from "./messageOrigin";
 import { agentMessageOrigin } from "./agentMessageAuthor";
 import { isRuntimeHostTransportFailure, RuntimeHostUnavailableError, runtimeHostClient, type RuntimeHostClient } from "./client";
 import { ownedDeliveryProgressStore } from "./deliveryProgress";
-import { recordDirectWait, stillAtStep, type DeliveryProgressPort } from "./recordWait";
+import { recordDirectWait, stillAtStep, stillOwnsRecord, type DeliveryProgressPort } from "./recordWait";
 import { STRUCTURED_DELIVERY_TIMING } from "./structuredDeliveryQueue";
 import { structuredHostsEnabled } from "./flags";
 import { admitRuntimeImagePayload, type RuntimeImageAdmissionResult } from "./runtimeImageAdmission";
@@ -245,8 +245,10 @@ export async function handleNativeQueue(request: NextRequest, dependencies: Depe
           await endRow(owner.command.operationId, message);
         } else {
           /* It may have reached the journal: the record says why it waits,
-             the attempt is counted and the queue is woken to list it. */
-          recordDirectWait(progress, registry!, owner, {
+             the attempt is counted and the queue is woken to list it. Written
+             only over the record this request wrote: once the queue or the
+             native executor moved it, they own it. */
+          if (stillOwnsRecord(progress, owner.command.operationId, written)) recordDirectWait(progress, registry!, owner, {
             reason: "evidence-unreadable",
             detail: `the runtime journal did not acknowledge the hand-off: ${message}`,
             attempted: true,

@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, setSystemTime, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -743,6 +743,42 @@ test("a native entry whose journal status cannot be read records why it waits", 
   f.journal.close();
 });
 
+test("a native entry whose journal status read has not answered shows that step and its stall within the bound, and is added once when it answers", async () => {
+  const f = fixture();
+  const add = command("op-native-status-hangs");
+  f.journal.executeOperation(add);
+  const { DeliveryProgressStore } = await import("./deliveryProgress");
+  let clock = Date.now();
+  const progress = new DeliveryProgressStore(null, () => clock);
+  progress.note(add.operationId, conversationId, { waitReason: "queued", originalKey: add.idempotencyKey });
+  let answer!: () => void;
+  let reads = 0;
+  const queue = new StructuredDeliveryQueue({
+    effects: async (kinds, afterEventSeq) => f.journal.effectBatch(100, kinds, afterEventSeq),
+    transition: async () => {},
+    status: async (operationId) => {
+      reads += 1;
+      if (reads === 1) await new Promise<void>((resolve) => { answer = resolve; });
+      return f.journal.operationResult(operationId)?.receipt ?? null;
+    },
+    progress,
+    nativeQueueExecute: (effect, refusal, note) => f.executor.execute(effect as never, refusal, note),
+  }, () => f.host, undefined, undefined, undefined, undefined, undefined, undefined, { stallMs: 4_000, now: () => clock });
+  const draining = queue.drain();
+  for (let attempt = 0; attempt < 200 && !answer; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  expect(f.calls.filter((call) => call.endsWith("/add"))).toHaveLength(0);
+  clock += 5_000;
+  await queue.tick();
+  const waiting = progress.get(add.operationId)!;
+  expect(waiting).toMatchObject({ waitReason: "checking", detail: "reading the delivery journal status", terminal: null });
+  expect(typeof waiting.stalledSince).toBe("string");
+  expect(clock - Date.parse(waiting.phaseSince)).toBeLessThanOrEqual(10_000);
+  answer();
+  await draining;
+  expect(f.calls.filter((call) => call.endsWith("/add"))).toHaveLength(1);
+  f.journal.close();
+});
+
 function handOffFixture(name: string) {
   const f = fixture();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), `llv-handoff-${name}-`));
@@ -831,6 +867,85 @@ test("a key first admitted before this build adopts the journal's operation, and
     expect(commands).toBe(before);
     expect(replay.status).toBe(202);
     expect((await replay.json()).operationId).toBe(freshOperation);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a hand-off whose acknowledgement is lost after Codex already holds the entry keeps the executor's phase and clocks, and the entry is added once", async () => {
+  const { f, registry, cleanup } = handOffFixture("late-failed-ack");
+  const { DeliveryProgressStore } = await import("./deliveryProgress");
+  const progress = new DeliveryProgressStore(null);
+  let kicks = 0;
+  const client = {
+    ...f.client,
+    command: async (c: NativeQueueCommand) => {
+      f.journal.executeOperation(c);
+      /* The queue lists it and the executor hands it to Codex before the reply comes back. */
+      const effect = f.journal.effectBatch(100).find((candidate) => candidate.kind === "runtime.native-queue")!;
+      await f.executor.execute(effect.payload as never, undefined, (reason, detail) => {
+        progress.note(c.operationId!, conversationId, { waitReason: reason, detail: detail ?? null, progressed: true });
+      });
+      setSystemTime(new Date(Date.now() + 5_000));
+      throw new RuntimeHostUnavailableError("runtime host is unavailable");
+    },
+  } as RuntimeHostClient;
+  const dependencies = { client: () => client, enabled: () => true, kick: () => { kicks += 1; }, admitImages: () => ({ images: [], error: null }), storeImages: () => [],
+    registry: () => registry, progress };
+  try {
+    const lost = await handleNativeQueue(handOff("late-failed-ack"), dependencies as never);
+    expect(lost.status).toBe(503);
+    const operationId = Object.values(registry.snapshot().deliveryOperationOwners).find((owner) => owner.clientMessageId === "late-failed-ack")!.command.operationId;
+    const record = progress.get(operationId)!;
+    expect(record).toMatchObject({ waitReason: "awaiting-turn", attempt: 0, terminal: null });
+    expect(Date.parse(record.lastProgressAt)).toBeLessThan(Date.now() - 4_000);
+    expect(kicks).toBe(1);
+    expect(f.calls.filter((call) => call.endsWith("/add"))).toHaveLength(1);
+  } finally {
+    setSystemTime();
+    cleanup();
+  }
+});
+
+test("a hand-off whose supplied operation id names another key's owner is refused and leaves that owner, its record and its entry as they were", async () => {
+  const { f, registry, cleanup } = handOffFixture("collision");
+  const { DeliveryProgressStore } = await import("./deliveryProgress");
+  const progress = new DeliveryProgressStore(null);
+  let commands = 0;
+  const client = { ...f.client, command: async (c: NativeQueueCommand) => { commands += 1; return f.journal.executeOperation(c); } } as RuntimeHostClient;
+  const dependencies = { client: () => client, enabled: () => true, kick: () => {}, admitImages: () => ({ images: [], error: null }), storeImages: () => [],
+    registry: () => registry, progress };
+  const named = (key: string, text: string, operationId: string, target = conversationId) =>
+    new NextRequest("http://localhost/api/runtime/queue", { method: "POST", headers: { host: "localhost", "sec-fetch-site": "same-origin" },
+      body: JSON.stringify({ kind: "native-queue", conversationId: target, idempotencyKey: key, action: "add", text, operationId, binding }) });
+  try {
+    const first = await handleNativeQueue(handOff("owner-a", "message A"), dependencies as never);
+    expect(first.status).toBe(202);
+    const a = (await first.json()).operationId as string;
+    const rowBefore = structuredClone(registry.snapshot().deliveryOperationOwners[a]);
+    const recordBefore = structuredClone(progress.get(a));
+    const before = commands;
+
+    for (const request of [
+      named("owner-b", "message B", a),
+      named("owner-b2", "message A", a),
+      named("owner-a", "message A", a, "conversation_other"),
+    ]) {
+      const refused = await handleNativeQueue(request, dependencies as never);
+      expect(refused.status).toBe(409);
+    }
+    expect(commands).toBe(before);
+    expect(registry.snapshot().deliveryOperationOwners[a]).toEqual(rowBefore);
+    expect(progress.get(a)).toEqual(recordBefore);
+    expect(f.journal.operationResult(a)?.receipt.status).toBe("queued");
+    await f.executor.execute(f.journal.effectBatch(100).find((effect) => effect.kind === "runtime.native-queue")!.payload as never);
+    expect(f.calls.filter((call) => call.endsWith("/add"))).toHaveLength(1);
+
+    /* An owner that has ended is not answered for another key either. */
+    registry.settleDirectAdmission(a, "failed", "settled at its deadline", "unverified");
+    const ended = await handleNativeQueue(named("owner-c", "message C", a), dependencies as never);
+    expect(ended.status).toBe(409);
+    expect(registry.snapshot().deliveryOperationOwners[a]).toMatchObject({ clientMessageId: "owner-a", terminalDisposition: "unverified" });
   } finally {
     cleanup();
   }

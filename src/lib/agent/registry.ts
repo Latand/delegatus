@@ -9564,6 +9564,14 @@ export class AgentRegistry {
         const identity = admission.handOff;
         const canonicalId = resolveConversationAlias(file, identity.conversationId);
         /* The key's rows, the open one first, then the newest. */
+        /* An operation id the request supplied may already name another
+           admission: another key, conversation or payload. That owner belongs
+           to another request, so this one is refused and the owner is left
+           untouched. */
+        const sameHandOff = (owner: DeliveryOperationOwner) =>
+          resolveConversationAlias(file, owner.conversationId) === canonicalId
+          && owner.clientMessageId === identity.clientMessageId
+          && owner.requestDigest === heldDeliveryRequestDigest(canonicalId, identity.text, canonicalHeldDeliveryCommand(identity.command, owner.deliveryId));
         const keyed = identity.clientMessageId
           ? conversationRows(file, "deliveryOperationOwners", canonicalId)
             .filter((owner) => owner.directAdmission === "native-queue-add" && owner.clientMessageId === identity.clientMessageId)
@@ -9585,7 +9593,10 @@ export class AgentRegistry {
             owner.settledAt = settledAt;
           }
           const existingAdopted = file.deliveryOperationOwners[adopted];
-          if (existingAdopted) return clone(existingAdopted);
+          if (existingAdopted) {
+            if (!sameHandOff(existingAdopted)) throw new DeliveryReservationConflictError();
+            return clone(existingAdopted);
+          }
           const owner: DeliveryOperationOwner = { ...ownerFor(identity, adopted), directAdmission: "native-queue-add" };
           file.deliveryOperationOwners[adopted] = owner;
           return clone(owner);
@@ -9599,7 +9610,14 @@ export class AgentRegistry {
           return clone(existing);
         }
         const operationId = identity.command.operationId || crypto.randomUUID();
-        if (file.deliveryOperationOwners[operationId]) return clone(file.deliveryOperationOwners[operationId]);
+        const taken = file.deliveryOperationOwners[operationId];
+        if (taken) {
+          if (!sameHandOff(taken)) throw new DeliveryReservationConflictError();
+          return clone(taken);
+        }
+        if (Object.values(file.heldDeliveries).some((delivery) => delivery.command.operationId === operationId)) {
+          throw new DeliveryReservationConflictError();
+        }
         const owner: DeliveryOperationOwner = { ...ownerFor(identity, operationId), directAdmission: "native-queue-add" };
         file.deliveryOperationOwners[operationId] = owner;
         return clone(owner);

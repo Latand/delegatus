@@ -895,10 +895,10 @@ export async function bindStructuredDeliveryQueue(
       deferTarget: (conversationId) => startupPending && hostResolver(registry, hosts)(conversationId) === null,
       reconfigureCancelled: (effect) => registry.reconfigureCancelled(effect.conversationId as ViewerConversationId, effect.operationId),
       switchHold: (conversationId) => registry.switchHold(conversationId as ViewerConversationId),
-      /* Off the loop (rule c). The switch already failed in the journal, so
-         its effect is no longer listed for a later pass: a hold the lock
-         refused is written again until it lands, and until then the
-         conversation's unactuated messages wait. */
+      /* Off the loop (rule c). The hold is written before the switch is
+         failed in the journal; a hold every attempt was refused answers
+         false, and the queue keeps the switch listed, blocking the
+         conversation's unactuated messages, until a later pass writes it. */
       holdForFailedSwitch: async (effect, reason) => {
         const hold = () => registry.deliveryWrite({ label: "delivery.switch-hold", operationId: effect.operationId },
           () => registry.holdForFailedSwitch(effect.conversationId as ViewerConversationId, {
@@ -907,9 +907,10 @@ export async function bindStructuredDeliveryQueue(
             reason,
           }));
         for (let attempt = 0; attempt < SWITCH_HOLD_WRITE_ATTEMPTS; attempt += 1) {
-          if ((await hold()).acquired) return;
+          if ((await hold()).acquired) return true;
         }
-        console.error("[structured delivery] a failed switch's hold could not be written", { operationId: effect.operationId });
+        console.error("[structured delivery] a failed switch's hold could not be written; it stays owed", { operationId: effect.operationId });
+        return false;
       },
       effects: (kinds, afterEventSeq) => client.effectBatch(kinds, afterEventSeq),
       bindDeliveryGeneration: async (operationId, generationId) => {
@@ -1950,12 +1951,13 @@ export async function bindStructuredDeliveryQueue(
       /* A3: an open record or an ending a crash or the inventory sidecar left
          missing is restored first; once the endings are restored up to this
          sweep, a checkpoint is taken, persisted with the records it covers.
-         Its margin covers a row stamped just before the snapshot. */
+         Its margin covers a row stamped just before the snapshot. A sweep
+         that could not read the store, or failed a backfill, takes none. */
       const sweptAt = Date.now();
       try {
-        restoreMissingRecords(registry, progressStore, sweptAt);
+        const complete = restoreMissingRecords(registry, progressStore, sweptAt);
         mirrorSettledReceipts(registry, progressStore);
-        progressStore.checkpoint(sweptAt - sweepMs);
+        if (complete) progressStore.checkpoint(sweptAt - sweepMs);
       } catch (error) {
         console.error("[structured delivery] progress restoration failed", { error: error instanceof Error ? error.message : String(error) });
       }

@@ -5416,6 +5416,44 @@ test("a lost admission acknowledgement keeps the original-key record from the re
   }
 });
 
+test("an acknowledgement lost after the queue already moved the record leaves the queue's phase, clocks and stall, and still wakes the queue", async () => {
+  const fixture = idleHostedConversation("progress-late-failed-ack", "5eed0015-5555-\x34555-8555-555555555515");
+  const { registry, conversation } = fixture;
+  const journal = fixture.openJournal();
+  let clock = Date.now();
+  const progress = new DeliveryProgressStore(null, () => clock);
+  const client = {
+    ...runtimeJournalClient(journal),
+    command: async (command: Parameters<RuntimeJournal["executeOperation"]>[0]) => {
+      journal.executeOperation(command);
+      /* The queue listed it and began handing it over before the reply came back. */
+      progress.note(command.operationId!, conversation.id, { waitReason: "dispatching", detail: "handing the message to the conversation's host", progressed: true });
+      clock += 5_000;
+      progress.stalled(command.operationId!);
+      throw new RuntimeHostUnavailableError("runtime host is unavailable");
+    },
+  } as unknown as RuntimeHostClient;
+  let kicks = 0;
+  try {
+    const admitted = await enqueueStructuredMessage({
+      path: fixture.artifactPath,
+      conversationId: conversation.id,
+      clientMessageId: "late-failed-ack-key",
+      text: "the queue owns this record before the reply is lost",
+      policy: "queue",
+    }, { enabled: () => true, client: () => client, registry: () => registry, requestMigrationTick: () => {}, kick: () => { kicks += 1; }, progress });
+    expect(admitted).toMatchObject({ ok: false, transportUncertain: true });
+    const operationId = (admitted as { operationId: string }).operationId;
+    const record = progress.get(operationId)!;
+    expect(record).toMatchObject({ originalKey: "late-failed-ack-key", waitReason: "dispatching", attempt: 0, terminal: null });
+    expect(typeof record.stalledSince).toBe("string");
+    expect(clock - Date.parse(record.lastProgressAt)).toBeGreaterThanOrEqual(5_000);
+    expect(kicks).toBe(1);
+  } finally {
+    journal.close();
+  }
+});
+
 test("a send behind an earlier admission on its conversation records conversation-busy then queued, and a journal admission that does not answer is a checking step that stalls and is never a lost wake", async () => {
   const fixture = idleHostedConversation("progress-admission-order", "5eed0006-6666-\x34666-8666-666666666666");
   const { registry, conversation } = fixture;

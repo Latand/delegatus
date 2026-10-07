@@ -1,5 +1,5 @@
 import type { AgentRegistry } from "@/lib/agent/registry";
-import { deliverConversationMessage, migrationDeliveryOutcome } from "@/lib/delivery";
+import { deliverConversationMessage, migrationDeliveryOutcome, type DeliveryOverrides } from "@/lib/delivery";
 import { ownedDeliveryProgressStore } from "@/lib/runtime/deliveryProgress";
 import { recordObservedWait, recordWait, type DeliveryProgressPort } from "@/lib/runtime/recordWait";
 import {
@@ -16,6 +16,8 @@ export interface MigrationDeliveryPortDependencies {
   legacyDelivery?: (input: HeldDeliveryInput) => Promise<Exclude<HeldStructuredMessageOutcome, null> | "held">;
   /** Where the drain's own waits are recorded; the Viewer's store by default. */
   progress?: DeliveryProgressPort | null;
+  /** The legacy ladder's transports, for tests that drive the real legacy drain. */
+  legacyOverrides?: DeliveryOverrides;
 }
 
 export function createMigrationDeliveryPort(
@@ -35,7 +37,11 @@ export function createMigrationDeliveryPort(
       /* #1117: the authorship persisted on the held command replays with the
          message, so a re-routed hold re-attributes exactly as admitted. */
       ...(delivery.command.origin ? { origin: delivery.command.origin } : {}),
-    }, lease ? { actuationLease: lease } : {});
+    }, {
+      ...dependencies.legacyOverrides,
+      ...(dependencies.progress !== undefined ? { progress: dependencies.progress } : {}),
+      ...(lease ? { actuationLease: lease } : {}),
+    });
     return migrationDeliveryOutcome(result);
   });
   const deliverStructured = ({ delivery, path, clientMessageId }: HeldDeliveryInput, reconcileUncertain = false) => structuredDelivery({

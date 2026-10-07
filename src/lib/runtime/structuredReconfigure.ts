@@ -239,11 +239,18 @@ export async function applyStructuredReconfigure(
 
   if (switchingAccount) {
     try {
-      registry.requestConversationReseat(conversationId, targetAccountId!, {
-        operationId: effect.operationId,
-        revision: effect.eventSeq,
-      });
+      /* Off the loop (C3): the reseat binds the conversation's held sends to
+         the switch. Refused, nothing changed: the claim stays `applying`, the
+         queue keeps the switch listed and blocking those sends, and its next
+         pass repeats the claim and this write under the same operation. */
+      const reseated = await registry.deliveryWrite({ label: "delivery.reseat", operationId: effect.operationId },
+        () => registry.requestConversationReseat(conversationId, targetAccountId!, {
+          operationId: effect.operationId,
+          revision: effect.eventSeq,
+        }));
+      if (!reseated.acquired) throw new Error(REGISTRY_WRITER_BUSY);
     } catch (error) {
+      if (registryBusy(error)) throw error;
       if (ownerCancelled()) throw new StructuredReconfigureCancelledError();
       throw error;
     }

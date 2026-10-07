@@ -4813,6 +4813,56 @@ describe("per-conversation lanes in the account-migration coordinator", () => {
     expect(most).toBe(1);
   });
 
+  test("a legacy held drain records dispatching on the original key while it types, stalls within the bound, ends delivered, and a second drain types nothing", async () => {
+    const { setAgentRegistryForTests } = await import("@/lib/agent/registry");
+    const store = registry();
+    setAgentRegistryForTests(store);
+    try {
+      store.reconcileConversations([observation("/legacy-drain.jsonl", "a", "idle")]);
+      const conversation = store.conversationForPath("/legacy-drain.jsonl")!;
+      const held = store.holdDelivery(conversation.id, "typed by the drain", "legacy-drain-key");
+      expect(held.state).toBe("assigned");
+      const progress = new DeliveryProgressStore(null);
+      progress.note(held.command.operationId, conversation.id, { waitReason: "checking", detail: "claiming the delivery record", nextWakeMs: null, kind: "send", originalKey: "legacy-drain-key" });
+      let typed = 0;
+      let release!: () => void;
+      const port = createMigrationDeliveryPort({
+        progress,
+        structuredDelivery: async () => null,
+        legacyOverrides: {
+          recover: async () => null,
+          listFiles: async () => [{
+            path: "/legacy-drain.jsonl", root: "codex-sessions", name: "legacy-drain.jsonl", project: "viewer", title: "legacy",
+            engine: "codex", kind: "session", fmt: "codex", parent: null, mtime: 1, size: 0, activity: "idle", proc: null, pid: null,
+            model: "gpt-5.6-sol", effort: "high", fast: false, pendingQuestion: null, waitingInput: null,
+          } as unknown as FileEntry],
+          pathAllowed: () => true,
+          resumeSpecFor: () => ({ command: "codex resume", cwd: "/", windowName: "codex-resume", engine: "codex" }),
+          deliver: async () => {
+            typed += 1;
+            await new Promise<void>((resolve) => { release = resolve; });
+            return { ok: true, outcome: "resumed", target: "%7" };
+          },
+        } as never,
+      });
+      const draining = drainHeldDeliveries(conversation.id, port, store);
+      for (let attempt = 0; attempt < 400 && !release; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(typed).toBe(1);
+      expect(progress.get(held.command.operationId)).toMatchObject({ waitReason: "dispatching", originalKey: "legacy-drain-key", terminal: null });
+      /* An active phase: the watchdog marks it stalled 4 s after it began, inside the ten-second bound. */
+      const { ACTIVE_DELIVERY_PHASES } = await import("@/lib/runtime/deliveryWaitReason");
+      expect(ACTIVE_DELIVERY_PHASES.has(progress.get(held.command.operationId)!.waitReason)).toBe(true);
+      release();
+      await draining;
+      expect(progress.get(held.command.operationId)).toMatchObject({ terminal: { state: "delivered" } });
+      expect(store.readOnlySnapshot().heldDeliveries[held.id]?.state).toBe("delivered");
+      await drainHeldDeliveries(conversation.id, port, store);
+      expect(typed).toBe(1);
+    } finally {
+      setAgentRegistryForTests(null);
+    }
+  });
+
   test("repeated passes during an unanswered drain neither erase its stall nor mark progress, and its followers show their own wait", async () => {
     const store = registry();
     const [conversation] = committedPair(store, ["stall-acting", "stall-other"]);

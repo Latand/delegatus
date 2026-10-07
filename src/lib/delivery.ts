@@ -3,6 +3,7 @@ import { registeredHostForPath } from "@/lib/conversation/registeredHost";
 import { resumeEligibility, resumeSpecFor } from "@/lib/agent/cli";
 import type { AgentReconfiguration } from "@/lib/agent/reconfigure";
 import { agentRegistry, deliveryMayHaveArrived, REGISTRY_WRITER_BUSY, serviceTierForSpeed, type AgentRegistry, type AgentRegistryEntry, type RegistryConversation, type TmuxHostEvidence } from "@/lib/agent/registry";
+import type { HeldDelivery } from "@/lib/accounts/migration/contracts";
 import { accountManager, ProjectAccountRefusedError, resolveResumeAccountId } from "@/lib/accounts/manager";
 import { AccountProjectBindingsUnreadableError } from "@/lib/accounts/projectBindings";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
@@ -709,7 +710,7 @@ export interface ConversationMessage {
   policy?: "queue" | "steer-or-queue";
 }
 
-interface DeliveryOverrides {
+export interface DeliveryOverrides {
   targetForKnownPid?: typeof targetForKnownPid;
   buildImagePayload?: typeof buildImagePayload;
   sendText?: typeof sendText;
@@ -765,13 +766,13 @@ export async function deliverConversationMessage(message: ConversationMessage, o
   let conversation = message.conversationId?.startsWith("conversation_")
     ? registry.conversation(message.conversationId as `conversation_${string}`)
     : registry.conversationForPath(message.path);
-  /* A9: a request the registry knows no conversation for (a pid only, or a
-     transcript nothing registered) resolves the transcript it addresses and
-     registers its conversation the way a resume of it would, so the send
-     takes the reserved branch below like every other. The pid keeps its own
-     pane as the target. */
+  /* A9: a request the registry knows no conversation for (a pid only, a
+     transcript nothing registered, or a conversation id the registry does not
+     hold) resolves the transcript it addresses and registers its conversation
+     the way a resume of it would, so the send takes the reserved branch below
+     like every other. The pid keeps its own pane as the target. */
   let pidAddressed = false;
-  if (!conversation && !message.reservedDeliveryId && !message.conversationId) {
+  if (!conversation && !message.reservedDeliveryId) {
     const addressed = await addressedTranscript(message, overrides);
     if (addressed && "refused" in addressed) return addressed.refused;
     if (addressed) {
@@ -786,6 +787,10 @@ export async function deliverConversationMessage(message: ConversationMessage, o
       }
       pidAddressed = !message.path;
     }
+    /* Only a drain that already claimed its reservation actuates without one
+       here; a request that addresses nothing the send could reserve on is
+       refused before anything is typed. */
+    if (!conversation) return failure(message.conversationId ? "conversation is unknown to the viewer" : "delivery target is unavailable", 404);
   }
   const rejected = supersededRejection(registry, conversation);
   if (rejected) return rejected;
@@ -961,7 +966,10 @@ export async function deliverConversationMessage(message: ConversationMessage, o
       return { ok: true, target: conversation.id, outcome: "held", operationId: queued.command.operationId };
     });
   }
-  return actuateConversationMessage(message, overrides, { filePath, deliveryId: null, acceptedOperationId: null });
+  /* Reached only with a reservation the drain already claimed and settles
+     itself: the actuation owns that reservation's record while it types. */
+  const drained = message.reservedDeliveryId ? registry.readOnlySnapshot().heldDeliveries[message.reservedDeliveryId] ?? null : null;
+  return actuateConversationMessage(message, overrides, { filePath, deliveryId: null, acceptedOperationId: null, drained });
 }
 
 /** What a settled reservation answers a send under its request: delivered, possibly delivered (#1131), or failed. */
@@ -988,7 +996,13 @@ function settledReservationAnswer(registry: AgentRegistry, deliveryId: string, t
 async function actuateConversationMessage(
   message: ConversationMessage,
   overrides: DeliveryOverrides,
-  claim: { filePath: string | null; deliveryId: string | null; acceptedOperationId: string | null },
+  claim: {
+    filePath: string | null;
+    deliveryId: string | null;
+    acceptedOperationId: string | null;
+    /** The drain's claimed reservation: its record is written here, its registry ending by the drain. */
+    drained?: HeldDelivery | null;
+  },
 ): Promise<DeliveryOutcome> {
   const { pid, images } = message;
   const text = message.text.trim();
@@ -996,7 +1010,8 @@ async function actuateConversationMessage(
   const { filePath, deliveryId, acceptedOperationId } = claim;
   const progress = overrides.progress === undefined ? ownedDeliveryProgressStore() : overrides.progress;
   /* The claimed reservation this actuation answers for, read once by its key. */
-  const reserved = deliveryId ? registry.readOnlySnapshot().heldDeliveries[deliveryId] ?? null : null;
+  const reserved = deliveryId ? registry.readOnlySnapshot().heldDeliveries[deliveryId] ?? null : claim.drained ?? null;
+  const recordOperationId = acceptedOperationId ?? reserved?.command.operationId ?? null;
   let actuation: "none" | "started" | "completed" = "none";
   /**
    * The answer an ambiguous legacy send must give (#1131).
@@ -1019,8 +1034,8 @@ async function actuateConversationMessage(
   };
   /** The send's record, ended the way this actuation ended it. */
   const settleRecord = (state: "delivered" | "failed" | "uncertain", reason: string | null) => {
-    if (!progress || !acceptedOperationId) return;
-    try { progress.settle?.(acceptedOperationId, state, reason); }
+    if (!progress || !recordOperationId) return;
+    try { progress.settle?.(recordOperationId, state, reason); }
     catch { /* A progress record never fails delivery. */ }
   };
   const settle = async (outcome: DeliveryOutcome): Promise<DeliveryOutcome> => {
@@ -1047,7 +1062,11 @@ async function actuateConversationMessage(
             () => registry.discardDelivery(deliveryId));
         }
       }
-      if (outcome.ok) settleRecord("delivered", null);
+      /* A drained send the host only held is requeued by the drain, which
+         delivers it on a later pass: its record waits, it has not ended. */
+      if (outcome.ok && outcome.outcome === "held" && claim.drained) {
+        if (reserved) recordWait(progress, registry, reserved, { reason: "awaiting-host", detail: "the conversation's host has not taken it yet" });
+      } else if (outcome.ok) settleRecord("delivered", null);
       else settleRecord(outcome.actuation === "started" ? "uncertain" : "failed", outcome.error);
       return absorbing(outcome);
     } catch (error) {

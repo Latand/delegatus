@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 import { ownedDeliveryProgressStore, readDeliveryProgress } from "./deliveryProgress";
-import { recordDirectWait, recordRearm, recordWait, stillAtStep, type DeliveryProgressPort } from "./recordWait";
+import { recordDirectWait, recordRearm, recordWait, stillAtStep, stillOwnsRecord, type DeliveryProgressPort } from "./recordWait";
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "node:crypto";
 
@@ -1001,8 +1001,10 @@ export async function handleRuntimeRetry(
         attemptProgress?.settle?.(attemptOperationId, "failed", message);
       } else if (attemptOwner) {
         /* It may have reached the journal: the record says why it waits, the
-           attempt is counted, and the queue is woken to list it. */
-        recordDirectWait(attemptProgress, retryRegistry, attemptOwner, {
+           attempt is counted, and the queue is woken to list it. Written only
+           over the record this route wrote: a queue that already listed the
+           attempt owns it. */
+        if (stillOwnsRecord(attemptProgress, attemptOperationId, attemptRecorded)) recordDirectWait(attemptProgress, retryRegistry, attemptOwner, {
           reason: "evidence-unreadable",
           detail: `the runtime journal did not acknowledge the retry: ${message}`,
           attempted: true,

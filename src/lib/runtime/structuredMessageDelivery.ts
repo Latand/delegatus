@@ -47,7 +47,7 @@ import {
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { ownedDeliveryProgressStore, type DeliveryProgressRecord } from "./deliveryProgress";
 import type { DeliveryWaitReason } from "./deliveryWaitReason";
-import { recordWait, stillAtStep, type DeliveryProgressPort, type RecordedWait } from "./recordWait";
+import { recordWait, stillAtStep, stillOwnsRecord, type DeliveryProgressPort, type RecordedWait } from "./recordWait";
 import { STRUCTURED_DELIVERY_TIMING } from "./structuredDeliveryQueue";
 import { markStructuredRuntimeSessionRecovered } from "./startupStatus";
 import { isInterruptionObligationId } from "./interruptionObligations";
@@ -1468,6 +1468,8 @@ export async function enqueueStructuredMessage(
   const payloadRefused = payloadRefusal(imageCapability, activeSession.sessionKey.engine, refs, wantsImages);
   if (payloadRefused) return refuseReservedPayload(payloadRefused.error, payloadRefused.status);
   let commandResult: RuntimeOperationResult | null = null;
+  /* The record this request wrote last, for the lost-acknowledgement note. */
+  let lastWritten: DeliveryProgressRecord | null = null;
   /* The operation a claimed reservation was accepted under. The claim leaves
      the reservation `delivery-uncertain`, so from here a throw is an accepted
      send whose fate is unknown, and it answers with this handle. */
@@ -1571,6 +1573,7 @@ export async function enqueueStructuredMessage(
         detail: "admitting to the runtime journal",
         nextWakeMs: null,
       }) ?? written;
+      lastWritten = written;
       commandResult = await client.command({
         kind: assigned.command.kind,
         operationId: assigned.command.operationId,
@@ -1674,7 +1677,10 @@ export async function enqueueStructuredMessage(
          record within one pass. */
       if (claimedOperation) {
         const claimedReservation = reservationFor(registry, claimedOperation);
-        if (claimedReservation) {
+        /* Only over the record this request wrote: a journal that admitted
+           the command before its reply was lost may have been listed by the
+           queue, which owns the record from then on. */
+        if (claimedReservation && stillOwnsRecord(progress, claimedOperation, lastWritten)) {
           recordWait(progress, registry, claimedReservation, {
             reason: "evidence-unreadable",
             detail: `the runtime journal did not acknowledge the admission: ${failure.error}`,

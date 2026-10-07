@@ -156,6 +156,8 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private lastPruneAt = 0;
   private loaded = false;
+  /** When a read that failed may be tried again. */
+  private loadRetryAt = 0;
   /** Every ending whose owner row settled before this has a record in the
       file. Null when the file holds no checkpoint (A3). */
   private checkedThrough: number | null = null;
@@ -308,17 +310,26 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
   }
 
   /** Whether the store holds a record of the operation, in memory or only on
-      disk (a terminal record trimmed from memory). */
-  knows(operationId: string): boolean {
+      disk (a terminal record trimmed from memory): `unknown` when the file
+      could not be read, which proves neither. */
+  presence(operationId: string): "present" | "absent" | "unknown" {
     this.load();
-    if (this.records.has(operationId)) return true;
-    if (this.filename === null || !fs.existsSync(this.filename)) return false;
+    if (this.records.has(operationId)) return "present";
+    if (this.filename === null) return "absent";
+    if (!this.loaded) return "unknown";
+    if (!fs.existsSync(this.filename)) return "absent";
     try {
-      return this.connection().query<{ found: number }, [string]>("SELECT 1 AS found FROM delivery_progress WHERE operation_id = ?").get(operationId) !== null;
+      return this.connection().query<{ found: number }, [string]>("SELECT 1 AS found FROM delivery_progress WHERE operation_id = ?").get(operationId) !== null
+        ? "present" : "absent";
     } catch {
-      /* Unreadable: assume it is there, so nothing is written over it. */
-      return true;
+      return "unknown";
     }
+  }
+
+  /** {@link presence}, with an unreadable file taken as holding it, so
+      nothing is written over a record that may be there. */
+  knows(operationId: string): boolean {
+    return this.presence(operationId) !== "absent";
   }
 
   /**
@@ -529,8 +540,10 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
       the ones its predecessor wrote. */
   private load(): void {
     if (this.loaded) return;
-    this.loaded = true;
-    if (this.filename === null || !fs.existsSync(this.filename)) return;
+    /* A read that failed is tried again, at most once per retry interval:
+       the store counts as loaded only once a read succeeded. */
+    if (this.now() < this.loadRetryAt) return;
+    if (this.filename === null || !fs.existsSync(this.filename)) { this.loaded = true; return; }
     try {
       const rows = this.connection().query<{ record_json: string }, [number, number]>(`
         SELECT record_json FROM delivery_progress
@@ -549,7 +562,11 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
       } catch {
         this.checkedThrough = null;
       }
+      this.loaded = true;
     } catch (error) {
+      this.loadRetryAt = this.now() + FLUSH_RETRY_MS;
+      this.db?.close();
+      this.db = null;
       console.error("[delivery progress] read failed", { error: error instanceof Error ? error.message : String(error) });
     }
   }

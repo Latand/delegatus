@@ -219,6 +219,45 @@ test("a checkpoint reaches the file only with the records owed when it was taken
   now += 1;
 });
 
+test("a progress file the sweep cannot read proves no ending: no checkpoint passes it, and once readable the ending is restored under its original key and survives a reopen", () => {
+  for (const unreadable of ["at-load", "after-load"] as const) {
+    const { registry, conversation, filename } = sweepFixture(`unreadable-${unreadable}`);
+    let now = Date.now();
+    const bootstrap = new DeliveryProgressStore(filename, () => now, noTimer);
+    bootstrap.note("bootstrap", conversation.id, { waitReason: "queued" });
+    expect(bootstrap.flush()).toBe(true);
+    bootstrap.close();
+    const held = registry.holdDelivery(conversation.id, "settled while unreadable", `unreadable-${unreadable}-key`);
+    registry.recordDeliveryOutcome(held.id, "delivered", null, "delivered");
+    now += 1_000;
+
+    const store = new DeliveryProgressStore(filename, () => now, noTimer);
+    const internals = store as unknown as { connection: () => unknown };
+    const connection = internals.connection;
+    if (unreadable === "at-load") fs.chmodSync(filename, 0o000);
+    else {
+      expect(store.get("bootstrap")).not.toBeNull();
+      internals.connection = () => { throw new Error("unable to open database file"); };
+    }
+    expect(store.presence(held.command.operationId)).toBe("unknown");
+    expect(restoreMissingRecords(registry, store, now)).toBe(false);
+    expect(store.get(held.command.operationId)).toBeNull();
+
+    if (unreadable === "at-load") fs.chmodSync(filename, 0o600);
+    else internals.connection = connection;
+    now += 1_000;
+    expect(restoreMissingRecords(registry, store, now)).toBe(true);
+    store.checkpoint(now - 500);
+    expect(store.flush()).toBe(true);
+    store.close();
+
+    const reopened = new DeliveryProgressStore(filename, () => now, noTimer);
+    restoreMissingRecords(registry, reopened, now);
+    expect(reopened.get(held.command.operationId)).toMatchObject({ originalKey: `unreadable-${unreadable}-key`, terminal: { state: "delivered" } });
+    reopened.close();
+  }
+});
+
 test("an open reservation whose record was owed at a crash gets it back, dated from its admission", () => {
   const { registry, conversation, filename } = sweepFixture("open-owed");
   const uncertain = registry.holdDelivery(conversation.id, "owed uncertain fixture", "uncertain-owed-key");

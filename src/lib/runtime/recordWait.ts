@@ -152,6 +152,22 @@ export function stillAtStep(current: DeliveryProgressRecord | null, written: Del
 }
 
 /**
+ * Whether a writer that may race the queue still owns the record (rule a,
+ * step 4): the record is the one it wrote last, or, when it wrote none, there
+ * is no record yet. A command that failed after the journal admitted it may
+ * already have been listed, so its failure note is written only then.
+ */
+export function stillOwnsRecord(progress: DeliveryProgressPort | null, operationId: string, written: DeliveryProgressRecord | null): boolean {
+  if (!progress) return false;
+  try {
+    const current = progress.get(operationId);
+    return written ? stillAtStep(current, written) : current === null;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * An observer's note (rule a, step 5): a pass that found the conversation's
  * lane running, a drain refused the section, the watchdog. It writes
  * `conversation-busy` only to an `assigned` reservation other than the acting
@@ -185,7 +201,7 @@ export function conversationActorRunning(conversationId: string): boolean {
 
 /** The store A3 restores into: the Viewer's own. */
 export type RestorableProgress = DeliveryProgressPort & {
-  knows(operationId: string): boolean;
+  presence(operationId: string): "present" | "absent" | "unknown";
   backfillEnded(ended: Parameters<import("./deliveryProgress").DeliveryProgressStore["backfillEnded"]>[0]): boolean;
   completenessMark(): number;
 };
@@ -206,13 +222,25 @@ const RESTORE_ENDED_LIMIT = 5_000;
  * 2. Every owner row that ended at or after the store's completeness mark,
  *    and whose operation the store holds nowhere, gets its ending under its
  *    original key, as the receipt reads it. Nothing is sent, re-armed or woken.
+ *
+ * Answers whether every ending up to `now` is now known to have its record:
+ * a store that could not say whether it holds one, or a backfill that failed,
+ * proves nothing, so the sweep takes no checkpoint past it and the next sweep
+ * checks again.
  */
-export function restoreMissingRecords(registry: AgentRegistry, progress: RestorableProgress, now = Date.now()): void {
+export function restoreMissingRecords(registry: AgentRegistry, progress: RestorableProgress, now = Date.now()): boolean {
   const file = registry.readOnlySnapshot();
+  let complete = true;
+  /** Whether the record is missing; an unreadable store marks the sweep incomplete. */
+  const missing = (operationId: string): boolean => {
+    const presence = progress.presence(operationId);
+    if (presence === "unknown") complete = false;
+    return presence === "absent";
+  };
   for (const delivery of Object.values(file.heldDeliveries)) {
     if (delivery.state !== "held" && delivery.state !== "assigned" && delivery.state !== "delivery-uncertain") continue;
     const operationId = delivery.command.operationId;
-    if (!operationId || progress.knows(operationId)) continue;
+    if (!operationId || !missing(operationId)) continue;
     recordWait(progress, registry, delivery, {
       reason: delivery.state === "delivery-uncertain" ? "evidence-unreadable" : "checking",
       detail: RESTORED_DETAIL,
@@ -220,7 +248,7 @@ export function restoreMissingRecords(registry: AgentRegistry, progress: Restora
     });
   }
   for (const [operationId, owner] of Object.entries(file.deliveryOperationOwners)) {
-    if (!ownsItsSettlement(owner) || owner.terminalState !== null || progress.knows(operationId)) continue;
+    if (!ownsItsSettlement(owner) || owner.terminalState !== null || !missing(operationId)) continue;
     recordDirectWait(progress, registry, owner, { reason: "checking", detail: RESTORED_DETAIL, sinceMs: Date.parse(owner.createdAt) });
   }
   const mark = progress.completenessMark();
@@ -233,11 +261,11 @@ export function restoreMissingRecords(registry: AgentRegistry, progress: Restora
     .sort(([, left], [, right]) => (right.settledAt ?? "").localeCompare(left.settledAt ?? ""))
     .slice(0, RESTORE_ENDED_LIMIT);
   for (const [operationId, owner] of ended) {
-    if (progress.knows(operationId)) continue;
+    if (!missing(operationId)) continue;
     const receipt = sendReceiptFor(file, operationId);
     if (!receipt || receipt.state === "in-flight") continue;
     try {
-      progress.backfillEnded({
+      const written = progress.backfillEnded({
         operationId,
         conversationId: owner.runtimeConversationId,
         originalKey: owner.clientMessageId,
@@ -247,8 +275,11 @@ export function restoreMissingRecords(registry: AgentRegistry, progress: Restora
         state: receipt.state === "delivered" ? "delivered" : receipt.duplicateRisk ? "uncertain" : "failed",
         reason: receipt.reason ?? null,
       });
+      if (!written && !progress.get(operationId)) complete = false;
     } catch (error) {
+      complete = false;
       logged(error);
     }
   }
+  return complete;
 }
