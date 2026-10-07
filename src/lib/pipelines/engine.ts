@@ -335,6 +335,9 @@ export interface PipelinePorts {
     /** Admission time of the attempt this message continues. An update drain
         delivers a follow-up to an attempt it found running and holds the rest. */
     cohortAt?: string;
+    /** Called before a false answer that does not prove nothing was accepted:
+        the surface may have admitted the message and lost its acknowledgement. */
+    onUncertain?: () => void;
   }): Promise<boolean>;
   /** Enrolls this stage's existing conversation in ordinary account migration. */
   requestConversationReseat?(conversationId: string, targetAccountId: string): Promise<void>;
@@ -1540,6 +1543,7 @@ export function defaultPipelinePorts(
         origin: delegatusMessageOrigin("pipeline", input.project, input.cwd),
         ...(input.cohortAt ? { cohortAt: input.cohortAt } : {}),
       });
+      if (result?.ok !== true && result?.transportUncertain === true) input.onUncertain?.();
       return result?.ok === true;
     },
     requestConversationReseat: async (conversationId, targetAccountId) => {
@@ -3271,9 +3275,9 @@ async function retryTerminalStagePublication(
   if (ports.deferStageGit) return;
   const current = (await currentPipelineBranchHead(pipeline, ports.exec));
   if (!current.ok || current.sha !== pipeline.lastPassedCommit) {
-    const detail = current.ok
+    const detail = afterCommitRepair(attempt, current.ok
       ? `the worktree moved to ${current.sha} after accepting ${pipeline.lastPassedCommit}; commit and publish the current head before completing this stage`
-      : `the accepted head cannot be verified before completion: ${current.error}`;
+      : `the accepted head cannot be verified before completion: ${current.error}`);
     // Head verification can be retried without discarding the accepted pass.
     attempt.error = detail;
     park(pipeline, detail);
@@ -3290,7 +3294,7 @@ async function retryTerminalStagePublication(
   });
   if (!published.ok) {
     if (retryRefusedPublication(pipeline, attempt, published, ports)) return;
-    attempt.error = passedPublicationParkDetail(attempt, published);
+    attempt.error = afterCommitRepair(attempt, passedPublicationParkDetail(attempt, published));
     park(pipeline, attempt.error);
     return;
   }
@@ -3468,8 +3472,12 @@ async function sendStageCommitRepair(
     repair.sendingAt = ports.now();
     await persist();
   }
-  /* A delivery surface that refuses or throws has accepted nothing: the next
-     tick asks again inside the same wait. */
+  /* A false answer leaves the request owed: the next tick asks again under the
+     same id inside the same wait. Only an outright refusal proves the surface
+     accepted nothing; an answer that lost its acknowledgement, or a throw, may
+     follow an admission whose turn is already running, so its moment stays
+     the boundary that turn is judged against. */
+  let uncertain = false;
   const delivered = await Promise.resolve().then(() => ports.resumeSeveredTurn!({
     conversationId,
     transcriptPath: attempt.agentPath!,
@@ -3478,15 +3486,18 @@ async function sendStageCommitRepair(
     project: pipeline.project,
     cwd: pipeline.repoDir,
     ...(attempt.startedAt ? { cohortAt: attempt.startedAt } : {}),
-  })).catch(() => false);
+    onUncertain: () => { uncertain = true; },
+  })).catch(() => { uncertain = true; return false; });
   if (delivered !== true) {
-    delete repair.sendingAt;
+    if (uncertain) repair.sendUncertain = true;
+    else if (!repair.sendUncertain) delete repair.sendingAt;
     await persist();
     return false;
   }
   repair.requestedAt = repair.sendingAt;
   repair.clientMessageId = clientMessageId;
   delete repair.sendingAt;
+  delete repair.sendUncertain;
   await persist();
   return true;
 }
@@ -3521,7 +3532,7 @@ async function stageRepairEvidence(attempt: PipelineStageAttempt, ports: Pipelin
 /** The park text for a stage that was asked to repair and is parked by `reason`. */
 function afterCommitRepair(attempt: PipelineStageAttempt, reason: string): string {
   const asked = attempt.commitRepair?.detail;
-  return !asked || asked === reason ? reason : `${reason}\nThe stage was asked once to repair this earlier refusal:\n${asked}`;
+  return !asked || reason.includes(asked) ? reason : `${reason}\nThe stage was asked once to repair this earlier refusal:\n${asked}`;
 }
 
 /** False while a requested repair is still out: the commit waits for it. */
@@ -7340,7 +7351,9 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
       await withPipelineMutation((pipelines, persist) => {
         const current = pipelines.find((pipeline) => pipeline.id === preview.id);
         if (!current || !matches(current)) return;
-        park(current, error instanceof Error ? error.message : "Pipeline locking unavailable", currentAttempt(current, stage.id));
+        const recorded = currentAttempt(current, stage.id);
+        const cause = error instanceof Error ? error.message : "Pipeline locking unavailable";
+        park(current, recorded ? afterCommitRepair(recorded, cause) : cause, recorded);
         persist([current]); changed = true;
       });
       continue;
@@ -7515,7 +7528,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
         const interruptedPublicationCleared = operation?.sha === pipeline.lastPassedCommit
           && operation.epoch === pipeline.delivery?.epoch
           && !deliveryOwnerError(pipeline, pipelineDeliveryLookup({ ...pipeline.delivery!.target, active: true }))
-          && (pipeline.stateDetail === `publishing the passed stage: publisher ${pipeline.delivery!.ownerId} at epoch ${pipeline.delivery!.epoch} is in flight or uncertain`
+          && (pipeline.stateDetail?.split("\n", 1)[0] === `publishing the passed stage: publisher ${pipeline.delivery!.ownerId} at epoch ${pipeline.delivery!.epoch} is in flight or uncertain`
             || (operation.state === "settled" && pipeline.stateDetail?.startsWith(`publishing the passed stage: publication ${operation.id} has no progress for `)));
         if (pipeline.state === "needs_decision" && passed && stageHeadAccepted(passed)
           && (deliveryRefusalCleared || publicationSucceeded || interruptedPublicationCleared)) {

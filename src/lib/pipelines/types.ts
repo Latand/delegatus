@@ -521,7 +521,9 @@ export type PipelineStageAttempt = {
       `messageTs` the stage's last message when it was refused, so the repair
       is over on the first completed turn after it. `sendingAt` is stored
       before a request leaves and kept until the delivery surface answers, so a
-      replay after a crash keeps it; `requestedAt` takes that moment once the
+      replay after a crash keeps it; only an outright refusal clears it, and
+      never after `sendUncertain` recorded an answer that may have followed an
+      admission; `requestedAt` takes that moment once the
       surface accepted the request, and `settledAt` is set once the commit was
       tried again; `refusedAt` bounds the whole wait. A refusal that finds this
       record already written parks. */
@@ -531,6 +533,7 @@ export type PipelineStageAttempt = {
     paths: string[];
     messageTs: number | null;
     sendingAt?: string;
+    sendUncertain?: true;
     requestedAt?: string;
     clientMessageId?: string;
     settledAt?: string;

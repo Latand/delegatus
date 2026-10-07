@@ -73,10 +73,29 @@ function pathAt(line: string, file: string, from = 0): number {
 const INFRASTRUCTURE_FAILURE = [
   /\bE(?:ACCES|AGAIN|BUSY|CONNREFUSED|CONNRESET|DQUOT|IO|ISDIR|MFILE|NFILE|NOENT|NOMEM|NOSPC|NOTDIR|PERM|PIPE|ROFS|TIMEDOUT)\b/,
   /too many open files|no such file or directory|permission denied|no space left on device|cannot allocate memory|out of memory|command not found|segmentation fault/i,
+  /* `/bin/sh` (dash) on a missing command: `<script>: <line>: <command>: not found`.
+     `git commit` exits 1 for any hook status, so the 127 never reaches us. */
+  /: \d+: \S+: not found$/,
   /* A stack frame (`    at fn (file:1:20)`) or a Python traceback: a program crashed. */
   /^\s+at\s.*:\d+:\d+\)?$/,
   /^Traceback \(most recent call last\):/,
 ];
+
+/** A line of the staged content a hook echoes under its diagnostic: a diff
+    line (`git diff --check` prints the added line after its position) or a
+    code frame row (`> 3 | const x = 1;`, `    |       ^`). What it spells is
+    the stage's text, never a report of what failed. */
+function sourceExcerpt(line: string): boolean {
+  return line.startsWith("+") || /^\s*>?\s*\d*\s*\|/.test(line);
+}
+
+/** A line as a report of what failed: an excerpt says nothing, and a name the
+    message quotes (`'ENOENT' is assigned a value but never used`) is the
+    stage's text too. An apostrophe inside a word opens no quote. */
+function reportedText(line: string): string {
+  if (sourceExcerpt(line)) return "";
+  return line.replace(/(^|[^\w])'[^']*'/g, "$1").replace(/"[^"]*"/g, "").replace(/`[^`]*`/g, "");
+}
 
 /** A diagnostic placed at a line of `file`, with a message after the position. */
 function locatesDiagnostic(lines: readonly string[], file: string): boolean {
@@ -100,7 +119,7 @@ async function stageCommitRefusal(commit: ExecResult, staged: readonly string[] 
   }
   const lines = `${commit.stderr}\n${commit.stdout}`.split("\n").map((line) => line.trimEnd());
   const judged = typeof commit.code === "number" && commit.code !== 126 && commit.code !== 127 && !killedAtBound(commit);
-  const infrastructure = lines.some((line) => INFRASTRUCTURE_FAILURE.some((pattern) => pattern.test(line)));
+  const infrastructure = lines.map(reportedText).some((line) => INFRASTRUCTURE_FAILURE.some((pattern) => pattern.test(line)));
   const repairable = judged && !infrastructure && paths.length > 0
     && (privacyContentVerdict(lines) || paths.some((file) => locatesDiagnostic(lines, file)));
   return { repairable, paths };
