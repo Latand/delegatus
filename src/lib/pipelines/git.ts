@@ -1675,7 +1675,7 @@ export async function reconcilePipelinePublication(id: string, expectedEpoch: nu
           ? { ok: false, error: failure ? publicationFailureDetail(failure)
             : retained.ok ? "publication did not leave its accepted head on the remote; the executor completed without confirmation"
               : redactBounded(redactPublicationText(retained.error), 4500),
-            ...(failure ? { failure } : {}) }
+            ...(failure ? { failure } : {}), ...(!retained.ok && retained.outcome ? { outcome: retained.outcome } : {}) }
           : { ok: false, error: "interrupted publication did not leave its accepted head on the remote" };
       if (!result.ok && (!retained || (retained.ok && retained.uncertain))) result.outcome = "not-landed";
       const attempt = current.runs.find((run) => run.stageId === current.cursor?.stageId)?.attempts.at(-1);

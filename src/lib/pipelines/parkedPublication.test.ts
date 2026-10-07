@@ -8,15 +8,17 @@ import type { Flow } from "@/lib/flows/types";
 
 // Store modules bind some paths at import time. Run these real controller
 // regressions in a child so their state and module caches cannot affect the
-// pre-push hook's other selected suites in the parent Bun process.
+// pre-push hook's other selected suites in the parent Bun process. The child
+// takes 45 s at load 18 on 24 cores; the bound stays inside the hook's
+// five-minute budget per file.
 if (process.env.LLV_PARKED_PUBLICATION_CHILD !== "1") {
   test("isolated parked publication regressions", () => {
     const result = spawnSync(process.execPath, ["test", import.meta.path], {
-      env: { ...process.env, LLV_PARKED_PUBLICATION_CHILD: "1" }, encoding: "utf8", timeout: 30_000,
+      env: { ...process.env, LLV_PARKED_PUBLICATION_CHILD: "1" }, encoding: "utf8", timeout: 120_000,
     });
     if (result.status !== 0) throw new Error(`${result.stdout}\n${result.stderr}`);
     expect(result.status).toBe(0);
-  }, 35_000);
+  }, 125_000);
 } else {
 const previousState = process.env.LLV_STATE_DIR;
 const state = fs.mkdtempSync(path.join(os.tmpdir(), "llv-parked-publication-"));
@@ -684,6 +686,34 @@ test("a hook that stopped at the deadline it was handed is retried as an interru
     expect(h.pushes()).toBe(4);
     expect(h.current().state).toBe("needs_decision");
     expect(h.current().stateDetail!.split("\n")[0]).toBe(`publishing the passed stage: ${cause}; retried 3 times. Nothing on this branch caused it: check that the hook can finish on this machine (time limit, memory, a stopped Viewer), then retry-stage.`);
+  } finally { h.cleanup(); }
+});
+
+test("a hook stopped at its deadline stays an interrupted push when the Viewer stopped before settling it", async () => {
+  const h = fixture();
+  const { reconcilePipelinePublication } = await import("./git");
+  try {
+    trailingLane(h, 2, { "src/work.ts": "export const work = 1;\n" });
+    const { NoVerdict } = await import("../../../scripts/local-gate");
+    const line = `pre-push: ${new NoVerdict({ name: "touched tests", command: [] }, { at: 840_000, startedAt: 0 }, { ranMs: 830_000 }).message}`;
+    fs.writeFileSync(h.hook, `#!/bin/sh\necho 'pre-push: touched tests' >&2\necho '${line}' >&2\nexit 75\n`, { mode: 0o700 });
+    const clock = Date.parse("2026-10-04T10:00:00.000Z");
+    const ports = { ...h.ports, now: () => new Date(clock).toISOString(), scheduleTick: () => {} };
+    expect((await patchPipeline(h.lane.id, { action: "publish" }, ports)).error).toBeUndefined();
+    for (let n = 0; n < 8; n++) await tickPipelines([], ports);
+    // The executor retained its result; settlement never ran.
+    const interrupted = h.current();
+    const operation = interrupted.delivery!.operation!;
+    expect(operation.executor!.result).toMatchObject({ ok: false, outcome: "not-landed" });
+    operation.state = "running"; delete operation.result;
+    interrupted.stateDetail = "publication accepted; remote verification pending";
+    savePipelines([interrupted]);
+    expect(await reconcilePipelinePublication(h.lane.id, 1, realExec, null)).toBeNull();
+    expect(h.current().delivery!.operation!.result).toMatchObject({ ok: false, outcome: "not-landed", failure: { hookBudgetMs: 840_000, hookStoppedCheck: "touched tests", changedFiles: 1 } });
+    for (let n = 0; n < 8; n++) await tickPipelines([], ports);
+    expect(h.pushes()).toBe(1);
+    expect(h.current().state).toBe("running");
+    expect(h.current().stateDetail).toContain("automatic retry 1 of 3");
   } finally { h.cleanup(); }
 });
 
