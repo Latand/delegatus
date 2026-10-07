@@ -22710,7 +22710,8 @@ describe("prototype review: a decided round retires the earlier undecided rounds
    * needs-you menu lists the three waiting tasks and not export, the
    * orchestrator's notice counts three and never names export, export's card
    * button says decided, and its review marks the first round superseded by
-   * the second and nothing as waiting.
+   * the second and nothing as waiting. Opened, the first round says round 2
+   * replaced it and offers no choice until asked.
    *
    *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "retires the earlier"
    *
@@ -22814,6 +22815,32 @@ describe("prototype review: a decided round retires the earlier undecided rounds
           if (rounds.shown !== "r-export") failures.push(`${label}: export's review opened on ${rounds.shown}, expected its decided round`);
           if (first?.superseded !== "r-export" || JSON.stringify(first.marks) !== JSON.stringify([tr("proto.round.superseded", { n: 2 })])) failures.push(`${label}: the first round's tab reads ${JSON.stringify(first)}, expected superseded by round 2`);
           if (rounds.tabs.some((tab) => tab.marks.includes(tr("proto.round.waiting")))) failures.push(`${label}: a round of export still says it waits: ${JSON.stringify(rounds.tabs)}`);
+
+          /* The superseded round opened from history: its footer names the round that replaced it, asks for nothing,
+             and its tab mark weighs what the decided check weighs, with its words on hover. */
+          await page.locator('[data-prototype-round="r-export-0"]').click();
+          /* On the phone the footer sits in the sheet's own slot, outside the review's body. */
+          await page.waitForSelector('[data-prototype-round-shown="r-export-0"]', { state: "attached", timeout: 10_000 });
+          await page.waitForSelector("[data-prototype-superseded-line]", { timeout: 10_000 });
+          await page.waitForTimeout(300);
+          const opened = await page.evaluate(() => {
+            const box = (selector: string) => { const rect = document.querySelector(selector)?.getBoundingClientRect(); return rect ? [Math.round(rect.width), Math.round(rect.height)] : null; };
+            return {
+              line: document.querySelector("[data-prototype-superseded-line]")?.textContent ?? null,
+              footer: (document.querySelector("[data-prototype-superseded-line]")?.closest("footer") ?? document.querySelector("[data-prototype-superseded-line]")?.parentElement)?.textContent ?? null,
+              save: Boolean(document.querySelector("[data-prototype-save]")),
+              choose: [...document.querySelectorAll<HTMLButtonElement>("[data-prototype-choose]")].filter((button) => !button.disabled).length,
+              marks: { superseded: box('[data-prototype-round="r-export-0"] [data-prototype-superseded]'), decided: box('[data-prototype-round="r-export"] svg') },
+              title: document.querySelector<HTMLElement>('[data-prototype-round="r-export-0"]')?.title ?? null,
+            };
+          });
+          record("superseded", opened);
+          await shot("superseded");
+          const said = tr("proto.supersededLine", { n: 2, date: "" }).split(",")[0]!;
+          if (!opened.line?.includes(said) || !opened.line.includes(tr("proto.openRound", { n: 2 }))) failures.push(`${label}: the superseded round's footer reads ${JSON.stringify(opened.line)}, expected «${said}…» with a link to round 2`);
+          if (opened.save || opened.choose || opened.footer?.includes(tr("proto.chooseFirst")) || opened.footer?.includes(tr("proto.chooseFirstPhone"))) failures.push(`${label}: the superseded round still asks for a choice: ${JSON.stringify(opened)}`);
+          if (JSON.stringify(opened.marks.superseded) !== JSON.stringify(opened.marks.decided)) failures.push(`${label}: the tab marks differ in size: ${JSON.stringify(opened.marks)}`);
+          if (!opened.title?.endsWith(tr("proto.round.superseded", { n: 2 }))) failures.push(`${label}: the superseded tab's hover text reads ${JSON.stringify(opened.title)}`);
           if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
         } catch (error) {
           failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);

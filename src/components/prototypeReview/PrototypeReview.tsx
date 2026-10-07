@@ -1,6 +1,6 @@
 "use client";
 
-import { Columns2, Film, GalleryHorizontalEnd, ImageOff, Loader2, RotateCw, SquareSplitHorizontal, TriangleAlert, ZoomIn } from "lucide-react";
+import { Columns2, CornerDownRight, Film, GalleryHorizontalEnd, ImageOff, Loader2, RotateCw, SquareSplitHorizontal, TriangleAlert, ZoomIn } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 
@@ -184,6 +184,8 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
   const [broken, setBroken] = useState<ReadonlySet<string>>(() => new Set());
   const [guard, setGuard] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
+  /* Superseded rounds the operator chose to decide anyway. */
+  const [reopened, setReopened] = useState<ReadonlySet<string>>(() => new Set());
   const dialog = useRef<HTMLDivElement>(null);
   const field = useRef<HTMLTextAreaElement>(null);
   const strip = useRef<HTMLDivElement>(null);
@@ -202,7 +204,9 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
   const slide = slides[index] ?? null;
   const variant = slide?.variant ?? round?.variants[0] ?? null;
   const elsewhere = data?.unavailable === "another-installation";
-  const open = Boolean(round && !round.decision && !elsewhere);
+  /* The later decided round that retired this one: the operator already answered there. */
+  const successor = round && !round.decision && round.supersededBy ? rounds.find((entry) => entry.id === round.supersededBy) ?? null : null;
+  const open = Boolean(round && !round.decision && !elsewhere && (!successor || reopened.has(round.id)));
   const draft = (roundId && drafts[roundId]) || EMPTY_DRAFT;
   const mode: PairMode = pairMode ?? (phone ? "slider" : "side");
 
@@ -368,6 +372,8 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
     </>
   );
 
+  const roundNumber = (id: string) => rounds.findIndex((entry) => entry.id === id) + 1;
+  const supersededWords = (id: string) => t("proto.round.superseded", { n: roundNumber(id) });
   const roundTabs = rounds.length > 1 ? (
     <div role="group" aria-label={t("proto.rounds")} data-prototype-rounds={rounds.length} className="flex min-w-0 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
       {rounds.map((entry, at) => (
@@ -377,14 +383,14 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
           data-prototype-round={entry.id}
           aria-pressed={entry.id === roundId}
           disabled={speaking && entry.id !== roundId}
-          title={speaking && entry.id !== roundId ? t("proto.round.speaking") : `${entry.title} · ${when(entry.createdAt, locale)}`}
+          title={speaking && entry.id !== roundId ? t("proto.round.speaking") : [entry.title, when(entry.createdAt, locale), ...(!entry.decision && entry.supersededBy ? [supersededWords(entry.supersededBy)] : [])].join(" · ")}
           className="inline-flex h-7 shrink-0 items-center gap-1 rounded-full border border-border bg-canvas px-2.5 text-label font-semibold text-secondary enabled:hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50 aria-pressed:border-accent/50 aria-pressed:bg-accent-soft aria-pressed:text-accent [@media(pointer:coarse)]:h-9"
           onClick={() => { if (!speaking) setPicked(entry.id); }}
         >
           {t("proto.round", { n: at + 1 })}
           {entry.decision ? <Check className="h-3 w-3" aria-label={t("proto.round.decided")} />
             /* A later decision retired this round: it stays readable, and waits for nothing. */
-            : entry.supersededBy ? <span data-prototype-superseded={entry.supersededBy} className="h-1.5 w-1.5 rounded-full border border-current" role="img" aria-label={t("proto.round.superseded", { n: rounds.findIndex((other) => other.id === entry.supersededBy) + 1 })} />
+            : entry.supersededBy ? <CornerDownRight data-prototype-superseded={entry.supersededBy} className="h-3 w-3 text-muted" role="img" aria-label={supersededWords(entry.supersededBy)} />
             : <span className="h-1.5 w-1.5 rounded-full bg-accent" role="img" aria-label={t("proto.round.waiting")} />}
         </button>
       ))}
@@ -624,6 +630,26 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
     );
   };
 
+  /* A superseded round says so where a waiting round asks for a choice: the
+     operator answered in the round that retired it. Its choice stays closed
+     until the operator opts to decide this round anyway. */
+  const supersededLine = successor ? (
+    <div data-prototype-superseded-line={successor.id} className="flex min-h-6 flex-wrap items-center gap-x-2 gap-y-1">
+      <CornerDownRight className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden />
+      <span className="text-label font-semibold text-secondary">
+        {t("proto.supersededLine", { n: roundNumber(successor.id), date: successor.decision ? whenDate(successor.decision.at, locale) : "" })}
+      </span>
+      <button type="button" data-prototype-open-round={successor.id} disabled={speaking} className="rounded-sm text-label font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50" onClick={() => setPicked(successor.id)}>
+        {t("proto.openRound", { n: roundNumber(successor.id) })}
+      </button>
+      {open || elsewhere ? null : (
+        <button type="button" data-prototype-decide-anyway="" className={`${SECONDARY} ml-auto`} onClick={() => setReopened((held) => new Set([...held, round!.id]))}>
+          {t("proto.decideAnyway")}
+        </button>
+      )}
+    </div>
+  ) : null;
+
   const footer = !round ? null : round.decision ? (
     <div data-prototype-decision={round.id} className="flex min-w-0 flex-1 flex-col gap-1.5">
       <div className="flex flex-wrap items-center gap-1.5">
@@ -638,8 +664,11 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
       )}
       {delivery(round.decision.delivery.state, round.decision.delivery.retryable)}
     </div>
-  ) : elsewhere ? null : (
+  ) : elsewhere ? supersededLine : successor && !open ? (
+    <div className="flex min-w-0 flex-1 flex-col">{supersededLine}</div>
+  ) : (
     <div data-prototype-decide={round.id} className="flex min-w-0 flex-1 flex-col gap-2">
+      {supersededLine}
       <div className="flex min-h-6 flex-wrap items-center gap-1.5">
         <span className="text-label font-semibold text-secondary">{t("proto.chosen")}</span>
         {draft.chosen.length ? chosenChips(draft.chosen) : <span className="text-label text-muted">{t(phone ? "proto.chooseFirstPhone" : "proto.chooseFirst")}</span>}

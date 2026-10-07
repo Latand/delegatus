@@ -37,6 +37,23 @@
         }
       ]
     },
+    "desktop-1440-en-superseded": {
+      "line": "Superseded by round 2, decided on 30 Aug 2026.Open round 2Decide this round anyway",
+      "footer": "Superseded by round 2, decided on 30 Aug 2026.Open round 2Decide this round anyway",
+      "save": false,
+      "choose": 0,
+      "marks": {
+        "superseded": [
+          12,
+          12
+        ],
+        "decided": [
+          12,
+          12
+        ]
+      },
+      "title": "Export presets, first take · 27 Aug, 19:21 · superseded by round 2"
+    },
     "desktop-1440-uk-menu": [
       "t-links",
       "t-search",
@@ -73,6 +90,23 @@
         }
       ]
     },
+    "desktop-1440-uk-superseded": {
+      "line": "Замінено раундом 2, рішення від 30 серп. 2026 р.Відкрити раунд 2Все одно вирішити цей раунд",
+      "footer": "Замінено раундом 2, рішення від 30 серп. 2026 р.Відкрити раунд 2Все одно вирішити цей раунд",
+      "save": false,
+      "choose": 0,
+      "marks": {
+        "superseded": [
+          12,
+          12
+        ],
+        "decided": [
+          12,
+          12
+        ]
+      },
+      "title": "Пресети експорту, перша спроба · 27 серп., 19:21 · замінено раундом 2"
+    },
     "phone-390-en-menu": [
       "t-links",
       "t-search",
@@ -105,6 +139,23 @@
         }
       ]
     },
+    "phone-390-en-superseded": {
+      "line": "Superseded by round 2, decided on 30 Aug 2026.Open round 2Decide this round anyway",
+      "footer": "Superseded by round 2, decided on 30 Aug 2026.Open round 2Decide this round anyway",
+      "save": false,
+      "choose": 0,
+      "marks": {
+        "superseded": [
+          12,
+          12
+        ],
+        "decided": [
+          12,
+          12
+        ]
+      },
+      "title": "Export presets, first take · 27 Aug, 19:21 · superseded by round 2"
+    },
     "phone-390-uk-menu": [
       "t-links",
       "t-search",
@@ -136,6 +187,23 @@
           ]
         }
       ]
+    },
+    "phone-390-uk-superseded": {
+      "line": "Замінено раундом 2, рішення від 30 серп. 2026 р.Відкрити раунд 2Все одно вирішити цей раунд",
+      "footer": "Замінено раундом 2, рішення від 30 серп. 2026 р.Відкрити раунд 2Все одно вирішити цей раунд",
+      "save": false,
+      "choose": 0,
+      "marks": {
+        "superseded": [
+          12,
+          12
+        ],
+        "decided": [
+          12,
+          12
+        ]
+      },
+      "title": "Пресети експорту, перша спроба · 27 серп., 19:21 · замінено раундом 2"
     }
   },
   "failures": []
