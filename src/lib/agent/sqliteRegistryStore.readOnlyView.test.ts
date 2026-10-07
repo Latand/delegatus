@@ -162,7 +162,7 @@ test("a write built from a view row can still be edited inside its mutation, and
   /* `upsert({ ...view.entries[id], … })` is how a writer reaches this: the
      spread is new, everything nested in it is the view's own frozen object. */
   store.mutate((file) => {
-    file.conversations[conversation.id] = { ...row, title: "spread from the view" };
+    file.conversations[conversation.id] = { ...row, pinnedAccountId: "spread-from-the-view" };
     file.conversations[conversation.id]!.generations[0]!.path = "/sessions/edited-in-the-mutation.jsonl";
     file.conversations[conversation.id]!.continuityPaths.push("/sessions/pushed-in-the-mutation.jsonl");
     file.receipts[kept]!.launchProfile = view.receipts[kept]!.launchProfile;
@@ -172,7 +172,7 @@ test("a write built from a view row can still be edited inside its mutation, and
   }, false);
 
   const next = store.readOnlySnapshot().file;
-  expect(next.conversations[conversation.id]?.title).toBe("spread from the view");
+  expect(next.conversations[conversation.id]?.pinnedAccountId).toBe("spread-from-the-view");
   expect(next.conversations[conversation.id]?.generations[0]?.path).toBe("/sessions/edited-in-the-mutation.jsonl");
   expect(next.conversations[conversation.id]?.continuityPaths).toContain("/sessions/pushed-in-the-mutation.jsonl");
   expect(next.receipts[kept]?.launchProfile?.title).toBe("edited in the mutation");
