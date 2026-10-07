@@ -119,3 +119,12 @@ test("a completed toggle survives an older refresh and refreshes pause during a 
   expect(control.checked).toBe(true);
   expect(host.querySelector("[data-memory-status]")?.textContent).toBe(translate("en", "memory.status.ready"));
 });
+
+for (const lang of ["en", "uk"] as const) for (const reason of ["noCandidates", "noMatches", "candidateTimeout", "timeout", "failed", "delivered"] as const) test(`${lang}: the existing status row explains the last turn (${reason})`, async () => {
+  setLocale(lang);
+  globalThis.fetch = (async () => Response.json({ enabled: true, reasons: [], lastTurn: reason })) as unknown as typeof fetch;
+  const host = document.createElement("div"); document.body.appendChild(host); root = createRoot(host);
+  await act(async () => { root!.render(<MemorySetting project="fixture-project" />); });
+  expect(host.querySelector("[data-memory-status] [data-memory-last-turn]")?.textContent?.trim()).toBe(translate(lang, `memory.last.${reason}`));
+  expect(host.querySelectorAll("[data-memory-status]")).toHaveLength(1);
+});

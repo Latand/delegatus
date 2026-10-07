@@ -1,0 +1,209 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "wheel": 240,
+  "cases": [
+    {
+      "seat": "open",
+      "column": "inbox",
+      "cards": 13,
+      "steps": 26,
+      "furthest": 1941,
+      "contentHeight": [
+        2592,
+        2675
+      ],
+      "collapsedAbove": 0,
+      "events": [],
+      "jumps": [],
+      "programmaticScrolls": [],
+      "layoutShifts": []
+    },
+    {
+      "seat": "open",
+      "column": "assigned",
+      "cards": 28,
+      "steps": 62,
+      "furthest": 6412,
+      "contentHeight": [
+        5532,
+        7215
+      ],
+      "collapsedAbove": 0,
+      "events": [
+        {
+          "event": "rewrite",
+          "card": "task:t-drag-12",
+          "heightBefore": 227,
+          "column": "assigned",
+          "heightAfter": 255,
+          "index": 2
+        },
+        {
+          "event": "arrival",
+          "card": "task:t-drag-0",
+          "step": 6,
+          "leaves": "inbox",
+          "column": "assigned",
+          "heightAfter": 227,
+          "index": 1
+        }
+      ],
+      "jumps": [],
+      "programmaticScrolls": [],
+      "layoutShifts": []
+    },
+    {
+      "seat": "open",
+      "column": "blocked",
+      "cards": 11,
+      "steps": 26,
+      "furthest": 2111,
+      "contentHeight": [
+        2717,
+        2845
+      ],
+      "collapsedAbove": 0,
+      "events": [],
+      "jumps": [],
+      "programmaticScrolls": [],
+      "layoutShifts": []
+    },
+    {
+      "seat": "folded",
+      "column": "inbox",
+      "cards": 13,
+      "steps": 22,
+      "furthest": 1941,
+      "contentHeight": [
+        2675,
+        2675
+      ],
+      "collapsedAbove": 0,
+      "events": [],
+      "jumps": [],
+      "programmaticScrolls": [],
+      "layoutShifts": []
+    },
+    {
+      "seat": "folded",
+      "column": "assigned",
+      "cards": 28,
+      "steps": 58,
+      "furthest": 6412,
+      "contentHeight": [
+        5807,
+        7215
+      ],
+      "collapsedAbove": 0,
+      "events": [
+        {
+          "event": "rewrite",
+          "card": "task:t-drag-12",
+          "heightBefore": 227,
+          "column": "assigned",
+          "heightAfter": 255,
+          "index": 2
+        },
+        {
+          "event": "arrival",
+          "card": "task:t-drag-0",
+          "step": 6,
+          "leaves": "inbox",
+          "column": "assigned",
+          "heightAfter": 227,
+          "index": 1
+        }
+      ],
+      "jumps": [],
+      "programmaticScrolls": [],
+      "layoutShifts": []
+    },
+    {
+      "seat": "folded",
+      "column": "blocked",
+      "cards": 11,
+      "steps": 22,
+      "furthest": 2111,
+      "contentHeight": [
+        2845,
+        2845
+      ],
+      "collapsedAbove": 0,
+      "events": [],
+      "jumps": [],
+      "programmaticScrolls": [],
+      "layoutShifts": []
+    },
+    {
+      "seat": "folded",
+      "unfixed": "as it was",
+      "css": ".kb .col-body > .card { flex-shrink: 1 !important; } .kb .board:not(.tabs) .col-body { overflow-anchor: none !important; }",
+      "column": "assigned",
+      "cards": 28,
+      "steps": 24,
+      "furthest": 2161,
+      "contentHeight": [
+        2895,
+        4355
+      ],
+      "collapsedAbove": 19,
+      "jumps": 30,
+      "firstJump": {
+        "step": 6,
+        "wheel": 240,
+        "card": "task:t-drag-26",
+        "column": "assigned",
+        "moved": -885.4,
+        "expected": -240,
+        "back": 0,
+        "scroll": [
+          1440,
+          1680
+        ],
+        "height": [
+          4320,
+          4355
+        ]
+      },
+      "largestJump": 1496.9
+    },
+    {
+      "seat": "folded",
+      "unfixed": "no anchoring",
+      "css": ".kb .board:not(.tabs) .col-body { overflow-anchor: none !important; }",
+      "column": "assigned",
+      "cards": 28,
+      "steps": 60,
+      "furthest": 6481,
+      "contentHeight": [
+        5807,
+        7251
+      ],
+      "collapsedAbove": 0,
+      "jumps": 8,
+      "firstJump": {
+        "step": 3,
+        "wheel": 240,
+        "card": "task:t-drag-16",
+        "column": "assigned",
+        "moved": -212,
+        "expected": -240,
+        "back": 0,
+        "scroll": [
+          720,
+          960
+        ],
+        "height": [
+          5807,
+          5835
+        ]
+      },
+      "largestJump": 238.8
+    }
+  ],
+  "failures": []
+}
