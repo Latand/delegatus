@@ -138,8 +138,16 @@ export class CompanionAdmission {
     const logicalInstruction = clean(instruction).trim();
     const duplicate = Object.values(this.session(id).proposals).find(row => row.proposal.sourceItemId === clean(sourceItemId)
       && row.proposal.instruction.trim() === logicalInstruction);
-    if (duplicate) return this.outcome(id, duplicate.proposal.proposalId);
-    const proposal = this.propose(id, callId, sourceItemId, instruction, options);
+    if (duplicate) {
+      // Recover older two-commit records when a caller retries after restart.
+      if (duplicate.state === "pending" && !duplicate.proposal.confirmation) {
+        await this.confirm(id, { proposalId: duplicate.proposal.proposalId, decision: "send", via: "auto" });
+      } else if (duplicate.state === "admitted" && duplicate.status === "unknown") {
+        await this.confirm(id, { proposalId: duplicate.proposal.proposalId, decision: "send", via: "auto" });
+      }
+      return this.outcome(id, duplicate.proposal.proposalId);
+    }
+    const proposal = this.propose(id, callId, sourceItemId, instruction, { ...options, autosend: !options.confirmation?.trim() });
     const row = Object.values(this.session(id).proposals).find(held => held.proposal.callId === clean(callId)
       || (held.proposal.sourceItemId === clean(sourceItemId) && held.proposal.instruction.trim() === logicalInstruction));
     if (!row) {
@@ -147,7 +155,7 @@ export class CompanionAdmission {
       return { state: "refused", code: last?.type === "delegation.tool.result" && "code" in last.result ? last.result.code : "not_admitted" };
     }
     if (proposal?.confirmation) return { state: "awaiting", proposal };
-    if (row.state === "pending") await this.confirm(id, { proposalId: row.proposal.proposalId, decision: "send", via: "auto" });
+    if (row.state === "pending" || row.status === "unknown") await this.confirm(id, { proposalId: row.proposal.proposalId, decision: "send", via: "auto" });
     return this.outcome(id, row.proposal.proposalId);
   }
   /** Where a decided delegation stands. */
@@ -167,7 +175,7 @@ export class CompanionAdmission {
     return Object.values(this.session(id).proposals).findLast(row => !!row.proposal.confirmation)?.proposal ?? null;
   }
   /** `sourceTurn`: the operator's Live turn when Live delegated, read whole by the gate. */
-  propose(id: string, rawCallId: string, rawSourceItemId: string, rawInstruction: string, options: { sourceTurn?: number; confirmation?: string } = {}): Proposal | null {
+  propose(id: string, rawCallId: string, rawSourceItemId: string, rawInstruction: string, options: { sourceTurn?: number; confirmation?: string; autosend?: boolean } = {}): Proposal | null {
     const { sourceTurn } = options;
     const [callId, sourceItemId, instruction, asked] = [rawCallId, rawSourceItemId, rawInstruction, options.confirmation?.trim().slice(0, 240) ?? ""].map(this.cleaner());
     const existing = Object.values(this.session(id).proposals).find(row => row.proposal.callId === callId);
@@ -188,8 +196,17 @@ export class CompanionAdmission {
       if (Object.values(session.proposals).some(row => row.state === "pending" && row.proposal.sourceItemId === sourceItemId)) { refusal = "duplicate_proposal"; return null; }
       const proposal: Proposal = { proposalId: randomUUID(), callId, sourceItemId, instruction: instruction.trim(), recipient,
         ...(session.authority ? { authority: session.authority } : {}), ...(asked ? { confirmation: { reason: asked } } : {}) };
-      session.proposals[proposal.proposalId] = { proposal, sourceText: session.inputs.at(-1)?.text ?? "", expiresAt: this.now() + 120_000, state: "pending", reports: [],
-        ...(sourceTurn !== undefined ? { sourceTurn } : {}) };
+      const row: StoredProposal = { proposal, sourceText: session.inputs.at(-1)?.text ?? "", expiresAt: this.now() + 120_000,
+        state: options.autosend && !asked ? "admitted" : "pending", reports: [], ...(sourceTurn !== undefined ? { sourceTurn } : {}) };
+      if (options.autosend && !asked) {
+        // Commit the proposal, admission decision and retry identity together.
+        row.via = "auto";
+        row.status = "unknown";
+        row.delivery = { proposalId: proposal.proposalId, callId: proposal.callId,
+          clientMessageId: `voice-${randomUUID()}`, operationId: null, recipient: proposal.recipient };
+        row.text = `${proposal.instruction}\n\n[Voice Delegatus reply: report progress or the result using bridge_report with correlatesDirective equal to ${row.delivery.clientMessageId}. Keep the report tied to this request.]`;
+      }
+      session.proposals[proposal.proposalId] = row;
       return proposal;
     });
     if (reusedLogicalRequest) return proposal;

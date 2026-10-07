@@ -264,7 +264,8 @@ export class CompanionLiveSessions {
           input.push({ type: "function_call", call_id: item.call_id, name: item.name, arguments: item.arguments });
           const toolResult = await this.tool(active, item, delegationId, sourceTurn, waiting?.proposalId ?? null);
           const resultObject = jsonObject(toolResult);
-          if (item.name === "request_orchestrator_delegation" && resultObject?.status === "sent"
+          if (["request_orchestrator_delegation", "resolve_orchestrator_confirmation"].includes(String(item.name))
+            && resultObject?.status === "sent"
             && ["delivered", "queued", "unknown", "failed"].includes(String(resultObject.delivery))) {
             completedDelegations.push(String(resultObject.delivery));
           }

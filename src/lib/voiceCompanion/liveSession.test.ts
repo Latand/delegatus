@@ -122,6 +122,43 @@ test("a backend failure after autosend reports the recorded delivery state", asy
   await f.service.close(s.sessionId);
 });
 
+test("an autosend proposal committed before a process stop keeps its admission and recovers with its delivery key", async () => {
+  const f = fixture();
+  f.provider.responder = calling(functionCall("call-crash", "request_orchestrator_delegation", { instruction: "Review the plan" }));
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  const originalChange = f.storage.change.bind(f.storage);
+  let interruptAfterCommit = true;
+  f.storage.change = operation => {
+    const result = originalChange(operation);
+    const held = Object.values(f.storage.read().sessions[s.sessionId]?.proposals ?? {})[0];
+    if (interruptAfterCommit && held?.state === "admitted" && held.via === "auto") {
+      interruptAfterCommit = false;
+      throw new Error("simulated process stop after durable proposal commit");
+    }
+    return result;
+  };
+  f.provider.replay(s.providerId, delegationCreated("delegation-crash", 10));
+  await f.service.drain(s.sessionId);
+  const [committed] = Object.values(f.storage.read().sessions[s.sessionId]!.proposals);
+  expect(committed).toMatchObject({ state: "admitted", status: "unknown", via: "auto", delivery: { clientMessageId: expect.any(String) } });
+  expect(f.sends()).toBe(0);
+
+  const restartedStorage = new CompanionStorage();
+  const recoveredKeys: string[] = [];
+  const restartedAdmission = new CompanionAdmission(restartedStorage, {
+    recipient: () => ({ project: "fixture", conversationId: "conversation_fixture", seatEpoch: 1, engine: "claude" }),
+    send: async ({ delivery }) => { recoveredKeys.push(delivery.clientMessageId); return { status: "queued", operationId: "recovered-operation" }; },
+    reports: () => [],
+  });
+  const restarted = new CompanionLiveSessions(restartedStorage, restartedAdmission, noReads(), f.provider, { key: () => "synthetic-credential", timers: false, closeTimeoutMs: 20 });
+  await restarted.recover();
+  await restarted.events(s.sessionId, 0);
+  expect(recoveredKeys).toEqual([committed.delivery!.clientMessageId]);
+  expect(restartedAdmission.outcome(s.sessionId, committed.proposal.proposalId)).toEqual({ state: "sent", status: "queued" });
+  expect(f.storage.read().sessions[s.sessionId]!.proposals[committed.proposal.proposalId]).toMatchObject({ state: "admitted", status: "queued" });
+  await f.provider.disconnect(s.providerId);
+});
+
 test("parallel delegations keep their own calls, outputs and spoken answers", async () => {
   const f = fixture();
   f.provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output")
@@ -752,6 +789,25 @@ test("a confirmation the model asked for is answered hands-free: the next delega
   f.provider.replay(s.providerId, said("Send it.", 9_000), delegationCreated("again", 9_500));
   await f.service.drain(s.sessionId);
   expect(f.sends()).toBe(1);
+  await f.service.close(s.sessionId);
+});
+
+test("a backend failure after spoken confirmation reports the queued delivery", async () => {
+  const f = fixture();
+  f.provider.responder = (_request, index) => index === 0
+    ? backendResponse("resp_ask", [functionCall("call-ask", "request_orchestrator_delegation", { instruction: "Delete the old presets", confirmation_reason: "Deleting cannot be undone." })])
+      : index === 1 ? backendResponse("resp_prompt", [message("Please confirm before I send it.")])
+        : index === 2 ? backendResponse("resp_yes", [functionCall("call-yes", "resolve_orchestrator_confirmation", { decision: "send" })])
+          : Promise.reject(new Error("backend unavailable"));
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  f.provider.replay(s.providerId, said("Tell the orchestrator to delete the old presets.", 0), delegationCreated("ask-confirmation", 600));
+  await f.service.drain(s.sessionId);
+  f.provider.replay(s.providerId, said("Please confirm before I send it.", 1_500, "output"), said("Yes, send it.", 4_000), delegationCreated("answer-confirmation", 4_600));
+  await f.service.drain(s.sessionId);
+  expect(f.sends()).toBe(1);
+  expect(Object.values(f.admission.session(s.sessionId).proposals)[0]).toMatchObject({ state: "admitted", via: "speech", status: "queued" });
+  expect(spoken(f).at(-1)).toMatchObject({ delegation_id: "answer-confirmation", content: "The board could not be read just now. The request is queued for the orchestrator." });
+  expect(spoken(f).at(-1)?.content).not.toContain("Nothing was sent");
   await f.service.close(s.sessionId);
 });
 
