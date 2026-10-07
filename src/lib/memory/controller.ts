@@ -6,6 +6,7 @@ import { readAsksYouSettings, readOpenRouterApiKey } from "@/lib/asks/settings";
 import { mutateOperatorAsks, spendMonth } from "@/lib/asks/store";
 import { projectInfoFromCwd } from "@/lib/scanner/describe";
 import { decodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText";
+import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
 import { FileClaudeDeliveryLedger } from "@/lib/runtime/claudeStreamBrokerHost";
 import { readStructuredUserMetadata } from "@/lib/selection/structuredUserMetadata";
 import { viewerReleaseOwnsTraffic } from "@/lib/viewerInstrumentation";
@@ -13,6 +14,7 @@ import { nativeHookCursor } from "./native";
 import { memoryTurnContext } from "./context";
 import { decideMemories, injectMemory } from "./injection";
 import { memoryIndex } from "./service";
+import type { MemoryTurnReason } from "./viewTypes";
 import { sharedMemoryEnabled } from "./settings";
 // Selected names are provisional durable evidence until stdout confirmation;
 // selection expiry and bounded confirmation retention are separate deadlines.
@@ -21,6 +23,10 @@ export async function offerForHook(request: Request, input: Record<string, unkno
   const hookId = request.headers.get("x-llv-memory-hook") ?? "";
   const remaining = Math.min(1500, expires - Date.now());
   const deadline = performance.now() + remaining;
+  const startedAt = performance.timeOrigin + performance.now();
+  let lastTurn: { project: string; conversation: string; request: string } | undefined;
+  let reason: MemoryTurnReason = "invalidTurn";
+  let candidateReason: MemoryTurnReason | undefined;
   let counted = input.delegatus_confirm === true;
   let possibleOperator = false;
   let outcome: "skipped" | "failed" = "skipped";
@@ -46,15 +52,19 @@ export async function offerForHook(request: Request, input: Record<string, unkno
     if (!cwd || input.cwd !== cwd) return "";
     const project = conversation?.projectOwnership?.project || projectInfoFromCwd(cwd)?.project;
     if (!project) return "";
+    lastTurn = { project, conversation: conversationId, request: hookId };
+    reason = "unprovenOrigin";
     const index = memoryIndex();
-    let prompt = input.prompt, origin = "unknown", requestId = "";
+    let prompt = input.prompt, origin = "unknown", requestId = "", deliveryKey = "";
     if (engine === "codex") {
       const decoded = decodeCodexStructuredUserText(prompt);
       prompt = decoded.text;
       if (decoded.metadataRef) {
-        origin = readStructuredUserMetadata(decoded.metadataRef).origin?.kind ?? "unknown";
+        const metadata = readStructuredUserMetadata(decoded.metadataRef);
+        origin = metadata.origin?.kind ?? "unknown";
+        deliveryKey = metadata.deliveryDedup ?? "";
         requestId = decoded.metadataRef;
-      } else if (decoded.structured) { origin = decoded.origin?.kind ?? "unknown"; requestId = decoded.deliveryDedup ?? ""; }
+      } else if (decoded.structured) { origin = decoded.origin?.kind ?? "unknown"; requestId = deliveryKey = decoded.deliveryDedup ?? ""; }
     } else {
       const ledger = new FileClaudeDeliveryLedger().load(input.session_id);
       if (typeof input.delegatus_delivery_id === "string") {
@@ -62,6 +72,20 @@ export async function offerForHook(request: Request, input: Record<string, unkno
         if (!queued || queued.entry.content.text !== prompt) return "";
         origin = queued.entry.origin?.kind ?? "unknown"; requestId = queued.entry.id;
       }
+    }
+    // A launch brief is delivered with operator origin whatever started it.
+    // The receipt names the initiator: a launching conversation, a container
+    // membership, a delegated depth or a board maintenance run. Drafts from
+    // the new-agent form carry none of them, with or without a role or parent.
+    // Later human messages in the same conversation remain eligible.
+    const delivery = deliveryKey ? Object.values(snapshot.deliveryOperationOwners).find(owner =>
+      owner.conversationId === conversationId && deliveryDedupToken(owner.command.operationId) === deliveryKey) : undefined;
+    if (delivery?.command.origin?.kind === "agent") { possibleOperator = false; return ""; }
+    const humanSubmission = delivery?.command.origin?.kind === "operator" && !delivery.command.operationId.startsWith("spawn_message_");
+    const containerLaunch = snapshot.memberships[conversationId]?.some(entry => entry.kind === "pipeline" || entry.kind === "flow");
+    if (!humanSubmission && receipt?.launchDisplay?.echo === prompt && (containerLaunch || (receipt.delegationDepth ?? 0) > 0
+      || receipt.launcher || receipt.clientAttemptId?.startsWith("maint_"))) {
+      possibleOperator = false; return "";
     }
     if (requestId && origin !== "operator") { possibleOperator = origin === "unknown"; return ""; }
     const transcript = generation?.path ?? receipt?.artifactPath ?? undefined;
@@ -119,10 +143,15 @@ export async function offerForHook(request: Request, input: Record<string, unkno
       index.recordNativeTurn(conversationId, requestId, transcript ?? "", cursor.offset, prompt);
     }
     if (origin !== "operator") { possibleOperator = false; return ""; }
-    if (!Number.isFinite(remaining) || remaining <= 0 || request.signal.aborted || !viewerReleaseOwnsTraffic() || !sharedMemoryEnabled(project)) return "";
+    lastTurn.request = requestId;
+    if (!Number.isFinite(remaining) || remaining <= 0) { reason = "timeout"; return ""; }
+    if (request.signal.aborted) { reason = "cancelled"; return ""; }
+    if (!viewerReleaseOwnsTraffic()) { reason = "notOwner"; return ""; }
+    if (!sharedMemoryEnabled(project)) { reason = "projectOff"; return ""; }
     const key = readOpenRouterApiKey();
-    if (!key) return "";
-    if (performance.now() >= deadline || !index.claimHook(conversationId, requestId)) return "";
+    if (!key) { reason = "noKey"; return ""; }
+    if (performance.now() >= deadline) { reason = "timeout"; return ""; }
+    if (!index.claimHook(conversationId, requestId)) { possibleOperator = false; return ""; }
     const context = transcript ? memoryTurnContext(transcript, engine as "claude" | "codex", prompt, conversationId) : [];
     // Recall terms follow the research order within the bounded transcript view.
     const recallQuery = [prompt, ...context.slice().reverse().map(turn => turn.text)].join("\n");
@@ -135,7 +164,8 @@ export async function offerForHook(request: Request, input: Record<string, unkno
       deadline, signal: request.signal,
       activity: event => { try { index.recordInjectionActivity(event); if (event === "noMatches") index.recordUnmatchedTurn(conversationId, requestId); } catch { /* optional ledger */ } },
       enabled: () => sharedMemoryEnabled(project), ownsTraffic: () => viewerReleaseOwnsTraffic(),
-      candidates: deadline => index.injectionCandidates(recallQuery, project, engine, conversationId, deadline),
+      reason: value => { reason = value === "noCandidates" && candidateReason ? candidateReason : value; },
+      candidates: deadline => index.injectionCandidates(recallQuery, project, engine, conversationId, deadline, { cwd, reason: value => { candidateReason = value; } }),
       reserve: ceiling => {
         mutateOperatorAsks(file => {
           if (file.spend.usd + ceiling > readAsksYouSettings().capUsd) { file.spend.capped++; return; }
@@ -150,8 +180,9 @@ export async function offerForHook(request: Request, input: Record<string, unkno
         index.recordPreparedInjection(entries, requestId, conversationId, hookId, expires);
       },
     });
-  } catch { outcome = "failed"; return ""; }
+  } catch { outcome = "failed"; reason = "failed"; return ""; }
   finally {
+    if (possibleOperator && lastTurn) { try { memoryIndex().recordLastTurn(lastTurn.project, lastTurn.conversation, lastTurn.request, startedAt, reason, expires); } catch { /* optional status */ } }
     if (possibleOperator && !counted) { try { memoryIndex().recordInjectionActivity(outcome); } catch { /* optional ledger */ } }
   }
 }

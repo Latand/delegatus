@@ -7,6 +7,7 @@ export type EphemeralAgentEvent =
 export function mapAgentLine(
   engine: "claude" | "codex",
   line: string,
+  profile: { webSearch: boolean } = { webSearch: false },
 ): EphemeralAgentEvent[] {
   let event: Record<string, unknown>;
   try {
@@ -19,9 +20,14 @@ export function mapAgentLine(
       const item = event.item as Record<string, unknown> | undefined;
       if (
         !item ||
-        !["agent_message", "reasoning", "error"].includes(String(item.type))
+        !["agent_message", "reasoning", "error", ...(profile.webSearch ? ["web_search"] : [])].includes(String(item.type))
       )
         return [{ type: "violation", detail: "unexpected Codex item" }];
+      // The native web search is the one tool the profile may offer (§B.6.5).
+      if (item.type === "web_search")
+        return event.type === "item.started" || event.type === "item.completed"
+          ? [{ type: "tool", phase: event.type === "item.started" ? "start" : "done", tool: "web_search", ok: null }]
+          : [];
       if (
         event.type === "item.completed" &&
         item.type === "agent_message" &&
@@ -40,10 +46,11 @@ export function mapAgentLine(
   if (event.type === "system" && event.subtype === "init") {
     const tools = event.tools;
     const servers = event.mcp_servers;
+    const expected = profile.webSearch ? ["StructuredOutput", "WebSearch"] : ["StructuredOutput"];
     if (
       !Array.isArray(tools) ||
-      tools.length !== 1 ||
-      tools[0] !== "StructuredOutput" ||
+      tools.length !== expected.length ||
+      !expected.every((name) => tools.includes(name)) ||
       !Array.isArray(servers) ||
       servers.length !== 0
     )
@@ -54,6 +61,10 @@ export function mapAgentLine(
   if (!Array.isArray(message?.content)) return [];
   const events: EphemeralAgentEvent[] = [];
   for (const block of message.content as Record<string, unknown>[]) {
+    if (block.type === "tool_use" && block.name === "WebSearch" && profile.webSearch) {
+      events.push({ type: "tool", phase: "start", tool: "web_search", ok: null });
+      continue;
+    }
     if (block.type === "tool_use" && block.name !== "StructuredOutput")
       return [{ type: "violation", detail: "unexpected Claude tool" }];
     if (block.type === "text" && typeof block.text === "string")

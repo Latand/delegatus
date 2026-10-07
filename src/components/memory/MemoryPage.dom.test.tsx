@@ -235,3 +235,11 @@ for (const lang of ["en", "uk"] as const) test(`${lang}: a refresh that fails af
   expect(host.querySelector("[data-memory-reason]")).toBeNull();
   expect(host.querySelector("[data-memory-numbers]")).not.toBeNull();
 });
+
+for (const lang of ["en", "uk"] as const) for (const reason of ["noCandidates", "noMatches", "candidateTimeout", "timeout", "failed", "delivered"] as const) test(`${lang}: the existing status row explains the last turn (${reason})`, async () => {
+  setLocale(lang);
+  serve(() => ({ enabled: true, reasons: [], lastTurn: reason }));
+  const host = await render();
+  expect(host.querySelector("[data-memory-status] [data-memory-last-turn]")?.textContent?.trim()).toBe(translate(lang, `memory.last.${reason}`));
+  expect(host.querySelectorAll("[data-memory-status]")).toHaveLength(1);
+});

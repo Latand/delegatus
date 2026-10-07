@@ -7,7 +7,11 @@ import type { BoardTask } from "@/lib/tasks/types";
 import { translate, type TFunction } from "@/lib/i18n";
 import { MAX_PIPELINE_STAGES } from "@/lib/pipelines/limits";
 
+import { PIPELINE_ROLE_IDS } from "@/lib/pipelines/roles";
+import { PIPELINE_DISALLOWED_ROLE_IDS } from "@/lib/pipelines/types";
+
 import {
+  PIPELINE_ROLE_OPTIONS,
   PIPELINE_TEMPLATES,
   STAGE_GLYPH,
   type DraftStage,
@@ -1816,4 +1820,12 @@ describe("stage agent row", () => {
     expect(stageAgentRowModel(p, "design")).toEqual({ target: { conversationId: "conversation_design", agentPath: null }, question: "Question\nOptions", earlier: [{ n: 1, position: 1, state: "failed", target: { conversationId: null, agentPath: "/fixture/old.jsonl" } }] });
     expect(stageAgentRowModel(p, "unstarted")).toEqual({ target: null, question: null, earlier: [] });
   });
+});
+
+/* The stage picker mirrors the server's PIPELINE_ROLE_IDS minus the roles a
+   pipeline may not run, so a UI lane can end on a visual-critic stage. */
+test("the stage role picker offers every pipeline role, the visual critic included, and never the deployer", () => {
+  expect(PIPELINE_ROLE_OPTIONS).toEqual(["orchestrator", "reviewer", "verifier", "builder", "architect", "cleaner", "prod-auditor", "merger", "visual-critic"]);
+  expect(PIPELINE_ROLE_OPTIONS).toEqual(PIPELINE_ROLE_IDS.filter((roleId) => !PIPELINE_DISALLOWED_ROLE_IDS.includes(roleId)));
+  expect(PIPELINE_ROLE_OPTIONS).not.toContain("deployer");
 });

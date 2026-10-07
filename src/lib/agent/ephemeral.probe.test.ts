@@ -190,3 +190,13 @@ if (process.env.LLV_SIGNED_IN_ANSWER_PROBE === "1")
         expect(init?.mcp_servers).toEqual([]);
       }
     }, 180_000);
+
+/* The relay profile with the native web search on (relay.md §B.6): it adds
+   that one tool and nothing else, and instructions still stay out. Codex's
+   search was observed end to end instead (relay.md, Evidence). */
+claudeProbe("installed Claude with web search offers StructuredOutput and WebSearch alone", async () => {
+  const body = await captureModelRequest({ ...request("claude"), webSearch: true });
+  const names = ((body.tools ?? []) as { name?: string }[]).map((tool) => tool.name);
+  expect(names.sort()).toEqual(["StructuredOutput", "WebSearch"]);
+  expect(JSON.stringify(body)).not.toContain(marker);
+}, 30_000);

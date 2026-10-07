@@ -190,8 +190,8 @@ export function projectIdentityFromRemote(remote: string, root: string): Reposit
     one {@link projectIdentityFromRepositoryRoot} mints from its local path.
     Exported so a caller can recognise that id after an origin was added and the
     same checkout started resolving to the remote's identity (#1874). */
-export function localRepositoryProjectId(root: string): string | null {
-  return repositoryProjectIdentity(`local:${realRoot(root)}`)?.project ?? null;
+export function localRepositoryProjectId(root: string, resolved = false): string | null {
+  return repositoryProjectIdentity(`local:${resolved ? root : realRoot(root)}`)?.project ?? null;
 }
 
 function realRoot(root: string): string {

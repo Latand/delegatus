@@ -7,7 +7,7 @@ import { useLocale, type TFunction } from "@/lib/i18n";
 
 import { describeReceiptFailure } from "./deliveryNotice";
 import { deliveryWaitText, type DeliveryWait } from "./deliveryWait";
-import { humanReceiptReasonKey, receiptIsTerminal, type ReceiptStatus, type RuntimeReceipt } from "./runtimeModel";
+import { humanReceiptReasonKey, receiptIsTerminal, SWITCH_WAIT_REASONS, type ReceiptStatus, type RuntimeReceipt } from "./runtimeModel";
 
 /** Human sentence for a rejected/failed reason: a mapped sentence for a known
     code, else the sanitized reason's terse cause behind a "not delivered:"
@@ -77,32 +77,34 @@ export function ReceiptChip({ receipt, wait = null, actionsDisabled = false, onR
   /* Issue #1213: a delivery unconfirmed past the bound is terminal here even
      though the receipt is not — the composer stops claiming it is moving and
      says it did not arrive, instead of spinning with no end. */
-  const uncertain = wait?.phase === "uncertain";
+  const switchReason = receipt.status === "queued" && receipt.reason && SWITCH_WAIT_REASONS.has(receipt.reason)
+    ? humanReason(t, receipt.reason) : null;
+  const uncertain = !switchReason && wait?.phase === "uncertain";
   const discarded = receipt.reason === "delivery-discarded";
   /* Nothing is moving in any of these: the message is parked behind a turn,
      parked with nothing to hand it to, parked for a reason this surface cannot
      name, or never confirmed as accepted at all. */
-  const parked = uncertain
+  const parked = Boolean(switchReason) || uncertain
     || wait?.phase === "awaiting-turn"
     || wait?.phase === "awaiting-host"
     || wait?.phase === "awaiting-handover"
     || wait?.phase === "unconfirmed-admission";
   const waitText = wait ? deliveryWaitText(t, wait, receipt.queuePosition) : null;
-  const label = waitText ?? runtimeReceiptStatusText(t, receipt);
+  const label = switchReason ? runtimeReceiptStatusText(t, receipt) : waitText ?? runtimeReceiptStatusText(t, receipt);
   const fullLabel = failed ? humanReasonFull(t, receipt.reason) : null;
   return (
     <span className="inline-flex min-w-0 max-w-full flex-wrap items-center gap-1.5 text-[11px] font-semibold" data-operation={receipt.operationId}>
       {/* A failure chip says the terse cause (#1362) and can still run long
           on a phone: it shrinks to its line and ends in an ellipsis instead of
           clipping mid-word, and the whole sentence rides on hover. Moving
-          states keep their fixed chip. */}
+          states keep a short chip; switch explanations wrap beneath it. */}
       <Badge
-        tone={uncertain || wait?.phase === "awaiting-host"
+        tone={uncertain || (!switchReason && wait?.phase === "awaiting-host")
           ? "danger"
           : parked
             ? "warning"
             : tone(receipt.status)}
-        shrinkable={failed}
+        shrinkable={failed || Boolean(switchReason)}
         {...(failed ? { title: fullLabel ?? label } : {})}
         data-receipt-status={receipt.status}
         {...(wait ? { "data-receipt-wait": wait.phase } : {})}
@@ -111,6 +113,9 @@ export function ReceiptChip({ receipt, wait = null, actionsDisabled = false, onR
         {parked ? <Clock3 className="mr-1 h-3 w-3" aria-hidden /> : null}
         {failed ? <span className="min-w-0 truncate">{label}</span> : label}
       </Badge>
+      {switchReason ? (
+        <span data-receipt-switch-reason role="status" aria-live="polite" className="basis-full min-w-0 whitespace-normal break-words font-normal">{switchReason}</span>
+      ) : null}
       {(failed || uncertain) && !discarded && onRetry ? (
         <button
           type="button"
@@ -148,6 +153,7 @@ export function ReceiptChip({ receipt, wait = null, actionsDisabled = false, onR
           hand-over genuinely IS moving, and keeps it. */}
       {!receiptIsTerminal(receipt.status)
         && receipt.status !== "pending"
+        && !switchReason
         && (!wait || wait.phase === "transmitting" || wait.phase === "handing-over") ? (
         <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted motion-reduce:animate-none" aria-hidden />
       ) : null}

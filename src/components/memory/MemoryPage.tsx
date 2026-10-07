@@ -196,6 +196,11 @@ export function MemoryPanel({ size = "menu" }: { size?: MemorySize }) {
         rowProps={{ "data-memory-setting": "" }}
         switchProps={{ "data-memory-switch": "", onClick: () => { if (memory) setEnabled(!memory.enabled); } }}
       />
+      {!readFailed && memory?.lastTurn ? (
+        <p role="status" data-memory-status data-memory-setting className={`${PAD[size]} ${LINE[size]} text-muted`}>
+          <span data-memory-last-turn>{t(`memory.last.${memory.lastTurn}`)}</span>
+        </p>
+      ) : null}
       {reason ? (
         <div className={PAD[size]}>
           <div role={readFailed ? "alert" : "status"} data-memory-reason={tone} className={`flex flex-col items-start gap-1.5 rounded-[8px] bg-warning-soft ${sheet ? "px-3 py-2.5 text-body" : "px-2 py-1.5 text-[12px]"} leading-snug text-primary`}>

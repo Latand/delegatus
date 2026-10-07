@@ -1,0 +1,60 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "viewport": {
+    "width": 1440,
+    "height": 900
+  },
+  "wheel": 240,
+  "columns": {
+    "inbox": {
+      "width": [
+        278,
+        478
+      ],
+      "scrollTop": [
+        960,
+        768
+      ],
+      "first": "task:t-drag-5",
+      "heightAbove": [
+        815,
+        623
+      ],
+      "moved": 0
+    },
+    "assigned": {
+      "width": [
+        478,
+        278
+      ],
+      "scrollTop": [
+        960,
+        1244
+      ],
+      "first": "task:t-drag-2",
+      "heightAbove": [
+        763,
+        1047.4
+      ],
+      "moved": 0
+    }
+  },
+  "scrollWrites": [
+    {
+      "call": "scrollTop = 768",
+      "target": "div.col-body [inbox]"
+    },
+    {
+      "call": "scrollTop = 1243.9375",
+      "target": "div.col-body [assigned]"
+    }
+  ],
+  "nextNotch": {
+    "scroll": [
+      768,
+      1008
+    ],
+    "jumps": []
+  },
+  "failures": []
+}
