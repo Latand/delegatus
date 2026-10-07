@@ -3463,6 +3463,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
      to fold: invented machine figures and one invented limit window. */
   if (url.pathname.startsWith("/api/resources")) {
     const diskRole = new URLSearchParams(location.search).get("disk-role");
+    const diskWarning = new URLSearchParams(location.search).get("disk-level") === "warning";
     const host = (target: string, title: string, over: Record<string, unknown>) => ({
       target, panePid: 4_100, kind: "structured", path: null, engine: "claude", title, project: LEDGER, activity: "idle", lastActiveAt: iso(6 * 60 * MIN), cwd: "/repo/ledger",
       rssBytes: 600 * 1024 ** 2, swapBytes: 0, procCount: 3, model: "opus", role: "builder", conversationId: null, stage: "implement", ownership: "owned", seat: false, turnBusy: false, ...over,
@@ -3470,8 +3471,13 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return json({
       ...(diskRole ? { diskPressure: {
         at: iso(0), episode: iso(MIN), warningBytes: 10 * 1024 ** 3, criticalBytes: 2 * 1024 ** 3,
-        volumes: [{ roles: [diskRole === "required-temp" ? "temp" : diskRole], freeBytes: 0.5 * 1024 ** 3, level: "critical", ...(diskRole === "required-temp" ? { provisioning: true } : {}) }],
-        consumers: [{ kind: "worktrees", bytes: 90 * 1024 ** 3, measuredAt: iso(0) }],
+        /* `all`: one 256 GiB volume under state, worktrees and temp, with every consumer measured; `disk-level=warning` leaves it above the admission threshold. */
+        volumes: diskRole === "all"
+          ? [{ roles: ["state", "worktrees", "temp"], totalBytes: 256 * 1024 ** 3, ...(diskWarning ? { freeBytes: 8 * 1024 ** 3, level: "warning" } : { freeBytes: 1.4 * 1024 ** 3, level: "critical" }) }]
+          : [{ roles: [diskRole === "required-temp" ? "temp" : diskRole], freeBytes: 0.5 * 1024 ** 3, level: "critical", ...(diskRole === "required-temp" ? { provisioning: true } : {}) }],
+        consumers: diskRole === "all"
+          ? [{ kind: "state", bytes: 2.1 * 1024 ** 3, measuredAt: iso(0) }, { kind: "worktrees", bytes: 187 * 1024 ** 3, measuredAt: iso(0) }, { kind: "temp", bytes: 15 * 1024 ** 3, measuredAt: iso(0) }]
+          : [{ kind: "worktrees", bytes: 90 * 1024 ** 3, measuredAt: iso(0) }],
       } } : {}),
       system: { ramTotal: 32 * 1024 ** 3, ramAvailable: 9 * 1024 ** 3, swapTotal: 8 * 1024 ** 3, swapUsed: 1024 ** 3, capturedAt: iso(30) },
       sessions: RAIL ? [

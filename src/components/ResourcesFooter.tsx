@@ -245,7 +245,7 @@ export function ResourcesFooter({ density = "full" }: { density?: RailFooterDens
             <MeterLine label={<>{t("resources.title")}{staleDot}</>} value={sessions.length} percent={null} color="var(--color-muted)" />
           )}
         </button>
-        {snap.data.diskPressure ? <DiskPressureNotice pressure={snap.data.diskPressure} edge={LINE_EDGE} /> : null}
+        {snap.data.diskPressure ? <DiskPressureNotice pressure={snap.data.diskPressure} density={density} /> : null}
         {cleanup}
       </div>
     );
@@ -375,23 +375,61 @@ async function killSession(
 }
 
 /** Low free space on a volume Delegatus writes to, while its episode lasts
-    and a volume is still below the warning threshold. */
-export function DiskPressureNotice({ pressure, edge = "px-3.5" }: { pressure: DiskPressure; edge?: string }) {
+    and a volume is still below the warning threshold. The sidebar draws it on
+    the system block's grid: one line per low volume, then what takes the space.
+    Behind "All windows" the block has room for the line alone, so the rest is
+    in its tooltip. */
+export function DiskPressureNotice({ pressure, density = "full" }: { pressure: DiskPressure; density?: RailFooterDensity }) {
   const { t } = useLocale();
   const low = pressure.volumes.filter((volume) => volume.level === "warning" || volume.level === "critical");
   if (!pressure.episode || low.length === 0) return null;
   const role = (name: string) => t(`resources.diskRole.${name}` as MessageKey);
-  const consumers = [...pressure.consumers].sort((a, b) => b.bytes - a.bytes);
+  const consumers = [...pressure.consumers].sort((a, b) => b.bytes - a.bytes).map((consumer) => `${role(consumer.kind)} ${fmtBytes(consumer.bytes)}`).join(", ");
+  const waiting = low.some((volume) => volume.level === "critical" && (volume.provisioning || volume.roles.includes("state")));
+  const volumeText = (volume: DiskPressure["volumes"][number]) => `${volume.roles.map(role).join(" / ")}: ${t("resources.free", { amount: fmtBytes(volume.freeBytes ?? 0) })}`;
+  if (density !== "full") {
+    const NOTE = "block break-words text-[10px] leading-[13px] text-muted";
+    const rest = [consumers ? `${t("resources.diskConsumers")} ${consumers}` : t("resources.diskMeasuring"), waiting ? t("resources.diskWaiting") : null].filter(Boolean).join(" · ");
+    const notes = density === "line";
+    return (
+      <div
+        role="status"
+        data-disk-pressure
+        aria-label={[t("resources.diskLow"), ...low.map(volumeText), rest].join(" · ")}
+        className={`${LINE_EDGE} -mt-1 pb-1`}
+      >
+        {low.map((volume, index) => {
+          const critical = volume.level === "critical";
+          const share = volume.totalBytes ? (100 * (volume.freeBytes ?? 0)) / volume.totalBytes : null;
+          return (
+            <span key={`${index}:${volume.roles.join("/")}`} className="block" data-disk-level={volume.level} title={[t("resources.diskLow"), volumeText(volume), ...(notes ? [] : [rest])].join(" · ")}>
+              <MeterLine
+                label={t("resources.disk")}
+                value={<span className={critical ? "text-danger" : "text-warning"}>{t("resources.free", { amount: fmtBytes(volume.freeBytes ?? 0) })}</span>}
+                percent={share}
+                color={critical ? "var(--color-danger)" : "var(--color-warning)"}
+                bar={share !== null}
+              />
+            </span>
+          );
+        })}
+        {!notes ? null : consumers
+          ? <span data-meter-note="" className={`-mt-0.5 ${NOTE}`} title={`${t("resources.diskConsumersHint")} ${consumers}`}>{t("resources.diskConsumers")} {consumers}</span>
+          : <span data-meter-note="" className={`-mt-0.5 ${NOTE}`}>{t("resources.diskMeasuring")}</span>}
+        {notes && waiting ? <span data-meter-note="" className={NOTE} title={t("resources.diskWaiting")}>{t("resources.diskWaitingShort")}</span> : null}
+      </div>
+    );
+  }
   return (
-    <div role="status" data-disk-pressure className={`${edge} pb-2 text-xs leading-relaxed text-warning`}>
+    <div role="status" data-disk-pressure className="px-3.5 pb-2 text-xs leading-relaxed text-warning">
       <strong className="block">{t("resources.diskLow")}</strong>
-      {low.map((volume) => (
-        <div key={volume.roles.join("/")}>{volume.roles.map(role).join(" / ")}: {t("resources.free", { amount: fmtBytes(volume.freeBytes ?? 0) })}</div>
+      {low.map((volume, index) => (
+        <div key={`${index}:${volume.roles.join("/")}`}>{volumeText(volume)}</div>
       ))}
-      {consumers.length
-        ? <div>{t("resources.diskConsumers")} {consumers.map((consumer) => `${role(consumer.kind)} ${fmtBytes(consumer.bytes)}`).join(", ")}</div>
+      {consumers
+        ? <div title={`${t("resources.diskConsumersHint")} ${consumers}`}>{t("resources.diskConsumers")} {consumers}</div>
         : <div>{t("resources.diskMeasuring")}</div>}
-      {low.some((volume) => volume.level === "critical" && (volume.provisioning || volume.roles.includes("state"))) ? <div>{t("resources.diskWaiting")}</div> : null}
+      {waiting ? <div>{t("resources.diskWaiting")}</div> : null}
     </div>
   );
 }
