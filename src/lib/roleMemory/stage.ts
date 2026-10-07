@@ -21,9 +21,9 @@ export function stageMemoryExcluded(stage: Pick<PipelineStage, "kind" | "onFail"
   return learnedMemoryExcluded({ roleId, stage });
 }
 
-/** The learned rules a stage launch starts with, or null for a clean stage or a project with the switch off. */
+/** The learned rules a stage launch starts with, or null for a clean stage or an installation with the kill switch set. */
 export function learnedRulesForLaunch(pipeline: Pick<Pipeline, "project">, stage: Pick<PipelineStage, "kind" | "onFail">, roleId: string | null): string | null {
-  if (stageMemoryExcluded(stage, roleId) || !roleMemoryEnabled(pipeline.project)) return null;
+  if (stageMemoryExcluded(stage, roleId) || !roleMemoryEnabled()) return null;
   return learnedRulesBlock(pipeline.project, roleId);
 }
 
@@ -35,13 +35,13 @@ function handedFindings(pipeline: Pipeline, attempt: PipelineStageAttempt): Hand
   return { stageId: edge.stageId, severities: findings.map((finding) => finding.severity) };
 }
 
-/** The lesson request for an accepted stage_report, once per attempt; null for a clean stage, a project switched off, or a repeat. */
+/** The lesson request for an accepted stage_report, once per attempt; null for a clean stage, the kill switch set, or a repeat. */
 export function lessonRequestForReport(pipeline: Pipeline, stageId: string, n: number, conversationId: string, now = new Date().toISOString()): string[] | null {
   const stage = pipeline.stages.find((candidate) => candidate.id === stageId) ?? null;
   const attempt = attemptOf(pipeline, stageId, n);
   if (!stage || !attempt) return null;
   const roleId = attempt.effectiveRole.roleId ?? null;
-  if (stageMemoryExcluded(stage, roleId) || !roleMemoryEnabled(pipeline.project)) return null;
+  if (stageMemoryExcluded(stage, roleId) || !roleMemoryEnabled()) return null;
   const created = recordLessonRequest({ pipelineId: pipeline.id, stageId, attempt: n, project: pipeline.project, roleId, conversationId, at: now });
   return created ? lessonRequestLines(handedFindings(pipeline, attempt)) : null;
 }
@@ -98,7 +98,7 @@ export function leaveLessonForConversation(pipelines: readonly Pipeline[], conve
   const latest = target ?? held.at(-1)!;
   const roleId = latest.attempt.effectiveRole.roleId ?? null;
   if (stageMemoryExcluded(latest.stage, roleId)) throw new RoleMemoryRefusal("LESSON_CLEAN_STAGE", "a review stage stays clean: it reads no learned rules and leaves none");
-  if (!roleMemoryEnabled(latest.pipeline.project)) throw new RoleMemoryRefusal("LESSON_SWITCHED_OFF", "learned rules are switched off for this project");
+  if (!roleMemoryEnabled()) throw new RoleMemoryRefusal("LESSON_SWITCHED_OFF", "learned rules are switched off on this installation");
   if (!target) throw new RoleMemoryRefusal("LESSON_NOT_REQUESTED", "report the stage with stage_report first; its answer asks for the lesson");
   const parsed = parseLessons(args, roleId);
   const result = leaveLessons({

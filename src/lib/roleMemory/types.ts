@@ -19,6 +19,7 @@ export const CLEAN_ROLE_IDS = ["reviewer", "verifier", "issue-reporter"] as cons
 export type ScopeKind = "role" | "project" | "machine";
 
 export type RuleState = "active" | "merged" | "archived";
+export type RuleLeftReason = "duplicate" | "budget" | "deleted";
 
 export interface RuleSource {
   project: string;
@@ -39,8 +40,8 @@ export interface RoleMemoryRule {
   rule: string;
   why: string;
   state: RuleState;
-  /** Why a rule left the injected text: a near-duplicate merged into a fuller rule, or the bound. */
-  reason?: "duplicate" | "budget";
+  /** Why a rule left the injected text: a near-duplicate merged into a fuller rule, the bound, or the operator removed it. */
+  reason?: RuleLeftReason;
   mergedInto?: string;
   hints: StaticFindingClass[];
   source: RuleSource;
@@ -51,9 +52,12 @@ export interface RoleMemoryRule {
 export interface ScopeHistoryEntry {
   revision: number;
   at: string;
+  /** Who changed the scope: a stage agent's lesson, or the operator in the rules window. */
+  by: "agent" | "operator";
   added: string[];
   merged: { from: string; into: string }[];
   archived: string[];
+  restored?: string[];
 }
 
 export interface RoleMemoryScopeRow {
@@ -80,14 +84,7 @@ export interface LessonRequestRow {
   none: string | null;
 }
 
-export interface ProjectSettingRow {
-  kind: "project";
-  project: string;
-  enabled: boolean;
-  changedAt: string;
-}
-
-export type RoleMemoryRow = RoleMemoryRule | RoleMemoryScopeRow | LessonRequestRow | ProjectSettingRow;
+export type RoleMemoryRow = RoleMemoryRule | RoleMemoryScopeRow | LessonRequestRow;
 
 export interface LessonInput {
   scope: ScopeKind;
@@ -103,7 +100,7 @@ export interface RuleView {
   rule: string;
   why: string;
   state: RuleState;
-  reason?: "duplicate" | "budget";
+  reason?: RuleLeftReason;
   mergedInto?: string;
   hints: StaticFindingClass[];
   roleId: string | null;
@@ -130,6 +127,7 @@ export interface ScopeView {
 
 export interface RoleMemoryProjectView {
   project: string;
+  /** False only while the installation's kill switch (`LLV_ROLE_MEMORY=off`) is set. */
   enabled: boolean;
   scopes: ScopeView[];
 }

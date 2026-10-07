@@ -13,7 +13,7 @@ const { registerPipelineTick } = await import("@/lib/pipelines/controllerSignal"
 afterAll(registerPipelineTick(async () => {}));
 const { viewerMcpBindings } = await import("./bindings");
 const { createMcpToolService, MCP_TOOL_NAMES, MemoryMcpReceiptStore, MUTATING_MCP_TOOL_NAMES, TOOL_INPUT_SCHEMAS } = await import("./server");
-const { setRoleMemoryEnabled, learnedRulesBlock } = await import("@/lib/roleMemory/store");
+const { learnedRulesBlock } = await import("@/lib/roleMemory/store");
 type Pipeline = import("@/lib/pipelines/types").Pipeline;
 type McpToolResult = import("./server").McpToolResult;
 
@@ -63,7 +63,6 @@ test("leave_lesson is a registered, mutating tool with a bounded schema", () => 
 });
 
 test("an accepted fix report asks for a lesson naming the handed findings, and leave_lesson stores an abstract rule", async () => {
-  setRoleMemoryEnabled(PROJECT, true);
   const review = await call("conversation_review", "stage_report", { verdict: "fail", findings: [{ severity: "P1", text: "empty input throws" }] });
   expect(review.ok).toBe(true);
   expect(review.lessonRequest).toBeUndefined();

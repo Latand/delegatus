@@ -9,12 +9,11 @@ import type { FileEntry } from "@/lib/types";
    port a mock and the state directory private to this file: a review finds a
    defect, its fixer is asked for a lesson and leaves an abstract rule, a fresh
    builder of the same project starts with that rule, reviewers get nothing,
-   and switching the project off stops both writing and injection. */
+   and the installation's kill switch stops both writing and injection. */
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-role-memory-lane-"));
 const { createPipelineFromRequest, reportStageCompletion, tickPipelines } = await import("@/lib/pipelines/engine");
 const { registerPipelineTick } = await import("@/lib/pipelines/controllerSignal");
 const { loadPipelines, savePipelines } = await import("@/lib/pipelines/store");
-const { setRoleMemoryEnabled } = await import("./store");
 const { leaveLessonForConversation, lessonRequestForReport } = await import("./stage");
 type PipelinePorts = import("@/lib/pipelines/engine").PipelinePorts;
 type SpawnInput = Parameters<PipelinePorts["spawnAgent"]>[0] & { learnedRules?: string | null };
@@ -114,9 +113,8 @@ async function create(stages: unknown[]): Promise<string> {
 }
 const builderLane = () => create([{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Add parseRate", next: null }]);
 
-test("a review's finding becomes the fixer's abstract rule, a fresh builder starts with it, reviewers stay clean, and the switch stops both", async () => {
+test("a review's finding becomes the fixer's abstract rule, a fresh builder starts with it, reviewers stay clean, and the kill switch stops both", async () => {
   savePipelines([]);
-  setRoleMemoryEnabled(PROJECT, true);
   const first = await create([
     { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review src/size.ts", next: null, onFail: { to: "fix", maxRounds: 1 } },
     { id: "fix", kind: "run", role: { roleId: "builder" }, prompt: "Fix the findings below.\n\n{{prev.output}}", next: "recheck" },
@@ -161,14 +159,17 @@ test("a review's finding becomes the fixer's abstract rule, a fresh builder star
   const fresh = spawned.at(-1)!;
   expect(fresh.role.roleId).toBe("builder");
   expect(fresh.learnedRules).toContain("Learned rules (Delegatus role memory)");
-  expect(fresh.learnedRules).toContain("Builder · this project");
+  expect(fresh.learnedRules).toContain("Role rules · Builder on this project");
+  /* Role, project and machine rules arrive together, as three labelled groups. */
+  expect(fresh.learnedRules).toContain("Project rules · every role on this project");
+  expect(fresh.learnedRules).toContain("Machine rules · every project on this machine");
   expect(fresh.learnedRules).toContain(RULE);
   /* The text reaches the launch only: no persisted pipeline record holds it. */
   expect(fresh.prompt).not.toContain(RULE);
   expect(JSON.stringify(loadPipelines())).not.toContain(RULE);
 
-  /* Switched off: the next builder gets nothing, and nothing more is written. */
-  setRoleMemoryEnabled(PROJECT, false);
+  /* The installation's kill switch: the next builder gets nothing, and nothing more is written. */
+  process.env.LLV_ROLE_MEMORY = "off";
   savePipelines([]);
   const third = await builderLane();
   await tickPipelines([], ports);
@@ -180,4 +181,5 @@ test("a review's finding becomes the fixer's abstract rule, a fresh builder star
   await settle(n, "pass");
   expect(lessonRequestForReport(lane(third), "build", 1, conversation(n))).toBeNull();
   expect(() => leaveLessonForConversation(loadPipelines(), conversation(n), { lessons: [{ scope: "role", rule: RULE, why: "x" }] })).toThrow(/switched off/);
+  delete process.env.LLV_ROLE_MEMORY;
 });

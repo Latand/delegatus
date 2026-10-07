@@ -9,7 +9,7 @@
       "line": {
         "left": 582,
         "right": 1010,
-        "height": 53.53125,
+        "height": 38.6875,
         "hostLeft": 582,
         "hostRight": 1010,
         "overflow": 0
@@ -21,11 +21,11 @@
       "width": 1440,
       "surface": "window-from-card",
       "left": 160,
-      "top": 90,
+      "top": 130,
       "right": 1280,
-      "bottom": 810,
+      "bottom": 770,
       "boxWidth": 1120,
-      "boxHeight": 720,
+      "boxHeight": 640,
       "overflow": 0,
       "clipped": 0,
       "viewport": [
@@ -33,6 +33,12 @@
         900
       ],
       "file": "desktop-1440-en-window-from-card.png"
+    },
+    {
+      "lang": "en",
+      "width": 1440,
+      "surface": "window-removed",
+      "file": "desktop-1440-en-window-removed.png"
     },
     {
       "lang": "en",
@@ -59,9 +65,9 @@
       "left": 948,
       "top": 44,
       "right": 1204,
-      "bottom": 196,
+      "bottom": 284,
       "boxWidth": 256,
-      "boxHeight": 152,
+      "boxHeight": 240,
       "overflow": 0,
       "clipped": 0,
       "viewport": [
@@ -75,11 +81,11 @@
       "width": 1440,
       "surface": "window",
       "left": 160,
-      "top": 90,
+      "top": 130,
       "right": 1280,
-      "bottom": 810,
+      "bottom": 770,
       "boxWidth": 1120,
-      "boxHeight": 720,
+      "boxHeight": 640,
       "overflow": 0,
       "clipped": 0,
       "viewport": [
@@ -95,7 +101,7 @@
       "line": {
         "left": 56,
         "right": 368,
-        "height": 53.53125,
+        "height": 38.6875,
         "hostLeft": 12,
         "hostRight": 378,
         "overflow": 0
@@ -123,6 +129,12 @@
     {
       "lang": "en",
       "width": 390,
+      "surface": "window-removed",
+      "file": "phone-390-en-window-removed.png"
+    },
+    {
+      "lang": "en",
+      "width": 390,
       "surface": "stage-start",
       "file": "phone-390-en-stage-start.png"
     },
@@ -143,11 +155,11 @@
       "width": 390,
       "surface": "project-menu",
       "left": 0,
-      "top": 289,
+      "top": 377,
       "right": 390,
       "bottom": 844,
       "boxWidth": 390,
-      "boxHeight": 555,
+      "boxHeight": 467,
       "overflow": 0,
       "clipped": 0,
       "viewport": [
@@ -181,7 +193,7 @@
       "line": {
         "left": 582,
         "right": 1010,
-        "height": 53.53125,
+        "height": 38.6875,
         "hostLeft": 582,
         "hostRight": 1010,
         "overflow": 0
@@ -193,11 +205,11 @@
       "width": 1440,
       "surface": "window-from-card",
       "left": 160,
-      "top": 90,
+      "top": 130,
       "right": 1280,
-      "bottom": 810,
+      "bottom": 770,
       "boxWidth": 1120,
-      "boxHeight": 720,
+      "boxHeight": 640,
       "overflow": 0,
       "clipped": 0,
       "viewport": [
@@ -205,6 +217,12 @@
         900
       ],
       "file": "desktop-1440-uk-window-from-card.png"
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "surface": "window-removed",
+      "file": "desktop-1440-uk-window-removed.png"
     },
     {
       "lang": "uk",
@@ -231,9 +249,9 @@
       "left": 948,
       "top": 44,
       "right": 1204,
-      "bottom": 214,
+      "bottom": 284,
       "boxWidth": 256,
-      "boxHeight": 170,
+      "boxHeight": 240,
       "overflow": 0,
       "clipped": 0,
       "viewport": [
@@ -247,11 +265,11 @@
       "width": 1440,
       "surface": "window",
       "left": 160,
-      "top": 90,
+      "top": 130,
       "right": 1280,
-      "bottom": 810,
+      "bottom": 770,
       "boxWidth": 1120,
-      "boxHeight": 720,
+      "boxHeight": 640,
       "overflow": 0,
       "clipped": 0,
       "viewport": [
@@ -267,7 +285,7 @@
       "line": {
         "left": 56,
         "right": 368,
-        "height": 53.53125,
+        "height": 38.6875,
         "hostLeft": 12,
         "hostRight": 378,
         "overflow": 0
@@ -295,6 +313,12 @@
     {
       "lang": "uk",
       "width": 390,
+      "surface": "window-removed",
+      "file": "phone-390-uk-window-removed.png"
+    },
+    {
+      "lang": "uk",
+      "width": 390,
       "surface": "stage-start",
       "file": "phone-390-uk-stage-start.png"
     },
@@ -315,11 +339,11 @@
       "width": 390,
       "surface": "project-menu",
       "left": 0,
-      "top": 289,
+      "top": 377,
       "right": 390,
       "bottom": 844,
       "boxWidth": 390,
-      "boxHeight": 555,
+      "boxHeight": 467,
       "overflow": 0,
       "clipped": 0,
       "viewport": [

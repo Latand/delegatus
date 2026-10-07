@@ -9,7 +9,7 @@ process.env.LLV_STATE_DIR = sandbox;
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 
 const { appendRule, codePoints, nearDuplicate, scopeChars } = await import("./consolidate");
-const { learnedRulesBlock, leaveLessons, projectView, recordLessonRequest, roleMemoryEnabled, setRoleMemoryEnabled, stageLessons } = await import("./store");
+const { deleteRule, learnedRulesBlock, leaveLessons, projectView, recordLessonRequest, restoreRule, roleMemoryEnabled, stageLessons } = await import("./store");
 const { insertLearnedRules, renderLearnedRules } = await import("./render");
 const { withLearnedRules } = await import("./launch");
 const { ROLE_MEMORY_BOUND } = await import("./types");
@@ -52,7 +52,6 @@ test("a lesson that restates an active rule merges with it, and the fuller text 
 
 test("a scope over 10 000 characters is consolidated under the bound, and the dropped rule stays visible in history", () => {
   const project = PROJECT();
-  setRoleMemoryEnabled(project, true);
   const distinct = (i: number) => `Rule ${i}: ${["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "india", "juliet", "kilo", "lima", "mike", "november", "oscar", "papa", "quebec", "romeo", "sierra", "tango", "uniform", "victor", "whiskey", "xray", "yankee", "zulu"].map((word, w) => `${word}${(i * 31 + w * 7) % 997}`).join(" ")}`.slice(0, 300);
   let attempt = 0;
   let firstId = "";
@@ -82,7 +81,8 @@ test("lessons join their scopes at once, with the source the server resolved, an
   ] });
   expect(result.left.map((entry) => entry.scope)).toEqual([`role:${project}:builder`, `role:${project}:visual-critic`, "machine"]);
   expect(learnedRulesBlock(project, "builder")).toContain("When a change adds a branch for empty input");
-  expect(learnedRulesBlock(project, "builder")).toContain("Builder · this project");
+  expect(learnedRulesBlock(project, "builder")).toContain("Role rules · Builder on this project");
+  expect(learnedRulesBlock(project, "builder")).toContain("Learned rules (Delegatus role memory): 1 role · 0 project · 1 machine");
   expect(learnedRulesBlock(project, "builder")).not.toContain("Judge the narrow Ukrainian frame");
   expect(learnedRulesBlock(project, "visual-critic")).toContain("Judge the narrow Ukrainian frame");
   expect(learnedRulesBlock(`${project}-other`, "builder")).toContain("short temporary directory");
@@ -102,13 +102,28 @@ test("privacy hints mark a lesson and never refuse it", () => {
   expect(left.state).toBe("active");
 });
 
-test("the switch is off for a project nobody switched on, and holds what the operator set", () => {
+test("memory is always on; only the installation's kill switch stops it", () => {
+  expect(roleMemoryEnabled()).toBe(true);
+  process.env.LLV_ROLE_MEMORY = "off";
+  try { expect(roleMemoryEnabled()).toBe(false); } finally { delete process.env.LLV_ROLE_MEMORY; }
+  expect(roleMemoryEnabled()).toBe(true);
+});
+
+test("the operator removes one rule and puts it back: it stays a record, and the scope's history says who did what", () => {
   const project = PROJECT();
-  expect(roleMemoryEnabled(project)).toBe(false);
-  setRoleMemoryEnabled(project, true);
-  expect(roleMemoryEnabled(project)).toBe(true);
-  setRoleMemoryEnabled(project, false);
-  expect(roleMemoryEnabled(project)).toBe(false);
+  const rule = "When a change adds a branch for empty input, write the test for that branch in the same commit.";
+  const [left] = leaveLessons({ request: request(), source: source(), none: null, lessons: [{ scope: "role", rule, why: "An untested empty path failed review." }] }).left;
+  deleteRule(left!.id, "2026-10-07T13:00:00.000Z");
+  let builder = projectView(project).scopes.find((scope) => scope.roleId === "builder")!;
+  expect(builder.active).toEqual([]);
+  expect(builder.left).toEqual([expect.objectContaining({ id: left!.id, state: "archived", reason: "deleted" })]);
+  expect(learnedRulesBlock(project, "builder")).not.toContain(rule);
+  restoreRule(left!.id, "2026-10-07T13:00:05.000Z");
+  builder = projectView(project).scopes.find((scope) => scope.roleId === "builder")!;
+  expect(builder.active.map((entry) => entry.id)).toEqual([left!.id]);
+  expect(builder.left).toEqual([]);
+  expect(learnedRulesBlock(project, "builder")).toContain(rule);
+  expect(() => deleteRule("r_00000000")).toThrow(/no such rule/);
 });
 
 test("the block goes below the brief and above the controller's lines, and an oversized one is a file outside the checkout", () => {
@@ -143,7 +158,7 @@ test("two lessons stay two records with their own ids and render as two items, n
   expect(builder.active.map((rule) => [rule.id, rule.rule])).toEqual([[left[0]!.id, first], [left[1]!.id, second]]);
   expect(builder.active.every((rule) => rule.roleId === "builder" && rule.stageId === "fix")).toBe(true);
   /* The builder's own section; the machine scope is shared with the other tests in this file. */
-  const section = learnedRulesBlock(project, "builder").split("\n\n").find((part) => part.startsWith("Builder · this project"))!;
+  const section = learnedRulesBlock(project, "builder").split("\n\n").find((part) => part.startsWith("Role rules · Builder on this project"))!;
   const items = section.split("\n").filter((line) => line.startsWith("- ["));
   expect(items).toEqual([`- [${left[0]!.id}] ${first} Why: An untested empty path failed review.`, `- [${left[1]!.id}] ${second} Why: The driver died on a socket path limit.`]);
 });

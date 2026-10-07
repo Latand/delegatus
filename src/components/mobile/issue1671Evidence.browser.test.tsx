@@ -8363,9 +8363,11 @@ describe("account-switch message receipts", () => {
    window (variant 2) and the rule line under the stage report (variant 3).
    The fixture's pipeline-block lane gets real lessons through the store on a
    private state directory, the window and the card read them through the real
-   routes, and the switch is driven both ways from the project's menu. */
+   routes. Over the built frames the operator asked for three separate kinds of
+   rule a new agent gets together, small rows a tap removes with an undo, and
+   no switch; this block drives each. */
 describe("role memory: rules window and the rule line", () => {
-  browserTest("the card's rule line, the project's switch and row, and the rules window, desktop and 390 px, en and uk", async () => {
+  browserTest("the card's rule line, the ⋯ row, and the rules window's three kinds with remove and undo, desktop and 390 px, en and uk", async () => {
     const { NextRequest } = await import("next/server");
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-role-memory-browser-"));
     const previous = { ...process.env };
@@ -8383,7 +8385,6 @@ describe("role memory: rules window and the rule line", () => {
       store.recordLessonRequest({ pipelineId, stageId, attempt: 1, project: "atlas", roleId, conversationId: `conversation_${pipelineId}`, at: at(minutes) });
       store.leaveLessons({ request: { pipelineId, stageId, attempt: 1 }, source: { project: "atlas", pipelineId, stageId, attempt: 1, roleId, fixRound: stageId === "fix", conversationId: `conversation_${pipelineId}` }, lessons, none: null, now: at(minutes) });
     };
-    store.setRoleMemoryEnabled("atlas", true);
     seed("p-search", "build", 3 * 24 * 60, "builder", [
       { scope: "role", rule: "Before opening a pull request, check each acceptance criterion of the pinned specification against the head, one by one.", why: "A lane met its brief and failed review on a criterion only the specification named." },
       { scope: "project", rule: "Run the test files you touched by path; a whole-directory sweep reaches live runtime state.", why: "A sweep once stopped the host of a running conversation." },
@@ -8404,7 +8405,7 @@ describe("role memory: rules window and the rule line", () => {
       "/api/team": { mode: "solo", me: null, members: [], methods: {} },
       "/api/asks-you/key": { present: true, source: "file" },
       "/api/memory/settings": (request: Request) => request.method === "PUT" ? memory.PUT(new NextRequest(request)) : memory.GET(new NextRequest(request)),
-      "/api/role-memory": (request: Request) => request.method === "PUT" ? rolesRoute.PUT(new NextRequest(request)) : rolesRoute.GET(new NextRequest(request)),
+      "/api/role-memory": (request: Request) => request.method === "POST" ? rolesRoute.POST(new NextRequest(request)) : rolesRoute.GET(new NextRequest(request)),
       "/api/role-memory/lessons": (request: Request) => lessonsRoute.GET(new NextRequest(request)),
       /* The project's other switches on the same page answer as a quiet install would. */
       "/api/links/shared": { known: [{ key: "atlas" }], shared: { all: false, projects: [] } },
@@ -8421,7 +8422,7 @@ describe("role memory: rules window and the rule line", () => {
         const height = phone ? 844 : 900;
         const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=pipeline-block&header=1&rolememory=1`, { width, height }, "light", lang, "reduce", phone);
         try {
-          /* The switch's knob and the window settle before a frame is taken. */
+          /* The window and its rows settle before a frame is taken. */
           const shot = async (name: string) => { await page.waitForTimeout(350); const file = `${phone ? "phone-390" : "desktop-1440"}-${lang}-${name}.png`; await page.screenshot({ path: path.join(out, file) }); return file; };
           const inside = (selector: string) => page.locator(selector).first().evaluate((node) => {
             const box = node.getBoundingClientRect();
@@ -8453,7 +8454,23 @@ describe("role memory: rules window and the rule line", () => {
           expect(fromCard.left).toBeGreaterThanOrEqual(0); expect(fromCard.right).toBeLessThanOrEqual(width);
           expect(fromCard.top).toBeGreaterThanOrEqual(0); expect(fromCard.bottom).toBeLessThanOrEqual(height);
           expect(fromCard.overflow).toBeLessThanOrEqual(1);
+          /* Three kinds, each its own section, and the header names what a new agent of the shown role starts with. */
+          for (const kind of ["role", "project", "machine"]) await page.locator(`[data-rules-window] [data-rules-section="${kind}"]`).waitFor();
+          expect(await page.locator("[data-rules-starts]").innerText()).toContain(translate(lang, "roleMemory.n.machine", { count: 1 }));
+          expect(await page.locator('[data-rules-section="role"] [data-learned-rule]').count()).toBe(3);
           cases.push({ lang, width, surface: "window-from-card", ...fromCard, file: await shot("window-from-card") });
+          /* One tap removes a rule; it is archived, not gone, and Undo brings it back. */
+          const target = page.locator('[data-rules-section="role"] [data-learned-rule]').first();
+          const ruleId = (await target.getAttribute("data-learned-rule"))!;
+          await target.locator("[data-learned-rule-delete]").click();
+          await page.locator("[data-rules-undo]").waitFor();
+          await page.waitForFunction((id) => !document.querySelector(`[data-rules-section="role"] [data-learned-rule="${id}"]`), ruleId);
+          const removed = store.projectView("atlas").scopes.find((scope) => scope.roleId === "builder")!.left.find((rule) => rule.id === ruleId);
+          expect(removed).toMatchObject({ state: "archived", reason: "deleted" });
+          cases.push({ lang, width, surface: "window-removed", file: await shot("window-removed") });
+          await page.locator("[data-rules-undo-button]").click();
+          await page.locator(`[data-rules-section="role"] [data-learned-rule="${ruleId}"]`).waitFor();
+          expect(store.projectView("atlas").scopes.find((scope) => scope.roleId === "builder")!.active.some((rule) => rule.id === ruleId)).toBe(true);
           await page.locator("[data-rules-window-close]").click();
           await page.locator("[data-rules-window]").waitFor({ state: "detached" });
           /* Variant 5: the stage's own conversation, as its agent saw it — the rules below the brief, the request in stage_report's answer, then leave_lesson. A tall window holds each part whole. */
@@ -8501,7 +8518,7 @@ describe("role memory: rules window and the rule line", () => {
           await page.waitForTimeout(200);
           cases.push({ lang, width, surface: "stage-lesson", file: await shot("stage-lesson") });
           await page.setViewportSize({ width, height });
-          /* Variant 2's switch and row, among the project's switches: the board's ⋯ → «Learned rules» on the desktop, the ⋯ sheet's project rules on the phone. */
+          /* The way in from the project's menu: one row, no switch — the board's ⋯ on the desktop, the ⋯ sheet's project rules on the phone. */
           const container = phone ? "[data-mobile2-sheet='menu']" : "[data-bar-more-menu]";
           await page.goto(`${server.base}?scenario=pipeline-block&header=1&rolememory=1`);
           if (phone) {
@@ -8510,31 +8527,24 @@ describe("role memory: rules window and the rule line", () => {
           } else {
             await page.locator('[data-kanban-board] [data-bar="project"] [data-bar-more]').click();
             await page.locator('[data-kanban-board] [data-bar-more][aria-expanded="true"]').waitFor();
-            await page.locator('[data-bar-more-menu] [data-bar-menu-head="learned-rules"]').click();
           }
-          await page.locator("[data-learned-rules-settings] [data-learned-rules-count]").filter({ hasText: translate(lang, "roleMemory.count", { count: 6 }) }).waitFor();
-          await page.locator("[data-learned-rules-settings]").scrollIntoViewIfNeeded();
-          await page.waitForFunction(() => document.querySelector("[data-learned-rules-switch]")?.getAttribute("aria-checked") === "true");
-          /* Nothing in the row is cut, in either language. */
-          expect(await page.locator("[data-learned-rules-settings] .truncate").evaluateAll((nodes) => nodes.filter((node) => node.scrollWidth > node.clientWidth + 1).length)).toBe(0);
+          const row = page.locator("[data-learned-rules-open]").locator("visible=true").first();
+          await row.locator("[data-learned-rules-count]").filter({ hasText: translate(lang, "roleMemory.n.machine", { count: 1 }) }).waitFor();
+          await row.scrollIntoViewIfNeeded();
+          expect(await page.locator(`${container} [role="switch"][data-learned-rules-switch]`).count()).toBe(0);
+          expect(await row.locator(".truncate").evaluateAll((nodes) => nodes.filter((node) => node.scrollWidth > node.clientWidth + 1).length)).toBe(0);
           const menu = await inside(container);
           expect(menu.left).toBeGreaterThanOrEqual(0); expect(menu.right).toBeLessThanOrEqual(width);
           expect(menu.bottom).toBeLessThanOrEqual(height);
           expect(menu.overflow).toBeLessThanOrEqual(1);
           cases.push({ lang, width, surface: "project-menu", ...menu, file: await shot("project-menu") });
-          /* Switching the project off is stored; on again restores it. */
-          const control = page.locator("[data-learned-rules-switch]");
-          expect(await control.getAttribute("aria-checked")).toBe("true");
-          await control.click();
-          await page.waitForFunction(() => document.querySelector("[data-learned-rules-switch]")?.getAttribute("aria-checked") === "false");
-          expect(store.roleMemoryEnabled("atlas")).toBe(false);
-          await page.waitForFunction(() => !document.querySelector<HTMLButtonElement>("[data-learned-rules-switch]")?.disabled);
-          await control.click();
-          await page.waitForFunction(() => document.querySelector("[data-learned-rules-switch]")?.getAttribute("aria-checked") === "true");
-          expect(store.roleMemoryEnabled("atlas")).toBe(true);
-          /* The window from the row: the builder scope, its rules as coloured blocks, and the merged rule on the right. */
-          await page.locator("[data-learned-rules-open]").click();
+          await row.click();
+          /* The window from the row outlives the menu that opened it, and a press inside it keeps it open. */
           await page.locator("[data-rules-window] [data-learned-rule]").first().waitFor();
+          await page.locator('[data-rules-window] [data-rules-role="visual-critic"]').click();
+          expect(await page.locator("[data-rules-starts]").innerText()).toContain(lang === "en" ? "Visual critic" : "Критик вигляду");
+          await page.locator('[data-rules-window] [data-rules-role="builder"]').click();
+          await page.locator('[data-rules-window] [data-rules-history="role"]').click();
           expect(await page.locator("[data-rules-window] [data-left-rule]").count()).toBe(1);
           const window = await inside("[data-rules-window]");
           expect(window.right).toBeLessThanOrEqual(width); expect(window.bottom).toBeLessThanOrEqual(height);

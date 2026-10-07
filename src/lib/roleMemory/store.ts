@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 
 import { statePath } from "@/lib/configDir";
-import { isOwnProject } from "@/lib/memory/settings";
 import { staticSensitiveClasses, type StaticFindingClass } from "@/lib/privacy/staticDetectors";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized } from "@/lib/state/sqliteStateStore";
@@ -12,15 +11,16 @@ import { MACHINE_SCOPE, scopeKind, scopeProject, scopeRole } from "./scopes";
 import { renderLearnedRules } from "./render";
 import {
   MAX_LESSONS_PER_ATTEMPT, ROLE_MEMORY_BOUND,
-  type LessonInput, type LessonRequestRow, type ProjectSettingRow, type RoleMemoryProjectView, type RoleMemoryRow,
+  type LessonInput, type LessonRequestRow, type RoleMemoryProjectView, type RoleMemoryRow,
   type RoleMemoryRule, type RoleMemoryScopeRow, type RuleSource, type RuleView, type ScopeView, type StageLessonView,
 } from "./types";
 
 /* One collection in state.sqlite, so role memory inherits the state store's
    transactions, integrity checks and backups and adds no file. Rows: a rule
-   (`r:`), a scope with its active list and history (`s:`), a stage attempt's
-   lesson request (`q:`) and a project's switch (`p:`). Rule rows are never
-   deleted. */
+   (`r:`), a scope with its active list and history (`s:`) and a stage
+   attempt's lesson request (`q:`). Every lesson is a record of its own; the
+   bound is on a scope's list of them, never one text. Rule rows are never
+   deleted: a rule the operator removes is archived and can be put back. */
 
 const COLLECTION = "role_memory";
 const HISTORY_LIMIT = 500;
@@ -31,7 +31,6 @@ function key(row: RoleMemoryRow): string {
     case "rule": return `r:${row.id}`;
     case "scope": return `s:${row.scope}`;
     case "request": return requestKey(row.pipelineId, row.stageId, row.attempt);
-    case "project": return `p:${row.project}`;
   }
 }
 function decode(value: unknown): RoleMemoryRow | null {
@@ -39,8 +38,7 @@ function decode(value: unknown): RoleMemoryRow | null {
   const row = value as RoleMemoryRow;
   return row.kind === "rule" && typeof row.id === "string" && typeof row.rule === "string"
     || row.kind === "scope" && typeof row.scope === "string" && Array.isArray(row.active)
-    || row.kind === "request" && typeof row.pipelineId === "string" && Array.isArray(row.ruleIds)
-    || row.kind === "project" && typeof row.project === "string" && typeof row.enabled === "boolean" ? row : null;
+    || row.kind === "request" && typeof row.pipelineId === "string" && Array.isArray(row.ruleIds) ? row : null;
 }
 const seed = { collection: COLLECTION, schemaVersion: 1, migrationId: "role-memory-v1", key, loadRecords: (): RoleMemoryRow[] => [] };
 const cache = new Map<string, SqliteStateCollection<RoleMemoryRow>>();
@@ -70,17 +68,11 @@ export class RoleMemoryRefusal extends Error {
   constructor(readonly code: string, message: string) { super(message); }
 }
 
-/** The per-project switch. This repository starts on, every other project off, as shared memory does. */
-export function roleMemoryEnabled(project: string): boolean {
-  try {
-    const row = collection()?.get(`p:${canonicalProject(project)}`);
-    return row?.kind === "project" ? row.enabled : isOwnProject(project);
-  } catch { return false; }
-}
-
-export function setRoleMemoryEnabled(project: string, enabled: boolean, now = new Date().toISOString()): void {
-  const row: ProjectSettingRow = { kind: "project", project: canonicalProject(project), enabled, changedAt: now };
-  collection(true)!.boundedPatch(1, (tx) => { tx.put(row); });
+/** Role memory is always on (operator, 2026-10-07: no per-project switch). The
+    one way to stop it, for safety, is the installation's own setting
+    `LLV_ROLE_MEMORY=off`, which stops both the requests and the injection. */
+export function roleMemoryEnabled(): boolean {
+  return process.env.LLV_ROLE_MEMORY?.trim().toLowerCase() !== "off";
 }
 
 export function activeRules(scope: string): RoleMemoryRule[] {
@@ -154,7 +146,7 @@ export function leaveLessons(input: {
       const revision = current.revision + 1;
       tx.put({
         ...current, revision, active: outcome.active.map((entry) => entry.id),
-        history: [...current.history, { revision, at: now, added: outcome.added, merged: outcome.merged, archived: outcome.archived }].slice(-HISTORY_LIMIT),
+        history: [...current.history, { revision, at: now, by: "agent" as const, added: outcome.added, merged: outcome.merged, archived: outcome.archived }].slice(-HISTORY_LIMIT),
       });
       const stored = outcome.changed.find((entry) => entry.id === incoming.id)!;
       left.push({ id: incoming.id, scope, state: stored.state, ...(stored.mergedInto ? { mergedInto: stored.mergedInto } : {}), scopeChars: scopeChars(outcome.active), archived: outcome.archived, hints });
@@ -162,6 +154,49 @@ export function leaveLessons(input: {
     const none = input.none ?? request.none;
     tx.put({ ...request, ruleIds: [...request.ruleIds, ...left.map((entry) => entry.id)], none });
     return { left, none };
+  });
+}
+
+/** The operator removes one rule from the injected list; it stays a record, archived as "deleted", and its scope's history says so. */
+export function deleteRule(ruleId: string, now = new Date().toISOString()): RoleMemoryRule {
+  return collection(true)!.boundedPatch(8, (tx) => {
+    const rule = tx.get(`r:${ruleId}`);
+    if (rule?.kind !== "rule") throw new RoleMemoryRefusal("RULE_NOT_FOUND", "no such rule");
+    if (rule.state !== "active") throw new RoleMemoryRefusal("RULE_NOT_ACTIVE", "this rule is not in the injected list");
+    const held = tx.get(`s:${rule.scope}`);
+    if (held?.kind !== "scope") throw new RoleMemoryRefusal("RULE_NOT_FOUND", "the rule's scope is missing");
+    const revision = held.revision + 1;
+    const deleted: RoleMemoryRule = { ...rule, state: "archived", reason: "deleted", changedAt: now };
+    tx.put(deleted);
+    tx.put({ ...held, revision, active: held.active.filter((id) => id !== ruleId),
+      history: [...held.history, { revision, at: now, by: "operator" as const, added: [], merged: [], archived: [ruleId] }].slice(-HISTORY_LIMIT) });
+    return deleted;
+  });
+}
+
+/** Undo, and the way back for any rule that left: it returns to the end of its scope, which then keeps its bound as an append does. */
+export function restoreRule(ruleId: string, now = new Date().toISOString()): RoleMemoryRule {
+  return collection(true)!.boundedPatch(4096, (tx) => {
+    const rule = tx.get(`r:${ruleId}`);
+    if (rule?.kind !== "rule") throw new RoleMemoryRefusal("RULE_NOT_FOUND", "no such rule");
+    if (rule.state === "active") return rule;
+    const held = tx.get(`s:${rule.scope}`);
+    const current: RoleMemoryScopeRow = held?.kind === "scope" ? held : { kind: "scope", scope: rule.scope, revision: 0, active: [], history: [] };
+    const restored: RoleMemoryRule = { ...rule, state: "active", changedAt: now };
+    delete restored.reason;
+    delete restored.mergedInto;
+    const next = [...current.active.flatMap((id) => { const row = tx.get(`r:${id}`); return row?.kind === "rule" ? [row] : []; }), restored];
+    const archived: string[] = [];
+    tx.put(restored);
+    while (next.length > 1 && scopeChars(next) > ROLE_MEMORY_BOUND) {
+      const oldest = next.shift()!;
+      tx.put({ ...oldest, state: "archived", reason: "budget", changedAt: now });
+      archived.push(oldest.id);
+    }
+    const revision = current.revision + 1;
+    tx.put({ ...current, revision, active: next.map((entry) => entry.id),
+      history: [...current.history, { revision, at: now, by: "operator" as const, added: [], merged: [], archived, restored: [ruleId] }].slice(-HISTORY_LIMIT) });
+    return restored;
   });
 }
 
@@ -195,7 +230,7 @@ export function projectView(project: string, now = Date.now()): RoleMemoryProjec
       active: active.map((row) => view(row, now)), left: left.map((row) => view(row, now)),
     };
   });
-  return { project: canonical, enabled: roleMemoryEnabled(canonical), scopes };
+  return { project: canonical, enabled: roleMemoryEnabled(), scopes };
 }
 
 /** What each stage attempt of a project left, for the line under its report on the card. */

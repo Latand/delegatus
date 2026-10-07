@@ -1,6 +1,6 @@
 "use client";
 
-import { Archive, Bot, GitMerge, Sparkles, Users, Columns3, EyeOff, Info, LayoutGrid, List, ListTodo, ListTree, MessageSquarePlus, Network, Search, UserRound } from "lucide-react";
+import { Archive, Bot, GitMerge, Users, Columns3, EyeOff, Info, LayoutGrid, List, ListTodo, ListTree, MessageSquarePlus, Network, Search, UserRound } from "lucide-react";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { queueColumnOpen, useBoardState } from "@/hooks/useBoardState";
@@ -105,7 +105,7 @@ import { AsksYouRow } from "./AsksYouRow";
 import { BridgeReportsRow } from "./BridgeReportsRow";
 import { MergeOnReviewRow } from "./MergeOnReviewRow";
 import { ShareProjectRow } from "./links/ShareProjectRow";
-import { LearnedRulesSettings } from "./roleMemory/LearnedRules";
+import { LearnedRulesRow } from "./roleMemory/LearnedRules";
 import { SoundToggle } from "./SoundToggle";
 import { BAR_MENU_ROW, BarCreateGroup, BarMenuGroup, BarMenuSection, BarMoreMenu, BarPanelToggles, DashboardBar } from "./ProjectBar";
 
@@ -2105,8 +2105,8 @@ function ProjectDashboardView({
       { kind: "custom", key: "merge-on-review", node: <MergeOnReviewRow project={project} variant="sheet" /> },
       { kind: "custom", key: "share-project", node: <ShareProjectRow project={project} variant="sheet" /> },
       { kind: "custom", key: "bridge-reports", node: <BridgeReportsRow project={project} variant="sheet" /> },
-      /* Role memory's switch and the way into the rules window (docs/design/role-memory.md §3.1). */
-      { kind: "custom", key: "learned-rules", node: <LearnedRulesSettings project={project} size="sheet" /> },
+      /* Role memory's rules window: always on, so a way in and no switch (docs/design/role-memory.md §3.1). */
+      { kind: "custom", key: "learned-rules", node: <LearnedRulesRow project={project} size="sheet" /> },
       /* "Asks you" is the installation's, not the project's; it sits here
          because this is where the operator looks for what reports to them. */
       { kind: "custom", key: "asks-you", node: <AsksYouRow variant="sheet" /> },
@@ -2178,6 +2178,10 @@ function ProjectDashboardView({
             <BarMenuGroup name="sound">
               <SoundToggle variant="menu" rowClassName={BAR_MENU_ROW} />
             </BarMenuGroup>
+            {/* Role memory's rules window: always on, so a way in and no switch (docs/design/role-memory.md §3.1). */}
+            <BarMenuGroup name="learned-rules">
+              <LearnedRulesRow project={project} size="menu" onOpened={close} />
+            </BarMenuGroup>
             <BarMenuGroup name="sections">
               {wide ? null : (
                 <BarMenuSection id="accounts" title={t("dash.menu.accounts")} icon={<Users className="h-[15px] w-[15px] shrink-0" aria-hidden />}>
@@ -2192,10 +2196,6 @@ function ProjectDashboardView({
               <BarMenuSection id="seat" title={t("dash.menu.seat")} icon={<Bot className="h-[15px] w-[15px] shrink-0" aria-hidden />} page>
                 <BridgeReportsRow project={project} variant="menu" />
                 <AsksYouRow variant="menu" />
-              </BarMenuSection>
-              {/* Role memory: the project's switch and the way into the rules window (docs/design/role-memory.md §3.1). */}
-              <BarMenuSection id="learned-rules" title={t("roleMemory.row")} icon={<Sparkles className="h-[15px] w-[15px] shrink-0" aria-hidden />} page>
-                <LearnedRulesSettings project={project} size="menu" />
               </BarMenuSection>
               <BarMenuSection id="project" title={t("dash.menu.project")} icon={<Archive className="h-[15px] w-[15px] shrink-0" aria-hidden />}>
                 {archived ? (

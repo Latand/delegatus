@@ -754,12 +754,15 @@ The operator asked for an MVP «без фантазий», and the design's own 
 noted that the plan below had grown to three lanes. The orchestrator cut it on
 2026-10-07 to one lane, and the operator chose the surfaces the same day
 (prototype review round 2: variants 2, 3 and 5, with the comment «Треба, щоб не
-було дуже багато тексту. І зайвої інформації.»). This is what the lane builds.
+було дуже багато тексту. І зайвої інформації.»). Over the built frames that
+evening the operator asked for three visibly separate kinds of rule that a new
+agent receives together, each rule small and removable, and no on/off switch:
+role memory is a default feature. This is what the lane builds.
 
 1. **Store.** One collection, `role_memory`, in `state.sqlite` through
    `SqliteStateCollection` (`src/lib/roleMemory/store.ts`): rule rows, one row
    per scope with its active list, revision and history, one row per stage
-   attempt that was asked for a lesson, and one row per project switch. Scopes
+   attempt that was asked for a lesson. Scopes
    are `role:<project>:<roleId>`, `project:<project>` and `machine`, with the
    canonical project key. Each scope renders to at most 10 000 code points.
    Rule rows are never deleted. Every lesson is a record of its own, with its
@@ -771,7 +774,7 @@ noted that the plan below had grown to three lanes. The orchestrator cut it on
    request, an issue, a linked board or a bridge or relay payload.
 2. **Write path.** `stage_report`'s answer gains `lessonRequest` (the prompt of
    2.4, shortened, as lines) on the first accepted report of an eligible
-   attempt in a project whose switch is on; a fix round's request names the
+   attempt; a fix round's request names the
    findings it was handed. The new MCP tool `leave_lesson` takes one to three
    lessons (`scope` role, project or machine, an optional `role` with scope
    role, `rule` of 20–300 characters, `why` of at most 160) or `none` with one
@@ -802,24 +805,34 @@ noted that the plan below had grown to three lanes. The orchestrator cut it on
    `learnedRules`, a field that is neither persisted on the attempt nor part of
    the request digest. The production port expands it into the prompt only at
    dispatch (`withLearnedRules` in `spawnPipelineAgent`), below the brief and
-   the role scaffold and above the controller's lines, labelled "Learned rules
-   (Delegatus role memory)" with every rule's id. A block that would push the
+   the role scaffold and above the controller's lines: "Learned rules
+   (Delegatus role memory): 3 role · 1 project · 1 machine", then the three
+   labelled groups (role rules for this role on this project, project rules,
+   machine rules), each rule an item with its id. A block that would push the
    message past the 32 000-byte envelope is written to
    `statePath("role-memory/launch/learned-rules-<sha256>.md")`, mode 0600, and
    the message points at it. No pipeline record, attempt input or composer
    artifact in the checkout holds rule text.
-6. **Controls.** The Memory page (header menu → Settings → Memory) gains the
-   switch "Learned rules for this project" and one row, "Learned rules · n
-   rules · +k today", whose Open button shows the rules window (variant 2):
-   scopes on the left, the scope's rules as coloured blocks in the middle with
-   their size against 10 000, and what left the rules on the right; on the
-   phone a full-screen sheet with the scopes as chips. Under a stage report on
-   the card, one coloured line (variant 3): "Left 2 rules → Builder, Visual
-   critic" with the first rule, which opens the window on that rule, or a quiet
-   "No rule left" once the turn ended without one; a clean stage draws
-   nothing. The switch is on by default for this repository and off for every
-   other project. Switching it off stops both the request and the injection;
-   stored rules stay.
+6. **Controls.** No switch: role memory is always on (operator, 2026-10-07).
+   The one way to stop it, for safety, is the installation's setting
+   `LLV_ROLE_MEMORY=off`, which stops both the request and the injection and
+   leaves stored rules as they are; the window then says so. One row,
+   "Learned rules · n role · n project · n machine", on the board's ⋯ and
+   among the phone's project rules, opens the rules window (variant 2). The
+   window's header names what a new agent starts with ("A new Builder starts
+   with: 3 role · 1 project · 1 machine"); its body holds three sections, each
+   with its own heading and colour: Role (a picker over the roles that have
+   rules), Project and Machine, side by side on the desktop and stacked on the
+   phone. Each rule is a small row: its text in at most two lines, its why on
+   hover or a tap, and one tap on × that removes it from the injected list
+   with an Undo. A removed rule is archived as "removed by you", recorded in
+   its scope's history with the operator as author, and listed under "Left the
+   rules" with merged and archived ones, each with Return. Under a stage report
+   on the card, one compact coloured line (variant 3): "Left 2 rules →
+   Builder, Visual critic" with the first rule on one line, which opens the
+   window on that rule, or a quiet "No rule left" once the turn ended without
+   one; a clean stage draws nothing. The header menu's Memory page is
+   unchanged: it already reaches 355 of the 360 px its driver allows.
 7. **Privacy for the MVP** is the abstract-rule instruction in the request and
    in the block, the detector hints, and the existing publication privacy
    gate on everything published.
@@ -827,8 +840,9 @@ noted that the plan below had grown to three lanes. The orchestrator cut it on
 Tests on isolated state: the bound in code points, merge and archive with the
 dropped rule visible, the lane path through the real engine (a review's finding
 makes the fixer's request name it, the fixer's rule reaches a fresh builder's
-launch and no persisted pipeline record, reviewers get nothing, the switch
-stops both), `leave_lesson` and `lessonRequest` through the MCP service, and the
+launch and no persisted pipeline record, reviewers get nothing, the kill
+switch stops both), a removed rule kept as a record and put back,
+`leave_lesson` and `lessonRequest` through the MCP service, and the
 oversized block as a file outside the checkout. Rendered evidence goes through
 the existing phone driver (`issue1671Evidence.browser.test.tsx`) over the
 kanban fixture, desktop and 390 px, English and Ukrainian.
@@ -852,7 +866,7 @@ its own:
   native probes.
 - Revisions frozen at binding and the marker in the stage prompt (2.6): the
   MVP reads the current rules at each activation.
-- Operator editing: add, edit, pin, archive and restore a rule, "May be
+- Operator editing beyond remove and return: add, edit and pin a rule, "May be
   published" and "Consolidate now".
 - The test aid `scripts/role-memory.ts` (`show`, `fill`, `probe`, `scan`).
 
@@ -966,9 +980,12 @@ row.
 
 ## 5. Test plan for the operator (D3)
 
-For the MVP as built (3.1): steps 1–5, 7 and 10 apply, read on the Memory
-page's rules window and on the card instead of `scripts/role-memory.ts`, and
-step 1 adds no rule by hand, since editing waits for a later slice. Of step 6
+For the MVP as built (3.1): steps 2–5 and 7 apply, read in the rules window
+(the board's ⋯ → Learned rules) and on the card instead of
+`scripts/role-memory.ts`. Step 1 switches nothing on, since role memory is
+always on, and adds no rule by hand, since adding waits for a later slice.
+Step 10 has no switch: it is the installation setting `LLV_ROLE_MEMORY=off`
+and a Viewer restart. Of step 6
 only the recheck's first message applies; closing shared and native memory
 waits. Steps 8 and 9 test the deferred egress system and model consolidation
 and wait for them; the MVP's bound is exercised by its tests.

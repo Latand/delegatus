@@ -17,19 +17,20 @@ function roleTitle(roleId: string): string {
 
 export function scopeHeading(scope: string): string {
   const kind = scopeKind(scope);
-  if (kind === "machine") return "Every project · this machine";
-  if (kind === "project") return "Every role · this project";
-  return `${roleTitle(scopeRole(scope) ?? "")} · this project`;
+  if (kind === "machine") return "Machine rules · every project on this machine";
+  if (kind === "project") return "Project rules · every role on this project";
+  return `Role rules · ${roleTitle(scopeRole(scope) ?? "")} on this project`;
 }
 
-/** The block injected at spawn, from each readable scope's active rules in order. */
+/** The block injected at spawn: the stage's role, project and machine rules
+    together, as three labelled groups of separate items, each with its id. */
 export function renderLearnedRules(scopes: readonly { scope: string; rules: readonly RoleMemoryRule[] }[]): string {
-  const filled = scopes.filter((entry) => entry.rules.length > 0);
-  if (!filled.length) return `${LEARNED_RULES_HEADING}: none yet for this stage. ${LESSON_POINTER}`;
+  const count = (kind: string) => scopes.filter((entry) => scopeKind(entry.scope) === kind).reduce((sum, entry) => sum + entry.rules.length, 0);
+  const counts = [...(scopes.some((entry) => scopeKind(entry.scope) === "role") ? [`${count("role")} role`] : []), `${count("project")} project`, `${count("machine")} machine`].join(" · ");
   return [
-    LEARNED_RULES_HEADING,
+    `${LEARNED_RULES_HEADING}: ${counts}`,
     "Earlier agents left these when they finished their stages. They are rules of thumb: the brief, the pinned specification and the project's instruction files win where they disagree. Keep them on this machine: never copy a rule into a commit, pull request, issue, task or report; name it by its id.",
-    ...filled.flatMap((entry) => ["", scopeHeading(entry.scope), ...entry.rules.map(ruleLine)]),
+    ...scopes.flatMap((entry) => ["", scopeHeading(entry.scope), ...(entry.rules.length ? entry.rules.map(ruleLine) : ["- none yet"])]),
     "",
     LESSON_POINTER,
   ].join("\n");

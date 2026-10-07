@@ -50,6 +50,7 @@ import { useSelfUpdateFeed } from "./selfUpdate/useSelfUpdateFeed";
 import { openSelfUpdate } from "./selfUpdate/openSelfUpdate";
 import { SelfUpdateHost } from "./selfUpdate/SelfUpdateDialog";
 import { TelemetrySettingsHost } from "./telemetry/TelemetrySettings";
+import { LearnedRulesWindowHost } from "./roleMemory/LearnedRules";
 import { LinkedSettingsHost } from "./links/LinkedSettingsDialog";
 import { ExternalRelaySettingsHost } from "./externalRelay/ExternalRelaySettingsDialog";
 import { VoiceBridgeRelayHost } from "./voice/VoiceBridgeRelayHost";
@@ -1849,6 +1850,8 @@ function ViewerApp() {
       <SelfUpdateHost />
       <LinkedSettingsHost />
       <TelemetrySettingsHost />
+      {/* Role memory's rules window, opened from the board's ⋯ and from a stage report's rule line. */}
+      <LearnedRulesWindowHost />
       <ExternalRelaySettingsHost />
       {/* #691: the ONE voice conversation panel, portalled into the card's dock
           slot or the floating PiP window. Mounted here rather than in the card
