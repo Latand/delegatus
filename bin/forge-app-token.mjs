@@ -27,6 +27,10 @@ import { fileURLToPath } from "node:url";
 
 export const FORGE_APP_SECRET_SERVICE = "delegatus-github-app";
 export const FORGE_APP_PERMISSIONS = Object.freeze({ contents: "write", pull_requests: "write", metadata: "read" });
+/** What filing an issue needs, asked for on its own (#2518): the token that
+    files one approved report can do nothing else, and a push token never
+    carries it. An installation that was not granted `issues` is refused here. */
+export const FORGE_APP_ISSUE_PERMISSIONS = Object.freeze({ issues: "write", metadata: "read" });
 export const FORGE_APP_USERNAME = "x-access-token";
 /** Where a push to a declared repository is sent: the one URL base the App's
     credential helper answers. Joined so the source holds no address-shaped literal. */
@@ -110,15 +114,15 @@ function sameRepository(left, right) {
   return typeof left === "string" && typeof right === "string" && left.toLowerCase() === right.toLowerCase();
 }
 
-function holdsRequiredPermissions(granted) {
+function holdsRequiredPermissions(granted, required) {
   return !!granted && typeof granted === "object"
-    && Object.entries(FORGE_APP_PERMISSIONS).every(([name, level]) => granted[name] === level || (level === "read" && granted[name] === "write"));
+    && Object.entries(required).every(([name, level]) => granted[name] === level || (level === "read" && granted[name] === "write"));
 }
 
-function exactlyRequiredPermissions(granted) {
+function exactlyRequiredPermissions(granted, required) {
   return !!granted && typeof granted === "object"
-    && Object.keys(granted).length === Object.keys(FORGE_APP_PERMISSIONS).length
-    && Object.entries(FORGE_APP_PERMISSIONS).every(([name, level]) => granted[name] === level);
+    && Object.keys(granted).length === Object.keys(required).length
+    && Object.entries(required).every(([name, level]) => granted[name] === level);
 }
 
 /**
@@ -129,9 +133,14 @@ function exactlyRequiredPermissions(granted) {
  * mint, so an uninstalled, suspended or re-pointed App is refused here rather
  * than discovered by a failed write, and the token is asked for this one
  * repository with the three permissions a forge write needs — whatever else
- * the installation can reach.
+ * the installation can reach. `permissions` names another written set, such
+ * as the one an issue needs; the token then carries exactly that set.
+ *
+ * @param {string} repository
+ * @param {any} ports
+ * @param {Readonly<Record<string, string>>} [permissions]
  */
-export async function mintInstallationToken(repository, ports) {
+export async function mintInstallationToken(repository, ports, permissions = FORGE_APP_PERMISSIONS) {
   const slug = parseRepository(repository);
   if (!slug) throw new ForgeAppRefusal(null, "the target is not a github.com repository this installation can name");
   const refuse = (reason) => new ForgeAppRefusal(slug, reason);
@@ -167,15 +176,15 @@ export async function mintInstallationToken(repository, ports) {
   const installation = await call("GET", `repos/${slug}/installation`, { token: bearer });
   if (!installation || installation.id !== app.installation_id || installation.app_id !== app.id
     || !sameRepository(installation.account?.login, owner) || installation.suspended_at != null
-    || !holdsRequiredPermissions(installation.permissions)) {
+    || !holdsRequiredPermissions(installation.permissions, permissions)) {
     throw refuse("the GitHub App installation is missing, suspended, or differs from the verified one");
   }
   const issued = await call("POST", `app/installations/${installation.id}/access_tokens`, {
-    token: bearer, body: { repositories: [name], permissions: FORGE_APP_PERMISSIONS },
+    token: bearer, body: { repositories: [name], permissions },
   });
   if (!issued || typeof issued.token !== "string" || !issued.token) throw refuse("GitHub issued no installation token");
   try {
-    if (!exactlyRequiredPermissions(issued.permissions)) throw refuse("the issued token carries unexpected permissions");
+    if (!exactlyRequiredPermissions(issued.permissions, permissions)) throw refuse("the issued token carries unexpected permissions");
     const reach = await call("GET", "installation/repositories?per_page=100", { token: issued.token });
     if (reach?.total_count !== 1 || reach.repositories?.length !== 1 || !sameRepository(reach.repositories[0]?.full_name, slug)) {
       throw refuse("the issued token is not limited to this repository");
@@ -642,7 +651,7 @@ async function main(argv) {
     const flag = rest.indexOf("--repository");
     try {
       const named = flag >= 0 ? rest[flag + 1] : await ports.originRepository();
-      const issued = await mintInstallationToken(named ?? "", ports);
+      const issued = await mintInstallationToken(named ?? "", ports, rest.includes("--issues") ? FORGE_APP_ISSUE_PERMISSIONS : FORGE_APP_PERMISSIONS);
       ports.stdout(rest.includes("--json") ? `${JSON.stringify({ token: issued.token, expiresAt: issued.expiresAt })}\n` : `${issued.token}\n`);
       return 0;
     } catch (error) {

@@ -1142,7 +1142,7 @@ test.each(["generation", "continuity", "alias"] as const)("fallback ownership fo
   const identity = captureProcessIdentity(child.pid)!;
   const previous = ended("open");
   const current = hosted("open", identity);
-  const disk = registry.readOnlySnapshot();
+  const disk = registry.snapshot();
   if (binding === "alias") disk.conversationAliases[previous.conversation.id] = current.conversation.id;
   else {
     delete disk.conversations[previous.conversation.id];
@@ -1375,7 +1375,7 @@ test.each((["missing", "dead", "live"] as const).flatMap((state) =>
     spawnStartedAt: new Date(Date.now() - 12 * 60 * 60_000).toISOString(),
   });
   const production = productionLivenessSources();
-  const disk = registry.readOnlySnapshot();
+  const disk = registry.snapshot();
   // An orphaned legacy pane path has neither a conversation nor a process row.
   if (state === "missing") {
     const flow = loadFlows()[0]!;

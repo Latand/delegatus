@@ -1,0 +1,47 @@
+{
+  "handoff": {
+    "lease_id": "ls_bbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "outcome": "declined",
+    "reason": "handoff",
+    "detail": "The agent handed this request to the service's own assistant.",
+    "retry_after_s": null
+  },
+  "member_limit": {
+    "lease_id": "ls_bbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "outcome": "declined",
+    "reason": "member_limit",
+    "detail": "This member reached 1 answer in the last hour in this chat.",
+    "retry_after_s": 3600
+  },
+  "claim_body": {
+    "wait_s": 25,
+    "kinds": [
+      "answer"
+    ],
+    "features": [
+      "requester_context"
+    ],
+    "slots": [
+      {
+        "target_id": "t_target",
+        "free": 1
+      }
+    ]
+  },
+  "completions_on_wire": [
+    {
+      "lease_id": "ls_bbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "outcome": "declined",
+      "reason": "handoff",
+      "detail": "The agent handed this request to the service's own assistant.",
+      "retry_after_s": null
+    },
+    {
+      "lease_id": "ls_bbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "outcome": "declined",
+      "reason": "member_limit",
+      "detail": "This member reached 1 answer in the last hour in this chat.",
+      "retry_after_s": 3600
+    }
+  ]
+}

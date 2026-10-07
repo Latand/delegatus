@@ -26,6 +26,7 @@ import { useAgentCapabilities } from "./useAgentCapabilities";
 import { DeadHostBanner } from "./runtime/DeadHostBanner";
 import { SupersededBanner } from "./runtime/SupersededBanner";
 import { FlipRow } from "./FlipRow";
+import { HintScope } from "./Hint";
 import { conversationSpeech } from "./feed/conversationSpeech";
 import { SpeakButton } from "./feed/SpeakButton";
 import { LogFeed } from "./LogFeed";
@@ -189,7 +190,17 @@ interface Props {
   chromeInMenu?: boolean;
 }
 
-export function BranchPane({ file, tasks, isRoot, onClose, dragHandle, noComposer, banner, headerActions, onToggleExpand, expanded, dormant, autoEditToken, showFavorite, onSpawnRetry, relatedTasks, onOpenTask, titleOverride, composerMount, chrome, chromeInMenu }: Props) {
+/* A pane handed another conversation in place (the phone's chat screen, a
+   reader) closes any hint still open on the previous one. */
+export function BranchPane(props: Props) {
+  return (
+    <HintScope id={props.file.conversationId ?? props.file.path}>
+      <BranchPaneBody {...props} />
+    </HintScope>
+  );
+}
+
+function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer, banner, headerActions, onToggleExpand, expanded, dormant, autoEditToken, showFavorite, onSpawnRetry, relatedTasks, onOpenTask, titleOverride, composerMount, chrome, chromeInMenu }: Props) {
   const neverStarted = file.path.startsWith("spawn:") && file.spawn?.state === "failed";
   const { t } = useLocale();
   const isMobile = useIsMobile();

@@ -12,13 +12,20 @@ import { conversationMessageSenders, messageSenders } from "@/lib/team";
 import type { MessageSender } from "@/lib/team/contract";
 import { pathAllowed } from "@/lib/scanner/roots";
 import type { ApiError } from "@/lib/types";
-import { offeredMemoryForTranscript } from "@/lib/memory/offers";
+import { memoryForTranscript } from "@/lib/memory/offers";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export interface MessageProvenanceResponse {
+  /** Titles of the shared memories added to each operator turn, keyed by the
+      row's engine identity. */
   memoryOffers?: Record<string, string[]>;
+  /** The file behind each of those titles, in the same order, so the feed can
+      open a memory's text; null where the index no longer holds the entry. */
+  memoryPaths?: Record<string, Array<string | null>>;
+  /** Turns whose candidates were judged and none was chosen. */
+  memoryNone?: string[];
   /** Delivered-message authorship keyed by the transcript row's engine uuid
       (#1117). Only rows with real delivery evidence appear; the feed keeps
       today's rendering for everything else. */
@@ -65,8 +72,9 @@ export function GET(req: NextRequest): NextResponse<MessageProvenanceResponse | 
     ...occurrences.flatMap((entry) => (entry.submissionId ? [entry.submissionId] : [])),
     ...Object.values(submissions),
   ];
+  const memory = memoryForTranscript(path);
   return NextResponse.json(
-    { messages, occurrences, submissions, memoryOffers: offeredMemoryForTranscript(path), senders: { ...queuedSenders(path), ...messageSenders(ids, conversationScope(path)) } },
+    { messages, occurrences, submissions, memoryOffers: memory.offers, memoryPaths: memory.paths, memoryNone: memory.none, senders: { ...queuedSenders(path), ...messageSenders(ids, conversationScope(path)) } },
     { headers: { "Cache-Control": "no-store" } },
   );
 }

@@ -87,6 +87,7 @@ export function renderStagePrompt(
     pipeline.spec?.trim() || "No separate pinned specification was supplied.",
     "",
     ...roleContext,
+    "Design and UI stages publish variants with publish_prototype_review; it binds to this pipeline's task, so omit taskId. Use read_prototype_review to read the operator's choice and exact comment.",
     access,
     hostAccess,
     ...baseLine,

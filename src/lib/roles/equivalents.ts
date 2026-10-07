@@ -18,6 +18,7 @@ import {
   CODEX_TERRA_MODEL,
 } from "@/lib/agent/models";
 
+import { lockedEngine } from "./locks";
 import type { RoleConfig, RoleEngine, RoleId, RoleVariantId } from "./types";
 
 /** One row of the agent mapping: a role, or one of its variants. */
@@ -74,6 +75,7 @@ const ROW_TARGETS: Record<RoleEngine, Readonly<Record<string, RoleConfig>>> = {
     maintainer: { engine: "claude", model: "opus", effort: "medium" },
     "prod-auditor": OPUS_HIGH,
     deployer: OPUS_HIGH,
+    "visual-critic": OPUS_HIGH,
   },
   codex: {
     orchestrator: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "medium" },
@@ -99,9 +101,12 @@ export function equivalentModel(model: string, engine: RoleEngine): string {
 }
 
 /** `config` moved onto `engine`: the row's approved runtime there, else the
-    equivalent model and a clamped effort. */
+    equivalent model and a clamped effort. A row locked to another engine
+    (ROLE_ENGINE_LOCKS) stays where it is. */
 export function equivalentConfig(config: RoleConfig, engine: RoleEngine, row?: EquivalentRow): RoleConfig {
   if (config.engine === engine) return config;
+  const locked = lockedEngine(row?.roleId);
+  if (locked && locked !== engine) return config;
   const target = row ? ROW_TARGETS[engine][rowKey(row)] : undefined;
   if (target) return { ...target };
   const model = equivalentModel(config.model, engine);

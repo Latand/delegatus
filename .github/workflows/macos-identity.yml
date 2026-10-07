@@ -127,6 +127,7 @@ jobs:
               "src/lib/proc/darwinArgv.test.ts",
               "src/lib/proc/darwinIdentity.test.ts",
               "src/lib/proc/portable.test.ts",
+              "src/lib/artifact/localFile.test.ts",
               "src/lib/accounts/claudeCredentials.test.ts",
               "src/lib/accounts/claude.test.ts",
               "src/lib/accounts/claudeLogin.test.ts",

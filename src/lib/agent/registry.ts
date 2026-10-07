@@ -5,6 +5,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import { statePath } from "@/lib/configDir";
+import { deepFreeze } from "@/lib/deepFreeze";
 import { assertNotOperatorStateUnderTest, assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
 import { hotStateWriterRevision } from "@/lib/state/hotStateAuthority";
 import {
@@ -1469,6 +1470,7 @@ function settleDeliveriesAtCommit(
     if (decision === "carry") {
       delivery.state = "assigned";
       delivery.fencedBy = null;
+      delivery.waitReason = null;
       delivery.generationId = successor.id;
       delivery.assignedAt = committedAt;
       delivery.deliveredAt = null;
@@ -1518,6 +1520,7 @@ function rearmRolledBackMigrationDeliveries(
       continue;
     }
     delivery.state = "assigned";
+    delivery.waitReason = null;
     delivery.generationId = current.id;
     delivery.assignedAt = assignedAt;
     delivery.deliveredAt = null;
@@ -1656,6 +1659,7 @@ function rearmFencedDeliveries(
     if (!held) continue;
     delivery.state = "assigned";
     delivery.fencedBy = null;
+    delivery.waitReason = null;
     delivery.generationId = current.id;
     delivery.assignedAt = assignedAt;
     delivery.deliveredAt = null;
@@ -1680,7 +1684,9 @@ function refenceHeldDeliveries(
     const held = (from.migration && migrationHeldDelivery(file, conversation, delivery, from.migration))
       || (Boolean(from.keptFrom) && delivery.state === "held" && delivery.fencedBy === from.keptFrom
         && resolveConversationAlias(file, delivery.conversationId) === conversation.id);
-    if (held) delivery.fencedBy = operationId;
+    if (!held) continue;
+    delivery.fencedBy = operationId;
+    if (delivery.state === "held") delivery.waitReason = "switching-accounts";
   }
 }
 
@@ -2455,6 +2461,7 @@ function normalizeHeldDelivery(value: HeldDelivery): HeldDelivery {
     recoveryIntent: value.recoveryIntent === "reclaimed-host" ? value.recoveryIntent : null,
     state,
     fencedBy: state === "held" && typeof value.fencedBy === "string" ? value.fencedBy : null,
+    waitReason: state === "held" && value.waitReason === "switching-accounts" ? value.waitReason : null,
     admissionSeq: Number.isSafeInteger(value.admissionSeq) && value.admissionSeq! > 0 ? value.admissionSeq : undefined,
     generationId: imagesCorrupt ? null : value.generationId ?? null,
     attempts: Number.isInteger(value.attempts) ? value.attempts : 0,
@@ -2532,6 +2539,7 @@ function placeDeliveryForRetryInFile(
   if (migrationBlocksDelivery) {
     delivery.state = "held";
     delivery.fencedBy = conversation.migration!.operationId;
+    delivery.waitReason = "switching-accounts";
     delivery.generationId = null;
     delivery.assignedAt = null;
     delivery.deliveredAt = null;
@@ -2550,6 +2558,7 @@ function placeDeliveryForRetryInFile(
     return delivery;
   }
   delivery.state = "assigned";
+  delivery.waitReason = null;
   delivery.generationId = current.id;
   delivery.assignedAt = now();
   delivery.deliveredAt = null;
@@ -5176,19 +5185,21 @@ export class AgentRegistry {
 
   /** Shared process-local snapshot for projections that never mutate registry
       objects. Atomic writers change the inode/signature, including writers in
-      the runtime-host process, so the next reader reparses immediately. */
+      the runtime-host process, so the next reader reparses immediately. The
+      JSON view is a copy nobody else holds, frozen all the way down before a
+      reader sees it, as the SQLite store's view is. */
   readOnlySnapshot(): RegistryFile {
     if (this.sqliteMode === "read" || this.sqliteMode === "sqlite") return this.sqliteStore!.readOnlySnapshot().file;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const before = registryFileSignature(this.filename);
       if (this.readOnlyCache?.signature === before) return this.readOnlyCache.snapshot;
-      const snapshot = readFile(this.filename, this.mcpGrantPolicy);
+      const snapshot = deepFreeze(structuredClone(readFile(this.filename, this.mcpGrantPolicy)));
       const after = registryFileSignature(this.filename);
       if (before !== after) continue;
       this.readOnlyCache = { signature: after, snapshot };
       return snapshot;
     }
-    return readFile(this.filename, this.mcpGrantPolicy);
+    return deepFreeze(structuredClone(readFile(this.filename, this.mcpGrantPolicy)));
   }
 
   private readKeyed<T>(reader: (file: RegistryFile) => T): T {
@@ -5234,6 +5245,12 @@ export class AgentRegistry {
         if (delivery) result.heldDeliveries[delivery.id] = clone(delivery);
       }
       for (const delivery of registryRowsMatching(file, "heldDeliveries", "command.operationId", operationId)) result.heldDeliveries[delivery.id] = clone(delivery);
+      /* A held send's receipt names what it waits for, which the owning
+         conversation's switch phase decides. */
+      for (const delivery of Object.values(result.heldDeliveries)) {
+        const conversation = delivery.state === "held" ? file.conversations[delivery.conversationId] : undefined;
+        if (conversation) result.conversations[conversation.id] = clone(conversation);
+      }
       return result;
     });
   }
@@ -8900,11 +8917,13 @@ export class AgentRegistry {
         if (migrationBlocksDelivery) {
           delivery.state = "held";
           delivery.fencedBy = conversation!.migration!.operationId;
+          delivery.waitReason = "switching-accounts";
           delivery.generationId = null;
           delivery.assignedAt = null;
         } else if (current) {
           delivery.state = "assigned";
           delivery.fencedBy = null;
+          delivery.waitReason = null;
           delivery.generationId = current.id;
           delivery.assignedAt = now();
         } else {
@@ -9497,7 +9516,9 @@ export class AgentRegistry {
 
   /** Terminalizes the reservation after the runtime journal has fenced its
       operation. This includes a never-actuated hold and an unverified failure
-      the operator explicitly chose to discard. */
+      the operator explicitly chose to discard. After reservation compaction,
+      writes the retained owner and returns null; callers verify the outcome
+      through deliverySnapshotForOperation. */
   discardDeliveryForOperation(
     conversationId: ViewerConversationId,
     operationId: string,
@@ -9512,15 +9533,33 @@ export class AgentRegistry {
         : Object.values(file.heldDeliveries).find((candidate) =>
           candidate.command.operationId === operationId
           && resolveConversationAlias(file, candidate.conversationId) === canonicalId);
-      if (!delivery
-        || delivery.command.operationId !== operationId
+      // A legacy failure with no disposition retains duplicate risk, exactly
+      // like an explicit unverified failure. The owner survives compaction and
+      // is the durable record in that case; there is no reservation to mutate.
+      // An explicit unverified disposition also covers account switches after
+      // an attempt; the migration reason alone cannot establish a known loss.
+      const discardableFailure = (error: string | null, terminalDisposition: DeliveryTerminalDisposition | null) =>
+        error === reason || terminalDisposition === "unverified" || (terminalDisposition === null
+          && !error?.startsWith(MIGRATION_DELIVERY_CANCELLATION_PREFIX));
+      if (!delivery) {
+        if (owner && resolveConversationAlias(file, owner.conversationId) === canonicalId
+          && owner.terminalState === "failed"
+          && discardableFailure(owner.terminalReason, owner.terminalDisposition)) {
+          owner.terminalReason = reason.slice(0, 240);
+          owner.terminalDisposition = disposition;
+          owner.settledAt = now();
+          owner.evidenceText = "";
+        }
+        return null;
+      }
+      if (delivery.command.operationId !== operationId
         || resolveConversationAlias(file, delivery.conversationId) !== canonicalId) return null;
       if (delivery.state === "delivered") return clone(delivery);
       const discardable = delivery.state === "held"
         || delivery.state === "assigned"
         || delivery.state === "delivery-uncertain"
         || (delivery.state === "failed"
-          && (delivery.error === reason || owner?.terminalDisposition === "unverified"));
+          && discardableFailure(delivery.error, owner?.terminalDisposition ?? null));
       if (!discardable) return null;
       const conversation = file.conversations[canonicalId];
       const paths = new Set([conversation?.generations.at(-1)?.path]

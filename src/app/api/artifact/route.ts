@@ -1,4 +1,4 @@
-import { constants as FS, type promises as fsp } from "node:fs";
+import type { promises as fsp } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -7,7 +7,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { classifyArtifact } from "@/lib/artifact/classify";
 import { frameUrl, mintFrameScope } from "@/lib/artifact/frameScope";
 import { artifactEtag, artifactLimits, dispositionFilename, parseByteRange, SNIFF_BYTES, sniffAgrees } from "@/lib/artifact/serve";
-import { admittedAs, lexicalAllowedRoots, realAllowedRoots, realpathAdmitted, resolveLocal, streamWindow } from "@/lib/artifact/localFile";
+import { admittedAs, lexicalAllowedRoots, openAdmitted, realAllowedRoots, realpathAdmitted, resolveLocal, streamWindow } from "@/lib/artifact/localFile";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
 
@@ -28,7 +28,9 @@ export const dynamic = "force-dynamic";
  *
  * Containment is enforced twice (lexical resolve, then realpath) so neither
  * `..` traversal nor a symlink under a root may reach outside it; the final open
- * is O_NOFOLLOW against the resolved real path, and everything after — the
+ * is O_NOFOLLOW against the resolved real path and is kept only when the open
+ * file lies at that path (`openAdmitted`), so a directory swapped for a link
+ * after the check reads nothing; and everything after — the
  * regular-file check, the size bound, the validator, the sniff and every
  * streamed byte — reads through that one file descriptor, so a rename or
  * replacement mid-response can never splice a different file's bytes in.
@@ -114,12 +116,12 @@ export async function GET(req: NextRequest): Promise<NextResponse<FailBody> | Ne
   }
   if (!realpathAdmitted(admission, real, await realAllowedRoots())) return fail("access-denied", "path is outside the allowed roots");
 
-  /* O_NOFOLLOW: realpath resolved every link above; a symlink appearing at the
-     final component between then and now is a race, refused. O_NONBLOCK keeps
-     a FIFO from wedging the open — its fstat below rejects it anyway. */
+  /* realpath resolved every link above; a link appearing at the final
+     component or at any directory above it between then and now is a race,
+     refused. A FIFO does not wedge the open — its fstat below rejects it. */
   let handle: fsp.FileHandle;
   try {
-    handle = await fs.open(real, FS.O_RDONLY | FS.O_NOFOLLOW | FS.O_NONBLOCK);
+    handle = await openAdmitted(real);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ENOENT") return fail("not-found", "file not found");

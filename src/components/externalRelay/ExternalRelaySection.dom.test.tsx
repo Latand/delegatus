@@ -525,3 +525,139 @@ test("in Ukrainian the button, its lead and the disclosure are written in Ukrain
     setLocale("en");
   }
 });
+
+const ANSWERS_URL = "/api/external-relay/relays/relay-1/targets/bot-1/answers";
+const exchanges = {
+  answers: [
+    { requestId: "rq_2", startedAt: "2026-10-06T09:05:00.000Z", finishedAt: "2026-10-06T09:05:04.000Z", durationMs: 4200, state: "finished", outcome: "declined:handoff", delivery: "accepted", request: "@helper mute him for an hour", answer: null },
+    { requestId: "rq_1", startedAt: "2026-10-06T09:00:00.000Z", finishedAt: "2026-10-06T09:00:06.000Z", durationMs: 6100, state: "finished", outcome: "answered", delivery: "accepted", request: "When is the <b>meetup</b>?", answer: "Thursday at 18:30." },
+  ],
+  retentionDays: 30,
+};
+const handoffRecord = {
+  requestId: "rq_2", startedAt: "2026-10-06T09:05:00.000Z", finishedAt: "2026-10-06T09:05:04.000Z", durationMs: 4200, state: "finished",
+  outcome: "declined:handoff", delivery: "accepted", engine: "claude", model: "opus", answer: { action: "handoff", text: "", reply_to: null },
+  input: {
+    conversation: [{ id: "m9", author: { key: "u_a", name: "Admin A", self: false }, text: "@helper mute him for an hour", reply_to: null }],
+    respond_to: "m9", request_text: null,
+    requester: { key: "u_a", is_admin: true, can_restrict_members: false, can_delete_messages: false, is_owner: false, is_anonymous_admin: false },
+    tools: [{ name: "restrict_member", summary: "Mute a participant", mode: "handoff" }],
+  },
+};
+function answersRoute(list: unknown = exchanges) {
+  route((url) => {
+    if (url === ANSWERS_URL) return jsonResponse(list);
+    if (url === `${ANSWERS_URL}/rq_2`) return jsonResponse({ answer: handoffRecord });
+    if (url === `${ANSWERS_URL}/rq_gone`) return jsonResponse({ error: "not_found" }, 404);
+    return undefined;
+  });
+}
+
+test("recent answers open from the target row, list the kept exchanges and show one read-only", async () => {
+  accounts({ claude: [signedIn("main")] });
+  answers.relay = { relays: [relay({ targets: [target({ engine: "claude", model: "opus", answered_by: "install" })] })], pending: [], status: [] };
+  answersRoute();
+  const host = await mount(<ExternalRelaySection />);
+  const row = host.querySelector("[data-external-relay-target=bot-1]")!;
+  const toggle = row.querySelector("[data-external-relay-answers-toggle]")!;
+  expect(toggle.textContent).toBe("Recent answers");
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  expect(harness.calls.some((call) => call.url === ANSWERS_URL)).toBe(false);
+  await click(toggle);
+  expect(toggle.getAttribute("aria-expanded")).toBe("true");
+  const list = row.querySelector("[data-external-relay-answer-list]")!;
+  const items = Array.from(list.querySelectorAll("[data-external-relay-answer]"));
+  expect(items.map((item) => item.getAttribute("data-external-relay-answer"))).toEqual(["rq_2", "rq_1"]);
+  expect(items[0]!.textContent).toContain("Handed off to the service");
+  expect(items[1]!.textContent).toContain("Answered");
+  expect(items[1]!.textContent).toContain("When is the <b>meetup</b>?");
+  expect(items[1]!.querySelector("b")).toBeNull();
+  expect(row.textContent).toContain("Each exchange is kept for 30 days and can only be read.");
+
+  await click(items[0]);
+  const exchange = row.querySelector("[data-external-relay-exchange=rq_2]")!;
+  expect(exchange.querySelector("[data-external-relay-exchange-outcome]")?.textContent).toBe("Handed off to the service");
+  expect(exchange.querySelector("[data-external-relay-exchange-request]")?.textContent).toBe("@helper mute him for an hour");
+  expect(exchange.querySelector("[data-external-relay-exchange-answer]")?.textContent).toBe("Handed back to the service, whose own assistant answers it.");
+  expect(exchange.textContent).toContain("Admin A · Admin");
+  expect(exchange.textContent).toContain("Claude · Opus 5.5");
+  expect(exchange.textContent).toContain("Received the result");
+  expect(exchange.querySelector("[data-external-relay-exchange-input]")?.textContent).toContain("\"restrict_member\"");
+  // Read-only: no composer, no field to type into.
+  expect(exchange.querySelector("textarea, input")).toBeNull();
+  await click(Array.from(exchange.querySelectorAll("button")).find((button) => button.textContent === "Back to recent answers"));
+  expect(row.querySelector("[data-external-relay-answer-list]")).toBeTruthy();
+});
+
+for (const locale of ["en", "uk"] as const)
+  for (const [role, flags, labels] of [
+    ["member", { is_admin: false, is_owner: false, is_anonymous_admin: false }, { en: "Member", uk: "Учасник" }],
+    ["admin", { is_admin: true, is_owner: false, is_anonymous_admin: false }, { en: "Admin", uk: "Адміністратор" }],
+    ["owner", { is_admin: false, is_owner: true, is_anonymous_admin: false }, { en: "Member · the owner", uk: "Учасник · власник" }],
+    ["anonymous admin", { is_admin: true, is_owner: false, is_anonymous_admin: true }, { en: "Admin · anonymous", uk: "Адміністратор · анонімно" }],
+  ] as const)
+    test(`the exchange shows service role flags for ${role} (${locale})`, async () => {
+      setLocale(locale);
+      try {
+        accounts({ claude: [signedIn("main")] });
+        answers.relay = { relays: [relay({ targets: [target({ engine: "claude", model: "opus", answered_by: "install" })] })], pending: [], status: [] };
+        route((url) => {
+          if (url === ANSWERS_URL) return jsonResponse(exchanges);
+          if (url === `${ANSWERS_URL}/rq_2`) return jsonResponse({ answer: {
+            ...handoffRecord, input: { ...handoffRecord.input, requester: { ...handoffRecord.input.requester, ...flags } },
+          } });
+          return undefined;
+        });
+        const host = await mount(<ExternalRelaySection />);
+        await click(host.querySelector("[data-external-relay-answers-toggle]"));
+        await click(host.querySelector("[data-external-relay-answer=rq_2]"));
+        expect(host.querySelector("[data-external-relay-exchange=rq_2]")?.textContent).toContain(`Admin A · ${labels[locale]}`);
+      } finally {
+        setLocale("en");
+      }
+    });
+
+test("recent answers in Ukrainian, empty and expired", async () => {
+  setLocale("uk");
+  try {
+    accounts({ claude: [signedIn("main")] });
+    answers.relay = { relays: [relay({ targets: [target({ engine: "claude", model: "opus", answered_by: "install" })] })], pending: [], status: [] };
+    answersRoute({ answers: [], retentionDays: 30 });
+    const host = await mount(<ExternalRelaySection />);
+    const row = host.querySelector("[data-external-relay-target=bot-1]")!;
+    const toggle = row.querySelector("[data-external-relay-answers-toggle]")!;
+    expect(toggle.textContent).toBe("Останні відповіді");
+    await click(toggle);
+    expect(row.querySelector("[data-external-relay-answers-empty]")?.textContent).toBe("За останні 30 днів відповідей немає.");
+    await click(toggle);
+    answersRoute({ ...exchanges, answers: [{ ...exchanges.answers[0], requestId: "rq_gone" }] });
+    await click(toggle);
+    await click(row.querySelector("[data-external-relay-answer=rq_gone]"));
+    expect(row.querySelector("[data-external-relay-exchange]")?.textContent).toContain("Цей обмін більше не зберігається.");
+  } finally {
+    setLocale("en");
+  }
+});
+
+test("the member limit shows the default, saves a number on leaving the field, and saves an empty field as no limit", async () => {
+  accounts({ claude: [signedIn("main")] });
+  answers.relay = { relays: [relay({ targets: [target({ engine: "claude", model: "opus", answered_by: "install" })] })], pending: [], status: [] };
+  route((url, init) => url === "/api/external-relay/relays/relay-1" && init?.method === "PATCH" ? jsonResponse({ relay: relay() }) : undefined);
+  const host = await mount(<ExternalRelaySection />);
+  const row = host.querySelector("[data-external-relay-target=bot-1]")!;
+  const field = row.querySelector("[data-external-relay-member-limit]") as HTMLInputElement;
+  expect(field.value).toBe("10");
+  expect(row.textContent).toContain("Answers per member per hour");
+  expect(row.textContent).toContain("The owner and chat admins are not counted.");
+  const patches = () => harness.calls.filter((call) => call.method === "PATCH").map((call) => call.body);
+  await act(async () => { field.focus(); });
+  await act(async () => typeInto(field, "3"));
+  await act(async () => { field.blur(); });
+  await act(async () => settle());
+  expect(patches()).toEqual([{ target: { id: "bot-1", memberLimitPerHour: 3 } }]);
+  await act(async () => { field.focus(); });
+  await act(async () => typeInto(field, ""));
+  await act(async () => { field.blur(); });
+  await act(async () => settle());
+  expect(patches().at(-1)).toEqual({ target: { id: "bot-1", memberLimitPerHour: null } });
+});

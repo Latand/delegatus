@@ -39,7 +39,7 @@ import { MAX_STRUCTURED_IMAGE_ENCODED_BYTES, runtimeImageStore } from "./runtime
 import { STRUCTURED_IMAGE_CAPABILITY, type StructuredImageRef } from "./structuredContent";
 import { NATIVE_INJECT_CAPABILITY, NATIVE_QUEUE_CAPABILITY, NATIVE_TURN_PROFILE_CAPABILITY } from "./codexCapabilityFlags";
 import { withAgentConfigSandbox } from "./agentConfigSandbox";
-import { withTelegramConnectorGrant } from "./telegramConnectorEnv";
+import { resolveTelegramLaunchGrant, TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE, type TelegramLaunchGrant } from "./telegramConnectorEnv";
 import {
   normalizeVoiceDeliveries,
   streamingVoiceDelivery,
@@ -1459,9 +1459,9 @@ export class CodexAppServerHost implements EngineHost {
       "--enable",
       "realtime_conversation",
     ];
-    let childEnv: NodeJS.ProcessEnv;
+    let telegram: TelegramLaunchGrant;
     try {
-      childEnv = withTelegramConnectorGrant(
+      telegram = await resolveTelegramLaunchGrant(
         subscriptionEnv(
           options.env ?? process.env,
           options.codexHome,
@@ -1469,12 +1469,13 @@ export class CodexAppServerHost implements EngineHost {
           options.forwardGitHubConfig === true,
         ),
         options.mcpServers,
-        options.validateTelegramGrant,
+        { validateGrant: options.validateTelegramGrant },
       );
     } catch (error) {
       options.releaseCleanup?.();
       throw error;
     }
+    const childEnv = telegram.env;
     let child: ChildProcessWithoutNullStreams;
     try {
       child = spawnProcess(binary, args, {
@@ -1512,11 +1513,11 @@ export class CodexAppServerHost implements EngineHost {
         provisional.imageInputSupport = "unknown";
       }
       if (options.serviceTier) assertCatalogOffersTier(provisional.modelCatalog, options.model, options.serviceTier);
-      const configRead = await provisional.rpc("config/read", { cwd: options.cwd, includeLayers: false }) as { config?: { shell_environment_policy?: unknown } };
+      const configRead = await provisional.rpc("config/read", { cwd: options.cwd, includeLayers: false }) as { config?: { shell_environment_policy?: unknown; developer_instructions?: unknown } };
       const config = headlessCodexThreadConfig(
         configRead,
         options.allowSubagents === true,
-        options.mcpServers,
+        telegram.mcpServers,
         granted,
         /* The app-server reads the capability header's value from its own
            environment, so only a thread whose app-server holds one goes
@@ -1545,11 +1546,28 @@ export class CodexAppServerHost implements EngineHost {
         approvalPolicy: options.approvalPolicy ?? "never",
         ...(options.allowSubagents === true ? {} : { approvalsReviewer: "user" }),
       };
+      /* A new thread reads its developer instructions as it builds its first
+         context. A resumed thread keeps the context it already has and sends
+         the model only what changed, so there the line goes into its history
+         below, where the next turn reads it. An engine too old to take a
+         history item still gets the instructions. */
+      const noticeIntoHistory = telegram.unavailable && Boolean(threadId) && provisional.supportsNativeHistory();
+      /* The thread parameter replaces the account's own developer
+         instructions, so the notice is added to them. */
+      const runNotice = telegram.unavailable && !noticeIntoHistory
+        ? {
+          developerInstructions: [
+            typeof configRead.config?.developer_instructions === "string" ? configRead.config.developer_instructions.trim() : "",
+            TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE,
+          ].filter(Boolean).join("\n\n"),
+        }
+        : {};
       const result = threadId
         ? await provisional.resumeThreadTolerantly({
           threadId,
           ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
           ...launchAccess,
+          ...runNotice,
           config,
         })
         : await provisional.rpc("thread/start", {
@@ -1557,6 +1575,7 @@ export class CodexAppServerHost implements EngineHost {
           ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
           ...(options.model ? { model: options.model } : {}),
           ...launchAccess,
+          ...runNotice,
           config,
         });
       const identity = threadFromResult(result, threadId ? "thread/resume" : "thread/start");
@@ -1581,6 +1600,9 @@ export class CodexAppServerHost implements EngineHost {
       provisional.reconcileAfterOpen(threadStatus(result), resumedActiveTurnId(result));
       provisional.endBufferedNotificationReconciliation();
       await provisional.initializeNativeQueue();
+      /* Before the queue's head can start a turn, so the first turn of this
+         run already reads it. */
+      if (noticeIntoHistory) await provisional.injectRunNotice(TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE);
       if (threadId && !deliberatelyPaused && threadStatus(result)?.type === "idle") await provisional.recoverIdleNativeQueue();
       return provisional;
     } catch (error) {
@@ -1666,6 +1688,19 @@ export class CodexAppServerHost implements EngineHost {
       return;
     }
     if (this.imageInputSupport === "supported") this.setSessionStatus(this.engineStatus, this.activeFlags);
+  }
+
+  /**
+   * One developer line for this run, appended to the resumed thread's history.
+   * It is a courtesy to the agent: a launch that could not place it goes on.
+   */
+  private async injectRunNotice(text: string): Promise<void> {
+    try {
+      await this.rpc("thread/inject_items", {
+        threadId: this.identity.threadId,
+        items: [{ type: "message", role: "developer", content: [{ type: "input_text", text }] }],
+      }, this.requestTimeoutMs, true);
+    } catch { /* the run starts without the line */ }
   }
 
   private supportsNativeHistory(): boolean {

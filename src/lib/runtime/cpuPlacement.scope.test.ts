@@ -222,7 +222,7 @@ scopeTest("a merger gate runs in the work slice, on a shared slot, and waits out
   const repo = fs.mkdtempSync(path.join(sandbox, "merger-"));
   runner("git", ["-C", repo, "init", "-q", "-b", "main"]);
   const stateFile = path.join(sandbox, "merge-batch.json");
-  fs.writeFileSync(stateFile, JSON.stringify({ version: 1, repo, work: repo, branch: `merge-batch/${randomUUID()}`, base: "", tip: "", rows: [], gated: null, batch: null, published: null, refreshes: 0, landed: false, gates: [] }));
+  fs.writeFileSync(stateFile, JSON.stringify({ version: 3, repo, work: repo, branch: `merge-batch/${randomUUID()}`, base: "", tip: "", rows: [], gated: null, batch: null, published: null, refreshes: 0, landed: false, gates: [], attributionLog: [] }));
   const lock = fs.mkdtempSync(path.join(sandbox, "merger-locks-"));
   const pressure = path.join(sandbox, "merger-pressure");
   fs.writeFileSync(pressure, "some avg10=80.00 avg60=0.00 avg300=0.00 total=1\n");

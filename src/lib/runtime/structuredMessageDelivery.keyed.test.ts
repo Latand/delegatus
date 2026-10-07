@@ -78,11 +78,10 @@ test("HTTP admission stays keyed as thousands of unrelated sessions and reservat
   let rows = 0;
   const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite",
     onSqliteSnapshotLoad: () => loads++, onSqliteRowPayloadRead: (_collection, count) => { rows += count; } });
-  const cached = registry.readOnlySnapshot();
-  let cachedMapEnumerations = 0;
-  cached.heldDeliveries = new Proxy(cached.heldDeliveries, {
-    ownKeys: target => { cachedMapEnumerations++; return Reflect.ownKeys(target); },
-  });
+  registry.readOnlySnapshot();
+  /* The shared whole-file view is frozen, so the keyed path is proven not to
+     reach it by its one exit rather than by a counter written into it. */
+  const cachedViewRead = spyOn((registry as unknown as { sqliteStore: { readOnlySnapshot(): unknown } }).sqliteStore, "readOnlySnapshot");
   const snapshotSpy = spyOn(runtimeClient.UnixRuntimeHostClient.prototype, "snapshot");
   const factory = spyOn(runtimeClient, "runtimeHostClient").mockReturnValue(client);
   const globalRegistryRead = spyOn(registry, "readOnlySnapshot");
@@ -112,7 +111,7 @@ test("HTTP admission stays keyed as thousands of unrelated sessions and reservat
     expect(globalRegistryRead).not.toHaveBeenCalled();
     expect(globalJournalRead).not.toHaveBeenCalled();
     expect(loads).toBe(0);
-    expect(cachedMapEnumerations).toBe(0);
+    expect(cachedViewRead).not.toHaveBeenCalled();
     expect(rows).toBeLessThan(12_000);
     expect(p95(large)).toBeLessThan(250);
     expect(p95(admission)).toBeLessThan(250);

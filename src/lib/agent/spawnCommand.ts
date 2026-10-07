@@ -64,7 +64,8 @@ import { buildImagePayload, collectImagePayloads, deleteInboxImages, spawnAgentW
 import { en } from "@/lib/i18n/en";
 import { uk } from "@/lib/i18n/uk";
 import type { ApiError } from "@/lib/types";
-import { readTelegramConnection, readTelegramSession } from "@/lib/telegram/sessionStore";
+import { telegramSetUp } from "@/lib/telegram/launchReadiness";
+import { TELEGRAM_SEAT_INACTIVE_BEFORE_LAUNCH } from "@/lib/runtime/telegramConnectorEnv";
 import { isCurrentOperatorSeat } from "@/lib/orchestrator/managerAuthoritySources";
 import { VIEWER_AUTONOMOUS_SPAWN_HEADER } from "./capabilityHeader";
 import { activeDrain } from "@/lib/selfUpdate/drain";
@@ -615,27 +616,29 @@ export async function executeSpawnRequest(
       agentRole: role.value?.role ?? null,
     });
     const implicitRootTelegram = requestedMcpServers === null && sessionOrigin === "operator-root";
-    if (requestedTelegram && engine === "copilot") {
+    /* Whether Telegram is set up on this installation decides the grant. A
+       connection that is down this minute changes nothing here: the launch
+       repairs it, or the host starts without the tool and gets it back on a
+       later start. Where Telegram is not set up the request is left out and
+       the launch goes on. That is settled before the checks on who may hold
+       the grant, because nothing is granted there and nothing is left to
+       refuse. A replayed attempt keeps what its receipt recorded. */
+    const telegramAvailable = (requestedTelegram || implicitRootTelegram) && telegramSetUp();
+    const telegramLeftOut = requestedTelegram && (existingAttempt
+      ? !existingAttempt.launchProfile.mcpServers.includes("telegram")
+      : !telegramAvailable);
+    const telegramWanted = requestedTelegram && !telegramLeftOut;
+    if (telegramWanted && engine === "copilot") {
       return refuse("telegram MCP is unsupported by the Copilot engine");
     }
-    let telegramConnected = false;
-    if (requestedTelegram || implicitRootTelegram) {
-      try {
-        const connection = readTelegramConnection();
-        const session = readTelegramSession();
-        telegramConnected = connection.status === "connected" && connection.credentialRef === session?.credentialRef
-          && Boolean(session.connectorToken);
-      }
-      catch { /* an unreadable connector cannot supply a grant */ }
-      if (requestedTelegram && !telegramConnected && !existingAttempt) return refuse("telegram MCP connector is not connected");
-    }
-    if (requestedTelegram) {
+    if (telegramWanted) {
       if (!existingAttempt && !seatLaunch && !seatParent && sessionOriginFor({
         origin: { kind: authenticatedCaller?.kind === "agent" ? "agent" : "operator" },
         parentConversationId, agentRole: role.value?.role ?? null,
       }) === "delegated") return refuse("telegram MCP requires an operator-owned orchestrator seat parent");
     }
-    const telegramSeatGrant = requestedTelegram && seatParent;
+    const requestedSeatGrant = requestedTelegram && seatParent;
+    const telegramSeatGrant = requestedSeatGrant && !telegramLeftOut;
     if (telegramSeatGrant && authenticatedCaller?.kind === "agent"
       && authenticatedCaller.conversationId !== parentConversationId) {
       return refuse("telegram MCP requires the orchestrator seat's own spawn capability");
@@ -665,20 +668,23 @@ export async function executeSpawnRequest(
         origin: sessionOrigin,
         requested: requestedPlugins.value,
       });
-    /* A seat carries the operator's connected connector, and an explicit
-       child request may receive that same grant from the seat. All other
-       delegated launches keep the Viewer baseline. */
-    const grantedServers = existingAttempt && requestedTelegram
+    /* A seat carries the operator's connector, and an explicit child request
+       may receive that same grant from the seat. All other delegated launches
+       keep the Viewer baseline. This is the request as it was asked, which is
+       what an attempt is matched by when it is replayed; the launch itself
+       takes {@link grantedServers}. */
+    const requestedServers = requestedTelegram && (existingAttempt || (telegramLeftOut && !reportClassGrant))
       ? grantedMcpServers(requestedMcpServers ?? [])
       : existingAttempt && implicitRootTelegram && !reportClassGrant
       ? existingAttempt.launchProfile.mcpServers
-      : implicitRootTelegram && (!telegramConnected || engine === "copilot" || transport === "tmux")
+      : implicitRootTelegram && (!telegramAvailable || engine === "copilot" || transport === "tmux")
       ? ["viewer"]
       : reportClassGrant
       ? grantedMcpServers(reportClassGrant.mcpServers)
-      : (seatLaunch || telegramSeatGrant) && requestedTelegram
+      : (seatLaunch || requestedSeatGrant) && requestedTelegram
         ? grantedMcpServers(requestedMcpServers)
       : mcpServersForSession({ origin: sessionOrigin, requested: requestedMcpServers });
+    const grantedServers = telegramLeftOut ? requestedServers.filter((name) => name !== "telegram") : requestedServers;
     if (transport === "tmux" && grantedServers.includes("telegram")) {
       return refuse("telegram MCP requires structured spawn transport");
     }
@@ -693,7 +699,7 @@ export async function executeSpawnRequest(
         accountId,
         role: role.value?.role ?? null,
         title: launchTitle,
-        mcpServers: grantedServers,
+        mcpServers: requestedServers,
         ...(plugins.length ? { plugins } : {}),
         ...(body.allowSubagents === true ? { allowSubagents: true } : {}),
         ...(explicitProject ? { project: explicitProject } : {}),
@@ -1015,7 +1021,7 @@ export async function executeSpawnRequest(
       }, { status: 503 });
     }
     if (begun.kind === "conflict") return NextResponse.json({ error: "spawn attempt conflicts with its original request" }, { status: 409 });
-    if (begun.kind === "created" && requestedTelegram && !begun.receipt.launchProfile.mcpServers.includes("telegram")) {
+    if (begun.kind === "created" && requestedTelegram && !telegramLeftOut && !begun.receipt.launchProfile.mcpServers.includes("telegram")) {
       const reason = "telegram MCP grant was revoked during spawn admission";
       if (transport === "structured") registry.failStructuredSpawn(begun.receipt.launchId, reason);
       else registry.failSpawn(begun.receipt.launchId, reason);
@@ -1023,7 +1029,7 @@ export async function executeSpawnRequest(
     }
     if (begun.kind === "created" && requestedTelegram && begun.receipt.telegramSeatGrant
       && !isCurrentOperatorSeat(begun.receipt.parentConversationId ?? "", registry)) {
-      const reason = "telegram MCP orchestrator seat is no longer active";
+      const reason = TELEGRAM_SEAT_INACTIVE_BEFORE_LAUNCH;
       if (transport === "structured") registry.failStructuredSpawn(begun.receipt.launchId, reason);
       else registry.failSpawn(begun.receipt.launchId, reason);
       return refuse(reason);

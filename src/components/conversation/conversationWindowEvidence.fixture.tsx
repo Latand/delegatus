@@ -12,10 +12,11 @@
  * the driver is `conversationWindow.browser.test.tsx`.
  */
 
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 
 import { setLocale, useLocale, type Locale } from "@/lib/i18n";
+import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import type { RuntimeSessionView } from "@/hooks/useRuntime";
 import type { LogTailState } from "@/hooks/useLogTail";
@@ -33,6 +34,7 @@ import { ImageGalleryProvider, Lightbox, type GalleryImage } from "@/components/
 import { ImagePane } from "@/components/preview/ImagePane";
 import { buildFeed, type Item } from "@/components/feed/parse";
 import { LogFeed } from "@/components/LogFeed";
+import { PrototypeReviewHost } from "@/components/prototypeReview/PrototypeReviewHost";
 import { RuntimeComposerReceipts, TmuxComposer } from "@/components/TmuxComposer";
 import { setLogFeedDependenciesForTests } from "@/components/logFeedDependencies";
 import { setTmuxComposerRuntimeDependenciesForTests } from "@/components/tmuxComposerRuntime";
@@ -40,6 +42,7 @@ import { setRuntimeUiEnabledForTests } from "@/hooks/runtimeBus";
 import { OVERVIEW_CONTEXT, OVERVIEW_SLICE, viewBus } from "@/hooks/viewPresenceBus";
 import type { RuntimeReceipt } from "@/components/runtime/runtimeModel";
 import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
+import { relayMessageText } from "@/lib/orchestrator/relayText";
 
 import { OWN_STEPS_TOTAL, ownStepsArrival, ownStepsTranscript, type OwnStepsArrival } from "./fixtures/ownMessageStepsTranscript";
 import { readStepState } from "./OwnMessageSteps";
@@ -83,6 +86,7 @@ const ECHO = `You are the Orchestrator. Drive work through the production Viewer
 
 export type ConversationWindowCase =
   | "delivery-settlement"
+  | "delivery-check-card"
   | "lifecycle"
   | "long-history"
   | "queued"
@@ -97,9 +101,12 @@ export type ConversationWindowCase =
   | "dead-host-delivering"
   | "dead-host-delivered"
   | "dead-host-resume-failed"
+  | "dead-host-telegram-refused"
+  | "telegram-refused-composer"
   | "agent-images"
   | "image-viewers"
-  | "own-message-steps";
+  | "own-message-steps"
+  | "prototype-notice";
 
 /* #1846 recurrence: a first turn that died unauthorized produced no assistant
    message at all, so the row the parser makes out of the turn-end record is
@@ -340,9 +347,20 @@ const DEAD_SESSION: Record<string, { host: string; turn: string }> = {
   "dead-host-delivering": { host: "hosted", turn: "idle" },
   "dead-host-delivered": { host: "hosted", turn: "idle" },
   "dead-host-resume-failed": { host: "unhosted", turn: "unknown" },
+  "dead-host-telegram-refused": { host: "unhosted", turn: "unknown" },
 };
 
 const RESUME_FAILURE = "structured host recovery failed after 12 contended attempts: account is busy";
+const TELEGRAM_REFUSAL = "structured host recovery failed: telegram MCP connector is not connected at launch";
+const TELEGRAM_WITHDRAWN = "structured host recovery failed: telegram MCP grant was revoked before launch";
+const TELEGRAM_CONFLICT = "structured host recovery failed: telegram MCP account definition conflicts with operator connector";
+
+/** `?cause=withdrawn` is the refusal that stays a refusal; `?cause=conflict`
+    is the account's own entry that blocks the tool. */
+function telegramRefusal(): string {
+  const cause = params.get("cause");
+  return cause === "withdrawn" ? TELEGRAM_WITHDRAWN : cause === "conflict" ? TELEGRAM_CONFLICT : TELEGRAM_REFUSAL;
+}
 
 function deadEntry(id: ConversationWindowCase): OutboxEntry {
   const base = { id: "evidence-dead-key", text: DEAD_SENT, images: 1, at: ADMITTED_AT } as const;
@@ -352,7 +370,41 @@ function deadEntry(id: ConversationWindowCase): OutboxEntry {
      over, which is what separates this chip from the resuming one above. */
   if (id === "dead-host-delivering") return { ...base, state: "delivering", dispatchedAt: ADMITTED_AT } as OutboxEntry;
   if (id === "dead-host-delivered") return { ...base, state: "delivered", settledAt: DELIVERED_AT } as OutboxEntry;
+  /* The sentence the queue recorded when a restart was refused for Telegram. */
+  if (id === "dead-host-telegram-refused") return { ...base, state: "failed", error: telegramRefusal() } as OutboxEntry;
   return { ...base, state: "failed", error: RESUME_FAILURE } as OutboxEntry;
+}
+
+/**
+ * The composer's own notice for the same refusal: one message that failed
+ * twice, each attempt carrying the sentence behind a different wrapper, as the
+ * send route and the queue's drain record it.
+ */
+function TelegramComposerNoticeFixture() {
+  const refusal = telegramRefusal();
+  const attempt = (n: number, reason: string): RuntimeReceipt => ({
+    operationId: `telegram-refused-${n}`, idempotencyKey: `telegram-refused-key-${n}`,
+    conversationId: DEAD_CARD, kind: "send", status: "failed", text: DEAD_SENT,
+    at: new Date(ADMITTED_AT + n * 1_000).toISOString(), revision: 1, reason,
+  });
+  return (
+    <div data-evidence-case="telegram-refused-composer" className="min-h-dvh bg-canvas px-4 py-6 text-primary">
+      <div data-evidence-transcript className="my-3 flex justify-end">
+        <div className="max-w-[75%] whitespace-pre-wrap break-words rounded-surface bg-user px-4 py-2.5">{DEAD_SENT}</div>
+      </div>
+      <RuntimeComposerReceipts
+        receipts={[
+          attempt(2, refusal),
+          attempt(1, `conversation host was reclaimed; automatic resume did not establish a deliverable host: ${refusal.split(": ")[1]}`),
+        ]}
+        nowMs={ADMITTED_AT + 60_000}
+        session={{ host: "unhosted", turn: "unknown" }}
+        onRetry={() => undefined}
+        onEdit={() => undefined}
+        onDismiss={() => undefined}
+      />
+    </div>
+  );
 }
 
 function DeadQueueFixture({ id }: { id: ConversationWindowCase }) {
@@ -931,7 +983,86 @@ function LifecycleFixture() {
   );
 }
 
-function mountLifecycle(root: HTMLElement): void {
+/* The orchestrator's open composer while prototypes wait (`prototype-notice`):
+   the production composer over the same fake host, told it holds the
+   project's seat the way the orchestrator's pane tells it, with the page's
+   review host fed three waiting tasks and one decided. The notice stands above
+   the message field; «Go to prototype» opens the review the host owns, read
+   from an answer shaped like `GET /api/tasks/:id/prototypes`. */
+const PROTO_PROJECT = "viewer";
+const PROTO_UK = params.get("lang") === "uk";
+const protoWord = (en: string, uk: string) => (PROTO_UK ? uk : en);
+const PROTO_WAITING = [
+  { task: "t-search", review: "r-search", text: protoWord("Restore search results after the index rebuild", "Повернути результати пошуку після перебудови індексу"), title: protoWord("Search results layout", "Макет результатів пошуку"), ago: 3 },
+  { task: "t-links", review: "r-links", text: protoWord("Repair old links in the release notes", "Полагодити старі посилання в нотатках до випуску"), title: protoWord("Release notes links, smaller arrows and a title long enough to be cut", "Посилання в нотатках релізу, менші стрілки і назва, якій доведеться обрізатися"), ago: 6 },
+  { task: "t-upload", review: "r-upload", text: protoWord("Redesign attachment upload for large files", "Переробити завантаження великих вкладень"), title: protoWord("Upload progress sheet", "Панель перебігу завантаження"), ago: 9 },
+];
+const protoAt = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+const PROTO_TASKS = [
+  ...PROTO_WAITING.map((entry) => ({
+    id: entry.task, project: PROTO_PROJECT, status: "assigned", placement: "unplaced", text: entry.text, assignments: [], createdAt: protoAt(60), updatedAt: protoAt(entry.ago),
+    prototypeReview: { latestReviewId: entry.review, waitingReviewId: entry.review, title: entry.title, rounds: 1, createdAt: protoAt(entry.ago) },
+  })),
+  {
+    id: "t-export", project: PROTO_PROJECT, status: "assigned", placement: "unplaced", text: protoWord("Export presets", "Пресети експорту"), assignments: [], createdAt: protoAt(900), updatedAt: protoAt(300),
+    prototypeReview: { latestReviewId: "r-export", waitingReviewId: null, title: protoWord("Export presets", "Пресети експорту"), rounds: 1, createdAt: protoAt(400),
+      decision: { chosen: [{ number: 2, name: protoWord("Segmented control", "Сегментований перемикач") }], comment: "", at: protoAt(300), delivery: "sent" } },
+  },
+] as unknown as BoardTask[];
+
+function protoPicture(hue: number, label: string): string {
+  const canvas = document.createElement("canvas");
+  canvas.width = 390; canvas.height = 600;
+  const g = canvas.getContext("2d")!;
+  g.fillStyle = `hsl(${hue} 45% 42%)`; g.fillRect(0, 0, 390, 600);
+  g.fillStyle = "#fff"; g.font = "600 20px sans-serif"; g.fillText(label, 20, 40);
+  return canvas.toDataURL("image/png");
+}
+
+function protoRead(taskId: string) {
+  const waiting = PROTO_WAITING.find((entry) => entry.task === taskId);
+  if (!waiting) return { taskId, rounds: [], waitingReviewId: null };
+  const media = (id: string, hue: number, label: string) => ({ id, mime: "image/png", bytes: 48_000, available: true, url: protoPicture(hue, label) });
+  return {
+    taskId, waitingReviewId: waiting.review,
+    rounds: [{
+      id: waiting.review, taskId, project: PROTO_PROJECT, title: waiting.title, createdAt: protoAt(waiting.ago), source: { conversationId: null },
+      variants: [
+        { number: 1, name: protoWord("Compact list", "Компактний список"), description: protoWord("One line per result.", "Один рядок на результат."), videos: [], frames: [{ image: media("m1", 205, "compact"), caption: protoWord("results, phone", "результати, телефон"), width: 390 }] },
+        { number: 2, name: protoWord("Two columns", "Дві колонки"), description: protoWord("Results beside the opened one.", "Результати поруч із відкритим."), videos: [], frames: [{ image: media("m2", 150, "two columns"), caption: protoWord("results, phone", "результати, телефон"), width: 390 }] },
+      ],
+    }],
+  };
+}
+
+function PrototypeNoticeFixture() {
+  useFakeHost();
+  return (
+    <div data-evidence-case="prototype-notice" className="flex h-dvh flex-col bg-canvas text-primary">
+      <div className="flex min-h-0 flex-1 flex-col">
+        <LogFeed file={lifeFile()} showSvc={false} lineFilter="" onStatus={() => undefined}
+          paused={false} follow setFollow={() => undefined} />
+      </div>
+      <div data-evidence-composer="">
+        <TmuxComposer file={lifeFile()} taskChipsFor={PROTO_PROJECT} />
+      </div>
+      <PrototypeReviewHost tasks={PROTO_TASKS} />
+    </div>
+  );
+}
+
+function mountPrototypeNotice(root: HTMLElement): void {
+  mountLifecycle(root, <PrototypeNoticeFixture />);
+  const transport = globalThis.fetch.bind(globalThis);
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    const match = /^\/api\/tasks\/([^/]+)\/prototypes$/.exec(url.split("?")[0]!);
+    if (match) return Response.json(protoRead(decodeURIComponent(match[1]!)));
+    return transport(input, init);
+  }) as typeof fetch;
+}
+
+function mountLifecycle(root: HTMLElement, scene: ReactNode = <LifecycleFixture />): void {
   setRuntimeUiEnabledForTests(false);
   setLogFeedDependenciesForTests({
     useLogTail: () => ({
@@ -943,7 +1074,7 @@ function mountLifecycle(root: HTMLElement): void {
   installFakeComposerHost();
   fakeHost.lines = [LIFE_OPENING];
   (window as unknown as { llvHost: LifecycleControls }).llvHost = lifecycleControls();
-  createRoot(root).render(<LifecycleFixture />);
+  createRoot(root).render(scene);
 }
 
 /** The composer's side of the fake host: a hosted structured session, its
@@ -1136,13 +1267,15 @@ function installCaptureBytes(): void {
 }
 
 function DeliverySettlementFixture() {
-  const [status, setStatus] = useState<"checking" | "delivered" | "failed">("checking");
+  /* `unconfirmed` is a send that ended without anyone learning whether it
+     arrived: the only unknown outcome the notice line speaks for. */
+  const [status, setStatus] = useState<"unconfirmed" | "delivered" | "failed">("unconfirmed");
   const [sends, setSends] = useState(0);
   const receipt: RuntimeReceipt = {
     operationId: "settlement-operation", idempotencyKey: "settlement-key",
-    conversationId: "conversation_settlement", kind: "send", status: status === "checking" ? "failed" : status,
+    conversationId: "conversation_settlement", kind: "send", status: status === "unconfirmed" ? "failed" : status,
     text: "Please check the release.", at: new Date().toISOString(), revision: 1,
-    reason: status === "checking" ? "delivery was started by an earlier executor" : null,
+    reason: status === "unconfirmed" ? "delivery was started by an earlier executor" : null,
     resend: status === "failed" ? "safe" : status === "delivered" ? "not-needed" : "verify-first",
   };
   return <div data-evidence-case="delivery-settlement" className="min-h-dvh bg-canvas p-4 text-primary">
@@ -1157,14 +1290,75 @@ function DeliverySettlementFixture() {
   </div>;
 }
 
+/* The operator's report: an English handoff relayed by another project's
+   orchestrator, its delivery left unconfirmed, drawn above the production
+   composer in the slot the pane gives its receipts. Discard removes it, as the
+   pane does once the discard is recorded. */
+const CHECK_CARD_HANDOFF = [
+  "The release notes for the next version are drafted and need a second reader before they go out.",
+  "Please check the three upgrade steps against the migration guide, confirm the storage note still holds for installs that skipped a version, and tell me which paragraphs to cut.",
+  "Nothing here is urgent. Reply in this conversation when you are done.",
+].join("\n\n");
+
+function DeliveryCheckCardFixture() {
+  const { t } = useLocale();
+  const requestedState = params.get("state");
+  const status = requestedState === "uncertain" || requestedState === "delivering" ? requestedState : "failed";
+  const [discarded, setDiscarded] = useState(false);
+  const [retries, setRetries] = useState(0);
+  const composer = useComposer({
+    initialText: () => "",
+    persistText: () => undefined,
+    submit: () => undefined,
+    acceptFiles: true,
+    holdInputWhileBusy: false,
+  });
+  const receipt: RuntimeReceipt = {
+    operationId: "check-card-operation", idempotencyKey: "check-card-key",
+    conversationId: "conversation_check_card", kind: "send", status,
+    text: relayMessageText(CHECK_CARD_HANDOFF, "Atlas"), at: new Date().toISOString(), revision: 1,
+    reason: "delivery was started by an earlier executor", resend: "verify-first",
+  };
+  return (
+    <div data-evidence-case="delivery-check-card" className="flex h-dvh flex-col bg-canvas px-4 py-6 text-primary">
+      <div data-evidence-transcript className="my-3 flex min-h-0 flex-1 items-start justify-start">
+        <div className="max-w-[75%] whitespace-pre-wrap break-words rounded-surface border border-border px-4 py-2.5">Ready for the next task.</div>
+      </div>
+      <ComposerBar
+        composer={composer}
+        placeholder={t("composer.placeholderSend")}
+        textareaAriaLabel={t("composer.sendStructuredAria")}
+        imageAriaLabel={t("composer.addAttachments")}
+        leftSlot={null}
+        sendSlot={{ kind: "send", label: t("composer.sendToAgent") }}
+        sendLabelIdle={t("composer.sendToAgent")}
+        sendLabelRecording={t("composer.sendToAgent")}
+        sendIdleClassName="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-control bg-accent text-canvas"
+        showImage
+        receipts={discarded ? undefined : (
+          <RuntimeComposerReceipts
+            receipts={[receipt]}
+            onRetry={() => setRetries(count => count + 1)}
+            onEdit={() => {}}
+            onDiscard={() => setDiscarded(true)}
+          />
+        )}
+      />
+      <span data-fixture-retries hidden>{retries}</span>
+    </div>
+  );
+}
+
 function Fixture({ id }: { id: ConversationWindowCase }) {
   const { t } = useLocale();
   if (id === "delivery-settlement") return <DeliverySettlementFixture />;
+  if (id === "delivery-check-card") return <DeliveryCheckCardFixture />;
   if (id === "agent-images") return <AgentImagesFixture />;
   if (id === "image-viewers") return <ImageViewersFixture />;
   if (id === "auth-terminal" || id === "clean-terminal") return <TerminalFixture id={id} />;
   if (id === "dead-host-composer") return <DeadComposerFixture file={DEAD_FILE} id={id} />;
   if (id === "dead-host-not-resumable") return <DeadComposerFixture file={ORPHANED_FILE} id={id} />;
+  if (id === "telegram-refused-composer") return <TelegramComposerNoticeFixture />;
   if (id.startsWith("dead-host-")) return <DeadQueueFixture id={id} />;
   const entries = visibleEntries(id);
   return (
@@ -1279,6 +1473,8 @@ interface OwnStepsControls {
   /** Median and mean ms of one reading across `runs` places in the feed, and
       how many selector passes over the feed those readings made. */
   readCost: (runs: number) => { medianMs: number; meanMs: number; selectorPasses: number };
+  /** Show another conversation in the components already on the page. */
+  open: (conversation: string) => void;
 }
 
 const noop = () => undefined;
@@ -1453,13 +1649,20 @@ function mountOwnMessageSteps(root: HTMLElement): void {
     activity: "idle",
     mtime: Math.floor(Date.now() / 1000) - 120,
   } as unknown as FileEntry;
-  createRoot(root).render(
+  const pane = (shown: FileEntry) => (
     <OwnMessageStepsPane
-      file={file}
+      file={shown}
       surface={params.get("surface") === "orchestrator" ? "orchestrator" : "pane"}
       paneWidth={Math.max(0, Number(params.get("pane") ?? 0))}
-    />,
+    />
   );
+  const reactRoot = createRoot(root);
+  /* Another conversation in the same window, the way the orchestrator panel
+     and a reader hand a new file to the components they already mounted. */
+  (window as unknown as { ownSteps: Partial<OwnStepsControls> }).ownSteps.open = (conversation) => {
+    reactRoot.render(pane({ ...file, path: `/${conversation}.jsonl`, name: `${conversation}.jsonl`, conversationId: conversation, title: conversation }));
+  };
+  reactRoot.render(pane(file));
 }
 
 setLocale((params.get("lang") as Locale | null) ?? "en");
@@ -1469,6 +1672,7 @@ const requested = (params.get("case") as ConversationWindowCase | null) ?? "rece
    composer and a fake host behind them — so it takes over the root rather than
    rendering one arranged frame. */
 if (root && requested === "lifecycle") mountLifecycle(root);
+else if (root && requested === "prototype-notice") mountPrototypeNotice(root);
 else if (root && requested === "long-history") mountLongHistory(root);
 else if (root && requested === "own-message-steps") mountOwnMessageSteps(root);
 else if (root) {
