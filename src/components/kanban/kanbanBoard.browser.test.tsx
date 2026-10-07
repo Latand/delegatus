@@ -22300,13 +22300,13 @@ describe("orchestrator wire routing across the board's layouts", () => {
           await page.waitForTimeout(600);
           await entry.before?.(page);
           const aimed = await entry.aim(page);
-          if (!aimed?.length) { results.push({ id: entry.id, form: entry.form, seat: entry.seat, lang: entry.lang, skipped: "no target in this layout" }); continue; }
+          if (!aimed?.length) { results.push({ id: entry.id, form: entry.form, placement: entry.seat, lang: entry.lang, skipped: "no target in this layout" }); continue; }
           await act(page, aimed.map((taskId) => ({ kind: "pipeline", taskId })));
           await page.waitForTimeout(200);
           await probe(page, "settle");
           await probe(page, "freeze");
           const state = await measure(page);
-          results.push({ id: entry.id, form: entry.form, seat: entry.seat, lang: entry.lang, many: !!entry.many, aimed, ...state, errors });
+          results.push({ id: entry.id, form: entry.form, placement: entry.seat, lang: entry.lang, many: !!entry.many, aimed, ...state, errors });
           if (entry.shoot || /^(1920|1440)-top-/.test(entry.id)) await page.screenshot({ path: path.join(out, `${entry.id}.png`) });
         } finally { await context.close(); }
       }
