@@ -1126,6 +1126,7 @@ describe("#1695 K3 conversations inside cards", () => {
     assignments: Array<{ method: string; id: string; body: Record<string, unknown> }>;
     setTaskStatus(id: string, status: string): void;
     touchTask(id: string): void;
+    askDecision(pathname: string): void;
     failLogsFor: string | null;
     focus: {
       bus: { board(): { arrival?(destination: unknown): string | null; returnFromHandoff?(requestId?: string): void } | null };

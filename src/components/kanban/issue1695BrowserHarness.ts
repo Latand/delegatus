@@ -3,7 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import tailwind from "@tailwindcss/postcss";
-import { chromium, type Browser } from "playwright-core";
+import { chromium, type Browser, type ConnectOptions } from "playwright-core";
 import postcss from "postcss";
 
 import { taskIconNodes } from "@/lib/tasks/taskIconNodes";
@@ -71,7 +71,7 @@ async function closeAll(scope: CaseScope) {
 export const caseChromium = {
   launch: (...args: Parameters<typeof chromium.launch>) => owned(() => chromium.launch(...args), (browser) => browser.close()),
   launchServer: (...args: Parameters<typeof chromium.launchServer>) => owned(() => chromium.launchServer(...args), (server) => server.kill()),
-  connect: (...args: Parameters<typeof chromium.connect>) => owned(() => chromium.connect(...args), (browser) => browser.close()),
+  connect: (wsEndpoint: string, options?: ConnectOptions) => owned(() => chromium.connect(wsEndpoint, options), (browser) => browser.close()),
 };
 
 export function browserCaseDeadline(declared: number): number {
@@ -80,7 +80,7 @@ export function browserCaseDeadline(declared: number): number {
 
 /** `test` for a gated browser driver; a disabled gate skips every case. */
 export function browserCase(enabled: boolean) {
-  return (name: string, body: () => unknown, declared = 5_000) => {
+  return (name: string, body: () => void | Promise<unknown>, declared = 5_000) => {
     if (!enabled) return test.skip(name, body);
     const deadline = browserCaseDeadline(declared);
     test(name, async () => {
