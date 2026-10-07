@@ -33,7 +33,7 @@ turn ends. Records: `evidence/launch-render-polish/cls-before.json` and `cls-aft
    A card launched from this page with its reader open therefore lands directly under the last card the operator
    is reading (`landUnderReading` in `kanbanModel.ts`), where the draft stood, and the hand-off's scroll leaves
    the column alone while a reader stands beside it. Read at 1440: 0.285 before (the read agent out of the window),
-   0.061 after with the agent at least 91% in the window throughout
+   0.063 after with the agent at least 89% in the window from the send until after the turn's end
    (`evidence/launch-render-polish/read-launch-cls-{before,after}.json`). The cards under the new card move down
    by its head; the remainder is that.
    The place holds when the launched agent's turn ends. A finished conversation folds off the board, which
