@@ -19,10 +19,29 @@ export interface Feed {
   offline: boolean;
   /** The server answered that it could not read the install, and why (#2594). */
   failure: string | null;
-  accept(snapshot: Snapshot): void;
+  /** A snapshot an action answered with, ordered by the `ticket` taken
+      before that action was sent. */
+  accept(snapshot: Snapshot, ticket: number): void;
 }
 
 const POLL_MS = 1_000;
+
+/* Every source of a snapshot (a stream event as it arrives, a poll, an
+   action's answer, a refusal's) takes its place in one order before it waits
+   for anything: a ticket from this counter. A feed shows a snapshot only when
+   nothing with a later ticket was shown, so an answer that left the server
+   before a newer stream state never steps the surface back. */
+let tickets = 0;
+export function selfUpdateTicket(): number {
+  return ++tickets;
+}
+
+/** The answer to an operator's drain decision, for every feed to order. */
+export interface DrainDecisionAnswer {
+  snapshot: Snapshot;
+  ticket: number;
+}
+export const DRAIN_DECISION_EVENT = "llv:auto-drain-decision";
 
 /** `work: false` leaves out the work in progress, which only the dialog
     shows: a background reader then never starts the reading of it. */
@@ -35,20 +54,20 @@ export function useSelfUpdateFeed(readOnly = false, work = true): Feed {
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const closed = useRef(false);
   /* Reads overlap and finish in any order: a poll every second can outlast
-     the second. Each read is numbered as it starts and a stream event as it
+     the second, and an action can answer after the stream moved on. Each read
+     and action takes its ticket as it starts and a stream event as it
      arrives; one that finishes after a later one was shown is about an older
      install and is dropped, answer or failure, so the surface never steps
      back. */
-  const issued = useRef(0);
   const shown = useRef(0);
-  const current = useCallback((read: number) => {
-    if (read < shown.current) return false;
-    shown.current = read;
+  const current = useCallback((ticket: number) => {
+    if (ticket < shown.current) return false;
+    shown.current = ticket;
     return true;
   }, []);
 
-  const accept = useCallback((next: Snapshot) => {
-    current(++issued.current);
+  const accept = useCallback((next: Snapshot, ticket: number) => {
+    if (!current(ticket)) return;
     setSnapshot(next);
     setOffline(false);
     setFailure(null);
@@ -72,12 +91,13 @@ export function useSelfUpdateFeed(readOnly = false, work = true): Feed {
         errors = 0;
         setLive("sse");
         stopPolling();
-        try { accept(JSON.parse((event as MessageEvent<string>).data) as Snapshot); } catch { /* next event */ }
+        const ticket = selfUpdateTicket();
+        try { accept(JSON.parse((event as MessageEvent<string>).data) as Snapshot, ticket); } catch { /* next event */ }
       });
       events.addEventListener("snapshot-error", (event) => {
         errors = 0;
-        current(++issued.current);
         setLive("sse");
+        if (!current(selfUpdateTicket())) return;
         try { setFailure((JSON.parse((event as MessageEvent<string>).data) as { error?: string }).error ?? ""); } catch { setFailure(""); }
       });
       events.addEventListener("error", () => {
@@ -94,7 +114,7 @@ export function useSelfUpdateFeed(readOnly = false, work = true): Feed {
       setLive("polling");
       let answered = 0;
       const tick = async () => {
-        const read = ++issued.current;
+        const read = selfUpdateTicket();
         try {
           const response = await fetch(`/api/self-update${suffix}`, { cache: "no-store" });
           if (response.status === 503) {
@@ -126,11 +146,14 @@ export function useSelfUpdateFeed(readOnly = false, work = true): Feed {
       void tick();
       pollTimer.current = setInterval(() => { void tick(); }, POLL_MS);
     };
-    const onDecision = (event: Event) => accept((event as CustomEvent<Snapshot>).detail);
-    window.addEventListener("llv:auto-drain-decision", onDecision);
+    const onDecision = (event: Event) => {
+      const { snapshot: next, ticket } = (event as CustomEvent<DrainDecisionAnswer>).detail;
+      accept(next, ticket);
+    };
+    window.addEventListener(DRAIN_DECISION_EVENT, onDecision);
     connect();
     return () => {
-      window.removeEventListener("llv:auto-drain-decision", onDecision);
+      window.removeEventListener(DRAIN_DECISION_EVENT, onDecision);
       closed.current = true;
       source.current?.close();
       source.current = null;

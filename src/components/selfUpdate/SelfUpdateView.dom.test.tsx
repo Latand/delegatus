@@ -282,7 +282,7 @@ describe("automatic updates", () => {
       button(el, choice)!.click();
       await Bun.sleep(0);
       expect(posted).toEqual([{ decisionId: "drain-current", choice }]);
-      expect(accepted).toMatchObject({ auto: { decision: null } });
+      expect(accepted).toMatchObject({ snapshot: { auto: { decision: null } }, ticket: expect.any(Number) });
     } finally {
       globalThis.fetch = savedFetch;
       window.removeEventListener("llv:auto-drain-decision", observe);
@@ -297,7 +297,7 @@ describe("automatic updates", () => {
     const observe = (event: Event) => {
       flushSync(() => root!.unmount());
       host?.remove();
-      render((event as CustomEvent<Snapshot>).detail);
+      render((event as CustomEvent<{ snapshot: Snapshot }>).detail.snapshot);
     };
     window.addEventListener("llv:auto-drain-decision", observe);
     globalThis.fetch = (async () => new Response(JSON.stringify({ error: "This automatic update decision is no longer pending", code: "auto-switch-superseded", snapshot: current }), { status: 409 })) as unknown as typeof fetch;

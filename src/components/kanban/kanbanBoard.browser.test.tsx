@@ -357,7 +357,10 @@ describe("self-update reload notice", () => {
    the same once the reading landed, and the installation after a deployment
    that already serves the available target (no "commits behind" left). Each
    state is framed on the desktop and at 390 px, in en and uk, with the
-   dialog's controls measured and the Update press's confirmation read. */
+   dialog's controls measured and the Update press's confirmation read.
+   The last state arrives while a "Check now" is held: its late answer, and
+   then a late refusal of a second check, both carry the old installation and
+   neither brings back the old revision, its badge or the Update button. */
 describe("Updates dialog first state", () => {
   browserTest("pending, error and loaded states and their controls on desktop and phone in en and uk", async () => {
     const out = path.resolve(".artifacts/updates-dialog-first-state");
@@ -418,10 +421,23 @@ describe("Updates dialog first state", () => {
                 } as typeof EventSource;
               },
             });
+            /* The fixture installs its own fetch too. A "Check now" it is
+               handed is held here until the driver answers it. */
+            const heldChecks: ((status: number, body: unknown) => void)[] = [];
+            let fetcher = window.fetch;
+            Object.defineProperty(window, "fetch", { configurable: true,
+              get: () => fetcher,
+              set: (next: typeof fetch) => {
+                fetcher = ((input: RequestInfo | URL, init?: RequestInit) => String(input).startsWith("/api/self-update/check")
+                  ? new Promise<Response>((resolve) => { heldChecks.push((status, body) => resolve(new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } }))); })
+                  : next(input, init)) as typeof fetch;
+              },
+            });
             Object.assign(window, { selfUpdateEmit: (type: string, data: unknown) => {
               for (const stream of dialogStreams) for (const listener of stream.listeners[type] ?? []) listener({ data: JSON.stringify(data) });
               return dialogStreams.length;
-            } });
+            }, selfUpdateHeldChecks: () => heldChecks.length,
+            selfUpdateAnswerCheck: (index: number, status: number, body: unknown) => heldChecks[index]!(status, body) });
           }, { lang });
           await page.goto(server.base);
           await page.waitForSelector(phone ? "[data-phone-card], [data-mobile2-shell], [data-mobile-shell]" : "[data-kanban-board]", { timeout: 15_000 }).catch(() => {});
@@ -441,6 +457,7 @@ describe("Updates dialog first state", () => {
                 status: element.querySelector("[data-status]")?.textContent?.trim() ?? null,
                 loading: element.querySelector("[data-section], [data-self-update-failure]") ? null : element.querySelector("p")?.textContent?.trim() ?? null,
                 failure: element.querySelector("[data-self-update-failure]")?.textContent?.trim() ?? null,
+                actionError: element.querySelector("[data-error='action']")?.textContent?.trim() ?? null,
                 work: element.querySelector("[data-work]")?.textContent?.trim() ?? null,
                 behindBadge: /17/.test(element.querySelector("[data-status]")?.textContent ?? ""),
                 controls,
@@ -478,10 +495,39 @@ describe("Updates dialog first state", () => {
           await page.waitForTimeout(100);
           expect(confirms.at(-1)).toContain(translate(lang, "selfUpdate.auto.block.turns", { count: 2 }));
 
+          /* Each "Check now" is held until the driver answers it, after the
+             stream has moved on. */
+          type Driven = { selfUpdateHeldChecks(): number; selfUpdateAnswerCheck(index: number, status: number, body: unknown): void };
+          const heldChecks = () => page.evaluate(() => (window as unknown as Driven).selfUpdateHeldChecks());
+          const check = async () => {
+            const index = await heldChecks();
+            await dialog.locator("[data-action='check']").click();
+            for (let wait = 0; wait < 100 && await heldChecks() === index; wait++) await page.waitForTimeout(50);
+            expect(await heldChecks()).toBe(index + 1);
+            return (status: number, body: unknown) => page.evaluate(([index, status, body]) =>
+              (window as unknown as Driven).selfUpdateAnswerCheck(index as number, status as number, body), [index, status, body] as const);
+          };
+          const upToDate = translate(lang, "selfUpdate.status.upToDate", { time: "" }).split(",")[0]!;
+          const answerCheck = await check();
           await emit("state", snapshot(TARGET, "ready"));
           const serving = await frame("serving-target", "[data-section='update'][data-update='idle']");
           expect(serving.behindBadge).toBe(false);
-          expect(serving.status).toContain(translate(lang, "selfUpdate.status.upToDate", { time: "" }).split(",")[0]!);
+          expect(serving.status).toContain(upToDate);
+          await answerCheck(202, snapshot(OLD, "ready"));
+          await dialog.locator("[data-action='check']:not([disabled])").waitFor();
+          const late = await frame("late-check-answer", "[data-section='update']");
+          expect(late.behindBadge).toBe(false);
+          expect(late.status).toContain(upToDate);
+          expect(late.controls.some((control) => control.action === "update" && !control.disabled)).toBe(false);
+
+          const refuseCheck = await check();
+          await emit("state", { ...snapshot(TARGET, "ready"), meta: { ...snapshot(TARGET, "ready").meta, serverTime: "2026-10-07T09:00:05.000Z" } });
+          await refuseCheck(409, { error: "An update is running.", code: "busy-update", snapshot: snapshot(OLD, "ready") });
+          const refused = await frame("late-refusal", "[data-error='action']");
+          expect(refused.actionError).toBe(translate(lang, "selfUpdate.refusal.busy-update"));
+          expect(refused.behindBadge).toBe(false);
+          expect(refused.status).toContain(upToDate);
+          expect(refused.controls.some((control) => control.action === "update" && !control.disabled)).toBe(false);
           expect(pageErrors).toEqual([]);
         } finally { await context.close(); }
       }

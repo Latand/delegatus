@@ -6,6 +6,7 @@ import type { AutoView } from "@/lib/selfUpdate/auto";
 import type { Snapshot } from "@/lib/selfUpdate/types";
 
 import { blockerRows, useBlockerNames } from "./blockerNames";
+import { DRAIN_DECISION_EVENT, selfUpdateTicket, type DrainDecisionAnswer } from "./useSelfUpdateFeed";
 
 /** The same operator decision in the update dialog and both Needs-you lists. */
 export function AutoDrainDecision({ decision }: { decision: NonNullable<AutoView["decision"]> }) {
@@ -13,10 +14,12 @@ export function AutoDrainDecision({ decision }: { decision: NonNullable<AutoView
   const names = useBlockerNames();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const accept = (snapshot: Snapshot) => window.dispatchEvent(new window.CustomEvent("llv:auto-drain-decision", { detail: snapshot }));
   const choose = async (choice: "deploy-now" | "keep-waiting") => {
     setPending(true);
     setError(null);
+    // Its place among the feed's snapshots is taken now, before the answer.
+    const ticket = selfUpdateTicket();
+    const accept = (snapshot: Snapshot) => window.dispatchEvent(new window.CustomEvent<DrainDecisionAnswer>(DRAIN_DECISION_EVENT, { detail: { snapshot, ticket } }));
     try {
       const response = await fetch("/api/self-update/auto", { method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ decisionId: decision.id, choice }) });

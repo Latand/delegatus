@@ -12,7 +12,9 @@
      `unavailable` with the error when a reading failed.
    - `instrumentQuietPorts` times the probe's phases through its ports, so the
      dominant cost is named on a real installation without touching the
-     probe's own rules.
+     probe's own rules. The same ports give the event loop back between the
+     probe's steps, so a reading that takes seconds never holds up another
+     caller's answer.
 
    What this module holds is for display only. A mutation (update admission,
    generation fencing, active-turn protection, the drain) calls `probeQuiet`
@@ -27,11 +29,18 @@ import type { ResumeWork, Snapshot, WorkEvidence, WorkPhases } from "./types";
 /** A landed reading is shown again, without a new probe, for this long. */
 export const WORK_EVIDENCE_REUSE_MS = 5_000;
 
+/** How long a reading runs before it gives the event loop back. */
+export const WORK_EVIDENCE_SLICE_MS = 10;
+
 type Phase = "pipelines" | "flows" | "historicalReviewers" | "turns";
+
+/* A synchronous port's answer read ahead of the probe, or what it threw. */
+type Held<T> = { value: T } | { error: unknown };
 
 interface Recorder {
   pipelines: readonly Pipeline[];
   flows: readonly Flow[];
+  held: Partial<Record<"registryHealth" | "pipelines" | "flows", Held<unknown>>>;
   sessions: readonly { conversationId: string; turn?: string; host?: string }[];
   index: Map<string, Phase> | null;
   ms: Record<keyof Omit<WorkPhases, "totalMs" | "judgingMs" | "readings">, number>;
@@ -39,8 +48,8 @@ interface Recorder {
 }
 
 function newRecorder(): Recorder {
-  return { pipelines: [], flows: [], sessions: [], index: null,
-    ms: { journalMs: 0, pipelinesMs: 0, flowsMs: 0, historicalReviewersMs: 0, turnsMs: 0, otherMs: 0 },
+  return { pipelines: [], flows: [], held: {}, sessions: [], index: null,
+    ms: { journalMs: 0, pipelinesMs: 0, flowsMs: 0, historicalReviewersMs: 0, turnsMs: 0, otherMs: 0, yieldedMs: 0 },
     readings: { pipelines: 0, flows: 0, historicalReviewers: 0, turns: 0 } };
 }
 
@@ -77,6 +86,9 @@ function ownerIndex(recorder: Recorder): Map<string, Phase> {
   return index;
 }
 
+/** One turn of the event loop: timers, sockets and requests waiting run first. */
+const nextTurn = () => new Promise<void>((resolve) => { setImmediate(resolve); });
+
 /**
  * The service's ports with every call timed into the reading in progress.
  *
@@ -85,13 +97,39 @@ function ownerIndex(recorder: Recorder): Map<string, Phase> {
  * wrapper per probe would restart that bound on every observation. Readings
  * never overlap (`ObservedWork` runs one at a time), so one current recorder
  * is enough.
+ *
+ * The probe runs on the Viewer's own event loop, and most of its steps answer
+ * from promises that are already settled, so nothing else would run until it
+ * ends. Before each awaited port the wrapper gives the loop back once the
+ * reading has run `sliceMs` since it last did, and `begin` reads the
+ * synchronous ports the probe calls back to back (the registry health, the
+ * pipelines, the flows) one per turn, ahead of it. A single synchronous port
+ * still holds the loop for as long as it takes; nothing on one thread can
+ * split it.
  */
-export function instrumentQuietPorts(ports: QuietPorts, clock: () => number = () => performance.now()): {
+export function instrumentQuietPorts(ports: QuietPorts, clock: () => number = () => performance.now(), sliceMs = WORK_EVIDENCE_SLICE_MS): {
   ports: QuietPorts;
-  begin(): void;
+  begin(): Promise<void>;
   finish(totalMs: number): WorkPhases;
 } {
   let recorder = newRecorder();
+  let sliceFrom = clock();
+  const pace = async () => {
+    if (clock() - sliceFrom < sliceMs) return;
+    const started = clock();
+    await nextTurn();
+    sliceFrom = clock();
+    recorder.ms.yieldedMs += sliceFrom - started;
+  };
+  const hold = <T>(read: () => T): Held<T> => { try { return { value: read() }; } catch (error) { return { error }; } };
+  /* The answer read ahead, once; a second call reads afresh. */
+  const replay = <T>(key: keyof Recorder["held"], read: () => T): T => {
+    const held = recorder.held[key];
+    if (!held) return read();
+    delete recorder.held[key];
+    if ("error" in held) throw held.error;
+    return held.value as T;
+  };
   const timed = <T>(bucket: keyof Recorder["ms"], read: () => T): T => {
     const started = clock();
     try { return read(); } finally { recorder.ms[bucket] += clock() - started; }
@@ -100,24 +138,31 @@ export function instrumentQuietPorts(ports: QuietPorts, clock: () => number = ()
     const started = clock();
     try { return await read(); } finally { recorder.ms[bucket] += clock() - started; }
   };
+  const readPipelines = () => timed("pipelinesMs", () => (recorder.pipelines = ports.pipelines()));
+  const readFlows = () => timed("flowsMs", () => (recorder.flows = ports.flows?.() ?? []));
+  const readRegistryHealth = () => timed("pipelinesMs", () => (ports.registryHealth ?? pipelineRegistryHealth)());
   const wrapped: QuietPorts = {
     ...ports,
-    runtimeSnapshot: () => timedAsync("journalMs", async () => {
-      const runtime = await ports.runtimeSnapshot();
-      recorder.sessions = runtime.sessions;
-      return runtime;
-    }),
-    pipelines: () => timed("pipelinesMs", () => (recorder.pipelines = ports.pipelines())),
-    flows: () => timed("flowsMs", () => (recorder.flows = ports.flows?.() ?? [])),
-    registryHealth: () => timed("pipelinesMs", () => (ports.registryHealth ?? pipelineRegistryHealth)()),
+    runtimeSnapshot: async () => {
+      await pace();
+      return timedAsync("journalMs", async () => {
+        const runtime = await ports.runtimeSnapshot();
+        recorder.sessions = runtime.sessions;
+        return runtime;
+      });
+    },
+    pipelines: () => replay("pipelines", readPipelines),
+    flows: () => replay("flows", readFlows),
+    registryHealth: () => replay("registryHealth", readRegistryHealth),
     presence: (now) => timed("otherMs", () => ports.presence(now)),
     ...(ports.reviewerProcess ? { reviewerProcess: (round) => timed("flowsMs", () => ports.reviewerProcess!(round)) } : {}),
-    ...(ports.controllerBusyReason ? { controllerBusyReason: () => timedAsync("otherMs", () => ports.controllerBusyReason!()) } : {}),
-    ...(ports.controllerIdle ? { controllerIdle: () => timedAsync("otherMs", () => ports.controllerIdle!()) } : {}),
+    ...(ports.controllerBusyReason ? { controllerBusyReason: async () => { await pace(); return timedAsync("otherMs", () => ports.controllerBusyReason!()); } } : {}),
+    ...(ports.controllerIdle ? { controllerIdle: async () => { await pace(); return timedAsync("otherMs", () => ports.controllerIdle!()); } } : {}),
     ...(ports.seats ? { seats: () => timed("otherMs", () => ports.seats!()) } : {}),
     ...(ports.memoryAvailableMb ? { memoryAvailableMb: () => timed("otherMs", () => ports.memoryAvailableMb!()) } : {}),
     ...(ports.turnLiveness ? {
-      turnLiveness: (session, probe) => {
+      turnLiveness: async (session, probe) => {
+        await pace();
         recorder.index ??= ownerIndex(recorder);
         const phase = recorder.index.get(session.conversationId)
           ?? (session.artifactPath ? recorder.index.get(session.artifactPath) : undefined) ?? "turns";
@@ -129,7 +174,19 @@ export function instrumentQuietPorts(ports: QuietPorts, clock: () => number = ()
   };
   return {
     ports: wrapped,
-    begin: () => { recorder = newRecorder(); },
+    begin: async () => {
+      recorder = newRecorder();
+      for (const [key, read] of [["registryHealth", readRegistryHealth], ["pipelines", readPipelines], ["flows", readFlows]] as const) {
+        const started = clock();
+        await nextTurn();
+        recorder.ms.yieldedMs += clock() - started;
+        const held = hold<unknown>(read);
+        recorder.held[key] = held;
+        // The probe stops at the first of them that fails; so does this.
+        if ("error" in held) break;
+      }
+      sliceFrom = clock();
+    },
     finish: (totalMs) => {
       const measured = Object.values(recorder.ms).reduce((sum, value) => sum + value, 0);
       const round = (value: number) => Math.round(value * 10) / 10;
@@ -220,9 +277,9 @@ export class ObservedWork {
 
   private async read(snapshot: Snapshot, now: number): Promise<void> {
     const instrumented = this.instrumented;
-    instrumented.begin();
     const startedAt = this.clock();
     try {
+      await instrumented.begin();
       const { blockers } = await probeQuiet(snapshot, instrumented.ports, now);
       const phases = instrumented.finish(this.clock() - startedAt);
       const error = incomplete(blockers);

@@ -104,6 +104,6 @@ test("instrumentation names the dominant phase of one observational probe on lon
   console.info(`[#2594] ${FLOWS} retained flows × ${ROUNDS} rounds, ${LANES} lanes, ${TURNS} open journal rows: ${JSON.stringify(phases)}`);
   expect(evidence.state).toBe("ready");
   expect(phases.readings).toEqual({ pipelines: LANES, flows: FLOWS, historicalReviewers: FLOWS * (ROUNDS - 1), turns: TURNS });
-  const parts = phases.journalMs + phases.pipelinesMs + phases.flowsMs + phases.historicalReviewersMs + phases.turnsMs + phases.otherMs + phases.judgingMs;
+  const parts = phases.journalMs + phases.pipelinesMs + phases.flowsMs + phases.historicalReviewersMs + phases.turnsMs + phases.otherMs + phases.yieldedMs + phases.judgingMs;
   expect(Math.abs(parts - phases.totalMs)).toBeLessThan(1);
 }, 600_000);

@@ -11,7 +11,7 @@ import type { Snapshot } from "@/lib/selfUpdate/types";
 import { OPEN_SELF_UPDATE_EVENT } from "./openSelfUpdate";
 import { actionError, type ActionError } from "./selfUpdateCopy";
 import { SelfUpdateView, type ViewActions, type ViewState } from "./SelfUpdateView";
-import { useSelfUpdateFeed } from "./useSelfUpdateFeed";
+import { selfUpdateTicket, useSelfUpdateFeed } from "./useSelfUpdateFeed";
 
 /**
  * The Update surface (#2007): how this install updates itself, reached from
@@ -65,6 +65,10 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
   const act = useCallback(async (key: string, path: string, body?: unknown) => {
     setPending((value) => new Set(value).add(key));
     setError(null);
+    /* The snapshot this action answers with is ordered from now: a stream
+       state that arrives while it runs is newer and stays. Its outcome (the
+       error, the restart it began) is the action's own and always shown. */
+    const ticket = selfUpdateTicket();
     try {
       const response = await fetch(path, {
         method: "POST",
@@ -74,7 +78,7 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
       const payload = await response.json().catch(() => null) as ({ error?: string; code?: string; detail?: string; snapshot?: Snapshot } & Partial<Snapshot>) | null;
       if (!response.ok) setError(actionError(response.status, payload));
       const next = response.ok ? payload as Snapshot | null : payload?.snapshot;
-      if (next && next.meta) feed.accept(next);
+      if (next && next.meta) feed.accept(next, ticket);
       return response.ok;
     } catch {
       setError({ code: "offline" });

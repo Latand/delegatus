@@ -5,7 +5,8 @@ import { createRoot } from "react-dom/client";
 
 import type { Snapshot } from "@/lib/selfUpdate/types";
 
-import { useSelfUpdateFeed, type Feed } from "./useSelfUpdateFeed";
+import { AutoDrainDecision } from "./AutoDrainDecision";
+import { selfUpdateTicket, useSelfUpdateFeed, type Feed } from "./useSelfUpdateFeed";
 
 /* The Update surface's feed reads the install every second while the stream
    is down, and a read can take longer than that: the reads overlap and finish
@@ -120,6 +121,65 @@ test("an older read's failure never covers a newer answer, and a fresh answer af
     expect(mounted.feed().failure).toBeNull();
     expect(mounted.feed().snapshot?.installed.sha).toBe(OLD);
   } finally {
+    mounted.unmount();
+    globalThis.fetch = originalFetch;
+  }
+});
+
+/* #2594: an action's answer is one more source of the same snapshots. It is
+   ordered by when the action was sent, so an answer that comes back after a
+   newer read was shown (the old revision, its "commits behind") is dropped,
+   while the action's own outcome stays. */
+test("an action's answer that comes back after a newer read was shown never replaces it", async () => {
+  const originalFetch = globalThis.fetch;
+  const { fetcher, calls } = answers();
+  globalThis.fetch = fetcher;
+  const mounted = await mountFeed();
+  try {
+    await readsMade(calls, 1);
+    const action = selfUpdateTicket();
+    await readsMade(calls, 2);
+    await act(async () => { calls[1]!.resolve(json(snapshotOf(NEWER))); });
+    await settle();
+    expect(mounted.feed().snapshot?.installed.sha).toBe(NEWER);
+    await act(async () => { mounted.feed().accept(snapshotOf(OLD), action); });
+    expect(mounted.feed().snapshot?.installed.sha).toBe(NEWER);
+    // An action sent after that read answers with what is newest.
+    const later = selfUpdateTicket();
+    await act(async () => { mounted.feed().accept(snapshotOf(OLD), later); });
+    expect(mounted.feed().snapshot?.installed.sha).toBe(OLD);
+  } finally {
+    mounted.unmount();
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("a refused drain decision's snapshot that comes back after a newer read never replaces it, and the refusal is still said", async () => {
+  const originalFetch = globalThis.fetch;
+  const { fetcher, calls } = answers();
+  let refuse!: (response: Response) => void;
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => String(input).startsWith("/api/self-update/auto")
+    ? new Promise<Response>((resolve) => { refuse = resolve; })
+    : fetcher(input, init)) as typeof fetch;
+  const mounted = await mountFeed();
+  const host = dom.document.createElement("div");
+  dom.document.body.appendChild(host);
+  const root = createRoot(host as unknown as Element);
+  try {
+    await act(async () => { root.render(<AutoDrainDecision decision={{ id: "drain-current", blockers: null } as never} />); });
+    await readsMade(calls, 1);
+    await act(async () => { (host.querySelector("[data-action='keep-waiting']") as unknown as HTMLButtonElement).click(); });
+    await readsMade(calls, 2);
+    await act(async () => { calls[1]!.resolve(json(snapshotOf(NEWER))); });
+    await settle();
+    expect(mounted.feed().snapshot?.installed.sha).toBe(NEWER);
+    await act(async () => { refuse(json({ error: "This automatic update decision is no longer pending", code: "auto-switch-superseded", snapshot: { ...snapshotOf(OLD), meta: {} } }, 409)); });
+    await settle();
+    expect(mounted.feed().snapshot?.installed.sha).toBe(NEWER);
+    expect(host.querySelector("[role='alert']")?.textContent).toBeTruthy();
+  } finally {
+    act(() => root.unmount());
+    host.remove();
     mounted.unmount();
     globalThis.fetch = originalFetch;
   }

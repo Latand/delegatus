@@ -155,6 +155,10 @@ test("the first SSE state arrives while the work reader is pending, and the land
 });
 
 const nextTurn = () => new Promise((resolve) => setTimeout(resolve, 0));
+/** Until `count()` reaches `value`, for at most fifty turns of the loop. */
+async function reached(count: () => number, value: number): Promise<void> {
+  for (let turn = 0; turn < 50 && count() < value; turn++) await nextTurn();
+}
 
 /** Holds the thread for `ms`, as a synchronous registry read on a long-lived
     installation does: no timer or promise runs meanwhile. */
@@ -257,8 +261,8 @@ test("overlapping observations share the one reading in flight and never stack p
     const next = events(abort.signal);
     const answers = await within(Promise.all([readOnly(), readOnly(), readOnly(), next(), readOnly()]), 2_000);
     expect(answers).not.toBe("timed out");
-    // The one reading begins on the next turn of the event loop.
-    await nextTurn();
+    // The one reading begins on a later turn of the event loop.
+    await reached(h.reads, 1);
     expect(h.reads()).toBe(1);
     // A second tab and a poll every second while the reading is still held.
     for (let i = 0; i < 5; i++) { h.advance(1_000); await readOnly(); }
@@ -271,7 +275,7 @@ test("overlapping observations share the one reading in flight and never stack p
     h.hold();
     h.advance(5_000);
     await Promise.all([readOnly(), readOnly(), readOnly()]);
-    await nextTurn();
+    await reached(h.reads, 2);
     expect(h.reads()).toBe(2);
     const refreshing = await (await readOnly()).json() as Snapshot;
     expect(refreshing.workEvidence?.state).toBe("ready");
@@ -503,3 +507,74 @@ test("a stream never replaces a newer state with an older reading that finished 
     expect(await within(next(), 500)).toBe("timed out");
   } finally { abort.abort(); host.open(); h.release(); }
 });
+
+/* The answer a new caller gets must not wait for a reading that is already
+   running either. The reading is CPU work on the Viewer's own event loop: a
+   long-lived installation asks thousands of owners, each answer an already
+   settled promise, and no timer or socket runs between them unless the reading
+   gives the loop back. The installation is served by a real server on port 0,
+   and the callers are another process, so their clock is not the one held. */
+test("a new GET and a new SSE subscription arriving after the reading has begun answer before it finishes", async () => {
+  const OWNERS = 3_000;
+  const sessions = Array.from({ length: OWNERS }, (_, index) => ({ conversationId: `conversation_${index}`, sessionKey: { engine: "codex" },
+    cwd: null, artifactPath: null, host: "hosted", turn: "running" }));
+  let began = 0;
+  let finished = 0;
+  let readings = 0;
+  const h = managed({ quiet: {
+    runtimeSnapshot: async () => ({ sessions }) as never,
+    // About a millisecond of reading per owner, answered without any I/O.
+    turnLiveness: async () => {
+      if (!readings++) began = Date.now();
+      blockFor(1);
+      if (readings === OWNERS) finished = Date.now();
+      return null as never;
+    },
+  } });
+  const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: (request) =>
+    new URL(request.url).pathname.endsWith("/events") ? getEvents(request) : getSnapshot(request) });
+  const client = Bun.spawn([process.execPath, "-e", `
+    const base = process.env.SELF_UPDATE_BASE;
+    await (await fetch(base + "?readOnly=1")).json();
+    await Bun.sleep(300);
+    const sent = Date.now();
+    const get = fetch(base + "?readOnly=1").then(async (response) => ({ at: Date.now(), body: await response.json() }));
+    const sse = fetch(base + "/events?readOnly=1").then(async (response) => {
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let text = "";
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) throw new Error("stream ended");
+        text += decoder.decode(value, { stream: true });
+        const state = /event: state\\ndata: (.+)\\n\\n/.exec(text);
+        if (state) { const at = Date.now(); void reader.cancel(); return { at, body: JSON.parse(state[1]) }; }
+      }
+    });
+    const [answer, first] = await Promise.all([get, sse]);
+    console.log(JSON.stringify({ sent, get: answer, sse: first }));
+    process.exit(0);
+  `], { env: { PATH: process.env.PATH ?? "", HOME: root, TMPDIR: root, SELF_UPDATE_BASE: `http://127.0.0.1:${server.port}/api/self-update` },
+    stdout: "pipe", stderr: "inherit" });
+  try {
+    const output = await new Response(client.stdout).text();
+    expect(await client.exited).toBe(0);
+    const { sent, get, sse } = JSON.parse(output) as { sent: number; get: { at: number; body: Snapshot }; sse: { at: number; body: Snapshot } };
+    await h.service.workSettled();
+    expect(readings).toBe(OWNERS);
+    // The callers came after the reading began, and it ran on past them.
+    expect(began).toBeGreaterThan(0);
+    expect(sent).toBeGreaterThan(began);
+    expect(finished - sent).toBeGreaterThan(1_000);
+    for (const answer of [get, sse]) {
+      expect(answer.at).toBeLessThan(finished);
+      expect(answer.at - sent).toBeLessThan(500);
+      expect(answer.body).toMatchObject({ mode: "managed", installed: { sha: TARGET },
+        processes: { web: { pid: 4141 }, runtimeHost: { pid: 4242 } }, workEvidence: { state: "pending" } });
+    }
+  } finally {
+    client.kill();
+    await server.stop(true);
+    h.service.stop();
+  }
+}, 60_000);

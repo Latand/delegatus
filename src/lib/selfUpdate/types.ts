@@ -194,6 +194,8 @@ export interface WorkPhases {
   turnsMs: number;
   /** Controller state, seats, presence and memory. */
   otherMs: number;
+  /** Time the reading gave the event loop back to other callers between its steps. */
+  yieldedMs: number;
   judgingMs: number;
   /** How many custody readings each phase asked for. */
   readings: { pipelines: number; flows: number; historicalReviewers: number; turns: number };
