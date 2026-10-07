@@ -32,6 +32,7 @@ import { sameProcess } from "./pid";
 import { procBackend } from "@/lib/proc";
 import { SelfUpdateService, type ServiceDeps } from "./service";
 import { currentHostTurnIdle, registryAdmissionEvidence, type QuietPorts } from "./quiet";
+import { readWorkOffThread } from "./workReads";
 import { memAvailableMb, realPorts, UpdateRunner } from "./steps";
 import type { Snapshot } from "./types";
 
@@ -209,6 +210,7 @@ export function productionDeps(env: Readonly<Record<string, string | undefined>>
       presence: listPresence,
       memoryAvailableMb: memAvailableMb,
     },
+    observedReads: () => readWorkOffThread(),
   };
 }
 

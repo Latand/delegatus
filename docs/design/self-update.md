@@ -141,6 +141,13 @@ again for five seconds, and says `pending` until one lands and `unavailable`
 when one fails or could not read the journal or the whole pipeline registry;
 the snapshot carries `resumeWork` only beside a `ready` reading, so unknown work
 never reads as none. `workEvidence.phases` names where the reading's time went.
+The reading gives the event loop back between the probe's awaited steps, and
+the probe's three synchronous reads (the registry health, the pipelines, the
+flows), which nothing on one thread can split, come from a worker process
+(`src/lib/selfUpdate/workReads.ts`, `src/lib/selfUpdateWork.worker.ts`): the
+Viewer's thread only waits for its answer, so a caller arriving inside a read
+that takes seconds is still answered at once. A worker that fails, or runs
+past thirty seconds, leaves the reading `unavailable` with that reason.
 That reading is display only: the automatic path, the launcher admission and
 every other decision still call `probeQuiet` themselves, at the moment they
 decide. The Viewer's background feed asks with `work=0` and never starts a

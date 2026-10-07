@@ -24,6 +24,7 @@ import { GreenReader, type GreenVerdict } from "./green";
 import { appendHistory, findAutoSwitchRequest, readHistory, storeAutoSwitchResponse } from "./history";
 import { probeQuiet, quietDispatchVersion, type QuietBlockers, type QuietPorts } from "./quiet";
 import { ObservedWork } from "./workEvidence";
+import type { ObservedReads } from "./workReads";
 import { activeRestartGate, ownsRestartGate, beginRestartGate, endRestartGate, restartGateFile } from "./restartGate";
 import { headOf, releaseDirFor } from "./release";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
@@ -120,6 +121,9 @@ export interface ServiceDeps {
   web: { pid: number; port: number | null; startedAt: string };
   green?: GreenReader;
   quiet?: QuietPorts;
+  /** The synchronous registry reads of an observational reading, from outside
+      the request thread (#2594). Display only: a mutation reads `quiet`. */
+  observedReads?(): Promise<ObservedReads>;
   requestPipelineTick?(): void;
   /** Wakes structured delivery when the drain ends: a held autonomous message
       for an idle host has no other event coming to move it. */
@@ -1838,7 +1842,8 @@ export class SelfUpdateService {
   async observe(): Promise<Snapshot> {
     const snapshot = await this.snapshot();
     if (!this.deps.quiet) return snapshot;
-    this.observedWork ??= new ObservedWork(this.deps.quiet, () => this.deps.now(), () => this.changes.emit());
+    this.observedWork ??= new ObservedWork(this.deps.quiet, () => this.deps.now(), () => this.changes.emit(),
+      undefined, undefined, this.deps.observedReads);
     const { evidence, resumeWork } = this.observedWork.observe(snapshot);
     return { ...snapshot, workEvidence: evidence, ...(resumeWork ? { resumeWork } : {}) };
   }

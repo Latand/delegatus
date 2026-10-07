@@ -10,9 +10,13 @@
      never authorizes a restart;
    - the "N commits behind" badge follows the serving revisions. */
 import { afterAll, afterEach, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+import { loadFlows, saveFlows } from "@/lib/flows/store";
+import type { Flow } from "@/lib/flows/types";
+import { loadPipelinesForList, pipelineRegistryHealth } from "@/lib/pipelines/store";
 
 import { activeDrain } from "./drain";
 import { initialAuto, writeAuto } from "./auto";
@@ -23,6 +27,7 @@ import type { QuietPorts } from "./quiet";
 import { getEvents, getSnapshot } from "./routes";
 import { SelfUpdateService, type ServiceDeps } from "./service";
 import { idleCheck, idleUpdate, stoppedProcess, type Snapshot } from "./types";
+import { readWorkOffThread, type ObservedReads } from "./workReads";
 
 const root = mkdtempSync(join(tmpdir(), "self-update-work-evidence-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
@@ -49,7 +54,7 @@ function within<T>(promise: Promise<T>, ms: number): Promise<T | "timed out"> {
 /** A managed installation serving TARGET from both processes, whose work
     reader waits on `held` for every reading until the test opens it. */
 function managed(options: { persisted?: unknown; installed?: string; hostRevision?: string; mode?: ServiceDeps["mode"];
-  quiet?: Partial<QuietPorts>; hostHealth?: ServiceDeps["hostHealth"] } = {}) {
+  quiet?: Partial<QuietPorts>; hostHealth?: ServiceDeps["hostHealth"]; observedReads?: ServiceDeps["observedReads"] } = {}) {
   const dir = mkdtempSync(join(root, "managed-"));
   if (options.persisted) writeFileSync(join(dir, "state.json"), JSON.stringify(options.persisted));
   let now = Date.parse("2026-10-07T09:00:00Z");
@@ -78,6 +83,7 @@ function managed(options: { persisted?: unknown; installed?: string; hostRevisio
     buildEnv: () => ({}),
     web: { pid: 4141, port: 3000, startedAt: "2026-10-07T08:00:00.000Z" },
     quiet,
+    ...(options.observedReads ? { observedReads: options.observedReads } : {}),
   };
   const service = new SelfUpdateService(deps);
   setSelfUpdateServiceForTests(service);
@@ -285,7 +291,7 @@ test("overlapping observations share the one reading in flight and never stack p
 });
 
 /* The automatic path in checkout mode, as `auto.test.ts` drives it. */
-function checkoutAuto() {
+function checkoutAuto(observedReads?: ServiceDeps["observedReads"]) {
   const dir = mkdtempSync(join(root, "checkout-"));
   const record: LauncherRecord = {
     version: 1, launcher: { pid: 100, startIdentity: "launch", autoAdmission: 1 }, checkout: process.cwd(),
@@ -297,6 +303,7 @@ function checkoutAuto() {
   let turnRunning = false;
   let held: ReturnType<typeof gate> | null = gate();
   let reads = 0;
+  let pipelineReads = 0;
   writeAuto(join(dir, "auto.json"), { ...initialAuto(), enabled: true, changedAt: new Date(now).toISOString(), green: { [TARGET]: { state: "green" as const } }, rollbackCaptured: true });
   writeFileSync(join(dir, "state.json"), JSON.stringify({ slice: initialCheck(), update: null, autoPending: null, autoRollbackPointer: null, autoRollbackCaptured: true }));
   const snapshot = (): Snapshot => ({
@@ -315,8 +322,9 @@ function checkoutAuto() {
         if (held) await held.opened;
         return { sessions: turnRunning ? [{ conversationId: "conversation_turn", host: "hosted", turn: "running" }] : [] };
       },
-      pipelines: () => [], presence: () => [], memoryAvailableMb: () => 8_192,
+      pipelines: () => { pipelineReads++; return []; }, presence: () => [], memoryAvailableMb: () => 8_192,
     },
+    ...(observedReads ? { observedReads } : {}),
     green: { read: async () => ({ state: "green" }) },
     targetOnBranch: async () => true, prune: async () => {}, findDeploymentByIdempotencyKey: async () => null,
     web: { pid: 101, port: 0, startedAt: "" }, processAlive: () => true, processIdentity: (pid: number) => pid === 102 ? "host" : null,
@@ -326,7 +334,7 @@ function checkoutAuto() {
   const service = new SelfUpdateService(deps);
   service.snapshot = async () => snapshot();
   const pending = () => (JSON.parse(readFileSync(join(dir, "state.json"), "utf8")) as { autoPending?: { role: string } | null }).autoPending ?? null;
-  return { dir, service, pending, reads: () => reads, setTurn: (running: boolean) => { turnRunning = running; },
+  return { dir, service, pending, reads: () => reads, pipelineReads: () => pipelineReads, setTurn: (running: boolean) => { turnRunning = running; },
     open: () => { const current = held; held = null; current?.open(); }, advance: (ms: number) => { now += ms; } };
 }
 
@@ -577,4 +585,161 @@ test("a new GET and a new SSE subscription arriving after the reading has begun 
     await server.stop(true);
     h.service.stop();
   }
+}, 60_000);
+
+/* One synchronous port cannot be split on one thread: while it reads, nothing
+   else on that thread answers. So the three synchronous reads of an observation
+   (the registry health, the pipelines, the flows) run in a process of their
+   own. Here that read holds its thread for 2,500 ms, and so would the same
+   read handed to the service as a port; callers from another process arrive
+   20 ms after it has entered. */
+test("a new GET and a new SSE subscription arriving inside a 2,500 ms synchronous registry read answer before it ends", async () => {
+  const READ_MS = 2_500;
+  const marker = join(mkdtempSync(join(root, "slow-reads-")), "marker");
+  let onThread = 0;
+  let offThread = 0;
+  const h = managed({
+    quiet: {
+      runtimeSnapshot: async () => ({ sessions: [] }) as never,
+      pipelines: () => {
+        onThread++;
+        appendFileSync(marker, `entered ${Date.now()}\n`);
+        blockFor(READ_MS);
+        appendFileSync(marker, `left ${Date.now()}\n`);
+        return [];
+      },
+    },
+    observedReads: () => {
+      offThread++;
+      return readWorkOffThread({ launch: { executable: process.execPath,
+        workerPath: join(import.meta.dir, "__fixtures__", "slowWorkReads.child.ts"), args: [marker, String(READ_MS)] } });
+    },
+  });
+  const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: (request) =>
+    new URL(request.url).pathname.endsWith("/events") ? getEvents(request) : getSnapshot(request) });
+  const client = Bun.spawn([process.execPath, "-e", `
+    const { existsSync } = require("node:fs");
+    const base = process.env.SELF_UPDATE_BASE;
+    const first = Date.now();
+    await (await fetch(base + "?readOnly=1")).json();
+    const triggerMs = Date.now() - first;
+    while (!existsSync(process.env.SELF_UPDATE_MARKER)) await Bun.sleep(2);
+    await Bun.sleep(20);
+    const sent = Date.now();
+    const get = fetch(base + "?readOnly=1").then(async (response) => ({ at: Date.now(), body: await response.json() }));
+    const sse = fetch(base + "/events?readOnly=1").then(async (response) => {
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let text = "";
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) throw new Error("stream ended");
+        text += decoder.decode(value, { stream: true });
+        const state = /event: state\\ndata: (.+)\\n\\n/.exec(text);
+        if (state) { const at = Date.now(); void reader.cancel(); return { at, body: JSON.parse(state[1]) }; }
+      }
+    });
+    const [answer, stream] = await Promise.all([get, sse]);
+    console.log(JSON.stringify({ triggerMs, sent, get: answer, sse: stream }));
+    process.exit(0);
+  `], { env: { PATH: process.env.PATH ?? "", HOME: root, TMPDIR: root, SELF_UPDATE_MARKER: marker,
+    SELF_UPDATE_BASE: `http://127.0.0.1:${server.port}/api/self-update` }, stdout: "pipe", stderr: "inherit" });
+  try {
+    const output = await new Response(client.stdout).text();
+    expect(await client.exited).toBe(0);
+    const { triggerMs, sent, get, sse } = JSON.parse(output) as { triggerMs: number; sent: number; get: { at: number; body: Snapshot }; sse: { at: number; body: Snapshot } };
+    await h.service.workSettled();
+    const marks = readFileSync(marker, "utf8").trim().split("\n").map((line) => line.split(" "));
+    // One read ran, and the callers came while it was inside.
+    expect(marks.map(([name]) => name)).toEqual(["entered", "left"]);
+    const [entered, left] = marks.map(([, at]) => Number(at));
+    expect(left - entered).toBeGreaterThanOrEqual(READ_MS - 50);
+    expect(sent).toBeGreaterThan(entered);
+    expect(triggerMs).toBeLessThan(500);
+    for (const answer of [get, sse]) {
+      expect(answer.at - sent).toBeLessThan(500);
+      expect(answer.at).toBeLessThan(left);
+      expect(answer.body).toMatchObject({ mode: "managed", installed: { sha: TARGET },
+        processes: { web: { pid: 4141 }, runtimeHost: { pid: 4242 } }, workEvidence: { state: "pending" } });
+    }
+    // The request thread never ran the read itself, and one job served all three callers.
+    expect(onThread).toBe(0);
+    expect(offThread).toBe(1);
+    const landed = await (await readOnly()).json() as Snapshot;
+    expect(landed).toMatchObject({ workEvidence: { state: "ready" }, resumeWork: { turns: 0, stages: 0, unreadable: null } });
+    expect(landed.workEvidence!.phases!.pipelinesMs).toBeGreaterThanOrEqual(READ_MS);
+  } finally {
+    client.kill();
+    await server.stop(true);
+    h.service.stop();
+  }
+}, 60_000);
+
+const emptyReads = (): ObservedReads => ({ registryHealth: { value: [], ms: 0 }, pipelines: { value: [], ms: 0 }, flows: { value: [], ms: 0 } });
+
+test("with the registry read off the request thread, the automatic path still reads its own registry afresh", async () => {
+  let offThread = 0;
+  const h = checkoutAuto(async () => { offThread++; return emptyReads(); });
+  try {
+    await h.service.observe();
+    h.open();
+    await h.service.workSettled();
+    expect(await h.service.observe()).toMatchObject({ workEvidence: { state: "ready" }, resumeWork: { turns: 0, stages: 0 } });
+    // The display took the registry from its reader and never from the ports.
+    expect(offThread).toBe(1);
+    expect(h.pipelineReads()).toBe(0);
+
+    // The drain asks the service's own ports, on the spot.
+    h.setTurn(true);
+    await h.service.autoTick();
+    expect(h.pipelineReads()).toBeGreaterThan(0);
+    expect(offThread).toBe(1);
+    h.advance(60_000);
+    await h.service.autoTick();
+    expect(h.pending()).toBeNull();
+  } finally { h.service.stop(); }
+});
+
+test("a registry reader that fails leaves the work unavailable with its reason, never zero", async () => {
+  const cases: [ServiceDeps["observedReads"], string][] = [
+    // The worker could not run at all.
+    [() => readWorkOffThread({ launch: { executable: process.execPath, workerPath: join(root, "no-such-worker.ts") } }), "the work reads worker exited with"],
+    // It ran past its bound and was stopped.
+    [() => readWorkOffThread({ timeoutMs: 150, launch: { executable: process.execPath,
+      workerPath: join(import.meta.dir, "__fixtures__", "slowWorkReads.child.ts"), args: [join(mkdtempSync(join(root, "late-")), "marker"), "5000"] } }),
+    "the work reads worker ran past 150 ms and was stopped"],
+    // It ran, and the registry itself could not be read: the probe's own answer for that.
+    [async () => ({ registryHealth: { error: "pipeline registry is corrupt", ms: 1 } }), "pipeline registry is corrupt"],
+    [async () => ({ registryHealth: { value: [], ms: 0 }, pipelines: { value: [], ms: 0 }, flows: { error: "flow state is busy", ms: 1 } }), "flow state is busy"],
+  ];
+  for (const [observedReads, reason] of cases) {
+    let onThread = 0;
+    const h = managed({ observedReads, quiet: { runtimeSnapshot: async () => ({ sessions: [] }) as never,
+      pipelines: () => { onThread++; return []; }, flows: () => { onThread++; return []; }, registryHealth: () => { onThread++; return []; } } });
+    expect(await (await readOnly()).json()).toMatchObject({ installed: { sha: TARGET }, workEvidence: { state: "pending" } });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await h.service.workSettled();
+    const snapshot = await (await readOnly()).json() as Snapshot;
+    expect(snapshot.workEvidence?.state).toBe("unavailable");
+    expect(snapshot.workEvidence?.error).toContain(reason);
+    expect(snapshot.resumeWork).toBeUndefined();
+    expect(onThread).toBe(0);
+    h.service.stop();
+  }
+});
+
+test("the worker answers what the Viewer's own readers answer, from the same isolated state", async () => {
+  const at = "2026-01-01T00:00:00.000Z";
+  saveFlows([{ id: "flow_worker_reads", template: "implement-review-loop", project: "fixture", cwd: root, implementerPath: join(root, "implementer.jsonl"),
+    implementerConversationId: "conversation_implementer",
+    roles: { implementer: { engine: "codex", model: null, effort: null }, reviewer: { engine: "codex", model: null, effort: null } },
+    baseRef: "a".repeat(40), baseMode: "head", mode: "auto", reviewerMode: "headless", roundLimit: 3, state: "done", stateDetail: null,
+    createdAt: at, closedAt: at, rounds: [{ n: 1, reviewerPath: join(root, "reviewer.jsonl"), reviewerConversationId: "conversation_reviewer", findingsPath: null,
+      triggeredBy: "button", readyNote: null, verdict: "APPROVE", findingsCount: null, startedAt: at, error: null }] } as unknown as Flow]);
+  const plain = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+  const reads = await readWorkOffThread();
+  expect(reads.flows).toMatchObject({ value: plain(loadFlows()) });
+  expect((reads.flows as { value: readonly Flow[] }).value.map((flow) => flow.id)).toContain("flow_worker_reads");
+  expect(reads.pipelines).toMatchObject({ value: plain(loadPipelinesForList()) });
+  expect(reads.registryHealth).toMatchObject({ value: plain(pipelineRegistryHealth()) });
 }, 60_000);

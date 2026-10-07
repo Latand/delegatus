@@ -15,6 +15,9 @@
      probe's own rules. The same ports give the event loop back between the
      probe's steps, so a reading that takes seconds never holds up another
      caller's answer.
+   - The probe's three synchronous reads (the registry health, the pipelines,
+     the flows) cannot be split on one thread, so an observation takes them
+     from a worker process (`workReads.ts`) and replays them to the probe.
 
    What this module holds is for display only. A mutation (update admission,
    generation fencing, active-turn protection, the drain) calls `probeQuiet`
@@ -25,6 +28,7 @@ import type { Pipeline } from "@/lib/pipelines/types";
 
 import { probeQuiet, type QuietBlockers, type QuietPorts } from "./quiet";
 import type { ResumeWork, Snapshot, WorkEvidence, WorkPhases } from "./types";
+import type { ObservedReads, WorkRead } from "./workReads";
 
 /** A landed reading is shown again, without a new probe, for this long. */
 export const WORK_EVIDENCE_REUSE_MS = 5_000;
@@ -101,13 +105,18 @@ const nextTurn = () => new Promise<void>((resolve) => { setImmediate(resolve); }
  * The probe runs on the Viewer's own event loop, and most of its steps answer
  * from promises that are already settled, so nothing else would run until it
  * ends. Before each awaited port the wrapper gives the loop back once the
- * reading has run `sliceMs` since it last did, and `begin` reads the
- * synchronous ports the probe calls back to back (the registry health, the
- * pipelines, the flows) one per turn, ahead of it. A single synchronous port
- * still holds the loop for as long as it takes; nothing on one thread can
- * split it.
+ * reading has run `sliceMs` since it last did.
+ *
+ * The synchronous ports the probe calls back to back (the registry health, the
+ * pipelines, the flows) are read ahead of it by `begin`. A single synchronous
+ * port holds the loop for as long as it takes and nothing on one thread can
+ * split it, so with `reads` they are not called here at all: the three answers
+ * come from a worker process and the loop stays free while it reads. Without
+ * `reads` (a caller that hands its own ports and nothing else) they run here,
+ * one per turn.
  */
-export function instrumentQuietPorts(ports: QuietPorts, clock: () => number = () => performance.now(), sliceMs = WORK_EVIDENCE_SLICE_MS): {
+export function instrumentQuietPorts(ports: QuietPorts, clock: () => number = () => performance.now(), sliceMs = WORK_EVIDENCE_SLICE_MS,
+  reads?: () => Promise<ObservedReads>): {
   ports: QuietPorts;
   begin(): Promise<void>;
   finish(totalMs: number): WorkPhases;
@@ -172,10 +181,36 @@ export function instrumentQuietPorts(ports: QuietPorts, clock: () => number = ()
       },
     } : {}),
   };
+  /* What the worker read, held for the probe. Returns false at the read that
+     failed: the probe stops there, and so does the replay. */
+  const holdRead = (key: keyof Recorder["held"], bucket: keyof Recorder["ms"], answer: WorkRead<unknown> | undefined): boolean => {
+    if (!answer) return false;
+    recorder.ms[bucket] += answer.ms;
+    recorder.held[key] = "error" in answer ? { error: new Error(answer.error) } : { value: answer.value };
+    return !("error" in answer);
+  };
+  const beginOffThread = async (read: () => Promise<ObservedReads>) => {
+    const started = clock();
+    const answer = await read();
+    const waited = clock() - started;
+    if (holdRead("registryHealth", "pipelinesMs", answer.registryHealth) && holdRead("pipelines", "pipelinesMs", answer.pipelines)) {
+      holdRead("flows", "flowsMs", answer.flows);
+    }
+    if (answer.pipelines && "value" in answer.pipelines) recorder.pipelines = answer.pipelines.value;
+    if (answer.flows && "value" in answer.flows) recorder.flows = answer.flows.value;
+    // The rest of the wait (the worker starting, its answer crossing) left the loop free.
+    const reading = answer.registryHealth.ms + (answer.pipelines?.ms ?? 0) + (answer.flows?.ms ?? 0);
+    recorder.ms.yieldedMs += Math.max(0, waited - reading);
+  };
   return {
     ports: wrapped,
     begin: async () => {
       recorder = newRecorder();
+      if (reads) {
+        await beginOffThread(reads);
+        sliceFrom = clock();
+        return;
+      }
       for (const [key, read] of [["registryHealth", readRegistryHealth], ["pipelines", readPipelines], ["flows", readFlows]] as const) {
         const started = clock();
         await nextTurn();
@@ -241,8 +276,9 @@ export class ObservedWork {
     private readonly landed: () => void,
     private readonly reuseMs = WORK_EVIDENCE_REUSE_MS,
     private readonly clock: () => number = () => performance.now(),
+    reads?: () => Promise<ObservedReads>,
   ) {
-    this.instrumented = instrumentQuietPorts(ports, clock);
+    this.instrumented = instrumentQuietPorts(ports, clock, WORK_EVIDENCE_SLICE_MS, reads);
   }
 
   observe(snapshot: Snapshot): { evidence: WorkEvidence; resumeWork?: ResumeWork } {
