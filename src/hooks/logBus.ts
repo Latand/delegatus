@@ -93,6 +93,10 @@ async function pollTick(): Promise<void> {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ reqs }),
         });
+        /* The route answers every read with 200; anything else (an access
+           refusal, the update handoff, a crash) carries no chunk, and a feed
+           with no rows would wait in its loading state forever. */
+        if (!res.ok) throw new Error(`/api/logs answered ${res.status}`);
         const json = (await res.json()) as { chunks?: Record<string, LogBusResult> };
         chunks = json.chunks ?? {};
       } catch {

@@ -133,6 +133,16 @@ describe("a stream that fails", () => {
     expect(heard).toEqual([{ transportError: true }]);
   });
 
+  test("before it opens, with the polled route refusing, reports the transport error once", async () => {
+    globalThis.fetch = (async () => Response.json({ error: "access denied: key required" }, { status: 403 })) as unknown as typeof fetch;
+    listen();
+    jest.advanceTimersByTime(40);
+    FakeEventSource.last!.onerror!();
+    jest.advanceTimersByTime(0);
+    await settle();
+    expect(heard).toEqual([{ transportError: true }]);
+  });
+
   test("after it opened reports the transport error at once", () => {
     globalThis.fetch = (async () => Response.json({ chunks: { 0: CHUNK } })) as unknown as typeof fetch;
     listen();
