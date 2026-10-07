@@ -174,6 +174,8 @@ function startSse(): void {
   const url = `/api/logs/stream?subs=${encodeURIComponent(JSON.stringify(reqs))}`;
   const nextSource = new EventSource(url);
   source = nextSource;
+  let opened = false;
+  nextSource.addEventListener("open", () => { opened = true; });
 
   nextSource.addEventListener("chunk", (event) => {
     if (generation !== sseGeneration || nextSource !== source) return;
@@ -187,9 +189,12 @@ function startSse(): void {
     deliverStreamChunk(payload.id, payload.chunk as LogTailStreamResult);
   });
 
+  /* A stream that never opened has told the feeds nothing yet: the polled
+     route answers at once, and its own failure is what they hear. A feed
+     with no rows would otherwise draw the error for the frame before. */
   nextSource.onerror = () => {
     if (generation !== sseGeneration || nextSource !== source) return;
-    notifyTransportError();
+    if (opened) notifyTransportError();
     startFallback();
   };
 }

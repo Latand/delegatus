@@ -12297,8 +12297,12 @@ describe("column dwell smooth", () => {
           if (motion === "reduce") expect(measurement.animationFrames).toBe(0);
           else if (judgeTiming) expect(measurement.animationFrames).toBeGreaterThan(5);
           const firstWide = measurement.samples.find((sample) => sample.wide === "1")!;
-          /* Never before the second is up; on time where the host keeps time. */
-          expect(firstWide.at - measurement.marks[0]!.at).toBeGreaterThanOrEqual(990);
+          const widened = measurement.marks.find((mark) => mark.name === "commit")!;
+          /* Never before the second is up, read when the column takes the
+             change: a frame's timestamp is its start, which a busy main thread
+             leaves behind a timer that ran inside it. On time where the host
+             keeps time. */
+          expect(widened.at - measurement.marks[0]!.at).toBeGreaterThanOrEqual(990);
           if (judgeTiming) expect(firstWide.at - measurement.marks[0]!.at).toBeLessThan(1100);
           expect(pageErrors).toEqual([]);
         } finally { await cdp.detach(); await context.close(); }
