@@ -1051,6 +1051,31 @@ What the build settled, 2026-10-07:
 - **Existing cases.** Every case of the five mapped files passes with its
   expectations unchanged.
 
+What a correctness pass against the build settled, 2026-10-07:
+
+- **The nudge keeps each pass's "no cut".** A row decided "no cut" by any
+  row of the table other than 12 joins the set the generic Codex nudge never
+  answers, for that pass. Before, a Codex turn its host closed, with the
+  rollout still ending mid-tool, was told to continue on every boot.
+- **B reads the turn as the agent's records and its host leave it.** The turn
+  axis B is gated on is projected after the exit bookkeeping is removed, and a
+  host's own close of the turn counts as its end. A shutdown marker after a
+  turn that ended waiting on background work had hidden that work.
+- **The hold is enforced where recovery mutates.**
+  `recoverDeadStructuredConversation` refuses a held row before it looks for
+  a live host and again under the row's operation lock, with the same
+  held-recovery error the queue already keeps a message queued on, so a direct
+  send, a retry or a control cannot retire or replace the predecessor. The
+  queue's own callback still answers first, since recovery returns nothing on
+  a non-structured transport. The reaper's dead-wrapper cleanup retains held
+  rows by default.
+- **The ledger read checks its sequence.** Every record the read passes,
+  skipped deltas included (their `seq` is read from the record's closing
+  `"seq":N}`), must carry the sequence one below the record after it and be a
+  valid event. A gap, a repeat or an invalid event is `unreadable`, as
+  `FileRuntimeEventStore.load` refuses the same file: the missing record could
+  be the turn's end.
+
 No question for the operator remains: the code, read-only counts over this
 machine's own ledgers and transcripts, three scratch runs of the existing
 suites and two scratch probes against the unchanged helpers settled every fact

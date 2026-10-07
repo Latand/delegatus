@@ -16,6 +16,7 @@ import {
   readTranscriptEvidence,
   resetHostCpuProgressForTests,
   restartCutDecision,
+  transcriptCutEvidenceFromRecords,
   transcriptEvidenceFromRecords,
   type RestartCutInput,
   type TurnLivenessEvidence,
@@ -673,4 +674,21 @@ test("the slice is found by identity, or the row is left undelimited", () => {
   expect(engineRecordSince("codex", ledgerOf({ turnId: "T" }), tailOf([codex("function_call", { call_id: "c1", turn_id: "T" })], true))).toBe("open");
   expect(engineRecordSince("codex", ledgerOf({ turnId: "T" }), tailOf([codex("function_call", { call_id: "c1", turn_id: "T" })]))).toBe("undelimited");
   expect(engineRecordSince("claude", ledgerOf({ turnId: "T" }), { integrity: "uncertain", records: [] })).toBe("unreadable");
+});
+
+test.each([
+  { after: "nothing", records: [] },
+  { after: "a shutdown marker", records: [{ type: "user", timestamp: "2026-10-07T00:00:09.000Z", interruptedByShutdown: true, message: { role: "user", content: "[Request interrupted by user]" } }] },
+  { after: "a meta prompt and a synthetic no-op", records: [
+    { type: "user", timestamp: "2026-10-07T00:00:09.000Z", isMeta: true, message: { role: "user", content: "Continue." } },
+    { type: "assistant", timestamp: "2026-10-07T00:00:10.000Z", message: { model: "<synthetic>", content: [{ type: "text", text: "No response requested." }] } },
+  ] },
+])("a Claude turn the agent's own records ended stays ended after $after", ({ records }) => {
+  const ended = [
+    { type: "user", timestamp: "2026-10-07T00:00:00.000Z", message: { role: "user", content: "run the gate" } },
+    { type: "assistant", timestamp: "2026-10-07T00:00:01.000Z", message: { model: "claude", stop_reason: "end_turn", content: [{ type: "text", text: "Waiting." }] } },
+  ];
+  expect(transcriptCutEvidenceFromRecords([...ended, ...records], "claude")).toEqual({
+    verified: true, turn: "terminal", lastWork: { at: Date.parse("2026-10-07T00:00:01.000Z"), kind: expect.anything() },
+  });
 });

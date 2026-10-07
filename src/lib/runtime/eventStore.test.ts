@@ -462,6 +462,33 @@ test("the host turn record ignores a torn final line and refuses a malformed com
   expect(readHostTurnRecord("session", { directory: malformed.directory }).state).toBe("unreadable");
 });
 
+test.each([
+  { shape: "a gap where the turn's end could be", seqs: [1, 3], events: [{ kind: "turn-started", turnId: "T1" }, { kind: "session-status", status: "idle" }] },
+  { shape: "a repeated sequence", seqs: [1, 2, 2], events: [{ kind: "turn-started", turnId: "T1" }, { kind: "session-status", status: "idle" }, { kind: "session-status", status: "idle" }] },
+  { shape: "a gap among the skipped deltas", seqs: [1, 2, 4, 5], events: [{ kind: "turn-started", turnId: "T1" }, { kind: "delta", turnId: "T1", text: "a" }, { kind: "delta", turnId: "T1", text: "\"seq\":3}" }, { kind: "session-status", status: "idle" }] },
+  { shape: "an invalid event", seqs: [1, 2], events: [{ kind: "turn-started", turnId: "T1" }, { kind: "session-status", status: "asleep" }] },
+  { shape: "a record with no sequence", seqs: [1, null], events: [{ kind: "turn-started", turnId: "T1" }, { kind: "session-status", status: "idle" }] },
+] as const)("a host turn record holding $shape is unreadable, as the store's own load refuses it", ({ seqs, events }) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-host-turn-record-"));
+  const filename = path.join(directory, "session.jsonl");
+  fs.writeFileSync(filename, events.map((event, index) =>
+    `${JSON.stringify(seqs[index] === null ? event : { ...event, seq: seqs[index] })}\n`).join(""));
+  expect(readHostTurnRecord("session", { directory }).state).toBe("unreadable");
+  expect(() => new FileRuntimeEventStore(directory).load("session")).toThrow();
+  /* Repaired, the same file decides. */
+  fs.writeFileSync(filename, events.slice(0, 1).map((event) => `${JSON.stringify({ ...event, seq: 1 })}\n`).join(""));
+  expect(readHostTurnRecord("session", { directory })).toMatchObject({ state: "read", turn: { turnId: "T1", closed: null } });
+});
+
+test("a host turn record checks the sequence of the deltas it skips by their header alone", () => {
+  const { directory } = turnLedger([
+    { kind: "turn-started", turnId: "T1" },
+    { kind: "delta", turnId: "T1", text: "quoted \"seq\":99} inside" },
+    { kind: "delta", turnId: "T1", text: "more" },
+  ]);
+  expect(readHostTurnRecord("session", { directory })).toMatchObject({ state: "read", turn: { turnId: "T1", closed: null } });
+});
+
 test("a host turn record whose file was appended to or replaced between the read and the stat is unreadable", () => {
   const appended = turnLedger([
     { kind: "turn-started", turnId: "T1" },

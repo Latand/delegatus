@@ -324,6 +324,10 @@ const HOST_TURN_RECORD_STEP_BYTES = 1024 * 1024;
     between it and the boundary. */
 const HOST_TURN_RECORD_FRAMES_BEFORE = 256;
 const DELTA_RECORD_PREFIX = '{"kind":"delta"';
+/** A delta's sequence, read from its header without parsing its text: a host
+    writes `seq` last, and an unescaped `"seq":N}` closing the line can only be
+    that top-level key. */
+const DELTA_RECORD_SEQ = /"seq":(\d+)\}$/;
 
 function hostLedgerFilename(threadId: string, directory: string): string {
   return path.join(directory, `${encodeURIComponent(threadId)}.jsonl`);
@@ -383,8 +387,28 @@ export function readHostTurnRecord(
     const olderFrames: HostTurnFrame[] = [];
     let started: string | null = null;
     let malformed: string | null = null;
+    /* Every record read, skipped deltas included, carries the sequence one
+       below the record after it. A gap or a repeat means a record is missing
+       or doubled, and the missing one could be the turn's end. */
+    let expectedSeq: number | null = null;
+    const sequenced = (seq: unknown): boolean => {
+      if (!Number.isSafeInteger(seq) || (seq as number) <= 0 || (expectedSeq !== null && seq !== expectedSeq)) {
+        malformed = expectedSeq === null
+          ? "the host ledger holds a record with no sequence"
+          : `the host ledger's sequence breaks before ${expectedSeq + 1}`;
+        return false;
+      }
+      expectedSeq = (seq as number) - 1;
+      return true;
+    };
     const visit = (line: string): void => {
-      if (line.startsWith(DELTA_RECORD_PREFIX)) return;
+      if (line.startsWith(DELTA_RECORD_PREFIX)) {
+        const header = DELTA_RECORD_SEQ.exec(line);
+        if (header) {
+          sequenced(Number(header[1]));
+          return;
+        }
+      }
       let event: Record<string, unknown> | null = null;
       try {
         const parsed = JSON.parse(line) as unknown;
@@ -394,6 +418,11 @@ export function readHostTurnRecord(
         malformed = "the host ledger holds a record that is not JSON";
         return;
       }
+      if (!validEvent(event)) {
+        malformed = "the host ledger holds an invalid event";
+        return;
+      }
+      if (!sequenced(event.seq) || event.kind === "delta") return;
       if (event.kind === "item") {
         const item = event.item as Record<string, unknown> | null;
         if (!item || typeof item !== "object" || typeof item.uuid !== "string") return;

@@ -375,6 +375,8 @@ export interface TranscriptCutEvidence {
       corrupt, truncated mid-record, or growing under the read. Nothing may be
       claimed from it. A file that does not exist yet is verified and empty. */
   verified: boolean;
+  /** The turn as the agent's own records leave it: the exit bookkeeping a
+      shutdown appends neither opens nor closes it. */
   turn: TranscriptLivenessEvidence["turn"];
   /** The newest record of the agent's work, or null when it wrote none. */
   lastWork: { at: number; kind: TranscriptEventKind | null } | null;
@@ -393,7 +395,7 @@ export function transcriptCutEvidenceFromRecords(
     verified: true,
     turn: engine === "claude" && claudeTurnClosedByProviderFailure(records)
       ? "terminal"
-      : transcriptEvidenceFromRecords(records, engine, null).turn,
+      : transcriptEvidenceFromRecords(withoutExitBookkeeping(records, engine === "codex"), engine, null).turn,
     lastWork: work?.lastEventAt != null ? { at: work.lastEventAt, kind: work.kind } : null,
   };
 }
@@ -412,14 +414,17 @@ export async function readTranscriptCutEvidence(
 
 /** The harness background work a Claude turn that has ended still waits on,
     named for its continuation. The work is a child of the engine process, so
-    whatever ends that process ends the work and its completion notice. */
+    whatever ends that process ends the work and its completion notice. The
+    turn ended when its host closed it, or when the agent's own records end
+    it; a shutdown marker after them changes neither. */
 export async function backgroundWorkAwaitedAtCut(
   engine: "claude" | "codex",
   transcriptPath: string,
   evidence: TranscriptCutEvidence,
   now: number,
+  hostClosedTurn = false,
 ): Promise<string[]> {
-  if (engine !== "claude" || evidence.turn !== "terminal" || !evidence.lastWork
+  if (engine !== "claude" || (evidence.turn !== "terminal" && !hostClosedTurn) || !evidence.lastWork
     || now - evidence.lastWork.at > BACKGROUND_TASK_WAIT_LIMIT_MS) return [];
   return pendingBackgroundTaskNames(transcriptPath, now);
 }

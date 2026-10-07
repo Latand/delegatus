@@ -43,7 +43,7 @@ import { delegatusOriginForRecipient } from "./agentMessageAuthor";
 import { claudeHostLaunchPaths, materializeStructuredHostAccess, recoverPendingStructuredSpawns, structuredHostAccessPolicy } from "./structuredSpawn";
 import { backgroundWorkAwaitedAtCut, conversationTurnLiveness, engineRecordSince, hostTurnReading, readTranscriptEvidence, restartCutDecision, transcriptCutEvidenceFromRecords, transcriptEvidenceFromRecords, type TranscriptEventKind, type TurnLivenessDependencies } from "./liveness";
 import { hostTurnRecordIdentity, readHostTurnRecord } from "./eventStore";
-import { holdRestartCutRow, setRestartCutHeldRows } from "./restartCutHold";
+import { holdRestartCutRow, releaseRestartCutRow, setRestartCutHeldRows } from "./restartCutHold";
 import { markStructuredHostStartupProgress, type StructuredHostStartupPhase } from "./startupStatus";
 import { startupDiagnostic } from "../startupDiagnostics";
 import { launchServiceTier } from "./codexTurnProfile";
@@ -433,6 +433,10 @@ interface RestartCutRecognition {
   cuts: RestartCutTarget[];
   /** Rows whose evidence could not be decided: held, re-probed, never recorded. */
   undecided: Set<string>;
+  /** Rows decided "no cut" from durable evidence that the turn ended: no
+      continuation answers them, the generic Codex nudge included. A "no cut"
+      on an uncorroborated turn word (row 12) is left to the nudge. */
+  settled: Set<string>;
   /** The evidence each row was decided "no cut" from, or not asked for its
       age: compared wherever this pass would replace the predecessor's
       ownership of the row. */
@@ -486,7 +490,7 @@ async function restartCutTargets(
      or that continuation's turn. One that already arrived was settled before
      this capture and covers nothing. This only postpones the question. */
   const postponed = new Set(unresolved.map((obligation) => registry.canonicalConversationId(obligation.conversationId)));
-  const recognition: RestartCutRecognition = { cuts: [], undecided: new Set(), stamps: new Map() };
+  const recognition: RestartCutRecognition = { cuts: [], undecided: new Set(), settled: new Set(), stamps: new Map() };
   const self = captureProcessIdentity(process.pid);
   for (const conversation of Object.values(snapshot.conversations)) {
     const generation = conversation.generations.at(-1);
@@ -532,10 +536,13 @@ async function restartCutTargets(
       continue;
     }
     const stage = interruptionStageOf(snapshot.memberships, conversationId);
-    const backgroundTasks = evidence ? await backgroundWorkAwaitedAtCut(conversation.engine, generation.path, evidence, now) : [];
+    const host = hostTurnReading(ledger);
+    const backgroundTasks = evidence
+      ? await backgroundWorkAwaitedAtCut(conversation.engine, generation.path, evidence, now, host.state === "closed")
+      : [];
     const turnWord = live ? entry.structuredHost.activeTurnRef ?? null : null;
     const decided = restartCutDecision({
-      host: hostTurnReading(ledger),
+      host,
       record: engineRecordSince(conversation.engine, ledger, tail),
       row: { status: live ? "live" : "idle", turnRef: turnWord, neverObserved: conversation.turn.source === "empty" },
       stage: stage !== null,
@@ -548,6 +555,7 @@ async function restartCutTargets(
     }
     if (decided.decision === "no-cut") {
       recognition.stamps.set(hostKey, stamp);
+      if (decided.row !== 12) recognition.settled.add(hostKey);
       continue;
     }
     const memberships = snapshot.memberships[conversationId] ?? [];
@@ -878,18 +886,20 @@ function assertEligibleHostsResolved(
 
 /**
  * The host rows the generic Codex nudge below never answers: a row this pass
- * decided cut or could not decide, a row this process has found cut, and a
- * pipeline stage, whose cuts are its controller's. The nudge is keyed by the
- * claim, which every boot and every generation renews, so it would answer
- * such a cut once more on each of them.
+ * decided cut, could not decide or found ended by itself, a row this process
+ * has found cut, and a pipeline stage, whose cuts are its controller's. The
+ * nudge is keyed by the claim, which every boot and every generation renews,
+ * so it would answer such a cut once more on each of them, and it would
+ * resume a turn its host saw complete or interrupted.
  */
 function rowsTheNudgeNeverAnswers(
   registry: AgentRegistry,
   held: ReadonlySet<string>,
   found: ReadonlySet<string>,
+  settled: ReadonlySet<string>,
 ): Set<string> {
   const snapshot = registry.readOnlySnapshot();
-  const answered = new Set([...held, ...found]);
+  const answered = new Set([...held, ...found, ...settled]);
   for (const conversation of Object.values(snapshot.conversations)) {
     const generation = conversation.generations.at(-1);
     if (generation && interruptionStageOf(snapshot.memberships, registry.canonicalConversationId(conversation.id))) {
@@ -1594,6 +1604,9 @@ async function adoptStructuredHostsPass(
   /* Rows whose evidence is undecided, or moved after it was decided: left
      exactly as they were, and asked again by the deferral re-probe. */
   const heldHostKeys = new Set(recognition.undecided);
+  for (const key of [...recognition.stamps.keys(), ...recognition.cuts.map((cut) => cut.hostKey)]) {
+    if (!heldHostKeys.has(key)) releaseRestartCutRow(key);
+  }
   /* A queued message's on-demand recovery waits for these rows as well, until
      the re-probe decides them or reaches its cap. */
   if (!admitHeldPendingWork) for (const key of heldHostKeys) holdRestartCutRow(key);
@@ -1909,7 +1922,7 @@ async function adoptStructuredHostsPass(
       || unreadableTranscripts.has(sessionKeyId(entry.key))
       || evidenceMoved(entry)
       || shouldAdopt(entry);
-    const neverNudged = rowsTheNudgeNeverAnswers(registry, heldHostKeys, cutHostKeys);
+    const neverNudged = rowsTheNudgeNeverAnswers(registry, heldHostKeys, cutHostKeys, recognition.settled);
     const candidateCodexHosts = nextAdoptedHosts.filter(
       (item): item is AdoptedCodexHost => item.key.engine === "codex"
         && !orchestratorHostKeys.has(sessionKeyId(item.key))

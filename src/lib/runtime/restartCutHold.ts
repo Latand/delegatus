@@ -19,6 +19,11 @@ export function holdRestartCutRow(hostKey: string): void {
   heldHostKeys().add(hostKey);
 }
 
+/** A pass decided the row: nothing holds it any more. */
+export function releaseRestartCutRow(hostKey: string): void {
+  heldHostKeys().delete(hostKey);
+}
+
 /** Replaces the held set with what a completed pass still holds. */
 export function setRestartCutHeldRows(hostKeys: Iterable<string>): void {
   shared.__llvRestartCutHeldHostKeys = new Set(hostKeys);

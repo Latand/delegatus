@@ -16,6 +16,7 @@ import type { MessageOrigin } from "./messageOrigin";
 import { accountPark, type AccountPark } from "./accountPark";
 import { runtimeHostClient, type RuntimeHostClient } from "./client";
 import { reconcileDeadStructuredRegistryHost } from "./registry";
+import { restartCutEvidenceHolds } from "./restartCutHold";
 import { StructuredRecoveryContendedError } from "./structuredRecoveryContention";
 import { stagedLaunchRecovery } from "./stagedRecovery";
 import {
@@ -40,6 +41,15 @@ export class StructuredRecoveryHeldForUpdateError extends Error {
   constructor(message = "new autonomous recovery is held for the automatic update") {
     super(message);
     this.name = "StructuredRecoveryHeldForUpdateError";
+  }
+}
+
+/** Startup holds a predecessor's row until its restart cut evidence is decided
+    (docs/design/restart-cut-recognition.md): nothing retires or replaces it
+    before then, whoever asks. The caller keeps its message queued. */
+function assertRestartCutEvidenceDecided(key: SessionKey): void {
+  if (restartCutEvidenceHolds(sessionKeyId(key))) {
+    throw new StructuredRecoveryHeldForUpdateError("recovery is held until the conversation's restart cut evidence is decided");
   }
 }
 
@@ -355,6 +365,8 @@ async function recoverCandidate(
   const owner = (dependencies.processIdentity ?? (() => captureProcessIdentity(process.pid)))();
   return registry.withOperationLock(candidate.key, owner, async () => {
     await assertOwnership();
+    /* Again under the lock: a startup pass may have held the row meanwhile. */
+    assertRestartCutEvidenceDecided(candidate.key);
     const park = dependencies.park ?? defaultParkResolver;
     let current = candidateFor(registry, request, Boolean(ownership), park);
     if (!current) return null;
@@ -484,6 +496,7 @@ export async function recoverDeadStructuredConversation(
     dependencies.park ?? defaultParkResolver,
   );
   if (!candidate) return null;
+  assertRestartCutEvidenceDecided(candidate.key);
   const recoveryKey = dependencies.ownership
     ? `${registry.filename}:${candidate.conversationId}:${dependencies.ownership.operationId}:${dependencies.ownership.revision}`
     : `${registry.filename}:${candidate.conversationId}:${request.operationId ?? "operator"}`;

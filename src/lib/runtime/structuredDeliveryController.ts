@@ -1094,7 +1094,9 @@ export async function bindStructuredDeliveryQueue(
       const generation = conversation?.generations.at(-1);
       if (!conversation || !generation) return false;
       /* Startup holds this row until its restart cut evidence is decided:
-         the message stays queued and recovery is asked again. */
+         the message stays queued and recovery is asked again. Recovery
+         refuses the row itself for every other caller; this answers the
+         queue before a transport or a candidate is even looked up. */
       if (restartCutEvidenceHolds(sessionKeyId({ engine: conversation.engine, sessionId: generation.id }))) {
         throw new (await import("./structuredRecovery")).StructuredRecoveryHeldForUpdateError(
           "recovery is held until the conversation's restart cut evidence is decided",
@@ -2058,9 +2060,10 @@ async function idleHostCut(registry: AgentRegistry, key: SessionKey): Promise<{ 
     return nothing;
   }
   const evidence = transcriptCutEvidenceFromRecords(tail.records, "claude");
+  const hostClosedTurn = hostTurnReading(ledger).state === "closed";
   return {
-    backgroundTasks: await backgroundWorkAwaitedAtCut("claude", transcriptPath, evidence, Date.now()),
-    selfStartedWork: hostTurnReading(ledger).state === "closed" && engineRecordSince("claude", ledger, tail) === "open",
+    backgroundTasks: await backgroundWorkAwaitedAtCut("claude", transcriptPath, evidence, Date.now(), hostClosedTurn),
+    selfStartedWork: hostClosedTurn && engineRecordSince("claude", ledger, tail) === "open",
   };
 }
 

@@ -9,6 +9,7 @@ import { AgentRegistry, setAgentRegistryForTests, type ProcessIdentity } from "@
 import type { OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { procBackend } from "@/lib/proc";
 import { captureProcessIdentity } from "@/lib/processIdentity";
+import { statePath } from "@/lib/configDir";
 import { completeViewerReleaseDemotion } from "@/lib/viewerInstrumentation";
 import { defaultPipelinePorts } from "@/lib/pipelines/engine";
 import { RuntimeJournal } from "@/runtime-host/journal";
@@ -19,6 +20,8 @@ import { durableRuntimeEventTailSeq, FileRuntimeEventStore, readHostTurnRecord }
 import { createFakeDeliveryLedger, FakeEngineHost, type FakeDeliveryLedger } from "./fixtures/fakeEngineHost";
 import type { StructuredHostAdoptionFilter } from "./registry";
 import { interruptionObligationDirectory, interruptionObligationStore } from "./interruptionObligations";
+import { INTERRUPTED_CODEX_CONTINUATION_TEXT } from "./recoveryNotices";
+import { recoverDeadStructuredConversation, StructuredRecoveryHeldForUpdateError } from "./structuredRecovery";
 import {
   adoptStructuredHostsAtStartup,
   releaseStructuredHostsForViewerDemotion,
@@ -2331,5 +2334,135 @@ test("a late echo of the turn a witness names leaves one record that follows the
   }).finally(async () => {
     if (engineProcess.exitCode === null) engineProcess.kill();
     await engineProcess.exited;
+  });
+});
+
+test.each(["completed", "interrupted"] as const)("a Codex turn its host closed %s gets neither a restart record nor the generic nudge before the transcript echoes the close", async (status) => {
+  await withJournal(async (journal) => {
+    /* The rollout still ends mid-tool: the CLI had not written the close yet. */
+    const cut = incumbentConversation("codex", cutSessionId(77), deadEngine(2_000_001_177), codexTurnRollout(CUT_TURN));
+    appendHostLedger(cut, [turnStarted(CUT_TURN), turnEnded(CUT_TURN, status)]);
+    const ledger = createFakeDeliveryLedger();
+    for (const index of [1, 2]) {
+      if (index > 1 && !restateHosted(cut, "live", CUT_TURN)) break;
+      expect((await successorBoot(cut.registryFile, journal, ledger, { viewer: OTHER_VIEWER(160 + index) })).error).toBeNull();
+      await settle(() => ledger.writes.length > 0);
+    }
+    expect(continuationsIn(ledger)).not.toContain(INTERRUPTED_CODEX_CONTINUATION_TEXT);
+    expect(continuationsIn(ledger)).toEqual([]);
+    expect(obligationsFor(cut.registryFile)).toEqual([]);
+  });
+});
+
+test.each([
+  { bookkeeping: "a shutdown marker", member: "agent", withLedger: true },
+  { bookkeeping: "a shutdown marker", member: "stage", withLedger: true },
+  { bookkeeping: "a shutdown marker", member: "agent", withLedger: false },
+  { bookkeeping: "a meta prompt and a synthetic no-op", member: "agent", withLedger: true },
+  { bookkeeping: "nothing", member: "agent", withLedger: true },
+] as const)("background work a Claude $member's ended turn waits on is recorded and named after $bookkeeping (host ledger: $withLedger)", async ({ bookkeeping, member, withLedger }) => {
+  await withJournal(async (journal) => {
+    const ended = endedWaitingOnBackground();
+    const cut = incumbentConversation("claude", cutSessionId(78), deadEngine(2_000_001_178), ended.records);
+    if (member === "stage") asPipelineStage(cut);
+    const at = new Date(Date.now() - 20_000).toISOString();
+    appendTranscript(cut, bookkeeping === "a shutdown marker"
+      ? [{ type: "user", uuid: "shutdown", timestamp: at, interruptedByShutdown: true, message: { role: "user", content: "[Request interrupted by user]" } }]
+      : bookkeeping === "nothing" ? []
+        : [
+          { type: "user", uuid: "meta", timestamp: at, isMeta: true, message: { role: "user", content: "Continue from where you left off." } },
+          { type: "assistant", uuid: "no-op", timestamp: at, message: { model: "<synthetic>", content: [{ type: "text", text: "No response requested." }] } },
+        ]);
+    if (withLedger) appendHostLedger(cut, ended.ledger);
+    markHosted(cut, "idle");
+    const ledger = createFakeDeliveryLedger();
+    for (const index of [1, 2, 3]) {
+      if (index > 1 && !restateHosted(cut, "idle")) break;
+      expect((await successorBoot(cut.registryFile, journal, ledger, { viewer: OTHER_VIEWER(170 + index) })).error).toBeNull();
+      await settle(() => ledger.writes.length > 0, index === 1 && member === "agent" ? 400 : 150);
+    }
+    expect(structuredStartupDeferral()).toBeNull();
+    const writes = restartContinuations(ledger);
+    expect(writes).toHaveLength(member === "agent" ? 1 : 0);
+    if (member === "agent") expect(writes[0]).toContain("background task gatetask1");
+    expect(restartCuts(cut.registryFile)).toMatchObject([{
+      checkpoint: { backgroundTasks: ["background task gatetask1"] },
+      ...(member === "stage" ? { state: "discharged", resolution: "a pipeline stage: its controller retries the attempt" } : {}),
+    }]);
+  });
+});
+
+test("direct recovery leaves a row held for its restart cut evidence untouched until the re-probe decides it", async () => {
+  await withJournal(async (journal) => {
+    const cut = incumbentConversation("claude", cutSessionId(79), deadEngine(2_000_001_179));
+    const whole = fs.readFileSync(cut.artifactPath, "utf8");
+    fs.writeFileSync(cut.artifactPath, `${whole}{"type":"assist`);
+    const ledger = createFakeDeliveryLedger();
+    const registry = new AgentRegistry(cut.registryFile);
+    expect((await successorBoot(cut.registryFile, journal, ledger, { registry })).error).toBeNull();
+    expect(structuredStartupDeferral()?.hostKeys).toEqual([cut.hostKey]);
+    const before = registry.readOnlySnapshot().entries[cut.hostKey]!;
+
+    /* A send's recovery, a retry or a control asks before the first re-probe. */
+    let spawns = 0;
+    const recovery = recoverDeadStructuredConversation({ path: cut.artifactPath, conversationId: cut.conversationId }, {
+      registry,
+      client: journalClient(journal),
+      transport: () => "structured",
+      resolveAccount: () => ({ engine: "claude", accountId: "default", kind: "managed", home: path.join(directory, "account"), transcriptRoot: directory, env: { NODE_ENV: "test" } }),
+      spawn: async () => {
+        spawns += 1;
+        return { ok: false, error: "no native spawn in this case" } as never;
+      },
+    });
+    expect(recovery).rejects.toBeInstanceOf(StructuredRecoveryHeldForUpdateError);
+    await recovery.catch(() => {});
+    expect(spawns).toBe(0);
+    const after = new AgentRegistry(cut.registryFile).readOnlySnapshot().entries[cut.hostKey]!;
+    expect({ status: after.status, claimEpoch: after.claimEpoch, turn: after.structuredHost?.activeTurnRef, process: after.structuredHost?.process })
+      .toEqual({ status: before.status, claimEpoch: before.claimEpoch, turn: CUT_TURN, process: before.structuredHost?.process });
+    expect(obligationsFor(cut.registryFile)).toEqual([]);
+
+    /* Repaired evidence still yields its one continuation. */
+    fs.writeFileSync(cut.artifactPath, whole);
+    await runScheduledProbe(() => ledger.writes.length > 0);
+    await settle(() => ledger.writes.length > 0);
+    expect(restartContinuations(ledger)).toHaveLength(1);
+    expect(restartCuts(cut.registryFile)).toHaveLength(1);
+  });
+});
+
+test.each(["agent", "stage"] as const)("a host ledger with a sequence gap invents no cut for a Codex %s until it is repaired", async (member) => {
+  await withJournal(async (journal) => {
+    const cut = incumbentConversation("codex", cutSessionId(80), deadEngine(2_000_001_180), []);
+    if (member === "stage") asPipelineStage(cut);
+    const ledgerFile = path.join(statePath("structured-host-events"), `${encodeURIComponent(cut.sessionId)}.jsonl`);
+    fs.mkdirSync(path.dirname(ledgerFile), { recursive: true });
+    /* The record at seq 2 is missing: it could be the turn's end. */
+    fs.writeFileSync(ledgerFile, [
+      { kind: "turn-started", turnId: "T1", seq: 1 },
+      { kind: "session-status", status: "idle", seq: 3 },
+    ].map((event) => `${JSON.stringify(event)}\n`).join(""));
+    const ledger = createFakeDeliveryLedger();
+    const registry = new AgentRegistry(cut.registryFile);
+    const boot = await successorBoot(cut.registryFile, journal, ledger, { registry });
+    expect(boot.error).toBeNull();
+    expect(boot.adopted).toEqual([]);
+    for (let probe = 0; probe < 3; probe += 1) await runScheduledProbe(() => ledger.writes.length > 0, 150);
+    expect(continuationsIn(ledger)).toEqual([]);
+    expect(obligationsFor(cut.registryFile)).toEqual([]);
+    expect(structuredStartupDeferral()?.hostKeys).toEqual([cut.hostKey]);
+
+    /* Repaired: T1 started and nothing ended it. */
+    fs.writeFileSync(ledgerFile, [
+      { kind: "turn-started", turnId: "T1", seq: 1 },
+      { kind: "session-status", status: "active", seq: 2 },
+    ].map((event) => `${JSON.stringify(event)}\n`).join(""));
+    await runScheduledProbe(() => ledger.writes.length > 0);
+    await settle(() => ledger.writes.length > 0, member === "agent" ? 400 : 150);
+    expect(restartContinuations(ledger)).toHaveLength(member === "agent" ? 1 : 0);
+    expect(restartCuts(cut.registryFile)).toMatchObject([member === "agent"
+      ? { turnRef: "T1", boundary: "viewer-restart:turn", state: expect.any(String) }
+      : { turnRef: "T1", state: "discharged", resolution: "a pipeline stage: its controller retries the attempt" }]);
   });
 });
