@@ -19435,6 +19435,71 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
   }, 3_600_000);
 });
 
+/* A worker slot wait reads as a free worker, and a resource hold carries its
+   note on the card, so a queued lane never reads as a memory shortage. Cards
+   at 1440 and 390 in en and uk go to LLV_HOLD_KINDS_PNG_DIR. */
+describe("queued hold kinds on the card", () => {
+  browserTest("a worker slot wait has its own line and a resource hold shows its note at 1440 and 390 in en and uk", async () => {
+    const out = path.resolve(process.env.LLV_HOLD_KINDS_PNG_DIR ?? ".artifacts/hold-kinds");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const cases: Record<string, unknown>[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        const phone = width === 390;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=hold-kinds`, { width, height: 844 }, "light", locale, "reduce", phone);
+        try {
+          const selector = (id: string) => phone ? `[data-phone-card="task:${id}"]` : card(id);
+          if (phone) {
+            await page.locator('[data-phone-kanban-tab="blocked"]').click();
+          } else {
+            await page.locator("[data-kanban-board]").waitFor();
+            if (await page.locator('[data-seat-collapse][aria-expanded="true"]').count()) {
+              await page.locator(selector("hold-slot")).focus();
+              await page.keyboard.press("o");
+              await page.locator('[data-seat-collapse][aria-expanded="false"]').waitFor();
+            }
+          }
+          const lines: Record<string, string> = {};
+          for (const id of ["hold-slot", "hold-slot-note", "hold-resource-note", "hold-resource"]) {
+            const line = page.locator(`${selector(id)} .motion-line`);
+            await line.waitFor();
+            lines[id] = (await line.innerText()).replace(/\s+/g, " ").trim();
+          }
+          const worker = translate(locale, "kanban.hold.worker");
+          const resource = translate(locale, "kanban.hold.resource");
+          expect(lines["hold-slot"]!.startsWith(worker)).toBeTrue();
+          expect(lines["hold-slot-note"]).toContain(`${worker} · ${locale === "uk" ? "Зайняті всі три агенти" : "Three of three workers busy"}`);
+          expect(lines["hold-resource-note"]).toContain(`${resource} · ${locale === "uk" ? "Доступно 4 ГБ памʼяті, потрібно 8 ГБ" : "4 GB of memory available, 8 GB needed"}`);
+          expect(lines["hold-resource"]!.startsWith(`${resource} ·`)).toBeTrue();
+          const clipped = await page.locator(`${selector("hold-resource-note")} .motion-line`).evaluate((node) => node.scrollHeight > node.clientHeight + 1);
+          expect(clipped).toBeFalse();
+          const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
+          expect(overflow).toBeFalse();
+          for (const id of ["hold-slot", "hold-slot-note", "hold-resource-note", "hold-resource"]) await page.locator(selector(id)).screenshot({ path: path.join(out, `${width}-${locale}-${id}.png`) });
+          await page.screenshot({ path: path.join(out, `${width}-${locale}-board.png`) });
+          let editorKinds: string[] | null = null;
+          if (!phone) {
+            await page.locator(`${selector("hold-slot")} [data-menu]`).click();
+            await page.locator('[role="menuitem"]', { hasText: translate(locale, "kanban.hold.edit") }).click();
+            const editor = page.locator("[data-hold-editor]");
+            await editor.waitFor();
+            editorKinds = await editor.locator("select option").allInnerTexts();
+            expect(editorKinds).toContain(translate(locale, "kanban.hold.kind.worker"));
+            expect(editorKinds).toContain(translate(locale, "kanban.hold.kind.resource"));
+            await page.locator(selector("hold-slot")).screenshot({ path: path.join(out, `${width}-${locale}-editor.png`) });
+          }
+          expect(pageErrors).toEqual([]);
+          cases.push({ locale, width, lines, clipped, overflow, editorKinds, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/hold-kinds", { recursive: true });
+      fs.writeFileSync("evidence/hold-kinds/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", scenario: "hold-kinds", cases }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
+});
+
 describe("issue report advisory preview", () => {
   /* PR #2530: the operator decides on this message, so it has to show which
      lines become public, that approving publishes them, and what each hint
