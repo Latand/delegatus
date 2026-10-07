@@ -9405,7 +9405,7 @@ export class AgentRegistry {
    */
   recordDirectAdmission(
     admission:
-      | { operationId: string; retryOf: string; identity?: DirectAdmissionIdentity }
+      | { operationId: string; retryOf: string; identity?: DirectAdmissionIdentity; reopenLost?: boolean }
       | { handOff: DirectAdmissionIdentity },
   ): DeliveryOperationOwner | null {
     if ("retryOf" in admission && (!admission.operationId || admission.operationId === admission.retryOf)) return null;
@@ -9452,7 +9452,20 @@ export class AgentRegistry {
         return clone(owner);
       }
       const { operationId: retryOperationId, retryOf: previousOperationId, identity } = admission;
-      if (file.deliveryOperationOwners[retryOperationId]) return clone(file.deliveryOperationOwners[retryOperationId]);
+      const recorded = file.deliveryOperationOwners[retryOperationId];
+      if (recorded) {
+        /* An attempt the journal refused outright ended `lost`: nothing ran
+           under its id. A new explicit retry, which mints the same id, reopens
+           it rather than sending under a row that fences it. */
+        if (admission.reopenLost && recorded.terminalState === "failed" && recorded.terminalDisposition === "lost") {
+          recorded.terminalState = null;
+          recorded.terminalDisposition = null;
+          recorded.terminalReason = null;
+          recorded.settledAt = null;
+          recorded.createdAt = now();
+        }
+        return clone(recorded);
+      }
       const previous = file.deliveryOperationOwners[previousOperationId];
       const delivery = previous
         ? file.heldDeliveries[previous.deliveryId]

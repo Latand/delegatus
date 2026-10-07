@@ -222,6 +222,40 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
     });
   }
 
+  /**
+   * Reopens the record of an operation the operator explicitly retried under
+   * the same identity, once the journal re-armed it (docs/design/
+   * delivery-progress-and-drain.md, A2, P13): the ending is cleared, the
+   * attempt counted, the phase and progress dated now, and a lost wake kept as
+   * evidence. Creates the record when there is none.
+   */
+  rearm(operationId: string, conversationId: string, note: DeliveryProgressNote): void {
+    this.load();
+    const current = this.records.get(operationId);
+    if (!current) {
+      this.note(operationId, conversationId, { ...note, attempted: true });
+      return;
+    }
+    const at = new Date(this.now()).toISOString();
+    this.put({
+      ...current,
+      conversationId,
+      originalKey: note.originalKey ?? current.originalKey,
+      kind: note.kind ?? current.kind,
+      waitReason: note.waitReason,
+      detail: boundedDetail(note.detail),
+      attempt: current.attempt + 1,
+      admittedAt: note.admittedAt ?? current.admittedAt,
+      phaseSince: at,
+      lastProgressAt: at,
+      nextWakeAt: note.nextWakeMs === undefined || note.nextWakeMs === null ? null : new Date(this.now() + Math.max(0, note.nextWakeMs)).toISOString(),
+      stalledSince: null,
+      executorId: note.executorId ?? current.executorId,
+      terminal: null,
+      updatedAt: at,
+    });
+  }
+
   stalled(operationId: string): void {
     this.load();
     const current = this.records.get(operationId);

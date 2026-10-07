@@ -24,7 +24,7 @@ import { emptyLaunchProfile, type ViewerConversationId } from "@/lib/accounts/mi
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import { effectiveRemaining } from "@/lib/accounts/migration/quotaPolicy";
 import { freshSpecFor } from "@/lib/agent/cli";
-import { agentRegistry, identityMaterializationFence, type DurableMembershipInput, type StructuredTerminationCapture, type TmuxHostEvidence } from "@/lib/agent/registry";
+import { agentRegistry, identityMaterializationFence, REGISTRY_WRITER_BUSY, type DurableMembershipInput, type StructuredTerminationCapture, type TmuxHostEvidence } from "@/lib/agent/registry";
 import { forEachCooperatively } from "@/lib/cooperative";
 import { transcriptAllowed } from "@/lib/agent/spawnParent";
 import { sessionKeyFromTranscript, sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
@@ -1541,7 +1541,10 @@ export function defaultPipelinePorts(
       const id = conversationId as ViewerConversationId;
       const migration = registry.conversation(id)?.migration;
       if (migration?.phase === "failed-recoverable" && migration.targetId === targetAccountId) {
-        registry.retryConversationMigration(id, migration.revision);
+        /* Off the loop; refused, the engine waits and asks again (C2). */
+        const retried = await registry.deliveryWrite({ label: "migration.retry", operationId: migration.operationId },
+          () => registry.retryConversationMigration(id, migration.revision));
+        if (!retried.acquired) throw new Error(REGISTRY_WRITER_BUSY);
       } else {
         registry.requestConversationReseat(id, targetAccountId);
       }

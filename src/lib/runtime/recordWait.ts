@@ -21,7 +21,9 @@ import { settlementDeadlineForRow } from "./sendSettlement";
  * behind its conversation's account switch keeps the switch's reason.
  */
 
-export type DeliveryProgressPort = Pick<DeliveryProgressSink, "get" | "note" | "deadline"> & Partial<Pick<DeliveryProgressSink, "settle">>;
+export type DeliveryProgressPort = Pick<DeliveryProgressSink, "get" | "note" | "deadline">
+  & Partial<Pick<DeliveryProgressSink, "settle">>
+  & { rearm?(operationId: string, conversationId: string, note: Parameters<DeliveryProgressSink["note"]>[2]): void };
 
 export interface RecordedWait {
   reason: DeliveryWaitReason;
@@ -66,6 +68,33 @@ export function recordWait(
       admittedAt: reservation.createdAt,
       nextWakeMs: switching || wait.nextWakeMs === undefined ? ACCOUNT_MIGRATION_PASS_INTERVAL_MS : wait.nextWakeMs,
       ...(wait.attempted ? { attempted: true } : {}),
+    });
+    const deadline = settlementDeadlineForRow(registry, { delivery: reservation });
+    progress.deadline(operationId, deadline?.deadlineAt ?? null, deadline?.policy ?? null);
+    return progress.get(operationId);
+  } catch (error) {
+    return logged(error);
+  }
+}
+
+/** {@link recordWait} for an operation the operator re-armed under its own
+    identity (P13): its ended record is reopened and the attempt counted. */
+export function recordRearm(
+  progress: DeliveryProgressPort | null,
+  registry: AgentRegistry,
+  reservation: HeldDelivery,
+  wait: RecordedWait,
+): DeliveryProgressRecord | null {
+  if (!progress?.rearm || !reservation.command.operationId) return recordWait(progress, registry, reservation, { ...wait, attempted: true });
+  const operationId = reservation.command.operationId;
+  try {
+    progress.rearm(operationId, reservation.runtimeConversationId, {
+      waitReason: wait.reason,
+      detail: wait.detail ?? null,
+      kind: reservation.command.kind,
+      originalKey: reservation.clientMessageId,
+      admittedAt: reservation.createdAt,
+      nextWakeMs: wait.nextWakeMs === undefined ? ACCOUNT_MIGRATION_PASS_INTERVAL_MS : wait.nextWakeMs,
     });
     const deadline = settlementDeadlineForRow(registry, { delivery: reservation });
     progress.deadline(operationId, deadline?.deadlineAt ?? null, deadline?.policy ?? null);

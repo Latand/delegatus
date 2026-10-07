@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
-import { readDeliveryProgress } from "./deliveryProgress";
+import { ownedDeliveryProgressStore, readDeliveryProgress } from "./deliveryProgress";
+import { recordDirectWait, recordRearm, recordWait, stillAtStep, type DeliveryProgressPort } from "./recordWait";
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "node:crypto";
 
@@ -15,10 +16,10 @@ import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { claimMessageAuthor, recordConversationEvent, refuseAnonymous, settleMessageAuthor, teamActor, type PriorSubmission } from "@/lib/team";
 import { agentMessageOrigin } from "./agentMessageAuthor";
 
-import { RuntimeHostUnavailableError, runtimeHostClient, type RuntimeHostClient } from "./client";
+import { isRuntimeHostTransportFailure, RuntimeHostUnavailableError, runtimeHostClient, type RuntimeHostClient } from "./client";
 import { parseRuntimeCommand } from "./commands";
 import { API_CLIENT_ORIGIN } from "./messageOrigin";
-import { runtimePresentationReceipt, type RuntimeOperationCommand, type RuntimeOperationKind } from "./contracts";
+import { runtimePresentationReceipt, terminalRetryOperationId, type RuntimeOperationCommand, type RuntimeOperationKind } from "./contracts";
 import { runtimeEventsEnabled, runtimeEventsRolledBack, structuredHostsEnabled, RUNTIME_PLANE_ABSENT } from "./flags";
 import { readEvidence, type Evidence } from "./evidence";
 import { confirmedSend } from "./confirmedSend";
@@ -27,6 +28,7 @@ import { republishStructuredDeliveryHost } from "./structuredDeliveryController"
 import { recoverDeadStructuredConversation } from "./structuredRecovery";
 import { enqueueStructuredMessage } from "./structuredMessageDelivery";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
+import { STRUCTURED_DELIVERY_TIMING } from "./structuredDeliveryQueue";
 import { admitRuntimeImagePayload } from "./runtimeImageAdmission";
 import type { RuntimeImageUpload } from "./runtimeImageStore";
 import type { StructuredImageRef } from "./structuredContent";
@@ -66,7 +68,10 @@ export interface RuntimeRetryHttpDependencies extends RuntimeHttpDependencies {
       and the settlement deadline can end it. Defaulted at the call site rather
       than in the dependency literal, because a caller that supplies its own
       dependencies must not silently opt the settlement record out. */
-  recordRetryAttempt?(previousOperationId: string, retryOperationId: string): boolean;
+  recordRetryAttempt?(previousOperationId: string, retryOperationId: string): boolean | Promise<boolean>;
+  /** Where the retried operation's waits are recorded; the Viewer's own store
+      by default, and nothing in a process that holds none. */
+  progress?: DeliveryProgressPort | null;
 }
 
 async function republishStructuredConversation(conversationId: string): Promise<boolean> {
@@ -84,8 +89,25 @@ const DEFAULT_RETRY_DEPENDENCIES: RuntimeRetryHttpDependencies = {
   republish: republishStructuredConversation,
 };
 
-function recordDeliveryRetryAttempt(previousOperationId: string, retryOperationId: string): boolean {
-  return agentRegistry().recordDeliveryRetryAttempt(previousOperationId, retryOperationId);
+/** The retry's row, written off the loop (rule c); false when the lock stayed
+    held or nothing durable names the retried operation. */
+async function recordDeliveryRetryAttempt(
+  registry: AgentRegistry,
+  previousOperationId: string,
+  retryOperationId: string,
+  reopenLost = false,
+): Promise<boolean> {
+  const written = await registry.deliveryWrite({ label: "delivery.direct-admission", operationId: retryOperationId },
+    () => registry.recordDirectAdmission({ operationId: retryOperationId, retryOf: previousOperationId, ...(reopenLost ? { reopenLost: true } : {}) }));
+  return written.acquired && written.value !== null;
+}
+
+/** Whether the runtime host answered a call with a refusal, so nothing it
+    names was admitted (as opposed to a call that may have reached it). */
+function definitiveRuntimeRefusal(error: unknown): boolean {
+  return error instanceof RuntimeHostUnavailableError
+    && !isRuntimeHostTransportFailure(error)
+    && error.message !== "runtime host request cancelled";
 }
 
 function terminalRetryIdempotencyKey(operationId: string): string {
@@ -596,20 +618,21 @@ export async function handleRuntimeDiscard(
     const registry = (dependencies.registry ?? agentRegistry)();
     const presentationOperationId = operation.receipt.presentationOperationId ?? operation.operationId;
     const deliveryRecord = sendReceiptFor(registry.deliverySnapshotForOperation(presentationOperationId), presentationOperationId);
-    const settleDelivered = () => {
+    const settleDelivered = async () => {
+      /* Off the loop; refused, the answer still reports the journal's
+         delivery and the queue's projection or the sweep writes it. */
       if (operation.receipt.conversationId.startsWith("conversation_")) {
-        registry.recordDeliveryOutcomeForOperation(
-          operation.receipt.conversationId as `conversation_${string}`,
-          operation.receipt.presentationOperationId ?? operation.operationId,
-          "delivered",
-        );
+        const settledOperationId = operation.receipt.presentationOperationId ?? operation.operationId;
+        const settledConversationId = operation.receipt.conversationId as `conversation_${string}`;
+        await registry.deliveryWrite({ label: "delivery.settle", operationId: settledOperationId },
+          () => registry.recordDeliveryOutcomeForOperation(settledConversationId, settledOperationId, "delivered"));
       }
       return NextResponse.json({
         operationId: operation.operationId,
         receipt: runtimePresentationReceipt(operation.receipt),
       });
     };
-    if (journalVerdict(operation.receipt.status, operation.receipt.reason)?.state === "delivered") return settleDelivered();
+    if (journalVerdict(operation.receipt.status, operation.receipt.reason)?.state === "delivered") return await settleDelivered();
     if (operation.receipt.status === "delivering" || operation.receipt.status === "applying") {
       return NextResponse.json({
         error: "runtime delivery is being handed over to the agent",
@@ -634,7 +657,7 @@ export async function handleRuntimeDiscard(
         const moved = await client.operationStatus(operation.operationId);
         if (!moved) throw error;
         operation = moved;
-        if (journalVerdict(operation.receipt.status, operation.receipt.reason)?.state === "delivered") return settleDelivered();
+        if (journalVerdict(operation.receipt.status, operation.receipt.reason)?.state === "delivered") return await settleDelivered();
         if (operation.receipt.status === "delivering" || operation.receipt.status === "applying") {
           return NextResponse.json({
             error: "runtime delivery is being handed over to the agent",
@@ -659,12 +682,12 @@ export async function handleRuntimeDiscard(
         }, { status: 409 });
       }
     }
-    registry.discardDeliveryForOperation(
-      operation.receipt.conversationId as `conversation_${string}`,
-      presentationOperationId,
-      SEND_DISCARDED_REASON,
-      disposition,
-    );
+    /* Off the loop. Refused, nothing was recorded and the answer below is the
+       existing retryable one: the journal already holds the discard, and a
+       repeated discard converges on it. */
+    const discardedConversationId = operation.receipt.conversationId as `conversation_${string}`;
+    await registry.deliveryWrite({ label: "delivery.discard", operationId: presentationOperationId },
+      () => registry.discardDeliveryForOperation(discardedConversationId, presentationOperationId, SEND_DISCARDED_REASON, disposition));
     const settled = sendReceiptFor(registry.deliverySnapshotForOperation(presentationOperationId), presentationOperationId);
     if (!settled || settled.state !== "failed" || settled.reason !== SEND_DISCARDED_REASON) {
       return NextResponse.json({
@@ -739,7 +762,9 @@ export async function handleRuntimeRetry(
         return NextResponse.json({ error: "uncertain retry keeps the original idempotency key" }, { status: 400 });
       }
     }
-    const recordRetryAttempt = dependencies.recordRetryAttempt ?? recordDeliveryRetryAttempt;
+    const retryRegistry = (dependencies.registry ?? agentRegistry)();
+    const recordRetryAttempt = dependencies.recordRetryAttempt
+      ?? ((previousOperationId: string, retryOperationId: string) => recordDeliveryRetryAttempt(retryRegistry, previousOperationId, retryOperationId));
     /* The attempt this call is about, and a FAILABLE read of it. Only a read
        that COMPLETED and found nothing may answer `operation not found`: the
        catch below classifies by message, and an outage whose message happens to
@@ -816,7 +841,13 @@ export async function handleRuntimeRetry(
           error: `runtime delivery ${claim.winner} already won; retry refused`,
         }, { status: 409 });
       }
-      const reservation = registry.retryUncertainDeliveryForOperation(operationId);
+      /* Off the loop; refused, nothing was re-armed and the call is retried. */
+      const rearmed = await registry.deliveryWrite({ label: "delivery.rearm", operationId },
+        () => registry.retryUncertainDeliveryForOperation(operationId));
+      if (!rearmed.acquired) {
+        return NextResponse.json({ error: "the delivery record's write lock is busy; nothing was re-armed", retryable: true }, { status: 503 });
+      }
+      const reservation = rearmed.value;
       if (!reservation) {
         return NextResponse.json({ error: "runtime operation has no delivery reservation" }, { status: 409 });
       }
@@ -827,16 +858,30 @@ export async function handleRuntimeRetry(
         }
         return NextResponse.json({ error: "delivery outcome is already resolved" }, { status: 409 });
       }
+      /* The ended record of this operation is reopened: the operator re-armed
+         it under the same identity (A2, P13). */
+      const progress = dependencies.progress === undefined ? ownedDeliveryProgressStore() : dependencies.progress;
+      const reopened = recordRearm(progress, registry, reservation, {
+        reason: "checking",
+        detail: "re-arming the delivery in the runtime journal",
+        nextWakeMs: null,
+      });
       /* #1709: the retry's claim and its admission to the journal run in the conversation's actuation section. */
-      const retried = await withConversationActuation(registry.canonicalConversationId(reservation.conversationId), async () => {
+      const retried = await withConversationActuation(registry.canonicalConversationId(reservation.conversationId), async (lease) => {
+        lease.act(operationId);
         if (reservation.state === "assigned" && reservation.generationId) {
-          const claimed = registry.beginDeliveryAttempt(reservation.id, reservation.generationId);
-          if (!claimed) return null;
+          const generationId = reservation.generationId;
+          const claim = await registry.beginDeliveryAttemptOffLoop(operationId, reservation.id, generationId);
+          if (!claim.acquired || !claim.value) return null;
         }
         return previous.receipt.status !== "pending" && previous.receipt.status !== "queued"
           ? await client.retryOperation(operationId)
           : previous;
       });
+      if (retried && (retried.receipt.status === "queued" || retried.receipt.status === "pending")
+        && progress && reopened && stillAtStep(progress.get(operationId), reopened)) {
+        recordWait(progress, registry, reservation, { reason: "queued", nextWakeMs: STRUCTURED_DELIVERY_TIMING.retryMs });
+      }
       if (!retried) {
         return NextResponse.json({
           error: "delivery reservation ownership changed before retry admission",
@@ -891,24 +936,75 @@ export async function handleRuntimeRetry(
       }, { status: 503 });
     }
     await dependencies.republish?.(previous.receipt.conversationId);
+    /* A2: the attempt's row and its record exist BEFORE the retry command
+       leaves the process, under the id the journal gives the attempt. A lost
+       reply then leaves an attempt the settlement can end and the record can
+       explain; a refused row sends nothing. An attempt the journal refused
+       outright ended `lost`, and a new explicit retry reopens it. */
+    const presentationOperationId = previous.receipt.presentationOperationId ?? previous.operationId;
+    const attemptOperationId = terminalRetryOperationId(previous.operationId);
+    const preRecorded = await readEvidence(
+      () => dependencies.recordRetryAttempt
+        ? dependencies.recordRetryAttempt(presentationOperationId, attemptOperationId)
+        : recordDeliveryRetryAttempt(retryRegistry, presentationOperationId, attemptOperationId, true),
+      RETRY_RECORD_UNAVAILABLE,
+    );
+    if (!preRecorded.readable || !preRecorded.value) return retryRecordUnavailable(preRecorded);
+    const attemptProgress = dependencies.progress === undefined ? ownedDeliveryProgressStore() : dependencies.progress;
+    const attemptOwner = retryRegistry.deliverySnapshotForOperation(attemptOperationId).deliveryOperationOwners[attemptOperationId] ?? null;
+    if (attemptOwner?.terminalState === null && attemptProgress?.get(attemptOperationId)?.terminal && attemptProgress.rearm) {
+      attemptProgress.rearm(attemptOperationId, attemptOwner.runtimeConversationId, {
+        waitReason: "checking", detail: "admitting to the runtime journal", nextWakeMs: null,
+        originalKey: attemptOwner.clientMessageId, admittedAt: attemptOwner.createdAt, kind: attemptOwner.command.kind,
+      });
+    }
+    const attemptRecorded = attemptOwner
+      ? recordDirectWait(attemptProgress, retryRegistry, attemptOwner, { reason: "checking", detail: "admitting to the runtime journal", nextWakeMs: null })
+      : null;
     const retry = () => client.retryOperation(previous.operationId, nextIdempotencyKey, {
       requireHostedConversationId: previous.receipt.conversationId,
     });
     let result: Awaited<ReturnType<typeof retry>>;
     try {
-      result = await retry();
-    } catch (error) {
-      if (!(error instanceof Error)
-        || error.message !== "structured recovery ownership changed before retry admission") throw error;
-      const converged = await recover(
-        { path: "", conversationId: previous.receipt.conversationId },
-        { client },
-      );
-      if (!converged || converged.conversationId !== previous.receipt.conversationId) {
-        throw new Error("structured recovery ownership is unavailable");
+      try {
+        result = await retry();
+      } catch (error) {
+        if (!(error instanceof Error)
+          || error.message !== "structured recovery ownership changed before retry admission") throw error;
+        const converged = await recover(
+          { path: "", conversationId: previous.receipt.conversationId },
+          { client },
+        );
+        if (!converged || converged.conversationId !== previous.receipt.conversationId) {
+          throw new Error("structured recovery ownership is unavailable");
+        }
+        await dependencies.republish?.(previous.receipt.conversationId);
+        result = await retry();
       }
-      await dependencies.republish?.(previous.receipt.conversationId);
-      result = await retry();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (attemptOwner && definitiveRuntimeRefusal(error)) {
+        /* The journal refused it: nothing was admitted under the attempt's id. */
+        await retryRegistry.deliveryWrite({ label: "delivery.settle", operationId: attemptOperationId },
+          () => retryRegistry.settleDirectAdmission(attemptOperationId, "failed", message, "lost"));
+        attemptProgress?.settle?.(attemptOperationId, "failed", message);
+      } else if (attemptOwner) {
+        /* It may have reached the journal: the record says why it waits, the
+           attempt is counted, and the queue is woken to list it. */
+        recordDirectWait(attemptProgress, retryRegistry, attemptOwner, {
+          reason: "evidence-unreadable",
+          detail: `the runtime journal did not acknowledge the retry: ${message}`,
+          attempted: true,
+          nextWakeMs: STRUCTURED_DELIVERY_TIMING.retryMs,
+        });
+        dependencies.kick();
+      }
+      throw error;
+    }
+    if (attemptOwner && attemptRecorded && result.operationId === attemptOperationId
+      && (result.receipt.status === "queued" || result.receipt.status === "pending")
+      && attemptProgress && stillAtStep(attemptProgress.get(attemptOperationId), attemptRecorded)) {
+      recordDirectWait(attemptProgress, retryRegistry, attemptOwner, { reason: "queued", nextWakeMs: STRUCTURED_DELIVERY_TIMING.retryMs });
     }
     /* Before the queue is kicked, and before the id leaves this process: the
        attempt gets a durable record keyed by the id the caller is handed
