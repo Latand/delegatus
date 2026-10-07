@@ -165,9 +165,9 @@ describe("batched turn settlement", () => {
             { width, working: translate(locale, "mobile2.chat.stateWorking") });
             const settledCount = width === 1440 ? await page.locator("[data-bar-working]").innerText() : null;
             if (width === 1440) {
-              /* The header counts tasks in motion, not conversations: this one's task also has a running
-                 pipeline, so settling its conversation leaves the count where it was. */
-              expect(Number(settledCount!.match(/\d+/)?.[0])).toBe(Number(initialCount!.match(/\d+/)?.[0]));
+              /* The header counts agents whose turn is running (isWorkingAgent), so settling this
+                 conversation's turn takes it off the count. */
+              expect(Number(settledCount!.match(/\d+/)?.[0])).toBe(Number(initialCount!.match(/\d+/)?.[0]) - 1);
               expect(await page.locator('[data-kanban-reader="conversation_search-ver-2"] [data-live-tail-pill]').count()).toBe(0);
             }
             const phoneState = width === 390 ? await page.locator(stateSelector).innerText() : null;
