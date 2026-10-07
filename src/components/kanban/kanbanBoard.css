@@ -703,6 +703,75 @@
 .kb .menu .st[data-status="done"] { background: var(--color-success); }
 .kb .menu .kbd { margin-left: auto; font-size: var(--text-caption); color: var(--color-muted); border: 1px solid var(--border-default); border-radius: 4px; padding: 0 5px; line-height: 16px; }
 
+/* ── The compact menu: a card's, a column's and a conversation's ⋯ ─────────
+   The board's own tokens and row grammar; what it adds is the segmented row,
+   the icon cells with the line under them, the value on a closed row and the
+   back row of a page. */
+.kb .menu.cm { width: var(--cm-width); min-width: 0; max-width: calc(100vw - 16px); animation: none; }
+.kb .menu.cm .cm-probe { position: absolute; left: 0; right: 0; top: 0; height: 0; overflow: hidden; visibility: hidden; pointer-events: none; padding: 0 6px; }
+.kb .menu.cm .lbl { min-width: 0; flex: 1 1 auto; overflow-wrap: anywhere; }
+.kb .menu.cm [role^="menuitem"].cm-tall { align-items: flex-start; padding-top: 6px; padding-bottom: 6px; }
+.kb .menu.cm .why { white-space: normal; }
+.kb .menu.cm .cm-seg { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 2px; padding: 2px; margin: 2px 4px 4px; border-radius: var(--radius-control); background: var(--surface-well); }
+.kb .menu.cm .cm-seg [role="menuitemradio"] { flex-direction: column; justify-content: center; gap: 3px; min-height: 40px; padding: 4px 2px; border-radius: calc(var(--radius-control) - 2px); font-size: var(--text-label); font-weight: 600; color: var(--color-secondary, var(--color-primary)); text-align: center; line-height: 1.15; }
+.kb .menu.cm .cm-seg.cm-seg-row [role="menuitemradio"] { flex-direction: row; gap: 5px; min-height: 28px; }
+.kb .menu.cm .cm-seg [role="menuitemradio"] svg { width: 13px; height: 13px; flex-shrink: 0; }
+.kb .menu.cm .cm-seg [role="menuitemradio"][aria-checked="true"] { background: var(--surface-raised); color: var(--color-primary); box-shadow: var(--shadow-1); }
+.kb .menu.cm .cm-seg [role="menuitemradio"]:hover, .kb .menu.cm .cm-seg [role="menuitemradio"]:focus-visible { background: var(--surface-raised); }
+.kb .menu.cm .cm-seg [role="menuitemradio"]:focus-visible { box-shadow: 0 0 0 2px var(--color-accent); }
+.kb .menu.cm .cm-seg .cm-cap, .kb .menu.cm .cm-quick .cm-cap { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* What the first and the last choice of a row do, under those two ends. */
+.kb .menu.cm .cm-ends { display: flex; justify-content: space-between; gap: 8px; margin: -1px 8px 5px; font-size: var(--text-caption); line-height: 1.3; color: var(--color-muted); }
+.kb .menu.cm .cm-quick { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 2px; margin: 0 4px; }
+.kb .menu.cm .cm-quick [role="menuitem"] { position: relative; flex-direction: column; justify-content: center; gap: 4px; min-height: 48px; padding: 6px 2px 5px; font-size: var(--text-caption); font-weight: 600; color: var(--color-secondary, var(--color-primary)); text-align: center; line-height: 1.15; }
+.kb .menu.cm .cm-quick [role="menuitem"] svg { width: 16px; height: 16px; flex-shrink: 0; color: var(--color-primary); }
+.kb .menu.cm .cm-quick [role="menuitem"][aria-disabled="true"] svg { color: var(--color-muted); }
+/* The key that does the same from the card, in the cell's corner. */
+.kb .menu.cm .cm-key { position: absolute; top: 3px; right: 5px; font-size: var(--text-caption); font-weight: 400; line-height: 1; color: var(--color-muted); }
+/* A row's key is drawn the way a cell's is: the bare sign in the muted caption, no keycap. */
+.kb .menu.cm .lbl .kbd { margin-left: 4px; border: 0; padding: 0; vertical-align: 5px; font-size: var(--text-caption); font-weight: 400; line-height: 1; color: var(--color-muted); }
+.kb .menu.cm .cm-note { margin: 1px 8px 5px; font-size: var(--text-caption); line-height: 1.3; color: var(--color-muted); }
+.kb .menu.cm .cm-val { margin-left: auto; flex: 0 1 auto; min-width: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-label); color: var(--color-muted); }
+.kb .menu.cm .cm-val.cm-colour { display: inline-flex; align-items: center; gap: 6px; }
+.kb .menu.cm .cm-val + .cm-chev { margin-left: 0; }
+.kb .menu.cm .cm-chev { margin-left: auto; width: 14px; height: 14px; flex-shrink: 0; color: var(--color-muted); }
+.kb .menu.cm .cm-lane { width: 15px; height: 15px; flex-shrink: 0; color: var(--color-muted); }
+.kb .menu.cm .cm-tall .cm-lane, .kb .menu.cm .cm-tall .cm-chev { margin-top: 2px; }
+/* A setting's switch: the accent track when on, an outlined track with a muted knob when off, legible in both themes. */
+.kb .menu.cm .cm-switch { position: relative; flex-shrink: 0; width: 26px; height: 15px; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--surface-well); transition: background-color var(--motion-base), border-color var(--motion-base); }
+.kb .menu.cm .cm-switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 9px; height: 9px; border-radius: 50%; background: var(--color-muted); transition: transform var(--motion-base); }
+.kb .menu.cm [aria-checked="true"] .cm-switch { border-color: var(--color-accent); background: var(--color-accent); }
+.kb .menu.cm [aria-checked="true"] .cm-switch::after { background: var(--surface-card); transform: translateX(11px); }
+.kb .menu.cm .cm-tall .cm-switch { margin-top: 1px; }
+.kb .menu.cm .cm-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; background: var(--c, transparent); border: 1px solid var(--border-strong); }
+.kb .menu.cm .cm-dot[data-set="1"] { border-color: transparent; }
+/* A section's rows hang from its own row, under it, on one rule. */
+.kb .menu.cm .cm-body { padding: 0 0 2px 10px; margin: 0 0 2px 16px; border-left: 1px solid var(--border-default); }
+.kb .menu.cm .cm-body .swatches { grid-template-columns: repeat(9, 22px); gap: 4px; padding: 4px 4px 4px; }
+.kb .menu.cm .cm-body .swatch { width: 22px; height: 22px; }
+.kb .menu.cm .cm-back { font-weight: 600; align-items: flex-start; min-height: 30px; padding-top: 6px; padding-bottom: 6px; border-bottom: 1px solid var(--border-default); border-radius: var(--radius-control) var(--radius-control) 0 0; margin-bottom: 3px; }
+.kb .menu.cm .cm-back svg { width: 14px; height: 14px; flex-shrink: 0; margin-top: 2px; color: var(--color-muted); }
+.kb .menu.cm .cm-back .cm-title { min-width: 0; overflow-wrap: anywhere; line-height: 1.3; }
+/* A page is the densest state: its rows sit closer so a pipeline's seven actions keep their second lines inside 360 px. */
+.kb .menu.cm .cm-page [role^="menuitem"]:not(.cm-back) { min-height: 28px; }
+.kb .menu.cm .cm-page [role^="menuitem"].cm-tall { padding-top: 3px; padding-bottom: 3px; }
+.kb .menu.cm .cm-page [data-cm-section].cm-tall { padding-top: 2px; padding-bottom: 2px; }
+.kb .menu.cm .cm-page .sep { margin: 2px 4px; }
+.kb .menu.cm .cm-page .why { line-height: 1.25; }
+/* In the list of a card's pipelines the state follows the title on its line and goes to the next one whole: seven pipelines are one page. */
+.kb .menu.cm .cm-page [data-cm-section] .why { display: inline-block; }
+/* Under a pointer no state is taller than 360 px; under a finger the rows are 44 px and the window is the bound. */
+@media (pointer: fine) {
+  .kb .menu.cm { max-height: min(360px, calc(100vh - 16px)); }
+  /* The rows of a section opened in place sit as close as a page's, and a swatch is a circle rather than a row's height:
+     the card that holds the orchestrator's conversation says why it cannot be hidden on two lines, and Appearance still opens inside the bound. */
+  .kb .menu.cm .cm-body [role^="menuitem"]:not(.swatch):not(.cm-tall) { min-height: 28px; }
+  .kb .menu.cm .cm-body .swatch { min-height: 0; }
+}
+@media (pointer: coarse) {
+  .kb .menu.cm .cm-key { display: none; }
+}
+
 /* ── Receipts (bottom-centre of the board's pane) ─────────────────────────── */
 /* Over the columns at the pane's foot, so a receipt is centred on the board
    beside an open project rail and no column changes size when one comes or

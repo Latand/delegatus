@@ -627,12 +627,16 @@ const linksReview = STAGES ? add(conversation("links-review", "Reviewer: both an
 /* #1765: each of the five pipelines on t-many gets its own pair of stages and
    its own conversations, so no row borrows another's identity. */
 const manyStages = (critique: string, fix: string) => [stage(critique, "reviewer", fix), stage(fix, "builder", null)];
+/* The compact card menu: `&lanes=N` puts N more running pipelines on t-many,
+   so the list of a card's pipelines is read past the one page it fits on. */
+const MORE_LANES = MANY ? Number(new URLSearchParams(location.search).get("lanes") ?? 0) : 0;
 const manyPipelines: Pipeline[] = MANY ? ([
   ["p-many-pills", "Name every pipeline row on a task card", "running", null, ["critique", "fix"]],
   ["p-many-drawers", "Remove the legacy drawers under the board columns", "running", null, ["diagnose", "cut"]],
   ["p-many-pill", "Take the floating waiting pill out of the corner", "completed", 40, ["critique", "fix"]],
   ["p-many-collapse", "Fold the completed pipelines of a task behind their count", "completed", 6 * 60, ["review-plan", "apply"]],
   ["p-many-report", "Read a stage report as role, outcome and age", "completed", 26 * 60, ["critique", "repair"]],
+  ...Array.from({ length: MORE_LANES }, (_, index) => [`p-many-more-${index + 1}`, index % 2 ? "Fold the completed pipelines of a task behind their count" : "Remove the legacy drawers under the board columns", "running", null, ["critique", "fix"]] as const),
 ] as const).map(([id, task, state, closedAgo, [first, second]]) => {
   const opened = add(conversation(`${id}-1`, `Opened ${task}`, { mtime: now - 90 * MIN, engine: "codex", model: "gpt-5.6" }));
   const closing = add(conversation(`${id}-2`, `Finished ${task}`, state === "running"
