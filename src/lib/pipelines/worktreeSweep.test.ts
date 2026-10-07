@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 
-import { openHostTempRoots } from "@/lib/state/hostTempViews";
+import { openHostTempRoots, stageHostNamespace } from "@/lib/state/hostTempViews";
 
 import { globalCache } from "@/lib/scanner/caches";
 import { projectForCwd, recordWorktreeResolution } from "@/lib/scanner/describe";
@@ -1965,10 +1965,12 @@ for (const idle of [false, true]) test.skipIf(process.platform !== "linux")(`hos
   const actual = path.join(proc, "root", canonical);
   git(["worktree", "add", "-q", "--detach", actual, "main"], root);
   const patches: { mockRestore(): void }[] = [];
-  if (idle) {
+  {
     const readlink = fs.readlinkSync;
     patches.push(spyOn(fs, "readlinkSync").mockImplementation(((file: fs.PathLike, ...args: unknown[]) =>
       String(file) === "/proc/1/ns/mnt" ? namespace : Reflect.apply(readlink, fs, [file, ...args])) as typeof readlink));
+  }
+  if (idle) {
     const map = (file: fs.PathLike) => typeof file === "string" && (file === "/proc/1/root" || file.startsWith("/proc/1/root/"))
       ? path.join(proc, "root") + file.slice("/proc/1/root".length) : file;
     for (const method of ["statSync", "lstatSync", "realpathSync", "readdirSync", "readFileSync", "existsSync"] as const) {
@@ -1983,19 +1985,23 @@ for (const idle of [false, true]) test.skipIf(process.platform !== "linux")(`hos
     }
   }
   const view = await openHostTempRoots(idle ? [{ path: canonicalRoot, via: "" }]
-    : [{ path: canonicalRoot, via: path.join(proc, "root"), anchor: { pid: 42, namespace } }], { LLV_DOCKER_NSENTER_SHIMS: idle ? "1" : "0" });
+    : [{ path: canonicalRoot, via: path.join(proc, "root"), anchor: { pid: 42, namespace } }], { LLV_DOCKER_NSENTER_SHIMS: "1" });
   try {
     const calls: string[][] = [];
-    const access = hostTempWorktreeAccess(view.roots, async (command, args) => {
+    const access = hostTempWorktreeAccess(view.roots, async (command, args, cwd) => {
+      if (command === "git") {
+        const answer = await realGit(args, cwd);
+        return args[0] === "worktree" && args[1] === "list" ? { ...answer, stdout: answer.stdout.replaceAll(actual, canonical) } : answer;
+      }
       expect(command).toBe("nsenter");
       expect(args.slice(0, 5)).toEqual(["-t", idle ? "1" : "42", "-m", "-p", "--"]);
       const sh = args.indexOf("sh");
-      const cwd = args[sh + 1]!;
+      const hostCwd = args[sh + 1]!;
       const gitArgs = args.slice(sh + 2);
       calls.push(gitArgs);
       // Stand in for entering the fixture namespace; use real sandbox Git.
-      return realGit(gitArgs.map(value => value === canonical ? actual : value), cwd === canonical ? actual : cwd);
-    });
+      return realGit(gitArgs.map(value => value === canonical ? actual : value), hostCwd === canonical ? actual : hostCwd);
+    }, { LLV_DOCKER_NSENTER_SHIMS: "1" });
     const ordinary = ports({ repositories: [root], tempRoots: [canonicalRoot], now: () => RETAIN_NOW });
     const hostPorts: WorktreeSweepPorts = { ...ordinary, ...access,
       git: async (args, cwd) => {
@@ -2030,12 +2036,17 @@ test.skipIf(process.platform !== "linux")("a recycled host namespace anchor cann
   fs.mkdirSync(path.join(proc, "ns"), { recursive: true });
   fs.symlinkSync("mnt:[replacement]", path.join(proc, "ns/mnt"));
   let called = false;
+  const readlink = fs.readlinkSync;
+  const patch = spyOn(fs, "readlinkSync").mockImplementation(((file: fs.PathLike, ...args: unknown[]) =>
+    String(file) === "/proc/1/ns/mnt" ? "mnt:[original]" : Reflect.apply(readlink, fs, [file, ...args])) as typeof readlink);
   const access = hostTempWorktreeAccess([{ path: "/tmp", via: path.join(proc, "root"), anchor: { pid: 42, namespace: "mnt:[original]" } }], async () => {
     called = true; return { code: 0, stdout: "", stderr: "" };
-  });
+  }, { LLV_DOCKER_NSENTER_SHIMS: "1" });
+  try {
   expect(access.accessiblePath("/tmp/llv-role/checkout")).toBe("/proc/0/root/tmp/llv-role/checkout");
   expect((await access.git(["worktree", "remove", "/tmp/llv-role/checkout"], caseDir)).code).toBe(1);
   expect(called).toBe(false);
+  } finally { patch.mockRestore(); }
 });
 
 test("Git reporting an ignored evidence descendant directly still preserves its capture", async () => {
@@ -2240,4 +2251,118 @@ test("same-size hidden tracked edits with restored mtime survive the last Git re
   expect(report.kept[0]!.reason).toBe("uncommitted");
   expect(fs.readFileSync(file, "utf8")).toBe("changed\n");
   expect(branchExists(root, branch)).toBe(true);
+});
+
+
+test.each(["native", "unrelated-docker-view", "docker-local-copy"])("a private agent mount view leaves %s cleanup on ordinary Git", async kind => {
+  const root = repository();
+  const mergedLane = lane(root, path.join(caseDir, "tmp/merged"), "topic/native-merged");
+  const retained = path.join(caseDir, "tmp/retained");
+  git(["worktree", "add", "-q", "--detach", retained, "main"], root);
+  const owners = [pipeline({ repoDir: root, worktreeDir: mergedLane.dir, branch: "topic/native-merged" }),
+    pipeline({ repoDir: root, worktreeDir: retained, branch: "", baseRef: git(["rev-parse", "main"], root), closedAt: OLD_TERMINAL })];
+  const commands: string[] = [];
+  const access = hostTempWorktreeAccess([{ path: path.join(caseDir, "tmp"), via: "/proc/42/root", anchor: { pid: 42, namespace: kind === "docker-local-copy" ? stageHostNamespace() ?? "mnt:[unavailable]" : "mnt:[private-agent]" } }],
+    async (command, args, cwd) => { commands.push(command); return realGit(args, cwd); },
+    { LLV_DOCKER_NSENTER_SHIMS: kind === "native" ? "0" : "1" });
+  const report = await sweepMergedWorktrees({ ...ports({ pipelines: owners, prs: [merged(250, "topic/native-merged", mergedLane.tip)], now: () => RETAIN_NOW }), ...access });
+  expect(commands.length).toBeGreaterThan(0);
+  expect(commands.every(command => command === "git")).toBe(true);
+  expect(report.errors).toEqual([]);
+  expect(report.removed.map(row => row.path).sort()).toEqual([mergedLane.dir, retained].sort());
+  expect(report.kept).toEqual([]);
+});
+
+/** Kill a real sweeper at lock-publication or final-listing boundaries. All
+    state and Git processes here belong to this test's sandbox. */
+async function killedSweeper(root: string, dir: string, tip: string, phase: string): Promise<void> {
+  const script = `
+    import fs from "node:fs";
+    import { realGit, sweepMergedWorktrees } from ${JSON.stringify(path.join(process.cwd(), "src/lib/pipelines/worktreeSweep.ts"))};
+    const [root, dir, tip, phase] = process.argv.slice(1);
+    const die = () => { fs.writeSync(1, "crash-boundary\\n"); process.kill(process.pid, "SIGKILL"); };
+    let links = 0;
+    const link = fs.linkSync;
+    fs.linkSync = (...args) => {
+      links++;
+      if (phase === "prepared-head" && links === 1 || phase === "prepared-branch" && links === 2) die();
+      return link(...args);
+    };
+    let listings = 0;
+    await sweepMergedWorktrees({ mode: "on", git: async (args, cwd) => {
+      if (args[0] === "worktree" && args[1] === "list" && ++listings === 2) die();
+      return realGit(args, cwd);
+    }, pipelines: [{ id: "crash-lane", repoDir: root, worktreeDir: dir, branch: "topic/crash", state: "completed", runs: [] }],
+      mergedPullRequests: () => [{ number: 251, url: "https://github.com/example/widgets/pull/251", headRefName: "topic/crash", headRefOid: tip }],
+      conversationCwds: () => [], scan: () => ({ ownNamespace: null, processes: [] }), recordResolution: () => true });
+  `;
+  const child = spawn(process.execPath, ["-e", script, root, dir, tip, phase], { cwd: process.cwd(), env: { ...process.env }, stdio: ["ignore", "pipe", "pipe"] });
+  children.push(child);
+  let output = "";
+  let errors = "";
+  child.stdout!.on("data", data => { output += String(data); });
+  child.stderr!.on("data", data => { errors += String(data); });
+  const signal = await new Promise<string | null>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (_code, signal) => resolve(signal));
+  });
+  children.splice(children.indexOf(child), 1);
+  expect(errors).toBe("");
+  expect(output).toContain("crash-boundary");
+  expect(signal).toBe("SIGKILL");
+}
+
+test.each(["prepared-head", "prepared-branch", "held"])("a sweeper killed at %s recovers its locks before the next sweep", async phase => {
+  const root = repository();
+  const { dir, tip } = lane(root, path.join(caseDir, "crash-lane"), "topic/crash");
+  await killedSweeper(root, dir, tip, phase);
+  const headLock = git(["rev-parse", "--git-path", "HEAD.lock"], dir);
+  const branchLock = path.join(root, ".git/refs/heads/topic/crash.lock");
+  expect(fs.existsSync(headLock)).toBe(phase !== "prepared-head");
+  expect(fs.existsSync(branchLock)).toBe(phase === "held");
+  const ordinary = ports({ pipelines: [pipeline({ repoDir: root, worktreeDir: dir, branch: "topic/crash" })], prs: [merged(251, "topic/crash", tip)] });
+  // Keep the checkout for one recovery pass to prove commits work again.
+  const recovered = await sweepMergedWorktrees({ ...ordinary, conversationCwds: () => [dir] });
+  expect(recovered.errors).toEqual([]);
+  expect(recovered.kept[0]!.reason).toBe("live-conversation");
+  expect(fs.existsSync(headLock)).toBe(false);
+  expect(fs.existsSync(branchLock)).toBe(false);
+  git(["commit", "--allow-empty", "-q", "-m", "commit after recovery"], dir);
+  const newTip = git(["rev-parse", "HEAD"], dir);
+  const removed = await sweepMergedWorktrees({ ...ordinary, mergedPullRequests: () => [merged(251, "topic/crash", newTip)] });
+  expect(removed.errors).toEqual([]);
+  expect(removed.removed.map(row => row.path)).toEqual([dir]);
+  expect(fs.readdirSync(path.join(process.env.LLV_STATE_DIR!, "worktree-sweep-locks"))).toEqual([]);
+});
+
+test("recovery preserves a foreign HEAD lock that replaced the recorded inode", async () => {
+  const root = repository();
+  const { dir, tip } = lane(root, path.join(caseDir, "crash-lane"), "topic/crash");
+  await killedSweeper(root, dir, tip, "held");
+  const lock = git(["rev-parse", "--git-path", "HEAD.lock"], dir);
+  fs.writeFileSync(lock + ".replacement", "foreign lock");
+  fs.renameSync(lock + ".replacement", lock);
+  const report = await sweepMergedWorktrees(ports({ repositories: [root], prs: [merged(251, "topic/crash", tip)] }));
+  expect(report.errors).toEqual([]);
+  expect(report.removed).toEqual([]);
+  expect(report.kept[0]!.reason).toBe("locked");
+  expect(fs.readFileSync(lock, "utf8")).toBe("foreign lock");
+});
+
+test("another sweep preserves locks held by a living sweeper", async () => {
+  const root = repository();
+  const { dir, tip } = lane(root, path.join(caseDir, "live-lock-lane"), "topic/live-lock");
+  const ordinary = ports({ repositories: [root], prs: [merged(252, "topic/live-lock", tip)] });
+  let listings = 0;
+  const report = await sweepMergedWorktrees({ ...ordinary, git: async (args, cwd) => {
+    if (args[0] === "worktree" && args[1] === "list" && ++listings === 2) {
+      const concurrent = await sweepMergedWorktrees(ordinary);
+      expect(concurrent.errors).toEqual([]);
+      expect(concurrent.kept[0]!.reason).toBe("locked");
+      expect(fs.existsSync(git(["rev-parse", "--git-path", "HEAD.lock"], dir))).toBe(true);
+    }
+    return ordinary.git(args, cwd);
+  } });
+  expect(report.errors).toEqual([]);
+  expect(report.removed.map(row => row.path)).toEqual([dir]);
 });

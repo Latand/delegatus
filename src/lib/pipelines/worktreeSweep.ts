@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,8 +8,9 @@ import { statePath } from "@/lib/configDir";
 import type { ForgeCacheFile } from "@/lib/forge/cache";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { githubRunner, type GithubRunner } from "@/lib/monitor/githubEvidence";
-import { writeJsonDurably } from "@/lib/state/durableJson";
-import { hostCommandArgs, openHostTempRoots } from "@/lib/state/hostTempViews";
+import { fsyncPath, writeJsonDurably } from "@/lib/state/durableJson";
+import { captureProcessIdentity, processIdentityProvenDead, type ProcessIdentity } from "@/lib/processIdentity";
+import { hostCommandArgs, openHostTempRoots, stageHostNamespace } from "@/lib/state/hostTempViews";
 import { isOwnedTempName, ownTempRoots, resolvePhysicalPath, scanProcesses, sweepRoots, type ProcessScan, type TempSweepRoot } from "@/lib/tempSweep";
 import type { ExecResult } from "@/lib/workflows/provision";
 
@@ -624,15 +626,60 @@ function registrationHold(root: string, directory: string, target: string,
   } catch { return { path: directory, reason: "uncommitted", detail: "worktree registration could not be refreshed" }; }
 }
 
-/** Git commits and ref updates honor these locks. Keep HEAD and every
-    symbolic destination stable from the preservation proof through removal. */
-function lockCheckoutHead(directory: string, accessible: (directory: string) => string): (() => void) | null {
-  const locks: { file: string; dev: number; ino: number }[] = [];
+type SweepHeadLock = { file: string; prepared: string; dev: string; ino: string };
+type SweepHeadLockRecord = { owner: ProcessIdentity; locks: SweepHeadLock[] };
+const HEAD_LOCK_RECORDS = () => statePath("worktree-sweep-locks");
+
+/** Only our recorded inodes can be released. Retain the journal on an I/O
+    failure so the next sweep can retry, including after a lost namespace view. */
+function releaseRecordedHeadLocks(record: SweepHeadLockRecord, journal: string, accessible: (directory: string) => string): void {
+  for (const lock of record.locks) for (const file of [lock.file, lock.prepared]) {
+    const reached = accessible(file);
+    try {
+      const stat = fs.lstatSync(reached, { bigint: true });
+      if (String(stat.dev) === lock.dev && String(stat.ino) === lock.ino) {
+        fs.unlinkSync(reached);
+        fsyncPath(path.dirname(reached));
+      }
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  }
+  fs.unlinkSync(journal);
+  fsyncPath(path.dirname(journal));
+}
+
+function recoverCheckoutHeadLocks(accessible: (directory: string) => string, errors: string[]): void {
+  let files: string[];
+  try { files = fs.readdirSync(HEAD_LOCK_RECORDS()); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") errors.push("HEAD lock recovery: records could not be read");
+    return;
+  }
+  for (const file of files.filter(file => file.endsWith(".json"))) {
+    const journal = path.join(HEAD_LOCK_RECORDS(), file);
+    try {
+      const record = JSON.parse(fs.readFileSync(journal, "utf8")) as SweepHeadLockRecord;
+      if (!record.owner || !Number.isSafeInteger(record.owner.pid) || record.owner.pid <= 0 || !Array.isArray(record.locks)
+        || record.locks.some(lock => !path.isAbsolute(lock.file) || !path.isAbsolute(lock.prepared)
+          || !lock.file.endsWith(".lock") || path.dirname(lock.file) !== path.dirname(lock.prepared)
+          || !path.basename(lock.prepared).startsWith(".delegatus-sweep-") || !/^\d+$/.test(lock.dev) || !/^\d+$/.test(lock.ino)))
+        throw new Error("invalid lock record");
+      if (processIdentityProvenDead(record.owner)) releaseRecordedHeadLocks(record, journal, accessible);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") errors.push("HEAD lock recovery: a record could not be released");
+    }
+  }
+}
+
+/** Git commits and ref updates honor these locks. Prepare an inode and record
+    it durably BEFORE linking it at Git's lock name, covering a crash at every
+    point between acquisition and removal without claiming somebody else's lock. */
+function lockCheckoutHead(directory: string, accessible: (directory: string) => string, errors: string[]): (() => void) | null {
+  const journal = path.join(HEAD_LOCK_RECORDS(), `${randomUUID()}.json`);
+  const record: SweepHeadLockRecord = { owner: captureProcessIdentity(process.pid), locks: [] };
   const release = () => {
-    for (const lock of locks.reverse()) try {
-      const stat = fs.lstatSync(lock.file);
-      if (stat.dev === lock.dev && stat.ino === lock.ino) fs.unlinkSync(lock.file);
-    } catch { /* Removal can already have removed the checkout metadata. */ }
+    if (!record.locks.length) return;
+    try { releaseRecordedHeadLocks(record, journal, accessible); }
+    catch { errors.push("HEAD lock release: recorded locks await recovery"); }
   };
   try {
     const pointer = fs.readFileSync(path.join(accessible(directory), ".git"), "utf8").trim();
@@ -641,11 +688,21 @@ function lockCheckoutHead(directory: string, accessible: (directory: string) => 
     const common = path.resolve(metadata, fs.readFileSync(accessible(path.join(metadata, "commondir")), "utf8").trim());
     if (fs.existsSync(accessible(path.join(common, "reftable")))) return null;
     const claim = (file: string) => {
+      const prepared = path.join(path.dirname(file), `.delegatus-sweep-${randomUUID()}`);
       const reached = accessible(file);
+      const preparedPath = accessible(prepared);
       fs.mkdirSync(path.dirname(reached), { recursive: true });
-      const fd = fs.openSync(reached, "wx", 0o600);
-      try { const stat = fs.fstatSync(fd); locks.push({ file: reached, dev: stat.dev, ino: stat.ino }); }
-      finally { fs.closeSync(fd); }
+      const fd = fs.openSync(preparedPath, "wx", 0o600);
+      try {
+        fs.fsyncSync(fd);
+        const stat = fs.fstatSync(fd, { bigint: true });
+        record.locks.push({ file, prepared, dev: String(stat.dev), ino: String(stat.ino) });
+      } finally { fs.closeSync(fd); }
+      writeJsonDurably(journal, record);
+      fs.linkSync(preparedPath, reached); // Atomic exclusive claim; an existing Git lock stays.
+      // Retain the prepared hard link so a replaced Git lock cannot recycle
+      // our recorded inode before recovery verifies it.
+      fsyncPath(path.dirname(reached));
     };
     claim(path.join(metadata, "HEAD.lock"));
     let value = fs.readFileSync(accessible(path.join(metadata, "HEAD")), "utf8").trim();
@@ -731,6 +788,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
     keptBytes: {},
     errors: [],
   };
+  if (!dryRun) recoverCheckoutHeadLocks(accessible, report.errors);
   const keep = (kept: WorktreeKept) => {
     /* Activity restarts the retention clock. */
     if (BUSY_REASONS.has(kept.reason)) delete kept.firstSettledAt;
@@ -981,7 +1039,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
         keep({ ...base, reason: "map-write-failed" });
         continue;
       }
-      const releaseHead = dryRun ? () => {} : lockCheckoutHead(worktree, accessible);
+      const releaseHead = dryRun ? () => {} : lockCheckoutHead(worktree, accessible, report.errors);
       if (!releaseHead) { keep({ ...base, reason: "locked", detail: "HEAD could not be held through removal" }); continue; }
       try {
         /* A commit made since the status read leaves the checkout clean, so the
@@ -1228,9 +1286,13 @@ export const realGit: GitRun = (args, cwd) => runGitCommand("git", args, cwd);
     the namespace root; Git removes its registered canonical path inside that
     namespace, with the caller's uid and groups. A gone or recycled anchor
     cannot authorize an operation in a different namespace. */
-export function hostTempWorktreeAccess(roots: readonly TempSweepRoot[], run = runGitCommand) {
-  const foreign = roots.filter(root => root.via && root.anchor);
-  const rootFor = (directory: string) => foreign.find(root => inside(directory, root.path));
+export function hostTempWorktreeAccess(
+  roots: readonly TempSweepRoot[], run = runGitCommand,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+) {
+  const namespace = env.LLV_DOCKER_NSENTER_SHIMS === "1" ? stageHostNamespace() : null;
+  const foreign = roots.filter(root => namespace && root.via && root.anchor?.namespace === namespace);
+  const rootFor = (directory: string) => !fs.existsSync(directory) ? foreign.find(root => inside(directory, root.path)) : undefined;
   const valid = (root: TempSweepRoot) => {
     try { return fs.readlinkSync(path.join(path.dirname(root.via), "ns/mnt")) === root.anchor?.namespace; }
     catch { return false; }
@@ -1240,12 +1302,18 @@ export function hostTempWorktreeAccess(roots: readonly TempSweepRoot[], run = ru
       const root = rootFor(directory);
       return root ? (valid(root) ? root.via : "/proc/0/root") + directory : directory;
     },
-    git: ((args: string[], cwd: string) => {
+    git: (async (args: string[], cwd: string) => {
       const target = args[0] === "worktree" && args[1] === "remove" ? args[2]! : cwd;
-      // Container Git would mark a valid host temp checkout prunable before
-      // its filesystem view is consulted. List in the host view as well.
-      const root = rootFor(target) ?? (args[0] === "worktree" && args[1] === "list" ? foreign[0] : undefined);
-      if (!root) return realGit(args, cwd);
+      let root = rootFor(target);
+      if (!root && args[0] === "worktree" && args[1] === "list" && foreign.length) {
+        // List locally first. Only registrations outside our own filesystem
+        // need the host view; unrelated private agent namespaces never select it.
+        const listed = await run("git", args, cwd);
+        if (listed.code !== 0) return listed;
+        root = parseWorktreeList(listed.stdout).map(entry => rootFor(entry.path)).find(Boolean);
+        if (!root) return listed;
+      }
+      if (!root) return run("git", args, cwd);
       if (!valid(root)) return Promise.resolve({ code: 1, stdout: "", stderr: "host temp namespace is unavailable" });
       return run("nsenter", hostCommandArgs(root.anchor!.pid, "/bin/sh", ["-c",
         'cd "$1" || exit; shift; exec git "$@"', "sh", cwd, ...args]), os.tmpdir());
