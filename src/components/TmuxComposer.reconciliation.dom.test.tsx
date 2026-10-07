@@ -53,6 +53,7 @@ function publishReceipts(next: RuntimeReceipt[]): void {
 }
 import { appendComposerDraft, TmuxComposer } from "./TmuxComposer";
 import { readOutbox, resetOutboxForTests } from "./conversation/outbox";
+import { composerSubmissionPayloads } from "@/lib/composerSubmissionPayloads";
 
 /* A submission reaches the wire after its complete copy is durably retained,
    which spans several macrotasks rather than one. */
@@ -510,7 +511,7 @@ test("a delayed receipt reconciles one text-plus-images generation on desktop an
       expect(outboxOf(conversationId).find((e) => e.text === prompt)?.state).toBe("delivering");
       /* Its admitted operation owns delivery; the complete copy remains available for re-check. */
       expect(host.querySelectorAll('[data-receipt-uncertain-retry]')).toHaveLength(0);
-      expect([...host.querySelectorAll("button")].some((button) => button.textContent === translate("en", "composer.payloadRecheck"))).toBe(true);
+      expect([...host.querySelectorAll("button")].some((button) => (button.textContent || button.getAttribute("aria-label")) === translate("en", "composer.payloadRecheck"))).toBe(true);
       expect(outboxOf(conversationId).find(entry => entry.id === sentKeys[0])?.deliveryUncertain).toBeUndefined();
       expect(host.querySelector(`[aria-label="${translate("en", "runtime.receipt.retry")}"]`)).toBeNull();
       if (mobile) {
@@ -600,7 +601,7 @@ test("only a confirmed retryable failure exposes Retry after a timeout", async (
     expect((host.querySelector('button[type="submit"]') as HTMLButtonElement).disabled).toBe(true);
     /* Its complete copy is retained, so an unknown fate is re-checked, never re-driven from here. */
     expect(host.querySelectorAll("[data-receipt-uncertain-retry]")).toHaveLength(0);
-    expect([...host.querySelectorAll("button")].some((button) => button.textContent === translate("en", "composer.payloadRecheck"))).toBe(true);
+    expect([...host.querySelectorAll("button")].some((button) => (button.textContent || button.getAttribute("aria-label")) === translate("en", "composer.payloadRecheck"))).toBe(true);
     expect(retries().filter(button => !button.hasAttribute("data-receipt-uncertain-retry"))).toHaveLength(0);
     expect(outboxOf(conversationId).find((e) => e.text === prompt)?.state).toBe("delivering");
 
@@ -625,6 +626,181 @@ test("only a confirmed retryable failure exposes Retry after a timeout", async (
     flushSync(() => root.unmount());
     publishReceipts([]);
     refreshRuntimeImpl = async () => false;
+    sessionStorage.clear();
+    host.remove();
+  }
+});
+
+/* The operator's report, 2026-10-07: «Автоматичну перевірку зупинено» with a
+   «Перевірити доставку» button that did nothing. A retained copy whose message
+   was delivered while its receipt went past this tab is never settled by the
+   live tail, which only carries recent receipts. The notice has to read the
+   operation itself, and go once the delivery is known. */
+async function retainedPayload(conversationId: string, key: string, operationId: string, text: string) {
+  const ref = await composerSubmissionPayloads.retain({ conversationId, key }, { text, images: [], files: [] });
+  await composerSubmissionPayloads.seal(ref, { route: "runtime", body: { conversationId, text, idempotencyKey: key } });
+  expect(await composerSubmissionPayloads.beginAttempt(ref)).toBe(true);
+  expect(composerSubmissionPayloads.consumeAttempt(ref)).toBe(true);
+  expect(await composerSubmissionPayloads.observe(ref, {
+    operationId, idempotencyKey: key, conversationId, revision: 1, status: "queued", at: "2026-10-07T18:00:00.000Z",
+  })).toBe(true);
+  return ref;
+}
+
+function payloadNoticeHarness(conversationId: string, operationAnswer: () => RuntimeReceipt | null) {
+  const operationReads: string[] = [];
+  globalThis.fetch = (async (input) => {
+    const url = String(input);
+    if (url === "/api/tmux/targets") return { ok: true, json: async () => ({ targets: { "0": null } }) } as Response;
+    if (url.startsWith("/api/runtime/operations/")) {
+      operationReads.push(decodeURIComponent(url.slice("/api/runtime/operations/".length)));
+      const receipt = operationAnswer();
+      return { ok: Boolean(receipt), status: receipt ? 200 : 404, json: async () => (receipt ? { receipt } : {}) } as Response;
+    }
+    throw new Error(`unexpected request: ${url}`);
+  }) as typeof fetch;
+  return { operationReads };
+}
+
+const notice = (host: Element) => host.querySelector("[data-payload-key]");
+const until = async (condition: () => boolean) => {
+  for (let attempt = 0; attempt < 100 && !condition(); attempt += 1) await tick();
+  expect(condition()).toBe(true);
+};
+
+for (const mobile of [false, true]) test(`a tap on Re-check reads the delivery and a settled delivery takes the notice away (${mobile ? "390px" : "desktop"})`, async () => {
+  setLocale("uk");
+  mobileViewport = mobile;
+  const conversationId = `conv-payload-recheck-${mobile ? "phone" : "desktop"}`;
+  const key = `key-${conversationId}`;
+  const operationId = `op-${conversationId}`;
+  let delivered = false;
+  /* Until it is delivered the record has no ending to report. */
+  const { operationReads } = payloadNoticeHarness(conversationId, () => (delivered ? {
+    operationId, idempotencyKey: key, conversationId, kind: "send", status: "delivered",
+    resend: "not-needed", text: "перевір реліз", at: "2026-10-07T18:01:00.000Z", revision: 2,
+  } : null));
+  await retainedPayload(conversationId, key, operationId, "перевір реліз");
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    flushSync(() => root.render(<TmuxComposer file={fileFor(conversationId)} />));
+    await until(() => notice(host) !== null);
+    const line = notice(host)!;
+    /* One line, no box, no second paragraph. */
+    expect(line.tagName).not.toBe("DETAILS");
+    expect(line.querySelectorAll("p")).toHaveLength(0);
+    expect(line.textContent).not.toContain("Автоматичну перевірку зупинено");
+    const recheck = line.querySelector(`[aria-label="${translate("uk", "composer.payloadRecheck")}"]`) as HTMLButtonElement;
+    expect(recheck).not.toBeNull();
+    const before = operationReads.length;
+    flushSync(() => recheck.click());
+    /* The tap reads this message's own operation, now. */
+    await until(() => operationReads.length > before);
+    expect(operationReads.at(-1)).toBe(operationId);
+    /* Still unconfirmed: the line says it checked, and stays. */
+    await until(() => notice(host)?.querySelector("[data-payload-checked]") !== null);
+    expect(notice(host)).not.toBeNull();
+    delivered = true;
+    flushSync(() => (notice(host)!.querySelector(`[aria-label="${translate("uk", "composer.payloadRecheck")}"]`) as HTMLButtonElement).click());
+    /* Delivered: the copy settles and the notice is gone. */
+    await until(() => notice(host) === null);
+    expect(host.querySelector('[data-testid="composer-payload-recovery"]')).toBeNull();
+    expect(await composerSubmissionPayloads.list(conversationId)).toHaveLength(0);
+  } finally {
+    flushSync(() => root.unmount());
+    sessionStorage.clear();
+    host.remove();
+    mobileViewport = false;
+  }
+});
+
+test("a stale notice for a delivery that already settled goes by itself", async () => {
+  setLocale("en");
+  const conversationId = "conv-payload-stale";
+  const key = "key-payload-stale";
+  const operationId = "op-payload-stale";
+  const { operationReads } = payloadNoticeHarness(conversationId, () => ({
+    operationId, idempotencyKey: key, conversationId, kind: "send", status: "delivered", resend: "not-needed",
+    text: "earlier message", at: "2026-10-07T17:00:00.000Z", revision: 3,
+  }));
+  await retainedPayload(conversationId, key, operationId, "earlier message");
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    flushSync(() => root.render(<TmuxComposer file={fileFor(conversationId)} />));
+    await until(() => operationReads.includes(operationId));
+    await until(() => notice(host) === null);
+    expect(await composerSubmissionPayloads.list(conversationId)).toHaveLength(0);
+  } finally {
+    flushSync(() => root.unmount());
+    sessionStorage.clear();
+    host.remove();
+  }
+});
+
+test("dismissing the notice hides it for that message across a remount, and only that message", async () => {
+  setLocale("en");
+  const conversationId = "conv-payload-dismiss";
+  payloadNoticeHarness(conversationId, () => null);
+  await retainedPayload(conversationId, "key-dismissed", "op-dismissed", "first message");
+  const host = document.createElement("div");
+  document.body.append(host);
+  let root = createRoot(host);
+  try {
+    flushSync(() => root.render(<TmuxComposer file={fileFor(conversationId)} />));
+    await until(() => notice(host) !== null);
+    const dismiss = notice(host)!.querySelector(`[aria-label="${translate("en", "runtime.receipt.dismiss")}"]`) as HTMLButtonElement;
+    expect(dismiss).not.toBeNull();
+    flushSync(() => dismiss.click());
+    await until(() => notice(host) === null);
+    /* Hiding is not settling: the retained copy and its observer stay. */
+    expect(await composerSubmissionPayloads.list(conversationId)).toHaveLength(1);
+    flushSync(() => root.unmount());
+    root = createRoot(host);
+    flushSync(() => root.render(<TmuxComposer file={fileFor(conversationId)} />));
+    await tick();
+    await tick();
+    expect(notice(host)).toBeNull();
+    /* A later message that is owed something still gets its line. */
+    await retainedPayload(conversationId, "key-later", "op-later", "later message");
+    flushSync(() => root.unmount());
+    root = createRoot(host);
+    flushSync(() => root.render(<TmuxComposer file={fileFor(conversationId)} />));
+    await until(() => notice(host) !== null);
+    expect(notice(host)!.getAttribute("data-payload-key")).toBe("key-later");
+    expect(host.querySelectorAll("[data-payload-key]")).toHaveLength(1);
+  } finally {
+    flushSync(() => root.unmount());
+    sessionStorage.clear();
+    host.remove();
+  }
+});
+
+test("an unknown fate the receipt card states is not repeated by the retained copy's line", async () => {
+  setLocale("en");
+  const conversationId = "conv-payload-unknown";
+  const key = "key-payload-unknown";
+  const operationId = "op-payload-unknown";
+  payloadNoticeHarness(conversationId, () => ({
+    operationId, idempotencyKey: key, conversationId, kind: "send", status: "failed", resend: "verify-first",
+    reason: "delivery was started by an earlier executor", text: "unknown message", at: "2026-10-07T18:01:00.000Z", revision: 2,
+  }));
+  await retainedPayload(conversationId, key, operationId, "unknown message");
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    flushSync(() => root.render(<TmuxComposer file={fileFor(conversationId)} />));
+    await until(() => host.querySelector("[data-runtime-receipt-stack]") !== null);
+    await until(() => notice(host) === null);
+    /* The card keeps the message's Re-check; the copy stays retained. */
+    expect([...host.querySelectorAll("button")].some((button) => button.textContent === translate("en", "composer.payloadRecheck"))).toBe(true);
+    expect(await composerSubmissionPayloads.list(conversationId)).toHaveLength(1);
+  } finally {
+    flushSync(() => root.unmount());
     sessionStorage.clear();
     host.remove();
   }
