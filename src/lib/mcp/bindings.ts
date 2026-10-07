@@ -5337,9 +5337,12 @@ function deploymentList(result: Record<string, unknown>, compact = false): {
   ) {
     throw new ViewerControlResponseError("Viewer control returned a malformed deployment list");
   }
-  if ((result.nextCursor !== undefined || result.hasMore !== undefined)
-    && (typeof result.hasMore !== "boolean" || !(result.nextCursor === null || typeof result.nextCursor === "string")
-      || result.hasMore !== (typeof result.nextCursor === "string" && result.nextCursor.length > 0))) {
+  /* A checkout or packaged Viewer up to 2fda8a4e ends its page with a null
+     cursor and no hasMore; that page declares itself the last one. */
+  const hasMore = result.nextCursor === null && result.hasMore === undefined ? false : result.hasMore;
+  if ((result.nextCursor !== undefined || hasMore !== undefined)
+    && (typeof hasMore !== "boolean" || !(result.nextCursor === null || typeof result.nextCursor === "string")
+      || hasMore !== (typeof result.nextCursor === "string" && result.nextCursor.length > 0))) {
     throw new ViewerControlResponseError("Viewer control returned malformed deployment pagination");
   }
   const health = runtimeHostRequestHealth(result.runtimeHostRequests);
@@ -5349,7 +5352,7 @@ function deploymentList(result: Record<string, unknown>, compact = false): {
   return {
     deployments: result.deployments,
     ...(result.legacySnapshot === true ? { legacySnapshot: true } : {}),
-    ...(result.nextCursor !== undefined ? { nextCursor: result.nextCursor as string | null, hasMore: result.hasMore as boolean } : {}),
+    ...(result.nextCursor !== undefined ? { nextCursor: result.nextCursor as string | null, hasMore: hasMore as boolean } : {}),
     ...(health ? { runtimeHostRequests: health } : {}),
   };
 }
