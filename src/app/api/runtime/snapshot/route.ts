@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { acceptsGzip, gzipBody } from "@/lib/http/gzipBody";
 import { runtimeHostClient } from "@/lib/runtime/client";
 import { runtimeEventsEnabled, structuredHostsEnabled, RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
+import { withJsonMembers } from "@/lib/runtime/snapshotBody";
 import { structuredStartupAxis } from "@/lib/runtime/startupStatus";
 
 export const runtime = "nodejs";
@@ -25,13 +26,17 @@ export async function GET(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: "runtime host socket is unavailable", code: RUNTIME_PLANE_ABSENT }, { status: 503 });
   }
   try {
-    const body = JSON.stringify({
-      // The request signal reaches the runtime host, so a disconnected caller
-      // cancels its socket wait instead of leaving late host work behind.
-      ...await client.snapshot(request.signal, summary || voiceFor ? { voiceBodiesFor: voiceFor ? [voiceFor] : [] } : undefined),
-      structuredHostsEnabled: structuredHostsEnabled(),
-      structuredStartup: structuredStartupAxis(),
-    });
+    const scope = summary || voiceFor ? { voiceBodiesFor: voiceFor ? [voiceFor] : [] } : undefined;
+    // The request signal reaches the runtime host, so a disconnected caller
+    // cancels its socket wait instead of leaving late host work behind.
+    const encoded = client.snapshotJson ? await client.snapshotJson(request.signal, scope) : null;
+    const snapshot = encoded === null ? await client.snapshot(request.signal, scope) : null;
+    const viewer = { structuredHostsEnabled: structuredHostsEnabled(), structuredStartup: structuredStartupAxis() };
+    /* The host already encoded the snapshot, megabytes of it. The Viewer's
+       two members are appended to that text; parsing the frame to spread it
+       and stringify it again held the request thread for both passes. */
+    const body = (encoded === null ? null : withJsonMembers(encoded, viewer))
+      ?? JSON.stringify({ ...(snapshot ?? JSON.parse(encoded!) as object), ...viewer });
     const headers = { "content-type": "application/json", "cache-control": "no-store", vary: "accept-encoding" };
     /* A cold open and every authoritative rejoin read the whole projection,
        megabytes of it; compressed it is a fifth of that on the wire (#1994). */

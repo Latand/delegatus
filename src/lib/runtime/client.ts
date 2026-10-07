@@ -98,6 +98,9 @@ export interface RuntimeHostClient {
   nativeQueueSettleCompacted?(request: NativeQueueCompactedProof): Promise<NativeQueueCompactedSettlement>;
   readSession?(identity: RuntimeSessionRead, options?: { timeoutMs?: number }): Promise<RuntimeSession | null>;
   snapshot(signal?: AbortSignal, options?: { voiceBodiesFor?: string[]; timeoutMs?: number }): Promise<RuntimeSnapshot>;
+  /** The same snapshot as the JSON text the host encoded, for a caller that
+      only forwards it. Optional: a client without it answers `snapshot`. */
+  snapshotJson?(signal?: AbortSignal, options?: { voiceBodiesFor?: string[]; timeoutMs?: number }): Promise<string>;
   events(after: number, signal?: AbortSignal): Promise<RuntimeReplay>;
   waitEvents(after: number, timeoutMs?: number, signal?: AbortSignal): Promise<RuntimeReplay>;
   append(event: RuntimeEventInput): Promise<unknown>;
@@ -171,6 +174,10 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
     // The deadline belongs to this caller, never to the wire protocol.
     const params = options?.voiceBodiesFor ? { voiceBodiesFor: options.voiceBodiesFor } : undefined;
     return this.call("snapshot", params, options?.timeoutMs ?? this.snapshotTimeoutMs, signal) as Promise<RuntimeSnapshot>;
+  }
+  snapshotJson(signal?: AbortSignal, options?: { voiceBodiesFor?: string[]; timeoutMs?: number }): Promise<string> {
+    const params = options?.voiceBodiesFor ? { voiceBodiesFor: options.voiceBodiesFor } : undefined;
+    return this.call("snapshot", params, options?.timeoutMs ?? this.snapshotTimeoutMs, signal, true) as Promise<string>;
   }
   events(after: number, signal?: AbortSignal): Promise<RuntimeReplay> { return this.call("events", { after }, this.timeoutMs, signal) as Promise<RuntimeReplay>; }
   waitEvents(after: number, timeoutMs = 15_000, signal?: AbortSignal): Promise<RuntimeReplay> { return this.call("wait", { after, timeoutMs }, timeoutMs + 1_000, signal) as Promise<RuntimeReplay>; }
@@ -289,7 +296,11 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
 
   admitMcpHealthProbe(capability: string): Promise<boolean> { return this.call("mcp-health-probe-admission", { capability }) as Promise<boolean>; }
 
-  private call(method: RuntimeSocketRequest["method"], params?: Record<string, unknown>, timeoutMs = this.timeoutMs, signal?: AbortSignal): Promise<unknown> {
+  /** `encoded` resolves the result as the JSON text inside the frame. The
+      host splices its cached snapshot into the frame verbatim, megabytes of
+      it; parsing that here only for a route to stringify it again cost two
+      full passes over the frame on the request thread, per request. */
+  private call(method: RuntimeSocketRequest["method"], params?: Record<string, unknown>, timeoutMs = this.timeoutMs, signal?: AbortSignal, encoded = false): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const request: RuntimeSocketRequest = { id: crypto.randomUUID(), method, ...(params ? { params } : {}) };
       const socket = net.createConnection(this.socketPath);
@@ -331,9 +342,20 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
         if (newlineInChunk < 0) return;
         const newline = frame.length - text.length + newlineInChunk;
         try {
+          if (encoded) {
+            /* A success frame is exactly this envelope around the result
+               (`serveRuntimeHost`). Anything else, a refusal included, takes
+               the parsing path below. */
+            const envelope = `{"id":${JSON.stringify(request.id)},"ok":true,"result":`;
+            if (frame.startsWith(envelope) && frame.charCodeAt(envelope.length) === 123
+              && frame.charCodeAt(newline - 2) === 125 && frame.charCodeAt(newline - 1) === 125) {
+              return finish(undefined, frame.slice(envelope.length, newline - 1));
+            }
+          }
           const response = JSON.parse(frame.slice(0, newline)) as RuntimeSocketResponse;
           if (response.id !== request.id) return finish(new RuntimeHostUnavailableError("runtime host response id mismatch"));
-          finish(response.ok ? undefined : new RuntimeHostUnavailableError(response.error ?? "runtime host rejected request", response.code), response.result);
+          finish(response.ok ? undefined : new RuntimeHostUnavailableError(response.error ?? "runtime host rejected request", response.code),
+            encoded ? JSON.stringify(response.result) ?? "null" : response.result);
         } catch {
           finish(new RuntimeHostUnavailableError("runtime host returned invalid JSON"));
         }
