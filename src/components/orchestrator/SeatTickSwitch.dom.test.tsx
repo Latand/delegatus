@@ -87,6 +87,9 @@ const REFUSAL = "instructions (reason) are required when the tick is disabled or
 const realFetch = globalThis.fetch;
 const writes: Array<Record<string, unknown>> = [];
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+/** How long the route takes to answer a write, and a refusal it gives instead. */
+let putDelay = 0;
+let refuse: string | null = null;
 
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = String(input);
@@ -95,6 +98,8 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if ((init?.method ?? "GET") !== "PUT") return json(answer());
   const change = JSON.parse(String(init!.body)) as Record<string, unknown>;
   writes.push(change);
+  if (putDelay) await new Promise((resolve) => setTimeout(resolve, putDelay));
+  if (refuse) return json({ error: refuse }, 400);
   const next: Row = { ...row };
   if ("enabled" in change) next.enabled = change.enabled as boolean;
   if ("wakeIntervalMinutes" in change) next.wakeIntervalMinutes = change.wakeIntervalMinutes as number | null;
@@ -114,6 +119,8 @@ beforeEach(() => {
   setLocale("en");
   reduceMotion = false;
   writes.length = 0;
+  putDelay = 0;
+  refuse = null;
   row = { ...DEFAULT_ROW };
 });
 afterEach(() => {
@@ -301,6 +308,89 @@ test("each stop writes its schedule once, clears the expiry, and the switch repl
   expect(writes[3]).toEqual({ project: PROJECT, enabled: true, wakeIntervalMinutes: null, untilMinutes: null, reason: null });
   expect(row).toEqual(DEFAULT_ROW);
   expect(writes).toHaveLength(4);
+});
+
+test("a move made while the previous write is in flight is written after it, and never opens the settings", async () => {
+  putDelay = 400;
+  const root = await mount();
+  await drag(root, [10, 20]);
+  expect(control().getAttribute("aria-busy")).toBe("true");
+  /* From 10 min, back to off before the route has answered. */
+  await drag(root, [-30, -62]);
+  expect(popover()).toBeNull();
+  /* The thumb stays where it was released while it waits its turn. */
+  expect(position()).toBe(0);
+  await sleep(1000);
+  await settle(root);
+  expect(popover()).toBeNull();
+  expect(writes).toEqual([
+    { project: PROJECT, enabled: true, wakeIntervalMinutes: 10, untilMinutes: null, reason: SET_10 },
+    /* Measured against the record the first write came back with: the
+       switch's own sentence is replaced. */
+    { project: PROJECT, enabled: false, untilMinutes: null, reason: OFF },
+  ]);
+  expect(row).toEqual({ enabled: false, wakeIntervalMinutes: 10, reason: OFF, until: null });
+  expect(control().getAttribute("data-seat-tick-stop")).toBe("0");
+  expect(thumb().textContent).toBe("off");
+});
+
+test("a keyboard step committed while a write is in flight waits for it too", async () => {
+  putDelay = 300;
+  const root = await mount();
+  await drag(root, [10, 20]);
+  key("ArrowLeft");
+  key("ArrowLeft");
+  key("ArrowLeft");
+  key("Enter");
+  await settle(root);
+  expect(popover()).toBeNull();
+  expect(position()).toBe(0);
+  await sleep(800);
+  await settle(root);
+  expect(writes.map((write) => write.enabled)).toEqual([true, false]);
+  expect(thumb().textContent).toBe("off");
+  expect(popover()).toBeNull();
+});
+
+test("of several moves during one write only the last is sent, and nothing when it ends where that write lands", async () => {
+  putDelay = 300;
+  const root = await mount();
+  await drag(root, [10, 20]);
+  await drag(root, [-30, -62]);
+  await drag(root, [10, 19]);
+  expect(popover()).toBeNull();
+  await sleep(800);
+  await settle(root);
+  expect(writes.map((write) => write.wakeIntervalMinutes)).toEqual([10, 240]);
+  expect(thumb().textContent).toBe("4 h");
+
+  /* To 10 min, off while that is in flight, then back to 10 min: the record
+     the write comes back with already holds it. */
+  writes.length = 0;
+  await drag(root, [10, 40]);
+  await drag(root, [-30, -62]);
+  await drag(root, [30, 62]);
+  await sleep(800);
+  await settle(root);
+  expect(writes.map((write) => write.wakeIntervalMinutes)).toEqual([10]);
+  expect(thumb().textContent).toBe("10 min");
+  expect(popover()).toBeNull();
+});
+
+test("a move the route refuses rolls the thumb back and opens the settings with the server's own words; a move queued behind it is dropped", async () => {
+  putDelay = 300;
+  refuse = REFUSAL;
+  const root = await mount();
+  await drag(root, [10, 20]);
+  await drag(root, [-30, -62]);
+  await sleep(800);
+  await settle(root);
+  expect(writes).toHaveLength(1);
+  expect(popover()).not.toBeNull();
+  expect(popover()!.querySelector("[data-seat-tick-error]")).not.toBeNull();
+  expect(thumb().textContent).toBe("1 h");
+  expect(position()).toBe(2);
+  expect(row).toEqual(DEFAULT_ROW);
 });
 
 test("a reason a person wrote is never sent over, on any stop", async () => {

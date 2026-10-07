@@ -150,13 +150,50 @@ export function SeatTickSwitch({ read, reading, now, surface, open, onOpen, onRe
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
 
+  /* A move released while a write is in flight waits for it, and only the
+     latest one is kept: once the write settles it is measured against the
+     record that came back, so a move back to where that write landed sends
+     nothing. `waiting` is that move, drawn where it was released. */
+  const queued = useRef<number | null>(null);
+  const writing = useRef(false);
+  const [waiting, setWaiting] = useState<number | null>(null);
+  const latest = useRef({ read, onRefused, locale });
+  useLayoutEffect(() => {
+    latest.current = { read, onRefused, locale };
+  });
+
+  const drain = async () => {
+    writing.current = true;
+    try {
+      while (queued.current !== null) {
+        const { read: settings, locale: language } = latest.current;
+        const held = await settings.saveAfter((record) => {
+          const stop = queued.current;
+          queued.current = null;
+          setWaiting(null);
+          /* The stop already set is not a move, so it writes nothing, an expiry included. */
+          if (stop === null || stop === seatTickPlace(record).stop) return null;
+          return seatTickStopChange(stop, record.settings.reason, language === "uk" ? "uk" : "en");
+        });
+        /* Only the route refuses here; its reason is in the settings, and a
+           move made behind the refused one is not sent over it. */
+        if (held === false) {
+          queued.current = null;
+          setWaiting(null);
+          latest.current.onRefused?.();
+          return;
+        }
+      }
+    } finally {
+      writing.current = false;
+    }
+  };
+
   const commit = (stop: number) => {
-    /* The stop already set is not a move, so it writes nothing, an expiry included. */
-    if (!answer || !place || stop === place.stop) return;
-    const stored = (read.record ?? answer).settings.reason;
-    void read.save(seatTickStopChange(stop, stored, locale === "uk" ? "uk" : "en")).then((held) => {
-      if (!held) onRefused?.();
-    });
+    if (!answer || !place) return;
+    queued.current = stop;
+    setWaiting(stop);
+    if (!writing.current) void drain();
   };
 
   const dropPending = () => {
@@ -170,7 +207,8 @@ export function SeatTickSwitch({ read, reading, now, surface, open, onOpen, onRe
     if (event.button !== 0 || !place) return;
     dropPending();
     const stepPx = travelOf(event.currentTarget, geometry.travel) / SEAT_TICK_LAST_STOP;
-    gesture.current = { id: event.pointerId, startX: event.clientX, stepPx, from: place.position, dragging: false, position: place.position, samples: [] };
+    const from = waiting ?? place.position;
+    gesture.current = { id: event.pointerId, startX: event.clientX, stepPx, from, dragging: false, position: from, samples: [] };
     try {
       event.currentTarget.setPointerCapture?.(event.pointerId);
     } catch {
@@ -226,7 +264,7 @@ export function SeatTickSwitch({ read, reading, now, surface, open, onOpen, onRe
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const from = pending ?? place?.position ?? null;
+    const from = pending ?? waiting ?? place?.position ?? null;
     if (event.key === "Escape") {
       const dragging = gesture.current?.dragging ?? false;
       if (dragging || pending !== null) {
@@ -259,8 +297,8 @@ export function SeatTickSwitch({ read, reading, now, surface, open, onOpen, onRe
   };
 
   /* What is shown: the stop a drag or an arrow is heading for, else the record. */
-  const preview = dragAt !== null ? Math.round(dragAt) : pending;
-  const target = dragAt ?? pending ?? place?.position ?? 2;
+  const preview = dragAt !== null ? Math.round(dragAt) : pending ?? waiting;
+  const target = dragAt ?? pending ?? waiting ?? place?.position ?? 2;
   useThumbMotion(rootRef, target, dragAt !== null);
 
   const until = preview === null && answer?.effective.until ? seatTickLocalTime(answer.effective.until, now, locale) : null;
@@ -299,7 +337,7 @@ export function SeatTickSwitch({ read, reading, now, surface, open, onOpen, onRe
       aria-busy={read.saving || undefined}
       title={`${reading.line}\n${t("seatTick.switch.hint")}`}
       data-seat-tick-chip={reading.state}
-      data-seat-tick-switch={dragging ? "dragging" : pending !== null ? "pending" : "rest"}
+      data-seat-tick-switch={dragging ? "dragging" : pending !== null ? "pending" : waiting !== null ? "queued" : "rest"}
       data-seat-tick-surface={surface}
       data-seat-tick-stop={place ? place.stop ?? "custom" : undefined}
       onPointerDown={onPointerDown}

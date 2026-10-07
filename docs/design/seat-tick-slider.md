@@ -273,6 +273,11 @@ drawn, so a stop is 10 px there.
   to moves.
 - A move the route refuses rolls the thumb back, as every save does, and
   opens the settings on the desktop, where the refusal's text is shown.
+- A move released while the previous write is still in flight waits for it,
+  drawn where it was released. Only the latest such move is kept, and once
+  the write settles it is measured against the record that came back: a move
+  back to where that write landed sends nothing. A move queued behind a
+  refused write is dropped, and only the route's refusal opens the settings.
 
 Rendered evidence is the «seat tick switch» block of
 `kanbanBoard.browser.test.tsx`. Its readings are

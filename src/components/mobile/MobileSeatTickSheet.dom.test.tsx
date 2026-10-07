@@ -126,6 +126,8 @@ const realFetch = globalThis.fetch;
 const requests: Recorded[] = [];
 let getAnswer: SeatTickSettingsAnswer;
 let putAnswers: Array<{ status: number; body: unknown }>;
+/** How long the route takes to answer a write. */
+let putDelay = 0;
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
@@ -149,6 +151,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (!url.startsWith("/api/monitor/seat-tick/settings")) return json({});
   if (method === "PUT") {
     const next = putAnswers.length > 1 ? putAnswers.shift()! : putAnswers[0]!;
+    if (putDelay) await new Promise((resolve) => setTimeout(resolve, putDelay));
     return json(next.body, next.status);
   }
   return json(getAnswer);
@@ -187,6 +190,7 @@ beforeEach(() => {
   requests.length = 0;
   getAnswer = record();
   putAnswers = [{ status: 200, body: record() }];
+  putDelay = 0;
 });
 afterEach(() => {
   for (const root of roots) flushSync(() => root.unmount());
@@ -499,6 +503,43 @@ test("a horizontal drag on the switch changes the stop from the row, without ope
     reason: "Turned off with the activity slider in the orchestrator header. Stays off until the operator moves the slider back.",
   });
   /* The row shows what the route read back. */
+  expect(rowSwitch().textContent).toBe("off");
+  expect(row()!.getAttribute("data-seat-tick-row")).toBe("paused");
+});
+
+test("a drag made while the row's previous write is in flight is written after it, and the thumb stays where it was released", async () => {
+  const root = await mount();
+  const at = new Date().toISOString();
+  const tenMinutes = record({ changed: true });
+  const ten = "The operator set the activity slider to «every 10 minutes».";
+  const off = "Turned off with the activity slider in the orchestrator header. Stays off until the operator moves the slider back.";
+  tenMinutes.settings = { ...tenMinutes.settings, wakeIntervalMinutes: 10, reason: ten, updatedAt: at };
+  tenMinutes.effective = { ...tenMinutes.effective, wakeIntervalMinutes: 10, reason: ten, isDefault: false, configured: true, updatedAt: at };
+  const stopped = record({ changed: true });
+  stopped.settings = { ...stopped.settings, enabled: false, wakeIntervalMinutes: 10, reason: off, updatedAt: at };
+  stopped.effective = { ...stopped.effective, enabled: false, wakeIntervalMinutes: 10, reason: off, isDefault: false, configured: true, updatedAt: at };
+  putAnswers = [{ status: 200, body: tenMinutes }, { status: 200, body: stopped }];
+  putDelay = 300;
+  const swipe = async (to: number[]) => {
+    finger("pointerdown", 300);
+    for (const x of to) finger("pointermove", x);
+    await new Promise((resolve) => setTimeout(resolve, 110));
+    finger("pointerup", to[to.length - 1]!);
+    flushSync(() => rowSwitch().click());
+    await settle(root);
+  };
+  /* One step right is 10 min; three back from there, before it is answered, is off. */
+  await swipe([310, 320]);
+  expect(rowSwitch().getAttribute("aria-busy")).toBe("true");
+  await swipe([280, 240]);
+  expect(rowSwitch().textContent).toBe("off");
+  await new Promise((resolve) => setTimeout(resolve, 900));
+  await settle(root);
+  expect(tickSheet()).toBeNull();
+  expect(puts().map((entry) => entry.body)).toEqual([
+    { project: PROJECT, enabled: true, wakeIntervalMinutes: 10, untilMinutes: null, reason: ten },
+    { project: PROJECT, enabled: false, untilMinutes: null, reason: off },
+  ]);
   expect(rowSwitch().textContent).toBe("off");
   expect(row()!.getAttribute("data-seat-tick-row")).toBe("paused");
 });
