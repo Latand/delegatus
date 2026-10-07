@@ -33,6 +33,7 @@ import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
+import { refreshTeamView } from "@/components/team/teamClient";
 
 /*
  * The real Viewer on the kanban face (#1695), over invented content equivalent
@@ -1732,6 +1733,18 @@ if (SCENARIO === "task-motion") {
     { pausedAt: iso(10 * MIN), pausedState: "running" }));
 }
 
+/* Queued holds side by side: a worker slot wait with and without a note, and
+   a resource hold with its note and without one. */
+if (SCENARIO === "hold-kinds") {
+  pipelines.splice(0, pipelines.length);
+  tasks.splice(0, tasks.length,
+    task("hold-slot", "blocked", L("Start the review lane", "Запустити лінію ревʼю"), "", 30 * MIN, [], { hold: { kind: "worker", note: "", since: iso(30 * MIN), by: "agent" } }),
+    task("hold-slot-note", "blocked", L("Start the docs lane", "Запустити лінію документації"), "", 20 * MIN, [], { hold: { kind: "worker", note: L("Three of three workers busy", "Зайняті всі три агенти"), since: iso(20 * MIN), by: "agent" } }),
+    task("hold-resource-note", "blocked", L("Run the full build", "Запустити повну збірку"), "", 15 * MIN, [], { hold: { kind: "resource", note: L("4 GB of memory available, 8 GB needed", "Доступно 4 ГБ памʼяті, потрібно 8 ГБ"), since: iso(15 * MIN), by: "agent" } }),
+    task("hold-resource", "blocked", L("Older resource hold", "Давніша причина про ресурси"), "", 60 * MIN, [], { hold: { kind: "resource", note: "", since: iso(60 * MIN), by: "agent" } }),
+  );
+}
+
 /* `&empty=<status>` empties one column: its tasks move to Done, so the
    column's strip can be read beside the others (an empty column folds). */
 const EMPTY_COLUMN = new URLSearchParams(location.search).get("empty");
@@ -2626,6 +2639,10 @@ if (SEAT_CLS) files.splice(0, files.length);
 if (LAUNCH_CLS) for (const file of files) Object.assign(file, { waitingInput: null, pendingQuestion: null });
 Object.assign(window, { launchRun });
 
+/* The header menu's driver block (kanbanBoard.browser.test.tsx, "the header's menu, built"): `&header=1`
+   hands shared memory, the key, the ping and the team to the driver, and `&member=1` signs a member in. */
+const HEADER_MENU = new URLSearchParams(location.search).has("header");
+const HEADER_ROUTES = ["/api/telemetry", "/api/memory/settings", "/api/asks-you/key", "/api/team"];
 /* The one request that leaves the page: the evidence server draws task icons from lucide (#2102). */
 const serverFetch = window.fetch.bind(window);
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -2637,6 +2654,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }) });
   if (SCENARIO === "service-tier" && url.pathname === "/api/roles") return json({ roles: ROLE_DEFAULTS.map(role => ({ ...role, promptPreview: role.promptScaffold, config: { ...role.config, ...(role.id === "reviewer" ? { serviceTier: "ultrafast" } : {}) }, shipped: { config: role.config } })) });
   if (SCENARIO === "memory-settings" && ["/api/telemetry", "/api/memory/settings", "/api/asks-you/key", "/api/asks-you"].includes(url.pathname)) return serverFetch(url.pathname + url.search, init);
+  if (HEADER_MENU && HEADER_ROUTES.includes(url.pathname)) return serverFetch(url.pathname + url.search, init);
   if (url.pathname === "/api/task-icons") return serverFetch(url.pathname + url.search);
   /* The tick panel the notice card opens reads these two; the driver answers them. */
   if (TICK_CARDS && (url.pathname === "/api/monitor/seat-tick/settings" || url.pathname === "/api/roles")) return serverFetch(url.pathname + url.search, init);
@@ -3286,6 +3304,7 @@ const queueTaskPreview = <div className="p-3"><NativeQueuePanel
   error={null} thread={{ model: null, effort: null }} cardId="conversation_task_queue" mintKey={() => "task-queue-edit"}
   submit={async () => ({ ok: true })} onRefresh={() => {}} t={(key, params) => translate(UK ? "uk" : "en", key, params)}
 /><div className="mt-3"><SeatDeputyChip deputy={taskDeputy} /><DeputyBlock deputy={taskDeputy} /></div></div>;
+if (HEADER_MENU && new URLSearchParams(location.search).has("member")) void refreshTeamView();
 createRoot(document.getElementById("root")!).render(SCENARIO === "task-queue-preview" ? queueTaskPreview : SCENARIO === "service-tier" || SCENARIO === "role-defaults" ? (
   new URLSearchParams(location.search).has("mapping") ? <div className="p-6"><AgentMappingTable statuses={{ claude: { connected: true, account: null }, codex: { connected: true, account: null } }} layout={innerWidth < 640 ? "card" : "table"} onConnect={() => {}} /></div> : <div className="p-6" style={{ paddingTop: 400 }}>
     <RuntimePill file={{ ...searchVer2, engine: "codex", root: "codex-sessions", model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast" }} surface="structured" runtimeSettings={{ perTurnEffort: true, perTurnModel: false }} />
