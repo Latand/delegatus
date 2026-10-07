@@ -36,6 +36,54 @@ guarantees for the 1.x series.
   `issue_report` files the report only with your approval of that exact text
   ([#2530]).
 
+- **Prototype review on a task.** An agent can publish screens for you to
+  judge as a review on a task: up to nine numbered variants, each with a name
+  and a short description. The card's foot gets a **Prototype** button that
+  marks a round you have not opened, one you opened and not decided, and a
+  decision with the numbers you chose. Above the orchestrator's composer,
+  "Prototype ready" names the review and jumps to it, and a waiting review
+  counts in **Needs you**. The review shows one picture at a time with a strip
+  of thumbnails, an original beside its change or under a slider, and a video
+  in place; ← and → step through the pictures and 1 to 9 toggle a variant.
+  Choose one variant or several, add a comment, typed or dictated, and save.
+  The choice goes to the project's orchestrator once, as your own message,
+  and survives a reload; a send that failed keeps the decision and offers a
+  retry. Earlier rounds open from the review's header. The pictures are
+  copied into the state directory and nothing is uploaded. Copies for tasks
+  finished more than 30 days ago are retired; the variants and decisions
+  stay, and the review says on which date the pictures went, as "5 Oct 2026".
+  Agents publish with `publish_prototype_review` and read your choice with
+  `read_prototype_review`, and design and UI stages are told to use them
+  ([#2544], [#2589]).
+- **The orchestrator's actions show on the board as wires.** When the
+  orchestrator starts a pipeline, launches a stage of a pipeline it owns,
+  creates a task or moves one, a wire runs from its seat along the top of the
+  board and down beside the card's column into the card, and a pulse rings
+  the card. The wire holds for a minute, then fades; another action on the
+  same card restarts its minute. More than six actions in one board update
+  draw nothing, and cards scrolled out of view are counted at the column's
+  edge. On a phone a line down the left margin joins the seat to the cards of
+  the open tab. At rest the board draws nothing, and under reduced motion a
+  wire appears and goes without animation. A task now records who last
+  changed its status, so only the orchestrator's own actions draw a wire
+  ([#2565]).
+- **A visual critic role.** **Visual critic** judges only the rendered
+  screens of a change. It renders the frames itself at desktop and phone
+  sizes, in English and Ukrainian, light and dark, and reports each ugly spot
+  and each piece of information you do not need, naming its frames. It is
+  read-only, starts no other agents, runs on Claude Opus at high effort by
+  default and can be changed in **Roles: engine and model** like any other
+  role. It can be a pipeline stage or started with `spawn_agent`, and the
+  orchestrator's interface lanes now end with it ([#2578]).
+- **The external relay knows who is asking.** A relay request can carry who
+  asked, with their rights in the chat, a short memory of the chat and an
+  index of the service's own tools; such requests used to be declined as
+  invalid. The answering agent reads them as data, and when one of the
+  service's tools fits the question better, it hands the question back to
+  the service. Every answer is kept, read-only, for 30 days and listed under
+  **Recent answers** in the relay's card. The member limit counts runs per
+  person and chat; chat admins and owners are exempt ([#2562]).
+
 ### Changed
 - **The left sidebar is one tidy panel with a compact system block.** Every
   project name, section label and line of the system block starts on one
@@ -62,6 +110,71 @@ guarantees for the 1.x series.
   taking candidates out one at a time. The healthy pull requests land in
   their order; the one that broke a test keeps its reviewed head, and the
   report names the failing tests ([#2549]).
+- **The header menu is short, and Settings is a page of it.** The ⋯ at the
+  top of the sidebar opened 13 rows over 437 px; it now opens at 215 px.
+  Three icon cells lead it: **Activity**, **Team** and **Updates**. Below
+  them stand **Open on phone** with its QR code, **Settings**, **Help and
+  learning** (the setup guide and the interface walk) and, for a signed-in
+  member, **Sign out**. Settings opens as a page with a back row: language,
+  notifications, shared memory, the OpenRouter key, **Roles: engine and
+  model**, dictation, linked installs, **Chat relay** and **Install ping**.
+  The Settings row and the shared memory row say memory's state in a word:
+  working with this month's count, off, key needed, or capped until the 1st.
+  Memory's page has the project's switch, the reason memory is not added
+  with its action beside it (**Enter the key** opens the field right there),
+  and the month's figures; the OpenRouter key has a page of its own. The
+  **Install ping** dialog now holds only the ping. On a phone the board menu
+  holds the same entries without scrolling, with the project's switches and
+  Archive on a **Project rules** page. Every entry of the old menu is still
+  there ([#2579]).
+- **A task card's ⋯ is a compact menu.** It took the whole window (456 by
+  884 px in Ukrainian, scrolling, with 30 controls) and now opens at 300 by
+  280 px: the four columns in one row with the current one marked; four icon
+  actions to rename, describe, attach a pull request or issue, and hide,
+  with a line saying what hiding leaves running ("Hide: 2 agents keep
+  working") or why the card cannot be hidden; the three priorities in a row,
+  with "Top of the Inbox" and "Bottom of the Inbox" under High and Low; then
+  **Appearance** and **More**, which open in place, and **Pipeline actions**,
+  which opens as a page. Moving, hiding, renaming and setting a priority are
+  still two presses, and Enter, E, H and I work as before. A column's ⋯, a
+  conversation's ⋯ and the board's ⋯ follow the same layout; the board's ⋯
+  keeps **Merging and syncing** and **Orchestrator** as pages and opens at
+  192 px, down from 491. On a phone, the card's long-press sheet shows the
+  other columns as a row of cells, and the task's ⋯ shows its actions as
+  cells. A section always opens under its own row ([#2557]).
+- **Production gets CPU priority over tests and pipeline work.** On Linux
+  with a systemd user manager, agents you talk to run with ten times the CPU
+  weight of pipeline stages, flow reviewers, workflow stages, gates, workflow
+  setup, pipeline publication and release builds. That work runs in its own
+  slice with 300% of a CPU per process tree and 75% of the machine for all of
+  it together, whatever the memory mode, and hosts picked up again after a
+  restart or moved to another account keep it. A new pipeline or workflow
+  stage, workflow setup, publication install, release build or gate waits
+  while CPU pressure is high and says so in its detail line or log; your
+  messages never wait. Where this placement should work and cannot,
+  including a slice where the kernel applies no CPU controls, that work
+  stops with the reason (`DELEGATUS_AGENT_CPU=off` opts out). All of this
+  applies on its own. The service itself, the web server and the runtime
+  host, gets the same priority only once you ask for it:
+  `node bin/install-cpu-placement.mjs` writes three systemd files and prints
+  the reload and restart that apply them, and runs neither, so you pick the
+  moment ([#2574]).
+- **A wait for a free worker slot reads as one.** An orchestrator could mark
+  a task waiting for a worker slot with the resource kind, and the card read
+  "Queued: waiting for resources" while the machine had memory to spare. The
+  task tools now tell agents that a slot wait is `worker` ("Queued: waiting
+  for a free worker"), that `resource` is a shortage of memory or disk named
+  in the note, and that `limit` is an account usage limit. The hold editor's
+  options read "Free worker slot" and "Machine resources (memory, disk)", and
+  a resource hold shows its note on the card ([#2575]).
+- **The interface stays quick on a busy machine.** Under load, the runtime
+  summary and snapshot the interface reads took more than a second each,
+  because other requests copied the whole task list and agent registry every
+  time. Those readers now share one read-only copy, and both answer in about
+  30 ms under the same load. The snapshot is handed on in the bytes the
+  runtime sent, with no second decoding and encoding. A request to the
+  runtime now waits 10 s before it gives up, and 30 s for a snapshot; it was
+  3 s and 10 s ([#2582], [#2590]).
 
 ### Fixed
 - **Telegram never stops an agent from starting, and a connection that can be
@@ -110,6 +223,55 @@ guarantees for the 1.x series.
   an oversized replay searched to the end of a line once for every string in
   it, which cost tens of seconds of CPU on each resume of a large thread. It
   now reads each frame once ([#2569]).
+- **Shared memory adds memories to your messages again.** The search left
+  out every memory of the engine receiving the message, so a Claude
+  orchestrator's turns found almost nothing to choose from and nothing was
+  added. It now searches the topics of both engines, leaving out only what
+  the receiving agent already loads, and includes memories recorded under an
+  earlier name of the same project when Delegatus can prove the folder is
+  the same. A brief from the new-agent form counts as your message; a launch
+  by another agent, a pipeline or board maintenance does not. The memory
+  status line explains your last message: no candidates, no match, the cap,
+  a timeout or a delivery not yet confirmed ([#2540]).
+- **A message sent while its conversation switches accounts is accepted at
+  once and says why it waits.** It used to sit with no reason shown for up
+  to two minutes and then read "Delivery couldn't be confirmed", although it
+  arrived once. It is now recorded straight away, and the composer reads
+  "Switching accounts — your message goes out right after", or, while a turn
+  is still running, that the switch waits for the turn to end. The message
+  goes out once to whichever account holds the conversation by then, and an
+  arrival after the composer gave up on it clears that line. A switch that
+  fails says the message waits for a retry or a cancel ([#2573]).
+- **A board column holds still while you scroll it.** Near the end of a long
+  column, cards above the window shrank once they left view and the column
+  jumped back on its own; a card above the window that grew on a refresh, or
+  a task that arrived there, pushed the cards you were reading. Cards now
+  keep their height out of view, a column keeps its place when something
+  above it changes size, and a column that widens under the mouse keeps the
+  first card you see where it was ([#2563]).
+- **A control's hint closes when you click the control.** After a click on
+  **Compact** in a conversation's control strip, its hint stayed on screen,
+  and it was still there after a switch to another orchestrator or project.
+  A hint now closes on its click, when its control becomes disabled, on a
+  press or a key elsewhere, and when the view moves to another conversation.
+  Focus from a mouse click opens no hint; keyboard focus still does. This
+  holds for every hint in the product, Send with an empty field included
+  ([#2561]).
+- **A finished stage leaves no "not delivered" chips and stops streaming
+  within seconds.** After a pipeline stage passed and its Codex agent wrote a
+  long final answer, the agent's card kept streaming text for minutes and
+  collected red "not delivered: idle-retirement-deferred" chips. The answer
+  was passed on a few characters at a time; what is already there now goes in
+  one piece, so a 61 000-character answer arrives in a handful of writes and
+  the card settles when the agent does. Retiring an idle agent never shows a
+  chip; a message of yours that failed and a stop you asked for still do
+  ([#2567]).
+- **A follow-up pipeline on an existing pull request branch finishes its
+  stage.** A pipeline started on the branch of a pull request opened by an
+  earlier, finished pipeline ran its stage and pushed, then stopped with
+  "another pipeline owns the stage branch" and waited for a decision. A
+  completed or closed pipeline with no active delivery no longer holds its
+  branch; a running or parked one still does ([#2581]).
 
 ### Security
 - Two dependencies were updated for published security advisories:
@@ -122,6 +284,12 @@ guarantees for the 1.x series.
   request build and one publication build run at once ([#2560]).
 - The oversized replay envelope test in `codexAppServerHost.test.ts` is back
   on the default timeout, which fails it if the slow scan returns ([#2569]).
+- Both gate scripts, `scripts/gate-slot.sh` and the installed
+  `/var/tmp/llv-gate`, count against one set of machine slots, and the
+  merger runs its gates through `scripts/gate-slot.sh` ([#2574]).
+- Every deadline a web-side caller puts on a runtime request comes from
+  `src/lib/runtime/deadlines.ts`, and `deadlines.test.ts` fails on a literal
+  deadline anywhere else ([#2590]).
 
 ## [1.10.0] — 2026-10-06
 
@@ -2544,3 +2712,20 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#2556]: https://github.com/Latand/delegatus/pull/2556
 [#2560]: https://github.com/Latand/delegatus/pull/2560
 [#2569]: https://github.com/Latand/delegatus/pull/2569
+[#2540]: https://github.com/Latand/delegatus/pull/2540
+[#2544]: https://github.com/Latand/delegatus/pull/2544
+[#2557]: https://github.com/Latand/delegatus/pull/2557
+[#2561]: https://github.com/Latand/delegatus/pull/2561
+[#2562]: https://github.com/Latand/delegatus/pull/2562
+[#2563]: https://github.com/Latand/delegatus/pull/2563
+[#2565]: https://github.com/Latand/delegatus/pull/2565
+[#2567]: https://github.com/Latand/delegatus/pull/2567
+[#2573]: https://github.com/Latand/delegatus/pull/2573
+[#2574]: https://github.com/Latand/delegatus/pull/2574
+[#2575]: https://github.com/Latand/delegatus/pull/2575
+[#2578]: https://github.com/Latand/delegatus/pull/2578
+[#2579]: https://github.com/Latand/delegatus/pull/2579
+[#2581]: https://github.com/Latand/delegatus/pull/2581
+[#2582]: https://github.com/Latand/delegatus/pull/2582
+[#2589]: https://github.com/Latand/delegatus/pull/2589
+[#2590]: https://github.com/Latand/delegatus/pull/2590
