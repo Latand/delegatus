@@ -421,14 +421,19 @@ recorded as (a stage's or a reviewer's). Three things follow.
 - **Every pass asks a proposed row again.** An owed proposal postpones
   nothing. A row decided "cut" again keeps its proposal, which still owns the
   conversation's next message, and writes no second record. A row that reads
-  undecided keeps its proposal as well: the record was written from evidence
-  that read whole.
+  undecided keeps its proposal, since the record was written from evidence
+  that read whole, and is held like any undecided row: stamped, never adopted
+  for the proposal, and its continuation waits until the evidence can be read
+  and decides the row again (see "Unresolved evidence").
 - **A row decided "no cut" from evidence that the turn ended has its
   proposals withdrawn** (rows 4, 6, 8 and 10; row 12 is the absence of
-  evidence and disproves nothing). The record is removed (`store.withdraw`),
-  so no continuation is sent, the stage controller finds no witness, and the
-  deploy inventory lists nothing. The same cut found again later is recorded
-  anew under the same id.
+  evidence and disproves nothing). The record is removed (`store.withdraw`)
+  wherever the store keeps it, the directory and the pending journal a
+  refused write falls back to, so no continuation is sent, the stage
+  controller finds no witness, and the deploy inventory lists nothing. A
+  record the store could not remove is still listed: its row is held and
+  asked again, which retries the withdrawal. The same cut found again later
+  is recorded anew under the same id.
 - **The stamp guards a cut row like any other.** When the stamp of a proposed
   row has moved at one of the three comparison sites below, its proposals are
   withdrawn, the row is held, and the re-probe decides it from what the
@@ -550,9 +555,10 @@ moved stamp is decided by the next pass from evidence that can no longer move.
 
 A row that is undecided, or whose stamp moved, is:
 
-- **held**: no adoption for a turn claim, no skipped-host demotion, no generic
-  nudge. Pending work (a held delivery or a pending runtime operation) waits
-  as well, until the re-probe below reaches its cap;
+- **held**: no adoption for a turn claim or for an owed proposal, no
+  skipped-host demotion, no generic nudge, no continuation. Pending work (a
+  held delivery or a pending runtime operation) waits as well, until the
+  re-probe below reaches its cap;
 - **re-probed**: its host key joins the startup deferral that already holds
   rows behind unresolved pipeline evidence (`DeferredStructuredStartup`,
   `startup.ts:83-98`, `:1948-2024`). The probe takes each held row's stamp and
@@ -598,6 +604,14 @@ read, or a tail that holds no boundary for the ledger's newest turn, records
 nothing either, and the log names the host and what could not be decided. B is
 read up to three times as well, and a B still `unreadable` records nothing.
 
+Those reads await, and the host keeps writing its ledger and the CLI its
+transcript in the meantime. The decision stands only when neither file moved
+from the moment its reads began, and the same comparison is asked again after
+the record's own reads, just before it is written. A moved file decides the
+host again from fresh reads, up to three times, so work that ended in the
+window is owed nothing and work still open is recorded once; evidence that
+keeps moving records nothing, and the log names the host.
+
 ## Finding map
 
 | Finding | What failed | Clause that decides it | Status at `57b174379` | Test |
@@ -623,6 +637,9 @@ read up to three times as well, and a B still `unreadable` records nothing.
 | E1 | A background job the restart killed was cut again on every later boot and release, after its continuation had completed | B: work a continuation reported as killed is held no longer | Open at `e6401f38f` | New, release seam: "background work a continuation reported as killed is never cut again …" (the turn finishes, is cut mid-tool, launches a new job); "an orderly release … already reported as killed"; fold case in `backgroundTasks.test.ts` |
 | E2 | A corrupt task notification above the 128 KiB tail left its job pending and authorized a cut | B is read whole or is `unreadable`: row 2, held and re-probed | Open at `e6401f38f` | New, release seam: "a corrupt background record above the transcript tail invents no cut across probes and boots, and its repair decides the row" (job ended, job still pending); its valid control; the orderly release; reader cases in `backgroundTasks.test.ts`; row 2 in `liveness.test.ts` |
 | E3 | A predecessor's turn that completed after recognition and before adoption still got a continuation | A cut is a proposal until the row is taken: the stamp withdraws it and the next decision is the turn's own evidence | Open at `e6401f38f` (deferred by revision 3) | New, release seam: "a turn that ends by itself before the row is claimed / after a pass that recorded it and never adopted …" (agent and stage); "a turn whose shutdown wrote its marker before the row is claimed is still cut, once"; store cases in `interruptionObligations.test.ts` |
+| E4 | An owed proposal whose evidence read unreadable was adopted and continued, though the turn had completed | Unresolved evidence holds the row, a proposal included; its continuation waits for the evidence | Open at `2cff6bd4b` | New, release seam: "an owed proposal whose transcript / host ledger reads unreadable is held …" (turn completed, turn still open) |
+| E5 | An orderly release recorded a cut from a decision made before its awaited background read, after the work had completed | The same rule at an orderly release: a decision stands only on files that did not move under its reads | Open at `2cff6bd4b` | New, release seam: "an orderly release of an idle Claude host decides on the evidence as it stands after its reads" (finishes during the read, stays open) |
+| E6 | A withdrawn proposal stayed in the pending journal and came back once the directory accepted records | A proposal is withdrawn wherever the store keeps it; one still listed holds its row | Open at `2cff6bd4b` | New, release seam: "a proposal the pending journal holds is withdrawn …" (agent and stage); store case in `interruptionObligations.test.ts` |
 
 Rounds 1-3 each landed a test that the map below keeps.
 
@@ -1186,8 +1203,25 @@ map):
   when its row reads "no cut" or its stamp has moved. The check the
   revision deferred is now part of the rule.
 - **Existing cases.** Every case of the mapped files passes with its
-  expectations unchanged. A row with an owed proposal that reads undecided
-  keeps the behaviour it had while it was postponed.
+  expectations unchanged.
+
+What a fourth correctness pass settled, 2026-10-07 (E4-E6 of the finding
+map):
+
+- **An undecided row is held whatever stands for it.** A row with an owed
+  proposal that read undecided had been passed over unstamped, so the
+  proposal forced its adoption and its continuation went out over evidence
+  that could still show the turn ended. Such a row is now stamped and held
+  like any other; the proposal is kept, and no continuation is delivered for
+  a held row, even where pending work took it after the re-probe's cap.
+- **A release decides on evidence that stood still.** `idleHostCut` takes the
+  identity of the host ledger and the transcript before its reads and
+  compares it after them, and `recordDemotionInterruption` asks the same
+  comparison again before it writes. A moved file decides the host again.
+- **A withdrawal reaches the pending journal.** `store.withdraw` takes the
+  journal and its abandoned claims as an import does and puts every other
+  record back. A record still listed after a withdrawal holds its row, so
+  the next pass retries it.
 
 No question for the operator remains: the code, read-only counts over this
 machine's own ledgers and transcripts, three scratch runs of the existing

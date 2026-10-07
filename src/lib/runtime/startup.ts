@@ -600,13 +600,12 @@ async function restartCutTargets(
       stage: stage !== null,
       backgroundWork: background.state === "read" ? backgroundTasks.length > 0 : "unreadable",
     });
-    /* A proposal read from evidence that was whole stands while the evidence
-       cannot be read to say otherwise: it keeps the conversation's next
-       message, as it did before its row was asked again. */
-    if (decided.decision === "undecided" && unresolved.length > 0) continue;
     /* Every row decided here is stamped, a cut one included: what is written
        for it is a proposal until the row is taken. */
     recognition.stamps.set(hostKey, stamp);
+    /* An undecided row is held whatever stands for it. A proposal read from
+       evidence that was whole is kept, and its continuation waits with the
+       row: the evidence that cannot be read now may show the turn ended. */
     if (decided.decision === "undecided") {
       recognition.undecided.add(hostKey);
       continue;
@@ -687,21 +686,33 @@ function recordRestartCuts(
 
 /** Removes proposals the evidence no longer supports. The row is decided
     again from what the evidence says now, and a cut found again is recorded
-    again under the same name. */
+    again under the same name. Returns the rows whose proposal is still on
+    file because the store could not remove it: those are held and asked
+    again, so the withdrawal is retried. */
 function withdrawRestartCutProposals(
   store: InterruptionObligationStore,
   proposals: readonly InterruptionObligation[],
   found: Set<string>,
   reason: string,
-): void {
+): Set<string> {
+  const standing = new Set<string>();
   for (const proposal of proposals) {
-    if (!store.withdraw(proposal.id)) continue;
+    if (!store.withdraw(proposal.id)) {
+      if (store.list().some((obligation) => obligation.id === proposal.id)) {
+        console.error("[structured hosts] a restart cut record the evidence disproves could not be withdrawn; holding its row", {
+          conversationId: proposal.conversationId, obligation: proposal.id, reason,
+        });
+        standing.add(proposal.hostKey);
+      }
+      continue;
+    }
     found.delete(proposal.hostKey);
     console.error("[structured hosts] withdrew a restart cut record", {
       conversationId: proposal.conversationId, obligation: proposal.id, reason,
       ...(proposal.stage ? { stage: proposal.stage } : {}),
     });
   }
+  return standing;
 }
 
 /**
@@ -1688,11 +1699,12 @@ async function adoptStructuredHostsPass(
   recordRestartCuts(interruptions, recognition.cuts, cutHostKeys);
   /* A cut is a proposal until its row is taken: one the turn's own evidence
      has since disproved is withdrawn before anything answers it. */
-  withdrawRestartCutProposals(interruptions, recognition.disproved, cutHostKeys,
+  const unwithdrawn = withdrawRestartCutProposals(interruptions, recognition.disproved, cutHostKeys,
     "the turn's own evidence shows it ended by itself");
-  /* Rows whose evidence is undecided, or moved after it was decided: left
-     exactly as they were, and asked again by the deferral re-probe. */
-  const heldHostKeys = new Set(recognition.undecided);
+  /* Rows whose evidence is undecided, or moved after it was decided, or whose
+     disproved proposal is still on file: left exactly as they were, and asked
+     again by the deferral re-probe. */
+  const heldHostKeys = new Set([...recognition.undecided, ...unwithdrawn]);
   for (const key of [...recognition.stamps.keys(), ...recognition.cuts.map((cut) => cut.hostKey)]) {
     if (!heldHostKeys.has(key)) releaseRestartCutRow(key);
   }
@@ -2116,7 +2128,10 @@ async function adoptStructuredHostsPass(
       const unresolvedAfterAdoption = interruptions.list().filter((obligation) =>
         interruptionObligationUnresolved(obligation)
           && interruptedHostKeys.has(obligation.hostKey)
-          && !deferredHostKeys.has(obligation.hostKey));
+          && !deferredHostKeys.has(obligation.hostKey)
+          /* A held row's proposal waits for its evidence, even where pending
+             work took the row after the re-probe's cap. */
+          && !heldHostKeys.has(obligation.hostKey));
       const owedInterruptions = unresolvedAfterAdoption.length === 0 ? [] : dischargeInterruptionObligations(
         registry,
         interruptions,

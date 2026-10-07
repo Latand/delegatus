@@ -2848,3 +2848,132 @@ test.each(["agent", "stage"] as const)("%s: a turn whose shutdown wrote its mark
       : { turnRef: "T1", state: "discharged", resolution: "a pipeline stage: its controller retries the attempt" }]);
   });
 });
+
+/** Leaves one source of a row's evidence unreadable; returns the repair. */
+function breakEvidence(cut: CutConversation, source: "transcript" | "host ledger"): () => void {
+  const file = source === "transcript" ? cut.artifactPath : hostLedgerFile(cut);
+  const whole = fs.readFileSync(file, "utf8");
+  fs.appendFileSync(file, source === "transcript" ? '{"type":"assistant","uuid":"cut-short"' : '{"kind":"item",BROKEN}\n');
+  return () => fs.writeFileSync(file, whole);
+}
+
+test.each([
+  { source: "transcript", turn: "completed" },
+  { source: "host ledger", turn: "completed" },
+  { source: "transcript", turn: "still open" },
+  { source: "host ledger", turn: "still open" },
+] as const)("an owed proposal whose $source reads unreadable is held with no adoption or continuation across probes and boots, and its repair decides it (turn $turn)", async ({ source, turn }) => {
+  await withJournal(async (journal) => {
+    const open = openClaudeTurn();
+    const cut = incumbentConversation("claude", cutSessionId(92), deadEngine(2_000_001_192), open.records);
+    appendHostLedger(cut, open.ledger);
+    markHosted(cut, "live", "T1");
+    const ledger = createFakeDeliveryLedger();
+    expect((await successorBoot(cut.registryFile, journal, ledger, { registry: new AgentRegistry(cut.registryFile), adoptionFails: true })).error).not.toBeNull();
+    expect(restartCuts(cut.registryFile)).toMatchObject([{ turnRef: "T1", state: "owed" }]);
+    if (turn === "completed") {
+      appendTranscript(cut, open.ending);
+      appendHostLedger(cut, [...open.ending.map((record) => frameOf(record, "T1")), turnEnded("T1")]);
+    }
+    const repair = breakEvidence(cut, source);
+    const registry = new AgentRegistry(cut.registryFile);
+    const boot = await successorBoot(cut.registryFile, journal, ledger, { registry, viewer: OTHER_VIEWER(240) });
+    expect(boot.error).toBeNull();
+    expect(boot.adopted).toEqual([]);
+    for (let probe = 0; probe < 2; probe += 1) await runScheduledProbe(() => ledger.writes.length > 0, 150);
+    const again = await successorBoot(cut.registryFile, journal, ledger, { viewer: OTHER_VIEWER(241) });
+    expect(again).toEqual({ adopted: [], error: null });
+    await settle(() => ledger.writes.length > 0, 150);
+    expect(continuationsIn(ledger)).toEqual([]);
+    expect(structuredStartupDeferral()?.hostKeys).toEqual([cut.hostKey]);
+    expect(restartCuts(cut.registryFile)).toMatchObject([{ turnRef: "T1", state: "owed" }]);
+
+    repair();
+    await runScheduledProbe(() => ledger.writes.length > 0, turn === "still open" ? 400 : 150);
+    await settle(() => ledger.writes.length > 0, turn === "still open" ? 400 : 150);
+    expect(restartContinuations(ledger)).toHaveLength(turn === "still open" ? 1 : 0);
+    expect(restartCuts(cut.registryFile)).toMatchObject(turn === "still open" ? [{ turnRef: "T1" }] : []);
+    expect(structuredStartupDeferral()).toBeNull();
+  });
+});
+
+test.each([
+  { followUp: "finishes during the background read", records: 0 },
+  { followUp: "stays open through the background read", records: 1 },
+] as const)("an orderly release of an idle Claude host decides on the evidence as it stands after its reads: self-started work that $followUp", async ({ followUp, records: expected }) => {
+  await withJournal(async (journal) => {
+    const engine = deadEngine(2_000_001_193);
+    const ended = endedWaitingOnBackground();
+    const cut = incumbentConversation("claude", cutSessionId(93), engine, ended.records);
+    const call = followUpCall();
+    appendTranscript(cut, [gateNotification(), call]);
+    appendHostLedger(cut, [...ended.ledger, frameOf(call, null)]);
+    const { registry, key, host } = await persistedIdleClaudeHost(cut, createFakeDeliveryLedger(), engine);
+    await bindStructuredDeliveryQueue([{ key, host }] as never, { registry, client: journalClient(journal) });
+    const open = fs.promises.open.bind(fs.promises);
+    let transcriptOpens = 0;
+    const opens = spyOn(fs.promises, "open").mockImplementation((async (file: fs.PathLike, ...rest: unknown[]) => {
+      /* The second open of the transcript is the verified background read. */
+      if (String(file) === cut.artifactPath && (transcriptOpens += 1) === 2 && followUp === "finishes during the background read") {
+        appendTranscript(cut, followUpEnd());
+        appendHostLedger(cut, followUpEnd().map((record) => frameOf(record, null)));
+      }
+      return await (open as (...args: unknown[]) => Promise<fs.promises.FileHandle>)(file, ...rest);
+    }) as typeof fs.promises.open);
+    try {
+      await releaseStructuredDeliveryHostsForDemotion({ boundary: "viewer-release:test-deploy" });
+    } finally {
+      opens.mockRestore();
+    }
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    expect(transcriptOpens).toBeGreaterThanOrEqual(2);
+    expect(obligationsFor(cut.registryFile)).toMatchObject(expected === 0 ? [] : [{ reason: "viewer-release", state: "owed" }]);
+    const ledger = createFakeDeliveryLedger();
+    expect((await successorBoot(cut.registryFile, journal, ledger, { viewer: OTHER_VIEWER(243) })).error).toBeNull();
+    await settle(() => ledger.writes.length > 0, expected > 0 ? 400 : 150);
+    expect(continuationsIn(ledger)).toHaveLength(expected);
+  });
+});
+
+test.each(["agent", "stage"] as const)("%s: a proposal the pending journal holds is withdrawn when its turn ends by itself, and stays gone once the directory accepts records", async (member) => {
+  await withJournal(async (journal) => {
+    const open = openClaudeTurn();
+    const cut = incumbentConversation("claude", cutSessionId(94), deadEngine(2_000_001_194), open.records);
+    if (member === "stage") asPipelineStage(cut);
+    appendHostLedger(cut, open.ledger);
+    markHosted(cut, "live", "T1");
+    const obligations = interruptionObligationDirectory(cut.registryFile);
+    fs.mkdirSync(obligations, { recursive: true });
+    fs.chmodSync(obligations, 0o500);
+    const ledger = createFakeDeliveryLedger();
+    expect((await successorBoot(cut.registryFile, journal, ledger, { registry: new AgentRegistry(cut.registryFile), adoptionFails: true })).error).not.toBeNull();
+    const [proposal] = restartCuts(cut.registryFile);
+    expect(proposal).toMatchObject({ turnRef: "T1" });
+    expect(fs.readdirSync(obligations)).toEqual([]);
+    expect(fs.readFileSync(`${obligations}.pending.jsonl`, "utf8")).toContain(proposal!.id);
+
+    appendTranscript(cut, open.ending);
+    appendHostLedger(cut, [...open.ending.map((record) => frameOf(record, "T1")), turnEnded("T1")]);
+    expect((await successorBoot(cut.registryFile, journal, ledger, { viewer: OTHER_VIEWER(244) })).error).toBeNull();
+    await settle(() => ledger.writes.length > 0, 150);
+    expect(restartCuts(cut.registryFile)).toEqual([]);
+    const restartCutOf = () => {
+      setAgentRegistryForTests(new AgentRegistry(cut.registryFile));
+      try {
+        return defaultPipelinePorts().conversationRestartCut!(cut.conversationId);
+      } finally {
+        setAgentRegistryForTests(null);
+      }
+    };
+    expect(restartCutOf()).toBeNull();
+
+    fs.chmodSync(obligations, 0o700);
+    expect(restartCuts(cut.registryFile)).toEqual([]);
+    restateHosted(cut, "live", "T1");
+    expect((await successorBoot(cut.registryFile, journal, ledger, { viewer: OTHER_VIEWER(245) })).error).toBeNull();
+    await settle(() => ledger.writes.length > 0, 150);
+    expect(restartCuts(cut.registryFile)).toEqual([]);
+    expect(restartCutOf()).toBeNull();
+    expect(continuationsIn(ledger)).toEqual([]);
+  });
+});

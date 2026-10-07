@@ -33,7 +33,7 @@ import { observeCodexSubagentEvent } from "./codexSubagentDetection";
 import { PermissionRequestGuard } from "./permissionGuard";
 import { permissionDenialRecorder, resolvePermissionAttendance } from "./permissionDenials";
 import { backgroundWorkAwaitedAtCut, conversationTurnLiveness, engineRecordSince, hostTurnReading, readTranscriptCutEvidence, transcriptCutEvidenceFromRecords, type TurnLivenessDependencies } from "./liveness";
-import { readHostTurnRecord } from "./eventStore";
+import { hostTurnRecordIdentity, readHostTurnRecord } from "./eventStore";
 import { restartCutEvidenceHolds } from "./restartCutHold";
 import {
   interruptionObligationDirectory,
@@ -1965,7 +1965,9 @@ async function orchestratorSeatFor(
  * its turn before the release is owed nothing unless `backgroundTasks` names
  * work that turn left running or `selfStartedWork` says its engine began
  * again by itself. Every demotion path that releases a host
- * reaches this through `handOverHostForDemotion`.
+ * reaches this through `handOverHostForDemotion`. False when
+ * `evidenceStands` says the evidence moved after the last awaited read:
+ * nothing is written, and the caller decides again.
  */
 export async function recordDemotionInterruption(
   registry: AgentRegistry,
@@ -1974,18 +1976,21 @@ export async function recordDemotionInterruption(
   options: DemotionInterruptionOptions,
   backgroundTasks: readonly string[] = [],
   selfStartedWork = false,
-): Promise<void> {
+  /** Whether the evidence the cut was decided from still stands, asked after
+      the last awaited read and before the record is written. */
+  evidenceStands: () => boolean = () => true,
+): Promise<boolean> {
   const snapshot = registry.readOnlySnapshot();
   const hostKey = sessionKeyId(key);
   const entry = snapshot.entries[hostKey];
   const conversation = Object.values(snapshot.conversations).find((candidate) =>
     candidate.engine === key.engine && candidate.generations.at(-1)?.id === key.sessionId);
-  if (!entry || !conversation || conversation.supersededBy) return;
+  if (!entry || !conversation || conversation.supersededBy) return true;
   /* Interruption obligations re-drive Claude and Codex turns a release cut;
      a Copilot turn cut the same way is resumed by the operator (slice 1). */
-  if (conversation.engine === "copilot") return;
+  if (conversation.engine === "copilot") return true;
   const turnRef = current.activeTurnRef ?? entry.structuredHost?.activeTurnRef ?? null;
-  if (turnRef === null && conversation.turn.state !== "busy" && backgroundTasks.length === 0 && !selfStartedWork) return;
+  if (turnRef === null && conversation.turn.state !== "busy" && backgroundTasks.length === 0 && !selfStartedWork) return true;
   const conversationId = registry.canonicalConversationId(conversation.id);
   const generation = conversation.generations.at(-1)!;
   const transcript = await readTranscriptCutEvidence(conversation.engine, generation.path).catch(() => null);
@@ -1996,6 +2001,7 @@ export async function recordDemotionInterruption(
     console.error("[viewer release] orchestrator seat lookup failed while recording an interruption", { hostKey, error });
   }
   const store = options.store ?? interruptionObligationStore(interruptionObligationDirectory(registry.filename));
+  if (!evidenceStands()) return false;
   const { obligation, created } = store.record({
     conversationId,
     engine: conversation.engine,
@@ -2021,11 +2027,22 @@ export async function recordDemotionInterruption(
       conversationId, hostKey, turnRef, obligation: obligation.id,
     });
   }
+  return true;
 }
 
 /** How many times a release reads a live CLI's transcript before it gives
     up on a tail that keeps moving. */
 const RELEASE_TAIL_READS = 3;
+
+/** What releasing an idle host cuts, and whether the evidence it was decided
+    from still stands. */
+interface IdleHostCut {
+  backgroundTasks: string[];
+  selfStartedWork: boolean;
+  evidenceStands: () => boolean;
+}
+
+const NO_IDLE_HOST_CUT: IdleHostCut = { backgroundTasks: [], selfStartedWork: false, evidenceStands: () => true };
 
 /**
  * What releasing an idle Claude host cuts, decided as a restart decides it
@@ -2040,13 +2057,42 @@ const RELEASE_TAIL_READS = 3;
  * still uncertain records nothing, and so does a ledger that cannot be read
  * or a tail that holds no boundary for the ledger's newest turn (rows 1 and 2).
  */
-async function idleHostCut(registry: AgentRegistry, key: SessionKey): Promise<{ backgroundTasks: string[]; selfStartedWork: boolean }> {
-  const nothing = { backgroundTasks: [], selfStartedWork: false };
-  if (key.engine !== "claude") return nothing;
+async function idleHostCut(registry: AgentRegistry, key: SessionKey): Promise<IdleHostCut> {
+  if (key.engine !== "claude") return NO_IDLE_HOST_CUT;
   const conversation = Object.values(registry.readOnlySnapshot().conversations).find((candidate) =>
     candidate.engine === key.engine && candidate.generations.at(-1)?.id === key.sessionId);
   const transcriptPath = conversation && !conversation.supersededBy ? conversation.generations.at(-1)!.path : null;
-  if (!transcriptPath) return nothing;
+  if (!transcriptPath) return NO_IDLE_HOST_CUT;
+  /* The host keeps writing its ledger, and the CLI its transcript, while the
+     reads below await: a decision stands only when neither file moved under
+     it, and the evidence it rests on is asked again before the record. */
+  for (let read = 0; read < RELEASE_TAIL_READS; read += 1) {
+    const before = idleHostEvidenceIdentity(key.sessionId, transcriptPath);
+    const decided = await decideIdleHostCut(key, transcriptPath);
+    const evidenceStands = () => idleHostEvidenceIdentity(key.sessionId, transcriptPath) === before;
+    if (evidenceStands()) return { ...decided, evidenceStands };
+  }
+  console.error("[viewer release] an idle host's evidence kept moving under its reads; recording nothing for it", {
+    hostKey: sessionKeyId(key),
+  });
+  return NO_IDLE_HOST_CUT;
+}
+
+/** The host ledger and the transcript as they stand, without reading either. */
+function idleHostEvidenceIdentity(sessionId: string, transcriptPath: string): string {
+  let transcript: string;
+  try {
+    const stats = fs.statSync(transcriptPath);
+    transcript = `${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeMs}`;
+  } catch (error) {
+    transcript = (error as NodeJS.ErrnoException).code === "ENOENT" ? "absent" : "unreadable";
+  }
+  return `${hostTurnRecordIdentity(sessionId)}|${transcript}`;
+}
+
+/** One decision of `idleHostCut` from one read of each source. */
+async function decideIdleHostCut(key: SessionKey, transcriptPath: string): Promise<Omit<IdleHostCut, "evidenceStands">> {
+  const nothing = { backgroundTasks: [], selfStartedWork: false };
   const ledger = readHostTurnRecord(key.sessionId);
   let tail: StableTailRead = { integrity: "complete", prefixTruncated: false, records: [] };
   if (fs.existsSync(transcriptPath)) {
@@ -2105,14 +2151,25 @@ export async function handOverHostForDemotion(
 ): Promise<boolean> {
   if (current.pid === null || current.processStartIdentity === null) return false;
   const inFlight = current.status === "active" || current.status === "attention";
-  const idle = current.status === "idle" ? await idleHostCut(registry, key) : { backgroundTasks: [], selfStartedWork: false };
-  if (!inFlight && idle.backgroundTasks.length === 0 && !idle.selfStartedWork) return false;
-  if (!registry.markStructuredHostHandoff(
-    key,
-    captureProcessIdentity(current.pid, undefined, current.processStartIdentity),
-  )) throw new Error(`structured host ${sessionKeyId(key)} changed before Viewer demotion`);
-  await recordDemotionInterruption(registry, key, current, options, idle.backgroundTasks, idle.selfStartedWork);
-  return true;
+  let marked = false;
+  /* An idle host's cut is decided again when its evidence moved between the
+     decision and the record: work that ended in that window is owed nothing. */
+  for (let attempt = 0; attempt < RELEASE_TAIL_READS; attempt += 1) {
+    const idle = !inFlight && current.status === "idle" ? await idleHostCut(registry, key) : NO_IDLE_HOST_CUT;
+    if (!inFlight && idle.backgroundTasks.length === 0 && !idle.selfStartedWork) return marked;
+    if (!marked && !registry.markStructuredHostHandoff(
+      key,
+      captureProcessIdentity(current.pid, undefined, current.processStartIdentity),
+    )) throw new Error(`structured host ${sessionKeyId(key)} changed before Viewer demotion`);
+    marked = true;
+    if (await recordDemotionInterruption(
+      registry, key, current, options, idle.backgroundTasks, idle.selfStartedWork, idle.evidenceStands,
+    )) return true;
+  }
+  console.error("[viewer release] an idle host's evidence kept moving before its cut was recorded; recording nothing for it", {
+    hostKey: sessionKeyId(key),
+  });
+  return marked;
 }
 
 /** Releases every engine host owned by this Viewer before release demotion.

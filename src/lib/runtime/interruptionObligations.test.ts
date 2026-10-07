@@ -174,6 +174,26 @@ test("a withdrawn restart record is gone, and the same cut found again is record
   expect(again).toMatchObject({ created: true, obligation: { id: first.obligation.id, state: "owed" } });
 });
 
+test("a withdrawn restart record the directory refused leaves the pending journal, and the other pending records stay", () => {
+  const obligations = path.join(directory, "obligations");
+  fs.mkdirSync(obligations);
+  fs.chmodSync(obligations, 0o500);
+  try {
+    const store = interruptionObligationStore(obligations);
+    const withdrawn = store.record(restartInput("T1", 1_000, "2026-10-07T00:00:00.000Z")).obligation;
+    const kept = store.record(restartInput("T2", 2_000, "2026-10-07T00:00:01.000Z")).obligation;
+    expect(fs.readdirSync(obligations)).toEqual([]);
+    expect(store.withdraw(withdrawn.id)).toBe(true);
+    expect(store.withdraw(withdrawn.id)).toBe(false);
+    expect(store.list().map(({ id }) => id)).toEqual([kept.id]);
+    fs.chmodSync(obligations, 0o700);
+    expect(interruptionObligationStore(obligations).list().map(({ id }) => id)).toEqual([kept.id]);
+    expect(fs.readdirSync(obligations)).toEqual([`${kept.id}.json`]);
+  } finally {
+    fs.chmodSync(obligations, 0o700);
+  }
+});
+
 test("a restart record is a proposal only while its row is unclaimed and nothing has answered it", () => {
   const store = interruptionObligationStore(directory);
   const witness = store.record(restartInput("T1", 1_000, "2026-10-07T00:00:00.000Z")).obligation;

@@ -94,8 +94,10 @@ export interface InterruptionObligationStore {
   record(input: InterruptionObligationInput): { obligation: InterruptionObligation; created: boolean };
   update(id: string, patch: Partial<Pick<InterruptionObligation,
     "state" | "operationId" | "attempts" | "resolvedAt" | "resolution">>): InterruptionObligation | null;
-  /** Removes a restart record the evidence no longer supports, so nothing
-      continues it, counts it or lists it. False when no record was there. */
+  /** Removes a restart record the evidence no longer supports, from the
+      directory and from the pending journal, so nothing continues it, counts
+      it or lists it. False when no record was there, or when a copy could not
+      be removed: the caller reads the store again to tell which. */
   withdraw(id: string): boolean;
 }
 
@@ -451,14 +453,34 @@ export function interruptionObligationStore(
       return { obligation, created: true };
     },
     withdraw(id) {
+      let removed = false;
       try {
-        if (!fs.existsSync(fileFor(id))) return false;
-        fs.rmSync(fileFor(id), { force: true });
-        return true;
+        if (fs.existsSync(fileFor(id))) {
+          fs.rmSync(fileFor(id), { force: true });
+          removed = true;
+        }
       } catch (error) {
         console.error("[interruption recovery] a withdrawn obligation could not be removed", { obligation: id, error });
         return false;
       }
+      /* A record the directory refused waits in the pending journal, and the
+         first read that the directory accepts would import it again. The
+         journal is taken as an import takes it, and every other record goes
+         back to the live journal. */
+      const claims = [pendingFile, ...abandonedClaims()].flatMap((source) => claim(source) ?? []);
+      if (claims.length === 0) return removed;
+      const pending = claims.flatMap(readJournal);
+      const kept = pending.filter((obligation) => obligation.id !== id);
+      try {
+        if (kept.length > 0) appendDurably(pendingFile, kept.map((obligation) => `${JSON.stringify(obligation)}\n`).join(""));
+      } catch (error) {
+        /* The claims stay on disk with the record in them; a later read takes
+           them over, and the caller finds the record still listed. */
+        console.error("[interruption recovery] a withdrawn obligation's pending journal could not be rewritten", { obligation: id, claims, error });
+        return false;
+      }
+      for (const claimed of claims) fs.rmSync(claimed, { force: true });
+      return removed || kept.length < pending.length;
     },
     update(id, patch) {
       const current = read(fileFor(id)) ?? readPending().find((pending) => pending.id === id) ?? null;
