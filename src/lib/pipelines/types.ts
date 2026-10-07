@@ -519,15 +519,18 @@ export type PipelineStageAttempt = {
       hook refused the commit of its passed work over a file the stage itself
       staged. `detail` is the park text that refusal would have produced and
       `messageTs` the stage's last message when it was refused, so the repair
-      is over on the first completed turn after it. `requestedAt` is set once
-      the delivery surface accepted the request and `settledAt` once the commit
-      was tried again; `refusedAt` bounds the whole wait. A refusal that finds
-      this record already written parks. */
+      is over on the first completed turn after it. `sendingAt` is stored
+      before a request leaves and kept until the delivery surface answers, so a
+      replay after a crash keeps it; `requestedAt` takes that moment once the
+      surface accepted the request, and `settledAt` is set once the commit was
+      tried again; `refusedAt` bounds the whole wait. A refusal that finds this
+      record already written parks. */
   commitRepair?: {
     refusedAt: string;
     detail: string;
     paths: string[];
     messageTs: number | null;
+    sendingAt?: string;
     requestedAt?: string;
     clientMessageId?: string;
     settledAt?: string;

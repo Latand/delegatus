@@ -33,9 +33,12 @@ export type PipelineGitResult = ({ ok: true; sha: string; baseBranch?: string } 
     that lists positions under the file), or a privacy verdict made only of
     content findings. A staged path that the output merely mentions proves
     nothing: a progress line names it, and so does a tool that could not open
-    it. A commit that was killed, a hook whose command was missing or could not
-    run (127, 126), and every refusal without that evidence leave it false, and
-    the lane parks with what the hook printed. */
+    it. A position needs a message after it, so a stack frame or a crash header
+    that places the file is no verdict. A commit that was killed, a hook whose
+    command was missing or could not run (127, 126), output that reports a
+    failed tool, configuration or machine (an errno, a stack trace, a missing
+    command), and every refusal without that evidence leave it false, and the
+    lane parks with what the hook printed. */
 export type StageCommitRefusal = { repairable: boolean; paths: string[] };
 export type PipelineBaseResult = { ok: true; baseBranch: string; baseRef: string } | { ok: false; error: string };
 
@@ -65,12 +68,23 @@ function pathAt(line: string, file: string, from = 0): number {
   return -1;
 }
 
-/** A diagnostic placed at a line of `file`. */
+/** Output that says a tool, its configuration or the machine failed. Whatever
+    position it names, no edit to the staged files answers it. */
+const INFRASTRUCTURE_FAILURE = [
+  /\bE(?:ACCES|AGAIN|BUSY|CONNREFUSED|CONNRESET|DQUOT|IO|ISDIR|MFILE|NFILE|NOENT|NOMEM|NOSPC|NOTDIR|PERM|PIPE|ROFS|TIMEDOUT)\b/,
+  /too many open files|no such file or directory|permission denied|no space left on device|cannot allocate memory|out of memory|command not found|segmentation fault/i,
+  /* A stack frame (`    at fn (file:1:20)`) or a Python traceback: a program crashed. */
+  /^\s+at\s.*:\d+:\d+\)?$/,
+  /^Traceback \(most recent call last\):/,
+];
+
+/** A diagnostic placed at a line of `file`, with a message after the position. */
 function locatesDiagnostic(lines: readonly string[], file: string): boolean {
   return lines.some((line, index) => {
     for (let at = pathAt(line, file); at !== -1; at = pathAt(line, file, at + 1)) {
       const after = line.slice(at + file.length);
-      if (/^:\d+(?::\d+)?(?:[:\s]|$)/.test(after)) return true;
+      const position = /^:\d+(?::\d+)?/.exec(after);
+      if (position && /^(?::|\s)[\s\-–—]*[A-Za-z]/.test(after.slice(position[0].length))) return true;
       /* The file on a line of its own, then `line:column  error` under it. */
       if (after === "" && /^\s+\d+:\d+\s+(?:error|warning)\b/.test(lines[index + 1] ?? "")) return true;
     }
@@ -86,7 +100,8 @@ async function stageCommitRefusal(commit: ExecResult, staged: readonly string[] 
   }
   const lines = `${commit.stderr}\n${commit.stdout}`.split("\n").map((line) => line.trimEnd());
   const judged = typeof commit.code === "number" && commit.code !== 126 && commit.code !== 127 && !killedAtBound(commit);
-  const repairable = judged && paths.length > 0
+  const infrastructure = lines.some((line) => INFRASTRUCTURE_FAILURE.some((pattern) => pattern.test(line)));
+  const repairable = judged && !infrastructure && paths.length > 0
     && (privacyContentVerdict(lines) || paths.some((file) => locatesDiagnostic(lines, file)));
   return { repairable, paths };
 }

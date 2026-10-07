@@ -3424,8 +3424,12 @@ function routeFailedAttempt(
  * by `refusedAt`, which covers a delivery surface that keeps refusing or
  * throwing and a repair turn that never ends. The record is in the store before
  * the request leaves: a settlement that dies around the delivery finds it on
- * the next tick, so it neither commits again nor starts a second wait. Whatever
- * parks the stage after the request keeps the refusal the stage was asked about.
+ * the next tick, so it neither commits again nor starts a second wait. So is
+ * the moment the request leaves: the delivery surface may have admitted a
+ * request whose acknowledgement a crash lost, and the turn it started may be
+ * over before the replay, so the replay keeps that moment as the boundary the
+ * finished turn is judged against. Whatever parks the stage after the request
+ * keeps the refusal the stage was asked about.
  */
 const COMMIT_REPAIR_WAIT_MS = 20 * 60_000;
 const COMMIT_REPAIR_DETAIL = "a commit hook refused the passed stage's files; the stage is repairing them once";
@@ -3452,7 +3456,7 @@ function stageCommitRepairText(stage: PipelineStage, attempt: PipelineStageAttem
 }
 
 async function sendStageCommitRepair(
-  pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, ports: PipelinePorts,
+  pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, ports: PipelinePorts, persist: () => void | Promise<void>,
 ): Promise<boolean> {
   const repair = attempt.commitRepair!;
   const conversationId = attempt.conversationId!;
@@ -3460,8 +3464,12 @@ async function sendStageCommitRepair(
   if (ports.conversationDeliveryOutstanding?.(conversationId) === true) return false;
   /* Stable across ticks and processes, so a replay cannot mint a second ask. */
   const clientMessageId = `stage-commit-repair-${pipeline.id}-${stage.id}-${attempt.n}`;
-  /* A delivery surface that throws has accepted nothing: the next tick asks
-     again inside the same wait. */
+  if (!repair.sendingAt) {
+    repair.sendingAt = ports.now();
+    await persist();
+  }
+  /* A delivery surface that refuses or throws has accepted nothing: the next
+     tick asks again inside the same wait. */
   const delivered = await Promise.resolve().then(() => ports.resumeSeveredTurn!({
     conversationId,
     transcriptPath: attempt.agentPath!,
@@ -3471,9 +3479,15 @@ async function sendStageCommitRepair(
     cwd: pipeline.repoDir,
     ...(attempt.startedAt ? { cohortAt: attempt.startedAt } : {}),
   })).catch(() => false);
-  if (delivered !== true) return false;
-  repair.requestedAt = ports.now();
+  if (delivered !== true) {
+    delete repair.sendingAt;
+    await persist();
+    return false;
+  }
+  repair.requestedAt = repair.sendingAt;
   repair.clientMessageId = clientMessageId;
+  delete repair.sendingAt;
+  await persist();
   return true;
 }
 
@@ -3493,7 +3507,7 @@ async function requestStageCommitRepair(
   };
   pipeline.stateDetail = COMMIT_REPAIR_DETAIL;
   await persist();
-  if (await sendStageCommitRepair(pipeline, stage, attempt, ports)) await persist();
+  await sendStageCommitRepair(pipeline, stage, attempt, ports, persist);
   return true;
 }
 
@@ -3527,7 +3541,7 @@ async function stageCommitRepairSettled(
   if (!attempt.conversationId || !attempt.agentPath || !ports.resumeSeveredTurn) return true;
   if (!repair.requestedAt) {
     if (expired) return giveUp("The stage could not be asked to repair its files: its conversation accepted no message.");
-    if (await sendStageCommitRepair(pipeline, stage, attempt, ports)) await persist();
+    await sendStageCommitRepair(pipeline, stage, attempt, ports, persist);
     return false;
   }
   const durable = await stageRepairEvidence(attempt, ports);
@@ -3555,6 +3569,8 @@ async function commitPassedStage(
 ): Promise<void> {
   if (ports.deferStageGit) return;
   if (!(await stageCommitRepairSettled(pipeline, stage, attempt, ports, persist))) return;
+  /* Every park after a requested repair keeps the refusal it was about. */
+  const parkStage = (reason: string) => park(pipeline, afterCommitRepair(attempt, reason), attempt);
   const allowCommit = stage.kind === "run" && attempt.effectiveRole.access === "read-write";
   const protectedHead = stage.kind === "run" && !allowCommit ? pipeline.lastPassedCommit : null;
   let result = allowCommit
@@ -3571,27 +3587,23 @@ async function commitPassedStage(
       return;
     }
     if (await requestStageCommitRepair(pipeline, stage, attempt, result, ports, persist)) return;
-    park(pipeline, afterCommitRepair(attempt, result.error), attempt);
+    parkStage(result.error);
     return;
   }
   if (stage.kind === "review-loop" && result.sha !== attempt.reviewHeadSha) {
-    park(
-      pipeline,
-      `approved review flow head mismatch during settlement: reviewed ${attempt.reviewHeadSha ?? "no exact head"}, settled ${result.sha}`,
-      attempt,
-    );
+    parkStage(`approved review flow head mismatch during settlement: reviewed ${attempt.reviewHeadSha ?? "no exact head"}, settled ${result.sha}`);
     return;
   }
   if (pipeline.lastPassedCommit && result.sha !== pipeline.lastPassedCommit) {
     const ancestor = (await ports.exec("git", ["merge-base", "--is-ancestor", pipeline.lastPassedCommit, result.sha], pipeline.worktreeDir));
     if (ancestor.code !== 0 && (ancestor.code !== 1 || !allowCommit)) {
-      park(pipeline, `stage head ${result.sha} does not descend from accepted head ${pipeline.lastPassedCommit}; ${ancestor.stderr.trim() || "reconciliation requires a writable builder stage"}`, attempt);
+      parkStage(`stage head ${result.sha} does not descend from accepted head ${pipeline.lastPassedCommit}; ${ancestor.stderr.trim() || "reconciliation requires a writable builder stage"}`);
       return;
     }
     if (ancestor.code === 1) {
       result = (await reconcilePipelineStageHead(pipeline, result.sha, ports.exec));
       if (!result.ok) {
-        park(pipeline, result.error, attempt);
+        parkStage(result.error);
         return;
       }
     }
@@ -3629,7 +3641,7 @@ async function commitPassedStage(
     publishedSha: pipeline.publishedCommit ?? null,
   });
   if (!published.ok) {
-    park(pipeline, `publishing the passed stage: ${published.error}`, attempt);
+    parkStage(`publishing the passed stage: ${published.error}`);
     return;
   }
   pipeline.publishedCommit = published.remote === "published" ? published.sha : null;

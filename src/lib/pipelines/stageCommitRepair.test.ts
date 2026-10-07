@@ -68,6 +68,7 @@ function hookedRepo() {
     "#!/bin/sh",
     "if [ -f \"$(git rev-parse --git-dir)/hook-broken\" ]; then echo 'gate-slot: no slot became free within 600s' >&2; exit 1; fi",
     "if [ -f \"$(git rev-parse --git-dir)/hook-tool-missing\" ]; then echo \"checking $(git diff --cached --name-only)\" >&2; llv-test-tool-that-is-not-installed; exit 1; fi",
+    "if [ -f \"$(git rev-parse --git-dir)/hook-runs-staged-checks\" ]; then for check in $(git diff --cached --name-only -- '*.cjs'); do node \"$check\" || exit 1; done; fi",
     "if ! out=$(git diff --cached --check 2>&1); then echo \"pre-commit: staged whitespace — $out\" >&2; exit 1; fi",
     "",
   ].join("\n"), { mode: 0o755 });
@@ -78,7 +79,8 @@ function hookedRepo() {
     srcPath: null, srcConversationId: null, createdAt: "now", closedAt: null,
   } as unknown as Pipeline;
   return { root, repo, exec, run, calls, subject, breakHook: () => fs.writeFileSync(path.join(repo, ".git", "hook-broken"), ""),
-    loseHookTool: () => fs.writeFileSync(path.join(repo, ".git", "hook-tool-missing"), "") };
+    loseHookTool: () => fs.writeFileSync(path.join(repo, ".git", "hook-tool-missing"), ""),
+    runStagedChecks: () => fs.writeFileSync(path.join(repo, ".git", "hook-runs-staged-checks"), "") };
 }
 
 function writeOutput(repo: string, relative: string, content: string) {
@@ -171,7 +173,23 @@ test("a hook whose tool is missing is not repairable, although its progress line
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
+test("a staged check that crashes on a missing hook configuration is not repairable, although its stack frame places the staged file", async () => {
+  const box = hookedRepo();
+  try {
+    box.runStagedChecks();
+    const check = "evidence/draft/check.cjs";
+    writeOutput(box.repo, check, "const config = require(\"fs\").readFileSync(\".git/hook-config.json\", \"utf8\");\nconsole.log(config);\n");
+    const refused = await commitPipelineStage(box.subject, "study", false, box.exec, ["evidence/draft"], box.subject.lastPassedCommit);
+    expect(refused.ok).toBe(false);
+    if (refused.ok) throw new Error("unreachable");
+    expect(refused.error).toContain("ENOENT");
+    expect(refused.error).toContain(`${check}:1:`);
+    expect(refused.commitRefusal).toEqual({ repairable: false, paths: [check] });
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
 const EMFILE_REFUSAL = `pre-commit: eslint — could not open ${OUTPUT}: EMFILE: too many open files`;
+const LOCATED_EMFILE_REFUSAL = `${OUTPUT}:15:1: error: EMFILE: too many open files`;
 const PRIVACY_REFUSAL = "pre-commit: privacy\nPRIVACY GATE: FAIL\nhome_path: 1\nknown_value: 2\npre-commit: bun failed (1); gate failed";
 
 test.each([
@@ -182,6 +200,10 @@ test.each([
   ["a privacy gate that could not run", 1, "pre-commit: privacy\nPRIVACY GATE: FAIL\nconfiguration_error: 1", false],
   ["a privacy gate that lacks a tool, beside a content finding", 1, "PRIVACY GATE: FAIL\nhome_path: 1\ntool_unavailable: 1", false],
   ["a resource failure that names the staged file", 1, EMFILE_REFUSAL, false],
+  ["a resource failure placed at a line of the staged file", 1, LOCATED_EMFILE_REFUSAL, false],
+  ["a stack frame in the staged file", 1, `TypeError: x is not a function\n    at run (/work/tree/${OUTPUT}:4:9)\n    at main (/work/tree/${OUTPUT}:9:3)`, false],
+  ["a crash header that places the staged file with no message", 1, `/work/tree/${OUTPUT}:4\nthrow new Error("config");\n^`, false],
+  ["a Python traceback beside a located line", 1, `Traceback (most recent call last):\n${OUTPUT}:2: in <module>\nModuleNotFoundError: No module named 'yaml'`, false],
   ["a progress line that names the staged file", 1, `checking ${OUTPUT}\nfatal: unable to write new index file`, false],
   ["a hook that could not find its command", 127, WHITESPACE_REFUSAL, false],
   ["a hook that could not be executed", 126, WHITESPACE_REFUSAL, false],
@@ -214,11 +236,15 @@ function harness(options: { access?: "read-only" | "read-write" } = {}) {
   let dirty: string[] = [OUTPUT];
   let hook: ExecResult = { code: 0, stdout: "", stderr: "" };
   let committedBody = "";
+  let ancestry: ExecResult = { code: 0, stdout: "", stderr: "" };
+  let branchRef: ExecResult | null = null;
   const calls: string[] = [];
   const ports: PipelinePorts = {
     exec: (rawCommand, rawArgs) => {
       calls.push(`${rawCommand} ${rawArgs.join(" ")}`);
       const args = rawCommand === "timeout" ? rawArgs.slice(rawArgs.indexOf("git") + 1) : rawArgs;
+      if (args[0] === "merge-base" && args[1] === "--is-ancestor") return ancestry;
+      if (args[0] === "symbolic-ref" && branchRef) return branchRef;
       if (args[0] === "rev-parse" && args[1] === "--git-dir") return { code: 0, stdout: ".git\n", stderr: "" };
       if (args[0] === "rev-parse" && args[1] === "--abbrev-ref") return { code: 0, stdout: "main\n", stderr: "" };
       if (args[0] === "rev-parse" && args[1] === "--verify") return { code: 0, stdout: `${BASE_SHA}\n`, stderr: "" };
@@ -307,6 +333,8 @@ function harness(options: { access?: "read-only" | "read-write" } = {}) {
     breakRequest: () => { requestThrows = true; },
     storedAtRequest,
     hookAnswers: (result: ExecResult) => { hook = result; },
+    ancestryAnswers: (result: ExecResult) => { ancestry = result; },
+    branchRefAnswers: (result: ExecResult) => { branchRef = result; },
     stageLeaves: (...files: string[]) => { dirty = files; },
     spawnCount: () => spawns,
   };
@@ -410,6 +438,7 @@ test("a second refusal after the repair parks with the hook's output", async () 
 test.each([
   ["a hook failure no stage file names", refusal("gate-slot: no slot became free within 600s"), "committing the passed stage: gate-slot: no slot became free within 600s"],
   ["a resource failure that names the stage's file", refusal(EMFILE_REFUSAL), `committing the passed stage: ${EMFILE_REFUSAL}`],
+  ["a resource failure placed at a line of the stage's file", refusal(LOCATED_EMFILE_REFUSAL), `committing the passed stage: ${LOCATED_EMFILE_REFUSAL}`],
   ["a commit killed at its time limit", { code: null, signal: "SIGKILL", stdout: "", stderr: WHITESPACE_REFUSAL } as ExecResult, `committing the passed stage: ${WHITESPACE_REFUSAL}`],
 ])("%s parks immediately and asks the stage for nothing", async (_name, answer, detail) => {
   const h = harness();
@@ -460,6 +489,10 @@ test("the refusal and its deadline are in the store before the request leaves", 
   expect(h.storedAtRequest).toHaveLength(1);
   expect(h.storedAtRequest[0]).toMatchObject({ refusedAt: "2026-10-07T09:00:01.000Z", detail: `committing the passed stage: ${WHITESPACE_REFUSAL}` });
   expect(h.storedAtRequest[0]!.requestedAt).toBeUndefined();
+  /* So is the moment it left, which a replay after a crash keeps. */
+  expect(h.storedAtRequest[0]!.sendingAt).toBe("2026-10-07T09:00:01.000Z");
+  expect(study().commitRepair).toMatchObject({ requestedAt: "2026-10-07T09:00:01.000Z" });
+  expect(study().commitRepair!.sendingAt).toBeUndefined();
 });
 
 test("a delivery that throws spends the one repair budget: the commit is not tried again and the lane parks with the hook's output", async () => {
@@ -513,4 +546,70 @@ test("a repair the stage never finishes, or the delivery surface never accepts, 
     expect(parked.stateDetail).toContain(`committing the passed stage: ${WHITESPACE_REFUSAL}`);
     expect(h.calls.filter((call) => call.startsWith("git commit"))).toHaveLength(1);
   }
+});
+
+test("a request a crash interrupted after the stage accepted it is replayed under the same id, and the repair the stage already finished advances the lane", async () => {
+  const h = harness();
+  await runningStage(h);
+  h.hookAnswers(refusal(WHITESPACE_REFUSAL));
+  h.advance(1_000);
+  h.endTurn(PASS);
+  await tickPipelines([], h.ports);
+  expect(h.requests).toHaveLength(1);
+  const refusedAt = study().commitRepair!.refusedAt;
+
+  /* The process died after the delivery surface admitted the request and
+     before its acknowledgement was stored: a restart reads back what the
+     store held when the request left. */
+  const pipelines = loadPipelines();
+  pipelines[0]!.runs[0]!.attempts[0]!.commitRepair = structuredClone(h.storedAtRequest[0]);
+  savePipelines(pipelines);
+  expect(study().commitRepair!.requestedAt).toBeUndefined();
+
+  /* Meanwhile the stage repaired its file and finished that turn. */
+  h.advance(TICK_MS);
+  h.hookAnswers({ code: 0, stdout: "", stderr: "" });
+  h.endTurn("Removed the trailing whitespace.");
+
+  h.advance(TICK_MS);
+  for (let tick = 0; tick < 3; tick += 1) await tickPipelines([], h.ports);
+
+  /* The replay is the same request, and nothing else was asked. */
+  expect(h.requests.map((request) => request.clientMessageId)).toEqual(h.requests.map(() => h.requests[0]!.clientMessageId));
+  expect(study().commitRepair!.refusedAt).toBe(refusedAt);
+  expect(study()).toMatchObject({ state: "passed" });
+  const advanced = loadPipelines()[0]!;
+  expect(advanced.state).toBe("running");
+  expect(advanced.cursor?.stageId).toBe("verify");
+  expect(advanced.lastPassedCommit).toBe(STAGE_HEAD);
+  expect(h.calls.filter((call) => call.startsWith("git commit"))).toHaveLength(2);
+});
+
+test.each([
+  ["the ancestry check fails", (h: ReturnType<typeof harness>) => h.ancestryAnswers({ code: 128, stdout: "", stderr: "fatal: object store unavailable" }),
+    `stage head ${STAGE_HEAD} does not descend from accepted head ${BASE_SHA}; fatal: object store unavailable`],
+  ["history reconciliation fails", (h: ReturnType<typeof harness>) => {
+    h.ancestryAnswers({ code: 1, stdout: "", stderr: "" });
+    h.branchRefAnswers({ code: 128, stdout: "", stderr: "fatal: ref HEAD is not a symbolic ref" });
+  }, "pinning the reconciliation branch: fatal: ref HEAD is not a symbolic ref"],
+] as const)("when %s after the repair committed, the park keeps the hook's output", async (_name, breakSettlement, reason) => {
+  const h = harness();
+  await runningStage(h);
+  h.hookAnswers(refusal(WHITESPACE_REFUSAL));
+  h.advance(1_000);
+  h.endTurn(PASS);
+  await tickPipelines([], h.ports);
+  expect(h.requests).toHaveLength(1);
+
+  h.advance(TICK_MS);
+  h.hookAnswers({ code: 0, stdout: "", stderr: "" });
+  breakSettlement(h);
+  h.endTurn("Removed the trailing whitespace.");
+  await tickPipelines([], h.ports);
+
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.stateDetail).toStartWith(reason);
+  expect(parked.stateDetail).toContain(`committing the passed stage: ${WHITESPACE_REFUSAL}`);
+  expect(study().error).toBe(parked.stateDetail);
 });
