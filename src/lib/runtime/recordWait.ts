@@ -35,6 +35,9 @@ export interface RecordedWait {
   nextWakeMs?: number | null;
   /** When the wait began, for one recorded after the fact. */
   sinceMs?: number;
+  /** A step the request itself is in, such as discarding its own payload: it
+      is named even on a held reservation, which otherwise shows its switch. */
+  ownStep?: boolean;
 }
 
 /** The switch phase a send held behind its conversation's account switch
@@ -61,7 +64,7 @@ export function recordWait(
   if (!progress || !reservation.command.operationId) return null;
   const operationId = reservation.command.operationId;
   try {
-    const switching = reservation.state === "held";
+    const switching = reservation.state === "held" && !wait.ownStep;
     progress.note(operationId, reservation.runtimeConversationId, {
       waitReason: switching ? switchWaitReason(registry, reservation.conversationId) : wait.reason,
       detail: switching ? null : wait.detail ?? null,
@@ -190,6 +193,29 @@ export function admissionRecordStanding(
   }
   if (!record || record.terminal) return { standing: "fresh" };
   return { standing: admitterWrote(record) || record.detail === RESTORED_DETAIL ? "continue" : "leave", record };
+}
+
+/**
+ * An admission's note on a reservation it placed or found (rule a, step 4),
+ * for the paths that answer a replay from the row already written: the outage
+ * and synchronization holds, and a reclaimed host's resume. It opens a missing
+ * record and continues one an admission wrote. A record a queue executor
+ * wrote, or one whose operation is being acted on in this process (its
+ * conversation's section or a coordinator lane), keeps its phase, clocks and
+ * stall: the replay writes nothing over it.
+ */
+export function recordAdmissionWait(
+  progress: DeliveryProgressPort | null,
+  registry: AgentRegistry,
+  reservation: HeldDelivery,
+  wait: RecordedWait,
+): DeliveryProgressRecord | null {
+  const operationId = reservation.command.operationId;
+  if (!progress || !operationId) return null;
+  const standing = admissionRecordStanding(progress, operationId, (record) => record.executorId === null
+    && actingOperation(reservation.conversationId) !== operationId
+    && !migrationLaneRunning(reservation.conversationId));
+  return standing.standing === "leave" ? null : recordWait(progress, registry, reservation, wait);
 }
 
 /**

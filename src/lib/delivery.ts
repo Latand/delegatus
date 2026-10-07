@@ -919,25 +919,40 @@ export async function deliverConversationMessage(message: ConversationMessage, o
       if (queued.state === "delivered" || deliveryMayHaveArrived(registry.readOnlySnapshot(), queued)) {
         return settledReservationAnswer(registry, queued.id, conversation.id);
       }
-      /* A request-local payload's own discard, off the loop; refused, it
-         stays and the drain fails it as request-local. */
-      const discardOwn = () => registry.deliveryWrite({ label: "delivery.discard", operationId: reservation.command.operationId },
-        () => registry.discardDelivery(reservation.id));
+      /* Rule (a): the record exists from the reservation on, before any
+         branch below waits on anything. A held one shows its switch; one
+         that already ended has its ending, and no open record is made. */
+      if (queued.state === "held" || queued.state === "assigned") {
+        recordWait(progress, registry, reservation, { reason: "checking", detail: "claiming the delivery record", nextWakeMs: null });
+      }
+      /* A request-local payload's own discard, off the loop, named on the
+         record while it waits. Done, the send ends with the answer it gets;
+         refused, it stays and the drain fails it as request-local. */
+      const discardOwn = async (answer: string) => {
+        const operationId = reservation.command.operationId;
+        const open = reservation.state === "held" || reservation.state === "assigned";
+        if (open) recordWait(progress, registry, reservation, { reason: "checking", detail: "discarding the request-local payload", nextWakeMs: null, ownStep: true });
+        const discarded = await registry.deliveryWrite({ label: "delivery.discard", operationId },
+          () => registry.discardDelivery(reservation.id));
+        if (discarded.acquired) {
+          try { progress?.settle?.(operationId, "failed", answer); }
+          catch { /* A progress record never fails an answer. */ }
+        } else if (open) {
+          recordWait(progress, registry, reservation, { reason: "checking", detail: "the discard waited past its lock deadline" });
+        }
+      };
       if (queued.state === "held") {
         if (requestLocalPayload) {
-          await discardOwn();
+          await discardOwn("request-local delivery waits for migration completion");
           return failure("request-local delivery waits for migration completion", 409);
         }
-        recordWait(progress, registry, reservation, { reason: "switching-accounts" });
         requestAccountMigrationTick();
         return { ok: true, target: conversation.id, outcome: "held", operationId: queued.command.operationId };
       }
       if (queued.state !== "assigned" || !queued.generationId) {
-        if (requestLocalPayload) await discardOwn();
+        if (requestLocalPayload) await discardOwn("delivery target is unavailable");
         return failure("delivery target is unavailable", 409);
       }
-      /* Rule (a): the record exists from the reservation on. */
-      recordWait(progress, registry, reservation, { reason: "checking", detail: "claiming the delivery record", nextWakeMs: null });
       const generationId = queued.generationId;
       const claim = await registry.beginDeliveryAttemptOffLoop(reservation.command.operationId, reservation.id, generationId);
       if (!claim.acquired) {
@@ -961,7 +976,7 @@ export async function deliverConversationMessage(message: ConversationMessage, o
       const refused = registry.readOnlySnapshot().heldDeliveries[queued.id];
       if (refused?.state !== "held" && refused?.state !== "assigned") return settledReservationAnswer(registry, queued.id, conversation.id);
       if (requestLocalPayload) {
-        await discardOwn();
+        await discardOwn("request-local delivery waits for migration completion");
         return failure("request-local delivery waits for migration completion", 409);
       }
       /* Off the loop; refused, it stays as it was. */

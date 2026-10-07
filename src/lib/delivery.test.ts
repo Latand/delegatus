@@ -1,5 +1,5 @@
 import { parseCodexFeatures, setCodexFeatureReaderForTest } from "@/lib/agent/codexSpawnPolicy";
-import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import os from "node:os";
@@ -2032,4 +2032,71 @@ test("a legacy send is recorded from its reservation, dispatching while the pane
     registry.close();
     made.cleanup();
   }
+});
+
+/* docs/design/delivery-progress-and-drain.md, P17 and A1: a request-local
+   reservation a switch overtook between the preflight fence and the hold is
+   recorded from the moment it exists. Its own discard waits for the writer
+   named on that record; done, the record ends with the answer; refused, the
+   reservation stays and the record shows the switch it waits behind. */
+describe.each([
+  ["oversized text", { text: "x".repeat(33_000), images: 0 }],
+  ["images", { text: "", images: 1 }],
+] as const)("a migration-raced request-local reservation (%s)", (_label, payload) => {
+  async function raced(name: string, holdMs: number, deadlineMs?: number) {
+    const { DeliveryProgressStore } = await import("./runtime/deliveryProgress");
+    const { Database } = await import("bun:sqlite");
+    const sqlitePath = path.join(SANDBOX, `${name}.sqlite`);
+    const registry = new AgentRegistry(path.join(SANDBOX, `${name}.json`), undefined, undefined, {
+      sqliteMode: "sqlite", sqliteFilename: sqlitePath, ...(deadlineMs !== undefined ? { sqliteWriterDeadlineMs: deadlineMs } : {}),
+    });
+    setAgentRegistryForTests(registry);
+    const conversation = registry.ensureConversation("codex", "", "default");
+    const progress = new DeliveryProgressStore(null);
+    let holder: InstanceType<typeof Database> | null = null;
+    let operationId: string | null = null;
+    const hold = registry.holdDeliveryOffLoop.bind(registry);
+    registry.holdDeliveryOffLoop = (async (...args: Parameters<typeof registry.holdDeliveryOffLoop>) => {
+      registry.setConversationMigration(conversation.id, {
+        intentId: `${name}-intent`, phase: "requested", targetId: "default", revision: 1, error: null, updatedAt: new Date().toISOString(),
+      });
+      const held = await hold(...args);
+      operationId = held?.command.operationId ?? null;
+      holder = new Database(sqlitePath);
+      holder.exec("PRAGMA busy_timeout = 5000");
+      holder.exec("BEGIN IMMEDIATE");
+      return held;
+    }) as typeof registry.holdDeliveryOffLoop;
+    const seen: unknown[] = [];
+    const sending = deliverConversationMessage({
+      pid: 1, path: "", conversationId: conversation.id, text: payload.text,
+      images: payload.images ? [{ base64: "aW1hZ2U=", mime: "image/png" }] : [], clientMessageId: `${name}-key`,
+    }, { progress, targetForKnownPid: async () => "%1", sendText: async () => { throw new Error("nothing may be typed"); } });
+    for (let attempt = 0; attempt < 200 && !holder; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    seen.push(structuredClone(progress.get(operationId!)));
+    await new Promise((resolve) => setTimeout(resolve, holdMs));
+    (holder as InstanceType<typeof Database> | null)?.exec("ROLLBACK");
+    const outcome = await sending;
+    (holder as InstanceType<typeof Database> | null)?.close();
+    return { registry, progress, operationId: operationId!, outcome, during: seen[0] };
+  }
+
+  test("names its discard while the writer is held, and ends its record with the 409 once the discard is written", async () => {
+    const { registry, progress, operationId, outcome, during } = await raced(`discarded-${payload.images}`, 400);
+    expect(during).toMatchObject({ waitReason: "checking", detail: "discarding the request-local payload", terminal: null });
+    expect(outcome).toMatchObject({ ok: false, status: 409, error: "request-local delivery waits for migration completion" });
+    expect(progress.get(operationId)!.terminal).toMatchObject({ state: "failed" });
+    expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toEqual([]);
+    registry.close();
+  });
+
+  test("keeps the reservation and its open record when the discard's writer wait is refused", async () => {
+    const { registry, progress, operationId, outcome, during } = await raced(`refused-${payload.images}`, 300, 150);
+    expect(during).toMatchObject({ waitReason: "checking", detail: "discarding the request-local payload", terminal: null });
+    expect(outcome).toMatchObject({ ok: false, status: 409 });
+    expect(progress.get(operationId)).toMatchObject({ waitReason: "switching-accounts", terminal: null });
+    expect(Object.values(registry.readOnlySnapshot().heldDeliveries)).toMatchObject([{ state: "held", command: { operationId } }]);
+    registry.close();
+  });
 });

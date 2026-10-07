@@ -24,6 +24,12 @@ export interface MigrationDeliveryPortDependencies {
       no phase on its record. It leaves the send to the Viewer's pass, which
       owns the record (docs/design/delivery-progress-and-drain.md, P9, P17). */
   actuatesLegacy?: () => boolean;
+  /** Whether this process claims a held send at all. The inventory sidecar
+      claims none, structured or legacy: the waits before the journal holds a
+      structured send (its session read, a reclaimed host's recovery, a
+      republish) would be recorded nowhere, so the Viewer's pass, which owns
+      the record, makes them (docs/design/delivery-progress-and-drain.md, P9). */
+  actuates?: () => boolean;
 }
 
 /** The inventory sidecar's mark (`migration/controller.ts`). */
@@ -36,7 +42,8 @@ export function createMigrationDeliveryPort(
 ): HeldDeliveryPort {
   const structuredDelivery = dependencies.structuredDelivery ?? deliverHeldStructuredMessage;
   const progress = () => dependencies.progress === undefined ? ownedDeliveryProgressStore() : dependencies.progress;
-  const actuatesLegacy = dependencies.actuatesLegacy ?? (() => !inventorySidecar());
+  const actuates = dependencies.actuates ?? (() => !inventorySidecar());
+  const actuatesLegacy = dependencies.actuatesLegacy ?? actuates;
   const legacyDelivery = dependencies.legacyDelivery ?? (async ({ delivery, path, clientMessageId, lease }) => {
     if (delivery.payloadKind === "runtime-images") return "delivery-uncertain";
     /* Nothing typed: the claim is put back for the Viewer's pass, which the
@@ -71,6 +78,7 @@ export function createMigrationDeliveryPort(
     ...(delivery.runtimeImages.length ? { imageRefs: delivery.runtimeImages } : {}),
   }, dependencies.progress !== undefined ? { progress: dependencies.progress } : {});
   return {
+    actuates,
     async deliver(input) {
       const outcome = await deliverStructured(input);
       return outcome ?? legacyDelivery(input);

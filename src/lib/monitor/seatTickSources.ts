@@ -683,11 +683,14 @@ export function defaultSeatTickSources(): SeatTickSources {
       if (!delivery) return "unknown";
       if (delivery.state === "delivered") return "too-late";
       if (delivery.state !== "held") return "unknown";
-      /* Off the loop; refused, the withdrawal is undecided. */
+      /* Off the loop; refused, the withdrawal is undecided. The row is asked
+         again inside the write: an attempt may have claimed it while the
+         writer was held, and then it is not withdrawn. */
       const registry = agentRegistry();
-      const withdrawn = await registry.deliveryWrite({ label: "delivery.withdraw", operationId: registry.readOnlySnapshot().heldDeliveries[delivery.id]?.command.operationId ?? null },
-        () => registry.terminalizeHeldDelivery(delivery.id, reason));
-      return withdrawn.acquired ? "withdrawn" : "unknown";
+      const operationId = registry.readOnlySnapshot().heldDeliveries[delivery.id]?.command.operationId ?? null;
+      const withdrawn = await registry.deliveryWrite({ label: "delivery.withdraw", operationId },
+        () => registry.withdrawHeldDelivery(delivery.id, operationId, reason));
+      return withdrawn.acquired ? withdrawn.value : "unknown";
     },
     now: () => Date.now(),
     refreshLifecycle: (pipelines) => {

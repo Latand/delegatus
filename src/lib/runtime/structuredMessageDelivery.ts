@@ -47,7 +47,7 @@ import {
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { ownedDeliveryProgressStore, type DeliveryProgressRecord } from "./deliveryProgress";
 import type { DeliveryWaitReason } from "./deliveryWaitReason";
-import { recordWait, stillAtStep, stillOwnsRecord, type DeliveryProgressPort, type RecordedWait } from "./recordWait";
+import { recordAdmissionWait, recordWait, stillAtStep, stillOwnsRecord, type DeliveryProgressPort, type RecordedWait } from "./recordWait";
 import { STRUCTURED_DELIVERY_TIMING } from "./structuredDeliveryQueue";
 import { markStructuredRuntimeSessionRecovered } from "./startupStatus";
 import { isInterruptionObligationId } from "./interruptionObligations";
@@ -655,7 +655,9 @@ async function holdDuringRuntimeSynchronization(
         status: 409,
       };
     }
-    recordWait(wait.progress, registry, reservation, wait);
+    /* A replay of a key the queue already leads leaves its record as it is;
+       the wake still goes out. */
+    recordAdmissionWait(wait.progress, registry, reservation, wait);
     requestTick();
     return {
       ok: true,
@@ -845,7 +847,7 @@ async function recoverReclaimedMessage(
         operationId: admitted.operationId,
       };
     }
-    recordWait(progress, registry, reservation, {
+    recordAdmissionWait(progress, registry, reservation, {
       reason: "awaiting-host",
       detail: `starting a host failed: ${error instanceof Error ? error.message : String(error)}`,
     });
@@ -885,9 +887,11 @@ async function recoverReclaimedMessage(
 
 /**
  * The progress record of one drain attempt on a reservation the journal does
- * not hold yet. The attempt is counted once, on its first note; a drain that
- * only reconciles an earlier attempt records nothing, since the queue or the
- * settlement owns that record.
+ * not hold yet. The attempt is counted once, on its first note. A drain that
+ * reconciles an earlier attempt counts none, and records the waits it performs
+ * itself (a session read, a recovery, a republish) only on a record no queue
+ * executor leads: one the queue wrote is that executor's, which may be acting
+ * on the operation right now, so its phase, clocks and stall stay (A5).
  */
 function heldDrainProgress(
   progress: DeliveryProgressPort | null,
@@ -898,14 +902,25 @@ function heldDrainProgress(
   let delivery: HeldDelivery | null | undefined;
   let attempted = false;
   let written: DeliveryProgressRecord | null = null;
+  /** Asked at each write, since a queue may list the operation meanwhile. */
+  const queueLeads = (): boolean => {
+    try {
+      const current = progress?.get(operationId) ?? null;
+      return Boolean(current && (current.terminal || current.executorId !== null));
+    } catch {
+      return true;
+    }
+  };
   const wait = (reason: DeliveryWaitReason, detail: string | null = null, sinceMs?: number) => {
-    if (!progress || request.reconcileUncertain) return;
+    if (!progress) return;
+    if (request.reconcileUncertain && queueLeads()) return;
     if (delivery === undefined) {
       try { delivery = reservationFor(registry, operationId); }
       catch { delivery = null; }
     }
     if (!delivery) return;
-    written = recordWait(progress, registry, delivery, { reason, detail, attempted: !attempted, ...(sinceMs !== undefined ? { sinceMs } : {}) });
+    const counts = !attempted && !request.reconcileUncertain;
+    written = recordWait(progress, registry, delivery, { reason, detail, ...(counts ? { attempted: true } : {}), ...(sinceMs !== undefined ? { sinceMs } : {}) });
     attempted = true;
   };
   return {
@@ -915,7 +930,7 @@ function heldDrainProgress(
         own reads do, so a pass does not restart the phase the send already
         shows; one that lasts is recorded as `checking` from when it began. */
     async step<T>(detail: string, read: () => Promise<T>): Promise<T> {
-      if (!progress || request.reconcileUncertain) return read();
+      if (!progress) return read();
       const began = Date.now();
       const bound = setTimeout(() => wait("checking", detail, began), STRUCTURED_DELIVERY_TIMING.stallMs);
       (bound as { unref?: () => void }).unref?.();
@@ -930,13 +945,7 @@ function heldDrainProgress(
         record a queue executor wrote (its phase, clocks and stall) is that
         executor's, which may be acting on the operation right now. */
     unreadable(cause: string) {
-      if (!progress || !request.reconcileUncertain) return;
-      try {
-        const current = progress.get(operationId);
-        if (current && (current.terminal || current.executorId !== null)) return;
-      } catch {
-        return;
-      }
+      if (!progress || !request.reconcileUncertain || queueLeads()) return;
       let reservation: HeldDelivery | null = null;
       try { reservation = reservationFor(registry, operationId); }
       catch { reservation = null; }
@@ -1395,7 +1404,7 @@ export async function enqueueStructuredMessage(
       return uncertainReservationFailure(recoveryReservation);
     }
     /* Accepted from here: its record says the host is being resumed for it. */
-    recordWait(progress, registry, recoveryReservation, {
+    recordAdmissionWait(progress, registry, recoveryReservation, {
       reason: "recovering-host",
       detail: "the conversation's host is being resumed",
       nextWakeMs: null,
@@ -1432,7 +1441,7 @@ export async function enqueueStructuredMessage(
       }
       if (!recoveryReservation) return ownershipUnavailable("reclaimed");
       /* Accepted, and its resume failed: the drain retries it. */
-      recordWait(progress, registry, recoveryReservation, {
+      recordAdmissionWait(progress, registry, recoveryReservation, {
         reason: "awaiting-host",
         detail: `starting a host failed: ${error instanceof Error ? error.message : String(error)}`,
       });

@@ -237,7 +237,7 @@ nothing to decide on that path.
 | P20 | Operator discard | `handleRuntimeDiscard` `http.ts:580`–`:692` | ending mirrored by the queue and sweep; A3 restores a lost one | — | `recordDeliveryOutcomeForOperation` `:601`, `discardDeliveryForOperation` `:662` synchronous; C2 |
 | P21 | Operator switch and intent controls: Stop, retry failed, cancel switch, rollback, retry migration, pipeline reseat | `account-migrations/[intentId]/action.ts:22` `:37`; `conversationCommand.ts:305` `:322` `:345`; `pipelines/engine.ts:1544` | held sends keep their switch reason; endings mirrored | per conversation (the command drains its own conversation, `conversationCommand.ts:316` `:323` `:347`) | all synchronous; C2 |
 | P22 | Hygiene in the inventory sidecar | `runReaperCycle` `reaperRuntime.ts:944` (runs only in the sidecar, `migration/controller.ts:149`–`:153`, `:335`–`:337`): `:870` `:893` `:925` `:928` `:935` `:972` | endings mirrored; A3 restores a lost one | sidecar cycle | all synchronous in the sidecar's loop; C4 |
-| P23 | Withdrawals: seat wake, Telegram reply | `seatTickSources.ts:603`–`:620`, `:674`; `telegram/bot/reportReplies.ts:71` | endings mirrored | — | synchronous; C2 |
+| P23 | Withdrawals: seat wake, Telegram reply | `seatTickSources.ts:603`–`:620`, `:674`; `telegram/bot/reportReplies.ts:71` | endings mirrored | — | synchronous; C2, and the `held` precondition decided inside the write it waited for (C0, round 9) |
 | P24 | Spawn first message bookkeeping and launch failure | `structuredSpawn.ts:399` (delivered), `:407` (initial message timed out); `failSpawn` `registry.ts:6503`, `failStructuredSpawn` `:6563`, which end a never-attempted first message inside the launch's own transaction (`terminalizeFailedSpawnDeliveriesInFile` `:2599`, called at `:6529` and `:6597`); about thirty callers | the first message's record is P1's; its failure ending is mirrored, A3 restores a lost one | — | synchronous; C2, C5 |
 | P25 | Queue-for-Codex hand-off (the composer's queue action, `TmuxComposer.tsx:4284`) | `handleNativeQueue` `nativeQueueHttp.ts:46`, `client.command` `:131` | **gap**: no row, no record, no deadline; the journal mints the operation id (`runtime-host/journal.ts:494`), so a lost reply leaves an admitted entry nothing in the Viewer can name; A2, A8 | — (the journal orders native entries; no actuation section today, unchanged) | none written; C2 (the row) |
 | P26 | Account retirement | `retireAccount` `registry.ts:8037`, from the removal `accounts/removal.ts:758` and its recovery `:834` | endings mirrored; A3 restores a lost one | — | synchronous, inside the account mutation lock and the accounts registry file lock; C5 |
@@ -316,6 +316,27 @@ Round 8 found sub-paths between and inside paths already listed:
 20. **P1/P5 switch race for an injection**, and **P4/P9** the recovery's
     authorization refusal after its admission.
 
+Round 9 found eight more intersections:
+
+21. **P18/P25 × P11/P15**: a native add the durable record ended during an
+    outage was still handed to Codex; the queue's settlement fence sat after
+    the native branch (A6).
+22. **P23**: a withdrawal decided on a `held` read made before its writer
+    wait, so a row an attempt claimed during the wait was ended and answered
+    `withdrawn` (C0).
+23. **P2/P3/P4 × P16**: an outage or reclaimed-host replay rewrote the record
+    a queue executor led (A1, "A replay that finds its row already written").
+24. **P19b × P16**: startup's first retry note rewrote a queue-led record when
+    the row already existed (A2).
+25. **P9 × P7**: a reconcile on the lost-ack branch recorded none of the waits
+    it performs itself (A5).
+26. **P18, exception branch**: the executor's two reads after a failure were
+    untracked (A6).
+27. **P17 × P5**: a request-local reservation a switch overtook waited on its
+    discard with no record (A1).
+28. **P9 in the inventory sidecar**: structured pre-journal waits had no
+    progress owner there, and A3 cannot restore a record that exists (A5).
+
 ## Rule (a): one record from the reservation on
 
 ### A1. Open at the reservation, update at every step
@@ -379,6 +400,34 @@ observers can leave that record alone: `withConversationActuation` and
 null. The structured admission declares its reservation's operation as it
 enters; the legacy send declares right after its hold; the drain declares the
 item it is about to claim.
+
+**A replay that finds its row already written** (round 9). P2, P3 and the P4
+recovery reservation answer a same-key replay from the reservation that
+already exists, and their note on it follows rule (a) step 4 through
+`recordAdmissionWait` (`recordWait.ts`), the same standing the terminal retry
+route and the hand-off use (`admissionRecordStanding`): a missing or ended
+record is opened, a record an admission wrote (no `executorId`, and its
+operation is not the one this process's section or a coordinator lane is
+acting on) is continued, and a record a queue executor or an actor leads keeps
+its phase, clocks and stall. The replay still answers `held` under the same
+operation and still wakes the migration pass. Before this, an outage replay of
+a send the queue was dispatching replaced `dispatching` with
+`evidence-unreadable`, reset its phase and progress clocks and cleared its
+stall while the original send was still in flight; the "continues the same
+record" claim for P16 did not hold on this intersection.
+
+**A request-local reservation a switch overtook** (P17, round 9). Between the
+preflight fence and the hold, a switch can begin, so the hold returns a `held`
+reservation whose payload (oversized text, images) is request-local and must
+be discarded. The record is opened right after the hold returns, before any of
+the early-return branches, for a reservation that is `held` or `assigned` (a
+`held` one shows its switch); the discard is named on it while it waits for
+the writer (`checking`, "discarding the request-local payload", written as the
+request's own step even on a `held` row, `RecordedWait.ownStep`). A written
+discard ends the record `failed` with the request's 409 answer; a refused one
+leaves the reservation, which the drain fails as request-local, and the record
+back on what it waits for (the switch for a `held` row, `checking` "the
+discard waited past its lock deadline" for an `assigned` one).
 
 The P7 kick matters: the request threw before its usual kick, so a journal that
 did admit the command has nobody waking the queue for up to the 5 s safety
@@ -503,6 +552,18 @@ pass sends it again under the same deterministic id and finds its row
 (idempotent); a row the sweep has already ended is not sent again. So the
 retry reaches the host at most once.
 
+A pass that finds the retry's row already written (a repeated pass after a
+lost reply, or one whose lookup of the original answered before another pass
+admitted the retry) asks `admissionRecordStanding` before its first note, as
+the route's retry and the hand-off do (round 9): it continues a record a
+startup pass wrote (`checking` "admitting to the runtime journal" or
+`evidence-unreadable` "the runtime journal did not acknowledge the retry", no
+executor) without restarting its clocks, and leaves a record the queue leads
+as it stands. Its later notes keep the step 4 guard. Before this, only the
+later notes were guarded, and the first one replaced the executor's
+`dispatching` record, its clocks and its stall, while the journal deduplicated
+the retry correctly.
+
 - **P13** is different: the same operation is re-armed, so there is no new row.
   `DeliveryProgressStore.rearm(operationId, conversationId, note)` reopens a
   terminal record (terminal cleared, attempt + 1, phase and progress dated now,
@@ -615,17 +676,39 @@ not list. For each one it now reads the reservation:
 
 ### A5. The drain records what it decides, and leaves the acting record alone
 
-`heldDrainProgress` skips every write while reconciling an uncertain row
-(`structuredMessageDelivery.ts:899`), because the queue may own the record. A
-reconcile whose runtime read fails (`heldOutcomeDuringRuntimeSynchronization`
-returns `delivery-uncertain`) writes `evidence-unreadable` with its cause only
-on a record no queue executor leads (no `executorId`, not ended). The first
-revision assumed one failed read proved the queue could not list the journal
-either; round 8 showed a queue dispatching the same operation through a
-journal that still answered, whose phase, clocks and stall that note replaced.
-A failed read proves nothing about the journal, so a led record is left as it
-stands, and the reconcile of an admission whose own acknowledgement was lost
-(a record the admission wrote) still gets the cause.
+A reconcile of an uncertain row writes only on a record no queue executor
+leads (no `executorId`, not ended), and asks that again at each write, since a
+queue may list the operation while the reconcile waits. Earlier revisions
+skipped every reconcile write (`heldDrainProgress`), on the premise that the
+queue owns that record; round 9 showed the premise false on the lost-ack
+branch (P7): the admission's own record (`evidence-unreadable`, no executor)
+stayed on its old cause while the reconcile read the session, recovered a
+reclaimed host or republished one, so a recovery that hung was named nowhere.
+The reconcile now records those waits exactly as an assigned drain does (the
+`recovering-host` note before `recover`, the session read and republish as
+tracked `checking` steps, the outcome's wait), counts no attempt, and leaves a
+led record's phase, clocks and stall as they are. A reconcile whose runtime
+read fails (`heldOutcomeDuringRuntimeSynchronization` returns
+`delivery-uncertain`) writes `evidence-unreadable` with its cause under the
+same rule. The first revision assumed one failed read proved the queue could
+not list the journal either; round 8 showed a queue dispatching the same
+operation through a journal that still answered, whose phase, clocks and stall
+that note replaced. A failed read proves nothing about the journal, so a led
+record is left as it stands.
+
+**The inventory sidecar claims nothing** (round 9). The coordinator drain
+also runs in the inventory sidecar, which owns no `DeliveryProgressStore`
+(`ownedDeliveryProgressStore` answers null there), so every wait the drain
+records before the journal holds a structured send (the session read, a
+reclaimed host's recovery, a republish) would be recorded nowhere, and A3
+cannot help: it restores only a record that is missing, and the Viewer's
+record of such a send exists (`awaiting-host`). `HeldDeliveryPort.actuates()`
+answers false in the sidecar (`deliveryPort.ts`, the same mark the legacy
+drain already used), and `drainHeldDeliveries` then neither claims nor
+reconciles the item. The send stays `assigned` (or `delivery-uncertain`) for
+the Viewer's pass, which the record's due wake brings (A4), and which records
+every one of those waits on the original key. The sidecar still settles a
+request-local payload it finds unclaimed, a registry write with no input.
 
 Every wait the drain decides before its command is recorded before it is
 awaited (round 8). The dead-host recovery inside the drain writes
@@ -671,7 +754,26 @@ journal answers). From the queue's listing on:
   on the conversation's lane, so a read that has not answered shows
   "reading the delivery journal status" (or its own step) and its stall from
   the moment it began, after the queue's own status read answered (round 8).
-  The `prepared` CAS and the turn fences are unchanged;
+  The `prepared` CAS and the turn fences are unchanged. The two reads the
+  executor makes after a failure (its status read and the native journal read
+  that decide whether another executor owns the entry,
+  `nativeQueueExecutor.ts` `catch`) run through the same `step`, so one that
+  hangs is named and stalls within the bound too (round 9);
+- an add's first actuation passes the durable settlement fence every send
+  passes (#1131): `execute` takes a fifth argument, `settled()`, the queue's
+  own `readSettled` under the add's operation id, tracked as the step
+  "reading the durable delivery record". It is asked right before the
+  `dispatching` note and the `prepared` CAS, after the awaits that precede
+  them. A settled answer refuses the entry in the native journal
+  (`refused`, "delivery was settled before this executor reached it; the
+  message was never handed to Codex's queue"), so no add is ever sent and the
+  ended record stands; an unreadable answer writes `evidence-unreadable`,
+  "durable delivery record is unavailable", and answers `false`, so nothing is
+  sent until the record can be read. It covers a direct hand-off and a
+  converted queue send alike, and every later executor after a restart, since
+  the fence is read from the registry each time. An entry already prepared or
+  acknowledged never reaches it: its receipt is past `queued`/`pending`, and
+  reconciliation of a submitted entry is unchanged (round 9);
 - after the acknowledgement the journal answers `queued` while Codex holds the
   entry in its own queue (`journal.ts:596`): the record says `awaiting-turn`,
   "held in Codex's own queue", a passive phase, until the proof settles it
@@ -923,6 +1025,16 @@ Two more pieces:
   mutation in the same synchronous step when it succeeds, and a refusal sampled
   into `blockingWaits` with its label and zero duration when it does not. It is
   synchronous, so it runs where an `await` cannot (C5).
+- A write that depends on a state read before the wait decides on it again
+  inside the transaction it waited for, and the caller returns that answer
+  (round 9); `acquired` by itself says only that the write ran. The wait can last seconds, and another
+  writer (a claim, a cancelled switch) can move the row meanwhile. The
+  withdrawals (P23) are the case found: both read `held`, waited, and then
+  answered `withdrawn` for a row an attempt had claimed in between, which the
+  Telegram rotation reads as permission to send under a new key.
+  `withdrawHeldDelivery(id, operationId, reason)` ends the row only while it
+  is still `held` under the operation the caller saw, and answers
+  `withdrawn`, `too-late` (delivered) or `unknown`.
 - `RegistryWriterBusyError`, thrown by a coordinator step whose write was
   refused. `advanceConversationMigration` treats it as it treats
   `SuccessorPendingError` (`coordinator.ts:1081`): it returns the latest
@@ -987,8 +1099,8 @@ holds sends towards its commit).
 | `conversationCommand.ts:305` | `cancelConversationSwitch` | bind | `migration.cancel` | 503 `retryable`; nothing cancelled |
 | `conversationCommand.ts:322` | `rollbackConversationMigration` | bind | `migration.rollback` | 503 `retryable`; nothing rolled back |
 | `seatTickSources.ts:614` `:616` | `recordDeliveryOutcomeForOperation`, `recordDeliveryOutcome` | settle | `delivery.settle` | answers null (not settled), as for an undecidable verdict; the next tick reads it again |
-| `seatTickSources.ts:674` | `terminalizeHeldDelivery` (wake withdrawal) | settle | `delivery.withdraw` | answers `unknown`, the existing answer for an undecided withdrawal |
-| `reportReplies.ts:71` | `terminalizeHeldDelivery` (reply withdrawal) | settle | `delivery.withdraw` | answers not withdrawn; the caller's existing fallback runs |
+| `seatTickSources.ts` `withdrawWake` | `withdrawHeldDelivery` (wake withdrawal): ends the row only if it is still `held` under the operation read before the wait | settle | `delivery.withdraw` | answers `unknown`, the existing answer for an undecided withdrawal; a row claimed during the wait answers `unknown` and stays as the claim left it |
+| `reportReplies.ts` `withdraw` | `withdrawHeldDelivery` (reply withdrawal), the same precondition | settle | `delivery.withdraw` | answers not withdrawn and the journal fallback decides; a row claimed during the wait is left to its attempt, and only the journal's own CAS can answer `withdrawn` for it |
 | `structuredSpawn.ts:399` | `recordDeliveryOutcome` delivered (first message) | settle | `delivery.settle` | stays; the queue's terminal projection or the sweep settles it from the journal |
 | `structuredSpawn.ts:407` | `recordDeliveryOutcome` delivery-uncertain (first message timed out) | settle | `delivery.settle` | stays as it was: a claimed first message is already `delivery-uncertain`; an unclaimed one is delivered by the drain under its key |
 | startup P19 | through `enqueueStructuredMessage` and the retry row (adopted identity included) | as above | as above | as above; startup counts the refusal as a failure and its retry repeats under the same key |
@@ -1089,7 +1201,8 @@ refused lock at that moment.
 | A resend, a reconcile, a lost-ack retry or a startup retry commands the same operation | journal admission is idempotent per operation id and key; a replay adds no effect |
 | Two executors read the same operation as `queued` (succession, rebind) | `delivering` written only from `pending`/`queued` (`fromStatuses`); a retired lane acts on nothing |
 | A native entry read by two executors | `prepared` written only from `pending`/`queued` (`journal.ts:602`), and the entry's mutation identity |
-| A send settled while unreachable | `settled` fence read before actuation; settlement fences the journal first |
+| A send settled while unreachable | `settled` fence read before actuation; settlement fences the journal first. A native add (hand-off or converted send) reads the same fence right before its `prepared` CAS; settled, the entry is refused in the native journal, unreadable, nothing is sent (A6, round 9) |
+| A held send withdrawn while an attempt claims it | the withdrawal's `held` check runs inside the write it waited for (`withdrawHeldDelivery`); a claimed row is never ended under its attempt and never answers `withdrawn`, so no second send is authorized (C0, round 9) |
 | Late evidence or a late acknowledgement | settles the same operation; never writes input |
 | Operator's unknown-fate retry | journal `claimDeliveryAction("retry")` must win; same operation re-armed, never automatically |
 | Terminal retry, from the route or from startup | a new operation with a deterministic id, only on a terminal `failed`/`rejected` original; startup retries once (`!existing.receipt.retryOfOperationId`, `startup.ts:674`) |
@@ -1104,7 +1217,10 @@ refused lock at that moment.
 What this design adds touches none of them: records are observational, lanes
 and the permit add scheduling within the existing sections, claims and
 revision fences, and an off-loop write commits the same mutation in the same
-transaction it waited for.
+transaction it waited for. A precondition read before that wait is decided
+again inside the transaction (C0); round 9 found two that were not (the
+withdrawals) and one fence a native add skipped (the durable settlement), and
+both rows above now hold.
 
 ## Findings map
 
@@ -1148,6 +1264,14 @@ transaction it waited for.
 | 8 | P2 a switch-raced injection had no record while its ending waited for the lock | P1, P5 | (a) | open at `8bb90fa54` | A1 table row; Note 2 "Held injection" |
 | 8 | P2 WRONG-PREMISE the inventory sidecar typed legacy sends with no progress writer | P9, P17 | (a) | open at `8bb90fa54` | the sidecar leaves legacy actuation to the Viewer (`actuatesLegacy`, `deliveryPort.ts`); the deferral of sidecar records is withdrawn |
 | 8 | P2 the recovery's authorization refusal still failed its launch on the loop | P4, P9 | (c) | open at `8bb90fa54` | C5: `structuredRecovery.ts` second call through `failSpawnOffLoop` |
+| 9 | P1 a native add the durable record ended is still handed to Codex | P18, P25, P11, P15 | once | open at `0ea702c31` | A6: the settlement fence before the `prepared` CAS; settled refuses the entry, unreadable sends nothing |
+| 9 | P1 a withdrawal answers `withdrawn` for a row an attempt claimed during its writer wait | P23 | (c) refusal, once | open at `0ea702c31` | C0: `withdrawHeldDelivery` decides `held` inside the transaction; both ports return its answer |
+| 9 | P2 an outage replay overwrites the queue's active record | P2, P3, P4, P16 | (a) step 4 | open at `0ea702c31` | A1: `recordAdmissionWait`, the admission standing at each replay note |
+| 9 | P2 startup's first retry note clobbers a queue-led record | P19b, P16 | (a) step 4 | open at `0ea702c31` | A2: `admissionRecordStanding` before the first startup note |
+| 9 | P2 a lost-ack reconcile records none of the waits it performs | P9, P7 | (a) | open at `0ea702c31` | A5 corrected: reconcile waits recorded on a record no queue leads, rechecked at each write |
+| 9 | P2 the native executor's reads after a failure are untracked | P18 | (a) | open at `0ea702c31` | A6: both reads through `step` |
+| 9 | P2 a migration-raced request-local reservation waits on its discard with no record | P17, P5 | (a), (c) refusal | open at `0ea702c31` | A1: the record opened after the hold, the discard named, ended or left by its outcome |
+| 9 | P2 WRONG-PREMISE the sweep restores the sidecar's structured pre-journal waits | P9 | (a) | open at `0ea702c31` | A5: the sidecar claims no held send (`HeldDeliveryPort.actuates`); Notes corrected |
 
 Earlier rounds, all fixed at this head and kept: round 1 (async probe followed
 by a synchronous write → `withWriter`; one stalled conversation stopped the
@@ -1197,6 +1321,31 @@ injection a switch overtook between preflight and its reservation …" (P1, P5;
 (a), once); `structuredRecovery.test.ts` "an account authorization lost after
 the recovery's admission ends its launch off the loop …" (P4, P9; (c) with a
 real lock holder, and its refusal).
+
+Round 9, one per finding, each failing on `0ea702c31`:
+`nativeQueueRuntime.test.ts` "a Queue-for-Codex add the durable record already
+ended is refused before any add, after a restart too …" (P25, P11, P15; once,
+the real hand-off route, registry, settlement sweep, journal, queue and
+executor), "a converted queue send's add waits on an unreadable settlement
+fence, then is refused …" (P18; once, unreadable fence) and "after a failed
+preparation, reading the delivery journal status / the native queue journal
+that has not answered shows that step and its stall …" (P18; (a), no input);
+`seatTickSources.test.ts` "a held-wake withdrawal that waited for the writer
+leaves a row an attempt claimed meanwhile …" and `reportReplies.test.ts` "a
+recipient-rotation withdrawal that waited for the writer …" (P23; the
+production ports with a real SQLite writer held by another connection);
+`structuredMessageDelivery.test.ts` "an outage replay of a send the queue is
+dispatching keeps the queue's record …" (P2, P16; (a) step 4, one command),
+"an uncertain send's reconcile names the host's recovery on a record no queue
+leads …" and "… whose session read hangs names that read …" (P9, P7; (a), no
+input, the led record untouched) and "the inventory sidecar's drain claims no
+structured send …" (P9; (a), one recovery, by the Viewer's pass);
+`startup.test.ts` "a repeated startup retry leaves the record the queue leads
+as it stands …" (P19b; (a) step 4, one host input); `delivery.test.ts` "a
+migration-raced request-local reservation (oversized text / images) …" (P17;
+(a) with a real lock holder, written and refused discards). The guard
+"an outage replay continues the record an earlier outage admission wrote …"
+pins the `continue` standing.
 
 `structuredDeliveryQueue.progress.test.ts`:
 
@@ -1319,31 +1468,32 @@ at-most-once fence; the rendered stall line and its strings.
 
 | File | Change |
 |---|---|
-| `src/lib/agent/registry.ts` | `whenWriterHeld` public as `deliveryWrite`, `deliveryWriteNow`, `RegistryWriterBusyError` (C0); the two read-then-mutate methods split into a candidate read and a mutation; `recordDirectAdmission` generalizing `recordDeliveryRetryAttempt`, the `directAdmission` field and `settleDirectAdmission` (A2); `deliveryRequestDigest` extracted from `inspectDeliveryReservation` (A2); `failSpawnOffLoop`, `failStructuredSpawnOffLoop`, the failed-spawn sweep narrowed to the launch being failed, `retireAccount` through `deliveryWriteNow` (C5) |
+| `src/lib/agent/registry.ts` | `whenWriterHeld` public as `deliveryWrite`, `deliveryWriteNow`, `RegistryWriterBusyError` (C0); the two read-then-mutate methods split into a candidate read and a mutation; `recordDirectAdmission` generalizing `recordDeliveryRetryAttempt`, the `directAdmission` field and `settleDirectAdmission` (A2); `deliveryRequestDigest` extracted from `inspectDeliveryReservation` (A2); `failSpawnOffLoop`, `failStructuredSpawnOffLoop`, the failed-spawn sweep narrowed to the launch being failed, `retireAccount` through `deliveryWriteNow` (C5); `withdrawHeldDelivery`, the withdrawal's `held` precondition inside its transaction (C0, round 9) |
 | `src/lib/deliveryActuation.ts` | `lease.act(operationId)` and `actingOperation(conversationId)` (A1, observer rule) |
 | `src/lib/runtime/deliveryProgress.ts` | `rearm` (A2); `backfillEnded`, the `checked_through` checkpoint written in the flush transaction, the retention-wide fallback (A3) |
 | `src/lib/runtime/deliveryWaitReason.ts` | none |
 | `src/lib/runtime/contracts.ts` | `terminalRetryOperationId` (A2) |
-| `src/lib/runtime/structuredMessageDelivery.ts` | `recordWait` at every reservation write and the P1/P4/P7 steps (A1); acting operation declared; deputy exemption for the Codex continuation id; `payloadRefusal` shared with the drain and the `rejected` outcome (Note 2); reconcile-unreadable note and observer rule in `heldDrainProgress` (A5); C2 writes |
+| `src/lib/runtime/structuredMessageDelivery.ts` | `recordWait` at every reservation write and the P1/P4/P7 steps (A1); acting operation declared; deputy exemption for the Codex continuation id; `payloadRefusal` shared with the drain and the `rejected` outcome (Note 2); reconcile-unreadable note and observer rule in `heldDrainProgress` (A5); reconcile waits on a record no queue leads, rechecked at each write (A5, round 9); replay notes through `recordAdmissionWait` (A1, round 9); C2 writes |
 | `src/lib/accounts/migration/coordinator.ts` | lanes, pass budget, leased advancement permit, cleanups per lane, cancellation-refused-no-drain, `rejected` outcome, `HeldDeliveryPort.wait`, `heldDrainBusy` (B1, A5); C1 writes, commit, rollback and every advancement write included; `RegistryWriterBusyError` handled beside `SuccessorPendingError` |
 | `src/lib/accounts/migration/contracts.ts`, `src/lib/accounts/migration/provider.ts` | `recordContinuityPath` returns a promise and the provider awaits it at its five call sites (C1) |
 | `src/lib/accounts/migration/controllerSignal.ts` | `HELD_DRAIN_PASS_BUDGET_MS`, `ADVANCEMENT_LEASE_MS` |
 | `src/lib/accounts/migration/controller.ts` | compaction off-loop |
-| `src/lib/accounts/migration/deliveryPort.ts` | `wait` through `recordWait` |
+| `src/lib/accounts/migration/deliveryPort.ts` | `wait` through `recordWait`; `actuates`, false in the inventory sidecar, which then claims no held send (A5, round 9) |
 | `src/lib/accounts/migration/conversationCommand.ts`, `src/app/api/account-migrations/[intentId]/action.ts`, `src/lib/pipelines/engine.ts` (`requestConversationReseat` only) | C2 writes and their refusals |
 | `src/lib/runtime/structuredDeliveryController.ts` | A4 in `unlistedWakeDue`; A3 in the sweep timer; A7 in the watchdog guard; native `settled` off-loop, settling a hand-off row (A8), and the native `note` port; `settleKilledLaunches` (`:1062`) awaiting the launch-failure form (C5); C3 writes. Edits stay in these functions and the native executor's construction; lane bc8e99e8 edits host registration and publication |
-| `src/lib/runtime/structuredDeliveryQueue.ts` | native notes: unreadable status, executor waits, acknowledged entry (A6) |
-| `src/lib/runtime/nativeQueueExecutor.ts` | the `note` argument at its waits and before `prepared` (A6) |
+| `src/lib/runtime/structuredDeliveryQueue.ts` | native notes: unreadable status, executor waits, acknowledged entry (A6); the settlement fence handed to the executor (A6, round 9) |
+| `src/lib/runtime/nativeQueueExecutor.ts` | the `note` argument at its waits and before `prepared` (A6); the `settled` fence before an add's `prepared` CAS and the exception branch's reads through `step` (A6, round 9) |
+| `src/lib/runtime/recordWait.ts` | `recordAdmissionWait` and `RecordedWait.ownStep` (A1, round 9) |
 | `src/lib/runtime/structuredReconfigure.ts` | claim and settle off-loop (C3) |
-| `src/lib/runtime/startup.ts` | B2 in both continuation loops; P19(b) through `enqueueStructuredMessage`; retry row (with the continuation's identity for adoption) and record before the retry command (A2); superseded drain off-loop (C3) |
+| `src/lib/runtime/startup.ts` | B2 in both continuation loops; P19(b) through `enqueueStructuredMessage`; retry row (with the continuation's identity for adoption) and record before the retry command (A2), the first note under `admissionRecordStanding` (A2, round 9); superseded drain off-loop (C3) |
 | `src/lib/runtime/sendSettlement.ts` | `restoreEndedRecords` beside `mirrorSettledReceipts` (A3); `attemptOwner` generalizing `retryAttemptOwner` for direct-admission rows (A2) |
 | `src/lib/runtime/http.ts` | retry route `rearm`; terminal retry row and record before the command (A2); discard writes; C2 writes |
-| `src/lib/delivery.ts` | legacy records (A1); the addressed transcript resolved or registered before the reserved branch, refusal ahead of actuation (A9); C2 writes |
+| `src/lib/delivery.ts` | legacy records (A1), opened right after the hold and naming a request-local discard (A1, round 9); the addressed transcript resolved or registered before the reserved branch, refusal ahead of actuation (A9); C2 writes |
 | `src/lib/runtime/nativeQueueHttp.ts` | `add` through the direct-admission row, the operation id on the command, the ended-row and pre-build replay answers, a `registry` dependency (A8) |
 | `src/lib/accounts/removal.ts` | step 4 and recovery through `deliveryWriteNow` (C5) |
 | `src/lib/tmux.ts`, `src/lib/runtime/structuredRecovery.ts`, `src/lib/agent/spawnCommand.ts`, `src/app/api/tasks/[id]/spawn/route.ts`, `src/lib/pipelines/engine.ts` (`failStageLaunch` and the two stage-launch failures) | await the off-loop launch-failure forms (C5) |
 | `src/lib/reaperRuntime.ts` | hygiene off-loop, `terminalizeStaleUndeliverableHeldDeliveries` async (C4) |
-| `src/lib/monitor/seatTickSources.ts`, `src/lib/telegram/bot/reportReplies.ts` | C2 writes |
+| `src/lib/monitor/seatTickSources.ts`, `src/lib/telegram/bot/reportReplies.ts` | C2 writes; each returns the answer `withdrawHeldDelivery` decided in its transaction (C0, round 9) |
 | `src/lib/runtime/structuredSpawn.ts` | `:399`, `:407` (C2); every `failSpawn`/`failStructuredSpawn` call awaiting the off-loop form, `failQueuedPinnedSpawn` async (C5) |
 
 Registry read paths (lane c64e30e9) are untouched; `runtime-host/journal.ts` is
@@ -1718,7 +1868,9 @@ parts of 7a677014 belong to lanes b49993f7 and b3a827ad.
   in-turn ceiling the sweep ends its row `uncertain` while Codex may still send
   it, and the proof later promotes it to `delivered`. That is P18's behavior
   today, extended to the hand-off unchanged. Revisit if a record shows
-  `awaiting-turn` ended `uncertain` and then delivered.
+  `awaiting-turn` ended `uncertain` and then delivered. This covers only an
+  entry Codex already acknowledged: one the settlement ended before its first
+  add is refused by the durable fence and never handed to Codex (A6).
 - **Holding a hand-off across a switch or an outage.** The journal refuses a
   hand-off it cannot admit, and the browser keeps it as an unresolved row with
   its replay; holding it would hide it from Codex's panel (A8, Options).
@@ -1747,9 +1899,12 @@ parts of 7a677014 belong to lanes b49993f7 and b3a827ad.
   effect the Viewer's queue could list, and the phase of a send it typed would
   reach no record. Its legacy drain puts the claim back untyped, and the
   Viewer's pass, which owns the record and is woken by it, types the send with
-  its `dispatching` phase. A structured send it drains reaches the journal,
-  where the Viewer's queue records it; its pre-command waits are the ones A3
-  restores.
+  its `dispatching` phase. Round 9 found the same gap on structured sends:
+  their waits before the journal holds them (session read, a reclaimed host's
+  recovery, a republish) reach no record in the sidecar, and A3 cannot restore
+  them because the record exists. The sidecar now claims no held send at all
+  (`HeldDeliveryPort.actuates`, A5); the Viewer's pass makes those waits on the
+  original key.
 - A continuation retry whose original was admitted by code older than this
   design gets its row from the identity startup already holds (A2), so it has
   the same owner, record and deadline as any other retry. The first revision's

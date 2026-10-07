@@ -5512,3 +5512,80 @@ test("one seat's unanswered interruption continuation holds no other seat's", as
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+/* docs/design/delivery-progress-and-drain.md, P19b and A2, rule (a) step 4:
+   a later startup pass that finds the retry's row already written carries on
+   the record a startup pass wrote, and leaves one the queue leads as it
+   stands, its phase, clocks and stall included. */
+test("a repeated startup retry leaves the record the queue leads as it stands before its retry command, and the retry reaches the host once", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-runtime-startup-retry-queue-led-"));
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
+  const sessionId = "11111111-8899-0899-0899-111111111111";
+  const { artifactPath, conversation } = addStructuredRestartConversation(registry, directory, {
+    sessionId, status: "live", turn: "busy", activeTurnRef: "turn-cut-before-queue-led-retry",
+    transcriptRecords: [{ timestamp: "2026-07-20T11:47:00.000Z", payload: { type: "task_started" } }],
+  });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  projectHostedRestart(journal, "codex", conversation.id, sessionId, directory, artifactPath);
+  const failedOperationId = `recovery-continuation-${sessionId}-3`;
+  journal.executeOperation({
+    kind: "send", operationId: failedOperationId, idempotencyKey: failedOperationId, conversationId: conversation.id,
+    text: "Continue the interrupted turn from the transcript.", policy: "queue", turnId: null,
+  });
+  journal.transitionOperation(failedOperationId, "delivering");
+  journal.transitionOperation(failedOperationId, "failed", { reason: "successor socket closed" });
+  const { terminalRetryOperationId } = await import("./contracts");
+  const retryOperationId = terminalRetryOperationId(failedOperationId);
+  let clock = Date.now();
+  let progressRef: InstanceType<typeof import("./deliveryProgress").DeliveryProgressStore> | null = null;
+  const atRetry: unknown[] = [];
+  let reachJournal = false;
+  const base = runtimeJournalClient(journal);
+  const client = {
+    ...base,
+    retryOperation: async (operationId: string, key?: string, options?: Parameters<RuntimeJournal["retryOperation"]>[2]) => {
+      atRetry.push(structuredClone(progressRef?.get(retryOperationId) ?? null));
+      /* The first reply is lost before the journal saw the retry. */
+      if (!reachJournal) throw new RuntimeHostUnavailableError("runtime host is unavailable");
+      return journal.retryOperation(operationId, key, options);
+    },
+  } as RuntimeHostClient;
+  const ledger = createFakeDeliveryLedger();
+  const host = Object.assign(new FakeEngineHost(ledger), { onStateChange: () => () => {} });
+  const startup = () => adoptStructuredHostsAtStartup({
+    registry, client,
+    adopt: async () => [{ key: { engine: "codex", sessionId }, host: host as never }],
+    adoptClaude: async () => [],
+  });
+  try {
+    await withProgressStore(directory, () => clock, async (progress) => {
+      progressRef = progress;
+      await startup().catch(() => {});
+      const own = structuredClone(progress.get(retryOperationId)!);
+      expect(own).toMatchObject({ waitReason: "evidence-unreadable", executorId: null, terminal: null });
+      /* A second pass carries on its own record without restarting its clocks. */
+      clock += 2_000;
+      await startup().catch(() => {});
+      expect(progress.get(retryOperationId)).toMatchObject({ waitReason: "evidence-unreadable", phaseSince: own.phaseSince, attempt: own.attempt + 1 });
+      /* Now a queue leads it, and its hand-over outlived the bound. */
+      progress.note(retryOperationId, conversation.id, { waitReason: "dispatching", detail: "handing the message to the host", executorId: "queue-executor", nextWakeMs: 30_000 });
+      clock += 5_000;
+      progress.stalled(retryOperationId);
+      const led = structuredClone(progress.get(retryOperationId)!);
+      expect(led.stalledSince).not.toBeNull();
+      clock += 2_000;
+      reachJournal = true;
+      await startup();
+      expect(atRetry.at(-1)).toEqual(led);
+      await waitFor(() => ledger.writes.length === 1, 500);
+      await startup();
+      await Bun.sleep(50);
+      expect(ledger.writes.map((write) => write.id)).toEqual([retryOperationId]);
+      expect(journal.snapshot().recentOperations.filter((receipt) => receipt.retryOfOperationId === failedOperationId)).toHaveLength(1);
+    });
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

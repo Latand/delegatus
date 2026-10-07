@@ -38,8 +38,8 @@ import {
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { enqueueStructuredMessage } from "./structuredMessageDelivery";
 import { INTERRUPTED_CODEX_CONTINUATION_OPERATION_PREFIX, INTERRUPTED_CODEX_CONTINUATION_TEXT, RECOVERY_NOTICE_ORIGIN } from "./recoveryNotices";
-import { ownedDeliveryProgressStore } from "./deliveryProgress";
-import { recordDirectWait, stillAtStep, stillOwnsRecord } from "./recordWait";
+import { ownedDeliveryProgressStore, type DeliveryProgressRecord } from "./deliveryProgress";
+import { admissionRecordStanding, recordDirectWait, stillAtStep, stillOwnsRecord } from "./recordWait";
 import { structuredContentDigest } from "./structuredContent";
 import { STRUCTURED_DELIVERY_TIMING } from "./structuredDeliveryQueue";
 import { delegatusOriginForRecipient } from "./agentMessageAuthor";
@@ -753,6 +753,17 @@ async function enqueueInterruptedCodexContinuations(
   return failures;
 }
 
+const STARTUP_RETRY_ADMITTING = "admitting to the runtime journal";
+const STARTUP_RETRY_UNACKNOWLEDGED = "the runtime journal did not acknowledge the retry";
+
+/** Whether a startup pass wrote this record: its admission note or its lost
+    reply. Neither carries a queue executor. */
+function startupRetryWrote(record: DeliveryProgressRecord): boolean {
+  return record.executorId === null
+    && ((record.waitReason === "checking" && record.detail === STARTUP_RETRY_ADMITTING)
+      || (record.waitReason === "evidence-unreadable" && Boolean(record.detail?.startsWith(STARTUP_RETRY_UNACKNOWLEDGED))));
+}
+
 /**
  * The one retry of a failed continuation (A2): its row and record exist
  * before `retryOperation` leaves the process, under the deterministic id the
@@ -785,11 +796,18 @@ async function retryInterruptedCodexContinuation(
   if (!row.value) return "the retried continuation has no durable identity";
   if (row.value.terminalState !== null) return null;
   const progress = ownedDeliveryProgressStore();
-  const written = recordDirectWait(progress, registry, row.value, {
-    reason: "checking",
-    detail: "admitting to the runtime journal",
-    nextWakeMs: null,
-  });
+  /* A repeated pass, or one whose continuation lookup raced the retry's
+     admission, finds the row already written: it carries on the record a
+     startup pass wrote and leaves one the queue already leads as it stands
+     (rule a, step 4). */
+  const standing = admissionRecordStanding(progress, retryOperationId, startupRetryWrote);
+  const written = standing.standing === "fresh"
+    ? recordDirectWait(progress, registry, row.value, {
+      reason: "checking",
+      detail: STARTUP_RETRY_ADMITTING,
+      nextWakeMs: null,
+    })
+    : standing.standing === "continue" ? standing.record : null;
   try {
     const result = await client.retryOperation(
       existing.operationId,
@@ -820,7 +838,7 @@ async function retryInterruptedCodexContinuation(
        listed the retry owns it. */
     if (stillOwnsRecord(progress, retryOperationId, written)) recordDirectWait(progress, registry, row.value, {
       reason: "evidence-unreadable",
-      detail: `the runtime journal did not acknowledge the retry: ${message}`,
+      detail: `${STARTUP_RETRY_UNACKNOWLEDGED}: ${message}`,
       attempted: true,
       nextWakeMs: STRUCTURED_DELIVERY_TIMING.retryMs,
     });

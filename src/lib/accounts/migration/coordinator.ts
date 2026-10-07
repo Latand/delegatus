@@ -88,6 +88,11 @@ export interface HeldDeliveryPort {
   /** Records a wait the drain decided itself on the send's progress record. An
       observer's note leaves the acting operation's record alone. */
   wait?(input: { delivery: HeldDelivery; registry: AgentRegistry; reason: DeliveryWaitReason; detail?: string | null; observer?: boolean }): void;
+  /** Whether this process claims and acts on a held send at all. One that
+      cannot record the waits of its attempt (the inventory sidecar, which owns
+      no progress store) claims nothing and leaves the send to the Viewer's
+      pass (docs/design/delivery-progress-and-drain.md, P9). */
+  actuates?(): boolean;
 }
 
 export interface DrainHeldDeliveriesOptions {
@@ -1254,6 +1259,9 @@ export async function drainHeldDeliveries(
         () => registry.recordDeliveryOutcome(item.id, "failed", "request-local delivery requires client retry"));
       return;
     }
+    /* Nothing claimed and nothing read: the Viewer's pass, woken by the
+       send's record, delivers or reconciles it. */
+    if (delivery.actuates && !delivery.actuates()) return;
     /* #1709: a claim and its delivery run in the conversation's actuation section, like every other actuator's.
        A send holding the section is not waited for here, so one slow send never delays this pass for other
        conversations: this delivery is left for the tick requested when the section frees. A later delivery of the

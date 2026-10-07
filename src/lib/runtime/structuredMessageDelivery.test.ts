@@ -4140,3 +4140,213 @@ test("a dead-host resume that throws leaves the accepted send recorded as awaiti
   expect(record.deadlineAt).not.toBeNull();
   expect(record.nextWakeAt).not.toBeNull();
 });
+
+/* docs/design/delivery-progress-and-drain.md, P16 and A1: a same-key replay
+   that finds the runtime host out of reach is answered from the reservation
+   already written. The queue leads that send's record now, so the replay
+   leaves its phase, clocks and stall, and still wakes the drain. */
+test("an outage replay of a send the queue is dispatching keeps the queue's record, its clocks and its stall, and answers the same operation", async () => {
+  const { registry, conversation } = registryWithConversation();
+  recordStructuredOwner(registry, conversation);
+  let clock = Date.parse("2026-07-13T00:00:00.000Z");
+  const progress = new DeliveryProgressStore(null, () => clock);
+  const commanded: string[] = [];
+  const request = { path: artifactPath, conversationId: conversation.id, clientMessageId: "outage-replay-key", text: "the instruction the queue is sending" };
+  const live = {
+    readSession: sessionReader(async () => snapshot(conversation.id)),
+    command: async (command: Parameters<RuntimeHostClient["command"]>[0]) => {
+      commanded.push(command.operationId!);
+      return { operationId: command.operationId, replayed: false, receipt: {
+        operationId: command.operationId, idempotencyKey: "outage-replay-key", conversationId: conversation.id, kind: "send",
+        status: "queued", text: request.text, imageCount: 0, at: "2026-07-13T00:00:00.000Z", revision: 1,
+      } };
+    },
+  } as unknown as RuntimeHostClient;
+  const admitted = await enqueueStructuredMessage(request, { enabled: () => true, client: () => live, registry: () => registry, progress, kick: () => {} });
+  expect(admitted).toMatchObject({ ok: true, outcome: "queued" });
+  const operationId = (admitted as { operationId: string }).operationId;
+  /* The queue listed it and is handing it over; the hand-over outlived the bound. */
+  progress.note(operationId, conversation.id, { waitReason: "dispatching", detail: "handing the message to the host", executorId: "queue-executor", nextWakeMs: 30_000 });
+  clock += 5_000;
+  progress.stalled(operationId);
+  const before = structuredClone(progress.get(operationId)!);
+  expect(before.stalledSince).not.toBeNull();
+  clock += 5_000;
+  let ticks = 0;
+  const unreadable = {
+    readSession: async () => { throw new Error("runtime session read failed"); },
+    command: async () => { throw new Error("no command may be dispatched"); },
+  } as unknown as RuntimeHostClient;
+  const replay = await enqueueStructuredMessage(request, { enabled: () => true, client: () => unreadable, registry: () => registry, progress,
+    requestMigrationTick: () => { ticks += 1; }, kick: () => {} });
+  expect(replay).toMatchObject({ ok: true, outcome: "held", operationId });
+  expect(progress.get(operationId)).toEqual(before);
+  const unreachable = await enqueueStructuredMessage(request, { enabled: () => true, client: () => null, registry: () => registry, progress,
+    requestMigrationTick: () => { ticks += 1; }, kick: () => {} });
+  expect(unreachable).toMatchObject({ ok: true, outcome: "held", operationId });
+  expect(progress.get(operationId)).toEqual(before);
+  expect(ticks).toBe(2);
+  expect(commanded).toEqual([operationId]);
+  registry.close();
+});
+
+test("an outage replay continues the record an earlier outage admission wrote, without restarting its clocks", async () => {
+  const { registry, conversation } = registryWithConversation();
+  recordStructuredOwner(registry, conversation);
+  let clock = Date.parse("2026-07-13T00:00:00.000Z");
+  const progress = new DeliveryProgressStore(null, () => clock);
+  const request = { path: artifactPath, conversationId: conversation.id, clientMessageId: "outage-continued-key", text: "held through the outage" };
+  const dependencies = { enabled: () => true, client: () => null, registry: () => registry, progress, requestMigrationTick: () => {}, kick: () => {} };
+  const first = await enqueueStructuredMessage(request, dependencies);
+  expect(first).toMatchObject({ ok: true, outcome: "held" });
+  const operationId = (first as { operationId: string }).operationId;
+  const opened = structuredClone(progress.get(operationId)!);
+  expect(opened).toMatchObject({ waitReason: "evidence-unreadable", originalKey: "outage-continued-key", executorId: null, terminal: null });
+  clock += 5_000;
+  expect(await enqueueStructuredMessage(request, dependencies)).toMatchObject({ ok: true, outcome: "held", operationId });
+  expect(progress.get(operationId)).toMatchObject({ waitReason: "evidence-unreadable", phaseSince: opened.phaseSince, lastProgressAt: opened.lastProgressAt, attempt: opened.attempt });
+  registry.close();
+});
+
+function reclaimedOwner(registry: AgentRegistry, conversation: ReturnType<typeof registryWithConversation>["conversation"]): void {
+  const generation = conversation.generations.at(-1)!;
+  registry.upsert({
+    key: { engine: conversation.engine, sessionId: generation.id },
+    artifactPath: generation.path, cwd: generation.launchProfile.cwd, accountId: generation.accountId,
+    launchProfile: generation.launchProfile, status: "idle", host: null,
+    structuredHost: { kind: "codex-app-server", endpoint: "stdio:released", process: null, eventCursor: 11, protocolVersion: "v2",
+      writerClaimEpoch: 8, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+    claimEpoch: 8, claimOwner: "structured-host:stale-owner", pendingAction: null,
+  });
+}
+
+/* docs/design/delivery-progress-and-drain.md, P9 and A5, the lost-ack branch:
+   a reconcile performs a recovery, a session read and a republish of its own.
+   On a record no queue executor leads, each is named while it lasts; one a
+   queue executor leads keeps its phase, clocks and stall. */
+test("an uncertain send's reconcile names the host's recovery on a record no queue leads and stalls within the bound, and leaves a queue-led record as it was", async () => {
+  const { StructuredDeliveryQueue } = await import("./structuredDeliveryQueue");
+  const { registry, conversation } = registryWithConversation();
+  reclaimedOwner(registry, conversation);
+  const generation = conversation.generations.at(-1)!;
+  let clock = Date.parse("2026-07-13T00:00:00.000Z");
+  const progress = new DeliveryProgressStore(null, () => clock);
+  const reconcileOnce = (held: HeldDelivery, recover: () => Promise<null>) => deliverHeldStructuredMessage({
+    conversationId: conversation.id, path: artifactPath, deliveryId: held.id, clientMessageId: held.clientMessageId!, text: held.text,
+    command: held.command, reconcileUncertain: true,
+  }, {
+    enabled: () => true, registry: () => registry, progress, kick: () => {},
+    client: () => ({ readSession: async () => null, command: async () => { throw new Error("nothing may be commanded"); } }) as unknown as RuntimeHostClient,
+    recover,
+  });
+  const lost = registry.holdDelivery(conversation.id, "the admission lost its acknowledgement", "reconcile-recovery-key");
+  registry.beginDeliveryAttempt(lost.id, generation.id);
+  const operationId = lost.command.operationId;
+  progress.note(operationId, conversation.id, { waitReason: "evidence-unreadable", detail: "the runtime journal did not acknowledge the admission: socket closed", originalKey: "reconcile-recovery-key" });
+  let refuse: (() => void) | undefined;
+  const reconciling = reconcileOnce(lost, () => new Promise((resolve) => { refuse = () => resolve(null); }));
+  for (let attempt = 0; attempt < 200 && !refuse; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  expect(typeof refuse).toBe("function");
+  clock += 5_000;
+  const queue = new StructuredDeliveryQueue({ effects: async () => [], transition: async () => {}, status: async () => null, progress },
+    () => null, undefined, undefined, undefined, undefined, undefined, undefined, { stallMs: 4_000, now: () => clock });
+  await queue.tick();
+  const recovering = progress.get(operationId)!;
+  expect(recovering).toMatchObject({ waitReason: "recovering-host", originalKey: "reconcile-recovery-key", terminal: null });
+  expect(typeof recovering.stalledSince).toBe("string");
+  expect(clock - Date.parse(recovering.phaseSince)).toBeLessThanOrEqual(10_000);
+  expect(recovering.attempt).toBe(0);
+  refuse!();
+  await reconciling;
+
+  const led = registry.holdDelivery(conversation.id, "the queue is dispatching this", "reconcile-led-key");
+  registry.beginDeliveryAttempt(led.id, generation.id);
+  progress.note(led.command.operationId, conversation.id, { waitReason: "dispatching", executorId: "queue-executor", nextWakeMs: 30_000, originalKey: "reconcile-led-key" });
+  clock += 5_000;
+  progress.stalled(led.command.operationId);
+  const before = structuredClone(progress.get(led.command.operationId)!);
+  await reconcileOnce(led, async () => null);
+  expect(progress.get(led.command.operationId)).toEqual(before);
+  registry.close();
+});
+
+test("an uncertain send's reconcile whose session read hangs names that read on a record no queue leads", async () => {
+  const { STRUCTURED_DELIVERY_TIMING } = await import("./structuredDeliveryQueue");
+  const { registry, conversation } = registryWithConversation();
+  recordStructuredOwner(registry, conversation);
+  const progress = new DeliveryProgressStore(null);
+  const lost = registry.holdDelivery(conversation.id, "the admission lost its acknowledgement", "reconcile-read-key");
+  registry.beginDeliveryAttempt(lost.id, conversation.generations.at(-1)!.id);
+  const operationId = lost.command.operationId;
+  progress.note(operationId, conversation.id, { waitReason: "evidence-unreadable", detail: "the runtime journal did not acknowledge the admission: socket closed", originalKey: "reconcile-read-key" });
+  const stallMs = STRUCTURED_DELIVERY_TIMING.stallMs;
+  STRUCTURED_DELIVERY_TIMING.stallMs = 40;
+  let answer: (() => void) | undefined;
+  try {
+    const reconciling = deliverHeldStructuredMessage({
+      conversationId: conversation.id, path: artifactPath, deliveryId: lost.id, clientMessageId: "reconcile-read-key", text: lost.text,
+      command: lost.command, reconcileUncertain: true,
+    }, {
+      enabled: () => true, registry: () => registry, progress, kick: () => {},
+      client: () => ({
+        readSession: () => new Promise((resolve) => { answer = () => resolve(null); }),
+        command: async () => { throw new Error("nothing may be commanded"); },
+      }) as unknown as RuntimeHostClient,
+      recover: async () => null,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(progress.get(operationId)).toMatchObject({ waitReason: "checking", detail: "reading the recipient's runtime session", terminal: null });
+    answer!();
+    await reconciling;
+  } finally {
+    STRUCTURED_DELIVERY_TIMING.stallMs = stallMs;
+    registry.close();
+  }
+});
+
+/* docs/design/delivery-progress-and-drain.md, P9: the inventory sidecar owns
+   no progress store, so the waits before the journal holds a structured send
+   would be recorded nowhere there. It claims nothing; the Viewer's pass makes
+   the recovery, on the send's original-key record, once. */
+test("the inventory sidecar's drain claims no structured send, and the Viewer's pass records the host's recovery on the original key", async () => {
+  const { createMigrationDeliveryPort } = await import("@/lib/accounts/migration/deliveryPort");
+  const { registry, conversation } = registryWithConversation();
+  reclaimedOwner(registry, conversation);
+  const held = registry.holdDelivery(conversation.id, "deliver after the host recovers", "sidecar-recovery-key");
+  expect(held.state).toBe("assigned");
+  const progress = new DeliveryProgressStore(null);
+  progress.note(held.command.operationId, conversation.id, { waitReason: "awaiting-host", originalKey: "sidecar-recovery-key" });
+  const before = structuredClone(registry.snapshot().heldDeliveries[held.id]);
+  let sidecarCalls = 0;
+  const previous = process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER;
+  process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER = "1";
+  try {
+    await drainHeldDeliveries(conversation.id, createMigrationDeliveryPort({
+      progress: null,
+      structuredDelivery: async () => { sidecarCalls += 1; return "held"; },
+    }), registry);
+  } finally {
+    if (previous === undefined) delete process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER;
+    else process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER = previous;
+  }
+  expect(sidecarCalls).toBe(0);
+  expect(registry.snapshot().heldDeliveries[held.id]).toEqual(before);
+  expect(progress.get(held.command.operationId)).toMatchObject({ waitReason: "awaiting-host" });
+
+  let recoveries = 0;
+  let release: (() => void) | undefined;
+  const draining = drainHeldDeliveries(conversation.id, createMigrationDeliveryPort({
+    progress,
+    structuredDelivery: (request, dependencies) => deliverHeldStructuredMessage(request, {
+      ...dependencies, enabled: () => true, registry: () => registry, kick: () => {},
+      client: () => ({ readSession: async () => null, command: async () => { throw new Error("nothing may be commanded"); } }) as unknown as RuntimeHostClient,
+      recover: () => { recoveries += 1; return new Promise((resolve) => { release = () => resolve(null); }); },
+    }),
+  }), registry);
+  for (let attempt = 0; attempt < 200 && !release; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  expect(progress.get(held.command.operationId)).toMatchObject({ waitReason: "recovering-host", originalKey: "sidecar-recovery-key", terminal: null });
+  release!();
+  await draining;
+  expect(recoveries).toBe(1);
+  registry.close();
+});

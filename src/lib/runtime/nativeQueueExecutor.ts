@@ -4,6 +4,7 @@ import { StructuredSendRefusedError, type EngineHost } from "./engineHost";
 import { NativeQueueNotSubmittedError, NativeQueueProtocolRefusal, type NativeCodexQueue, type NativeQueueInput } from "./nativeCodexQueue";
 import { sameNativeQueueBinding, type NativeQueueBinding, type NativeQueueCommand, type NativeQueueProof, type NativeQueueRecord, type NativeQueueVersion } from "./nativeQueueContracts";
 import type { DeliveryWaitReason } from "./deliveryWaitReason";
+import type { Evidence } from "./evidence";
 
 /** Reports what an entry waits on, on its original operation's progress record
     (docs/design/delivery-progress-and-drain.md, A6). */
@@ -15,6 +16,11 @@ export type NativeQueueWaitNote = (reason: DeliveryWaitReason, detail?: string |
 export type NativeQueueStep = <T>(detail: string, wait: () => Promise<T>) => Promise<T>;
 
 const untracked: NativeQueueStep = (_detail, wait) => wait();
+
+/** Reads whether the durable delivery record already ended this add's send
+    (docs/design/delivery-progress-and-drain.md, A6). An unreadable answer is
+    no permission to actuate. */
+export type NativeQueueSettlementFence = () => Promise<Evidence<boolean>>;
 
 export interface NativeQueueHost {
   queue: NativeCodexQueue;
@@ -38,6 +44,9 @@ export interface NativeQueueExecutorPort {
   settled?(entry: NativeQueueRecord): Promise<void> | void;
 }
 
+export const NATIVE_ADD_FENCED_BY_SETTLEMENT =
+  "delivery was settled before this executor reached it; the message was never handed to Codex's queue";
+
 /** Runs only in the structured delivery controller's existing per-target drain. */
 export class NativeQueueExecutor {
   constructor(private readonly port: NativeQueueExecutorPort) {}
@@ -48,6 +57,7 @@ export class NativeQueueExecutor {
     refusalReason?: string,
     note: NativeQueueWaitNote = () => {},
     step: NativeQueueStep = untracked,
+    settled?: NativeQueueSettlementFence,
   ): Promise<void | false> {
     const { client } = this.port;
     if (!client.nativeQueueRead || !client.nativeQueueTransition) throw new Error("native queue journal is unavailable");
@@ -117,6 +127,20 @@ export class NativeQueueExecutor {
       if ((command.action === "start" || command.action === "send-now") && health.status === "attention") throw new StructuredSendRefusedError("blocking-attention");
       if ((command.action === "start" || (command.action === "send-now" && command.turnId === null)) && health.status !== "idle") throw new StructuredSendRefusedError("idle state is unproven");
       if (command.action === "add" && health.status === "attention" && health.activeTurnRef === null) throw new StructuredSendRefusedError("blocking attention prevents native auto-dispatch");
+      /* The durable record can end this send while the journal is out of
+         reach (#1131); an add it ended never reaches Codex. Asked last, so
+         the window between this read and the CAS holds no await. */
+      if (command.action === "add" && settled) {
+        const fence = await settled();
+        if (!fence.readable) {
+          note("evidence-unreadable", "durable delivery record is unavailable");
+          return false;
+        }
+        if (fence.value) {
+          await transition({ phase: "refused", reason: NATIVE_ADD_FENCED_BY_SETTLEMENT });
+          return;
+        }
+      }
       // Atomic journal CAS: a second executor cannot pass this boundary.
       if (command.action === "add") note("dispatching", "handing the message to Codex's queue");
       await transition({ phase: "prepared", input, ...(rebinding ? { binding } : {}) });
@@ -172,10 +196,11 @@ export class NativeQueueExecutor {
       }
     } catch (error) {
       // A journal CAS failure is another executor's ownership, never a new attempt.
-      const current = await client.operationStatus(command.operationId);
+      /* Its reads are the entry's current wait as much as the normal path's (A6). */
+      const current = await step("reading the delivery journal status", () => client.operationStatus(command.operationId));
       if (current?.receipt.status === "delivered" || current?.receipt.status === "applied" || (!prepared && current?.receipt.status === "delivering")) return;
       if (entry) {
-        const recovered = (await client.nativeQueueRead(command.conversationId)).find(row => row.entryId === entry.entryId);
+        const recovered = (await step("reading the native queue journal", () => client.nativeQueueRead!(command.conversationId))).find(row => row.entryId === entry.entryId);
         if (recovered && recovered.mutationOperationId !== command.operationId) return;
       }
       const refused = error instanceof NativeQueueProtocolRefusal || error instanceof NativeQueueNotSubmittedError || error instanceof StructuredSendRefusedError;

@@ -1090,3 +1090,133 @@ test("a native entry's settlement waits for the lock off the loop, a hand-off se
     made.cleanup();
   }
 });
+
+/* docs/design/delivery-progress-and-drain.md, P18 and P25 (A6, #1131): the
+   durable record ended an add that was never handed to Codex while the journal
+   was out of reach. The add's first actuation passes that fence like any
+   send's: no add follows, through a later executor too, and the ending stands. */
+test("a Queue-for-Codex add the durable record already ended is refused before any add, after a restart too, and its ended record stands", async () => {
+  const { f, registry, cleanup } = handOffFixture("settled-fence");
+  const { DeliveryProgressStore } = await import("./deliveryProgress");
+  const { settleDueSends, sendIsSettled } = await import("./sendSettlement");
+  const progress = new DeliveryProgressStore(null);
+  let lose = true;
+  const client = {
+    ...f.client,
+    command: async (c: NativeQueueCommand) => {
+      const result = f.journal.executeOperation(c);
+      if (lose) { lose = false; throw new RuntimeHostUnavailableError("runtime host is unavailable"); }
+      return result;
+    },
+  } as RuntimeHostClient;
+  try {
+    const lost = await handleNativeQueue(handOff("handoff-settled"), { client: () => client, enabled: () => true, kick: () => {},
+      admitImages: () => ({ images: [], error: null }), storeImages: () => [], registry: () => registry, progress } as never);
+    expect(lost.status).toBe(503);
+    const operationId = Object.values(registry.snapshot().deliveryOperationOwners).find((owner) => owner.clientMessageId === "handoff-settled")!.command.operationId;
+    const unreadable = { ...client, operationStatus: async () => { throw new RuntimeHostUnavailableError("runtime host is unavailable"); } } as RuntimeHostClient;
+    await settleDueSends({ registry, client: unreadable, progress, readMs: 200, now: () => Date.now() + 61 * 60_000 });
+    expect(sendIsSettled(registry.snapshot(), operationId)).toBe(true);
+    const ended = progress.get(operationId)!.terminal;
+    expect(ended).not.toBeNull();
+    const queue = () => new StructuredDeliveryQueue({
+      effects: async (kinds, afterEventSeq) => f.journal.effectBatch(100, kinds, afterEventSeq),
+      status: async (id) => f.journal.operationResult(id)?.receipt ?? null,
+      transition: async (id, status, details) => { f.journal.transitionOperation(id, status, details); },
+      settled: (id) => sendIsSettled(registry.snapshot(), id),
+      progress,
+      nativeQueueExecute: (c, reason, note, step, settled) => f.executor.execute(c as never, reason, note, step, settled),
+    }, () => f.host);
+    await queue().drain();
+    await queue().drain();
+    expect(f.calls.filter((call) => call.endsWith("/add"))).toHaveLength(0);
+    expect(f.journal.nativeQueueRead(conversationId).find((entry) => entry.entryId === operationId)?.state).toBe("refused");
+    expect(f.journal.operationResult(operationId)?.receipt.status).toBe("failed");
+    expect(progress.get(operationId)!.terminal).toEqual(ended);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a converted queue send's add waits on an unreadable settlement fence, then is refused once the record ended it; Codex's queue receives nothing", async () => {
+  const f = fixture();
+  const send = parseRuntimeCommand("send", { conversationId, operationId: "converted-fenced", idempotencyKey: "converted-fenced-key", text: "native owned", policy: "queue" });
+  f.journal.executeOperation(send);
+  const { DeliveryProgressStore } = await import("./deliveryProgress");
+  const progress = new DeliveryProgressStore(null);
+  progress.note("converted-fenced", conversationId, { waitReason: "queued", originalKey: "converted-fenced-key" });
+  let fence: "unreadable" | boolean = "unreadable";
+  const queue = () => new StructuredDeliveryQueue({
+    effects: async (kinds, afterEventSeq) => f.journal.effectBatch(100, kinds, afterEventSeq),
+    status: async (id) => f.journal.operationResult(id)?.receipt ?? null,
+    transition: async (id, status, details) => { f.journal.transitionOperation(id, status, details); },
+    settled: async () => { if (fence === "unreadable") throw new Error("registry is unreadable"); return fence; },
+    progress,
+    nativeQueueExecute: (c, reason, note, step, settled) => f.executor.execute(c as never, reason, note, step, settled),
+  }, () => f.host);
+  await queue().drain();
+  expect(f.calls.filter((call) => call.endsWith("/add"))).toHaveLength(0);
+  expect(progress.get("converted-fenced")).toMatchObject({ waitReason: "evidence-unreadable", detail: "durable delivery record is unavailable", terminal: null });
+  expect(f.journal.operationResult("converted-fenced")?.receipt.status).toBe("queued");
+  fence = true;
+  progress.settle("converted-fenced", "uncertain", "settled while the journal was unreachable");
+  await queue().drain();
+  expect(f.calls.filter((call) => call.endsWith("/add"))).toHaveLength(0);
+  expect(f.journal.nativeQueueRead(conversationId)[0]?.state).toBe("refused");
+  expect(progress.get("converted-fenced")!.terminal).toMatchObject({ state: "uncertain" });
+  f.journal.close();
+});
+
+/* A6: the reads after a failed preparation are the entry's wait as much as
+   the normal path's, so one that hangs shows as that step and stalls. */
+test.each([
+  ["reading the delivery journal status", "status"],
+  ["reading the native queue journal", "journal"],
+] as const)("after a failed preparation, %s that has not answered shows that step and its stall within the bound, and nothing is added", async (detail, hang) => {
+  const f = fixture();
+  const add = command(`op-native-error-${hang}`);
+  f.journal.executeOperation(add);
+  const { DeliveryProgressStore } = await import("./deliveryProgress");
+  let clock = Date.now();
+  const progress = new DeliveryProgressStore(null, () => clock);
+  progress.note(add.operationId, conversationId, { waitReason: "queued", originalKey: add.idempotencyKey });
+  let answer: (() => void) | undefined;
+  let statusReads = 0;
+  let journalReads = 0;
+  const hanging = {
+    ...f.client,
+    operationStatus: async (operationId: string) => {
+      statusReads += 1;
+      if (hang === "status" && statusReads === 2) await new Promise<void>((resolve) => { answer = resolve; });
+      return f.journal.operationResult(operationId);
+    },
+    nativeQueueRead: async (id: string) => {
+      journalReads += 1;
+      if (hang === "journal" && journalReads === 2) await new Promise<void>((resolve) => { answer = resolve; });
+      return f.journal.nativeQueueRead(id);
+    },
+  } as RuntimeHostClient;
+  const failing = { ...f.host, nativeQueue: { ...f.host.nativeQueue!, prepare: async () => { throw new Error("attachment unreadable"); } } } as unknown as EngineHost;
+  const executor = new NativeQueueExecutor({ client: hanging, resolveHost: () => failing, binding: () => binding });
+  const queue = new StructuredDeliveryQueue({
+    effects: async (kinds, afterEventSeq) => f.journal.effectBatch(100, kinds, afterEventSeq),
+    transition: async () => {},
+    status: async (operationId) => f.journal.operationResult(operationId)?.receipt ?? null,
+    progress,
+    nativeQueueExecute: (effect, refusal, note, step) => executor.execute(effect as never, refusal, note, step),
+  }, () => failing, undefined, undefined, undefined, undefined, undefined, undefined, { stallMs: 4_000, now: () => clock });
+  const draining = queue.drain();
+  for (let attempt = 0; attempt < 200 && !answer; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  expect(typeof answer).toBe("function");
+  clock += 5_000;
+  await queue.tick();
+  const waiting = progress.get(add.operationId)!;
+  expect(waiting).toMatchObject({ waitReason: "checking", detail, terminal: null });
+  expect(typeof waiting.stalledSince).toBe("string");
+  expect(clock - Date.parse(waiting.phaseSince)).toBeLessThanOrEqual(10_000);
+  answer!();
+  await draining;
+  expect(f.calls.filter((call) => call.endsWith("/add"))).toHaveLength(0);
+  expect(f.journal.nativeQueueRead(conversationId)[0]?.state).toBe("refused");
+  f.journal.close();
+});

@@ -9367,6 +9367,22 @@ export class AgentRegistry {
     }, { deliveryOnly: true });
   }
 
+  /** Ends a reservation only while it is still `held` under the operation the
+      caller saw, decided inside the write transaction: a withdrawal that waited
+      for the writer can find the row already claimed by an attempt, and then
+      it leaves the row as it is (docs/design/delivery-progress-and-drain.md,
+      C2). `too-late` when it was delivered, `unknown` for any other state. */
+  withdrawHeldDelivery(id: string, operationId: string | null, reason: string): "withdrawn" | "too-late" | "unknown" {
+    return this.mutate((file) => {
+      const delivery = file.heldDeliveries[id];
+      if (!delivery) return "unknown";
+      if (delivery.state === "delivered") return "too-late";
+      if (delivery.state !== "held" || (operationId !== null && delivery.command.operationId !== operationId)) return "unknown";
+      terminalizeHeldDelivery(file, delivery, reason);
+      return "withdrawn";
+    }, { deliveryOnly: true });
+  }
+
   /** Expires pending work whose target has two terminal proofs: a durable
       supersedence edge and a registry process identity that is gone. Settlement
       keeps the delivery operation queryable and removes it from startup's

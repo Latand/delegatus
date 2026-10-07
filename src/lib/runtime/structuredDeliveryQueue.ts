@@ -59,6 +59,8 @@ export interface StructuredDeliveryQueuePort {
     note?: (reason: DeliveryWaitReason, detail?: string | null) => void,
     /** Tracks one read the entry waits on as the lane's `checking` step. */
     step?: <T>(detail: string, wait: () => Promise<T>) => Promise<T>,
+    /** The durable settlement fence an add's first actuation must pass. */
+    settled?: () => Promise<Evidence<boolean>>,
   ): Promise<void | false>;
   nativeQueueReconcile?(): Promise<void>;
   /** Startup owns recovery for hosts it has not registered yet. Leave their
@@ -1499,7 +1501,10 @@ export class StructuredDeliveryQueue {
          host's health) come before its first recorded phase, and each is
          tracked on the lane the same way the queue's own reads are. */
       const step = <T>(detail: string, wait: () => Promise<T>) => this.checking(lane, effect, detail, wait);
-      if (await this.port.nativeQueueExecute(effect, reason, note, step) === false) {
+      /* The fence every message send passes before its first actuation, asked
+         under the add's own operation id (#1131). */
+      const settled = () => this.checking(lane, effect, "reading the durable delivery record", () => this.readSettled(effect.operationId));
+      if (await this.port.nativeQueueExecute(effect, reason, note, step, settled) === false) {
         this.retrySoon();
         return false;
       }
