@@ -354,10 +354,29 @@ describe("self-update reload notice", () => {
 /* The loading leaf draws its own header bar until the Board mounts and draws
    the same bar itself, so a ⋯ menu opened before then is thrown away with the
    bar it opened in. Open the Board's own menu and wait until it is open. */
-async function openBoardMenu(page: Page) {
+async function openBoardMenu(page: Page, section?: string) {
   await page.locator('[data-kanban-board] [data-bar="project"] [data-bar-more]').click();
   await page.locator('[data-kanban-board] [data-bar-more][aria-expanded="true"]').waitFor();
+  /* The project's switches sit behind the menu's sections. */
+  if (section) await page.locator(`[data-bar-more-menu] [data-bar-menu-head="${section}"]`).click();
 }
+
+/* A pipeline's actions are a page of the card's ⋯: one row opens it, and on a
+   card holding several pipelines that row lists them first. Pressed from the
+   page, so the guard against a double click on a row that swaps the list does
+   not read these two presses as one. */
+async function openLaneActions(page: Page) {
+  for (let depth = 0; depth < 2; depth += 1) {
+    const opened = await page.evaluate(() => {
+      const row = document.querySelector<HTMLElement>('.menu [data-cm-shown] [data-cm-opens="drill"]');
+      row?.click();
+      return Boolean(row);
+    });
+    if (!opened) return;
+    await page.waitForTimeout(120);
+  }
+}
+const openMenuSection = (page: Page, id: string) => page.locator(`.menu [data-cm-shown] [data-cm-section="${id}"]`).click();
 
 describe("linked boards M1 settings", () => {
   browserTest("a mounted project row preserves sharing changed in Settings", async () => {
@@ -380,7 +399,7 @@ describe("linked boards M1 settings", () => {
           }
           await route.fulfill({ json: { shared: { v: 1, all: false, projects: selected }, known: [{ key: "atlas", name: "atlas" }], states: [] } });
         });
-        await openBoardMenu(page);
+        await openBoardMenu(page, "merging");
         await page.locator('[data-share-project-switch]').waitFor();
         selected = [];
         await page.locator('[data-share-project-switch]').click();
@@ -408,7 +427,7 @@ describe("linked boards M1 settings", () => {
             json: { shared: { v: 1, all: false, projects: [] }, known: [{ key: "atlas", name: "atlas" }], states: [] },
           });
         });
-        await openBoardMenu(page);
+        await openBoardMenu(page, "merging");
         const retry = page.getByRole("button", { name: "Retry sharing settings" });
         await retry.waitFor();
         expect(await page.locator('[data-share-project]').textContent()).toContain("Could not load or save sharing");
@@ -1493,11 +1512,12 @@ describe("#1695 K3 conversations inside cards", () => {
         const explore = readerFor("conversation_export-explore");
         await page.waitForSelector(explore, { timeout: 5_000 });
         await page.click(`${explore} [data-reader-menu]`);
+        await openMenuSection(page, "more");
         await page.click('.menu [role="menuitem"]:has-text("Unlink from this task")');
         await page.waitForFunction(() => document.querySelector("[data-kanban-receipt].error"), undefined, { timeout: 5_000 });
         const refusedUnlink = await receipts();
         await page.click(`${explore} [data-reader-menu]`);
-        await page.click('.menu [role="menuitem"]:has-text("Link to another task")');
+        await page.click('.menu [role="menuitem"][aria-label^="Link to another task"]');
         await page.fill("[data-link-search]", "walkthrough");
         await page.screenshot({ path: path.join(OUT, "flow-link-picker.png") });
         await page.click('[data-link-task="t-onboarding"]');
@@ -1506,6 +1526,7 @@ describe("#1695 K3 conversations inside cards", () => {
         await page.waitForTimeout(600);
         const exploreNow = await page.evaluate((selector) => document.querySelector(selector) ? document.querySelector(selector)!.closest<HTMLElement>(".card")?.dataset.id ?? "parked" : null, explore);
         await page.click(`${explore} [data-reader-menu]`);
+        await openMenuSection(page, "more");
         await page.click('.menu [role="menuitem"]:has-text("Unlink from this task")');
         await page.waitForFunction(() => [...document.querySelectorAll("[data-kanban-receipt] .msg")].some((node) => node.textContent?.startsWith("Unlinked")), undefined, { timeout: 5_000 });
         const unlinked = await receipts();
@@ -1598,9 +1619,10 @@ describe("#1695 K3 conversations inside cards", () => {
         await page.click(`${card("t-export")} .tile >> nth=0`);
         await waitSettled(page, "conversation_export-impl");
         await page.click(`${readerFor("conversation_export-impl")} [data-reader-menu]`);
+        await openMenuSection(page, "more");
         const menuItems = await page.evaluate(() => [...document.querySelectorAll('.menu [role="menuitem"]')].map((node) => node.textContent ?? ""));
         const stopItem = menuItems.find((text) => text.startsWith("Stop host"));
-        if (!stopItem?.includes("PID 4401")) failures.push(`stop host: the reader's actions offer ${JSON.stringify(menuItems)}`);
+        if (!stopItem) failures.push(`stop host: the reader's actions offer ${JSON.stringify(menuItems)}`);
         let stopConfirm: unknown = null;
         if (stopItem) {
           await page.click('.menu [role="menuitem"]:has-text("Stop host")');
@@ -1612,6 +1634,8 @@ describe("#1695 K3 conversations inside cards", () => {
           await page.screenshot({ path: path.join(OUT, "flow-stop-host-confirm.png") });
           await page.click("[data-stop-cancel]");
           if (!(stopConfirm as { cancelFocused: boolean }).cancelFocused) failures.push("stop host: the confirmation does not start on Cancel");
+          /* The menu row says only what it does; the process it stops is named in the confirmation. */
+          if (!(stopConfirm as { text: string }).text.includes("PID 4401")) failures.push(`stop host: the confirmation does not name the process: ${JSON.stringify(stopConfirm)}`);
         }
         flows.stopHost = { menuItems, stopConfirm };
 
@@ -1794,6 +1818,7 @@ describe("#1695 K4b inline editing, colour, hide and the Hidden tray", () => {
         await production(scheme, async (page) => {
           await page.locator(card("t-export")).scrollIntoViewIfNeeded();
           await page.click(`${card("t-export")} [data-menu]`);
+          await openMenuSection(page, "appearance");
           await page.waitForSelector(".menu .swatch");
           await page.waitForTimeout(350);
           const menu = await page.evaluate(() => {
@@ -1804,7 +1829,8 @@ describe("#1695 K4b inline editing, colour, hide and the Hidden tray", () => {
               swatches: [...root.querySelectorAll(".swatch")].map((node) => node.getAttribute("aria-label")),
               swatchBox: { width: Math.round(swatch.width), height: Math.round(swatch.height) },
               checked: root.querySelector('.swatch[aria-checked="true"]')?.getAttribute("data-swatch") ?? null,
-              items: [...root.querySelectorAll<HTMLElement>('[role="menuitem"]')].map((item) => ({ label: item.querySelector(".lbl")?.firstChild?.textContent ?? "", kbd: item.querySelector(".kbd")?.textContent ?? null, why: item.querySelector(".why")?.textContent ?? null, disabled: item.getAttribute("aria-disabled") === "true" })),
+              /* An icon cell is named by its full label, carries its key as `aria-keyshortcuts` and says its second line under the row of cells. */
+              items: [...root.querySelectorAll<HTMLElement>('[data-cm-shown] [role="menuitem"]')].map((item) => ({ label: item.getAttribute("aria-label") ?? item.querySelector(".lbl")?.firstChild?.textContent ?? "", kbd: item.getAttribute("aria-keyshortcuts") ?? item.querySelector(".kbd")?.textContent ?? null, why: item.querySelector(".why")?.textContent ?? root.querySelector(`[data-cm-note="${item.dataset.cmItem ?? ""}"]`)?.textContent ?? null, disabled: item.getAttribute("aria-disabled") === "true" })),
             };
           });
           await shot(page, "production", "card-menu", scheme);
@@ -1995,8 +2021,8 @@ describe("#1695 K4b inline editing, colour, hide and the Hidden tray", () => {
         if (loadReceipts.length) failures.push(`seat group: the first seat read announced ${JSON.stringify(loadReceipts)}`);
         await page.click(`${card("t-seat")} [data-menu]`);
         const menuHide = await page.evaluate(() => {
-          const item = [...document.querySelectorAll<HTMLElement>('.menu [role="menuitem"]')].find((node) => node.querySelector(".lbl")?.firstChild?.textContent === "Hide from board");
-          return item ? { disabled: item.getAttribute("aria-disabled") === "true", why: item.querySelector(".why")?.textContent ?? null } : null;
+          const item = [...document.querySelectorAll<HTMLElement>('.menu [role="menuitem"]')].find((node) => node.getAttribute("aria-label") === "Hide from board");
+          return item ? { disabled: item.getAttribute("aria-disabled") === "true", why: document.querySelector('.menu [data-cm-note="hide"]')?.textContent ?? null } : null;
         });
         const patches = await evidenceOf(page, (evidence) => evidence.taskPatches.length);
         if (!seatCard || seatCard.column !== "assigned" || !seatCard.lock || seatCard.hideButton || seatCard.resurfaced !== "Back on the board: it holds the orchestrator's conversation" || seatCard.hideAgain) failures.push(`seat group: ${JSON.stringify(seatCard)}`);
@@ -2118,6 +2144,7 @@ describe("#1695 K4b inline editing, colour, hide and the Hidden tray", () => {
         const before = await evidenceOf(page, (evidence) => String(evidence.storedTask("t-disk")?.updatedAt ?? ""));
         await page.locator(card("t-disk")).scrollIntoViewIfNeeded();
         await page.click(`${card("t-disk")} [data-menu]`);
+        await openMenuSection(page, "appearance");
         await page.click('.menu .swatch[aria-label="Teal"]');
         const applied = await page.evaluate((selector) => {
           const element = document.querySelector<HTMLElement>(selector)!;
@@ -3034,11 +3061,12 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
 
       await production("light", "pipeline actions", async (page) => {
         const section = `${card("t-upload")} .pblock`;
-        /* The lane's actions are a group in the card's one ⋯ (#2148). */
+        /* The lane's actions are a page of the card's one ⋯ (#2148). */
         const laneMenu = `${card("t-upload")} [data-menu]`;
         await page.locator(section).evaluate((element) => element.scrollIntoView({ block: "center" }));
         if (await page.locator(`${section} [data-pipeline-menu]`).count()) failures.push("pipeline actions: the lane still draws a ⋯ of its own");
         await page.click(laneMenu);
+        await openLaneActions(page);
         await page.waitForTimeout(350);
         await shot(page, "production", "pipeline-menu", "light");
         await page.locator('.menu [role="menuitem"]', { hasText: "Pause" }).first().click();
@@ -3048,6 +3076,7 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         const pausedReceipt = await page.locator("[data-kanban-receipt] .msg").last().textContent();
         await page.evaluate(() => { (window as unknown as Hook).evidence.refuseNextPipelinePatch = { status: 409, error: "the runtime host did not answer" }; });
         await page.click(laneMenu);
+        await openLaneActions(page);
         await page.locator('.menu [role="menuitem"]', { hasText: "Resume" }).first().click();
         await page.waitForSelector("[data-kanban-receipt].error", { timeout: 5_000 });
         await page.waitForTimeout(350);
@@ -3058,6 +3087,7 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         /* The pause is carried out and its answer lost: not confirmed, and Check again only reads. */
         await page.evaluate(() => { (window as unknown as Hook).evidence.loseNextPipelineAnswer = true; });
         await page.click(laneMenu);
+        await openLaneActions(page);
         await page.locator('.menu [role="menuitem"]', { hasText: "Pause" }).first().click();
         await page.waitForFunction(() => [...document.querySelectorAll("[data-kanban-receipt].error .msg")].some((node) => node.textContent?.includes("is not confirmed")), undefined, { timeout: 5_000 });
         await page.waitForTimeout(350);
@@ -3084,6 +3114,7 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
         await page.locator(section).evaluate((element) => element.scrollIntoView({ block: "center" }));
         await page.evaluate(() => { (window as unknown as Hook).evidence.refuseNextPipelinePatch = { status: 409, error: "the stage worktree has uncommitted changes" }; });
         await page.click(`${card("t-links")} [data-menu]`);
+        await openLaneActions(page);
         await page.locator('.menu [role="menuitem"]', { hasText: "Skip Builder" }).first().click();
         await page.waitForSelector("[data-kanban-receipt].error", { timeout: 5_000 });
         const refused = await page.locator("[data-kanban-receipt].error .msg").textContent();
@@ -9357,13 +9388,13 @@ describe("task priority: the Inbox takes high first and low last, the other colu
             if (extra.length) failures.push(`${label}: normal tasks carry a mark: ${extra.join(", ")}`);
             if (read.squeezed.length) failures.push(`${label}: title widths differ: ${read.squeezed.join(", ")}`);
             if (read.misplaced.length) failures.push(`${label}: mark not leading the foot: ${read.misplaced.join(", ")}`);
-            /* The card's ⋯: the Priority group under Move to, the current level checked. */
+            /* The card's ⋯: the priority row after the columns', the current level checked. */
             await page.locator(`${card("t-prio-notes")} [data-menu]`).click();
             await page.waitForSelector(".menu", { timeout: 10_000 });
             await page.waitForTimeout(300);
             await page.locator(".menu").screenshot({ path: path.join(pngDir, `${label}-menu.png`) });
             const menu = await page.evaluate(() => ({
-              heads: [...document.querySelectorAll(".menu .head")].map((head) => head.textContent?.trim()),
+              heads: [...document.querySelectorAll(".menu [data-cm-segments]")].map((group) => group.getAttribute("aria-label")),
               checked: [...document.querySelectorAll('.menu [role="menuitemradio"][aria-checked="true"]')].map((item) => item.querySelector(".lbl")?.firstChild?.textContent?.trim() ?? item.textContent?.trim()),
             }));
             readings[`${label}-menu`] = menu;
@@ -9695,10 +9726,13 @@ describe("interface polish round 2: press and open/close motion, the status menu
           /* A toast may stand over the ⋯, so no pointer. */
           await page.locator(`${card("t-upload")} [data-menu]`).evaluate((element) => { element.scrollIntoView({ block: "center" }); (element as HTMLElement).click(); });
           await page.waitForSelector('.menu[aria-label^="Actions for"]', { timeout: 5_000 });
-          const attach = await page.evaluate((selector) => ({
+          /* The task's own Attach is an icon cell; each lane's is on that lane's page. */
+          const own = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.menu .cm-quick [role="menuitem"]')].map((cell) => cell.getAttribute("aria-label") ?? "").filter((label) => label.startsWith("Attach PR or issue")));
+          await openLaneActions(page);
+          const attach = await page.evaluate(([selector, cells]) => ({
             lanes: document.querySelectorAll(`${selector} .pblock`).length,
-            labels: [...document.querySelectorAll<HTMLElement>('.menu [role^="menuitem"] .lbl')].map((label) => label.firstChild?.textContent ?? "").filter((label) => label.startsWith("Attach PR or issue")),
-          }), card("t-upload"));
+            labels: [...(cells as string[]), ...[...document.querySelectorAll<HTMLElement>('.menu [role^="menuitem"] .lbl')].map((label) => label.firstChild?.textContent ?? "").filter((label) => label.startsWith("Attach PR or issue"))],
+          }), [card("t-upload"), own] as const);
           await page.waitForTimeout(400);
           await page.screenshot({ path: path.join(OUT, "card-menu-attach.png") });
           await page.keyboard.press("Escape");
@@ -10783,13 +10817,17 @@ describe("#2187 a completed lane's automatic merge, and the project's merge sett
               for (const entry of [...got.clipped, ...got.overlaps]) fail(entry);
               for (const entry of got.escapes) fail(`paints outside its card: ${entry}`);
             }
-            /* The ⋯ menu: the setting row on, its switch, and the row off. */
+            /* The ⋯ menu: the setting row on, its switch, and the row off. The
+               row lives on the menu's "Merging and syncing" page (#2557, the
+               compact menus): at rest the ⋯ shows only its section rows. */
             const more = page.locator('[data-bar-group="more"] button').first();
             await more.click();
+            await page.locator('[data-bar-menu-head="merging"]').click();
+            await page.locator('[data-bar-more-menu][data-bar-menu-view="merging"] [data-bar-menu-back="merging"]').waitFor({ timeout: 10_000 });
             const row = page.locator("[data-merge-on-review]");
             await row.waitFor({ timeout: 10_000 });
             await page.waitForFunction(() => !document.querySelector("[data-merge-on-review-switch]")?.hasAttribute("disabled"), undefined, { timeout: 10_000 });
-            const menuBox = page.locator('[data-bar-menu-group="project"]').locator("xpath=..");
+            const menuBox = page.locator("[data-bar-more-menu]");
             await menuBox.screenshot({ path: path.join(OUT, `menu-setting-on-${label}.png`) });
             const readRow = () => page.evaluate(() => {
               const element = document.querySelector("[data-merge-on-review]")!;
@@ -10987,11 +11025,22 @@ describe("#2187 a pipeline that finishes its task, and the wait for the task's o
             /* The card's ⋯: both lanes' toggles, the marked one checked with the count in warning ink. */
             await page.locator(card("t-finish-hold")).scrollIntoViewIfNeeded();
             await page.click(`${card("t-finish-hold")} [data-menu]`);
-            await page.waitForSelector('.menu [role="menuitemcheckbox"]', { timeout: 10_000 });
-            await page.waitForTimeout(350);
-            await page.locator(".menu").screenshot({ path: path.join(OUT, `menu-hold-${label}.png`) });
-            await page.screenshot({ path: path.join(OUT, `board-menu-${label}.png`) });
-            const menu = await page.evaluate(READ_MENU);
+            /* Each lane's toggle is on that lane's page, behind the card's one pipelines row. */
+            await page.evaluate(() => document.querySelector<HTMLElement>('.menu [data-cm-shown] [data-cm-section="pipelines"]')?.click());
+            const lanePages = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>(".menu [data-cm-shown] [data-cm-section]")].map((row) => row.dataset.cmSection!));
+            const menu: ReturnType<typeof READ_MENU> = [];
+            for (const [index, lane] of lanePages.entries()) {
+              await page.evaluate((id) => [...document.querySelectorAll<HTMLElement>(".menu [data-cm-shown] [data-cm-section]")].find((row) => row.dataset.cmSection === id)?.click(), lane);
+              await page.waitForSelector('.menu [role="menuitemcheckbox"]', { timeout: 10_000 });
+              await page.waitForTimeout(350);
+              if (index === 0) {
+                await page.locator(".menu").screenshot({ path: path.join(OUT, `menu-hold-${label}.png`) });
+                await page.screenshot({ path: path.join(OUT, `board-menu-${label}.png`) });
+              }
+              menu.push(...await page.evaluate(READ_MENU));
+              await page.evaluate(() => document.querySelector<HTMLElement>(".menu [data-cm-back]")?.click());
+              await page.waitForTimeout(120);
+            }
             const want = [
               { label: t("pipelineBlock.finish.menu"), checked: "true", why: t("pipelineBlock.finish.menuWhy"), warn: t("pipelineBlock.finish.menuOpen", { count: 1 }) },
               { label: t("pipelineBlock.finish.menu"), checked: "false", why: t("pipelineBlock.finish.menuWhy"), warn: null },
@@ -11005,6 +11054,7 @@ describe("#2187 a pipeline that finishes its task, and the wait for the task's o
             /* The toggle: clearing the running lane's flag sends link-task, and the flag leaves the row. */
             if (scheme === "light") {
               await page.click(`${card("t-finish-marked")} [data-menu]`);
+              await openLaneActions(page);
               await page.waitForSelector('.menu [role="menuitemcheckbox"]', { timeout: 10_000 });
               await page.locator('.menu [role="menuitemcheckbox"]').first().click();
               await page.waitForFunction(() => !document.querySelector('[data-kanban-board] .card[data-id="task:t-finish-marked"] span[data-pipeline-finish]'), undefined, { timeout: 10_000 }).catch(() => fail("the flag stayed on the row after clearing it"));
@@ -11585,11 +11635,15 @@ describe("#2146 the orchestrator's report log beside its chat, and the Bridge re
             const older = await page.evaluate(READ_LOG);
             if (older?.entries !== 46 || older.older) fail(`after Show older: ${older?.entries} entries, older control ${older?.older}`);
 
-            /* The ⋯ menu: the Bridge reports row on, then off by its switch. */
+            /* The ⋯ menu: the Bridge reports row on, then off by its switch, on
+               the menu's "Orchestrator" page (#2557, the compact menus). */
             await page.locator('[data-bar-group="more"] button').first().click();
+            await page.locator('[data-bar-menu-head="seat"]').click();
+            await page.locator('[data-bar-more-menu][data-bar-menu-view="seat"] [data-bar-menu-back="seat"]').waitFor({ timeout: 10_000 });
             await page.locator("[data-bridge-reports]").waitFor({ timeout: 10_000 });
-            await page.waitForFunction(() => [...document.querySelectorAll("[data-bar-menu-group] [role=switch]")].every((toggle) => !toggle.hasAttribute("disabled")), undefined, { timeout: 10_000 });
-            const menuBox = page.locator('[data-bar-menu-group="project"]').locator("xpath=..");
+            /* Every switch of the page that is shown; the other pages' rows stay mounted, out of sight. */
+            await page.waitForFunction(() => [...document.querySelectorAll('[data-bar-menu-body="seat"] [role=switch]')].every((toggle) => !toggle.hasAttribute("disabled")), undefined, { timeout: 10_000 });
+            const menuBox = page.locator("[data-bar-more-menu]");
             await page.waitForTimeout(400);
             await menuBox.screenshot({ path: path.join(OUT, `menu-bridge-on-${label}.png`) });
             const readRow = () => page.evaluate(() => {
@@ -13367,12 +13421,15 @@ describe("asks you: an agent that asked the operator, on its card, in the report
           if (log.sideways > 0) fail(`the log scrolls sideways by ${log.sideways}px`);
           await seat.locator("[data-report-ask] a[data-report-link=conversation]").first().screenshot({ path: path.join(OUT, `log-link-${label}.png`) });
 
-          /* The ⋯ menu: the Asks you row, on, with the month's spend. */
+          /* The ⋯ menu: the Asks you row, on, with the month's spend, on the
+             menu's "Orchestrator" page (#2557, the compact menus). */
           await page.locator('[data-bar-group="more"] button').first().click();
+          await page.locator('[data-bar-menu-head="seat"]').click();
+          await page.locator('[data-bar-more-menu][data-bar-menu-view="seat"] [data-bar-menu-back="seat"]').waitFor({ timeout: 10_000 });
           await page.locator("[data-bar-menu-group] [data-asks-you]").waitFor({ timeout: 10_000 });
           await page.waitForFunction(() => document.querySelector("[data-bar-menu-group] [data-asks-you]")?.getAttribute("data-asks-you") === "on", undefined, { timeout: 10_000 });
           await page.waitForTimeout(400);
-          await page.locator('[data-bar-menu-group="project"]').locator("xpath=..").screenshot({ path: path.join(OUT, `menu-${label}.png`) });
+          await page.locator("[data-bar-more-menu]").screenshot({ path: path.join(OUT, `menu-${label}.png`) });
           const row = await page.evaluate(() => {
             const element = document.querySelector("[data-bar-menu-group] [data-asks-you]")!;
             const toggle = element.querySelector<HTMLElement>("[data-asks-you-switch]")!;
@@ -16643,6 +16700,7 @@ describe("task motion and waiting reasons", () => {
             await page.locator('[data-phone-task-hold]').click();
           } else {
             await page.locator(`${selector("motion-worker")} [data-menu]`).click();
+            await openMenuSection(page, "more");
             await page.getByRole("menuitem", { name: translate(locale, "kanban.hold.edit"), exact: true }).click();
           }
           const editor = page.locator('[data-hold-editor]');
@@ -18857,6 +18915,966 @@ describe("running stage runtime switch", () => {
       fs.writeFileSync("evidence/stage-runtime-switch/geometry.json", JSON.stringify(readings, null, 2) + "\n");
     } finally { await browser.close(); await browserServer.close(); server.stop(); }
   }, 360_000);
+});
+
+describe("compact card menu and overflow menus: today and built", () => {
+  /*
+   * The board's compact menus (docs/design/compact-card-menu.md), opened on the
+   * real Viewer over this fixture: the card's ⋯ at rest and with each section
+   * opened, from a card at the bottom and at the right edge of the window, on
+   * a waiting card, on a card holding five pipelines and on the card that
+   * holds the orchestrator's conversation, whose Hide is refused in words; a
+   * column's ⋯, a conversation's ⋯, the board's ⋯ and the rail header's ⋯; on
+   * the phone the card's long-press sheet, the task's ⋯, the board menu and a
+   * conversation's menu at rest and with each section opened. Desktop at
+   * 1440×900 and 1000×700, the phone at 390×844, light and dark, en and uk.
+   *
+   * Each state reports its box, whether it scrolls, whether it stays inside
+   * the window and every label it had to cut. The run fails when any state of
+   * a card's menu is wider than 300 px, taller than 360 px or scrolls; when
+   * any state of a column's, a conversation's or the board's menu is taller
+   * than 360 px or scrolls; when the card's sheet, the task's menu or any
+   * state of a conversation's menu on the phone is taller than the sheet was
+   * or scrolls; when opening a section moves the
+   * row that was pressed or the top edge of the menu, or when any state covers
+   * the menu's own button (both read on every card of the fixture, where it
+   * stands and at the bottom of the window); when the rows of a section opened
+   * in place are not under its own row, or a closed row carries the arrow of
+   * an open one; when the line under the Hide cell, the line under the
+   * conversation's To task cell or the two lines under the priority row are
+   * missing or cut; when the first and the last cell of the
+   * phone's row stand at different insets; when a double click on a row that
+   * swaps the list for a page, or on the page's back row, sends a write or
+   * lands on another row; when a state leaves the window or cuts a label; and
+   * when an entry of the menu as it was is not in the built one.
+   *
+   * "As it was" is this same block run over an export of the merge base with
+   * `LLV_COMPACT_MENUS_SIDE=today`: it writes its frames and `today.json` to
+   * the output directory, and the built run that follows in the same directory
+   * compares against them and lays both on the comparison sheets. Without
+   * them the built run still checks everything that needs no comparison.
+   *
+   * Frames and sheets go to `LLV_COMPACT_MENUS_OUT` (default
+   * `.artifacts/compact-menus/`, never committed); the built measurements to
+   * `evidence/compact-card-menu/built.json`. `LLV_COMPACT_MENUS_FRAMES=390`,
+   * `..._LANGS=uk`, `..._SCHEMES=light` and `..._STEPS=seat` (frames,
+   * stretched, seat, act, steady, doubled) narrow a run, and a narrowed run
+   * writes no evidence.
+   *
+   *   CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 LLV_COMPACT_MENUS_OUT=… \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "compact card menu"
+   */
+  const OUT = path.resolve(process.env.LLV_COMPACT_MENUS_OUT ?? ".artifacts/compact-menus");
+  const EVIDENCE = path.resolve("evidence/compact-card-menu");
+  type Side = "today" | "built";
+  const SIDE: Side = process.env.LLV_COMPACT_MENUS_SIDE === "today" ? "today" : "built";
+  const BUILT = SIDE === "built";
+  const pick = (name: string) => process.env[name]?.split(",") ?? null;
+  const ONLY_FRAMES = pick("LLV_COMPACT_MENUS_FRAMES");
+  const ONLY_LANGS = pick("LLV_COMPACT_MENUS_LANGS");
+  const ONLY_SCHEMES = pick("LLV_COMPACT_MENUS_SCHEMES");
+  const ONLY_STEPS = pick("LLV_COMPACT_MENUS_STEPS");
+  const runs = (step: string) => !ONLY_STEPS || ONLY_STEPS.includes(step);
+  const NARROWED = Boolean(ONLY_FRAMES || ONLY_LANGS || ONLY_SCHEMES || ONLY_STEPS);
+  const NAMES: Record<Side, string> = { today: "TODAY", built: "BUILT · quick row, segments, sections" };
+  const FILL: Record<Side, string> = { today: "#3a3a3a", built: "#1f4fb5" };
+  const FRAMES = ([
+    { name: "1440", width: 1440, height: 900, phone: false },
+    { name: "1000", width: 1000, height: 700, phone: false },
+    { name: "390", width: 390, height: 844, phone: true },
+  ] as const).filter((frame) => !ONLY_FRAMES || ONLY_FRAMES.includes(frame.name));
+  const LANGS = (["en", "uk"] as const).filter((lang) => !ONLY_LANGS || ONLY_LANGS.includes(lang));
+  const SCHEMES = (["light", "dark"] as const).filter((scheme) => !ONLY_SCHEMES || ONLY_SCHEMES.includes(scheme));
+  const STRIP = 40;
+  const MENU = ".kb .menu";
+  const BAR = "[data-bar-more-menu]";
+  const RAIL = "[data-rail-menu-panel]";
+  const SHEET = "[data-mobile2-sheet]";
+
+  interface Reading {
+    side: Side; frame: string; scheme: Scheme; lang: string; surface: string; state: string;
+    box: [x: number, y: number, width: number, height: number];
+    scrolls: boolean; inside: boolean; controls: number; clipped: string[]; labels: string[];
+    /** Each row of the surface as it is drawn: its label and its box. */
+    items: [label: string, width: number, height: number][];
+    file: string;
+    /** How far opening this state moved the row that was pressed or the top edge of the menu, in px. */
+    shift?: number;
+    /** Where the menu stands by its button. */
+    stands?: string;
+  }
+
+  /** The open surface: its box, whether anything in it scrolls, the controls a pointer meets, the labels it cut and what its section rows say against what they do. */
+  const read = (page: Page, selector: string) => page.evaluate((surfaceSelector) => {
+    const surface = [...document.querySelectorAll<HTMLElement>(surfaceSelector)].find((element) => element.getBoundingClientRect().width > 0);
+    if (!surface) return null;
+    const rect = surface.getBoundingClientRect();
+    const round = (value: number) => Math.round(value * 10) / 10;
+    const shown = (element: Element) => { const box = element.getBoundingClientRect(); return box.width > 0 && box.height > 0 && getComputedStyle(element).visibility !== "hidden" && !element.closest(".cm-probe"); };
+    const scrolls = [surface, ...surface.querySelectorAll<HTMLElement>("*")].some((element) => element.scrollHeight > element.clientHeight + 1 && /auto|scroll/.test(getComputedStyle(element).overflowY));
+    const controls = [...surface.querySelectorAll<HTMLElement>('button, a[href], [role^="menuitem"], [role="switch"]')].filter(shown);
+    const clipped = [...surface.querySelectorAll<HTMLElement>(".cm-cap, .cm-val, .cm-title, .cm-ends, .lbl, [data-bar-menu-head] > span, [data-phone-task-menu-cells] button > span:last-child, [data-phone-card-cells] button > span:last-child, [data-mobile2-chat-menu] button > span")].filter(shown)
+      .filter((element) => element.scrollWidth > element.clientWidth + 1).map((element) => (element.textContent ?? "").trim().slice(0, 40));
+    const label = (element: HTMLElement) => (element.querySelector(".lbl")?.firstChild?.textContent ?? element.getAttribute("aria-label") ?? element.textContent ?? "").trim();
+    /* A row that opens a page carries the arrow to the right. A row that opens
+       in place points down while it is closed and up once its rows are there,
+       and those rows are under it. */
+    const grammar = [...surface.querySelectorAll<HTMLElement>("[data-cm-opens], [data-bar-menu-opens], [data-mobile2-menu-section]")].filter(shown).flatMap((row) => {
+      const name = label(row).slice(0, 40);
+      const id = row.dataset.cmSection ?? row.dataset.barMenuHead ?? row.dataset.mobile2MenuSection ?? "";
+      const pages = row.dataset.cmOpens === "drill" || row.dataset.barMenuOpens === "page";
+      const has = (direction: string) => Boolean(row.querySelector(`:scope > svg.lucide-chevron-${direction}`));
+      if (pages) return has("right") && !has("down") && !has("up") ? [] : [`${name}: opens a page without the arrow to the right`];
+      const open = row.getAttribute("aria-expanded") === "true";
+      const said: string[] = [];
+      if (has("right") || has(open ? "down" : "up") || !has(open ? "up" : "down")) said.push(`${name}: ${open ? "open" : "closed"} with the wrong arrow`);
+      const body = surface.querySelector<HTMLElement>(`[data-cm-body="${CSS.escape(id)}"], [data-bar-menu-body="${CSS.escape(id)}"], [data-mobile2-menu-body="${CSS.escape(id)}"]`);
+      const drawn = Boolean(body && shown(body));
+      if (open !== drawn) said.push(`${name}: ${open ? "open with no rows" : "closed with rows drawn"}`);
+      if (open && body && body.getBoundingClientRect().top < row.getBoundingClientRect().bottom - 0.5) said.push(`${name}: its rows are not under it`);
+      return said;
+    });
+    return {
+      grammar,
+      stands: surface.dataset.cmSide ?? null,
+      box: [round(rect.left), round(rect.top), round(rect.width), round(rect.height)] as [number, number, number, number],
+      scrolls,
+      inside: rect.left >= -0.5 && rect.top >= -0.5 && rect.right <= innerWidth + 0.5 && rect.bottom <= innerHeight + 0.5,
+      controls: controls.length,
+      clipped,
+      labels: [...surface.querySelectorAll<HTMLElement>('[role^="menuitem"]:not([data-cm-section]):not([data-cm-back])')].filter(shown).map(label),
+      items: [...surface.querySelectorAll<HTMLElement>('[role^="menuitem"], .head, .swatches, [data-phone-card-action], [data-phone-task-menu], [data-mobile2-menu-row], [data-mobile2-menu-section], [data-bar-menu-head], [data-bar-menu-back]')].filter(shown)
+        .filter((element) => !element.closest(".swatches") || element.classList.contains("swatches"))
+        .map((element): [string, number, number] => [element.classList.contains("swatches") ? "(swatches)" : label(element).slice(0, 60), round(element.getBoundingClientRect().width), round(element.getBoundingClientRect().height)]),
+    };
+  }, selector);
+
+  /** A frame under a strip that says which side it is, outside the application frame. */
+  async function frameWithStrip(shot: Buffer, width: number, text: string): Promise<Buffer> {
+    const escaped = text.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+    const strip = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${STRIP}"><rect width="100%" height="100%" fill="${FILL[SIDE]}"/><text x="12" y="26" font-family="DejaVu Sans, Arial, sans-serif" font-size="${width < 500 ? 12 : 16}" font-weight="700" fill="#fff">${escaped}</text></svg>`);
+    return sharp(shot).extend({ top: STRIP, background: FILL[SIDE] }).composite([{ input: strip, left: 0, top: 0 }]).png().toBuffer();
+  }
+
+  /** What failed and what it was waiting for. */
+  const brief = (error: unknown) => (error as Error).message.split("\n").filter((line) => !/^Call log:/.test(line.trim())).slice(0, 2).map((line) => line.trim()).join(" · ");
+  const jsClick = (page: Page, selector: string) => page.evaluate((target) => { document.querySelector<HTMLElement>(target)?.click(); }, selector);
+
+  browserTest("the menus as they were and as built, measured and framed", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const server = await serveEvidenceFixture(path.join(OUT, `bundle-root-${SIDE}`));
+    let browser = await chromium.launch(LAUNCH);
+    /* A long run outlives a browser now and then; the next frame starts a new one. */
+    const alive = async () => { if (!browser.isConnected()) browser = await chromium.launch(LAUNCH); };
+    const readings: Reading[] = [];
+    const failures: string[] = [];
+    const taps: Record<string, Record<string, number | string>> = {};
+    let acted: Record<string, boolean> = {};
+    /* The words written where an action is: under the Hide cell and under the two ends of the priority row. */
+    const said: Record<string, Record<string, string | null>> = {};
+    /* The phone's row of cells: the inset of its first and of its last cell, and their widths. */
+    const insets: Record<string, { left: number; right: number; widths: number[] }> = {};
+    const stability: Record<string, { cards: number; openings: number; maxShift: number; covered: number; sides: Record<string, number> }> = {};
+    /* Double clicks on the rows that swap the list: how many were made, how many second presses were dropped, how many writes went out. */
+    const doubles: Record<string, { cards: number; rows: number; dropped: number; sent: number }> = {};
+    /* The ⋯ of the card whose menu is open. */
+    let cardButton: string | null = null;
+    const url = (scenario = "stages") => `${server.base}?scenario=${scenario}`;
+    /* The menus as they were, from the run over the merge base in this directory. */
+    const before: Reading[] = BUILT && fs.existsSync(path.join(OUT, "today.json")) ? (JSON.parse(fs.readFileSync(path.join(OUT, "today.json"), "utf8")) as { readings: Reading[] }).readings : [];
+
+    type Where = { frame: (typeof FRAMES)[number]; scheme: Scheme; lang: "en" | "uk" };
+    const keyOf = (where: Where) => `${SIDE}/${where.frame.name}-${where.scheme}-${where.lang}`;
+    async function capture(page: Page, where: Where, selector: string, surface: string, state: string): Promise<Reading | null> {
+      const reading = await read(page, selector);
+      if (!reading) { failures.push(`${keyOf(where)} ${surface} ${state}: the surface did not open`); return null; }
+      const file = `${keyOf(where)}-${surface}-${state.replace(/[^a-z0-9]+/gi, "_")}.png`;
+      fs.mkdirSync(path.dirname(path.join(OUT, file)), { recursive: true });
+      const { grammar, stands, ...measured } = reading;
+      const text = `${NAMES[SIDE]}  ·  ${where.frame.width}×${where.frame.height} ${where.lang} ${where.scheme}  ·  ${surface}: ${state}  ·  ${Math.round(reading.box[2])}×${Math.round(reading.box[3])}${reading.scrolls ? " scrolls" : ""}`;
+      fs.writeFileSync(path.join(OUT, file), await frameWithStrip(await page.screenshot(), where.frame.width, text));
+      const entry: Reading = { side: SIDE, frame: where.frame.name, scheme: where.scheme, lang: where.lang, surface, state, ...measured, ...(stands ? { stands } : {}), file };
+      readings.push(entry);
+      if (BUILT && surface !== "header" && surface !== "phone-board") {
+        if (!reading.inside) failures.push(`${keyOf(where)} ${surface} ${state}: leaves the window ${JSON.stringify(reading.box)}`);
+        if (reading.clipped.length) failures.push(`${keyOf(where)} ${surface} ${state}: cut labels ${JSON.stringify(reading.clipped)}`);
+        if (grammar.length) failures.push(`${keyOf(where)} ${surface} ${state}: ${grammar.join("; ")}`);
+        if (cardButton && surface.startsWith("card") && await covers(page, cardButton)) failures.push(`${keyOf(where)} ${surface} ${state}: the menu covers its own ⋯ ${JSON.stringify(reading.box)}`);
+      }
+      return entry;
+    }
+
+    /** Whether the open menu lies over this button. */
+    const covers = (page: Page, button: string) => page.evaluate((selector) => {
+      const menu = document.querySelector<HTMLElement>(".kb .menu")?.getBoundingClientRect();
+      const anchor = document.querySelector<HTMLElement>(selector)?.getBoundingClientRect();
+      return Boolean(menu && anchor && menu.left < anchor.right && menu.right > anchor.left && menu.top < anchor.bottom && menu.bottom > anchor.top);
+    }, button);
+    /** Where the open menu stands and where the row that opens `id` sits. Every state hangs from the menu's top edge. */
+    const corner = (page: Page, id: string | null) => page.evaluate((section) => {
+      const menu = document.querySelector<HTMLElement>(".kb .menu");
+      if (!menu) return null;
+      const box = menu.getBoundingClientRect();
+      const row = section ? menu.querySelector<HTMLElement>(`[data-cm-shown] [data-cm-section="${CSS.escape(section)}"]`)?.getBoundingClientRect() ?? null : null;
+      return { left: box.left, top: box.top, side: menu.dataset.cmSide ?? "below", row: row ? row.top : null, paged: Boolean(menu.querySelector("[data-cm-back]")) };
+    }, id);
+    /** Opens one section of the open menu and says how far that moved the menu's top edge, or the pressed row where it is still drawn. */
+    async function openSection(page: Page, id: string): Promise<number> {
+      const from = await corner(page, id);
+      await jsClick(page, `${MENU} [data-cm-section="${id}"]`);
+      await page.waitForTimeout(100);
+      const to = await corner(page, id);
+      if (!from || !to) return Number.NaN;
+      const moved = Math.max(Math.abs(to.left - from.left), Math.abs(to.top - from.top));
+      return Math.round(Math.max(moved, from.row !== null && to.row !== null ? Math.abs(to.row - from.row) : 0) * 10) / 10;
+    }
+    const leaveSection = async (page: Page, id: string) => {
+      if (await page.locator(`${MENU} [data-cm-back]`).count()) await jsClick(page, `${MENU} [data-cm-back]`); else await jsClick(page, `${MENU} [data-cm-section="${id}"]`);
+      await page.waitForTimeout(70);
+    };
+    const sectionIds = (page: Page) => page.evaluate(() => [...document.querySelectorAll<HTMLElement>(".kb .menu [data-cm-shown] [data-cm-section]")].map((element) => element.dataset.cmSection!));
+
+    /** Opens each section of the open menu in turn, a page's own sections too, captures it and closes it again. */
+    async function walk(page: Page, where: Where, surface: string, prefix = ""): Promise<Reading[]> {
+      const out: Reading[] = [];
+      const into = async (trail: string[]) => {
+        const ids = await sectionIds(page);
+        for (const [index, id] of ids.entries()) {
+          const shift = await openSection(page, id);
+          /* A pipeline's page is named by its place in the list, never by its id. */
+          const step = id.startsWith("lane:") ? (trail.length ? `pipeline ${index + 1}` : "pipeline") : id;
+          const name = `${prefix}open ${[...trail, step].join(", ")}`;
+          const reading = await capture(page, where, MENU, surface, name);
+          if (reading) { reading.shift = shift; out.push(reading); }
+          if (!(shift <= 0.5)) failures.push(`${keyOf(where)} ${surface} ${name}: opening it moved the menu or the pressed row by ${shift} px`);
+          if ((await corner(page, null))?.paged) await into([...trail, step]);
+          await leaveSection(page, id);
+        }
+      };
+      await into([]);
+      return out;
+    }
+    /** Opens each section of the board's ⋯ in turn. */
+    async function walkBar(page: Page, where: Where): Promise<void> {
+      const ids = await page.evaluate((panel) => [...document.querySelectorAll<HTMLElement>(`${panel} [data-bar-menu-head]`)].filter((element) => element.getBoundingClientRect().height > 0).map((element) => element.dataset.barMenuHead!), BAR);
+      for (const id of ids) {
+        const head = `${BAR} [data-bar-menu-head="${id}"]`;
+        await jsClick(page, head);
+        await page.waitForTimeout(150);
+        await capture(page, where, BAR, "board", `open ${id}`);
+        const back = `${BAR} [data-bar-menu-back]`;
+        if (await page.locator(back).count()) await jsClick(page, back); else await jsClick(page, head);
+        await page.waitForTimeout(100);
+      }
+    }
+    const droppedPresses = (page: Page) => page.evaluate(() => Number(document.documentElement.dataset.menuDropped ?? 0));
+    /** A double click on each row of the board's ⋯ that opens a page, and on the page's back row: the second press reaches none of the rows under it. */
+    async function doubledBar(page: Page, where: Where) {
+      const switches = () => page.evaluate((target) => [...document.querySelectorAll<HTMLElement>(`${target} [role="switch"]`)].map((element) => element.getAttribute("aria-checked")).join(","), BAR);
+      const view = () => page.evaluate((target) => document.querySelector<HTMLElement>(target)?.dataset.barMenuView ?? null, BAR);
+      const ids = await page.evaluate((target) => [...document.querySelectorAll<HTMLElement>(`${target} [data-bar-menu-opens="page"]`)].filter((element) => element.getBoundingClientRect().height > 0).map((element) => element.dataset.barMenuHead!), BAR);
+      const tally = doubles[`${keyOf(where)} board`] = { cards: 0, rows: 0, dropped: 0, sent: 0 };
+      for (const id of ids) {
+        for (const [target, wanted] of [[`${BAR} [data-bar-menu-head="${id}"]`, id], [`${BAR} [data-bar-menu-back]`, "rest"]] as const) {
+          const flipped = await switches();
+          const dropped = await droppedPresses(page);
+          const box = await page.locator(target).first().boundingBox();
+          if (!box) { failures.push(`${keyOf(where)} board ${id}: no row to double-click`); break; }
+          await page.mouse.move(2, 2);
+          await page.mouse.dblclick(box.x + box.width / 2, box.y + box.height / 2);
+          await page.waitForTimeout(200);
+          tally.rows += 1;
+          tally.dropped += await droppedPresses(page) - dropped;
+          const now = await view();
+          if (now !== wanted) failures.push(`${keyOf(where)} board ${id}: a double click left the menu at ${now}, expected ${wanted}`);
+          if (await switches() !== flipped) { tally.sent += 1; failures.push(`${keyOf(where)} board ${id}: a double click flipped a switch`); }
+        }
+      }
+      if (tally.dropped < tally.rows) failures.push(`${keyOf(where)} board: ${tally.rows} double clicks, only ${tally.dropped} second presses were dropped`);
+      await page.mouse.move(2, 2);
+    }
+    /** No state of a card's menu is over 300×360 or scrolls. */
+    const bounded = (where: Where, states: (Reading | null)[]) => {
+      for (const state of states) {
+        if (!state) continue;
+        if (state.box[2] > 300.5 || state.box[3] > 360.5) failures.push(`${keyOf(where)} ${state.surface} ${state.state}: ${state.box[2]}×${state.box[3]} is over 300×360`);
+        if (state.scrolls) failures.push(`${keyOf(where)} ${state.surface} ${state.state}: scrolls`);
+      }
+    };
+
+    async function settleBoard(page: Page) {
+      /* A narrow board shows one column behind tabs: the first card in the document may be in a closed one. */
+      await page.locator("[data-kanban-board] .card[data-id]").locator("visible=true").first().waitFor({ timeout: 30_000 });
+      await page.waitForTimeout(500);
+      /* The attention notice lies over the board header's right end; it is answered away as an operator would. */
+      await page.evaluate(() => { for (const button of document.querySelectorAll<HTMLElement>("[data-attention-toast] button")) button.click(); });
+      await jsClick(page, "[data-seat-collapse]");
+      await page.waitForTimeout(500);
+      await page.mouse.move(2, 2);
+    }
+    /** On a board of tabs, the tab of this column. */
+    const showColumn = async (page: Page, status: string) => {
+      const tab = page.locator(`[data-kanban-board] .tabs-nav [data-tab="${status}"]`);
+      if (await tab.count() && await tab.getAttribute("aria-selected") !== "true") { await tab.click(); await page.waitForTimeout(250); }
+    };
+    const showCard = async (page: Page, id: string) => {
+      const status = await page.evaluate((selector) => document.querySelector(selector)?.closest(".column")?.getAttribute("data-status") ?? null, card(id));
+      if (status) await showColumn(page, status);
+    };
+    const openCardMenu = async (page: Page, id: string) => {
+      await showCard(page, id);
+      await page.locator(`${card(id)} [data-menu]`).click();
+      await page.waitForSelector(MENU, { timeout: 10_000 });
+      await page.waitForTimeout(120);
+      cardButton = `${card(id)} [data-menu]`;
+    };
+    const closeMenu = async (page: Page) => { cardButton = null; await page.keyboard.press("Escape"); await page.waitForTimeout(80); };
+
+    /** Where an entry with this label sits in the open card menu: 2 taps at rest, 3 behind a section. */
+    const findEntry = (page: Page, label: string) => page.evaluate((wanted) => {
+      const menu = document.querySelector<HTMLElement>(".kb .menu");
+      if (!menu) return null;
+      const name = (element: HTMLElement) => (element.querySelector(".lbl")?.firstChild?.textContent ?? element.querySelector(".cm-cap")?.textContent ?? "").trim();
+      const hit = [...menu.querySelectorAll<HTMLElement>('[role^="menuitem"]')].find((element) => !element.closest(".cm-probe") && element.getBoundingClientRect().height > 0 && (element.getAttribute("aria-label") === wanted || name(element) === wanted));
+      if (!hit) return null;
+      const box = hit.getBoundingClientRect();
+      const frame = menu.getBoundingClientRect();
+      hit.setAttribute("data-compact-target", "");
+      return { needsScroll: box.bottom > frame.bottom + 0.5 || box.top < frame.top - 0.5 || box.bottom > innerHeight };
+    }, label);
+    async function tapsTo(page: Page, label: string): Promise<{ taps: number | string; path: "rest" | string } | null> {
+      const rest = await findEntry(page, label);
+      if (rest) return { taps: rest.needsScroll ? "2 + scroll" : 2, path: "rest" };
+      for (const id of await sectionIds(page)) {
+        await jsClick(page, `${MENU} [data-cm-section="${id}"]`);
+        await page.waitForTimeout(80);
+        const inside = await findEntry(page, label);
+        if (inside) return { taps: inside.needsScroll ? "3 + scroll" : 3, path: id };
+        await leaveSection(page, id);
+      }
+      return null;
+    }
+
+    async function desktop(where: Where) {
+      const { frame, scheme, lang } = where;
+      const t = (key: string, params?: Record<string, string | number>) => translate(lang, key as never, params);
+      const { context, page, pageErrors } = await openFixture(browser, url(), frame, scheme, lang, "reduce");
+      try {
+        await settleBoard(page);
+        /* The card's ⋯, on a card that holds one pipeline. */
+        await openCardMenu(page, "t-links");
+        const rest = await capture(page, where, MENU, "card", "rest");
+        if (BUILT) {
+          /* The words that used to be a tooltip: under the Hide cell, and under the two ends of the priority row. */
+          const words = await page.evaluate(() => {
+            const menu = document.querySelector<HTMLElement>(".kb .menu");
+            const whole = (selector: string) => {
+              const element = menu?.querySelector<HTMLElement>(`[data-cm-shown] ${selector}`);
+              if (!element || !menu) return null;
+              const box = element.getBoundingClientRect();
+              const frame = menu.getBoundingClientRect();
+              return box.height > 0 && box.left >= frame.left && box.right <= frame.right + 0.5 && box.top >= frame.top && box.bottom <= frame.bottom + 0.5 ? (element.textContent ?? "").trim() : null;
+            };
+            return { hide: whole('[data-cm-note="hide"]'), high: whole('[data-cm-end="priority:high"]'), low: whole('[data-cm-end="priority:low"]') };
+          });
+          said[keyOf(where)] = words;
+          if (!words.hide?.startsWith(`${t("kanban.menu.cell.hide")}: `)) failures.push(`${keyOf(where)} card rest: no line under the Hide cell (${JSON.stringify(words.hide)})`);
+          if (words.high !== t("kanban.priorityHint.high") || words.low !== t("kanban.priorityHint.low")) failures.push(`${keyOf(where)} card rest: the priority row does not say what its ends do (${JSON.stringify([words.high, words.low])})`);
+          bounded(where, [rest, ...await walk(page, where, "card")]);
+        }
+        /* Taps to eight frequent actions, counted from the closed menu. */
+        const targets: [string, string][] = [
+          ["move to Done", t("kanban.status.done")], ["move to Waiting", t("kanban.status.blocked")], ["hide from board", t("kanban.hideFromBoard")],
+          ["rename", t("kanban.rename")], ["description", t("kanban.addDescription")], ["priority High", t("kanban.priority.high")],
+          ["colour", t("kanban.color.coral")], ["pause the pipeline", t("kanban.pipelineAct.label.pause")],
+        ];
+        const counted: Record<string, number | string> = {};
+        for (const [name, label] of targets) {
+          await closeMenu(page);
+          await openCardMenu(page, "t-links");
+          const found = await tapsTo(page, label);
+          counted[name] = found ? found.taps : "unreachable";
+          if (!found) failures.push(`${keyOf(where)}: «${label}» is not reachable from the card's ⋯`);
+        }
+        taps[keyOf(where)] = counted;
+        await closeMenu(page);
+        /* A column's ⋯. */
+        for (const status of ["assigned", "done"]) {
+          await showColumn(page, status);
+          await page.locator(`[data-colmenu="${status}"]`).scrollIntoViewIfNeeded();
+          await page.locator(`[data-colmenu="${status}"]`).click();
+          await page.waitForSelector(MENU, { timeout: 10_000 });
+          await page.waitForTimeout(100);
+          await capture(page, where, MENU, "column", status);
+          await closeMenu(page);
+        }
+        await page.evaluate(() => document.querySelector(".kb .columns, [data-kanban-board]")?.scrollTo?.({ left: 0 }));
+        /* The board's ⋯, and the rail header's ⋯, which this change leaves as it was. */
+        for (const [trigger, panel, surface] of [["[data-bar-more]", BAR, "board"], ["[data-rail-menu]", RAIL, "header"]] as const) {
+          if (!(await page.locator(trigger).count()) || !(await page.locator(trigger).first().isVisible())) continue;
+          await page.locator(trigger).first().click();
+          await page.waitForSelector(panel, { timeout: 10_000 });
+          await page.waitForTimeout(150);
+          await capture(page, where, panel, surface, "rest");
+          if (BUILT && surface === "board") {
+            await walkBar(page, where);
+            if (scheme === "light") await doubledBar(page, where);
+          }
+          await page.locator(trigger).first().click();
+          await page.waitForTimeout(80);
+        }
+        /* A card at the bottom of the window, then one at its right edge. */
+        for (const [id, state, options] of [["t-upload", "bottom card", { block: "end" }], ["t-attach", "right-edge card", { block: "center", inline: "end" }]] as const) {
+          await showCard(page, id);
+          await page.evaluate(([selector, how]) => document.querySelector(selector as string)?.scrollIntoView(how as ScrollIntoViewOptions), [`${card(id)} [data-menu]`, options] as const);
+          await page.waitForTimeout(250);
+          await openCardMenu(page, id);
+          await capture(page, where, MENU, "card", state);
+          /* And with each section open, where a menu with no room under its button has to stand elsewhere. */
+          if (BUILT) bounded(where, await walk(page, where, "card", `${state}, `));
+          await closeMenu(page);
+        }
+        /* A conversation's ⋯: the reader a card's agent row opens. */
+        await showCard(page, "t-export");
+        await page.evaluate((selector) => document.querySelector(selector)?.scrollIntoView({ block: "center", inline: "center" }), `${card("t-export")} [data-member]`);
+        await page.locator(`${card("t-export")} [data-member]`).first().click();
+        await page.waitForSelector("[data-reader-menu]", { timeout: 15_000 });
+        await page.waitForTimeout(400);
+        await page.locator("[data-reader-menu]").first().click();
+        await page.waitForSelector(MENU, { timeout: 10_000 });
+        await page.waitForTimeout(120);
+        await capture(page, where, MENU, "conversation", "rest");
+        if (BUILT) {
+          /* What Link to another task does beyond its name, at rest under the conversation's cells, the way Hide's is under the card's. */
+          const link = await page.evaluate(() => {
+            const menu = document.querySelector<HTMLElement>(".kb .menu");
+            const element = menu?.querySelector<HTMLElement>('[data-cm-shown] [data-cm-note="link"]');
+            if (!element || !menu) return null;
+            const box = element.getBoundingClientRect();
+            const frame = menu.getBoundingClientRect();
+            return box.height > 0 && box.left >= frame.left && box.right <= frame.right + 0.5 && box.top >= frame.top && box.bottom <= frame.bottom + 0.5 && element.scrollWidth <= element.clientWidth + 0.5 ? (element.textContent ?? "").trim() : null;
+          });
+          said[`${keyOf(where)} conversation`] = { link };
+          if (link !== `${t("kanban.menu.cell.link")}: ${t("kanban.linkToTaskNote")}`) failures.push(`${keyOf(where)} conversation rest: no line under the To task cell (${JSON.stringify(link)})`);
+          await walk(page, where, "conversation");
+        }
+        await closeMenu(page);
+        if (pageErrors.length) failures.push(`${keyOf(where)}: page errors ${pageErrors.join(" | ")}`);
+      } catch (error) {
+        failures.push(`${keyOf(where)}: ${brief(error)}`);
+        /* What the window showed when the walk stopped. */
+        fs.mkdirSync(path.join(OUT, "failed"), { recursive: true });
+        await page.screenshot({ path: path.join(OUT, "failed", `${keyOf(where).replace("/", "-")}.png`) }).catch(() => {});
+      } finally {
+        await context.close();
+      }
+    }
+
+    /** One frame: four frequent actions carried out through the menu and read back from the board, then the keys. */
+    async function act() {
+      const frame = FRAMES.find((entry) => !entry.phone);
+      if (!frame) return;
+      const where: Where = { frame, scheme: "light", lang: "en" };
+      const t = (key: string) => translate("en", key as never);
+      const { context, page } = await openFixture(browser, url(), frame, "light", "en", "reduce");
+      const done: Record<string, boolean> = {};
+      try {
+        await settleBoard(page);
+        const through = async (id: string, label: string) => {
+          await openCardMenu(page, id);
+          const found = await tapsTo(page, label);
+          if (!found) return false;
+          await page.locator(`${MENU} [data-compact-target]`).first().click();
+          await page.waitForTimeout(700);
+          return true;
+        };
+        const state = (id: string) => page.evaluate((selector) => {
+          const element = document.querySelector<HTMLElement>(selector);
+          return element ? { status: element.closest(".column")?.getAttribute("data-status") ?? null, color: element.getAttribute("data-color"), priority: element.querySelector(".prio-mark")?.getAttribute("data-priority") ?? null } : null;
+        }, card(id));
+        done.colour = await through("t-export", t("kanban.color.coral")) && (await state("t-export"))?.color === "coral";
+        done.priority = await through("t-onboarding", t("kanban.priority.high")) && (await state("t-onboarding"))?.priority === "high";
+        done.move = await through("t-onboarding", t("kanban.status.blocked")) && (await state("t-onboarding"))?.status === "blocked";
+        done.hide = await through("t-longtitle", t("kanban.hideFromBoard")) && (await state("t-longtitle")) === null;
+        /* Keys: the arrows walk the menu and Escape hands focus back to the ⋯. */
+        await openCardMenu(page, "t-export");
+        await page.keyboard.press("ArrowDown");
+        await page.keyboard.press("ArrowDown");
+        const walked = await page.evaluate(() => Boolean(document.activeElement?.closest(".kb .menu")));
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(150);
+        done.keys = walked && await page.evaluate((selector) => document.activeElement === document.querySelector(selector), `${card("t-export")} [data-menu]`);
+        /* The key a cell shows in its corner still does the same from the card: E opens the description for editing. */
+        await page.locator(card("t-export")).focus();
+        await page.keyboard.press("e");
+        await page.waitForTimeout(300);
+        done.shortcut = await page.evaluate((selector) => Boolean(document.querySelector(`${selector} textarea, ${selector} [contenteditable="true"]`)), card("t-export"));
+        await page.keyboard.press("Escape");
+      } catch (error) {
+        failures.push(`${keyOf(where)} actions: ${brief(error)}`);
+      } finally {
+        await context.close();
+      }
+      acted = done;
+      for (const [name, ok] of Object.entries(done)) if (!ok) failures.push(`${keyOf(where)}: «${name}» through the menu did not reach the board`);
+    }
+
+    /** The card that holds the orchestrator's conversation: its Hide is refused, and the reason is two lines under the cells. Every state of its menu, at both sizes, in both languages and schemes. */
+    async function seated() {
+      for (const frame of FRAMES.filter((entry) => !entry.phone)) for (const scheme of SCHEMES) for (const lang of LANGS) {
+        const where: Where = { frame, scheme, lang };
+        await alive();
+        const { context, page } = await openFixture(browser, url(), frame, scheme, lang, "reduce");
+        try {
+          await settleBoard(page);
+          /* The card with one pipeline takes the seat's conversation, as the board's own server would hand it over. */
+          await page.evaluate(async () => {
+            const { seat } = await (await fetch("/api/orchestrator/seat")).json() as { seat: { conversationId: string; path: string } };
+            const stored = (window as unknown as { evidence: { storedTask(id: string): { assignments: unknown[] } | null } }).evidence.storedTask("t-links");
+            stored?.assignments.push({ path: seat.path, conversationId: seat.conversationId, panePid: null, state: "delivered", error: null, at: new Date().toISOString() });
+            window.dispatchEvent(new Event("llv:tasks-changed"));
+          });
+          await page.waitForSelector(`${card("t-links")} [data-lock]`, { timeout: 15_000 });
+          await page.waitForTimeout(300);
+          await openCardMenu(page, "t-links");
+          const rest = await capture(page, where, MENU, "card-seat", "rest");
+          if (BUILT) {
+            const hide = await page.evaluate(() => {
+              const menu = document.querySelector<HTMLElement>(".kb .menu");
+              const note = menu?.querySelector<HTMLElement>('[data-cm-shown] [data-cm-note="hide"]');
+              const cell = menu?.querySelector<HTMLElement>('[data-cm-shown] [data-cm-item="hide"]');
+              if (!menu || !note || !cell) return null;
+              const box = note.getBoundingClientRect();
+              const frame = menu.getBoundingClientRect();
+              return { text: (note.textContent ?? "").trim(), whole: box.height > 0 && box.left >= frame.left && box.right <= frame.right + 0.5 && box.top >= frame.top && box.bottom <= frame.bottom + 0.5 && note.scrollWidth <= note.clientWidth + 1, lines: Math.round(box.height / parseFloat(getComputedStyle(note).lineHeight)), refused: cell.getAttribute("aria-disabled") === "true" };
+            });
+            said[`${keyOf(where)} card-seat`] = { hide: hide?.text ?? null };
+            const wanted = `${translate(lang, "kanban.menu.cell.hide" as never)}: ${translate(lang, "kanban.seatProtected" as never)}`;
+            if (!hide || hide.text !== wanted || !hide.whole || !hide.refused) failures.push(`${keyOf(where)} card-seat rest: the refused Hide does not say why in full under the cells (${JSON.stringify(hide)})`);
+            bounded(where, [rest, ...await walk(page, where, "card-seat")]);
+          }
+          await closeMenu(page);
+        } catch (error) {
+          failures.push(`${keyOf(where)} card-seat: ${brief(error)}`);
+          fs.mkdirSync(path.join(OUT, "failed"), { recursive: true });
+          await page.screenshot({ path: path.join(OUT, "failed", `${keyOf(where).replace("/", "-")}-card-seat.png`) }).catch(() => {});
+        } finally {
+          await context.close();
+        }
+      }
+    }
+
+    /** Every state of the menu on the cards that stretch it: a waiting card with a pipeline, and cards holding five, seven and twelve pipelines. */
+    async function stretched() {
+      /* Seven pipelines are still one page, read in both schemes; twelve go on to a second page behind the last row of the first. */
+      const cases = [["stages", "t-limits", "card-waiting", 1], ["work-links", "t-many", "card-many", 5], ["pipeline-block", "t-many", "card-seven", 7], ["work-links&lanes=7", "t-many", "card-twelve", 12]] as const;
+      for (const frame of FRAMES.filter((entry) => !entry.phone)) for (const lang of LANGS) for (const scheme of SCHEMES) {
+        const where: Where = { frame, scheme, lang };
+        for (const [scenario, id, surface, lanes] of cases) {
+          if (scheme !== "light" && surface !== "card-seven") continue;
+          await alive();
+          const { context, page } = await openFixture(browser, url(scenario), frame, scheme, lang, "reduce");
+          try {
+            await settleBoard(page);
+            await openCardMenu(page, id);
+            const rest = await capture(page, where, MENU, surface, "rest");
+            if (!BUILT) continue;
+            const states = await walk(page, where, surface);
+            bounded(where, [rest, ...states]);
+            if (lanes < 2) continue;
+            /* Each pipeline of the card has its own page with its actions, and only a list too long for one page has a second. */
+            const pages = states.filter((state) => /pipeline \d+$/.test(state.state));
+            const second = states.some((state) => state.state.endsWith("pipelines-more"));
+            if (pages.length !== lanes) failures.push(`${keyOf(where)} ${surface}: ${pages.length} of its ${lanes} pipelines open a page`);
+            if (pages.some((state) => state.labels.length < 2)) failures.push(`${keyOf(where)} ${surface}: a pipeline's page has no actions`);
+            if (second !== lanes > 7) failures.push(`${keyOf(where)} ${surface}: ${lanes} pipelines ${second ? "are cut into pages" : "stay on one page"}`);
+          } catch (error) {
+            failures.push(`${keyOf(where)} ${surface}: ${brief(error)}`);
+            fs.mkdirSync(path.join(OUT, "failed"), { recursive: true });
+            await page.screenshot({ path: path.join(OUT, "failed", `${keyOf(where).replace("/", "-")}-${surface}.png`) }).catch(() => {});
+          } finally {
+            await context.close();
+          }
+        }
+      }
+    }
+
+    /** Every card of the fixture, where it stands and at the bottom of the window: opening a section moves neither the menu nor the pressed row, and no state lies over the ⋯. */
+    async function steady() {
+      if (!SCHEMES.includes("light")) return;
+      const lang = LANGS.includes("uk") ? "uk" : LANGS[0];
+      if (!lang) return;
+      for (const frame of FRAMES.filter((entry) => !entry.phone)) {
+        const where: Where = { frame, scheme: "light", lang };
+        const tally = { cards: 0, openings: 0, maxShift: 0, covered: 0, sides: {} as Record<string, number> };
+        for (const scenario of ["stages", "work-links"]) {
+          await alive();
+          const { context, page } = await openFixture(browser, url(scenario), frame, "light", lang, "reduce");
+          try {
+            await settleBoard(page);
+            const ids = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-kanban-board] .card[data-id^='task:']")].filter((element) => element.querySelector("[data-menu]")).map((element) => element.dataset.id!.slice(5)));
+            for (const id of ids) {
+              for (const block of ["center", "end"] as const) {
+                await showCard(page, id);
+                await page.evaluate(([selector, how]) => document.querySelector(selector!)?.scrollIntoView({ block: how as ScrollLogicalPosition }), [`${card(id)} [data-menu]`, block] as const);
+                await page.waitForTimeout(200);
+                /* A Done card ages off the board, or folds behind the column's count, while the walk is on its way to it. */
+                if (!(await page.locator(`${card(id)} [data-menu]`).first().isVisible().catch(() => false))) break;
+                if (block === "center") tally.cards += 1;
+                await openCardMenu(page, id);
+                const button = `${card(id)} [data-menu]`;
+                /* The menu is placed once, when it opens. A board that moves the card under an open menu (a turn ends, a card ages off) is no fault of the placement. */
+                const opened = await page.locator(button).first().boundingBox();
+                const stayed = async () => { const now = await page.locator(button).first().boundingBox().catch(() => null); return Boolean(opened && now && Math.abs(now.x - opened.x) <= 1 && Math.abs(now.y - opened.y) <= 1); };
+                const side = (await corner(page, null))?.side ?? "below";
+                tally.sides[side] = (tally.sides[side] ?? 0) + 1;
+                /* One state: it stays in the window and off its own ⋯, and its section rows say what they do. */
+                const stands = async (name: string) => {
+                  const state = await read(page, MENU);
+                  if (state && !state.inside) failures.push(`${keyOf(where)} ${scenario} ${id} (${block}) ${name}: leaves the window ${JSON.stringify(state.box)}`);
+                  if (state?.grammar.length) failures.push(`${keyOf(where)} ${scenario} ${id} (${block}) ${name}: ${state.grammar.join("; ")}`);
+                  if (await covers(page, button) && await stayed()) { tally.covered += 1; failures.push(`${keyOf(where)} ${scenario} ${id} (${block}) ${name}: the menu covers its own ⋯ ${JSON.stringify(state?.box ?? null)}`); }
+                };
+                /* False once the card has left the board under the walk (a Done card ages off it), which takes its menu along. */
+                const opens = async (section: string, name: string): Promise<boolean> => {
+                  const shift = await openSection(page, section);
+                  if (Number.isNaN(shift) && !(await page.locator(button).first().isVisible().catch(() => false))) return false;
+                  tally.openings += 1;
+                  if (!(shift <= tally.maxShift)) tally.maxShift = shift;
+                  if (!(shift <= 0.5)) failures.push(`${keyOf(where)} ${scenario} ${id} (${block}) ${name}: opening it moved the menu or the pressed row by ${shift} px`);
+                  await stands(name);
+                  return true;
+                };
+                await stands("rest");
+                for (const section of await sectionIds(page)) {
+                  if (!(await opens(section, section))) break;
+                  /* The list of a card's pipelines: each of them is one more page. */
+                  if ((await corner(page, null))?.paged) for (const lane of await sectionIds(page)) { if (await opens(lane, `${section}/${lane}`)) await leaveSection(page, lane); }
+                  await leaveSection(page, section);
+                }
+                await closeMenu(page);
+              }
+            }
+          } catch (error) {
+            failures.push(`${keyOf(where)} steadiness in ${scenario}: ${brief(error)}`);
+          } finally {
+            await context.close();
+          }
+        }
+        stability[keyOf(where)] = tally;
+      }
+    }
+
+    /** Every card of the fixture: a double click on each row that swaps the list for a page, and on that page's back row. The second press lands where another row now is, and reaches nothing. */
+    async function doubled() {
+      if (!SCHEMES.includes("light")) return;
+      const lang = LANGS.includes("uk") ? "uk" : LANGS[0];
+      if (!lang) return;
+      for (const frame of FRAMES.filter((entry) => !entry.phone)) {
+        const where: Where = { frame, scheme: "light", lang };
+        const tally = { cards: 0, rows: 0, dropped: 0, sent: 0 };
+        for (const scenario of ["stages", "work-links"]) {
+          await alive();
+          const { context, page } = await openFixture(browser, url(scenario), frame, "light", lang, "reduce");
+          try {
+            await settleBoard(page);
+            /* Everything the fixture's server was asked to write: a pipeline's actions, a task's fields, the board's moves. */
+            const writes = () => page.evaluate(() => {
+              const log = (window as unknown as { evidence: Record<string, unknown> }).evidence;
+              return ["pipelinePatches", "taskPatches", "taskWrites", "boardMutations", "assignments"].map((name) => (Array.isArray(log[name]) ? (log[name] as unknown[]).length : 0)).join(",");
+            });
+            const viewNow = () => page.evaluate(() => document.querySelector<HTMLElement>(".kb .menu")?.dataset.cmView ?? null);
+            const pages = () => page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.kb .menu [data-cm-shown] [data-cm-opens="drill"]')].map((element) => element.dataset.cmSection!));
+            const ids = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-kanban-board] .card[data-id^='task:']")].filter((element) => element.querySelector("[data-menu]")).map((element) => element.dataset.id!.slice(5)));
+            for (const id of ids) {
+              await showCard(page, id);
+              await page.evaluate((selector) => document.querySelector(selector)?.scrollIntoView({ block: "center" }), `${card(id)} [data-menu]`);
+              await page.waitForTimeout(60);
+              if (!(await page.locator(`${card(id)} [data-menu]`).first().isVisible().catch(() => false))) continue;
+              await openCardMenu(page, id);
+              const press = async (target: string, wanted: string, name: string) => {
+                const sent = await writes();
+                const dropped = await droppedPresses(page);
+                const box = await page.locator(`${MENU} ${target}`).first().boundingBox();
+                if (!box) { failures.push(`${keyOf(where)} ${scenario} ${id} ${name}: no row to double-click`); return; }
+                /* Each double click arrives from elsewhere, as a hand does: a back row can stand where the row that opened its page stood. */
+                await page.mouse.move(2, 2);
+                await page.mouse.dblclick(box.x + box.width / 2, box.y + box.height / 2);
+                /* The fixture's server answers a pipeline write after 300 ms; the request itself is logged at once. */
+                await page.waitForTimeout(200);
+                tally.rows += 1;
+                tally.dropped += await droppedPresses(page) - dropped;
+                const after = await writes();
+                if (after !== sent) { tally.sent += 1; failures.push(`${keyOf(where)} ${scenario} ${id} ${name}: a double click sent a write (${sent} → ${after})`); }
+                const now = await viewNow();
+                if (now !== wanted) failures.push(`${keyOf(where)} ${scenario} ${id} ${name}: a double click left the menu at ${now}, expected ${wanted}`);
+              };
+              const tops = await pages();
+              if (tops.some((section) => section === "pipelines" || section.startsWith("lane:"))) tally.cards += 1;
+              for (const section of tops) {
+                await press(`[data-cm-section="${section}"]`, section, section);
+                if (await viewNow() !== section) break;
+                for (const lane of await pages()) {
+                  await press(`[data-cm-section="${lane}"]`, `${section}/${lane}`, `${section}/${lane}`);
+                  if (await viewNow() !== `${section}/${lane}`) break;
+                  await press("[data-cm-back]", section, `${section}/${lane} back`);
+                }
+                await press("[data-cm-back]", "rest", `${section} back`);
+                if (await viewNow() !== "rest") break;
+              }
+              await page.mouse.move(2, 2);
+              if (await page.locator(MENU).count()) await closeMenu(page); else cardButton = null;
+            }
+          } catch (error) {
+            failures.push(`${keyOf(where)} double clicks in ${scenario}: ${brief(error)}`);
+          } finally {
+            await context.close();
+          }
+        }
+        doubles[keyOf(where)] = tally;
+        if (tally.cards && tally.dropped < tally.rows) failures.push(`${keyOf(where)}: ${tally.rows} double clicks, only ${tally.dropped} second presses were dropped`);
+      }
+    }
+
+    async function phone(where: Where) {
+      const { frame, scheme, lang } = where;
+      const fresh = async () => {
+        const opened = await openFixture(browser, url(), frame, scheme, lang, "reduce", true);
+        await opened.page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
+        await opened.page.waitForTimeout(600);
+        return opened;
+      };
+      const shut = async (page: Page) => { await jsClick(page, "[data-mobile2-close]"); await page.waitForTimeout(250); };
+      /** The row of cells in the open sheet: where its first and its last cell stand against the sheet's edges. */
+      const cells = async (page: Page, row: string, name: string) => {
+        const found = await page.evaluate((selector) => {
+          const group = document.querySelector<HTMLElement>(selector);
+          const sheet = group?.closest<HTMLElement>("[data-mobile2-sheet]");
+          const boxes = [...(group?.children ?? [])].map((cell) => cell.getBoundingClientRect());
+          if (!sheet || !boxes.length) return null;
+          const edge = sheet.getBoundingClientRect();
+          const round = (value: number) => Math.round(value * 10) / 10;
+          return { left: round(boxes[0]!.left - edge.left), right: round(edge.right - boxes[boxes.length - 1]!.right), widths: boxes.map((box) => round(box.width)) };
+        }, row);
+        if (!found) { failures.push(`${keyOf(where)} ${name}: no row of cells`); return; }
+        insets[`${keyOf(where)} ${name}`] = found;
+        if (Math.abs(found.left - found.right) > 0.5 || Math.max(...found.widths) - Math.min(...found.widths) > 0.5) failures.push(`${keyOf(where)} ${name}: the cells stand unevenly ${JSON.stringify(found)}`);
+      };
+      {
+        const { context, page, pageErrors } = await fresh();
+        try {
+          /* The card's long-press sheet. */
+          await page.locator('[data-phone-kanban-tab="assigned"]').first().click();
+          await page.waitForTimeout(300);
+          await page.evaluate(() => document.querySelector('[data-phone-card="task:t-links"]')?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })));
+          await page.waitForSelector("[data-phone-card-sheet]", { timeout: 10_000 });
+          await page.waitForTimeout(300);
+          await capture(page, where, SHEET, "phone-card", "rest");
+          if (BUILT) await cells(page, "[data-phone-card-cells]", "phone-card");
+          await shut(page);
+          /* The board menu, which this change leaves as it was. */
+          await page.locator('[data-mobile2-open="menu"]').first().click();
+          await page.waitForSelector(`${SHEET} [data-mobile2-menu-row="tasks"]`, { timeout: 10_000 });
+          await page.waitForTimeout(300);
+          await capture(page, where, SHEET, "phone-board", "rest");
+          await shut(page);
+          /* The task's ⋯. */
+          await page.locator('[data-phone-card="task:t-links"]').click();
+          await page.waitForTimeout(500);
+          await page.locator('[data-mobile2-open="menu"]').first().click();
+          await page.waitForSelector("[data-phone-task-menu-sheet]", { timeout: 10_000 });
+          await page.waitForTimeout(300);
+          await capture(page, where, SHEET, "phone-task", "rest");
+          if (BUILT) {
+            await cells(page, "[data-phone-task-menu-cells]", "phone-task");
+            const note = await page.evaluate(() => { const line = document.querySelector<HTMLElement>('[data-phone-task-menu-note="hide"]'); return line && line.getBoundingClientRect().height > 0 ? (line.textContent ?? "").trim() : null; });
+            said[`${keyOf(where)} phone-task`] = { hide: note };
+            if (!note?.startsWith(`${translate(lang, "kanban.menu.cell.hide" as never)}: `)) failures.push(`${keyOf(where)} phone-task: no line under the Hide cell (${JSON.stringify(note)})`);
+          }
+          if (pageErrors.length) failures.push(`${keyOf(where)}: page errors ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          failures.push(`${keyOf(where)} phone: ${brief(error)}`);
+        } finally {
+          await context.close();
+        }
+      }
+      {
+        const { context, page, pageErrors } = await fresh();
+        try {
+          /* A conversation's menu: at rest, then each of its sections opened in place. */
+          await page.locator('[data-phone-kanban-tab="inbox"]').first().click();
+          await page.waitForTimeout(300);
+          await page.locator('[data-phone-card-kind="conversation"]').first().click();
+          await page.waitForTimeout(700);
+          await page.locator('[data-mobile2-open="menu"]').first().click();
+          await page.waitForSelector("[data-mobile2-chat-identity]", { timeout: 10_000 });
+          await page.waitForTimeout(300);
+          await capture(page, where, SHEET, "phone-conversation", "rest");
+          if (BUILT) {
+            /* Interrupt is urgent while the agent works: it is never behind a section. */
+            const atRest = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-mobile2-chat-menu] [data-mobile2-menu-row]")].filter((row) => row.getBoundingClientRect().height > 0).map((row) => row.dataset.mobile2MenuRow!));
+            if (!atRest.includes("stop")) failures.push(`${keyOf(where)} phone-conversation rest: Interrupt is not at rest (${JSON.stringify(atRest)})`);
+            const sections = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-mobile2-chat-menu] [data-mobile2-menu-section]")].map((row) => row.dataset.mobile2MenuSection!));
+            if (!sections.length) failures.push(`${keyOf(where)} phone-conversation rest: no section to open`);
+            for (const id of sections) {
+              const head = `${SHEET} [data-mobile2-menu-section="${id}"]`;
+              await jsClick(page, head);
+              await page.waitForTimeout(250);
+              await capture(page, where, SHEET, "phone-conversation", `open ${id}`);
+              await jsClick(page, head);
+              await page.waitForTimeout(150);
+            }
+          }
+          if (pageErrors.length) failures.push(`${keyOf(where)}: page errors ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          failures.push(`${keyOf(where)} phone conversation: ${brief(error)}`);
+        } finally {
+          await context.close();
+        }
+      }
+    }
+
+    try {
+      for (const frame of FRAMES) for (const scheme of SCHEMES) for (const lang of LANGS) {
+        const where: Where = { frame, scheme, lang };
+        await alive();
+        if (!runs("frames")) continue;
+        if (frame.phone) await phone(where); else await desktop(where);
+      }
+      await alive();
+      if (runs("stretched")) await stretched();
+      if (runs("seat")) await seated();
+      if (BUILT) {
+        if (runs("act")) await act();
+        if (runs("steady")) await steady();
+        if (runs("doubled")) await doubled();
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+
+    if (!BUILT) {
+      /* The menus as they were: the frames and the readings the built run compares against. */
+      fs.writeFileSync(path.join(OUT, "today.json"), `${JSON.stringify({ taps, failures, readings }, null, 2)}\n`);
+      if (failures.length) throw new Error(failures.join("\n"));
+      return;
+    }
+
+    const same = (a: Pick<Reading, "frame" | "scheme" | "lang" | "surface">, b: Reading) => a.frame === b.frame && a.scheme === b.scheme && a.lang === b.lang && a.surface === b.surface;
+    const was = (entry: Pick<Reading, "frame" | "scheme" | "lang" | "surface">, state = "rest") => before.find((other) => same(entry, other) && other.state === state) ?? null;
+    /* Every entry the card's and the conversation's menus showed is in the built ones, on the phone too. */
+    const reach: Record<string, string[]> = {};
+    for (const base of before.filter((entry) => entry.state === "rest" && ["card", "conversation", "phone-conversation"].includes(entry.surface))) {
+      /* A phone sheet's rows carry no menu role; they are read as drawn. */
+      const shown = (entry: Reading) => (entry.surface === "phone-conversation" ? entry.items.map(([label]) => label) : entry.labels);
+      const have = new Set(readings.filter((entry) => same(base, entry)).flatMap(shown));
+      if (!have.size) continue;
+      const lost = shown(base).filter((label) => !have.has(label));
+      reach[`${base.frame}-${base.scheme}-${base.lang} ${base.surface}`] = lost;
+      if (lost.length) failures.push(`${base.frame}-${base.scheme}-${base.lang} ${base.surface}: no longer reachable ${JSON.stringify(lost)}`);
+    }
+    /* On the desktop no state is taller than 360 px or scrolls; on the phone no state of the card's sheet, the task's menu or a conversation's menu is taller than the sheet was. What this change leaves alone measures as it did. */
+    const SHEET_WAS: Record<string, number> = { "phone-card": 445, "phone-task": 401, "phone-conversation": 706 };
+    for (const entry of readings) {
+      const at = `${entry.frame}-${entry.scheme}-${entry.lang} ${entry.surface} ${entry.state}`;
+      if (["column", "conversation", "board"].includes(entry.surface)) {
+        if (entry.box[3] > 360.5) failures.push(`${at}: ${entry.box[3]} px is taller than 360`);
+        if (entry.scrolls) failures.push(`${at}: scrolls`);
+      } else if (entry.surface in SHEET_WAS) {
+        /* The sheet's own reading where this directory holds one; a run without it falls back to the recorded heights. */
+        const height = was(entry)?.box[3] ?? SHEET_WAS[entry.surface]!;
+        if (entry.box[3] > height + 0.5) failures.push(`${at}: ${entry.box[3]} px is taller than the ${height} it was`);
+        if (entry.scrolls) failures.push(`${at}: scrolls`);
+      } else if (["header", "phone-board"].includes(entry.surface)) {
+        const old = was(entry);
+        if (old && (JSON.stringify(old.items) !== JSON.stringify(entry.items) || old.box[2] !== entry.box[2] || old.box[3] !== entry.box[3])) failures.push(`${at}: changed, and this change leaves it alone (${old.box[2]}×${old.box[3]} → ${entry.box[2]}×${entry.box[3]})`);
+      }
+    }
+
+    /* ── The comparison sheets ──────────────────────────────────────────── */
+    const text = (value: string, width: number, size = 13, fill = "#222", weight = 600) => Buffer.from(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${size + 10}"><text x="2" y="${size + 2}" font-family="DejaVu Sans, Arial, sans-serif" font-size="${size}" font-weight="${weight}" fill="${fill}">${value.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</text></svg>`);
+    /** One tile: the surface cut out of its frame with a margin (or the whole frame), scaled, under a caption. */
+    async function tile(entry: Reading | null, whole = false, scale = 1): Promise<{ image: Buffer; width: number; height: number } | null> {
+      if (!entry || !fs.existsSync(path.join(OUT, entry.file))) return null;
+      const source = sharp(path.join(OUT, entry.file));
+      const meta = await source.metadata();
+      let picture: Buffer;
+      if (whole) picture = await source.png().toBuffer();
+      else {
+        const margin = 14;
+        const left = Math.max(0, Math.floor(entry.box[0] - margin));
+        const top = Math.max(0, Math.floor(entry.box[1] + STRIP - margin));
+        picture = await source.extract({ left, top, width: Math.min(meta.width! - left, Math.ceil(entry.box[2] + margin * 2)), height: Math.min(meta.height! - top, Math.ceil(entry.box[3] + margin * 2)) }).png().toBuffer();
+      }
+      if (scale !== 1) picture = await sharp(picture).resize({ width: Math.round((await sharp(picture).metadata()).width! * scale) }).png().toBuffer();
+      const size = await sharp(picture).metadata();
+      const width = Math.max(size.width!, 200);
+      const caption = `${entry.side === "today" ? "today" : "built"} · ${entry.state}`;
+      const note = `${Math.round(entry.box[2])}×${Math.round(entry.box[3])}${entry.scrolls ? " · scrolls" : ""}${scale !== 1 ? ` · shown at ${Math.round(scale * 100)}%` : ""}`;
+      const image = await sharp({ create: { width, height: size.height! + 44, channels: 3, background: "#f1efe9" } })
+        .composite([{ input: text(caption, width, 13, entry.side === "today" ? "#3a3a3a" : "#1f4fb5"), left: 0, top: 0 }, { input: text(note, width, 11, "#666", 400), left: 0, top: 21 }, { input: picture, left: 0, top: 44 }]).png().toBuffer();
+      return { image, width, height: size.height! + 44 };
+    }
+    type Tile = Awaited<ReturnType<typeof tile>>;
+    const sheets: string[] = [];
+    async function sheet(file: string, title: string, rows: { name: string; tiles: Tile[] }[]) {
+      const gap = 18;
+      const kept = rows.map((row) => ({ name: row.name, tiles: row.tiles.filter((entry): entry is NonNullable<Tile> => entry !== null) })).filter((row) => row.tiles.length);
+      if (!kept.length) return;
+      const widths = kept.map((row) => row.tiles.reduce((sum, entry) => sum + entry.width + gap, gap));
+      const width = Math.max(900, ...widths);
+      const heights = kept.map((row) => Math.max(...row.tiles.map((entry) => entry.height)) + 34);
+      const height = 64 + heights.reduce((sum, value) => sum + value + gap, 0);
+      const layers: import("sharp").OverlayOptions[] = [
+        { input: Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="56"><rect width="100%" height="100%" fill="#222"/><text x="18" y="37" font-family="DejaVu Sans, Arial, sans-serif" font-size="24" font-weight="700" fill="#fff">${title.replace(/&/g, "&amp;")}</text></svg>`), left: 0, top: 0 },
+      ];
+      let y = 64;
+      kept.forEach((row, index) => {
+        layers.push({ input: text(row.name, width - gap, 15, "#111", 700), left: gap, top: y });
+        let x = gap;
+        for (const entry of row.tiles) { layers.push({ input: entry.image, left: x, top: y + 30 }); x += entry.width + gap; }
+        y += heights[index]! + gap;
+      });
+      await sharp({ create: { width, height, channels: 3, background: "#f1efe9" } }).composite(layers).png().toFile(path.join(OUT, file));
+      sheets.push(file);
+    }
+    const built = (frame: string, scheme: Scheme, lang: string, surface: string, states: string[] | null = null) =>
+      readings.filter((entry) => entry.frame === frame && entry.scheme === scheme && entry.lang === lang && entry.surface === surface && (!states || states.includes(entry.state)));
+    const old = (frame: string, scheme: Scheme, lang: string, surface: string, state = "rest") => was({ frame, scheme, lang, surface }, state);
+    const tiles = (entries: (Reading | null)[], whole = false, scale = 1) => Promise.all(entries.map((entry) => tile(entry, whole, scale)));
+    /* Short on purpose: each sheet is read at a glance. Today's card menu is the height of the window, so it is drawn at half size. */
+    await sheet("sheet-card-menu.png", "Task card menu: today and built", [
+      { name: "The card's ⋯ · 1440×900 · uk · light: today, then built at rest and with each section open", tiles: [...await tiles([old("1440", "light", "uk", "card")], false, 0.5), ...await tiles(built("1440", "light", "uk", "card", ["rest", "open appearance", "open pipeline", "open more"]))] },
+      { name: "The same · 1440×900 · en · dark", tiles: [...await tiles([old("1440", "dark", "en", "card")], false, 0.5), ...await tiles(built("1440", "dark", "en", "card", ["rest", "open appearance", "open pipeline", "open more"]))] },
+      { name: "A card holding five pipelines · 1440×900 · uk · light: at rest, the list, one pipeline", tiles: [...await tiles([old("1440", "light", "uk", "card-many")], false, 0.5), ...await tiles(built("1440", "light", "uk", "card-many", ["rest", "open pipelines", "open pipelines, pipeline 1"]))] },
+      { name: "Seven pipelines on one card · 1000×700 · uk · light, then en · dark: the list is one page. Twelve · 1440×900 · uk · light: the list and the page behind its last row", tiles: [...await tiles(built("1000", "light", "uk", "card-seven", ["open pipelines"])), ...await tiles(built("1000", "dark", "en", "card-seven", ["open pipelines"])), ...await tiles(built("1440", "light", "uk", "card-twelve", ["open pipelines", "open pipelines, pipelines-more"]))] },
+      { name: "The card that holds the orchestrator's conversation · 1440×900 · uk · light, then 1000×700 · en · dark: why Hide is refused, at rest and with each section open", tiles: [...await tiles(built("1440", "light", "uk", "card-seat")), ...await tiles(built("1000", "dark", "en", "card-seat", ["rest", "open appearance"]))] },
+      { name: "A card at the bottom of the window · 1000×700 · uk · light (whole frames): a section opens under its own row", tiles: [...await tiles([old("1000", "light", "uk", "card", "bottom card")], true, 0.45), ...await tiles(built("1000", "light", "uk", "card", ["bottom card", "bottom card, open appearance", "bottom card, open more"]), true, 0.45)] },
+      { name: "A card at the right edge · 1440×900 · uk · light (whole frames)", tiles: [...await tiles([old("1440", "light", "uk", "card", "right-edge card")], true, 0.42), ...await tiles(built("1440", "light", "uk", "card", ["right-edge card", "right-edge card, open pipeline"]), true, 0.42)] },
+    ]);
+    await sheet("sheet-other-menus.png", "The column's, the conversation's and the board's menus, and the phone: today and built", [
+      { name: "A column's ⋯ and a conversation's ⋯ · 1440×900 · uk · light", tiles: [...await tiles([old("1440", "light", "uk", "column", "assigned")]), ...await tiles(built("1440", "light", "uk", "column", ["assigned"])), ...await tiles([old("1440", "light", "uk", "conversation")]), ...await tiles(built("1440", "light", "uk", "conversation"))] },
+      { name: "The board's ⋯ · 1440×900 · uk · light: today, then built at rest and with each section open", tiles: [...await tiles([old("1440", "light", "uk", "board")], false, 0.6), ...await tiles(built("1440", "light", "uk", "board"))] },
+      { name: "Phone 390×844 · uk · light (whole frames): the card's long-press sheet, then the task's ⋯", tiles: [...await tiles([old("390", "light", "uk", "phone-card")], true, 0.5), ...await tiles(built("390", "light", "uk", "phone-card"), true, 0.5), ...await tiles([old("390", "light", "uk", "phone-task")], true, 0.5), ...await tiles(built("390", "light", "uk", "phone-task"), true, 0.5)] },
+      { name: "Phone 390×844 · uk · light (whole frames): a conversation's menu, today, then built at rest and with each section open", tiles: [...await tiles([old("390", "light", "uk", "phone-conversation")], true, 0.5), ...await tiles(built("390", "light", "uk", "phone-conversation"), true, 0.5)] },
+      { name: "Phone 390×844 · en · dark (whole frames): a conversation's menu", tiles: [...await tiles([old("390", "dark", "en", "phone-conversation")], true, 0.5), ...await tiles(built("390", "dark", "en", "phone-conversation"), true, 0.5)] },
+      { name: "Phone 390×844 · en · dark (whole frames)", tiles: [...await tiles([old("390", "dark", "en", "phone-card")], true, 0.5), ...await tiles(built("390", "dark", "en", "phone-card"), true, 0.5), ...await tiles([old("390", "dark", "en", "phone-task")], true, 0.5), ...await tiles(built("390", "dark", "en", "phone-task"), true, 0.5)] },
+    ]);
+
+    const summary = {
+      driver: "src/components/kanban/kanbanBoard.browser.test.tsx", comparedWithToday: before.length > 0, taps, acted, said, insets, stability, doubles, reach, sheets, failures,
+      readings: readings.map(({ labels, items, ...entry }) => { void labels; void items; return entry; }),
+    };
+    fs.writeFileSync(path.join(OUT, "built.json"), `${JSON.stringify(summary, null, 2)}\n`);
+    if (!NARROWED) {
+      fs.mkdirSync(EVIDENCE, { recursive: true });
+      fs.writeFileSync(path.join(EVIDENCE, "built.json"), `${JSON.stringify(summary, null, 2)}\n`);
+    }
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 3_600_000);
 });
 
 /* What moves the board under a scroll. Installed once the board is drawn: it

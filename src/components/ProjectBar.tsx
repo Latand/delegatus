@@ -1,10 +1,11 @@
 "use client";
 
-import { Bot, ListTodo, MoreHorizontal, Plus } from "lucide-react";
+import { Bot, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ListTodo, MoreHorizontal, Plus } from "lucide-react";
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 
 import { Z } from "@/components/layers";
+import { useSwapGuard } from "@/components/menuSwapGuard";
 import { useLocale } from "@/lib/i18n";
 import { handleOverlayEscape } from "@/lib/overlay";
 
@@ -227,17 +228,24 @@ export function BarPanelToggles({ wide, orchestrator, tasks }: {
   );
 }
 
+/* Which section of the ⋯ is open, and whether it took the menu over as a page. */
+const BarMenuContext = createContext<{ open: string | null; paged: boolean; show: (id: string | null, paged: boolean, press?: React.MouseEvent) => void } | null>(null);
+
 /**
  * The ⋯ menu: everything the bar holds that is not used every minute. Its rows
  * are the controls themselves, so a confirm or a levels panel opens in place
  * and the menu stays open until the operator leaves it. `rows` receives a
- * `close` for the rows whose action is done in one click.
+ * `close` for the rows whose action is done in one click. What is used daily
+ * rests as rows; the rest sits behind named sections (`BarMenuSection`), one
+ * open at a time (docs/design/compact-card-menu.md).
  */
 export function BarMoreMenu({ rows }: { rows: (close: () => void) => ReactNode }) {
   const { t } = useLocale();
   const [open, setOpen] = useState(false);
+  const [section, setSection] = useState<{ id: string; paged: boolean } | null>(null);
   const container = useRef<HTMLSpanElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
+  const swapped = useSwapGuard();
 
   useEffect(() => {
     if (!open) return;
@@ -252,6 +260,11 @@ export function BarMoreMenu({ rows }: { rows: (close: () => void) => ReactNode }
     setOpen(false);
     trigger.current?.focus();
   };
+  const show = (id: string | null, paged: boolean, press?: React.MouseEvent) => {
+    /* A page replaces the list under the pointer, so the tail of a double click reaches no row of it. */
+    if (paged) swapped(press);
+    setSection(id ? { id, paged } : null);
+  };
 
   return (
     <span ref={container} className="relative inline-flex shrink-0" data-bar-group="more">
@@ -264,7 +277,7 @@ export function BarMoreMenu({ rows }: { rows: (close: () => void) => ReactNode }
         title={t("dash.more")}
         aria-haspopup="dialog"
         aria-expanded={open}
-        onClick={() => setOpen((was) => !was)}
+        onClick={() => { setSection(null); setOpen((was) => !was); }}
         className={`${BAR_QUIET} ${open ? "border-border bg-well text-primary" : ""}`}
       >
         <MoreHorizontal className={BAR_ICON} aria-hidden />
@@ -274,10 +287,13 @@ export function BarMoreMenu({ rows }: { rows: (close: () => void) => ReactNode }
           role="dialog"
           aria-label={t("dash.more")}
           data-bar-more-menu=""
+          data-bar-menu-view={section?.id ?? "rest"}
           onKeyDown={(event) => { handleOverlayEscape(event, close); }}
           className={`absolute right-0 top-full ${Z.popover} mt-1 flex w-64 flex-col rounded-control border border-border bg-card p-1 shadow-2 ${MENU_RULES}`}
         >
-          {rows(close)}
+          <BarMenuContext.Provider value={{ open: section?.id ?? null, paged: section?.paged ?? false, show }}>
+            {rows(close)}
+          </BarMenuContext.Provider>
         </div>
       ) : null}
     </span>
@@ -290,9 +306,59 @@ export function BarMoreMenu({ rows }: { rows: (close: () => void) => ReactNode }
 const MENU_RULES =
   "[&>[data-bar-menu-group]:not(:empty)~[data-bar-menu-group]:not(:empty)]:mt-1 [&>[data-bar-menu-group]:not(:empty)~[data-bar-menu-group]:not(:empty)]:border-t [&>[data-bar-menu-group]:not(:empty)~[data-bar-menu-group]:not(:empty)]:border-border [&>[data-bar-menu-group]:not(:empty)~[data-bar-menu-group]:not(:empty)]:pt-1";
 
-/** One group of ⋯ rows. */
+/** One group of ⋯ rows. `sections` holds the menu's sections; every other group steps aside while a section is shown as a page. */
 export function BarMenuGroup({ name, children }: { name: string; children: ReactNode }) {
-  return <div role="group" data-bar-menu-group={name} className="flex flex-col gap-0.5 empty:hidden">{children}</div>;
+  const menu = useContext(BarMenuContext);
+  return <div role="group" data-bar-menu-group={name} className="flex flex-col gap-0.5 empty:hidden">{menu?.paged && name !== "sections" ? null : children}</div>;
+}
+
+/**
+ * A named row of the ⋯ that holds rows of its own. It opens in place, its rows
+ * under it, where the menu then stays short; `page` replaces the list with the
+ * section and a back row, for rows that carry explanations. The rows stay
+ * mounted while it is closed, so a section whose rows all stood down draws no
+ * row of its own either.
+ */
+export function BarMenuSection({ id, title, icon, page = false, children }: { id: string; title: string; icon: ReactNode; page?: boolean; children: ReactNode }) {
+  const menu = useContext(BarMenuContext);
+  const open = menu?.open === id;
+  const head = useRef<HTMLButtonElement>(null);
+  const back = useRef<HTMLButtonElement>(null);
+  const was = useRef(false);
+  useEffect(() => {
+    if (!page) return;
+    if (open) back.current?.focus();
+    else if (was.current) head.current?.focus();
+    was.current = open;
+  }, [open, page]);
+  if (!menu) return <>{children}</>;
+  const away = menu.paged && !open;
+  return (
+    <div data-bar-menu-section={id} className={`flex-col gap-0.5 [&:has(>[data-bar-menu-body]:empty)]:hidden ${away ? "hidden" : "flex"}`}>
+      {open && page ? (
+        <button ref={back} type="button" className={`${BAR_MENU_ROW} mb-0.5 rounded-b-none border-b border-border`} data-bar-menu-back={id} onClick={(event) => menu.show(null, true, event)}>
+          <ChevronLeft className={BAR_ICON} aria-hidden /> {title}
+        </button>
+      ) : (
+        <button
+          ref={head}
+          type="button"
+          className={BAR_MENU_ROW}
+          data-bar-menu-head={id}
+          data-bar-menu-opens={page ? "page" : "place"}
+          aria-haspopup={page ? "dialog" : undefined}
+          aria-expanded={page ? undefined : open}
+          onClick={(event) => menu.show(open ? null : id, page, event)}
+        >
+          {icon}
+          <span className="min-w-0 flex-1 truncate">{title}</span>
+          {/* A page is the arrow to the right; a section that opens in place points down, and up once its rows are under it. */}
+          {page ? <ChevronRight className={`${BAR_ICON} text-muted`} aria-hidden /> : open ? <ChevronUp className={`${BAR_ICON} text-muted`} aria-hidden /> : <ChevronDown className={`${BAR_ICON} text-muted`} aria-hidden />}
+        </button>
+      )}
+      <div data-bar-menu-body={id} className={open ? (page ? "flex flex-col gap-0.5" : "ml-[15px] flex flex-col gap-0.5 border-l border-border pl-1") : "hidden"}>{children}</div>
+    </div>
+  );
 }
 
 /**
