@@ -36,6 +36,12 @@ turn ends. Records: `evidence/launch-render-polish/cls-before.json` and `cls-aft
    0.061 after with the agent at least 91% in the window throughout
    (`evidence/launch-render-polish/read-launch-cls-{before,after}.json`). The cards under the new card move down
    by its head; the remainder is that.
+   The place holds when the launched agent's turn ends. A finished conversation folds off the board, which
+   took the reader out of its card into nowhere, and the card then sorted under the working ones. A
+   conversation open as a reader is now exempt from the fold until its reader is closed (`onReadersChange`
+   into `protectedCollapsePaths` in `ProjectDashboard.tsx`), and `landUnderReading` keeps the launched card
+   under the card being read from either side. The same record reads the order again once the card shows the
+   turn finished (`orderAtTurnEnd`).
 6. **The hand-off scrolled the column.** Opening the launched card's reader scrolled Assigned until the
    reader's foot was in view, which put the card's head (and the first-prompt title) under the column header.
    The hand-off now leaves the column where it is while the card's head is in view (`landing` in

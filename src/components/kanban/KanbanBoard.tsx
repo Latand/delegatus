@@ -183,6 +183,10 @@ export interface KanbanBoardProps {
   closedPaths?: readonly string[];
   /** Restore a closed conversation to the board. */
   onRestoreConversation?: (file: FileEntry) => void;
+  /** The paths of the conversations open as readers on this board. An open
+      reader is the operator's own act: the page keeps its conversation in its
+      card when its work finishes, until the reader is closed. */
+  onReadersChange?: (paths: readonly string[]) => void;
   /** The project's checkout, carried into the seat the board draws. */
   projectCwd?: string;
   /** The project's seat as its owner read it: every conversation the seat
@@ -627,6 +631,12 @@ export function KanbanBoard(props: KanbanBoardProps) {
   useEffect(() => {
     memory.update((readers) => followPaths(readers, (key) => filesByIdentity.get(key)?.path ?? null));
   }, [memory, filesByIdentity]);
+  /* Told before paint, so a conversation whose turn ends under an open reader is never drawn folded. */
+  const readerPaths = useMemo(() => openReaders.map((reader) => filesByIdentity.get(reader.key)?.path ?? reader.path).join("\n"), [openReaders, filesByIdentity]);
+  const readersChanged = useStableCallback((paths: readonly string[]) => props.onReadersChange?.(paths));
+  useLayoutEffect(() => {
+    readersChanged(readerPaths ? readerPaths.split("\n") : []);
+  }, [readerPaths, readersChanged]);
   const readerKeysByCard = useMemo(() => {
     const byCard = new Map<string, string[]>();
     for (const reader of openReaders) {

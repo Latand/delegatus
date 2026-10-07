@@ -17440,13 +17440,17 @@ describe("launch layout shift rendered evidence", () => {
           return { read, launched };
         }, readId);
         /* Where the card lands is read as it lands, with its reader open
-           (docs/design/launch-render-polish.md §5). The order at the turn's
-           end is recorded too: on a loaded machine the finished agent's tile
-           can leave its card by then, which this case does not gate. */
+           (docs/design/launch-render-polish.md §5), and again once the board
+           shows the turn finished: a finished conversation folds off the
+           board, and one whose reader is open must keep its card and its
+           place. The end reaches the page a poll after the fixture's clock
+           ends the turn, so the read waits for the card to say so. */
         const landedAt = Date.now();
         await page.locator('.card[data-id="task:t-launch"] [data-kanban-reader]').first().waitFor({ timeout: 14_000 });
         const landed = await orderOf();
-        await page.waitForTimeout(Math.max(0, 14_000 - (Date.now() - landedAt)));
+        await page.locator('.card[data-id="task:t-launch"] .motion-line[data-motion="stopped"]').first().waitFor({ timeout: 60_000 });
+        await page.waitForTimeout(Math.max(3_000, 14_000 - (Date.now() - landedAt)));
+        const atTurnEnd = { ...(await orderOf()), readerInCard: await page.locator('.card[data-id="task:t-launch"] [data-kanban-reader]').count() };
         const shifts = await collectShifts(page, sentAt);
         const cls = Number(shifts.reduce((sum, entry) => sum + entry.value, 0).toFixed(4));
         await page.screenshot({ path: path.join(out, `${label}-read-launch-desktop-1440.png`) });
@@ -17454,14 +17458,15 @@ describe("launch layout shift rendered evidence", () => {
           const shares = (window as unknown as { __readerShare: number[] }).__readerShare;
           return { minShare: Number(Math.min(...shares).toFixed(3)), samples: shares.length };
         });
-        const launchedBelow = landed;
-        const reading = { viewport: "desktop-1440", cls, shifts: shifts.length, largest: [...shifts].sort((a, b) => b.value - a.value).slice(0, 8), readerShare: state, order: launchedBelow, orderAtTurnEnd: await orderOf(), pageErrors };
+        const reading = { viewport: "desktop-1440", cls, shifts: shifts.length, largest: [...shifts].sort((a, b) => b.value - a.value).slice(0, 8), readerShare: state, order: landed, orderAtTurnEnd: atTurnEnd, pageErrors };
         fs.mkdirSync("evidence/launch-render-polish", { recursive: true });
         fs.writeFileSync(`evidence/launch-render-polish/read-launch-cls-${label}.json`, `${JSON.stringify({ label, limit: LAUNCH_CLS_LIMIT, readings: [reading] }, null, 2)}\n`);
         expect(pageErrors, "page errors").toEqual([]);
         if (label === "after") {
           expect(state.minShare, "the agent being read stays in the window from the send to the turn's end").toBeGreaterThan(0.6);
-          expect(launchedBelow.launched, "the launched card stands right under the agent being read").toBe(launchedBelow.read + 1);
+          expect(landed.launched, "the launched card lands right under the agent being read").toBe(landed.read + 1);
+          expect(atTurnEnd.readerInCard, "the launched agent's reader stays in its card after its turn ends").toBe(1);
+          expect(atTurnEnd.launched, "the launched card still stands right under the agent being read after its turn ends").toBe(atTurnEnd.read + 1);
           expect(cls, "cumulative layout shift of a launch made beside a read agent").toBeLessThan(LAUNCH_CLS_LIMIT);
         }
       } finally { await context.close(); }
