@@ -49,14 +49,21 @@ const META_FIELDS = [
 
 export type RowCollection = (typeof ROW_COLLECTIONS)[number];
 const ROW_COLLECTION_KEYS: ReadonlySet<string> = new Set(ROW_COLLECTIONS);
+/** The rows whose MCP grant lists a complete load decides from other rows. */
+const READER_GRANT_COLLECTIONS: ReadonlySet<RowCollection> = new Set(["entries", "receipts", "conversations"]);
 type LookupValue = string | readonly string[];
 type LookupField = "conversationId" | "artifactPath" | "command.operationId" | "alias";
 const LOOKUP_PATHS: Record<LookupField, string> = { conversationId: "$.conversationId", artifactPath: "$.artifactPath", "command.operationId": "$.command.operationId", alias: "$" };
 const keyedReaders = new WeakMap<RegistryFile, (collection: RowCollection, field: LookupField, value: LookupValue) => string[]>();
 const pathReaders = new WeakMap<RegistryFile, (path: string) => string[]>();
 
-/** A reader's frozen copy of one row and the JSON of the decided row it copies. */
-type ReaderRow = { json: string; row: unknown };
+/** A reader's frozen copy of one row. `stored` is the stored JSON a complete
+    load decided it from and `grants` the MCP lists that decision left on it;
+    `json` is the decided row's own JSON, taken only when those cannot say. */
+type ReaderRow = { row: unknown; stored: string | undefined; grants: string; json?: string };
+
+/** Stored JSON of a row in a complete load, from the parse cache it was read through. */
+type StoredRowJson = (collection: RowCollection, key: string) => string | undefined;
 
 /**
  * The shared view every whole-file read-only reader holds, and the only objects
@@ -66,23 +73,28 @@ type ReaderRow = { json: string; row: unknown };
  * them instead, all the way down, so an assignment, push or delete on any part
  * of the view throws, and the next reader gets what the store loaded.
  *
- * A copy is only made for a row whose decided JSON changed. A view patched
- * after a local commit carries the frozen rows of the view before it; a reload
- * stringifies each decided row and reuses the copy whose JSON is the same, which
- * costs about a quarter of copying the rows again. A copy is never changed, so
- * a view a reader already holds stays as it was.
+ * A copy is only made for a row whose decided value changed. A view patched
+ * after a local commit carries the frozen rows of the view before it. A
+ * complete load decides a row from its own stored JSON and, for the MCP grant
+ * lists, from the rows that attest to it, which is what the recorded grant
+ * decisions already rest on; so a row whose stored JSON and grant lists are
+ * both unchanged keeps its copy. An operation owner, which a held delivery can
+ * rewrite, and a row a local commit patched in are compared by their decided
+ * JSON instead. A copy is never changed, so a view a reader already holds
+ * stays as it was.
  */
 class RegistryReaderViews {
   private readonly rows = new Map<RowCollection, Map<string, ReaderRow>>();
   private readonly owned = new WeakSet<object>();
 
-  view(file: RegistryFile): RegistryFile {
+  /** `storedJson` is given for a complete load and absent for a patched view. */
+  view(file: RegistryFile, storedJson?: StoredRowJson): RegistryFile {
     if (this.owned.has(file)) return file;
     const source = file as unknown as Record<string, unknown>;
     const view = {} as Record<string, unknown>;
     for (const key of Object.keys(file)) {
       view[key] = ROW_COLLECTION_KEYS.has(key)
-        ? this.collection(key as RowCollection, source[key] as Record<string, unknown>)
+        ? this.collection(key as RowCollection, source[key] as Record<string, unknown>, storedJson)
         : this.value(source[key]);
     }
     const frozen = this.own(Object.freeze(view)) as unknown as RegistryFile;
@@ -93,7 +105,7 @@ class RegistryReaderViews {
     return frozen;
   }
 
-  private collection(collection: RowCollection, rows: Record<string, unknown>): Record<string, unknown> {
+  private collection(collection: RowCollection, rows: Record<string, unknown>, storedJson: StoredRowJson | undefined): Record<string, unknown> {
     if (this.owned.has(rows)) return rows;
     const previous = this.rows.get(collection);
     const next = new Map<string, ReaderRow>();
@@ -103,8 +115,17 @@ class RegistryReaderViews {
       let reader: ReaderRow;
       if (known && known.row === row) reader = known;
       else {
-        const json = JSON.stringify(row);
-        reader = known?.json === json ? known : { json, row: this.value(row) };
+        const stored = collection === "deliveryOperationOwners" ? undefined : storedJson?.(collection, key);
+        const grants = READER_GRANT_COLLECTIONS.has(collection) ? JSON.stringify(grantLists(collection, row as GrantProfileRow)) : "";
+        if (stored !== undefined && known?.stored === stored && known.grants === grants) reader = known;
+        else {
+          const json = JSON.stringify(row);
+          if (known && (known.json ??= JSON.stringify(known.row)) === json) {
+            known.stored = stored;
+            known.grants = grants;
+            reader = known;
+          } else reader = { row: this.value(row), stored, grants, json };
+        }
       }
       next.set(key, reader);
       record[key] = reader.row;
@@ -491,8 +512,9 @@ export class SqliteAgentRegistryStore {
   /** Stamped like the grant record: a complete snapshot is only ever handed
       out again over exactly the database it was loaded from. */
   private readOnlyCache: StampedSnapshot | null = null;
-  /** Keyed by a row's decided JSON, so a copy stays valid across a reopened
-      or replaced database: equal JSON is the same row. */
+  /** Frozen copies of rows for the shared view. Keyed by what a row was
+      decided from, so a copy stays valid across a reopened or replaced
+      database: the same stored JSON and grant lists are the same row. */
   private readonly readerViews = new RegistryReaderViews();
   /** What the assembled grant decision (#739) returned for every grant-bearing
       row at one stored revision. A keyed read of a row claiming more than the
@@ -743,12 +765,16 @@ export class SqliteAgentRegistryStore {
        rewrites a row without advancing it would leave the decision over the old
        rows standing in every whole-file read. */
     if (this.readOnlyCache?.revision === revision && this.readOnlyCache.stamp === this.storeStamp()) return this.readOnlyCache;
-    return this.rememberReadOnly(this.loadSnapshot(true));
+    return this.rememberReadOnly(this.loadSnapshot(true), true);
   }
 
-  /** Every snapshot the shared cache holds is the frozen reader view of it. */
-  private rememberReadOnly(snapshot: StampedSnapshot): StampedSnapshot {
-    this.readOnlyCache = { ...snapshot, file: this.readerViews.view(snapshot.file) };
+  /** Every snapshot the shared cache holds is the frozen reader view of it.
+      `complete` says the file is a complete load through the parse cache. */
+  private rememberReadOnly(snapshot: StampedSnapshot, complete: boolean): StampedSnapshot {
+    const storedJson: StoredRowJson | undefined = complete
+      ? (collection, key) => this.rowCache.get(collection)?.get(key)?.valueJson
+      : undefined;
+    this.readOnlyCache = { ...snapshot, file: this.readerViews.view(snapshot.file, storedJson) };
     return this.readOnlyCache;
   }
 
@@ -1316,7 +1342,7 @@ export class SqliteAgentRegistryStore {
              mutation persists the rows its decision rewrites. */
           const snapshot = this.loadInTransaction(true);
           if (this.readOnlyCache?.revision !== revision || this.readOnlyCache.stamp !== stamp()) {
-            this.rememberReadOnly({ file: snapshot.file, revision, stamp: stamp() });
+            this.rememberReadOnly({ file: snapshot.file, revision, stamp: stamp() }, true);
           }
         }
         recordedDecisions = unchanged() && recordHolds() ? this.grantDecisions : null;
@@ -1727,7 +1753,7 @@ export class SqliteAgentRegistryStore {
       for (const field of changes.meta) {
         (nextFile as unknown as Record<string, unknown>)[field] = structuredClone(file[field]);
       }
-      this.rememberReadOnly({ file: nextFile, revision, stamp: stamps.after });
+      this.rememberReadOnly({ file: nextFile, revision, stamp: stamps.after }, false);
     } else {
       this.readOnlyCache = null;
     }
