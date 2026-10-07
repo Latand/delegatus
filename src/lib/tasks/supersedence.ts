@@ -19,10 +19,10 @@ interface SupersedenceLookup {
  * superseded assignments are returned as the same object.
  */
 export function projectSupersededTaskHandoffs(
-  tasks: BoardTask[],
+  tasks: readonly BoardTask[],
   conversations: Record<string, Pick<RegistryConversation, "id" | "supersededBy" | "generations">>,
   canonicalConversationId: (id: string) => string,
-): BoardTask[] {
+): readonly BoardTask[] {
   const lookup: SupersedenceLookup = {
     conversation: (id) => conversations[canonicalConversationId(id)] ?? null,
     canonicalConversationId,

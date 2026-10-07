@@ -5,12 +5,13 @@ import { randomUUID } from "node:crypto";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { productionLivenessSources } from "@/lib/lifecycle/liveness";
 import { captureProcessIdentity } from "@/lib/processIdentity";
+import { deepFreeze } from "@/lib/deepFreeze";
 import { bindStructuredDeliveryQueue, structuredDeliveryHostForConversation } from "@/lib/runtime/structuredDeliveryController";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
 import type { RuntimeSession } from "@/lib/runtime/contracts";
 import { turnEvidenceReader } from "./instance";
 import { describeUpdateWait, launchHoldRefusal } from "./launchHold";
-import { probeQuiet, currentHostTurnIdle, UNRESOLVED_TURN_GRACE_MS, type QuietPorts, type TurnEvidence } from "./quiet";
+import { probeQuiet, currentHostTurnIdle, registryAdmissionEvidence, UNRESOLVED_TURN_GRACE_MS, type QuietPorts, type TurnEvidence } from "./quiet";
 import type { Snapshot } from "./types";
 
 const NOW = Date.parse("2026-01-01T12:00:00Z");
@@ -310,6 +311,33 @@ test("production fallback projection keeps a live registry process without an at
     expect(reads).toBe(1);
   } finally {
     await bindStructuredDeliveryQueue([], { registry, client: null });
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("the dispatch version's registry evidence only reads the shared view and sees the next write", () => {
+  const directory = mkdtempSync("/var/tmp/quiet-admission-evidence-");
+  const registry = new AgentRegistry(join(directory, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  try {
+    const conversation = registry.ensureConversation("codex", join(directory, "admitted.jsonl"), "fixture");
+    const artifactPath = conversation.generations[0]!.path;
+    registry.upsert({ key: { engine: "codex", sessionId: conversation.generations[0]!.id }, artifactPath, cwd: directory, accountId: "fixture",
+      status: "live", host: null, claimEpoch: 3, claimOwner: null, pendingAction: null, structuredHost: null });
+    registry.beginSpawn("codex", directory, { title: "Admitted spawn" });
+    const shared = registry.readOnlySnapshot();
+    const before = JSON.stringify(shared);
+    /* Frozen all the way down: a write anywhere in the evidence would throw. */
+    const evidence = registryAdmissionEvidence(deepFreeze(structuredClone(registry.snapshot())));
+    expect(registryAdmissionEvidence(shared)).toEqual(evidence);
+    expect(evidence[0][0]).toEqual([[`codex:${conversation.generations[0]!.id}`, 3, null]]);
+    expect(evidence[1]).toHaveLength(1);
+    expect(registry.readOnlySnapshot()).toBe(shared);
+    expect(JSON.stringify(registry.readOnlySnapshot())).toBe(before);
+
+    registry.beginSpawn("codex", directory, { title: "Admitted later" });
+    expect(registryAdmissionEvidence(registry.readOnlySnapshot())[1]).toHaveLength(2);
+  } finally {
+    registry.close();
     rmSync(directory, { recursive: true, force: true });
   }
 });
