@@ -135,6 +135,7 @@ test("the focused successor keeps its composer and reaches its predecessor from 
   const more = host.querySelector('[data-mobile2-open="menu"]') as HTMLButtonElement;
   expect(more).not.toBeNull();
   flushSync(() => more.click());
+  flushSync(() => (host.querySelector('[data-mobile2-menu-section="manage"]') as HTMLButtonElement).click());
   const row = host.querySelector('[data-testid="mobile-menu-predecessor"]') as HTMLElement | null;
   expect(row).not.toBeNull();
   expect(row!.getAttribute("data-continues-conversation")).toBe("conversation_round_1");

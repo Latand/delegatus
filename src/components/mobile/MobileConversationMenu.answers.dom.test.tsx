@@ -112,6 +112,9 @@ function open(): HTMLElement {
 const row = (host: HTMLElement, name: string) =>
   host.querySelector(`[data-mobile2-menu-row="${name}"]`) as unknown as HTMLButtonElement;
 
+/** Opens one of the menu's named rows in place. */
+const unfold = (host: HTMLElement, id: string) => act(() => { (host.querySelector(`[data-mobile2-menu-section="${id}"]`) as unknown as HTMLButtonElement).click(); });
+
 const tap = async (host: HTMLElement, name: string) => {
   await act(async () => {
     row(host, name).click();
@@ -141,6 +144,9 @@ afterAll(() => {
 test("a refused host stop stays visible and a deliberate retry uses the common route", async () => {
   const host = open();
   answer = () => ({ ok: false, error: "kill refused: no such process" });
+  /* Kill is behind «Close or stop», which stays open over the refusal. */
+  expect(row(host, "kill")).toBeNull();
+  unfold(host, "end");
   await tap(host, "kill");
 
   /* Nothing was killed, so nothing says it was. */
@@ -168,6 +174,7 @@ test("a refused host stop stays visible and a deliberate retry uses the common r
 test("a Kill whose transport is dead says so rather than reporting a kill", async () => {
   const host = open();
   answer = () => new Error("network down");
+  unfold(host, "end");
   await tap(host, "kill");
 
   expect(receipts.getState()).toBeNull();
@@ -180,6 +187,8 @@ test("a Kill whose transport is dead says so rather than reporting a kill", asyn
 test("a refused Stop answers on the sheet's own status line, which is still on screen to be read", async () => {
   const host = open();
   answer = () => ({ ok: false, error: "interrupt refused: no live pane" });
+  /* Interrupt is at rest: no section stands between a working agent and it. */
+  expect(host.querySelector('[data-mobile2-chat-menu="rest"]')).not.toBeNull();
   await tap(host, "stop");
 
   expect(closes).toBe(0);
@@ -195,6 +204,7 @@ test("a refused Stop answers on the sheet's own status line, which is still on s
 test("an accepted Compact answers on the same line: one tap, no arming step, and a result", async () => {
   const host = open();
   answer = () => ({ ok: true });
+  unfold(host, "turn");
   await tap(host, "compact");
 
   expect(closes).toBe(0);

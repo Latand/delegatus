@@ -47,7 +47,7 @@ import { attentionReason } from "../attention";
 import { mobilePipelineActions, pendingPipelineActs, usePhonePipelineActs, useScrolledAway, type PendingPipelineActs } from "./MobilePipelineScreen";
 import { showReceipt } from "./MobileReceipt";
 import type { MobileRowActionTarget } from "./MobileRowActions";
-import { MobileSheet, MobileSheetDivider, MobileSheetRow } from "./MobileSheet";
+import { MobileSheet, MobileSheetCell, MobileSheetCells, MobileSheetDivider, MobileSheetRow } from "./MobileSheet";
 import { MobileSeatTickSheet } from "./MobileSeatTickSheet";
 import { MobileShell, type MobileShellHost, type SheetRenderer } from "./MobileShell";
 import { MobileSwipeRow, type MobileRowAction } from "./MobileSwipeRow";
@@ -728,7 +728,7 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
   };
   const [laneFor, setLaneFor] = useState<string | null>(null);
   const [linksFor, setLinksFor] = useState<WorkLinkTarget | null>(null);
-  const [menuFace, setMenuFace] = useState<"task" | "colour" | "priority" | "board">("task");
+  const [menuFace, setMenuFace] = useState<"task" | "colour" | "priority">("task");
   useEffect(() => {
     if (navState.sheet !== "menu") setMenuFace("task");
   }, [navState.sheet]);
@@ -996,19 +996,33 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
       const row = (key: string, icon: ReactNode, label: string, run: () => void, trailing?: ReactNode) => (
         <MobileSheetRow key={key} icon={icon} label={label} trailing={trailing} onSelect={run} attrs={{ "data-phone-task-menu": key }} />
       );
+      const cell = (key: string, icon: ReactNode, caption: string, label: string, run: () => void) => (
+        <MobileSheetCell key={key} icon={icon} caption={caption} label={label} onSelect={run} attrs={{ "data-phone-task-menu": key }} />
+      );
+      const hides = !card?.holdsSeat && !hidden;
+      /* The frequent actions are a row of cells, and what stays a row opens a
+         picker (docs/design/compact-card-menu.md). The board's own menu is one
+         Back away, on the board. */
       return (
         <MobileSheet name="menu" title={cleanTitle(title, 90)} onClose={close}>
           <div role="menu" aria-label={cleanTitle(title, 90)} className="flex flex-col py-1" data-phone-task-menu-sheet={taskId}>
-            {row("rename", <Pencil className="h-[18px] w-[18px]" aria-hidden />, t("kanban.rename"), () => { close(); startEdit("title"); })}
+            <MobileSheetCells attrs={{ "data-phone-task-menu-cells": "" }}>
+              {cell("rename", <Pencil className="h-[18px] w-[18px]" aria-hidden />, t("kanban.menu.cell.rename"), t("kanban.rename"), () => { close(); startEdit("title"); })}
+              {cell("details", <ScrollText className="h-[18px] w-[18px]" aria-hidden />, t("kanban.details"), t("kanban.details"), () => { close(); startEdit("details"); })}
+              {cell("links", <Link2 className="h-[18px] w-[18px]" aria-hidden />, t("kanban.menu.cell.links"), t("workLinks.attach"), () => openLinks({ kind: "task", id: taskId }))}
+              {card?.holdsSeat ? null : hidden
+                ? cell("show", <Eye className="h-[18px] w-[18px]" aria-hidden />, t("kanban.menu.cell.show"), t("mobile2.task.showOnBoard"), () => { close(); setHidden(false); })
+                : cell("hide", <EyeOff className="h-[18px] w-[18px]" aria-hidden />, t("kanban.menu.cell.hide"), t("kanban.hideFromBoard"), () => { close(); setHidden(true); })}
+            </MobileSheetCells>
+            {/* What hiding leaves running, in words where the cell is. */}
+            {hides ? (
+              <p data-phone-task-menu-note="hide" className="px-4 pb-1 text-label text-muted">
+                {t("kanban.menu.cell.hide")}: {card?.working ? t("kanban.hideNoteWorking", { count: card.working }) : t("kanban.hideNote")}
+              </p>
+            ) : null}
+            <MobileSheetDivider />
             {row("priority", <ArrowUpDown className="h-[18px] w-[18px]" aria-hidden />, t("kanban.priority"), () => setMenuFace("priority"), <ChevronRight className="h-4 w-4" aria-hidden />)}
             {row("colour", <Palette className="h-[18px] w-[18px]" aria-hidden />, t("kanban.colour"), () => setMenuFace("colour"), <ChevronRight className="h-4 w-4" aria-hidden />)}
-            {row("details", <ScrollText className="h-[18px] w-[18px]" aria-hidden />, t("kanban.details"), () => { close(); startEdit("details"); })}
-            {row("links", <Link2 className="h-[18px] w-[18px]" aria-hidden />, t("workLinks.attach"), () => openLinks({ kind: "task", id: taskId }))}
-            {card?.holdsSeat ? null : hidden
-              ? row("show", <Eye className="h-[18px] w-[18px]" aria-hidden />, t("mobile2.task.showOnBoard"), () => { close(); setHidden(false); })
-              : row("hide", <EyeOff className="h-[18px] w-[18px]" aria-hidden />, t("kanban.hideFromBoard"), () => { close(); setHidden(true); })}
-            <MobileSheetDivider />
-            {row("board", <Boxes className="h-[18px] w-[18px]" aria-hidden />, t("mobile2.pipeline.boardMenu"), () => setMenuFace("board"), <ChevronRight className="h-4 w-4" aria-hidden />)}
           </div>
         </MobileSheet>
       );
