@@ -1855,14 +1855,18 @@ export class SelfUpdateService {
    * behind" names a distance nothing serves any more, and the next poll can be
    * an hour away. The check's own answer for that revision is "equal", so it
    * reads so from here on, for the dialog and for the automatic path alike.
-   * Only once the web AND the runtime host both serve it: an installed pointer
-   * one process has not reached yet, or a host that does not answer, is an
-   * update still on its way, and its badge stays.
+   * Only once the web AND the runtime host both serve it, each confirmed by
+   * this read: an installed pointer one process has not reached yet, or a
+   * process that does not answer as the one the launcher recorded (whose
+   * revision is then only what the launcher last wrote), is an update still
+   * on its way, and its badge stays.
    */
-  private reconcileCheck(snapshot: Pick<Snapshot, "installed" | "serving">): void {
+  private reconcileCheck(snapshot: Pick<Snapshot, "installed" | "serving" | "processes">): void {
     const { check, available } = this.slice;
     const target = available?.sha;
     if (!target || snapshot.installed.sha !== target || check.state !== "update-available") return;
+    const confirmed = (view: ProcessView) => view.state === "healthy" && view.lastHealthOk === true;
+    if (!confirmed(snapshot.processes.web) || !confirmed(snapshot.processes.runtimeHost)) return;
     const serves = (revision: Revision | null) => !!revision && (revision.sha === target || (!!revision.short && revision.short === shortSha(target)));
     if (!serves(snapshot.serving.web) || !serves(snapshot.serving.runtimeHost)) return;
     this.slice = { installed: available, available: null,

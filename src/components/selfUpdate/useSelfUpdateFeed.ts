@@ -34,12 +34,25 @@ export function useSelfUpdateFeed(readOnly = false, work = true): Feed {
   const source = useRef<EventSource | null>(null);
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const closed = useRef(false);
+  /* Reads overlap and finish in any order: a poll every second can outlast
+     the second. Each read is numbered as it starts and a stream event as it
+     arrives; one that finishes after a later one was shown is about an older
+     install and is dropped, answer or failure, so the surface never steps
+     back. */
+  const issued = useRef(0);
+  const shown = useRef(0);
+  const current = useCallback((read: number) => {
+    if (read < shown.current) return false;
+    shown.current = read;
+    return true;
+  }, []);
 
   const accept = useCallback((next: Snapshot) => {
+    current(++issued.current);
     setSnapshot(next);
     setOffline(false);
     setFailure(null);
-  }, []);
+  }, [current]);
 
   useEffect(() => {
     closed.current = false;
@@ -63,6 +76,7 @@ export function useSelfUpdateFeed(readOnly = false, work = true): Feed {
       });
       events.addEventListener("snapshot-error", (event) => {
         errors = 0;
+        current(++issued.current);
         setLive("sse");
         try { setFailure((JSON.parse((event as MessageEvent<string>).data) as { error?: string }).error ?? ""); } catch { setFailure(""); }
       });
@@ -80,14 +94,22 @@ export function useSelfUpdateFeed(readOnly = false, work = true): Feed {
       setLive("polling");
       let answered = 0;
       const tick = async () => {
+        const read = ++issued.current;
         try {
           const response = await fetch(`/api/self-update${suffix}`, { cache: "no-store" });
           if (response.status === 503) {
             const body = await response.json().catch(() => null) as { code?: string; error?: string } | null;
-            if (body?.code === "snapshot-failed") { setOffline(false); setFailure(body.error ?? ""); return; }
+            if (body?.code === "snapshot-failed") {
+              if (current(read)) { setOffline(false); setFailure(body.error ?? ""); }
+              return;
+            }
           }
           if (!response.ok) throw new Error(String(response.status));
-          accept(await response.json() as Snapshot);
+          const next = await response.json() as Snapshot;
+          if (!current(read)) return;
+          setSnapshot(next);
+          setOffline(false);
+          setFailure(null);
           answered += 1;
           /* The server is back: go live again. */
           if (answered >= 2 && typeof EventSource !== "undefined" && !source.current) {
@@ -96,6 +118,7 @@ export function useSelfUpdateFeed(readOnly = false, work = true): Feed {
             connect();
           }
         } catch {
+          if (!current(read)) return;
           setOffline(true);
           answered = 0;
         }
@@ -113,7 +136,7 @@ export function useSelfUpdateFeed(readOnly = false, work = true): Feed {
       source.current = null;
       stopPolling();
     };
-  }, [accept, readOnly, work]);
+  }, [accept, current, readOnly, work]);
 
   return { snapshot, live, offline, failure, accept };
 }

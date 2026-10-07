@@ -266,17 +266,28 @@ export function snapshotStream(service: SelfUpdateService, signal: AbortSignal, 
     if (closed) return;
     try { controllerRef?.enqueue(encoder.encode(text)); } catch { close(); }
   };
+  /* Readings overlap (a change, the tick, the first read) and can finish in
+     any order. Each is numbered as it starts; one that finishes after a later
+     one already answered is about an older install and is dropped, error or
+     state, so the surface never steps back. */
+  let started = 0;
+  let answered = 0;
   const broadcast = async (force = false) => {
     pending = null;
     if (closed) return;
+    const reading = ++started;
     let snapshot: Snapshot;
     try { snapshot = await read(); } catch (error) {
+      if (reading < answered) return;
+      answered = reading;
       const failure = JSON.stringify(snapshotFailure(error));
       if (!force && failure === last) return;
       last = failure;
       send(`event: snapshot-error\ndata: ${failure}\n\n`);
       return;
     }
+    if (reading < answered) return;
+    answered = reading;
     const body = JSON.stringify(snapshot);
     /* serverTime moves every read; compare without it. */
     const comparable = body.replace(/"serverTime":"[^"]*"/, "");

@@ -410,3 +410,96 @@ test("a check about the installed revision keeps its answer", async () => {
   expect(snapshot.available?.sha).toBe(NEWER);
   expect(snapshot.check).toMatchObject({ state: "update-available", behind: 17 });
 });
+
+/* A checkout whose launcher record says both processes run its HEAD. The
+   record is only what the launcher last wrote; the badge clears on what the
+   processes answer now. */
+async function checkoutServing(hostHealth: ServiceDeps["hostHealth"]) {
+  const dir = mkdtempSync(join(root, "checkout-serving-"));
+  const checkout = join(dir, "checkout");
+  const git = (...args: string[]) => {
+    const result = Bun.spawnSync(["git", "-c", "user.name=test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd: checkout });
+    if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+    return result.stdout.toString().trim();
+  };
+  Bun.spawnSync(["mkdir", "-p", checkout]);
+  git("init", "-q");
+  git("commit", "-q", "--allow-empty", "-m", "target");
+  const head = git("rev-parse", "HEAD");
+  const record: LauncherRecord = {
+    version: 1, launcher: { pid: 100, startIdentity: "launch", autoAdmission: 1 }, checkout,
+    releasesDir: join(dir, "releases"), releasePointer: join(dir, "release.json"), requestFile: join(dir, "request.json"), port: 0, socket: join(dir, "host.sock"), updatedAt: "",
+    web: { state: "healthy", pid: 101, startIdentity: "web", startedAt: "", revision: head.slice(0, 7), error: null, requestId: null },
+    runtimeHost: { state: "healthy", pid: 102, startIdentity: "host", startedAt: "", revision: head.slice(0, 7), error: null, requestId: null },
+  };
+  const persisted = staleCheck(OLD);
+  persisted.slice.available = revision(head);
+  writeFileSync(join(dir, "state.json"), JSON.stringify(persisted));
+  const deps = {
+    now: () => Date.parse("2026-10-07T09:00:00Z"), env: {}, dir, remote: "https://github.com/example/project", branch: "main", pollMinutes: 60, bun: "bun",
+    mode: async () => ({ mode: "checkout", reason: null, record }),
+    check: async () => { throw new Error("no network in this test"); },
+    web: { pid: 101, port: 0, startedAt: "" }, processAlive: () => true, processIdentity: (pid: number) => pid === 102 ? "host" : null,
+    hostHealth, describe: async (_repo: string, sha: string) => revision(sha), buildEnv: () => ({}),
+    createRunner: () => ({ state: idleUpdate(), restore: () => {}, start: async () => {}, retry: async () => {}, logPath: () => "" }),
+  } as unknown as ServiceDeps;
+  const service = new SelfUpdateService(deps);
+  return { service, head, persisted: () => JSON.parse(readFileSync(join(dir, "state.json"), "utf8")).slice };
+}
+
+test("in a checkout the badge stays while the runtime host does not answer or answers as another process", async () => {
+  const cases: ServiceDeps["hostHealth"][] = [
+    async () => null,
+    async () => { throw new Error("connect ECONNREFUSED"); },
+    async () => ({ pid: 102, startIdentity: "someone else" }) as never,
+    async () => ({ pid: 999, startIdentity: "host" }) as never,
+  ];
+  for (const hostHealth of cases) {
+    const h = await checkoutServing(hostHealth);
+    try {
+      const snapshot = await h.service.snapshot();
+      expect(snapshot.installed.sha).toBe(h.head);
+      expect(snapshot.processes.runtimeHost).toMatchObject({ state: "failed", lastHealthOk: false });
+      expect(snapshot.available?.sha).toBe(h.head);
+      expect(snapshot.check).toMatchObject({ state: "update-available", behind: 17 });
+      expect(h.persisted().check).toMatchObject({ state: "update-available", behind: 17 });
+      expect(h.persisted().available.sha).toBe(h.head);
+    } finally { h.service.stop(); }
+  }
+});
+
+test("in a checkout the badge clears once both processes answer as the ones serving the target", async () => {
+  const h = await checkoutServing(async () => ({ pid: 102, startIdentity: "host" }) as never);
+  try {
+    const snapshot = await h.service.snapshot();
+    expect(snapshot.processes.runtimeHost).toMatchObject({ state: "healthy", lastHealthOk: true });
+    expect(snapshot.available).toBeNull();
+    expect(snapshot.check).toMatchObject({ state: "up-to-date", relation: "equal", behind: 0 });
+    expect(h.persisted().check.behind).toBe(0);
+    expect(h.persisted().available).toBeNull();
+  } finally { h.service.stop(); }
+});
+
+test("a stream never replaces a newer state with an older reading that finished late", async () => {
+  // The first reading waits on the runtime host; the install moves to NEWER
+  // a second later and the reading that change starts answers at once.
+  const host = gate();
+  let healthReads = 0;
+  const h = managed({ hostHealth: async () => {
+    if (++healthReads === 1) await host.opened;
+    return { pid: 4242, generation: { revision: TARGET } } as never;
+  } });
+  const abort = new AbortController();
+  try {
+    const next = events(abort.signal);
+    await nextTurn();
+    h.deps.releaseTarget = () => ({ revision: NEWER });
+    h.advance(1_000);
+    h.service.changes.emit();
+    const newer = await within(next(), 2_000);
+    expect(newer).toMatchObject({ event: "state", data: { installed: { sha: NEWER }, meta: { serverTime: "2026-10-07T09:00:01.000Z" } } });
+    host.open();
+    // The first reading lands now, about the install as it was; it is not sent.
+    expect(await within(next(), 500)).toBe("timed out");
+  } finally { abort.abort(); host.open(); h.release(); }
+});
