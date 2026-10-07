@@ -20915,6 +20915,36 @@ test("transport traversals before a terminal park cannot shorten a later grant",
   expect(continued.runs.find(run => run.stageId === "critique")!.attempts.filter(attempt => attempt.verdict)).toHaveLength(completedBefore + 3);
 });
 
+test("Codex quota pressure reseats the same attempt onto the next permitted account", async () => {
+  const f = await providerRecoveryHarness("codex", "usage_limit_exceeded", "You've hit your usage limit", 120_000);
+  f.h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { engine: "codex", accountId: SPARE_ACCOUNT, kind: "managed", home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } });
+  const switches: string[] = [];
+  f.h.ports.requestConversationReseat = async (_id, account) => { switches.push(account); };
+  await tickPipelines([], f.h.ports);
+  expect(switches).toEqual([SPARE_ACCOUNT]);
+  expect(f.sends).toHaveLength(1);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+  expect(f.h.spawnInputs).toHaveLength(1);
+});
+
+test("a persisted Codex migration retry stays fenced after its target account is revoked", async () => {
+  const f = await providerRecoveryHarness("codex", "usage_limit_exceeded", "You've hit your usage limit", 120_000);
+  let allowed = [LIMITED_ACCOUNT, SPARE_ACCOUNT];
+  f.h.ports.allowedAccountIds = () => allowed;
+  f.h.ports.resolveProjectSpawn = () => ({ kind: "available", account: {
+    engine: "codex", accountId: SPARE_ACCOUNT, kind: "managed", home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } });
+  const switches: string[] = [];
+  f.h.ports.requestConversationReseat = async (_id, account) => { switches.push(account); };
+  await tickPipelines([], f.h.ports);
+  expect(switches).toEqual([SPARE_ACCOUNT]);
+  allowed = [LIMITED_ACCOUNT];
+  f.h.ports.conversationMigration = () => ({ phase: "failed-recoverable", targetId: SPARE_ACCOUNT, retry: true, sourceFailure: false, error: "retry pending" }) as never;
+  await tickPipelines([], f.h.ports);
+  expect(switches).toEqual([SPARE_ACCOUNT]);
+  expect(loadPipelines()[0]!.stateDetail).toContain("target is no longer allowed");
+  expect(f.h.spawnInputs).toHaveLength(1);
+});
+
 test("critical disk pressure defers new provisioning without parking and automatically resumes", async () => {
   const h = harness();
   savePipelines([]);

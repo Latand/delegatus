@@ -30,7 +30,7 @@ const ACTIONS = new Set<PipelineAction>(PIPELINE_ACTIONS);
 const CONTROLLER_ACTIONS = new Set<PipelineAction>(["start", "resume", "retry-stage", "skip-stage", "resolve-decision", "continue-review", "accept-head", "retry-merge"]);
 
 type PipelineApiError = ApiError & {
-  code?: PipelineRepoPreflightErrorCode | PipelineGuardErrorCode | "store_busy" | typeof ENGINE_NOT_CONNECTED
+  code?: "RUNTIME_SWITCH_IN_PROGRESS" | "STAGE_ALREADY_REPORTED" | "ATTEMPT_STARTING" | "RUNTIME_SWITCH_UNAVAILABLE" | PipelineRepoPreflightErrorCode | PipelineGuardErrorCode | "store_busy" | typeof ENGINE_NOT_CONNECTED
     | "WORK_LINK_INVALID" | "WORK_LINK_AUTO" | "WORK_LINK_LIMIT" | "orchestrator_seat_revoked" | "orchestrator_seat_authority_unavailable" | "TASK_RUNS_ELSEWHERE";
   /** With ENGINE_NOT_CONNECTED: the stage, role and engine (#1876). */
   details?: EngineNotConnectedDetails;
@@ -107,7 +107,7 @@ export async function PATCH(
   }
   const { id } = await ctx.params;
   try {
-    const actor = body.action === "resolve-decision" || body.action === "continue-review" || body.action === "accept-head"
+    const actor = body.action === "resolve-decision" || body.action === "continue-review" || body.action === "accept-head" || body.action === "override-stage"
       ? admission.actor
       : undefined;
     const result = await patchPipeline(id, body, undefined, actor);
@@ -134,7 +134,7 @@ export async function PATCH(
         project: result.pipeline.project,
       });
     }
-    return NextResponse.json({ ok: true, pipeline: result.pipeline, revision: pipelineRevision(result.pipeline), ...(result.decisionAnswer ? { decisionAnswer: result.decisionAnswer, replayed: result.replayed } : {}), ...(result.reviewContinuation ? { reviewContinuation: result.reviewContinuation, replayed: result.replayed } : {}), ...(result.reviewAcceptance ? { reviewAcceptance: result.reviewAcceptance, replayed: result.replayed } : {}), ...(result.legacyReviewPreview ? { legacyReviewPreview: result.legacyReviewPreview } : {}), ...(result.legacyReviewConversion ? { legacyReviewConversion: result.legacyReviewConversion, replayed: result.replayed } : {}), ...(result.close ? { close: result.close } : {}), ...(result.graphEdit ? { graphEdit: result.graphEdit } : {}), ...(result.convertedStages?.length ? { convertedStages: result.convertedStages } : {}), ...(result.legacyReview?.length ? { legacyReview: result.legacyReview } : {}), ...(body.action === "attach-link" || body.action === "detach-link" ? {
+    return NextResponse.json({ ok: true, pipeline: result.pipeline, revision: pipelineRevision(result.pipeline), ...(result.decisionAnswer ? { decisionAnswer: result.decisionAnswer, replayed: result.replayed } : {}), ...(result.reviewContinuation ? { reviewContinuation: result.reviewContinuation, replayed: result.replayed } : {}), ...(result.reviewAcceptance ? { reviewAcceptance: result.reviewAcceptance, replayed: result.replayed } : {}), ...(result.legacyReviewPreview ? { legacyReviewPreview: result.legacyReviewPreview } : {}), ...(result.legacyReviewConversion ? { legacyReviewConversion: result.legacyReviewConversion, replayed: result.replayed } : {}), ...(result.close ? { close: result.close } : {}), ...(result.graphEdit ? { graphEdit: result.graphEdit } : {}), ...(result.runtimeSwitch !== undefined ? { runtimeSwitch: result.runtimeSwitch, replayed: result.replayed, appliedNow: result.appliedNow } : {}), ...(result.convertedStages?.length ? { convertedStages: result.convertedStages } : {}), ...(result.legacyReview?.length ? { legacyReview: result.legacyReview } : {}), ...(body.action === "attach-link" || body.action === "detach-link" ? {
       workLinks: pipelineWorkLinks(result.pipeline),
       /* The task cards that aggregate this pipeline redraw from the same answer. */
       taskWorkLinks: carryingTaskWorkLinks(result.pipeline, loadTasks(), loadPipelines()),
