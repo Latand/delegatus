@@ -96,6 +96,29 @@ The same path serves everything else that opens a conversation: a
 holds, which already opens in this window today (`looseReader`). The handoff's
 `show` intent still only reveals the card.
 
+### What the window shows when an agent comes in
+
+An agent that was already open comes in with its last rendered feed and
+toolbar, in the frame the switch happens. Every open agent's reader stays laid
+out at the size the window gives its reader while it waits: the park that
+holds the readers not on screen sits off screen at that width and height with
+`visibility: hidden`, where today it is `hidden` and lays nothing out. A
+reader parked at zero width is what made the composer toolbar fold its third
+button into ⋯ and unfold it again on every switch.
+
+A first open is held back until its feed has content and its toolbar has kept
+one layout for two frames, then fades in over 140 ms; the list and the
+window's frame show at once. The feed's skeleton (`FeedSkeleton`, `LogFeed.tsx`)
+therefore never appears in the window, and a slow read past 1.2 s shows the
+reader with its skeleton, so the window is never left empty.
+
+The prototypes trace every frame of every open and switch
+(`variants-all.json`, `transitions`): across 96 transitions (8 per run, three
+variants, two widths, two languages) no frame showed a skeleton, and every
+incoming agent kept one toolbar layout from its first visible frame. The
+first revision showed a skeleton for 3–4 frames on each first open and a second
+toolbar layout on each switch.
+
 ### How the carousel orders agents
 
 Agents stand in the order they were opened, and a new one joins at the end.
@@ -106,18 +129,34 @@ restores the same list. Next and previous go round the ends, the way
 
 ### How the window is closed
 
-- **Esc**, the reader header's existing «leave the whole window» button, or a
-  click on the dimmed board (variants 1–3; the prototypes do not draw this
-  one) closes the window. The agents stay
-  open, and the list shrinks to one pill at the foot of the board pane, «N
-  агенти відкриті ⤢». A click on it brings the window back on the agent shown
-  last. The pill floats over the board and takes no strip, so the columns
-  never move.
-- **×** on a list row, or the reader header's ×, closes that one agent. The
-  window shows its neighbour (the next, or the previous at the end), and
+- **× in the window's corner**, or **Esc**, closes the window. Its label says
+  so («Закрити вікно (Esc) — агенти лишаються відкритими»). The agents stay
+  open, and focus goes to the pill that brings the window back. The reader
+  header's ⤡ («leave the whole window») and its fold button are not drawn in
+  the window, so the corner holds one close.
+- **× on a list row or a tab** closes that one agent, and nothing else does.
+  The window shows its neighbour (the next, or the previous at the end), and
   closing the last agent closes the window.
 - **«Закрити всі»** closes every agent and the window, and the pill goes with
   them.
+- In variants 1 and 2 a click on the dimmed area also closes the window (the
+  prototypes do not draw it).
+
+With the window closed and agents still open, the list is one labelled pill in
+the board's header, right after the working count: «1 агент ⤢», «3 агенти ⤢»,
+«5 агентів ⤢» (en «1 agent ⤢», «3 agents ⤢»). The search field gives up the
+pill's width, so the pill covers no card and stands in the same place at 1440
+and at 1000. A click, or Enter on it, brings the window back on the agent shown
+last. The first revision floated the pill over the board's foot, where at
+1000 px it was a bare «1» lying on a card and at 1440 it covered a card's
+button.
+
+The open agent's card shows nothing more than the chip's ring. The × and the
+graph icon the critic saw on that card in frame `03` were the card's own hover
+controls (`.tools .icon-btn.hide`, `kanbanBoard.css:1316-1323`), revealed
+because the pointer rested on the card and focus had returned into it. With
+focus going to the pill they stay hidden; the frames move the pointer off the
+card, as a hand leaves the window.
 
 ### Keyboard
 
@@ -128,41 +167,55 @@ restores the same list. Next and previous go round the ends, the way
   reader. Inside a composer or an open menu, Esc keeps its own meaning, as the
   whole-window reader's Escape does today.
 - A switch puts focus in the reader that was brought in. The list's rows are
-  buttons in tab order before the reader.
+  buttons in tab order before the reader. Closing the window puts focus on the
+  pill.
 
 ### Phone
 
 The phone is unchanged in every variant. It already opens an agent full screen
 at once, its bar and dock swipe step between agents, and its title opens the
 switcher, which is the phone's form of the open-agents list. Every variant's
-review carries the same four phone frames, with the variant printed on them.
+review carries the same four phone frames.
+
+One difference the operator should know about: the phone's swipe walks every
+agent of the project, while the desktop window walks only the agents the
+operator opened. In frame `p3` a swipe from the retry banner's Review lands on
+an agent of another task. This design leaves the phone's order as it is (see
+Deferred).
 
 ### The variants
 
-All four are drawn on the real components. The conversation is the product's
+All three are drawn on the real components. The conversation is the product's
 reader (`KanbanReaders.tsx`) in the product's whole-window host
 (`.reader-full`), and the switcher is the product's `OpenAgentsList` at full
-contrast, with a role bar on the agent on screen and its × always visible. They
-differ only in where the list stands and how the window sits over the board.
+contrast, with a role bar on the agent on screen and its × always visible in a
+column of its own, so a name ends in an ellipsis before the ×. They differ in
+where the list stands and how the window sits over the board.
 
-1. **List at the window's left.** The board dims behind one window: the list
-   is its left column (248 px at 1440, 212 px at 1000) with ‹ › in its head,
-   and the conversation fills the rest. A long list scrolls in its column. It
-   is the list as it is today, moved into the window.
-2. **Tabs across the window's top.** The same rows laid out as tabs above the
-   conversation, with ‹ › in the head and «Закрити всі» at the strip's end. The
-   conversation gets the full window width. Past five agents at 1000 px the
-   tabs scroll sideways.
-3. **Carousel with neighbours.** The agent on screen sits in the middle; the
-   previous and the next stand dimmed at the window's sides as the real
-   readers, and a click on one brings it to the middle. Large ‹ › sit at the
-   window's edges, and the list is one strip under the window. It is the most
-   literal «карусель» of the four and the heaviest, because up to three live
-   conversations render at once.
-4. **Window in the columns' place.** Nothing is dimmed. The window takes
-   exactly the columns' frame, and the header, the sidebar and the orchestrator
-   seat stay visible and usable beside it. The list is the window's left
-   column. The board comes back when the window closes.
+1. **List at the window's left.** One modal window over a board dimmed to
+   about half. At 1100 px and wider the window covers the board's pane below
+   the header row with even 8 px margins, so the header, the sidebar and the
+   seat are dimmed whole and no text row is sliced. Narrower, it covers the
+   viewport. The list is its left column (248 px at 1440, 220 px at 1000) with
+   ‹ › in its head, and the conversation fills the rest. A long list scrolls
+   in its column. It is the list as it is today, moved into the window.
+2. **Tabs across the window's top.** The same frame as variant 1, with the
+   rows laid out as tabs above the conversation, ‹ › in the head and «Закрити
+   всі» at the strip's end. The tab on screen is filled; the reader header
+   drops the title the tab already shows and keeps its state, model and
+   actions on one line. Past five agents at 1000 px the tabs scroll sideways.
+4. **Window in the columns' place.** Nothing is dimmed. One frame wraps the
+   list and the conversation, starting 12 px below the lowest thing above the
+   columns (the header, the seat, the attention banner), with the columns not
+   drawn behind it. The header, the sidebar and the orchestrator seat stay
+   visible and usable beside it, and the board comes back when the window
+   closes. A click on the header's column tabs would close the window and go to
+   that column.
+
+Variant 3 (the carousel with its neighbours dimmed at the sides) is dropped:
+the neighbours were clipped by the viewport, board fragments showed between
+the panes, and three composers rendered at once. It is kept under Deferred.
+The surviving variants keep their numbers, so 4 is still 4.
 
 ### What happens to the inline-expansion code
 
@@ -174,20 +227,29 @@ The change is mostly removal:
   (`kanbanBoard.css:1171`, `:1808-1812`), and the reader-driven «reading»
   column tracks (`readingStatuses` from readers, `kanbanColumnTracks`'s
   `reading`). Drafts and the new-task composer keep their tracks.
+- **Opening stops revealing the card.** `openReaderFor` calls `revealCard`,
+  whose layout effect scrolls the reader's slot into view
+  (`KanbanBoard.tsx:1858-1898`). For an agent that opens in the window that
+  scroll goes; in the prototypes it moved both cards 54 px until it was
+  disabled. `jumpToAgent` stops revealing the card and widening its column
+  (`widenIfNarrow`) for the same reason; both set the window's agent.
 - **One window, many agents.** `fullReader` becomes the window's current agent.
   `.reader-full` renders the `OpenAgentsList` beside the `ReaderSlot`, which
   makes it the window. `openReaderFor` sets the window's agent for every
   conversation, so the loose reader stops being a special case.
-  `ReaderPlacement` keeps parking readers that are not shown, so a composer's
-  draft and a feed's scroll survive a switch, as they survive a move today.
+- **The park lays readers out.** `ReaderPlacement`'s park (`.reader-park`,
+  `KanbanBoard.tsx:2911`) stops being `hidden`: it sits off screen at the
+  window reader's size with `visibility: hidden`, so a parked composer keeps
+  its draft and toolbar layout and a parked feed keeps its scroll and content.
+  The first open's hold-and-fade lives in the window.
+- **The window's corner.** In the window the reader header's ⤡ and fold
+  buttons are not rendered, and its × closes the window. Fold goes with it:
+  `OpenReader.folded` is read and ignored.
 - **The rail stops taking a strip.** The side tier of `OpenAgentsRail`,
   `openRailTier`, `OPEN_RAIL_WIDTH` and the rail's share of
-  `kanbanLayoutModeBeside` go. The compact tier's count becomes the pill.
-  `jumpToAgent` stops revealing the card and widening its column
-  (`widenIfNarrow`); it sets the window's agent.
-- **Fold goes.** A reader in the window has no fold, so the fold button and
-  `OpenReader.folded` go. Stored readers that carry `folded` are read and
-  ignored.
+  `kanbanLayoutModeBeside` go. The list's head becomes the header pill, one
+  form at every width. The row's × moves out of its absolute position into its
+  own column (`kanbanBoard.css:947-952`) and is always visible.
 - **Drafts leave the list.** A new-agent draft (`draftAgents`) stays in its
   card as today. The list holds agents, and a draft becomes one when it
   launches.
@@ -199,7 +261,8 @@ The change is mostly removal:
   and the kanban browser driver's «the open agents at the board's side» and
   «a column widens itself» blocks assert the side strip and the in-card
   readers. They become window assertions, and the driver gains the window's
-  case in place of a new file.
+  case in place of a new file, including the per-frame transition trace
+  (no skeleton, one toolbar layout).
 
 ## Recommendation
 
@@ -207,42 +270,58 @@ The change is mostly removal:
 asked for it, as the same rows. It holds seven or more agents without
 crowding, because the column scrolls, and it renders one conversation at a
 time. Variant 4 is the alternative if the orchestrator seat should stay usable
-while the window is open. Variant 3 matches the word «карусель» most literally,
-and it costs three live feeds rendered at once.
+while the window is open. Variant 2 gives the conversation the full width and
+crowds past five agents.
 
 ## Validation against the requirement
 
 - «на доске агентов ты раскрыть не можешь»: the cards' boxes stay unchanged
-  (0 px) through every step in all four variants, at 1440 and 1000.
+  (0 px) through every step in all three variants, at 1440 and 1000.
 - «сразу открывает большое окошко … в нормальном виде»: one click shows the
-  full reader in the window (frame `02-one-stage`).
+  full reader in the window (frame `02-one-stage`), with no skeleton and no
+  second toolbar layout.
 - «много этих компоузеров … переключаться … карусель»: three agents, switched
-  by row, by ‹ › and by Alt+J, wrapping round (frames `04`–`06`, the video).
+  by row, by ‹ › and by Alt+J, wrapping round (frames `04`–`06`, the video),
+  each switch showing the agent as it was last seen.
 - «эта штучка … тоже должна быть там»: the list is inside the window, full
-  contrast, every row a button with its × (all frames from `02`).
+  contrast, every row a button with its × (all frames from `02`), and the
+  header pill brings it back when the window is closed.
 - «ты можешь раскрыть схему»: the Stages sheet is untouched.
 
 ## How the prototypes were made
 
 The driver is a stage-scratch script that is not in the tree. It serves the
 kanban fixture through `serveEvidenceFixture`, lays a variant's stylesheet over
-the production one, and adds a thin click shim: a click on a chip or a tile
-puts that agent in the window through the reader's own whole-window toggle,
-in-card reader slots are not drawn, and the columns keep the tracks they had
-with nothing open. The board, reader, composer and list are the product's
-components, with no product file edited. Frames and videos are under
+the production one, and adds a thin shim: a click on a chip or a tile puts that
+agent in the window through the reader's own whole-window toggle, in-card
+reader slots and the park lay out off screen at the window reader's size, the
+reveal's scroll to a reader slot is a no-op, the window's corner × closes the
+window, and the columns keep the tracks they had with nothing open. A
+per-frame trace records whether the window shows a skeleton and the toolbar's
+layout on every open and switch. The board, reader, composer and list are the
+product's components, with no product file edited. Each frame carries its
+variant label in a 30 px strip above the screenshot, so the label hides no
+content. Frames and videos are under
 `~/Pictures/delegatus-review/agent-window/<variant>/`, and the readings are in
-`evidence/agent-window/`.
+`evidence/agent-window/`. The frames are in the light theme only; the
+specification names no dark theme.
 
 ## Deferred: not currently justified
 
+- **Variant 3, the carousel with neighbours.** Dropped after review: its
+  neighbour readers were clipped by the viewport (56 px slivers at 1000), board
+  fragments showed between the panes, a side button sat on a board button,
+  and three composers rendered at once. Variant 1 covers the same need.
 - **A first-message panel for a not-started stage in the window.** It is a
   form with no agent yet, it does not cause the jump the operator reported,
   and the window would need a second kind of pane to host it.
-- **An «Opened from the board» section in the phone's switcher.** The phone
-  has no inline expansion to remove, and its swipe already walks the agents
-  the operator works with.
+- **Making the phone's swipe walk only the open agents.** The phone has no
+  inline expansion to remove, and its swipe already walks the agents the
+  operator works with; the difference from the desktop is named under Phone.
+- **An «Opened from the board» section in the phone's switcher.** Same reason.
 - **Reordering agents by dragging rows.** Nothing in the requirement asks for
   it, and the open order is stable.
 - **Arrow-key switching.** Arrow keys already belong to the feed and the
   composer, and Alt+J/K covers switching without a conflict.
+- **Dark-theme frames.** The specification does not ask for them; the
+  variants use the product's theme tokens throughout.
