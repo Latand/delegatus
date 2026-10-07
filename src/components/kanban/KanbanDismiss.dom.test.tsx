@@ -205,6 +205,24 @@ test("the foot names why the card needs the operator, and a member tile names it
   expect(card.querySelector("[data-dismiss]")?.getAttribute("aria-label")).toContain("stop flagging it until something new");
 });
 
+test("a card that waits only on its prototype says so on its review button, with no reason line and nothing to dismiss, until the choice", () => {
+  const review = { latestReviewId: "pr_round", waitingReviewId: "pr_round" as string | null, title: "Layout", rounds: 1, createdAt: "2026-10-01T00:00:00Z" };
+  const waiting = { ...task("p", "assigned", "Lay out the search results"), prototypeReview: review } as BoardTask;
+  const { host, render } = mount({ tasks: [waiting], files: [] });
+  const card = cardEl(host, "task:p")!;
+  expect(card.getAttribute("data-attention")).toBe("needs");
+  const foot = card.querySelector<HTMLElement>(".foot")!;
+  const button = foot.querySelector<HTMLElement>("[data-prototype-button]")!;
+  expect(button.getAttribute("data-prototype-state")).toBe("ready");
+  expect(button.querySelector(".proto-word")?.textContent).toBe("Prototype");
+  /* The button is the one thing in the foot that says it: no amber line beside it. */
+  expect(foot.querySelector(".foot-meta.needs")).toBeNull();
+  expect(foot.textContent).not.toContain("Prototype ready");
+  expect(foot.querySelector("[data-dismiss]")).toBeNull();
+  render({ tasks: [{ ...waiting, prototypeReview: { ...review, waitingReviewId: null } } as BoardTask] });
+  expect(cardEl(host, "task:p")!.hasAttribute("data-attention")).toBe(false);
+});
+
 test("one click posts what the card drew, clears it at once with who cleared it, and Undo brings it back", async () => {
   const asker = asking(1, "Unit", 900);
   const { host } = mount({ tasks: [task("a", "assigned", "Retire the systemd install path", [asker])], files: [asker] });

@@ -77,6 +77,7 @@ import { KanbanBoard } from "./kanban/KanbanBoard";
 import { KanbanSeat } from "./kanban/KanbanSeat";
 import { useKanbanSeat, useSeatSignal } from "./kanban/kanbanSeatStore";
 import { onTaskChipOpen } from "./orchestrator/taskChips";
+import { usePrototypeReviewJump, type PrototypeReviewTarget } from "@/hooks/usePrototypeReview";
 import { CatalogFailureNotice } from "./CatalogFailureNotice";
 import { FeedSkeleton, KanbanSkeleton, PhoneKanbanSkeleton, TitleSkeleton } from "./skeletons";
 import { Switchboard } from "./Switchboard";
@@ -1163,10 +1164,19 @@ function ProjectDashboardView({
      clicked: open or frame that task on this board, the way a task-panel row
      does. A task of another project is not this board's to open. */
   const openChipTask = useRef(openTaskOnBoard);
+  const projectTaskIds = useRef<ReadonlySet<string>>(new Set());
+  useEffect(() => { projectTaskIds.current = new Set(projectTasks.map((task) => task.id)); }, [projectTasks]);
   useEffect(() => { openChipTask.current = openTaskOnBoard; });
   useEffect(() => onTaskChipOpen((request) => {
     if (request.project === project) openChipTask.current(request.id);
   }), [project]);
+  /* The orchestrator's «Go to prototype» takes the operator to the task
+     first; the review itself opens over it from the page's host. A card's own
+     button asks for nothing here: the operator is already at the task. */
+  usePrototypeReviewJump(useCallback((target: PrototypeReviewTarget) => {
+    if (target.from === "card" || !projectTaskIds.current.has(target.taskId)) return;
+    openChipTask.current(target.taskId);
+  }, []));
 
   /* An attention jump rides the same channel as switchboard opens: the ref is
      set here and the every-render effect below flashes it, whether the node is

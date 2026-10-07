@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { Window } from "happy-dom";
 
 import { installActEnv } from "@/test-helpers/actEnv";
+import type { BoardTask } from "@/lib/tasks/types";
 
 /*
  * «Waiting for you» (docs/design/needs-you-options.md, option B), mounted the
@@ -345,4 +346,28 @@ test("the update decision is a counted Needs-you row with named blockers and bot
   expect(host.querySelector('[data-action="deploy-now"]')).not.toBeNull();
   expect(host.querySelector('[data-action="keep-waiting"]')).not.toBeNull();
   expect(host.querySelector('[data-needs-you-dismiss-all]')).toBeNull();
+});
+
+test("a waiting prototype review is a counted row that opens its task's review and offers no «Dismiss»", async () => {
+  const boardTask = { id: "task-layout", project: ALPHA, status: "inbox", placement: "unplaced", text: "Tidy the card menu\nThree items moved.", assignments: [], createdAt: "", updatedAt: "",
+    prototypeReview: { latestReviewId: "pr_1", waitingReviewId: "pr_1", title: "Card menu layout", rounds: 1, createdAt: new Date((NOW - 120) * 1000).toISOString() } } as unknown as BoardTask;
+  const queue = buildNeedsYouQueue([], [], NOW, [], undefined, [boardTask]);
+  const opened: string[] = [];
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  root = createRoot(host);
+  await act(async () => root!.render(<AttentionPanel queue={queue} current={ALPHA} projectNames={{}} pipelines={[]} placement="docked" canDock
+    onPlacement={() => {}} onClose={() => {}} onOpen={(entry) => opened.push(entry.id)} />));
+  expect(title(host)).toContain("1");
+  expect(rowIds(host)).toEqual(["prototype:pr_1"]);
+  const row = host.querySelector('[data-needs-you-row="prototype:pr_1"]')!;
+  // The row names the task the jump lands on, by its first line.
+  expect(row.textContent).toContain("Tidy the card menu");
+  expect(row.textContent).not.toContain("Three items moved");
+  expect(row.textContent).toContain("Prototype ready");
+  expect(host.querySelector("[data-needs-you-dismiss]")).toBeNull();
+  expect(host.querySelector("[data-needs-you-dismiss-all]")).toBeNull();
+  expect(host.querySelector("[data-needs-you-dismiss-section]")).toBeNull();
+  await click(host.querySelector('[data-attention-prototype="task-layout"]')!);
+  expect(opened).toEqual(["prototype:pr_1"]);
 });

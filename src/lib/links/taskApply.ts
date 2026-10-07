@@ -37,7 +37,10 @@ function assignGroup(target: BoardTask, row: WireTask, group: TaskSyncGroup): vo
     if (value === undefined) delete target[key]; else target[key] = value;
   };
   switch (group) {
-    case "text": target.text = row.text; set("details", row.details); target.chosen = true; break;
+    case "text":
+      target.text = row.text; set("details", row.details); target.chosen = true;
+      if (row.prototypeReviewReplica !== undefined) set("prototypeReviewReplica", row.prototypeReviewReplica ?? undefined);
+      break;
     case "status": target.status = row.status; break;
     case "look": set("color", row.color); set("icon", row.icon); set("priority", row.priority); break;
     case "place": target.placement = row.placement; set("pos", row.pos); break;
@@ -49,7 +52,7 @@ function assignGroup(target: BoardTask, row: WireTask, group: TaskSyncGroup): vo
 
 /** Whether the merged row, in wire form, is exactly what the sender sent. */
 function equalsSent(merged: BoardTask, row: WireTask, self: { id: string; prefix: string }): boolean {
-  const mine = encodeTask(merged, self).row;
+  const mine = encodeTask(merged, self, { includePrototypeReview: row.prototypeReviewReplica !== undefined }).row;
   if (isWireStub(mine)) return false;
   return TASK_SYNC_GROUPS.every((group) => mine.s[group] === row.s[group] && wireGroup(mine, group) === wireGroup(row, group));
 }

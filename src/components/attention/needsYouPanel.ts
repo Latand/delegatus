@@ -59,6 +59,7 @@ export function needsYouLaneLine(t: TFunction, pipeline: Pipeline): string {
 
 export function needsYouEntrySince(entry: MobileAttentionEntry): number | null {
   if (entry.kind === "update") return Date.parse(entry.decision.at) / 1000;
+  if (entry.kind === "prototype") return Date.parse(entry.notice.createdAt) / 1000;
   if (entry.kind === "conversation") return entry.item.since;
   return laneNeed(entry.row.pipeline)?.need.since ?? null;
 }
@@ -88,6 +89,8 @@ export function needsYouCounts(queue: readonly MobileAttentionEntry[]): Map<stri
  */
 export function needsYouEntryRole(entry: MobileAttentionEntry, pipelines: readonly Pipeline[]): FrameRole {
   if (entry.kind === "update") return "orchestrator";
+  /* A review waits on its task; no agent stands behind the row. */
+  if (entry.kind === "prototype") return "neutral";
   if (entry.kind === "pipeline") {
     const lane = entry.row.pipeline;
     const stageId = laneStageId(lane);
@@ -114,6 +117,7 @@ function stageRole(stage: PipelineStage | null): { kind?: string; role?: { roleI
  */
 export function needsYouSubject(entry: MobileAttentionEntry): DismissalSubjectRequest {
   if (entry.kind === "update") throw new Error("An update decision must be answered with its own choices");
+  if (entry.kind === "prototype") throw new Error("A prototype review is cleared by its choice");
   if (entry.kind === "pipeline") {
     return { kind: "pipeline", pipelineId: entry.row.pipeline.id, laneMovedAt: drawnLaneMovement(entry.row.pipeline) };
   }
@@ -128,20 +132,22 @@ export function needsYouSubject(entry: MobileAttentionEntry): DismissalSubjectRe
   };
 }
 
-/** System update choices stay actionable until the operator answers them. */
+/** System update choices stay actionable until the operator answers them, and
+    a prototype review until its choice is saved. */
+const dismissible = (entry: MobileAttentionEntry) => entry.kind !== "update" && entry.kind !== "prototype";
 export function needsYouDismissibleCount(entries: readonly MobileAttentionEntry[]): number {
-  return entries.filter((entry) => entry.kind !== "update").length;
+  return entries.filter(dismissible).length;
 }
 
 /** One request for several rows (a section's or the panel's «Dismiss all»). */
 export function needsYouDismissal(entries: readonly MobileAttentionEntry[]): { target: DismissalTarget; subjects: DismissalSubjectRequest[] } {
-  const subjects = entries.filter((entry) => entry.kind !== "update").map(needsYouSubject);
+  const subjects = entries.filter(dismissible).map(needsYouSubject);
   return { target: { kind: "subjects", subjects }, subjects };
 }
 
 /** The row the operator is looking at: the open conversation, or the focused lane card. */
 export function isFocusedNeedsYouEntry(entry: MobileAttentionEntry, focus: { path: string | null; laneId: string | null }): boolean {
-  if (entry.kind === "update") return false;
+  if (entry.kind === "update" || entry.kind === "prototype") return false;
   if (entry.kind === "pipeline") return focus.laneId !== null && entry.row.pipeline.id === focus.laneId;
   return focus.path !== null && entry.item.file.path === focus.path;
 }
