@@ -68,6 +68,10 @@ type Conversation = {
   steps: Step[];
   /** A conversation mid-turn ends on a tool call with no answer yet. */
   midTurn?: { tool: string; input: Record<string, unknown> };
+  /** The effort it ran at, when above the engine's lowest: Claude Code writes
+      no effort into its transcript, and a turn that thought (an empty,
+      signed thinking block, which the feed does not draw) reads as `high`. */
+  effort?: "high";
 };
 
 function claudeConversations(dirs: Record<DemoProject, string>): Conversation[] {
@@ -80,6 +84,7 @@ function claudeConversations(dirs: Record<DemoProject, string>): Conversation[] 
       title: "Orchestrator · harbor-api",
       project: "harbor-api",
       model: "claude-opus-5-5",
+      effort: "high",
       startedMinutesAgo: 50,
       pace: 70,
       steps: [
@@ -92,6 +97,9 @@ function claudeConversations(dirs: Record<DemoProject, string>): Conversation[] 
       title: "Idempotent refunds",
       project: "harbor-api",
       model: "claude-opus-5-5",
+      /* The pipeline's Build stage runs its builder role at high, the one
+         effort every frame shows. */
+      effort: "high",
       startedMinutesAgo: 34,
       pace: 21,
       steps: [
@@ -287,16 +295,19 @@ function claudeTranscript(conversation: Conversation, cwd: string, sessionId: st
     n += 1;
     return { uuid: demoSessionId(`${conversation.key}:${n}`), timestamp: iso(at) };
   };
+  const thought = (key: string) => conversation.effort === "high"
+    ? [{ type: "thinking", thinking: "", signature: createHash("sha256").update(`${conversation.key}:thought:${key}`).digest("base64") }]
+    : [];
   conversation.steps.forEach((step, index) => {
     if ("user" in step) {
       lines.push(JSON.stringify({ type: "user", ...next(), ...base, message: { role: "user", content: step.user } }));
     } else if ("say" in step) {
       /* The last answer of a finished conversation closes its turn. */
       const closes = !conversation.midTurn && index === conversation.steps.length - 1;
-      lines.push(JSON.stringify({ type: "assistant", ...next(), ...base, message: { role: "assistant", model: conversation.model, content: [{ type: "text", text: step.say }], stop_reason: closes ? "end_turn" : null } }));
+      lines.push(JSON.stringify({ type: "assistant", ...next(), ...base, message: { role: "assistant", model: conversation.model, content: [...thought(String(index)), { type: "text", text: step.say }], stop_reason: closes ? "end_turn" : null } }));
     } else {
       const id = `toolu_${createHash("sha256").update(`${conversation.key}:${n}`).digest("hex").slice(0, 20)}`;
-      lines.push(JSON.stringify({ type: "assistant", ...next(), ...base, message: { role: "assistant", model: conversation.model, content: [{ type: "tool_use", id, name: step.tool, input: step.input }], stop_reason: "tool_use" } }));
+      lines.push(JSON.stringify({ type: "assistant", ...next(), ...base, message: { role: "assistant", model: conversation.model, content: [...thought(String(index)), { type: "tool_use", id, name: step.tool, input: step.input }], stop_reason: "tool_use" } }));
       lines.push(JSON.stringify({ type: "user", ...next(), ...base, message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: step.result, ...(step.error ? { is_error: true } : {}) }] } }));
     }
   });
@@ -318,7 +329,7 @@ function codexReviewRollout(cwd: string, sessionId: string, now: number): { line
   };
   const lines = [
     { type: "session_meta", timestamp: iso(at), payload: { id: sessionId, cwd, originator: "codex_cli_rs", cli_version: "0.151.0", source: "cli", model_provider: "openai" } },
-    { type: "turn_context", timestamp: step(1), payload: { cwd, model: "gpt-6-sol", effort: "xhigh", approval_policy: "never", sandbox_policy: { type: "read-only" } } },
+    { type: "turn_context", timestamp: step(1), payload: { cwd, model: "gpt-6-sol", effort: "high", approval_policy: "never", sandbox_policy: { type: "read-only" } } },
     { type: "event_msg", timestamp: step(2), payload: { type: "user_message", message: "Review the idempotent refunds change against the acceptance criteria: a repeated key never reaches the provider, a reused key with a different body answers 409, and requests without a key are unchanged." } },
     { type: "event_msg", timestamp: step(9), payload: { type: "agent_message", message: "Reading the diff against main first, then the tests that claim each criterion.", phase: "commentary" } },
     { type: "response_item", timestamp: step(4), payload: { type: "function_call", name: "shell", call_id: "call-review-1", arguments: JSON.stringify({ command: "git diff --stat main...HEAD" }) } },
@@ -362,7 +373,9 @@ function buildTasks(layout: DemoLayout, files: Record<string, Written>) {
 
 const STAGE_ROLES = {
   builder: { engine: "claude", model: "opus", effort: "high", access: "read-write" },
-  reviewer: { engine: "codex", model: "gpt-6-sol", effort: "xhigh", access: "read-only" },
+  /* One effort per stage, spelled the same in the graph, the agent's chip and
+     its composer: `xhigh` would read «extra high», «xhigh» and «Extra High». */
+  reviewer: { engine: "codex", model: "gpt-6-sol", effort: "high", access: "read-only" },
   verifier: { engine: "claude", model: "sonnet", effort: "medium", access: "read-only" },
 } as const;
 

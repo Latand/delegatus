@@ -1845,6 +1845,9 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
   const releaseStep = ownSteps.release;
   useEffect(() => { releaseOwnStep.current = releaseStep; }, [releaseStep]);
   const awayFromTail = Boolean(file && feed.items.length && !magnet);
+  /* The live-tail pill sits over the feed's bottom padding, so while it shows
+     the padding is taller than the pill and its offset together. */
+  const liveTailPill = Boolean(file && feed.items.length && magnet && file.activity === "live" && !phone);
   /* On the phone the way back shares the step row while both are needed, so
      only one row is spent under the feed. */
   const wayBackInStepRow = phone && ownSteps.shown && stepsMount !== null;
@@ -1880,7 +1883,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
         overlay area. It shows only at the tail, where the feed's bottom
         padding is under it. */}
     <div className="relative flex min-h-0 flex-1 flex-col">
-      {file && feed.items.length && magnet && file.activity === "live" && !phone ? (
+      {liveTailPill ? (
         <div
           data-live-tail-pill
           className={`pointer-events-none absolute bottom-2 ${pillPos} z-10 inline-flex items-center gap-1 rounded-full bg-success px-2 py-0.5 text-[10px] font-bold text-white shadow-1 transition-transform duration-200 ${
@@ -2047,7 +2050,7 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
            empty state an empty transcript settles on. A read that failed is
            neither: it says `error`, and nothing arrives on it. */
         data-feed-state={!file ? "none" : feed.items.length || windowTail ? "items" : tail.loading ? "loading" : tail.error ? "error" : "empty"}
-        className={compact ? "px-3 pb-3 text-body" : "mx-auto w-full max-w-[1060px] px-6 pb-4"}
+        className={compact ? `px-3 ${liveTailPill ? "pb-8" : "pb-3"} text-body` : `mx-auto w-full max-w-[1060px] px-6 ${liveTailPill ? "pb-8" : "pb-4"}`}
       >
         {!file ? (
           <div className="mt-[20vh] text-center text-muted">{t("feed.pickLog")}</div>

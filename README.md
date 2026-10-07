@@ -506,7 +506,7 @@ One Delegatus can be shared by a team, with each person signed in as themselves.
 Until someone sets a team up, nothing changes: a Delegatus used by one
 person has no sign-in page and no names.
 
-- **Set up.** Open the sidebar's ⋯ menu → **Team** and press **Set me as owner**. From
+- **Set up.** Open the sidebar's ⋯ menu → **Team** and press **Make me the owner**. From
   then on, anyone else who reaches this Delegatus is asked to sign in. The
   access key (phone access, `LLV_TOKEN`) still decides who can reach it at
   all.

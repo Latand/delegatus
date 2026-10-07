@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "classification": "synthetic",
   "generator": "scripts/capture-readme-media.ts",
-  "generatorSha256": "d2195b4d6f504b811145e3ce3220bcdd58cfec815461e540e738762a7ccd4b6b",
+  "generatorSha256": "b99a0f9a40d12407e63e701e75b80b18ff4cae82bf4ff027edc99f25207a9d55",
   "seed": "scripts/readme-demo-state.ts",
-  "seedSha256": "e74ea4fa5f8aeb9a109030a3f6b8c1ed5046839db9aa63dcd83c23a2bb8ece1b",
+  "seedSha256": "c7795b8cf6788a4081d65e7647709a6b236c460e4927b6302d6d064899e9e28f",
   "command": "bun run build && bun scripts/capture-readme-media.ts",
   "assets": [
     {
@@ -22,24 +22,24 @@
         "meanDifference": 0.257,
         "ringsClipped": 0
       },
-      "sha256": "37ff07c96ef50d6295c7200fb6971279ea868d9986824000e72b08ad7df74791"
+      "sha256": "51825c859540ac2f050bc0cfd00783e6fc23d5c724f73cd8e6afda3c21df682b"
     },
     {
       "path": "orchestrator.svg",
       "description": "A project's orchestrator on top of its board: its chat with the operator, and beside it the log of the reports it filed.",
       "viewport": {
-        "width": 1440,
+        "width": 1728,
         "height": 800
       },
       "colorScheme": "dark",
       "rasterTiles": 13,
       "renderBack": {
         "worstTileMean": 12.771,
-        "changedTileShare": 0.015,
-        "meanDifference": 0.47,
+        "changedTileShare": 0.012,
+        "meanDifference": 0.405,
         "ringsClipped": 1
       },
-      "sha256": "5b856af3ec1df2de94edd59c0d16fa7ebcf05f43d3a7dba180d0025092aa3963"
+      "sha256": "e929b6dd2cfe5f7ab66b4ae857bc6a1828ad2ea1f302f96412e48fdd7c0296fd"
     },
     {
       "path": "conversation.svg",
@@ -48,49 +48,61 @@
         "width": 1440,
         "height": 1080
       },
+      "crop": {
+        "x": 170,
+        "y": 24,
+        "width": 1100,
+        "height": 1032
+      },
       "colorScheme": "dark",
       "rasterTiles": 23,
       "renderBack": {
-        "worstTileMean": 9.534,
-        "changedTileShare": 0.005,
-        "meanDifference": 0.357,
+        "worstTileMean": 8.376,
+        "changedTileShare": 0.002,
+        "meanDifference": 0.259,
         "ringsClipped": 2
       },
-      "sha256": "0ce26313f178bfb06310a15ce37925c50398b8d16aa05eb7f4f8e2b476f4f7f4"
+      "sha256": "f3ab2b3d36ff992876ee90bff7ca1bbaa59592a3666b8451f32a05f7030ddfa4"
     },
     {
       "path": "pipeline.svg",
       "description": "A pipeline opened from its card: the stage graph with its fail edge, and each stage's conversation side by side.",
       "viewport": {
-        "width": 1440,
-        "height": 896
+        "width": 1728,
+        "height": 944
+      },
+      "crop": {
+        "x": 124,
+        "y": 12,
+        "width": 1480,
+        "height": 920
       },
       "colorScheme": "dark",
       "rasterTiles": 34,
       "renderBack": {
-        "worstTileMean": 9.017,
-        "changedTileShare": 0.004,
-        "meanDifference": 0.318,
+        "worstTileMean": 9.487,
+        "changedTileShare": 0.001,
+        "meanDifference": 0.265,
         "ringsClipped": 0
       },
-      "sha256": "ba8cbf2b369d444d65af14d0a1ed6296afa98959a0cab896bc906a6977f0e54e"
+      "sha256": "7981532b0885be6c5668804cededa01546a26edaf1bb27ef43b9ba70004c5566"
     },
     {
       "path": "card-menu.svg",
       "description": "A task card's ⋯ menu: the columns in a row, icon actions with what hiding leaves running, the priorities, and the sections that open in place.",
       "viewport": {
-        "width": 1440,
-        "height": 896
+        "width": 1728,
+        "height": 944
       },
       "colorScheme": "dark",
       "rasterTiles": 24,
       "renderBack": {
         "worstTileMean": 12.771,
-        "changedTileShare": 0.012,
-        "meanDifference": 0.323,
+        "changedTileShare": 0.009,
+        "meanDifference": 0.269,
         "ringsClipped": 0
       },
-      "sha256": "470f936e42fbb233ee7689b4e931c671e89e0fa84d8db553eeb4b26658246656"
+      "sha256": "8b7615cb7a66e97cedb7a208bc675a517fbf4e4a4bf48b18d2f5dae3e2aee49b"
     },
     {
       "path": "accounts.svg",
@@ -99,15 +111,21 @@
         "width": 1440,
         "height": 896
       },
+      "crop": {
+        "x": 255,
+        "y": 356,
+        "width": 400,
+        "height": 478
+      },
       "colorScheme": "dark",
       "rasterTiles": 22,
       "renderBack": {
-        "worstTileMean": 12.771,
-        "changedTileShare": 0.012,
-        "meanDifference": 0.35,
+        "worstTileMean": 3.062,
+        "changedTileShare": 0,
+        "meanDifference": 0.224,
         "ringsClipped": 0
       },
-      "sha256": "2d2b8357c378e640f71719f9631c0c6a2946d8c7d7f05cf556d09f456c44bc97"
+      "sha256": "1f33912fd206810d28a3476085ecc67a2a4cca8bd66f7c15fc3afb21708883b2"
     },
     {
       "path": "phone-conversation.svg",
@@ -120,11 +138,11 @@
       "rasterTiles": 1,
       "renderBack": {
         "worstTileMean": 11.912,
-        "changedTileShare": 0.015,
-        "meanDifference": 0.744,
+        "changedTileShare": 0.014,
+        "meanDifference": 0.746,
         "ringsClipped": 0
       },
-      "sha256": "a24b3d50f37acdce9d114105d8ce2fa141a930d445f53b3e4e0ce79ade8b51bd"
+      "sha256": "79a9938123564363b8e0c40817554d7e1e1f789b6f095a0da0d4a66c6b18bd82"
     },
     {
       "path": "phone-board.svg",
@@ -138,10 +156,10 @@
       "renderBack": {
         "worstTileMean": 12.37,
         "changedTileShare": 0.02,
-        "meanDifference": 0.381,
+        "meanDifference": 0.383,
         "ringsClipped": 0
       },
-      "sha256": "48aac8829320bdd23233554f109183d9e970d5625cc21bb16712367d59c9a16b"
+      "sha256": "c8e1fc7e144f7b7c2e7011b6e914edc94c5548d1eb26f222f49ad6c01ec982d7"
     }
   ]
 }

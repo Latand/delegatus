@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { judgeRenderBack, RENDER_BACK_TILE, RENDER_BACK_TILE_LIMIT, ringClipPath, type RingBox, withPointSize } from "./capture-readme-media";
+import { cropSvg, judgeRenderBack, RENDER_BACK_TILE, RENDER_BACK_TILE_LIMIT, ringClipPath, type RingBox, snapCrop, withPointSize } from "./capture-readme-media";
 
 const box = (overrides: Partial<RingBox> = {}): RingBox => ({
   width: 200,
@@ -86,4 +86,19 @@ test("a unitless page size from a newer cairo is written back in points", () => 
 test("a page size already in points is left alone", () => {
   const svg = '<svg width="294pt" height="636pt" viewBox="0 0 294 636"></svg>';
   expect(withPointSize(svg)).toBe(svg);
+});
+
+test("a crop shrinks inward to whole pixels and stays on the screen", () => {
+  expect(snapCrop({ x: 255, y: 355.75, width: 400, height: 478.25 }, { width: 1440, height: 896 })).toEqual({ x: 255, y: 356, width: 400, height: 478 });
+  expect(snapCrop({ x: 12.4, y: 11.6, width: 400.2, height: 300 }, { width: 1440, height: 896 })).toEqual({ x: 13, y: 12, width: 399, height: 299 });
+  expect(snapCrop({ x: -3, y: 880, width: 100, height: 40 }, { width: 1440, height: 896 })).toEqual({ x: 0, y: 880, width: 97, height: 16 });
+  expect(() => snapCrop({ x: 1500, y: 0, width: 10, height: 10 }, { width: 1440, height: 896 })).toThrow();
+});
+
+test("a cropped frame's root names the crop in points and keeps everything else", () => {
+  const svg = '<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="1080pt" height="672pt" viewBox="0 0 1080 672">\n<rect width="10" height="10"/></svg>';
+  const cropped = cropSvg(svg, { x: 12, y: 12, width: 1416, height: 872 });
+  expect(cropped).toContain('width="1062pt" height="654pt" viewBox="9 9 1062 654"');
+  expect(cropped).toContain('<rect width="10" height="10"/>');
+  expect(() => cropSvg("<svg></svg>", { x: 0, y: 0, width: 1, height: 1 })).toThrow();
 });

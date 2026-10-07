@@ -64,11 +64,18 @@ export type ReadmeShot = {
   absentText?: string[];
   /** In-page preparation after the target opened. */
   prepare?: (page: Page) => Promise<void>;
+  /** The part of the screen the frame keeps, when its subject is a window or
+      panel over the board: everything outside it would show the screen
+      behind sliced into fragments. */
+  crop?: (page: Page) => Promise<CropRect>;
   description: string;
 };
 
 /* Wide enough for the sidebar and all four status columns. */
 const DESKTOP = { width: 1440, height: 896 };
+/* In progress holds the wide share, so a whole Done column and a stage chain
+   on one line need more room. */
+const WIDE = { width: 1728, height: 944 };
 /* A phone frame at 392 × 848 px: Chrome printed a 390 × 844 px page as
    293.04 × 633.12 pt instead of 292.5 × 633, so its vector drew the frame a
    fraction smaller than its PNG. Sizes in multiples of 8 px print exact. */
@@ -79,13 +86,22 @@ const clickText = (page: Page, text: string) => page.getByText(text, { exact: fa
 /* A project without an orchestrator opens with the create draft unfolded;
    the board shots fold it to its one-line bar. */
 const foldOrchestrator = (page: Page) => clickLabel(page, "Collapse the orchestrator chat (O)");
+/* The frame ends at the element's border box. Its corners go square, since
+   the frame's own edge is now its edge: a rounded corner would show the
+   screen behind it. */
+const cropTo = (selector: string) => async (page: Page): Promise<CropRect> => {
+  const target = page.locator(selector).first();
+  await target.evaluate((element) => (element as HTMLElement).style.setProperty("border-radius", "0", "important"));
+  const box = await target.boundingBox();
+  if (!box) throw new Error(`crop target ${selector} is not on the screen`);
+  return box;
+};
 
 export const SHOTS: ReadmeShot[] = [
   {
     id: "board",
     target: { kind: "project", project: "harbor-api" },
-    /* In progress holds the wide share, so all four columns need more room. */
-    viewport: { width: 1728, height: 944 },
+    viewport: WIDE,
     requiredText: ["Idempotent refunds", "Rotate webhook signing keys", "Move invoices to the new ledger", "Document refund error codes", "needs a decision · build"],
     absentText: ["tmux", "Untitled task"],
     prepare: foldOrchestrator,
@@ -95,10 +111,18 @@ export const SHOTS: ReadmeShot[] = [
     id: "orchestrator",
     target: { kind: "project", project: "harbor-api" },
     /* Below 800 px the seat folds its Reports log away. */
-    viewport: { width: 1440, height: 800 },
+    viewport: { width: WIDE.width, height: 800 },
     requiredText: ["Orchestrator", "Reports", "Take the open harbor-api work", "Paginate GET /charges is done", "review verdict"],
     /* A seat nothing hosts reads as finished, with the resume banner. */
     absentText: ["tmux", "Untitled task", "has not reported anything yet", "finished", "has finished its run"],
+    /* The demo seat's conversation is not in the agent registry, so the
+       header has no model to size the context window by and would show a
+       bare byte estimate; a real seat shows its share of the window. */
+    prepare: async (page) => {
+      await page.locator("[data-orchestrator-context]").evaluateAll((elements) => {
+        for (const element of elements) (element as HTMLElement).style.setProperty("display", "none", "important");
+      });
+    },
     description: "A project's orchestrator on top of its board: its chat with the operator, and beside it the log of the reports it filed.",
   },
   {
@@ -113,25 +137,30 @@ export const SHOTS: ReadmeShot[] = [
       await page.waitForTimeout(500);
       await clickText(page, "wrote 1 file");
     },
+    crop: cropTo("[data-reader-full] .reader.conv"),
     description: "A Claude Code conversation read as a chat: an edit shown as a diff, a test run with its output, and the answer.",
   },
   {
     id: "pipeline",
     target: { kind: "project", project: "harbor-api" },
-    viewport: DESKTOP,
+    /* Each stage column keeps its agent's head on one line and the tail of
+       its conversation whole. */
+    viewport: WIDE,
     requiredText: ["Idempotent refunds", "Build", "Review", "Verify", "passed", "running", "waiting"],
     prepare: async (page) => {
       await foldOrchestrator(page);
       await page.waitForTimeout(500);
       /* The lane row's head opens the pipeline: its graph over the stages. */
       await page.locator('[data-open-stages][aria-label^="Idempotent refunds"]').first().click();
+      await page.waitForSelector("[data-stages-sheet]");
     },
+    crop: cropTo("[data-stages-sheet]"),
     description: "A pipeline opened from its card: the stage graph with its fail edge, and each stage's conversation side by side.",
   },
   {
     id: "card-menu",
     target: { kind: "project", project: "harbor-api" },
-    viewport: DESKTOP,
+    viewport: WIDE,
     requiredText: ["Idempotent refunds", "Inbox", "Done", "Top of the Inbox", "Appearance", "Pipeline actions", "keeps working"],
     absentText: ["tmux", "Untitled task"],
     prepare: async (page) => {
@@ -154,6 +183,7 @@ export const SHOTS: ReadmeShot[] = [
       await clickLabel(page, "Claude accounts — switch or add");
       await page.waitForSelector('[role="dialog"][aria-label="Claude accounts"]');
     },
+    crop: cropTo('[role="dialog"][aria-label="Claude accounts"]'),
     description: "Claude accounts with their five-hour, weekly and per-model limits; switch the active account or add one here.",
   },
   {
@@ -291,6 +321,33 @@ function collectOutput(child: ChildProcess): () => string {
     element's size is put back in points, which is what the page measures. */
 export function withPointSize(svg: string): string {
   return svg.replace(/(<svg\b[^>]*?\bwidth=")([\d.]+)(" height=")([\d.]+)(")/, "$1$2pt$3$4pt$5");
+}
+
+export type CropRect = { x: number; y: number; width: number; height: number };
+
+/** The crop on whole CSS pixels, shrunk inward to the pixels the box fills
+    and kept on the screen, so the PNG clip and the vector's view box cut the
+    same pixels and neither shows a sliver of what lies behind the box. */
+export function snapCrop(box: CropRect, viewport: { width: number; height: number }): CropRect {
+  const left = Math.max(0, Math.ceil(box.x));
+  const top = Math.max(0, Math.ceil(box.y));
+  const right = Math.min(viewport.width, Math.floor(box.x + box.width));
+  const bottom = Math.min(viewport.height, Math.floor(box.y + box.height));
+  if (right <= left || bottom <= top) throw new Error(`crop ${JSON.stringify(box)} leaves nothing of a ${viewport.width} × ${viewport.height} screen`);
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+/** Narrows a printed frame to the crop: the root's size and view box move to
+    the crop's rectangle in points (a CSS pixel prints as 0.75 pt). The paths
+    outside it stay in the file and are never drawn. */
+export function cropSvg(svg: string, crop: CropRect): string {
+  const pt = (px: number) => String(Math.round(px * 0.75 * 1000) / 1000);
+  const root = svg.match(/<svg\b[^>]*>/);
+  if (!root || !/\bviewBox="[^"]*"/.test(root[0]) || !/\bwidth="[\d.]+pt" height="[\d.]+pt"/.test(root[0])) throw new Error("the printed frame has no sized root to crop");
+  const cropped = root[0]
+    .replace(/\bwidth="[\d.]+pt" height="[\d.]+pt"/, `width="${pt(crop.width)}pt" height="${pt(crop.height)}pt"`)
+    .replace(/\bviewBox="[^"]*"/, `viewBox="${pt(crop.x)} ${pt(crop.y)} ${pt(crop.width)} ${pt(crop.height)}"`);
+  return svg.replace(root[0], cropped);
 }
 
 /** Returns how many raster tiles the vector frame embeds. Chrome prints CSS
@@ -751,8 +808,10 @@ async function captureShots(repoRoot: string, baseUrl: string, layout: Layout, c
       const textFindings = [...sensitiveClasses(text)];
       if (textFindings.length) throw new Error(`${shot.id}: the gate classifies the frame text as ${textFindings.join(", ")}`);
 
+      const crop = shot.crop ? snapCrop(await shot.crop(page), shot.viewport) : null;
+      const size = crop ? { width: crop.width, height: crop.height } : shot.viewport;
       const png = path.join(EVIDENCE_DIR, `${shot.id}.png`);
-      const frame = await page.screenshot({ path: png });
+      const frame = await page.screenshot({ path: png, ...(crop ? { clip: crop } : {}) });
       /* A browser raster never carries provenance, so those two classes are
          expected here; anything else the gate finds in the pixels is not. */
       const rasterFindings = [...inspectPaths([png]).keys()].filter((finding) => !finding.startsWith("provenance_"));
@@ -809,13 +868,14 @@ async function captureShots(repoRoot: string, baseUrl: string, layout: Layout, c
          the PNG shows. */
       const draft = path.join(captureRoot, `${shot.id}.svg`);
       const rasterTiles = pdfToSvg(Buffer.from(pdf), draft, captureRoot);
-      const svg = fs.readFileSync(draft);
-      const printed = svg.toString("utf8", 0, 600).match(/<svg\b[^>]*\bwidth="([\d.]+)pt" height="([\d.]+)pt"/);
+      const printed = fs.readFileSync(draft, "utf8").slice(0, 600).match(/<svg\b[^>]*\bwidth="([\d.]+)pt" height="([\d.]+)pt"/);
       const expected = [shot.viewport.width * 0.75, shot.viewport.height * 0.75];
       if (!printed || Math.abs(Number(printed[1]) - expected[0]) > 0.01 || Math.abs(Number(printed[2]) - expected[1]) > 0.01) {
         throw new Error(`${shot.id}: Chrome printed a ${printed?.[1]} × ${printed?.[2]} pt page for a ${expected.join(" × ")} pt frame, which draws the vector at another scale than its PNG; pick a viewport it prints exactly (multiples of 8 px do)`);
       }
-      const rendered = await renderBack(browser, svg, shot.viewport);
+      if (crop) fs.writeFileSync(draft, cropSvg(fs.readFileSync(draft, "utf8"), crop));
+      const svg = fs.readFileSync(draft);
+      const rendered = await renderBack(browser, svg, size);
       fs.writeFileSync(path.join(EVIDENCE_DIR, `${shot.id}.svg.png`), rendered);
       const { width, height, difference, heatmap } = await pixelDifference(browser, frame, rendered);
       fs.writeFileSync(path.join(EVIDENCE_DIR, `${shot.id}.diff.png`), heatmap);
@@ -830,6 +890,7 @@ async function captureShots(repoRoot: string, baseUrl: string, layout: Layout, c
         path: `${shot.id}.svg`,
         description: shot.description,
         viewport: shot.viewport,
+        ...(crop ? { crop } : {}),
         colorScheme: "dark",
         rasterTiles,
         renderBack: { worstTileMean: renderBackVerdict.worstTile.mean, changedTileShare: renderBackVerdict.changedTileShare, meanDifference: renderBackVerdict.meanDifference, ringsClipped: unmasked.rings },
