@@ -226,9 +226,10 @@ rule's paths run through no text and overlap nowhere outside a shared trunk.
 > **A wire takes the route with the fewest bends, and of those the shortest,
 > that leaves the seat from its edge, enters the card's port from its column's
 > gutter, and crosses no column but its own, nothing of the seat panel, and no
-> line of text. Wires to cards of one column leave the seat at one point and
-> share that column's gutter as their trunk; wires to different columns share
-> nothing.**
+> line of text. Wires that leave the seat at the same point share their run
+> from it as one trunk, each until it turns down its own column's gutter, and
+> wires to cards of one column share that gutter too; no two wires share a run
+> anywhere else.**
 
 "Text" is a column header, the row of column links or tabs, and a count chip.
 A column is out of bounds as a whole, its empty part too: a card can land there
@@ -267,11 +268,19 @@ and its 6 px margins) is treated as out of view, like a column scrolled out
 sideways. It draws no count and no wire, and its wire appears when the column
 comes into view within the minute.
 
-**Several wires at once.** The rule makes them a tree rooted at the seat: one
-exit and one trunk per column, branching into each card at its port; different
-columns leave the seat at different points (each column's own gutter for a
-drop, the facing side for a side exit). Under the rule no case has a run shared
-outside a trunk; the near-parallel length (within 6 px of another wire) is at
+**Several wires at once.** The rule makes them trees rooted at the seat, one
+for each point a route leaves it. A drop leaves the seat's bottom edge at its
+own column's gutter, so each column reached by a drop has its own exit and its
+own trunk. A side exit leaves the foot of the facing side, whichever column it
+goes to, so every column on that side of a seat on top shares the one exit: the
+wires run together from it and each turns down at its own gutter, the nearest
+first (`1920-top-narrow-*-several`: Inbox and In progress share 128 px from the
+seat's left side). The bus beside a seat at the side is the same tree: every
+farther column leaves the seat's one bus exit and branches down its gutter
+(`1440-side-*-several`). Within a column the wires share its gutter and branch
+into each card at its port. A shared run is always the start of both wires,
+which reads as one wire branching; under the rule no case has a run shared
+anywhere else, and the near-parallel length (within 6 px of another wire) is at
 most 6 px, at the branch corners. The seat gets a port dot at each exit point
 it has, drawn and faded as the one seat port is today.
 
@@ -327,7 +336,9 @@ Each places the seat, the columns, the cards and the row of links at a case's
 measured boxes, acts, and checks the bends, the start where it matters, and
 that no straight run of the path passes through a card, the seat or a link
 (`through()` over the path's corners). Run against main they are red where
-marked; against the prototype all thirteen pass.
+marked; against the prototype the thirteen of the study pass. The six below
+the line were added in review, for the cases the thirteen left to the browser
+block alone: they pass on the built rule and are red on main where marked.
 
 | Test | Case | On main |
 | --- | --- | --- |
@@ -339,11 +350,25 @@ marked; against the prototype all thirteen pass.
 | seat at the side, card in the column beside it: a straight wire | 39 | red (2) |
 | seat at the side, card in a farther column: two elbows along the bus, over no card | 40 | green, pins it |
 | seat at the side with the columns flush with its top (1920, wide): two elbows, no hook back above the seat | 16–20 | red (4, runs back left) |
-| several wires at once: two cards of one column share their trunk from the seat, wires to other columns share nothing | 5, 12 | red |
+| several wires at once: two cards of one column share their trunk from the seat, a drop to another column shares nothing | 5 | red |
 | a card scrolled out below its column: the count's wire takes the same one-elbow route | 6 | red (4) |
 | a column whose scroller shows a few pixels under its header draws no count over the header | 47 | red (count drawn) |
 | a full-width row of tabs under the seat: no route through it, the margin route stays | 65 | green, pins it |
 | the phone: the last corner never runs past the card's port | 89 | red |
+| *added in review* | | |
+| seat on top narrowed, two target columns on its left: one exit, a shared run from it as their trunk, each down its own gutter | 88 | red (4 bends, three wires on one margin) |
+| seat at the side, several columns: every bus wire leaves the one exit and shares the bus as its trunk, nothing after its gutter | 43 | red (the Inbox wire: 2 bends, on the bus) |
+| a card scrolled out above its column: the count sits at the scroller's top, one elbow down from the seat's foot | 7 | red (4) |
+| a card scrolled out above its column in the other layouts: the count's wire takes the layout's own route | 14, 30, 37, 45, 69 | red (4 for 3 at 1440, 4 for 1 on the strip) |
+| the folded strip on the wide board: a drop from the strip's bottom edge, a side exit to the column left of it | 8–12 | red (4) |
+| the folded strip over the row of column links: round it from the strip's foot in three elbows, a drop where the links end | 31–35 | red (4) |
+
+The folded and side cases at 1280 × 800 and the side cases at 1000 × 700
+(49–64, 77–84) have the boxes of their 1440 × 900 counterparts moved as a
+whole, and on the tabs board the seat's box is the same open and folded
+(65–76), so the same tests stand for them. The tests that take several wires
+also measure what each pair shares (`shared()`): a run within 2 px counts as
+trunk only along the two wires' common start, and anywhere else it must be 0.
 
 **Browser block**, `orchestrator wire routing across the board's layouts` in
 `src/components/kanban/kanbanBoard.browser.test.tsx`: the draft in

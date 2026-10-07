@@ -364,6 +364,31 @@ describe("route geometry across the board's layouts", () => {
     return false;
   }
   const obstacles = (spec: ReturnType<typeof layout>["spec"]) => [spec.seat, ...Object.values(spec.cards).map(([, at]) => at), ...(spec.links ?? [])];
+  /** How far two paths run within 2 px of each other: `trunk` along their common start, the stem of a
+      tree, and `elsewhere`, where a shared run hides which wire goes where. */
+  function shared(a: string, b: string): { trunk: number; elsewhere: number } {
+    const walk = (d: string) => {
+      const out: { x: number; y: number; at: number }[] = [];
+      let at = 0;
+      points(d).forEach((p, i, all) => {
+        if (!i) return;
+        const from = all[i - 1]!, span = Math.hypot(p.x - from.x, p.y - from.y);
+        for (let s = 0; s < span; s++) out.push({ x: from.x + ((p.x - from.x) * s) / span, y: from.y + ((p.y - from.y) * s) / span, at: at + s });
+        at += span;
+      });
+      return out;
+    };
+    const [one, other] = [walk(a), walk(b)];
+    const together = a.split(" ")[0] === b.split(" ")[0];
+    let trunk = 0, elsewhere = 0;
+    for (const p of one) {
+      const near = other.filter((q) => Math.hypot(p.x - q.x, p.y - q.y) < 2);
+      if (!near.length) continue;
+      if (together && near.some((q) => Math.abs(q.at - p.at) <= 3)) trunk += 1;
+      else elsewhere += 1;
+    }
+    return { trunk, elsewhere };
+  }
 
   /* The operator's board (2026-10-07) as the fixture draws it at 1920 × 1080, the wide mode: the seat on
      top, open, centred over the columns; Inbox starts left of it (routes.json, 1920-top-en-*). */
@@ -464,7 +489,7 @@ describe("route geometry across the board's layouts", () => {
     }
   });
 
-  test("several wires at once: two cards of one column share their trunk from the seat, wires to other columns share nothing", () => {
+  test("several wires at once: two cards of one column share their trunk from the seat, a drop to another column shares nothing", () => {
     const { act, wire, seatPorts, spec } = layout({ ...WIDE, placement: "top", cards: {
       a: ["assigned", [652, 935, 1146, 1040]], b: ["assigned", [652, 1050, 1146, 1075]], c: ["blocked", [1188, 935, 1517, 1060]], i: ["inbox", [281, 935, 610, 1060]],
     } });
@@ -477,6 +502,48 @@ describe("route geometry across the board's layouts", () => {
     expect(new Set([a, c, i].map((d) => d.split(" ")[0])).size).toBe(3);
     /* A port on the seat at each of the three exits. */
     expect(seatPorts().sort()).toEqual([a, c, i].map((d) => d.split(" ")[0]!).sort());
+    expect(shared(a, b).trunk).toBeGreaterThan(50);
+    for (const [one, other] of [[a, b], [a, c], [a, i], [b, c], [b, i], [c, i]]) expect(shared(one!, other!).elsewhere).toBe(0);
+    for (const [one, other] of [[a, c], [a, i], [c, i]]) expect(shared(one!, other!).trunk).toBe(0);
+  });
+
+  test("seat on top narrowed, two target columns on its left: one exit, a shared run from it as their trunk, each down its own gutter", () => {
+    /* 1920-top-narrow-*-several: Inbox and In progress both lie left of the seat, Waiting under it. */
+    const { act, wire, seatPorts, spec } = layout({ ...WIDE, seat: [764, 60, 1404, 870], placement: "top", cards: {
+      i: ["inbox", [281, 935, 610, 1060]], a: ["assigned", [652, 935, 1146, 1040]], c: ["blocked", [1188, 935, 1517, 1060]],
+    } });
+    act("i", "a", "c");
+    const [i, a, c] = ["i", "a", "c"].map((id) => wire(id)!);
+    for (const d of [i, a, c]) expect(through(d, obstacles(spec))).toBe(false);
+    expect([i, a, c].map(bends)).toEqual([2, 2, 1]);
+    /* Both leave the foot of the seat's left side; the drop leaves its bottom edge at its own gutter. */
+    expect(i.startsWith("M764,856 ")).toBe(true);
+    expect(a.startsWith("M764,856 ")).toBe(true);
+    expect(c.startsWith("M1166,870 ")).toBe(true);
+    expect(seatPorts().sort()).toEqual(["M1166,870", "M764,856"]);
+    /* The trunk is the run from the exit to the nearer gutter (764 to 630); past it nothing is shared. */
+    expect(shared(a, i).trunk).toBeGreaterThan(120);
+    expect(shared(a, i).trunk).toBeLessThan(140);
+    for (const [one, other] of [[i, a], [a, i], [i, c], [a, c]]) expect(shared(one!, other!).elsewhere).toBe(0);
+    for (const other of [i, a]) expect(shared(c, other).trunk).toBe(0);
+  });
+
+  test("seat at the side, several columns: every bus wire leaves the one exit and shares the bus as its trunk, nothing after its gutter", () => {
+    /* 1440-side-*-several. */
+    const { act, wire, seatPorts, spec } = layout({ ...SIDE, columns: { ...SIDE.columns, blocked: [1214, 100, 1494, 884] }, placement: "side", cards: {
+      i: ["inbox", [443, 153, 697, 442]], a: ["assigned", [735, 153, 1189, 460]], b: ["assigned", [735, 475, 1189, 700]], c: ["blocked", [1227, 153, 1481, 442]],
+    } });
+    act("i", "a", "b", "c");
+    const [i, a, b, c] = ["i", "a", "b", "c"].map((id) => wire(id)!);
+    for (const d of [i, a, b, c]) expect(through(d, obstacles(spec))).toBe(false);
+    expect([i, a, b, c].map(bends)).toEqual([0, 2, 2, 2]);
+    expect(new Set([a, b, c].map((d) => d.split(" ")[0])).size).toBe(1);
+    expect(seatPorts().sort()).toEqual([a, i].map((d) => d.split(" ")[0]!).sort());
+    /* The bus from the seat to In progress's gutter (414 to 713) carries all three. */
+    expect(shared(c, a).trunk).toBeGreaterThan(280);
+    const pairs = [[i, a], [i, b], [i, c], [a, b], [a, c], [b, c]];
+    for (const [one, other] of pairs) { expect(shared(one!, other!).elsewhere).toBe(0); expect(shared(other!, one!).elsewhere).toBe(0); }
+    for (const other of [a, b, c]) expect(shared(i, other).trunk).toBe(0);
   });
 
   test("a card scrolled out below its column: the count's wire takes the same one-elbow route", () => {
@@ -485,6 +552,99 @@ describe("route geometry across the board's layouts", () => {
     const d = stub()!;
     expect(bends(d)).toBe(1);
     expect(through(d, obstacles(spec))).toBe(false);
+  });
+
+  test("a card scrolled out above its column: the count sits at the scroller's top, one elbow down from the seat's foot", () => {
+    /* 1920-top-*-hidden-above. */
+    const { act, stub, spec } = layout({ ...WIDE, placement: "top", cards: { far: ["assigned", [652, 600, 1146, 800]] } });
+    act("far");
+    const d = stub()!;
+    expect(document.querySelector(".oa-stub")!.textContent).toBe("↑ +1");
+    expect(bends(d)).toBe(1);
+    expect(d.startsWith("M630,870 ")).toBe(true);
+    /* Into the count, 16 px under the scroller's top (882 + 46). */
+    expect(points(d).at(-1)).toEqual({ x: 649, y: 944 });
+    expect(through(d, obstacles(spec))).toBe(false);
+    expect(length(d)).toBeLessThan(100);
+  });
+
+  test("a card scrolled out above its column in the other layouts: the count's wire takes the layout's own route", () => {
+    const above = (spec: Parameters<typeof layout>[0], status: string) => {
+      const column = spec.columns[status]!;
+      const made = layout({ ...spec, cards: { far: [status, [column[0] + 13, column[1] - 300, column[2] - 13, column[1] - 100]] } });
+      made.act("far");
+      const d = made.stub()!;
+      expect(document.querySelector(".oa-stub")!.textContent).toBe("↑ +1");
+      expect(points(d).at(-1)).toEqual({ x: column[0] + 10, y: column[1] + 46 + 16 });
+      /* The card itself is out of sight, above the scroller: the seat and the links are what is in the way. */
+      expect(through(d, [spec.seat, ...(spec.links ?? [])])).toBe(false);
+      document.body.replaceChildren();
+      return d;
+    };
+    /* 1440-top-*-hidden-above: round the row of links. */
+    expect(bends(above({ ...SCROLL, placement: "top", cards: {} }, "assigned"))).toBe(3);
+    /* 1440-top-folded-*-hidden-above: the same from the strip. */
+    const folded = above({ ...FOLDED_SCROLL, placement: "top", cards: {} }, "assigned");
+    expect(bends(folded)).toBe(3);
+    expect(folded.startsWith("M586,102 ")).toBe(true);
+    /* 1920-top-folded-*-hidden-above: a drop from the strip. */
+    const strip = above({ ...FOLDED_WIDE, placement: "top", cards: {} }, "assigned");
+    expect(bends(strip)).toBe(1);
+    expect(strip.startsWith("M630,102 ")).toBe(true);
+    /* 1440-side-*-hidden-above: along the bus. */
+    const bus = above({ ...SIDE, placement: "side", cards: {} }, "assigned");
+    expect(bends(bus)).toBe(2);
+    expect(bus.startsWith("M414,91 ")).toBe(true);
+    /* 1000-top-*-hidden-above: the tabs board, out of the seat's left side. */
+    const tabs = above({ seat: [260, 135, 988, 177], placement: "top", columns: { assigned: [260, 237, 988, 700] },
+      links: [[260, 189, 439, 225], [443, 189, 622, 225], [626, 189, 805, 225], [809, 189, 988, 225]], cards: {} }, "assigned");
+    expect(bends(tabs)).toBe(2);
+    expect(tabs.startsWith("M260,163 ")).toBe(true);
+  });
+
+  /* The seat on top folded to its strip: a transparent box 42 px tall across the board (…-top-folded-en-*). */
+  const FOLDED_WIDE = {
+    seat: [268, 60, 1900, 102] as R,
+    columns: { inbox: [268, 114, 623, 1080] as R, assigned: [639, 114, 1159, 1080] as R, blocked: [1175, 114, 1529, 1080] as R, done: [1545, 114, 1900, 1080] as R },
+  };
+  const FOLDED_SCROLL = {
+    seat: [264, 60, 1424, 102] as R,
+    columns: { inbox: [264, 154, 544, 938] as R, assigned: [556, 154, 1036, 938] as R, blocked: [1048, 154, 1328, 938] as R },
+    links: [[264, 114, 330, 142], [332, 114, 429, 142], [431, 114, 507, 142], [509, 114, 574, 142]] as R[],
+  };
+
+  test("the folded strip on the wide board: a drop from the strip's bottom edge, a side exit to the column left of it", () => {
+    const { act, wire, seatPorts, spec } = layout({ ...FOLDED_WIDE, placement: "top", cards: {
+      i: ["inbox", [281, 167, 610, 420]], a: ["assigned", [652, 167, 1146, 440]], b: ["assigned", [652, 489, 1146, 700]], c: ["blocked", [1188, 167, 1517, 420]],
+    } });
+    act("i", "a", "b", "c");
+    const [i, a, b, c] = ["i", "a", "b", "c"].map((id) => wire(id)!);
+    for (const d of [i, a, b, c]) expect(through(d, obstacles(spec))).toBe(false);
+    expect([i, a, b, c].map(bends)).toEqual([2, 1, 1, 1]);
+    expect(i.startsWith("M268,88 ")).toBe(true);
+    expect(a.startsWith("M630,102 ")).toBe(true);
+    expect(b.startsWith("M630,102 ")).toBe(true);
+    expect(c.startsWith("M1166,102 ")).toBe(true);
+    expect([i, a, c].map(length).every((px) => px < 130)).toBe(true);
+    expect(seatPorts().sort()).toEqual(["M1166,102", "M268,88", "M630,102"]);
+    for (const [one, other] of [[i, a], [i, c], [a, c], [a, b], [b, c]]) expect(shared(one!, other!).elsewhere).toBe(0);
+  });
+
+  test("the folded strip over the row of column links: round it from the strip's foot in three elbows, a drop where the links end", () => {
+    const { act, wire, spec } = layout({ ...FOLDED_SCROLL, placement: "top", cards: {
+      i: ["inbox", [277, 207, 531, 460]], a: ["assigned", [569, 207, 1023, 500]], b: ["assigned", [569, 529, 1023, 700]], c: ["blocked", [1061, 207, 1315, 460]],
+    } });
+    act("i", "a", "b", "c");
+    const [i, a, b, c] = ["i", "a", "b", "c"].map((id) => wire(id)!);
+    for (const d of [i, a, b, c]) expect(through(d, obstacles(spec))).toBe(false);
+    expect([i, a, b, c].map(bends)).toEqual([2, 3, 3, 1]);
+    expect(i.startsWith("M264,88 ")).toBe(true);
+    /* 12 px past the last link, down to the bus under the row, back to the gutter. */
+    expect(a.startsWith("M586,102 V139 ")).toBe(true);
+    expect(b.startsWith("M586,102 V139 ")).toBe(true);
+    expect(c.startsWith("M1039,102 ")).toBe(true);
+    expect(length(a)).toBeLessThan(185);
+    for (const [one, other] of [[i, a], [i, c], [a, c], [a, b], [b, c]]) expect(shared(one!, other!).elsewhere).toBe(0);
   });
 
   test("a column whose scroller shows a few pixels under its header draws no count over the header", () => {
