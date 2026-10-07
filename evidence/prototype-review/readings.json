@@ -658,6 +658,96 @@
       "position": "1 / 3",
       "caption": "1 · Compact list — results, desktop· Search results layout"
     },
+    "desktop-1440-en-light-tall-frame": {
+      "slide": "1:f2",
+      "caption": "1Compact list — results, phone",
+      "captionParts": [
+        "1",
+        "Compact list",
+        "results, phone"
+      ],
+      "position": "3 / 3",
+      "canvas": [
+        974,
+        510
+      ],
+      "media": [
+        [
+          249,
+          486
+        ]
+      ],
+      "mediaInside": true,
+      "loaded": true,
+      "pair": null,
+      "thumbs": 3,
+      "chosen": [],
+      "round": "r-search"
+    },
+    "desktop-1440-en-light-tall-frame-geometry": {
+      "regions": {
+        "header": [
+          101,
+          55,
+          1238,
+          57
+        ],
+        "rail": [
+          101,
+          112,
+          264,
+          622
+        ],
+        "toolbar": [
+          365,
+          112,
+          974,
+          48
+        ],
+        "canvas": [
+          365,
+          160,
+          974,
+          510
+        ],
+        "strip": [
+          365,
+          670,
+          974,
+          64
+        ],
+        "footer": [
+          101,
+          734,
+          1238,
+          111
+        ]
+      },
+      "overlaps": [],
+      "underHead": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "desktop-1440-en-light-viewer-pair": {
+      "shown": [
+        "before"
+      ],
+      "position": "1 / 3",
+      "caption": "2 · Two columns — results page, before and after · Original· Search results layout",
+      "zoom": "1 / 32 · Two columns — results page, before and after · Original· Search results layout140%",
+      "sides": [
+        [
+          "before",
+          "true",
+          "Original"
+        ],
+        [
+          "after",
+          "false",
+          "Changed"
+        ]
+      ]
+    },
     "desktop-1440-en-light-dictating-geometry": {
       "regions": {
         "header": [
@@ -703,12 +793,12 @@
       "sideways": 0
     },
     "desktop-1440-en-light-combination": {
-      "slide": "1:f0",
-      "caption": "1Compact list — results, desktop",
+      "slide": "2:f0",
+      "caption": "2Two columns — results page, before and after",
       "captionParts": [
-        "1",
-        "Compact list",
-        "results, desktop"
+        "2",
+        "Two columns",
+        "results page, before and after"
       ],
       "position": "1 / 3",
       "canvas": [
@@ -717,13 +807,17 @@
       ],
       "media": [
         [
-          778,
-          486
+          696,
+          435
+        ],
+        [
+          696,
+          435
         ]
       ],
       "mediaInside": true,
       "loaded": true,
-      "pair": null,
+      "pair": "slider",
       "thumbs": 3,
       "chosen": [
         "2",
@@ -811,7 +905,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "7 Oct, 07:40",
+      "time": "7 Oct, 16:10",
       "posts": [
         {
           "taskId": "t-search",
@@ -874,17 +968,17 @@
         {
           "number": 1,
           "chosen": false,
-          "current": true,
-          "background": "rgb(248, 245, 240)",
-          "border": "rgb(203, 195, 183)",
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
           "accented": false
         },
         {
           "number": 2,
           "chosen": true,
-          "current": false,
+          "current": true,
           "background": "rgb(236, 235, 251)",
-          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.25)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.6)",
           "accented": true
         },
         {
@@ -2187,6 +2281,96 @@
       "position": "1 / 3",
       "caption": "1 · Compact list — results, desktop· Search results layout"
     },
+    "desktop-1440-en-dark-tall-frame": {
+      "slide": "1:f2",
+      "caption": "1Compact list — results, phone",
+      "captionParts": [
+        "1",
+        "Compact list",
+        "results, phone"
+      ],
+      "position": "3 / 3",
+      "canvas": [
+        974,
+        510
+      ],
+      "media": [
+        [
+          249,
+          486
+        ]
+      ],
+      "mediaInside": true,
+      "loaded": true,
+      "pair": null,
+      "thumbs": 3,
+      "chosen": [],
+      "round": "r-search"
+    },
+    "desktop-1440-en-dark-tall-frame-geometry": {
+      "regions": {
+        "header": [
+          101,
+          55,
+          1238,
+          57
+        ],
+        "rail": [
+          101,
+          112,
+          264,
+          622
+        ],
+        "toolbar": [
+          365,
+          112,
+          974,
+          48
+        ],
+        "canvas": [
+          365,
+          160,
+          974,
+          510
+        ],
+        "strip": [
+          365,
+          670,
+          974,
+          64
+        ],
+        "footer": [
+          101,
+          734,
+          1238,
+          111
+        ]
+      },
+      "overlaps": [],
+      "underHead": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "desktop-1440-en-dark-viewer-pair": {
+      "shown": [
+        "before"
+      ],
+      "position": "1 / 3",
+      "caption": "2 · Two columns — results page, before and after · Original· Search results layout",
+      "zoom": "1 / 32 · Two columns — results page, before and after · Original· Search results layout140%",
+      "sides": [
+        [
+          "before",
+          "true",
+          "Original"
+        ],
+        [
+          "after",
+          "false",
+          "Changed"
+        ]
+      ]
+    },
     "desktop-1440-en-dark-dictating-geometry": {
       "regions": {
         "header": [
@@ -2232,12 +2416,12 @@
       "sideways": 0
     },
     "desktop-1440-en-dark-combination": {
-      "slide": "1:f0",
-      "caption": "1Compact list — results, desktop",
+      "slide": "2:f0",
+      "caption": "2Two columns — results page, before and after",
       "captionParts": [
-        "1",
-        "Compact list",
-        "results, desktop"
+        "2",
+        "Two columns",
+        "results page, before and after"
       ],
       "position": "1 / 3",
       "canvas": [
@@ -2246,13 +2430,17 @@
       ],
       "media": [
         [
-          778,
-          486
+          696,
+          435
+        ],
+        [
+          696,
+          435
         ]
       ],
       "mediaInside": true,
       "loaded": true,
-      "pair": null,
+      "pair": "slider",
       "thumbs": 3,
       "chosen": [
         "2",
@@ -2340,7 +2528,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "7 Oct, 07:41",
+      "time": "7 Oct, 16:10",
       "posts": [
         {
           "taskId": "t-search",
@@ -2403,17 +2591,17 @@
         {
           "number": 1,
           "chosen": false,
-          "current": true,
-          "background": "rgb(20, 21, 27)",
-          "border": "rgb(60, 64, 76)",
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
           "accented": false
         },
         {
           "number": 2,
           "chosen": true,
-          "current": false,
+          "current": true,
           "background": "rgb(38, 35, 71)",
-          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.25)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.6)",
           "accented": true
         },
         {
@@ -3716,6 +3904,96 @@
       "position": "1 / 3",
       "caption": "1 · Компактний список — результати, десктоп· Макет результатів пошуку"
     },
+    "desktop-1440-uk-light-tall-frame": {
+      "slide": "1:f2",
+      "caption": "1Компактний список — результати, телефон",
+      "captionParts": [
+        "1",
+        "Компактний список",
+        "результати, телефон"
+      ],
+      "position": "3 / 3",
+      "canvas": [
+        974,
+        510
+      ],
+      "media": [
+        [
+          249,
+          486
+        ]
+      ],
+      "mediaInside": true,
+      "loaded": true,
+      "pair": null,
+      "thumbs": 3,
+      "chosen": [],
+      "round": "r-search"
+    },
+    "desktop-1440-uk-light-tall-frame-geometry": {
+      "regions": {
+        "header": [
+          101,
+          55,
+          1238,
+          57
+        ],
+        "rail": [
+          101,
+          112,
+          264,
+          622
+        ],
+        "toolbar": [
+          365,
+          112,
+          974,
+          48
+        ],
+        "canvas": [
+          365,
+          160,
+          974,
+          510
+        ],
+        "strip": [
+          365,
+          670,
+          974,
+          64
+        ],
+        "footer": [
+          101,
+          734,
+          1238,
+          111
+        ]
+      },
+      "overlaps": [],
+      "underHead": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "desktop-1440-uk-light-viewer-pair": {
+      "shown": [
+        "before"
+      ],
+      "position": "1 / 3",
+      "caption": "2 · Дві колонки — сторінка результатів, до і після · Оригінал· Макет результатів пошуку",
+      "zoom": "1 / 32 · Дві колонки — сторінка результатів, до і після · Оригінал· Макет результатів пошуку140%",
+      "sides": [
+        [
+          "before",
+          "true",
+          "Оригінал"
+        ],
+        [
+          "after",
+          "false",
+          "Змінено"
+        ]
+      ]
+    },
     "desktop-1440-uk-light-dictating-geometry": {
       "regions": {
         "header": [
@@ -3761,12 +4039,12 @@
       "sideways": 0
     },
     "desktop-1440-uk-light-combination": {
-      "slide": "1:f0",
-      "caption": "1Компактний список — результати, десктоп",
+      "slide": "2:f0",
+      "caption": "2Дві колонки — сторінка результатів, до і після",
       "captionParts": [
-        "1",
-        "Компактний список",
-        "результати, десктоп"
+        "2",
+        "Дві колонки",
+        "сторінка результатів, до і після"
       ],
       "position": "1 / 3",
       "canvas": [
@@ -3775,13 +4053,17 @@
       ],
       "media": [
         [
-          778,
-          486
+          696,
+          435
+        ],
+        [
+          696,
+          435
         ]
       ],
       "mediaInside": true,
       "loaded": true,
-      "pair": null,
+      "pair": "slider",
       "thumbs": 3,
       "chosen": [
         "2",
@@ -3869,7 +4151,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "7 жовт., 07:41",
+      "time": "7 жовт., 16:11",
       "posts": [
         {
           "taskId": "t-search",
@@ -3932,17 +4214,17 @@
         {
           "number": 1,
           "chosen": false,
-          "current": true,
-          "background": "rgb(248, 245, 240)",
-          "border": "rgb(203, 195, 183)",
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
           "accented": false
         },
         {
           "number": 2,
           "chosen": true,
-          "current": false,
+          "current": true,
           "background": "rgb(236, 235, 251)",
-          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.25)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.6)",
           "accented": true
         },
         {
@@ -5245,6 +5527,96 @@
       "position": "1 / 3",
       "caption": "1 · Компактний список — результати, десктоп· Макет результатів пошуку"
     },
+    "desktop-1440-uk-dark-tall-frame": {
+      "slide": "1:f2",
+      "caption": "1Компактний список — результати, телефон",
+      "captionParts": [
+        "1",
+        "Компактний список",
+        "результати, телефон"
+      ],
+      "position": "3 / 3",
+      "canvas": [
+        974,
+        510
+      ],
+      "media": [
+        [
+          249,
+          486
+        ]
+      ],
+      "mediaInside": true,
+      "loaded": true,
+      "pair": null,
+      "thumbs": 3,
+      "chosen": [],
+      "round": "r-search"
+    },
+    "desktop-1440-uk-dark-tall-frame-geometry": {
+      "regions": {
+        "header": [
+          101,
+          55,
+          1238,
+          57
+        ],
+        "rail": [
+          101,
+          112,
+          264,
+          622
+        ],
+        "toolbar": [
+          365,
+          112,
+          974,
+          48
+        ],
+        "canvas": [
+          365,
+          160,
+          974,
+          510
+        ],
+        "strip": [
+          365,
+          670,
+          974,
+          64
+        ],
+        "footer": [
+          101,
+          734,
+          1238,
+          111
+        ]
+      },
+      "overlaps": [],
+      "underHead": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "desktop-1440-uk-dark-viewer-pair": {
+      "shown": [
+        "before"
+      ],
+      "position": "1 / 3",
+      "caption": "2 · Дві колонки — сторінка результатів, до і після · Оригінал· Макет результатів пошуку",
+      "zoom": "1 / 32 · Дві колонки — сторінка результатів, до і після · Оригінал· Макет результатів пошуку140%",
+      "sides": [
+        [
+          "before",
+          "true",
+          "Оригінал"
+        ],
+        [
+          "after",
+          "false",
+          "Змінено"
+        ]
+      ]
+    },
     "desktop-1440-uk-dark-dictating-geometry": {
       "regions": {
         "header": [
@@ -5290,12 +5662,12 @@
       "sideways": 0
     },
     "desktop-1440-uk-dark-combination": {
-      "slide": "1:f0",
-      "caption": "1Компактний список — результати, десктоп",
+      "slide": "2:f0",
+      "caption": "2Дві колонки — сторінка результатів, до і після",
       "captionParts": [
-        "1",
-        "Компактний список",
-        "результати, десктоп"
+        "2",
+        "Дві колонки",
+        "сторінка результатів, до і після"
       ],
       "position": "1 / 3",
       "canvas": [
@@ -5304,13 +5676,17 @@
       ],
       "media": [
         [
-          778,
-          486
+          696,
+          435
+        ],
+        [
+          696,
+          435
         ]
       ],
       "mediaInside": true,
       "loaded": true,
-      "pair": null,
+      "pair": "slider",
       "thumbs": 3,
       "chosen": [
         "2",
@@ -5398,7 +5774,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "7 жовт., 07:41",
+      "time": "7 жовт., 16:11",
       "posts": [
         {
           "taskId": "t-search",
@@ -5461,17 +5837,17 @@
         {
           "number": 1,
           "chosen": false,
-          "current": true,
-          "background": "rgb(20, 21, 27)",
-          "border": "rgb(60, 64, 76)",
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
           "accented": false
         },
         {
           "number": 2,
           "chosen": true,
-          "current": false,
+          "current": true,
           "background": "rgb(38, 35, 71)",
-          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.25)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.6)",
           "accented": true
         },
         {
@@ -6816,6 +7192,96 @@
       "position": "1 / 3",
       "caption": "1 · Compact list — results, desktop· Search results layout"
     },
+    "pane-1000-en-light-tall-frame": {
+      "slide": "1:f2",
+      "caption": "1Compact list — results, phone",
+      "captionParts": [
+        "1",
+        "Compact list",
+        "results, phone"
+      ],
+      "position": "3 / 3",
+      "canvas": [
+        686,
+        334
+      ],
+      "media": [
+        [
+          159,
+          310
+        ]
+      ],
+      "mediaInside": true,
+      "loaded": true,
+      "pair": null,
+      "thumbs": 3,
+      "chosen": [],
+      "round": "r-search"
+    },
+    "pane-1000-en-light-tall-frame-geometry": {
+      "regions": {
+        "header": [
+          25,
+          43,
+          950,
+          57
+        ],
+        "rail": [
+          25,
+          100,
+          264,
+          446
+        ],
+        "toolbar": [
+          289,
+          100,
+          686,
+          48
+        ],
+        "canvas": [
+          289,
+          148,
+          686,
+          334
+        ],
+        "strip": [
+          289,
+          482,
+          686,
+          64
+        ],
+        "footer": [
+          25,
+          546,
+          950,
+          111
+        ]
+      },
+      "overlaps": [],
+      "underHead": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "pane-1000-en-light-viewer-pair": {
+      "shown": [
+        "before"
+      ],
+      "position": "1 / 3",
+      "caption": "2 · Two columns — results page, before and after · Original· Search results layout",
+      "zoom": "1 / 32 · Two columns — results page, before and after · Original· Search results layout140%",
+      "sides": [
+        [
+          "before",
+          "true",
+          "Original"
+        ],
+        [
+          "after",
+          "false",
+          "Changed"
+        ]
+      ]
+    },
     "pane-1000-en-light-dictating-geometry": {
       "regions": {
         "header": [
@@ -6861,12 +7327,12 @@
       "sideways": 0
     },
     "pane-1000-en-light-combination": {
-      "slide": "1:f0",
-      "caption": "1Compact list — results, desktop",
+      "slide": "2:f0",
+      "caption": "2Two columns — results page, before and after",
       "captionParts": [
-        "1",
-        "Compact list",
-        "results, desktop"
+        "2",
+        "Two columns",
+        "results page, before and after"
       ],
       "position": "1 / 3",
       "canvas": [
@@ -6875,13 +7341,17 @@
       ],
       "media": [
         [
-          496,
-          310
+          414,
+          259
+        ],
+        [
+          414,
+          259
         ]
       ],
       "mediaInside": true,
       "loaded": true,
-      "pair": null,
+      "pair": "slider",
       "thumbs": 3,
       "chosen": [
         "2",
@@ -6969,7 +7439,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "7 Oct, 07:42",
+      "time": "7 Oct, 16:12",
       "posts": [
         {
           "taskId": "t-search",
@@ -7032,17 +7502,17 @@
         {
           "number": 1,
           "chosen": false,
-          "current": true,
-          "background": "rgb(248, 245, 240)",
-          "border": "rgb(203, 195, 183)",
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
           "accented": false
         },
         {
           "number": 2,
           "chosen": true,
-          "current": false,
+          "current": true,
           "background": "rgb(236, 235, 251)",
-          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.25)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.6)",
           "accented": true
         },
         {
@@ -8387,6 +8857,96 @@
       "position": "1 / 3",
       "caption": "1 · Compact list — results, desktop· Search results layout"
     },
+    "pane-1000-en-dark-tall-frame": {
+      "slide": "1:f2",
+      "caption": "1Compact list — results, phone",
+      "captionParts": [
+        "1",
+        "Compact list",
+        "results, phone"
+      ],
+      "position": "3 / 3",
+      "canvas": [
+        686,
+        334
+      ],
+      "media": [
+        [
+          159,
+          310
+        ]
+      ],
+      "mediaInside": true,
+      "loaded": true,
+      "pair": null,
+      "thumbs": 3,
+      "chosen": [],
+      "round": "r-search"
+    },
+    "pane-1000-en-dark-tall-frame-geometry": {
+      "regions": {
+        "header": [
+          25,
+          43,
+          950,
+          57
+        ],
+        "rail": [
+          25,
+          100,
+          264,
+          446
+        ],
+        "toolbar": [
+          289,
+          100,
+          686,
+          48
+        ],
+        "canvas": [
+          289,
+          148,
+          686,
+          334
+        ],
+        "strip": [
+          289,
+          482,
+          686,
+          64
+        ],
+        "footer": [
+          25,
+          546,
+          950,
+          111
+        ]
+      },
+      "overlaps": [],
+      "underHead": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "pane-1000-en-dark-viewer-pair": {
+      "shown": [
+        "before"
+      ],
+      "position": "1 / 3",
+      "caption": "2 · Two columns — results page, before and after · Original· Search results layout",
+      "zoom": "1 / 32 · Two columns — results page, before and after · Original· Search results layout140%",
+      "sides": [
+        [
+          "before",
+          "true",
+          "Original"
+        ],
+        [
+          "after",
+          "false",
+          "Changed"
+        ]
+      ]
+    },
     "pane-1000-en-dark-dictating-geometry": {
       "regions": {
         "header": [
@@ -8432,12 +8992,12 @@
       "sideways": 0
     },
     "pane-1000-en-dark-combination": {
-      "slide": "1:f0",
-      "caption": "1Compact list — results, desktop",
+      "slide": "2:f0",
+      "caption": "2Two columns — results page, before and after",
       "captionParts": [
-        "1",
-        "Compact list",
-        "results, desktop"
+        "2",
+        "Two columns",
+        "results page, before and after"
       ],
       "position": "1 / 3",
       "canvas": [
@@ -8446,13 +9006,17 @@
       ],
       "media": [
         [
-          496,
-          310
+          414,
+          259
+        ],
+        [
+          414,
+          259
         ]
       ],
       "mediaInside": true,
       "loaded": true,
-      "pair": null,
+      "pair": "slider",
       "thumbs": 3,
       "chosen": [
         "2",
@@ -8540,7 +9104,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "7 Oct, 07:42",
+      "time": "7 Oct, 16:12",
       "posts": [
         {
           "taskId": "t-search",
@@ -8603,17 +9167,17 @@
         {
           "number": 1,
           "chosen": false,
-          "current": true,
-          "background": "rgb(20, 21, 27)",
-          "border": "rgb(60, 64, 76)",
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
           "accented": false
         },
         {
           "number": 2,
           "chosen": true,
-          "current": false,
+          "current": true,
           "background": "rgb(38, 35, 71)",
-          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.25)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.6)",
           "accented": true
         },
         {
@@ -9958,6 +10522,96 @@
       "position": "1 / 3",
       "caption": "1 · Компактний список — результати, десктоп· Макет результатів пошуку"
     },
+    "pane-1000-uk-light-tall-frame": {
+      "slide": "1:f2",
+      "caption": "1Компактний список — результати, телефон",
+      "captionParts": [
+        "1",
+        "Компактний список",
+        "результати, телефон"
+      ],
+      "position": "3 / 3",
+      "canvas": [
+        686,
+        334
+      ],
+      "media": [
+        [
+          159,
+          310
+        ]
+      ],
+      "mediaInside": true,
+      "loaded": true,
+      "pair": null,
+      "thumbs": 3,
+      "chosen": [],
+      "round": "r-search"
+    },
+    "pane-1000-uk-light-tall-frame-geometry": {
+      "regions": {
+        "header": [
+          25,
+          43,
+          950,
+          57
+        ],
+        "rail": [
+          25,
+          100,
+          264,
+          446
+        ],
+        "toolbar": [
+          289,
+          100,
+          686,
+          48
+        ],
+        "canvas": [
+          289,
+          148,
+          686,
+          334
+        ],
+        "strip": [
+          289,
+          482,
+          686,
+          64
+        ],
+        "footer": [
+          25,
+          546,
+          950,
+          111
+        ]
+      },
+      "overlaps": [],
+      "underHead": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "pane-1000-uk-light-viewer-pair": {
+      "shown": [
+        "before"
+      ],
+      "position": "1 / 3",
+      "caption": "2 · Дві колонки — сторінка результатів, до і після · Оригінал· Макет результатів пошуку",
+      "zoom": "1 / 32 · Дві колонки — сторінка результатів, до і після · Оригінал· Макет результатів пошуку140%",
+      "sides": [
+        [
+          "before",
+          "true",
+          "Оригінал"
+        ],
+        [
+          "after",
+          "false",
+          "Змінено"
+        ]
+      ]
+    },
     "pane-1000-uk-light-dictating-geometry": {
       "regions": {
         "header": [
@@ -10003,12 +10657,12 @@
       "sideways": 0
     },
     "pane-1000-uk-light-combination": {
-      "slide": "1:f0",
-      "caption": "1Компактний список — результати, десктоп",
+      "slide": "2:f0",
+      "caption": "2Дві колонки — сторінка результатів, до і після",
       "captionParts": [
-        "1",
-        "Компактний список",
-        "результати, десктоп"
+        "2",
+        "Дві колонки",
+        "сторінка результатів, до і після"
       ],
       "position": "1 / 3",
       "canvas": [
@@ -10017,13 +10671,17 @@
       ],
       "media": [
         [
-          496,
-          310
+          414,
+          259
+        ],
+        [
+          414,
+          259
         ]
       ],
       "mediaInside": true,
       "loaded": true,
-      "pair": null,
+      "pair": "slider",
       "thumbs": 3,
       "chosen": [
         "2",
@@ -10111,7 +10769,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "7 жовт., 07:43",
+      "time": "7 жовт., 16:12",
       "posts": [
         {
           "taskId": "t-search",
@@ -10174,17 +10832,17 @@
         {
           "number": 1,
           "chosen": false,
-          "current": true,
-          "background": "rgb(248, 245, 240)",
-          "border": "rgb(203, 195, 183)",
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
           "accented": false
         },
         {
           "number": 2,
           "chosen": true,
-          "current": false,
+          "current": true,
           "background": "rgb(236, 235, 251)",
-          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.25)",
+          "border": "oklab(0.530663 0.0339187 -0.206729 / 0.6)",
           "accented": true
         },
         {
@@ -11529,6 +12187,96 @@
       "position": "1 / 3",
       "caption": "1 · Компактний список — результати, десктоп· Макет результатів пошуку"
     },
+    "pane-1000-uk-dark-tall-frame": {
+      "slide": "1:f2",
+      "caption": "1Компактний список — результати, телефон",
+      "captionParts": [
+        "1",
+        "Компактний список",
+        "результати, телефон"
+      ],
+      "position": "3 / 3",
+      "canvas": [
+        686,
+        334
+      ],
+      "media": [
+        [
+          159,
+          310
+        ]
+      ],
+      "mediaInside": true,
+      "loaded": true,
+      "pair": null,
+      "thumbs": 3,
+      "chosen": [],
+      "round": "r-search"
+    },
+    "pane-1000-uk-dark-tall-frame-geometry": {
+      "regions": {
+        "header": [
+          25,
+          43,
+          950,
+          57
+        ],
+        "rail": [
+          25,
+          100,
+          264,
+          446
+        ],
+        "toolbar": [
+          289,
+          100,
+          686,
+          48
+        ],
+        "canvas": [
+          289,
+          148,
+          686,
+          334
+        ],
+        "strip": [
+          289,
+          482,
+          686,
+          64
+        ],
+        "footer": [
+          25,
+          546,
+          950,
+          111
+        ]
+      },
+      "overlaps": [],
+      "underHead": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "pane-1000-uk-dark-viewer-pair": {
+      "shown": [
+        "before"
+      ],
+      "position": "1 / 3",
+      "caption": "2 · Дві колонки — сторінка результатів, до і після · Оригінал· Макет результатів пошуку",
+      "zoom": "1 / 32 · Дві колонки — сторінка результатів, до і після · Оригінал· Макет результатів пошуку140%",
+      "sides": [
+        [
+          "before",
+          "true",
+          "Оригінал"
+        ],
+        [
+          "after",
+          "false",
+          "Змінено"
+        ]
+      ]
+    },
     "pane-1000-uk-dark-dictating-geometry": {
       "regions": {
         "header": [
@@ -11574,12 +12322,12 @@
       "sideways": 0
     },
     "pane-1000-uk-dark-combination": {
-      "slide": "1:f0",
-      "caption": "1Компактний список — результати, десктоп",
+      "slide": "2:f0",
+      "caption": "2Дві колонки — сторінка результатів, до і після",
       "captionParts": [
-        "1",
-        "Компактний список",
-        "результати, десктоп"
+        "2",
+        "Дві колонки",
+        "сторінка результатів, до і після"
       ],
       "position": "1 / 3",
       "canvas": [
@@ -11588,13 +12336,17 @@
       ],
       "media": [
         [
-          496,
-          310
+          414,
+          259
+        ],
+        [
+          414,
+          259
         ]
       ],
       "mediaInside": true,
       "loaded": true,
-      "pair": null,
+      "pair": "slider",
       "thumbs": 3,
       "chosen": [
         "2",
@@ -11682,7 +12434,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "7 жовт., 07:43",
+      "time": "7 жовт., 16:13",
       "posts": [
         {
           "taskId": "t-search",
@@ -11745,17 +12497,17 @@
         {
           "number": 1,
           "chosen": false,
-          "current": true,
-          "background": "rgb(20, 21, 27)",
-          "border": "rgb(60, 64, 76)",
+          "current": false,
+          "background": "rgba(0, 0, 0, 0)",
+          "border": "rgba(0, 0, 0, 0)",
           "accented": false
         },
         {
           "number": 2,
           "chosen": true,
-          "current": false,
+          "current": true,
           "background": "rgb(38, 35, 71)",
-          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.25)",
+          "border": "oklab(0.686886 0.0401993 -0.166043 / 0.6)",
           "accented": true
         },
         {
@@ -12661,7 +13413,7 @@
         "chevron": 290
       },
       {
-        "row": "/repo/links-impl.jsonl:waiting:1791347199",
+        "row": "/repo/links-impl.jsonl:waiting:1791377789",
         "title": 16,
         "chevron": 290
       },
@@ -12744,12 +13496,12 @@
       "position": "1 / 3",
       "canvas": [
         390,
-        270
+        244
       ],
       "media": [
         [
-          366,
-          229
+          390,
+          244
         ]
       ],
       "mediaInside": true,
@@ -12763,19 +13515,19 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          526.7
+          534.3
         ],
         "footer": [
           0,
-          690,
+          582.3,
           390,
           148
         ]
@@ -12796,16 +13548,16 @@
       "position": "1 / 3",
       "canvas": [
         390,
-        270
+        331
       ],
       "media": [
         [
-          280,
-          175
+          390,
+          244
         ],
         [
-          280,
-          175
+          390,
+          244
         ]
       ],
       "mediaInside": true,
@@ -12818,24 +13570,24 @@
       "labels": {
         "drawn": [
           [
-            55,
-            412.8,
-            280,
-            175
+            0,
+            293.6,
+            390,
+            243.8
           ],
           [
-            55,
-            412.8,
-            280,
-            175
+            0,
+            293.6,
+            390,
+            243.8
           ]
         ],
         "labels": [
           {
             "side": "original",
             "box": [
-              55,
-              393.8,
+              16,
+              274.5,
               50.9,
               15
             ],
@@ -12845,8 +13597,8 @@
           {
             "side": "changed",
             "box": [
-              282.7,
-              393.8,
+              321.7,
+              274.5,
               52.3,
               15
             ],
@@ -12855,8 +13607,8 @@
           }
         ],
         "track": [
-          55,
-          335
+          16,
+          374
         ],
         "fitted": true
       }
@@ -12865,19 +13617,19 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          526.7
+          621.5
         ],
         "footer": [
           0,
-          690,
+          669.5,
           390,
           148
         ]
@@ -12898,12 +13650,12 @@
       "position": "40 / 40",
       "canvas": [
         390,
-        270
+        244
       ],
       "media": [
         [
-          366,
-          229
+          390,
+          244
         ]
       ],
       "mediaInside": true,
@@ -12923,27 +13675,25 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          526.7
+          534.3
         ],
         "footer": [
           0,
-          690,
+          582.3,
           390,
           148
         ]
       },
       "overlaps": [],
-      "underHead": [
-        "chips#4 × choose"
-      ],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -12958,12 +13708,12 @@
       "position": "3 / 3",
       "canvas": [
         390,
-        270
+        219
       ],
       "media": [
         [
-          366,
-          206
+          390,
+          219
         ]
       ],
       "mediaInside": true,
@@ -12982,15 +13732,71 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          526.7
+          509.9
+        ],
+        "footer": [
+          0,
+          557.9,
+          390,
+          148
+        ]
+      },
+      "overlaps": [],
+      "underHead": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "phone-390-en-light-viewer": {
+      "position": "1 / 3",
+      "caption": "1 · Compact list — results, desktop· Search results layout"
+    },
+    "phone-390-en-light-tall-frame": {
+      "slide": "1:f2",
+      "caption": "1Compact list — results, phone",
+      "captionParts": [
+        "1",
+        "Compact list",
+        "results, phone"
+      ],
+      "position": "3 / 3",
+      "canvas": [
+        390,
+        760
+      ],
+      "media": [
+        [
+          390,
+          760
+        ]
+      ],
+      "mediaInside": true,
+      "loaded": true,
+      "pair": null,
+      "thumbs": 3,
+      "chosen": [],
+      "round": "r-search"
+    },
+    "phone-390-en-light-tall-frame-geometry": {
+      "regions": {
+        "header": [
+          0,
+          0,
+          390,
+          48
+        ],
+        "body": [
+          0,
+          48,
+          390,
+          642
         ],
         "footer": [
           0,
@@ -13000,56 +13806,67 @@
         ]
       },
       "overlaps": [],
-      "underHead": [
-        "chips#4 × choose"
-      ],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
-    "phone-390-en-light-viewer": {
+    "phone-390-en-light-viewer-pair": {
+      "shown": [
+        "before"
+      ],
       "position": "1 / 3",
-      "caption": "1 · Compact list — results, desktop· Search results layout"
+      "caption": "2 · Two columns — results page, before and after · Original· Search results layout",
+      "zoom": "1 / 32 · Two columns — results page, before and after · Original· Search results layout140%",
+      "sides": [
+        [
+          "before",
+          "true",
+          "Original"
+        ],
+        [
+          "after",
+          "false",
+          "Changed"
+        ]
+      ]
     },
     "phone-390-en-light-dictating-geometry": {
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          468.7
+          534.3
         ],
         "footer": [
           0,
-          632,
+          582.3,
           390,
           206
         ]
       },
       "overlaps": [],
-      "underHead": [
-        "chips#3 × choose",
-        "chips#4 × choose"
-      ],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
     "phone-390-en-light-dictating-context": {
-      "headerBottom": 163.3,
+      "headerBottom": 48,
       "line": [
-        163.3,
-        237.8
+        48,
+        122.5
       ],
-      "scrolled": 17,
+      "scrolled": 0,
       "whole": true,
       "hidden": false,
       "chips": {
-        "top": 189.8,
+        "top": 74.5,
         "under": true,
         "cut": 0
       }
@@ -13065,12 +13882,12 @@
       "position": "1 / 40",
       "canvas": [
         390,
-        270
+        244
       ],
       "media": [
         [
-          366,
-          229
+          390,
+          244
         ]
       ],
       "mediaInside": true,
@@ -13087,57 +13904,54 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          522.7
+          534.3
         ],
         "footer": [
           0,
-          686,
+          582.3,
           390,
           152
         ]
       },
       "overlaps": [],
-      "underHead": [
-        "chips#3 × choose",
-        "chips#4 × choose"
-      ],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
     "phone-390-en-light-combination-context": {
-      "headerBottom": 163.3,
+      "headerBottom": 48,
       "line": [
-        163.3,
-        237.8
+        48,
+        122.5
       ],
-      "scrolled": 17,
+      "scrolled": 0,
       "whole": true,
       "hidden": false,
       "chips": {
-        "top": 189.8,
+        "top": 74.5,
         "under": true,
         "cut": 0
       }
     },
     "phone-390-en-light-unsaved-guard-context": {
-      "headerBottom": 163.3,
+      "headerBottom": 48,
       "line": [
-        163.3,
-        237.8
+        48,
+        122.5
       ],
-      "scrolled": 17,
+      "scrolled": 0,
       "whole": true,
       "hidden": false,
       "chips": {
-        "top": 189.8,
+        "top": 74.5,
         "under": true,
         "cut": 0
       }
@@ -13178,7 +13992,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "7 Oct, 07:43",
+      "time": "7 Oct, 16:13",
       "posts": [
         {
           "taskId": "t-search",
@@ -13192,16 +14006,16 @@
       ]
     },
     "phone-390-en-light-decided-context": {
-      "headerBottom": 179.4,
+      "headerBottom": 48,
       "line": [
-        179.4,
-        253.9
+        48,
+        122.5
       ],
       "scrolled": 0,
       "whole": true,
       "hidden": false,
       "chips": {
-        "top": 205.9,
+        "top": 74.5,
         "under": true,
         "cut": 0
       }
@@ -13210,19 +14024,19 @@
       "regions": {
         "header": [
           0,
-          131.4,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          179.4,
+          48,
           390,
-          549.6
+          523.3
         ],
         "footer": [
           0,
-          729,
+          571.3,
           390,
           109
         ]
@@ -13315,19 +14129,19 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          526.7
+          552.3
         ],
         "footer": [
           0,
-          690,
+          600.3,
           390,
           148
         ]
@@ -13348,12 +14162,12 @@
       "position": "1 / 2",
       "canvas": [
         390,
-        270
+        244
       ],
       "media": [
         [
-          366,
-          229
+          390,
+          244
         ]
       ],
       "mediaInside": true,
@@ -13401,19 +14215,19 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          526.7
+          606.3
         ],
         "footer": [
           0,
-          690,
+          654.3,
           390,
           148
         ]
@@ -13424,16 +14238,16 @@
       "sideways": 0
     },
     "phone-390-en-light-transcribing-guard-context": {
-      "headerBottom": 163.3,
+      "headerBottom": 48,
       "line": [
-        163.3,
-        237.8
+        48,
+        122.5
       ],
       "scrolled": 0,
       "whole": true,
       "hidden": false,
       "chips": {
-        "top": 189.8,
+        "top": 74.5,
         "under": true,
         "cut": 0
       }
@@ -13449,19 +14263,19 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          474.2
+          541.3
         ],
         "footer": [
           0,
-          637.5,
+          589.3,
           390,
           200.5
         ]
@@ -13476,20 +14290,20 @@
       "lines": 1,
       "mark": [
         16,
-        774.8,
+        726.5,
         14,
         14
       ],
       "firstLine": [
         38,
-        775.5,
+        727.3,
         304.4,
         12
       ],
       "markOnFirstLine": true,
       "retry": [
         16,
-        794,
+        745.8,
         102.7,
         44
       ],
@@ -13510,19 +14324,19 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          526.7
+          616
         ],
         "footer": [
           0,
-          690,
+          664,
           390,
           148
         ]
@@ -13536,19 +14350,19 @@
       "regions": {
         "header": [
           0,
-          187.9,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          235.9,
+          48,
           390,
-          511.1
+          484.8
         ],
         "footer": [
           0,
-          747,
+          532.8,
           390,
           91
         ]
@@ -13590,15 +14404,15 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          468.7
+          584
         ],
         "footer": [
           0,
@@ -13632,19 +14446,19 @@
       "regions": {
         "header": [
           0,
-          132.9,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          180.9,
+          48,
           390,
           527.1
         ],
         "footer": [
           0,
-          708,
+          575.1,
           390,
           130
         ]
@@ -13693,19 +14507,19 @@
       "regions": {
         "header": [
           0,
-          165.4,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          213.4,
+          48,
           390,
-          485.6
+          459.3
         ],
         "footer": [
           0,
-          699,
+          507.3,
           390,
           139
         ]
@@ -13741,20 +14555,20 @@
       "lines": 1,
       "mark": [
         16,
-        774.8,
+        583,
         14,
         14
       ],
       "firstLine": [
         38,
-        775.5,
+        583.8,
         270.2,
         12
       ],
       "markOnFirstLine": true,
       "retry": [
         16,
-        794,
+        602.3,
         110,
         44
       ],
@@ -13764,19 +14578,19 @@
       "regions": {
         "header": [
           0,
-          165.4,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          213.4,
+          48,
           390,
-          485.6
+          459.3
         ],
         "footer": [
           0,
-          699,
+          507.3,
           390,
           139
         ]
@@ -13791,20 +14605,20 @@
       "lines": 1,
       "mark": [
         16,
-        774.8,
+        583,
         14,
         14
       ],
       "firstLine": [
         38,
-        775.5,
+        583.8,
         267.1,
         12
       ],
       "markOnFirstLine": true,
       "retry": [
         16,
-        794,
+        602.3,
         110,
         44
       ],
@@ -14085,7 +14899,7 @@
         "chevron": 290
       },
       {
-        "row": "/repo/links-impl.jsonl:waiting:1791347223",
+        "row": "/repo/links-impl.jsonl:waiting:1791377814",
         "title": 16,
         "chevron": 290
       },
@@ -14168,12 +14982,12 @@
       "position": "1 / 3",
       "canvas": [
         390,
-        270
+        244
       ],
       "media": [
         [
-          366,
-          229
+          390,
+          244
         ]
       ],
       "mediaInside": true,
@@ -14187,19 +15001,19 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          526.7
+          534.3
         ],
         "footer": [
           0,
-          690,
+          582.3,
           390,
           148
         ]
@@ -14220,16 +15034,16 @@
       "position": "1 / 3",
       "canvas": [
         390,
-        270
+        331
       ],
       "media": [
         [
-          280,
-          175
+          390,
+          244
         ],
         [
-          280,
-          175
+          390,
+          244
         ]
       ],
       "mediaInside": true,
@@ -14242,24 +15056,24 @@
       "labels": {
         "drawn": [
           [
-            55,
-            412.8,
-            280,
-            175
+            0,
+            293.6,
+            390,
+            243.8
           ],
           [
-            55,
-            412.8,
-            280,
-            175
+            0,
+            293.6,
+            390,
+            243.8
           ]
         ],
         "labels": [
           {
             "side": "original",
             "box": [
-              55,
-              393.8,
+              16,
+              274.5,
               50.9,
               15
             ],
@@ -14269,8 +15083,8 @@
           {
             "side": "changed",
             "box": [
-              282.7,
-              393.8,
+              321.7,
+              274.5,
               52.3,
               15
             ],
@@ -14279,8 +15093,8 @@
           }
         ],
         "track": [
-          55,
-          335
+          16,
+          374
         ],
         "fitted": true
       }
@@ -14289,19 +15103,19 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          526.7
+          621.5
         ],
         "footer": [
           0,
-          690,
+          669.5,
           390,
           148
         ]
@@ -14322,12 +15136,12 @@
       "position": "40 / 40",
       "canvas": [
         390,
-        270
+        244
       ],
       "media": [
         [
-          366,
-          229
+          390,
+          244
         ]
       ],
       "mediaInside": true,
@@ -14347,27 +15161,25 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          526.7
+          534.3
         ],
         "footer": [
           0,
-          690,
+          582.3,
           390,
           148
         ]
       },
       "overlaps": [],
-      "underHead": [
-        "chips#4 × choose"
-      ],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -14382,12 +15194,12 @@
       "position": "3 / 3",
       "canvas": [
         390,
-        270
+        219
       ],
       "media": [
         [
-          366,
-          206
+          390,
+          219
         ]
       ],
       "mediaInside": true,
@@ -14406,15 +15218,71 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          526.7
+          509.9
+        ],
+        "footer": [
+          0,
+          557.9,
+          390,
+          148
+        ]
+      },
+      "overlaps": [],
+      "underHead": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "phone-390-en-dark-viewer": {
+      "position": "1 / 3",
+      "caption": "1 · Compact list — results, desktop· Search results layout"
+    },
+    "phone-390-en-dark-tall-frame": {
+      "slide": "1:f2",
+      "caption": "1Compact list — results, phone",
+      "captionParts": [
+        "1",
+        "Compact list",
+        "results, phone"
+      ],
+      "position": "3 / 3",
+      "canvas": [
+        390,
+        760
+      ],
+      "media": [
+        [
+          390,
+          760
+        ]
+      ],
+      "mediaInside": true,
+      "loaded": true,
+      "pair": null,
+      "thumbs": 3,
+      "chosen": [],
+      "round": "r-search"
+    },
+    "phone-390-en-dark-tall-frame-geometry": {
+      "regions": {
+        "header": [
+          0,
+          0,
+          390,
+          48
+        ],
+        "body": [
+          0,
+          48,
+          390,
+          642
         ],
         "footer": [
           0,
@@ -14424,56 +15292,67 @@
         ]
       },
       "overlaps": [],
-      "underHead": [
-        "chips#4 × choose"
-      ],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
-    "phone-390-en-dark-viewer": {
+    "phone-390-en-dark-viewer-pair": {
+      "shown": [
+        "before"
+      ],
       "position": "1 / 3",
-      "caption": "1 · Compact list — results, desktop· Search results layout"
+      "caption": "2 · Two columns — results page, before and after · Original· Search results layout",
+      "zoom": "1 / 32 · Two columns — results page, before and after · Original· Search results layout140%",
+      "sides": [
+        [
+          "before",
+          "true",
+          "Original"
+        ],
+        [
+          "after",
+          "false",
+          "Changed"
+        ]
+      ]
     },
     "phone-390-en-dark-dictating-geometry": {
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          468.7
+          534.3
         ],
         "footer": [
           0,
-          632,
+          582.3,
           390,
           206
         ]
       },
       "overlaps": [],
-      "underHead": [
-        "chips#3 × choose",
-        "chips#4 × choose"
-      ],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
     "phone-390-en-dark-dictating-context": {
-      "headerBottom": 163.3,
+      "headerBottom": 48,
       "line": [
-        163.3,
-        237.8
+        48,
+        122.5
       ],
-      "scrolled": 17,
+      "scrolled": 0,
       "whole": true,
       "hidden": false,
       "chips": {
-        "top": 189.8,
+        "top": 74.5,
         "under": true,
         "cut": 0
       }
@@ -14489,12 +15368,12 @@
       "position": "1 / 40",
       "canvas": [
         390,
-        270
+        244
       ],
       "media": [
         [
-          366,
-          229
+          390,
+          244
         ]
       ],
       "mediaInside": true,
@@ -14511,57 +15390,54 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          522.7
+          534.3
         ],
         "footer": [
           0,
-          686,
+          582.3,
           390,
           152
         ]
       },
       "overlaps": [],
-      "underHead": [
-        "chips#3 × choose",
-        "chips#4 × choose"
-      ],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
     "phone-390-en-dark-combination-context": {
-      "headerBottom": 163.3,
+      "headerBottom": 48,
       "line": [
-        163.3,
-        237.8
+        48,
+        122.5
       ],
-      "scrolled": 17,
+      "scrolled": 0,
       "whole": true,
       "hidden": false,
       "chips": {
-        "top": 189.8,
+        "top": 74.5,
         "under": true,
         "cut": 0
       }
     },
     "phone-390-en-dark-unsaved-guard-context": {
-      "headerBottom": 163.3,
+      "headerBottom": 48,
       "line": [
-        163.3,
-        237.8
+        48,
+        122.5
       ],
-      "scrolled": 17,
+      "scrolled": 0,
       "whole": true,
       "hidden": false,
       "chips": {
-        "top": 189.8,
+        "top": 74.5,
         "under": true,
         "cut": 0
       }
@@ -14602,7 +15478,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "7 Oct, 07:44",
+      "time": "7 Oct, 16:14",
       "posts": [
         {
           "taskId": "t-search",
@@ -14616,16 +15492,16 @@
       ]
     },
     "phone-390-en-dark-decided-context": {
-      "headerBottom": 179.4,
+      "headerBottom": 48,
       "line": [
-        179.4,
-        253.9
+        48,
+        122.5
       ],
       "scrolled": 0,
       "whole": true,
       "hidden": false,
       "chips": {
-        "top": 205.9,
+        "top": 74.5,
         "under": true,
         "cut": 0
       }
@@ -14634,19 +15510,19 @@
       "regions": {
         "header": [
           0,
-          131.4,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          179.4,
+          48,
           390,
-          549.6
+          523.3
         ],
         "footer": [
           0,
-          729,
+          571.3,
           390,
           109
         ]
@@ -14739,19 +15615,19 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          526.7
+          552.3
         ],
         "footer": [
           0,
-          690,
+          600.3,
           390,
           148
         ]
@@ -14772,12 +15648,12 @@
       "position": "1 / 2",
       "canvas": [
         390,
-        270
+        244
       ],
       "media": [
         [
-          366,
-          229
+          390,
+          244
         ]
       ],
       "mediaInside": true,
@@ -14825,19 +15701,19 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          526.7
+          606.3
         ],
         "footer": [
           0,
-          690,
+          654.3,
           390,
           148
         ]
@@ -14848,16 +15724,16 @@
       "sideways": 0
     },
     "phone-390-en-dark-transcribing-guard-context": {
-      "headerBottom": 163.3,
+      "headerBottom": 48,
       "line": [
-        163.3,
-        237.8
+        48,
+        122.5
       ],
       "scrolled": 0,
       "whole": true,
       "hidden": false,
       "chips": {
-        "top": 189.8,
+        "top": 74.5,
         "under": true,
         "cut": 0
       }
@@ -14873,19 +15749,19 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          474.2
+          541.3
         ],
         "footer": [
           0,
-          637.5,
+          589.3,
           390,
           200.5
         ]
@@ -14900,20 +15776,20 @@
       "lines": 1,
       "mark": [
         16,
-        774.8,
+        726.5,
         14,
         14
       ],
       "firstLine": [
         38,
-        775.5,
+        727.3,
         304.4,
         12
       ],
       "markOnFirstLine": true,
       "retry": [
         16,
-        794,
+        745.8,
         102.7,
         44
       ],
@@ -14934,19 +15810,19 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          526.7
+          616
         ],
         "footer": [
           0,
-          690,
+          664,
           390,
           148
         ]
@@ -14960,19 +15836,19 @@
       "regions": {
         "header": [
           0,
-          187.9,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          235.9,
+          48,
           390,
-          511.1
+          484.8
         ],
         "footer": [
           0,
-          747,
+          532.8,
           390,
           91
         ]
@@ -15014,15 +15890,15 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          468.7
+          584
         ],
         "footer": [
           0,
@@ -15056,19 +15932,19 @@
       "regions": {
         "header": [
           0,
-          132.9,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          180.9,
+          48,
           390,
           527.1
         ],
         "footer": [
           0,
-          708,
+          575.1,
           390,
           130
         ]
@@ -15117,19 +15993,19 @@
       "regions": {
         "header": [
           0,
-          165.4,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          213.4,
+          48,
           390,
-          485.6
+          459.3
         ],
         "footer": [
           0,
-          699,
+          507.3,
           390,
           139
         ]
@@ -15165,20 +16041,20 @@
       "lines": 1,
       "mark": [
         16,
-        774.8,
+        583,
         14,
         14
       ],
       "firstLine": [
         38,
-        775.5,
+        583.8,
         270.2,
         12
       ],
       "markOnFirstLine": true,
       "retry": [
         16,
-        794,
+        602.3,
         110,
         44
       ],
@@ -15188,19 +16064,19 @@
       "regions": {
         "header": [
           0,
-          165.4,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          213.4,
+          48,
           390,
-          485.6
+          459.3
         ],
         "footer": [
           0,
-          699,
+          507.3,
           390,
           139
         ]
@@ -15215,20 +16091,20 @@
       "lines": 1,
       "mark": [
         16,
-        774.8,
+        583,
         14,
         14
       ],
       "firstLine": [
         38,
-        775.5,
+        583.8,
         267.1,
         12
       ],
       "markOnFirstLine": true,
       "retry": [
         16,
-        794,
+        602.3,
         110,
         44
       ],
@@ -15509,7 +16385,7 @@
         "chevron": 300
       },
       {
-        "row": "/repo/links-impl.jsonl:waiting:1791347247",
+        "row": "/repo/links-impl.jsonl:waiting:1791377839",
         "title": 16,
         "chevron": 300
       },
@@ -15592,12 +16468,12 @@
       "position": "1 / 3",
       "canvas": [
         390,
-        270
+        244
       ],
       "media": [
         [
-          366,
-          229
+          390,
+          244
         ]
       ],
       "mediaInside": true,
@@ -15611,19 +16487,19 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          526.7
+          556.3
         ],
         "footer": [
           0,
-          690,
+          604.3,
           390,
           148
         ]
@@ -15644,16 +16520,16 @@
       "position": "1 / 3",
       "canvas": [
         390,
-        270
+        331
       ],
       "media": [
         [
-          280,
-          175
+          390,
+          244
         ],
         [
-          280,
-          175
+          390,
+          244
         ]
       ],
       "mediaInside": true,
@@ -15666,24 +16542,24 @@
       "labels": {
         "drawn": [
           [
-            55,
-            429.3,
-            280,
-            175
+            0,
+            310.1,
+            390,
+            243.8
           ],
           [
-            55,
-            429.3,
-            280,
-            175
+            0,
+            310.1,
+            390,
+            243.8
           ]
         ],
         "labels": [
           {
             "side": "original",
             "box": [
-              55,
-              410.3,
+              16,
+              291,
               53.7,
               15
             ],
@@ -15693,8 +16569,8 @@
           {
             "side": "changed",
             "box": [
-              287,
-              410.3,
+              326,
+              291,
               48,
               15
             ],
@@ -15703,8 +16579,8 @@
           }
         ],
         "track": [
-          55,
-          335
+          16,
+          374
         ],
         "fitted": true
       }
@@ -15713,19 +16589,19 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          526.7
+          638
         ],
         "footer": [
           0,
-          690,
+          686,
           390,
           148
         ]
@@ -15746,12 +16622,12 @@
       "position": "40 / 40",
       "canvas": [
         390,
-        270
+        244
       ],
       "media": [
         [
-          366,
-          229
+          390,
+          244
         ]
       ],
       "mediaInside": true,
@@ -15771,27 +16647,25 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          526.7
+          550.8
         ],
         "footer": [
           0,
-          690,
+          598.8,
           390,
           148
         ]
       },
       "overlaps": [],
-      "underHead": [
-        "chips#4 × choose"
-      ],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -15806,12 +16680,12 @@
       "position": "3 / 3",
       "canvas": [
         390,
-        270
+        219
       ],
       "media": [
         [
-          366,
-          206
+          390,
+          219
         ]
       ],
       "mediaInside": true,
@@ -15830,15 +16704,71 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          526.7
+          526.4
+        ],
+        "footer": [
+          0,
+          574.4,
+          390,
+          148
+        ]
+      },
+      "overlaps": [],
+      "underHead": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "phone-390-uk-light-viewer": {
+      "position": "1 / 3",
+      "caption": "1 · Компактний список — результати, десктоп· Макет результатів пошуку"
+    },
+    "phone-390-uk-light-tall-frame": {
+      "slide": "1:f2",
+      "caption": "1Компактний список — результати, телефон",
+      "captionParts": [
+        "1",
+        "Компактний список",
+        "результати, телефон"
+      ],
+      "position": "3 / 3",
+      "canvas": [
+        390,
+        760
+      ],
+      "media": [
+        [
+          390,
+          760
+        ]
+      ],
+      "mediaInside": true,
+      "loaded": true,
+      "pair": null,
+      "thumbs": 3,
+      "chosen": [],
+      "round": "r-search"
+    },
+    "phone-390-uk-light-tall-frame-geometry": {
+      "regions": {
+        "header": [
+          0,
+          0,
+          390,
+          48
+        ],
+        "body": [
+          0,
+          48,
+          390,
+          642
         ],
         "footer": [
           0,
@@ -15848,33 +16778,47 @@
         ]
       },
       "overlaps": [],
-      "underHead": [
-        "chips#4 × choose"
-      ],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
-    "phone-390-uk-light-viewer": {
+    "phone-390-uk-light-viewer-pair": {
+      "shown": [
+        "before"
+      ],
       "position": "1 / 3",
-      "caption": "1 · Компактний список — результати, десктоп· Макет результатів пошуку"
+      "caption": "2 · Дві колонки — сторінка результатів, до і після · Оригінал· Макет результатів пошуку",
+      "zoom": "1 / 32 · Дві колонки — сторінка результатів, до і після · Оригінал· Макет результатів пошуку140%",
+      "sides": [
+        [
+          "before",
+          "true",
+          "Оригінал"
+        ],
+        [
+          "after",
+          "false",
+          "Змінено"
+        ]
+      ]
     },
     "phone-390-uk-light-dictating-geometry": {
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          468.7
+          550.8
         ],
         "footer": [
           0,
-          632,
+          598.8,
           390,
           206
         ]
@@ -15885,16 +16829,16 @@
       "sideways": 0
     },
     "phone-390-uk-light-dictating-context": {
-      "headerBottom": 163.3,
+      "headerBottom": 48,
       "line": [
-        163.3,
-        254.3
+        48,
+        139
       ],
       "scrolled": 0,
       "whole": true,
       "hidden": false,
       "chips": {
-        "top": 206.3,
+        "top": 91,
         "under": true,
         "cut": 0
       }
@@ -15910,12 +16854,12 @@
       "position": "1 / 40",
       "canvas": [
         390,
-        270
+        244
       ],
       "media": [
         [
-          366,
-          229
+          390,
+          244
         ]
       ],
       "mediaInside": true,
@@ -15932,19 +16876,19 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          522.7
+          550.8
         ],
         "footer": [
           0,
-          686,
+          598.8,
           390,
           152
         ]
@@ -15955,31 +16899,31 @@
       "sideways": 0
     },
     "phone-390-uk-light-combination-context": {
-      "headerBottom": 163.3,
+      "headerBottom": 48,
       "line": [
-        163.3,
-        254.3
+        48,
+        139
       ],
       "scrolled": 0,
       "whole": true,
       "hidden": false,
       "chips": {
-        "top": 206.3,
+        "top": 91,
         "under": true,
         "cut": 0
       }
     },
     "phone-390-uk-light-unsaved-guard-context": {
-      "headerBottom": 163.3,
+      "headerBottom": 48,
       "line": [
-        163.3,
-        254.3
+        48,
+        139
       ],
       "scrolled": 0,
       "whole": true,
       "hidden": false,
       "chips": {
-        "top": 206.3,
+        "top": 91,
         "under": true,
         "cut": 0
       }
@@ -16020,7 +16964,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "7 жовт., 07:44",
+      "time": "7 жовт., 16:14",
       "posts": [
         {
           "taskId": "t-search",
@@ -16034,16 +16978,16 @@
       ]
     },
     "phone-390-uk-light-decided-context": {
-      "headerBottom": 163.3,
+      "headerBottom": 48,
       "line": [
-        163.3,
-        254.3
+        48,
+        139
       ],
       "scrolled": 0,
       "whole": true,
       "hidden": false,
       "chips": {
-        "top": 206.3,
+        "top": 91,
         "under": true,
         "cut": 0
       }
@@ -16052,19 +16996,19 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          565.7
+          539.8
         ],
         "footer": [
           0,
-          729,
+          587.8,
           390,
           109
         ]
@@ -16157,19 +17101,19 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          526.7
+          568.8
         ],
         "footer": [
           0,
-          690,
+          616.8,
           390,
           148
         ]
@@ -16190,12 +17134,12 @@
       "position": "1 / 2",
       "canvas": [
         390,
-        270
+        244
       ],
       "media": [
         [
-          366,
-          229
+          390,
+          244
         ]
       ],
       "mediaInside": true,
@@ -16243,19 +17187,19 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          526.7
+          622.8
         ],
         "footer": [
           0,
-          690,
+          670.8,
           390,
           148
         ]
@@ -16266,16 +17210,16 @@
       "sideways": 0
     },
     "phone-390-uk-light-transcribing-guard-context": {
-      "headerBottom": 163.3,
+      "headerBottom": 48,
       "line": [
-        163.3,
-        254.3
+        48,
+        139
       ],
       "scrolled": 0,
       "whole": true,
       "hidden": false,
       "chips": {
-        "top": 206.3,
+        "top": 91,
         "under": true,
         "cut": 0
       }
@@ -16291,19 +17235,19 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          457.7
+          557.8
         ],
         "footer": [
           0,
-          621,
+          605.8,
           390,
           217
         ]
@@ -16318,20 +17262,20 @@
       "lines": 2,
       "mark": [
         16,
-        758.3,
+        743,
         14,
         14
       ],
       "firstLine": [
         38,
-        759,
+        743.8,
         270.5,
         12
       ],
       "markOnFirstLine": true,
       "retry": [
         16,
-        794,
+        778.8,
         142.5,
         44
       ],
@@ -16352,19 +17296,19 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          526.7
+          616
         ],
         "footer": [
           0,
-          690,
+          664,
           390,
           148
         ]
@@ -16378,19 +17322,19 @@
       "regions": {
         "header": [
           0,
-          187.9,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          235.9,
+          48,
           390,
-          511.1
+          484.8
         ],
         "footer": [
           0,
-          747,
+          532.8,
           390,
           91
         ]
@@ -16432,15 +17376,15 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          468.7
+          584
         ],
         "footer": [
           0,
@@ -16474,19 +17418,19 @@
       "regions": {
         "header": [
           0,
-          127.4,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          175.4,
+          48,
           390,
           527.1
         ],
         "footer": [
           0,
-          702.5,
+          575.1,
           390,
           135.5
         ]
@@ -16535,19 +17479,19 @@
       "regions": {
         "header": [
           0,
-          165.4,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          213.4,
+          48,
           390,
-          485.6
+          459.3
         ],
         "footer": [
           0,
-          699,
+          507.3,
           390,
           139
         ]
@@ -16583,20 +17527,20 @@
       "lines": 1,
       "mark": [
         16,
-        774.8,
+        583,
         14,
         14
       ],
       "firstLine": [
         38,
-        775.5,
+        583.8,
         299.9,
         12
       ],
       "markOnFirstLine": true,
       "retry": [
         16,
-        794,
+        602.3,
         150.1,
         44
       ],
@@ -16606,19 +17550,19 @@
       "regions": {
         "header": [
           0,
-          165.4,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          213.4,
+          48,
           390,
-          485.6
+          459.3
         ],
         "footer": [
           0,
-          699,
+          507.3,
           390,
           139
         ]
@@ -16633,20 +17577,20 @@
       "lines": 1,
       "mark": [
         16,
-        774.8,
+        583,
         14,
         14
       ],
       "firstLine": [
         38,
-        775.5,
+        583.8,
         290.6,
         12
       ],
       "markOnFirstLine": true,
       "retry": [
         16,
-        794,
+        602.3,
         150.1,
         44
       ],
@@ -16711,7 +17655,7 @@
         },
         "reasons": [
           "запит дозволу",
-          "gpt-5.6·16 хв",
+          "gpt-5.6·17 хв",
           "Прототип"
         ],
         "overlaps": [],
@@ -16861,15 +17805,6 @@
         "reasons": [],
         "overlaps": [],
         "outside": []
-      },
-      {
-        "task": "t-voice",
-        "needs": false,
-        "line": false,
-        "button": null,
-        "reasons": [],
-        "overlaps": [],
-        "outside": []
       }
     ],
     "phone-390-uk-dark-card-tap": {
@@ -16927,7 +17862,7 @@
         "chevron": 300
       },
       {
-        "row": "/repo/links-impl.jsonl:waiting:1791347270",
+        "row": "/repo/links-impl.jsonl:waiting:1791377864",
         "title": 16,
         "chevron": 300
       },
@@ -17010,12 +17945,12 @@
       "position": "1 / 3",
       "canvas": [
         390,
-        270
+        244
       ],
       "media": [
         [
-          366,
-          229
+          390,
+          244
         ]
       ],
       "mediaInside": true,
@@ -17029,19 +17964,19 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          526.7
+          556.3
         ],
         "footer": [
           0,
-          690,
+          604.3,
           390,
           148
         ]
@@ -17062,16 +17997,16 @@
       "position": "1 / 3",
       "canvas": [
         390,
-        270
+        331
       ],
       "media": [
         [
-          280,
-          175
+          390,
+          244
         ],
         [
-          280,
-          175
+          390,
+          244
         ]
       ],
       "mediaInside": true,
@@ -17084,24 +18019,24 @@
       "labels": {
         "drawn": [
           [
-            55,
-            429.3,
-            280,
-            175
+            0,
+            310.1,
+            390,
+            243.8
           ],
           [
-            55,
-            429.3,
-            280,
-            175
+            0,
+            310.1,
+            390,
+            243.8
           ]
         ],
         "labels": [
           {
             "side": "original",
             "box": [
-              55,
-              410.3,
+              16,
+              291,
               53.7,
               15
             ],
@@ -17111,8 +18046,8 @@
           {
             "side": "changed",
             "box": [
-              287,
-              410.3,
+              326,
+              291,
               48,
               15
             ],
@@ -17121,8 +18056,8 @@
           }
         ],
         "track": [
-          55,
-          335
+          16,
+          374
         ],
         "fitted": true
       }
@@ -17131,19 +18066,19 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          526.7
+          638
         ],
         "footer": [
           0,
-          690,
+          686,
           390,
           148
         ]
@@ -17164,12 +18099,12 @@
       "position": "40 / 40",
       "canvas": [
         390,
-        270
+        244
       ],
       "media": [
         [
-          366,
-          229
+          390,
+          244
         ]
       ],
       "mediaInside": true,
@@ -17189,27 +18124,25 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          526.7
+          550.8
         ],
         "footer": [
           0,
-          690,
+          598.8,
           390,
           148
         ]
       },
       "overlaps": [],
-      "underHead": [
-        "chips#4 × choose"
-      ],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -17224,12 +18157,12 @@
       "position": "3 / 3",
       "canvas": [
         390,
-        270
+        219
       ],
       "media": [
         [
-          366,
-          206
+          390,
+          219
         ]
       ],
       "mediaInside": true,
@@ -17248,15 +18181,71 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          526.7
+          526.4
+        ],
+        "footer": [
+          0,
+          574.4,
+          390,
+          148
+        ]
+      },
+      "overlaps": [],
+      "underHead": [],
+      "outside": [],
+      "sideways": 0
+    },
+    "phone-390-uk-dark-viewer": {
+      "position": "1 / 3",
+      "caption": "1 · Компактний список — результати, десктоп· Макет результатів пошуку"
+    },
+    "phone-390-uk-dark-tall-frame": {
+      "slide": "1:f2",
+      "caption": "1Компактний список — результати, телефон",
+      "captionParts": [
+        "1",
+        "Компактний список",
+        "результати, телефон"
+      ],
+      "position": "3 / 3",
+      "canvas": [
+        390,
+        760
+      ],
+      "media": [
+        [
+          390,
+          760
+        ]
+      ],
+      "mediaInside": true,
+      "loaded": true,
+      "pair": null,
+      "thumbs": 3,
+      "chosen": [],
+      "round": "r-search"
+    },
+    "phone-390-uk-dark-tall-frame-geometry": {
+      "regions": {
+        "header": [
+          0,
+          0,
+          390,
+          48
+        ],
+        "body": [
+          0,
+          48,
+          390,
+          642
         ],
         "footer": [
           0,
@@ -17266,33 +18255,47 @@
         ]
       },
       "overlaps": [],
-      "underHead": [
-        "chips#4 × choose"
-      ],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
-    "phone-390-uk-dark-viewer": {
+    "phone-390-uk-dark-viewer-pair": {
+      "shown": [
+        "before"
+      ],
       "position": "1 / 3",
-      "caption": "1 · Компактний список — результати, десктоп· Макет результатів пошуку"
+      "caption": "2 · Дві колонки — сторінка результатів, до і після · Оригінал· Макет результатів пошуку",
+      "zoom": "1 / 32 · Дві колонки — сторінка результатів, до і після · Оригінал· Макет результатів пошуку140%",
+      "sides": [
+        [
+          "before",
+          "true",
+          "Оригінал"
+        ],
+        [
+          "after",
+          "false",
+          "Змінено"
+        ]
+      ]
     },
     "phone-390-uk-dark-dictating-geometry": {
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          468.7
+          550.8
         ],
         "footer": [
           0,
-          632,
+          598.8,
           390,
           206
         ]
@@ -17303,16 +18306,16 @@
       "sideways": 0
     },
     "phone-390-uk-dark-dictating-context": {
-      "headerBottom": 163.3,
+      "headerBottom": 48,
       "line": [
-        163.3,
-        254.3
+        48,
+        139
       ],
       "scrolled": 0,
       "whole": true,
       "hidden": false,
       "chips": {
-        "top": 206.3,
+        "top": 91,
         "under": true,
         "cut": 0
       }
@@ -17328,12 +18331,12 @@
       "position": "1 / 40",
       "canvas": [
         390,
-        270
+        244
       ],
       "media": [
         [
-          366,
-          229
+          390,
+          244
         ]
       ],
       "mediaInside": true,
@@ -17350,19 +18353,19 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          522.7
+          550.8
         ],
         "footer": [
           0,
-          686,
+          598.8,
           390,
           152
         ]
@@ -17373,31 +18376,31 @@
       "sideways": 0
     },
     "phone-390-uk-dark-combination-context": {
-      "headerBottom": 163.3,
+      "headerBottom": 48,
       "line": [
-        163.3,
-        254.3
+        48,
+        139
       ],
       "scrolled": 0,
       "whole": true,
       "hidden": false,
       "chips": {
-        "top": 206.3,
+        "top": 91,
         "under": true,
         "cut": 0
       }
     },
     "phone-390-uk-dark-unsaved-guard-context": {
-      "headerBottom": 163.3,
+      "headerBottom": 48,
       "line": [
-        163.3,
-        254.3
+        48,
+        139
       ],
       "scrolled": 0,
       "whole": true,
       "hidden": false,
       "chips": {
-        "top": 206.3,
+        "top": 91,
         "under": true,
         "cut": 0
       }
@@ -17438,7 +18441,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "7 жовт., 07:45",
+      "time": "7 жовт., 16:14",
       "posts": [
         {
           "taskId": "t-search",
@@ -17452,16 +18455,16 @@
       ]
     },
     "phone-390-uk-dark-decided-context": {
-      "headerBottom": 163.3,
+      "headerBottom": 48,
       "line": [
-        163.3,
-        254.3
+        48,
+        139
       ],
       "scrolled": 0,
       "whole": true,
       "hidden": false,
       "chips": {
-        "top": 206.3,
+        "top": 91,
         "under": true,
         "cut": 0
       }
@@ -17470,19 +18473,19 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          565.7
+          539.8
         ],
         "footer": [
           0,
-          729,
+          587.8,
           390,
           109
         ]
@@ -17575,19 +18578,19 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          526.7
+          568.8
         ],
         "footer": [
           0,
-          690,
+          616.8,
           390,
           148
         ]
@@ -17608,12 +18611,12 @@
       "position": "1 / 2",
       "canvas": [
         390,
-        270
+        244
       ],
       "media": [
         [
-          366,
-          229
+          390,
+          244
         ]
       ],
       "mediaInside": true,
@@ -17661,19 +18664,19 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          526.7
+          622.8
         ],
         "footer": [
           0,
-          690,
+          670.8,
           390,
           148
         ]
@@ -17684,16 +18687,16 @@
       "sideways": 0
     },
     "phone-390-uk-dark-transcribing-guard-context": {
-      "headerBottom": 163.3,
+      "headerBottom": 48,
       "line": [
-        163.3,
-        254.3
+        48,
+        139
       ],
       "scrolled": 0,
       "whole": true,
       "hidden": false,
       "chips": {
-        "top": 206.3,
+        "top": 91,
         "under": true,
         "cut": 0
       }
@@ -17709,19 +18712,19 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          457.7
+          557.8
         ],
         "footer": [
           0,
-          621,
+          605.8,
           390,
           217
         ]
@@ -17736,20 +18739,20 @@
       "lines": 2,
       "mark": [
         16,
-        758.3,
+        743,
         14,
         14
       ],
       "firstLine": [
         38,
-        759,
+        743.8,
         270.5,
         12
       ],
       "markOnFirstLine": true,
       "retry": [
         16,
-        794,
+        778.8,
         142.5,
         44
       ],
@@ -17770,19 +18773,19 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          526.7
+          616
         ],
         "footer": [
           0,
-          690,
+          664,
           390,
           148
         ]
@@ -17796,19 +18799,19 @@
       "regions": {
         "header": [
           0,
-          187.9,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          235.9,
+          48,
           390,
-          511.1
+          484.8
         ],
         "footer": [
           0,
-          747,
+          532.8,
           390,
           91
         ]
@@ -17850,15 +18853,15 @@
       "regions": {
         "header": [
           0,
-          115.3,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          163.3,
+          48,
           390,
-          468.7
+          584
         ],
         "footer": [
           0,
@@ -17892,19 +18895,19 @@
       "regions": {
         "header": [
           0,
-          127.4,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          175.4,
+          48,
           390,
           527.1
         ],
         "footer": [
           0,
-          702.5,
+          575.1,
           390,
           135.5
         ]
@@ -17953,19 +18956,19 @@
       "regions": {
         "header": [
           0,
-          165.4,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          213.4,
+          48,
           390,
-          485.6
+          459.3
         ],
         "footer": [
           0,
-          699,
+          507.3,
           390,
           139
         ]
@@ -18001,20 +19004,20 @@
       "lines": 1,
       "mark": [
         16,
-        774.8,
+        583,
         14,
         14
       ],
       "firstLine": [
         38,
-        775.5,
+        583.8,
         299.9,
         12
       ],
       "markOnFirstLine": true,
       "retry": [
         16,
-        794,
+        602.3,
         150.1,
         44
       ],
@@ -18024,19 +19027,19 @@
       "regions": {
         "header": [
           0,
-          165.4,
+          0,
           390,
           48
         ],
         "body": [
           0,
-          213.4,
+          48,
           390,
-          485.6
+          459.3
         ],
         "footer": [
           0,
-          699,
+          507.3,
           390,
           139
         ]
@@ -18051,20 +19054,20 @@
       "lines": 1,
       "mark": [
         16,
-        774.8,
+        583,
         14,
         14
       ],
       "firstLine": [
         38,
-        775.5,
+        583.8,
         290.6,
         12
       ],
       "markOnFirstLine": true,
       "retry": [
         16,
-        794,
+        602.3,
         150.1,
         44
       ],

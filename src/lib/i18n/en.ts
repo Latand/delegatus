@@ -1765,6 +1765,9 @@ export const en = {
   "lightbox.zoomIn": "Zoom in",
   "lightbox.previous": "Previous image",
   "lightbox.next": "Next image",
+  "lightbox.compare": "Compare with the original",
+  "lightbox.original": "Original",
+  "lightbox.changed": "Changed",
 
   "proto.title": "Prototype review",
   "proto.dialogAria": "Prototype review of «{title}»",

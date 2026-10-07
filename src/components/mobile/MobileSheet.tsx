@@ -131,7 +131,7 @@ export function MobileSheet({
         tabIndex={-1}
         data-mobile2-sheet={name}
         className={`flex flex-col bg-raised shadow-2 outline-none transition-[transform,opacity] duration-[320ms] ease-[cubic-bezier(0.2,0,0,1)] starting:translate-y-6 starting:opacity-0 motion-reduce:transition-none ${
-          full ? "h-full max-h-full rounded-none" : "max-h-[88%] rounded-t-[16px]"
+          full ? "h-full max-h-full rounded-none pt-[env(safe-area-inset-top)]" : "max-h-[88%] rounded-t-[16px]"
         } pb-[calc(6px+env(safe-area-inset-bottom))]`}
       >
         {full ? null : (
