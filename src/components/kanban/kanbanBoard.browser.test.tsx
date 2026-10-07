@@ -16927,7 +16927,20 @@ describe("launch layout shift rendered evidence", () => {
           return performance.now();
         }, readerOf);
         await page.getByRole("button", { name: "Launch the agent" }).first().click();
-        await page.waitForTimeout(14_000);
+        const orderOf = () => page.evaluate((id) => {
+          const cards = [...document.querySelectorAll<HTMLElement>('.col-body[data-status="assigned"] .card[data-id^="task:"]')];
+          const read = cards.findIndex((entry) => entry.dataset.id === id);
+          const launched = cards.findIndex((entry) => entry.dataset.id === "task:t-launch");
+          return { read, launched };
+        }, readId);
+        /* Where the card lands is read as it lands, with its reader open
+           (docs/design/launch-render-polish.md §5). The order at the turn's
+           end is recorded too: on a loaded machine the finished agent's tile
+           can leave its card by then, which this case does not gate. */
+        const landedAt = Date.now();
+        await page.locator('.card[data-id="task:t-launch"] [data-kanban-reader]').first().waitFor({ timeout: 14_000 });
+        const landed = await orderOf();
+        await page.waitForTimeout(Math.max(0, 14_000 - (Date.now() - landedAt)));
         const shifts = await collectShifts(page, sentAt);
         const cls = Number(shifts.reduce((sum, entry) => sum + entry.value, 0).toFixed(4));
         await page.screenshot({ path: path.join(out, `${label}-read-launch-desktop-1440.png`) });
@@ -16935,13 +16948,8 @@ describe("launch layout shift rendered evidence", () => {
           const shares = (window as unknown as { __readerShare: number[] }).__readerShare;
           return { minShare: Number(Math.min(...shares).toFixed(3)), samples: shares.length };
         });
-        const launchedBelow = await page.evaluate((id) => {
-          const cards = [...document.querySelectorAll<HTMLElement>('.col-body[data-status="assigned"] .card[data-id^="task:"]')];
-          const read = cards.findIndex((entry) => entry.dataset.id === id);
-          const launched = cards.findIndex((entry) => entry.dataset.id === "task:t-launch");
-          return { read, launched };
-        }, readId);
-        const reading = { viewport: "desktop-1440", cls, shifts: shifts.length, largest: [...shifts].sort((a, b) => b.value - a.value).slice(0, 8), readerShare: state, order: launchedBelow, pageErrors };
+        const launchedBelow = landed;
+        const reading = { viewport: "desktop-1440", cls, shifts: shifts.length, largest: [...shifts].sort((a, b) => b.value - a.value).slice(0, 8), readerShare: state, order: launchedBelow, orderAtTurnEnd: await orderOf(), pageErrors };
         fs.mkdirSync("evidence/launch-render-polish", { recursive: true });
         fs.writeFileSync(`evidence/launch-render-polish/read-launch-cls-${label}.json`, `${JSON.stringify({ label, limit: LAUNCH_CLS_LIMIT, readings: [reading] }, null, 2)}\n`);
         expect(pageErrors, "page errors").toEqual([]);
