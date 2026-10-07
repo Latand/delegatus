@@ -11,9 +11,11 @@ import { LAYER } from "@/components/layers";
  * a bubble and a call element do, so a click anywhere else in the lane reaches
  * the page underneath. Motion is transform and opacity only.
  *
- * The lane is clipped at its end beside the character and nowhere else: a new
- * element comes out from behind that edge while the older ones rise, and an
- * element that grows shows its new part from there.
+ * A new element comes out from behind the lane's end beside the character
+ * while the older ones rise: the component cuts what of it is still beyond
+ * that edge, so the lane itself is not clipped there and the newest bubble's
+ * glow fades as it is drawn. An element that grows shows its new part from
+ * behind its own edge.
  *
  * One look (the operator's choice of 2026-10-06 among the prototype's three):
  * the character in a lit halo whose ring takes the state's colour, glass speech
@@ -127,8 +129,12 @@ export const VOICE_COMPANION_CSS = `
 .vc-shape-end { position: absolute; right: 0; bottom: 0; width: 24px; height: 24px; pointer-events: auto; color: var(--color-danger); animation: vc-pop 200ms var(--vc-ease); }
 
 /* The lane: bubbles and calls, each its own element */
-.vc-lane { position: absolute; pointer-events: none; clip-path: inset(-4000px -48px 0 -48px); }
-.vc-lane[data-direction="down"] { clip-path: inset(0 -48px -4000px -48px); }
+.vc-lane { position: absolute; pointer-events: none; clip-path: inset(-4000px -48px -48px -48px); transition: opacity 180ms ease-out; }
+.vc-lane[data-direction="down"] { clip-path: inset(-48px -48px -4000px -48px); }
+/* A move the companion makes by itself: the lane empties where it stands, is gone while the character travels,
+   and shows again at the new place. */
+.vc-lane[data-relocating] { opacity: 0; transition: opacity 140ms linear; }
+.vc-lane[data-relocating="travel"] { visibility: hidden; }
 .vc-stack { position: relative; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; gap: 8px; padding-bottom: 8px; }
 .vc-lane[data-direction="down"] .vc-stack { flex-direction: column-reverse; padding-bottom: 0; padding-top: 8px; }
 .vc-floater { display: flex; min-width: 0; will-change: transform; }

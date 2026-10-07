@@ -13,7 +13,8 @@
  *    companion collapses to its small shape, which takes the nearest free
  *    place for itself.
  *  - Unless the operator put it there, neither the character nor its lane
- *    covers a line of the page's text, and a surface that fills with rows (a
+ *    covers a line of the page's text (the component counts the pictures of
+ *    a feed's rows, their avatars, with it), and a surface that fills with rows (a
  *    conversation's feed) is kept clear as a whole, its empty part included,
  *    wherever a place outside it exists: the rows that arrive while it talks
  *    then arrive where nothing of the companion stands.

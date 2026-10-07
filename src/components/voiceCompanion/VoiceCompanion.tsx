@@ -87,7 +87,7 @@ const SETTINGS_FAILURES = new Set(["NO_KEY", "CAP_REACHED", "KEY_FROM_ENV"]);
 export const NOMINAL_MS_PER_CHAR = 58;
 /* Room kept at the far end of the lane for a bubble that is leaving. */
 const EXIT_ROOM = 18;
-/* Room kept at the character's end of the lane, where the lane is clipped, for a shadow. */
+/* Room kept at the character's end of the lane, between the newest element and the edge it came out from. */
 const END_ROOM = 8;
 const DRAG_THRESHOLD = 6;
 /* The longest the first appearance waits for the host's late surfaces. */
@@ -98,6 +98,11 @@ const ENTER_SHOWN = 0.5;
 const FADE_IN_MS = 200;
 const EXIT_MS = 420;
 const QUICK_EXIT_MS = 140;
+/* A move the companion makes by itself with elements in its lane: the lane fades where it stands over the
+   first span, the character travels with no lane over the second (its own transition is 260 ms), and the lane
+   shows again at the new place. */
+const LANE_OUT_MS = 140;
+const TRAVEL_MS = 280;
 
 const ENGINE_NAME = { claude: "Claude", codex: "Codex" } as const;
 
@@ -192,6 +197,18 @@ function textRects(self: Element | null): Rect[] {
     }
   }
   return rects;
+}
+
+/** The pictures in each surface that fills with rows (a row's avatar, the icon beside its author): a row's
+    content as much as its text, though they hold none. Every row begins at its avatar, so a place over the
+    feed's avatars stands where the next row's will be. Kept off as the page's text is. */
+function rowGraphics(self: Element | null, rows: string | undefined): Rect[] {
+  if (!rows) return [];
+  const clips = new Map<Element, DOMRect | null>();
+  return [...document.querySelectorAll<HTMLElement>(rows)].filter((surface) => !self?.contains(surface))
+    .flatMap((surface) => [...surface.querySelectorAll<Element>("img, svg, canvas, video, [role='img']")])
+    .filter((node) => !node.parentElement?.closest("svg") && (node.checkVisibility?.({ checkOpacity: true, checkVisibilityCSS: true }) ?? true))
+    .flatMap((node) => reachable(node.parentElement, node.getBoundingClientRect(), clips) ?? []);
 }
 
 /** The surfaces that fill with rows (a conversation's feed), as the part of each a reader can see. */
@@ -323,6 +340,13 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
   const [talks, setTalks] = useState(0);
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const [layout, setLayout] = useState<Layout | null>(null);
+  /* The layout on screen: `layout` itself, except while the companion moves itself with elements in its lane.
+     Then the lane empties where it stands before the character sets off, and shows again once it has arrived,
+     so nothing in it is carried across the page or swings to another side on the way. */
+  const [view, setView] = useState<Layout | null>(null);
+  const [relocating, setRelocating] = useState<"out" | "travel" | null>(null);
+  /* Set by the operator's own moves (a drop, a key, a resize): those are shown as they happen. */
+  const moveAtOnce = useRef(false);
   /* While held: where the character is and the lane it would have there. */
   const [heldView, setHeld] = useState<{ at: Point; lane: LaneLayout | null } | null>(null);
   const [muted, setMuted] = useState(false);
@@ -348,6 +372,9 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
   /* What the last placement was computed from: the same page gives the same place without a second search. */
   const settledFor = useRef<string | null>(null);
   const swallowClick = useRef(false);
+  /* What the companion keeps off unless the operator put it there: the page's text, and the pictures of the rows
+     in a feed. */
+  const pageContent = useCallback(() => [...textRects(root.current), ...rowGraphics(root.current, rows)], [rows]);
 
   const shape = SHAPE;
   const block = BLOCK;
@@ -368,7 +395,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     const began = performance.now();
     const viewport = viewportSize();
     const obstacles = read?.obstacles ?? [...controlRects(root.current, protect, rows), ...(reserve?.() ?? [])];
-    const text = read?.text ?? textRects(root.current);
+    const text = read?.text ?? pageContent();
     const surfaces = rowSurfaces(root.current, rows);
     const corner = anchor.current ?? { x: viewport.width - 16, y: viewport.height - 16 };
     const inputs = JSON.stringify([viewport, isCollapsed, corner, chosen.current, obstacles, text, surfaces]);
@@ -390,20 +417,21 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     }
     mark("vc:settle", performance.now() - began);
     setLayout((current) => (current && JSON.stringify(current) === JSON.stringify(next) ? current : next));
-  }, [block, protect, rows, reserve, shape]);
+  }, [block, protect, rows, reserve, shape, pageContent]);
 
   /* First placement, once the host's late surfaces are on the page, and again whenever the viewport changes. */
   useLayoutEffect(() => {
     if (!shellReady) return;
     settle(collapsed);
-    const onResize = () => settle(collapsed);
+    const onResize = () => { moveAtOnce.current = true; settle(collapsed); };
     addEventListener("resize", onResize);
     return () => removeEventListener("resize", onResize);
   }, [collapsed, settle, shellReady]);
 
-  const expanded = layout?.mode === "expanded";
+  const expanded = view?.mode === "expanded";
+  /* The lane reserved where the character is going, and the one on screen. */
   const lane = layout?.mode === "expanded" ? layout.lane : null;
-  const shownLane = heldView ? heldView.lane : lane;
+  const shownLane = heldView ? heldView.lane : view?.mode === "expanded" ? view.lane : null;
 
   /** The rectangles the companion reserves where it stands: the character, and the lane when open. */
   const footprint = useCallback((): Rect[] => {
@@ -523,6 +551,32 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     if (departs > gate) setGate(departs);
   }, [departs, gate]);
 
+  /* The screen follows the placement: at once, or for a move the companion makes by itself with elements in its
+     lane, in three steps (the lane empties, the character travels, the lane shows again). A new placement on the
+     way starts over from what is on screen. */
+  const carrying = floaters.length > 0;
+  useLayoutEffect(() => {
+    if (layout === view) return;
+    const atOnce = moveAtOnce.current;
+    moveAtOnce.current = false;
+    const moves = !!view && !!layout && (layout.at.x !== view.at.x || layout.at.y !== view.at.y || layout.mode !== view.mode);
+    const staged = !atOnce && moves && view?.mode === "expanded" && (layout?.mode === "expanded" || layout?.yielded === true) && carrying && !reducedMotion();
+    if (!staged) {
+      setView(layout);
+      setRelocating(null);
+      return;
+    }
+    setRelocating("out");
+    const timer = setTimeout(() => { setView(layout); setRelocating(layout!.mode === "expanded" ? "travel" : null); }, LANE_OUT_MS);
+    return () => clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- runs per placement; what the lane holds is read as it is then
+  }, [layout]);
+  useEffect(() => {
+    if (relocating !== "travel") return;
+    const timer = setTimeout(() => setRelocating(null), TRAVEL_MS);
+    return () => clearTimeout(timer);
+  }, [relocating, view]);
+
   /* A clock for the lingering, ticking only while something can still leave. */
   const lingering = floaters.some((floater) => floater.settled);
   useEffect(() => {
@@ -552,9 +606,9 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
          its tile, which flags the answer when it comes. The row it made way for is the record of what was sent.
          A page that reads as it did at the last placement gives the same answer: the search is not run again. */
       const reserved = footprint();
-      if (reserved.some((rect) => !isFree(rect, obstacles))) { settle(collapsed, { obstacles, text: textRects(root.current) }); return; }
+      if (reserved.some((rect) => !isFree(rect, obstacles))) { settle(collapsed, { obstacles, text: pageContent() }); return; }
       if (!chosen.current) {
-        const text = textRects(root.current);
+        const text = pageContent();
         if (reserved.some((rect) => !isFree(rect, text, 0))) settle(collapsed, { obstacles, text });
       }
     };
@@ -582,7 +636,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
       document.removeEventListener("scroll", onSettled, true);
       if (timer) clearTimeout(timer);
     };
-  }, [layout, dragging, collapsed, protect, rows, reserve, settle, footprint, atRest]);
+  }, [layout, dragging, collapsed, protect, rows, reserve, settle, footprint, atRest, pageContent]);
 
   /* The lane's stack: fit, rise and leave. Measured after each commit and
      played back as transforms, so nothing animates layout. */
@@ -667,7 +721,9 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
            travels the height it gained: it lies over no element that stands nearer the character. */
         const grew = was ? Math.max(0, place.height - was.height) : 0;
         const hidden = was ? hiddenByClip(node, up) : 0;
-        return { node, was, arriving, flying, shifted: was ? place.far !== was.far : arriving, reveal: grew || hidden >= 0.5 ? grew + hidden : 0, travel: (was ? sign * (place.far - was.far) : arriving ? sign * sheet : 0) + flying };
+        /* How far the element stands from the lane's end at the character once it has risen. */
+        const near = up ? stack.offsetHeight - place.top - place.height : place.top;
+        return { node, was, arriving, flying, near, shifted: was ? place.far !== was.far : arriving, reveal: grew || hidden >= 0.5 ? grew + hidden : 0, travel: (was ? sign * (place.far - was.far) : arriving ? sign * sheet : 0) + flying };
       });
       /* A pass in which nothing arrived and nothing grew (text that streamed into a line it already had)
          leaves every rise in flight as it is: restarting one would stretch it and break its pace. */
@@ -678,17 +734,27 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
       const curve = riseCurve(speed, most);
       const easing = cssBezier(curve);
       const flies = (animation: Animation) => { animation.id = "rise"; startNow(animation); sheetFlight.current = { animation, travel: most, curve }; };
-      for (const { node, was, arriving, travel, reveal } of plans) {
+      const cut = (by: number) => (up ? `inset(-48px -48px ${by}px -48px)` : `inset(${by}px -48px -48px -48px)`);
+      for (const { node, was, arriving, travel, reveal, near } of plans) {
         if (!was) {
           entered += 1;
           mark(node.dataset.kind === "speech" ? "vc:bubble-in" : "vc:call-in", RISE_MS);
           if (arriving) {
-            /* It comes out from the lane's end at the character, where the lane is clipped, as the sheet rises. */
+            /* It comes out from behind the lane's end at the character as the sheet rises: what of it is still
+               beyond that edge is cut there, on the same curve, and once it is all out its own shadow (the
+               bubble's warm glow) shows whole, so the glow fades as it was drawn and ends in no line. */
             const animation = node.animate(
               [{ transform: `translate3d(0, ${travel}px, 0)`, opacity: 0 }, { opacity: 1, offset: ENTER_SHOWN }, { transform: "translate3d(0, 0, 0)", opacity: 1 }],
               { duration: RISE_MS, easing },
             );
             flies(animation);
+            const beyond = Math.abs(travel) - near;
+            if (beyond >= 0.5) {
+              const out = Math.min(1, beyond / Math.abs(travel));
+              const edge = node.animate([{ clipPath: cut(beyond) }, { clipPath: cut(0), offset: out }, { clipPath: cut(-48) }], { duration: RISE_MS, easing });
+              edge.id = "reveal";
+              startNow(edge);
+            }
           } else { node.animate([{ opacity: 0 }, { opacity: 1 }], { duration: FADE_IN_MS, easing: "ease-out" }); faded = true; }
           continue;
         }
@@ -698,7 +764,6 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
         const animation = node.animate([{ transform: `translate3d(0, ${travel}px, 0)` }, { transform: "translate3d(0, 0, 0)" }], { duration: RISE_MS, easing, composite: "replace" });
         flies(animation);
         if (reveal >= 1) {
-          const cut = (by: number) => (up ? `inset(-48px -48px ${by}px -48px)` : `inset(${by}px -48px -48px -48px)`);
           const revealing = node.animate([{ clipPath: cut(reveal) }, { clipPath: cut(0) }], { duration: RISE_MS, easing });
           revealing.id = "reveal";
           startNow(revealing);
@@ -794,6 +859,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     anchor.current = { x: held.at.x + size.width, y: held.at.y + size.height };
     chosen.current = true;
     settledFor.current = null;
+    moveAtOnce.current = true;
     setLayout(layout?.mode === "expanded" ? { mode: "expanded", at: held.at, lane: laneLayout(viewportSize(), { ...held.at, ...block }, layout.lane.rect.height) } : { mode: "collapsed", at: held.at, yielded: false });
     setDragging(false);
     setHeld(null);
@@ -804,6 +870,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     const move = ({ ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] } as Record<string, [number, number]>)[event.key];
     if (!move && event.key !== "Home") return;
     event.preventDefault();
+    moveAtOnce.current = true;
     const size = expanded ? block : shape;
     if (event.key === "Home") { anchor.current = null; chosen.current = false; }
     else {
@@ -959,9 +1026,9 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     );
   };
 
-  const at = heldView?.at ?? layout?.at ?? { x: -9999, y: -9999 };
+  const at = heldView?.at ?? view?.at ?? { x: -9999, y: -9999 };
   const size = expanded ? block : shape;
-  const style = { width: size.width, height: size.height, transform: `translate3d(${at.x}px, ${at.y}px, 0)`, visibility: layout ? undefined : ("hidden" as const) };
+  const style = { width: size.width, height: size.height, transform: `translate3d(${at.x}px, ${at.y}px, 0)`, visibility: view ? undefined : ("hidden" as const) };
   const transcriptLine = (line: SpeechLine) => {
     const who = line.speaker === "operator" ? t("voiceCompanion.you") : "Delegatus";
     const cut = line.playback === "cut" ? ` (${t("voiceCompanion.cutAfter", { s: seconds(line.playedMs ?? 0) })})` : "";
@@ -977,9 +1044,9 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
       data-voice-companion
       data-mode={adapter.mode}
       data-starting={starting ? "" : undefined}
-      data-layout={layout?.mode ?? "expanded"}
-      data-placed={layout ? "" : undefined}
-      data-yielded={layout?.mode === "collapsed" && layout.yielded ? "" : undefined}
+      data-layout={view?.mode ?? "expanded"}
+      data-placed={view ? "" : undefined}
+      data-yielded={view?.mode === "collapsed" && view.yielded ? "" : undefined}
       data-phase={state.phase}
       data-collapsed={!expanded ? "" : undefined}
       data-delegation-stage={stage ?? undefined}
@@ -994,6 +1061,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
           data-side={shownLane.side}
           data-align={shownLane.align}
           data-direction={shownLane.direction}
+          data-relocating={relocating ?? undefined}
           style={{ left: shownLane.rect.x - at.x, top: shownLane.rect.y - at.y, width: shownLane.rect.width, height: shownLane.rect.height, ["--vc-room" as string]: `${shownLane.rect.height - EXIT_ROOM - END_ROOM}px` }}
         >
           <div className="vc-stack" ref={stackEl}>
