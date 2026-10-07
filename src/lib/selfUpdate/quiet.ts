@@ -285,7 +285,8 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
     const memory = firstUnresolved.get(ports) ?? new Map<string, number>();
     firstUnresolved.set(ports, memory);
     /* One bound per clock: a recorded owner and an ownerless record each have
-       their own, keyed by the record itself, and a reference a journal row
+       their own, keyed by the record, its process and the transcript it
+       names, and a reference a journal row
        or a stage names has one by its id. It runs from the newest record of
        the transcript the item names when one can be read, else from the first
        probe that saw the item (R8). `shownAs` is the id the item is counted
@@ -301,7 +302,7 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
       return false;
     };
     const ownerPastBound = (item: OwnerReading | OwnerlessReading): boolean =>
-      pastBound(`${isOwner(item) ? "owner" : "ownerless"}:${item.id}`, "unresolved", item.tail?.lastRecordAt ?? null, displayId(item));
+      pastBound(`${isOwner(item) ? "owner" : "ownerless"}:${item.id}:${item.artifactPath ?? ""}`, "unresolved", item.tail?.lastRecordAt ?? null, displayId(item));
     /* R8 clock 1: a hosted row with no process past its launch grace proves
        nothing owns it. */
     const expired = (record: OwnerlessReading): boolean => record.kind === "hosted-row"

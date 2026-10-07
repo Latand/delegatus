@@ -873,6 +873,20 @@ describe("each owner on its own records", () => {
     expect(await probe(p, now + 2 * FIVE_MINUTES)).toMatchObject({ quiet: true, blockers: { turns: 0, unresolvedBlocking: 0 } });
   });
 
+  test("a process whose record moves to another transcript starts a new bound for that transcript (R1, R8)", async () => {
+    const pathA = transcript("settled");
+    const c = conversation(pathA);
+    const host = spawn();
+    claimHost(c.key, pathA, host.identity, "idle");
+    rmSync(pathA);
+    const p = ports(), now = Date.now();
+    expect(await probe(p, now)).toMatchObject({ quiet: false, blockers: { turns: 1, turnList: [{ reason: "turn-unread" }] } });
+    const pathB = join(f.dir, "moved.jsonl");
+    f.registry.upsert({ ...f.registry.readOnlySnapshot().entries[sessionKeyId(c.key)]!, artifactPath: pathB });
+    expect(await probe(p, now + FIVE_MINUTES)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolvedBlocking: 1 } });
+    expect(await probe(p, now + 2 * FIVE_MINUTES)).toMatchObject({ quiet: true, blockers: { turns: 0, unresolvedBlocking: 0 } });
+  });
+
   test("a finished headless round at an earlier artifact leaves a fresh successor's ownerless row its own launch hold (R1, R2, R8)", async () => {
     const now = Date.now();
     const pathA = transcript("settled");
