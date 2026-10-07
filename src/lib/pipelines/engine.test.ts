@@ -1296,6 +1296,81 @@ test("a stage branch is adopted onto an owned delivery branch when the lane ref 
   }
 });
 
+/** A successor lane created on an existing pull request branch: the branch is
+    the previous lane's own pipeline branch, the successor's delivery claim
+    (epoch 2) targets it, and the stage agent commits straight onto it. */
+async function successorOnPullRequestBranch(name: string, previousState: Pipeline["state"]) {
+  const fixture = await realWorktreeLane(name, [
+    { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review", next: null },
+  ], "remote-branch");
+  const { git, repo, worktree } = fixture;
+  const lane = loadPipelines().find((item) => item.id === fixture.id)!;
+  const previous = structuredClone(lane);
+  previous.id = "previouslane";
+  previous.worktreeDir = path.join(path.dirname(repo), `${path.basename(repo)}-pipeline-${previous.id}`);
+  previous.branch = lane.branch.slice(0, -lane.id.length) + previous.id;
+  const prBranch = previous.branch;
+  (await git(worktree, "branch", "-m", prBranch));
+  lane.delivery!.target.branch = `refs/heads/${prBranch}`;
+  lane.delivery!.epoch = 2;
+  previous.state = previousState;
+  previous.cursor = previousState === "completed" || previousState === "closed" ? null : previous.cursor;
+  previous.closedAt = previousState === "closed" ? new Date().toISOString() : null;
+  previous.delivery = { ...structuredClone(lane.delivery!), ownerId: previous.id, epoch: 1,
+    active: false, publish: "disabled", releasedAt: new Date().toISOString() };
+  savePipelines([lane, previous]);
+  fs.writeFileSync(path.join(worktree, "build.txt"), "successor work\n");
+  (await git(worktree, "add", "build.txt"));
+  (await git(worktree, "commit", "-m", "successor stage work"));
+  return { ...fixture, lane, previous, prBranch, head: (await git(worktree, "rev-parse", "HEAD")) };
+}
+
+for (const previousState of ["completed", "closed"] as const) {
+  test(`a successor lane on a pull request branch settles its passed stage after a ${previousState} lane`, async () => {
+    const fixture = await successorOnPullRequestBranch(`stage-branch-successor-${previousState}`, previousState);
+    try {
+      const { git, h, id, origin, worktree, prBranch, head } = fixture;
+      await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+      const settled = loadPipelines().find((item) => item.id === id)!;
+      expect(settled.stateDetail ?? null).toBeNull();
+      expect(settled).toMatchObject({ state: "running", lastPassedCommit: head, cursor: { stageId: "review" } });
+      expect((await git(worktree, "branch", "--show-current"))).toBe(prBranch);
+      expect((await git(origin, "rev-parse", `refs/heads/${prBranch}`))).toBe(head);
+    } finally {
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const previousState of ["running", "needs_decision"] as const) {
+  test(`a successor lane is refused the pull request branch while the previous lane is ${previousState}`, async () => {
+    const fixture = await successorOnPullRequestBranch(`stage-branch-successor-${previousState}`, previousState);
+    try {
+      const { git, h, worktree, lane, previous, prBranch, head } = fixture;
+      const { commitAndAdoptStageBranch } = await import("./stageBranch");
+      const result = await commitAndAdoptStageBranch(lane, "build", h.ports.exec, () => [lane, previous], undefined, () => {}, null);
+      expect(result).toMatchObject({ ok: false, error: expect.stringContaining("another pipeline owns the stage branch") });
+      expect((await git(worktree, "rev-parse", `refs/heads/${prBranch}`))).toBe(head);
+    } finally {
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+}
+
+test("a terminal lane whose delivery claim is still active keeps owning its branch", async () => {
+  const fixture = await successorOnPullRequestBranch("stage-branch-successor-terminal-active", "completed");
+  try {
+    const { h, lane, previous } = fixture;
+    previous.delivery = { ...previous.delivery!, active: true, publish: "enabled" };
+    const { commitAndAdoptStageBranch } = await import("./stageBranch");
+    const result = await commitAndAdoptStageBranch(lane, "build", h.ports.exec, () => [lane, previous], undefined, () => {}, null);
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining("another pipeline owns the stage branch") });
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 for (const removeOwnerSeed of [false, true]) {
 test(`linked-worktree pipeline ownership refuses a foreign stage branch before committing (removed seed: ${removeOwnerSeed})`, async () => {
   const fixture = await realWorktreeLane(`stage-branch-linked-owner-${removeOwnerSeed}`, [
