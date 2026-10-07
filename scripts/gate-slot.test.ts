@@ -175,7 +175,7 @@ const onlineCpus = Number(spawnSync("getconf", ["_NPROCESSORS_ONLN"], { encoding
 test.skipIf(process.platform !== "linux" || !Bun.which("taskset") || !(onlineCpus > 1))("runtime, installer and gate set one aggregate quota under a narrowed CPU affinity", () => {
   const pinned = (args: string[], env: NodeJS.ProcessEnv) => spawnSync(Bun.which("taskset")!, ["-c", "0", ...args], { env, encoding: "utf8" });
   const expected = `CPUQuota=${Math.floor(onlineCpus * 0.75) * 100}%`;
-  const quietEnv = { PATH: process.env.PATH, HOME: tmpdir(), NODE_ENV: "test" };
+  const quietEnv: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: tmpdir(), NODE_ENV: "test" };
   const affinity = pinned([process.execPath, "-e", "console.log(require('node:os').availableParallelism())"], quietEnv);
   expect(affinity.stdout.trim()).toBe("1");
   const runtime = pinned([process.execPath, "-e", `const { cpuSettings, workSliceProperties } = await import(${JSON.stringify(join(import.meta.dir, "../src/lib/runtime/cpuPlacement.ts"))});
