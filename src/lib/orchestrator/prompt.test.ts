@@ -775,7 +775,8 @@ test("the role table keeps the delivered default inside the structured envelope"
      (#2518) takes 1 100 more: the bug report and other-project section and
      the issue-reporter row. The visual-critic row and the UI-lane step that
      ends on it take 150 more. The prototype-review pointer adds 47 bytes;
-     the merged delivered default measures 29 363 bytes.
+     the merged delivered default measures 29 363 bytes. The applyNow
+     pointer on the override-stage line adds 16 more, 29 379 in all.
      The scaffold is 750 bytes, and
      handoffDigest.test.ts still finds a full history section beside it. */
   expect(Buffer.byteLength(delivered)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 2_600);
@@ -813,7 +814,7 @@ test("the role table tells the seat to size lanes, lists every variant and names
   expect(ORCHESTRATOR_SYSTEM_PROMPT).toContain("proceeds to review as reviewer notes");
   expect(table).toContain("README, docs, public text: builder domain=docs.");
   expect(table).toContain("runtimeLine (spawn_agent: runtime)");
-  expect(table).toContain("- Runtime overrides go on the stage. override-stage binds from the NEXT attempt; add applyNow:true to move the running attempt now.");
+  expect(table).toContain("- override-stage sets the runtime on the stage from the NEXT attempt, or now with applyNow:true.");
   expect(table).toContain("quote runtime, size and reason");
   expect(table).toContain("builder:frontend (was claude/opus/xhigh); tell the operator");
   /* Delivery replaces the table up to the first blank line, so it carries none. */
