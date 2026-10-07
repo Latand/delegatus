@@ -624,7 +624,9 @@ test("current host work overrides idle journal labels and a settled transcript",
   settleTranscript();
   const host = Object.assign(new FakeEngineHost(), { onStateChange: () => () => {} });
   const health = await host.health();
-  host.health = async () => ({ ...health, status: "active", activeTurnRef: "new-turn" });
+  // The host of the entry, as a real host reports it: its own process under its own start identity.
+  host.health = async () => ({ ...health, pid: child.pid, processStartIdentity: captureProcessIdentity(child.pid)!.startIdentity,
+    status: "active", activeTurnRef: "new-turn" });
   await bindStructuredDeliveryQueue([{ key: f.key, host }], { registry: f.registry, client: f.client, hostlessSettleIntervalMs: 0 });
   journalRow({ host: "unhosted", turn: "idle", activeTurnId: null });
   expect(await probeQuiet(snapshot, ports(f.journal), Date.now(), true)).toMatchObject({ quiet: false, blockers: { turns: 1 } });

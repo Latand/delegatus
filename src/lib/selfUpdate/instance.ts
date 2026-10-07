@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 
 import { agentRegistry } from "@/lib/agent/registry";
-import { livenessProbe } from "@/lib/agent/accountLiveness";
+import { identityAlive, livenessProbe } from "@/lib/agent/accountLiveness";
 import { headlessRoundProcess, productionLivenessSources, type AgentLivenessSources } from "@/lib/lifecycle/liveness";
 import { censusIndex, ownerProcessAlive, registryOwners, rowKeyId, type OwnerlessRecord, type RecordedOwner } from "@/lib/lifecycle/owners";
 import type { EngineHost, HostState } from "@/lib/runtime/engineHost";
@@ -248,9 +248,11 @@ export function ownerCensusReader(
       return handles.get(key)!;
     };
     const spoken = new Set<string>();
+    const gone: { key: string; identity: ProcessIdentity }[] = [];
     for (const owner of census.owners) {
       const alive = ownerProcessAlive(owner, probe);
       const reading: OwnerReading = { ...place(owner), role: owner.role, process: alive ? "alive" : "gone" };
+      if (!alive && owner.entryKey) for (const identity of owner.identities) gone.push({ key: owner.entryKey, identity });
       if (alive && owner.role === "host") {
         let handle: "busy" | "idle" | null = null;
         if (owner.structuredHost && owner.entryKey && held.has(owner.entryKey)) {
@@ -272,6 +274,16 @@ export function ownerCensusReader(
       const state = await health(key);
       const turn = handleTurn(state);
       if (!state || !turn) continue;
+      /* R4 for the handle: health that names a process a record under the
+         same key holds, and that the census found gone, is stale and speaks
+         for nobody. Health that names another process is that process's
+         owner, alive only while its own pid and start identity answer. */
+      if (state.pid !== null) {
+        const pid = state.pid, start = state.processStartIdentity;
+        if (gone.some((record) => record.key === key && record.identity.pid === pid
+          && (start === null || record.identity.startIdentity === null || record.identity.startIdentity === start))) continue;
+        if (!identityAlive({ pid, startIdentity: start }, probe)) continue;
+      }
       const entry = registry.entries[key] ?? null;
       const binding = entry ? index.conversation({ sessionKey: entry.key, artifactPath: entry.artifactPath }) : null;
       owners.push({ id: `handle:${key}:${state.pid ?? ""}`, binding, artifactPath: entry?.artifactPath ?? null, entryKey: key,

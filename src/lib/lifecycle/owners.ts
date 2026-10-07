@@ -122,6 +122,12 @@ export function headlessRoundVerdict(
   return currentIdentity === round.reviewerIdentity ? "alive" : "gone";
 }
 
+/** Adds a conversation a receipt or a round names to an owner an entry
+    records, which a stage naming that conversation then reaches (R10). */
+function addCustody(owner: RecordedOwner, conversation: string): void {
+  if (owner.binding !== conversation && !owner.custody?.includes(conversation)) (owner.custody ??= []).push(conversation);
+}
+
 function canonical(registry: Pick<CensusRegistry, "conversationAliases">, id: string): string {
   return registry.conversationAliases && id.startsWith("conversation_")
     ? resolveConversationAlias({ conversationAliases: registry.conversationAliases }, id as `conversation_${string}`)
@@ -257,15 +263,20 @@ export function registryOwners(
       ownerless.push({ ...base, id: `open-receipt:${receipt.launchId}`, kind: "open-receipt", updatedAt: null });
     }
     const launched = [receipt.verifiedHost?.agent, receipt.pane?.panePid].filter(usable);
-    if (!launched.length) continue;
-    /* An entry that records the launched process is that owner already (R1):
+    /* An entry that records a launched process is that owner already (R1):
        the receipt adds the conversation it was launched for, and the
-       artifact stays the entry's. */
-    const recorded = owners.filter((owner) => owner.entry && owner.identities.some((identity) => launched.some((other) => sameProcess(other, identity))));
-    for (const owner of recorded) if (owner.binding !== base.binding && !owner.custody?.includes(base.binding)) (owner.custody ??= []).push(base.binding);
-    if (!recorded.length) {
-      owners.push({ ...base, id: `launched:${receipt.launchId}:${launched[0]!.pid}:${launched[0]!.startIdentity}`, role: "host", kind,
-        pid: launched[0]!.pid, identities: launched });
+       artifact stays the entry's. A launched process no entry records is
+       still an owner at the receipt's own path, so an entry that records the
+       agent cannot drop the pane the receipt also launched. */
+    const unrecorded: ProcessIdentity[] = [];
+    for (const identity of launched) {
+      const recorded = owners.filter((owner) => owner.entry && owner.identities.some((other) => sameProcess(other, identity)));
+      for (const owner of recorded) addCustody(owner, base.binding);
+      if (!recorded.length && !unrecorded.some((other) => sameProcess(other, identity))) unrecorded.push(identity);
+    }
+    if (unrecorded.length) {
+      owners.push({ ...base, id: `launched:${receipt.launchId}:${unrecorded[0]!.pid}:${unrecorded[0]!.startIdentity}`, role: "host", kind,
+        pid: unrecorded[0]!.pid, identities: unrecorded });
     }
   }
   /* A headless launch records its process on the flow round only, so the
@@ -290,10 +301,13 @@ export function registryOwners(
       const binding = round.reviewerConversationId ? canonical(registry, round.reviewerConversationId)
         : round.reviewerPath ? map.byPath.get(round.reviewerPath) ?? null : null;
       // An entry that records this process for the same transcript or
-      // conversation already is this owner (R1).
-      if (owners.some((owner) => owner.entry && owner.identities.some((identity) => identity.pid === pid
+      // conversation already is this owner (R1), and the round adds the
+      // conversation it names to it (R10).
+      const recorded = owners.filter((owner) => owner.entry && owner.identities.some((identity) => identity.pid === pid
         && (!round.reviewerIdentity || identity.startIdentity === round.reviewerIdentity))
-        && ((!!round.reviewerPath && owner.artifactPath === round.reviewerPath) || (binding !== null && owner.binding === binding)))) continue;
+        && ((!!round.reviewerPath && owner.artifactPath === round.reviewerPath) || (binding !== null && owner.binding === binding)));
+      if (binding !== null) for (const owner of recorded) addCustody(owner, binding);
+      if (recorded.length) continue;
       owners.push({ id: `reviewer:${flow.id}:${round.n}:${pid}:${round.reviewerIdentity ?? ""}`, role: "reviewer", kind: "headless",
         pid, identities: [], round: { reviewerPid: pid, reviewerIdentity: round.reviewerIdentity ?? null },
         artifactPath: round.reviewerPath ?? null, entry: null, entryKey: null, sessionKey: null, writerEpoch: null,

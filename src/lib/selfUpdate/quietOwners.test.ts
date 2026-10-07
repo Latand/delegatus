@@ -161,15 +161,17 @@ function row(id: string): RuntimeSession {
   return read;
 }
 
-/** A held host whose health the test sets. */
+/** A held host whose health the test sets. Like a real host, its health
+    names its process under that process's own start identity. */
 function heldHost(pid: number, state: Partial<HostState> = {}) {
+  const processStartIdentity = captureProcessIdentity(pid)?.startIdentity ?? null;
   const listeners: ((state: HostState) => void)[] = [];
   const host = Object.assign(new FakeEngineHost(), { onStateChange: (listener: (state: HostState) => void) => {
     listeners.push(listener);
     return () => {};
   } });
   const base = host.health.bind(host);
-  host.health = async () => ({ ...await base(), pid, ...state });
+  host.health = async () => ({ ...await base(), pid, processStartIdentity, ...state });
   return { host, fire: async (next: Partial<HostState>) => {
     const current = { ...await host.health(), ...next };
     for (const listener of listeners) listener(current);
@@ -1234,5 +1236,100 @@ describe("each owner's evidence beside another record", () => {
     await exit(host);
     // With the process gone the stage's settled transcript holds it for the bound only.
     expect(await probe(p, now + TWELVE_HOURS + FIVE_MINUTES)).toMatchObject({ quiet: true, blockers: { stages: 0 } });
+  });
+
+  test("an entry that records a receipt's agent beside another pane leaves the receipt's live pane its own owner (R1, R2, R10)", async () => {
+    const path = transcript("open");
+    const agent = spawn(), pane = spawn(), otherPane = spawn();
+    await exit(agent);
+    await exit(otherPane);
+    const begun = beginLegacySpawnFixture(f.registry, { engine: "codex", cwd: f.dir, transport: "tmux", accountId: "fixture" });
+    if (begun.kind !== "created") throw new Error("fixture launch receipt unavailable");
+    const launchId = begun.receipt.launchId, evidence = { ...tmuxHost(agent.identity), panePid: pane.identity };
+    f.registry.bindSpawnPane(launchId, { endpoint: evidence.endpoint, server: evidence.server, paneId: evidence.paneId, panePid: evidence.panePid, target: evidence.paneId });
+    f.registry.markSpawnHostVerified(launchId, evidence);
+    const key = { engine: "codex" as const, sessionId: randomUUID() };
+    const entry = { key, artifactPath: path, cwd: f.dir, accountId: "fixture", status: "idle" as const, host: evidence,
+      claimEpoch: 0, claimOwner: null, pendingAction: null, structuredHost: null };
+    expect(f.registry.settleSpawn(launchId, entry).kind).toBe("settled");
+    const disk = f.registry.snapshot(), receipt = disk.receipts[launchId]!;
+    expect(receipt).toMatchObject({ state: "completed", verifiedHost: { agent: agent.identity }, pane: { panePid: pane.identity } });
+    delete disk.conversations[receipt.conversationId];
+    delete disk.entries[sessionKeyId(key)];
+    writeFileSync(f.registry.filename, JSON.stringify(disk));
+    const pipelines = () => [{ id: "lane_pane", task: "Finish the work", state: "running", cursor: { stageId: "stage", state: "running" },
+      runs: [{ stageId: "stage", attempts: [{ n: 1, conversationId: receipt.conversationId }] }] }] as unknown as ReturnType<QuietPorts["pipelines"]>;
+    const p = noHandles({ pipelines }), now = Date.now();
+    const held = { quiet: false, blockers: { turns: 1, stages: 1, turnList: [{ reason: "turn-open" }] } };
+    expect(await probe(p, now)).toMatchObject(held);
+    // The entry records the same agent, gone, beside a pane of its own, gone too.
+    f.registry.upsert({ ...entry, host: { ...evidence, panePid: otherPane.identity } });
+    expect(f.registry.readOnlySnapshot().entries[sessionKeyId(key)]).toMatchObject({ host: { agent: agent.identity, panePid: otherPane.identity } });
+    expect(await probe(p, now)).toMatchObject(held);
+    expect(await probe(p, now + TWELVE_HOURS)).toMatchObject(held);
+    await exit(pane);
+    expect(await probe(p, now)).toMatchObject({ quiet: true, blockers: { turns: 0, stages: 0 } });
+  });
+
+  test("a round an entry records keeps the round's conversation custody past the unresolved bound (R1, R10)", async () => {
+    const path = transcript("settled");
+    const reviewer = spawn();
+    const reviewerConversationId = `conversation_${randomUUID()}`;
+    const flows = [{ id: "flow_detached", reviewerMode: "headless", state: "completed", rounds: [{ n: 1, reviewerPid: reviewer.child.pid,
+      reviewerIdentity: reviewer.identity.startIdentity, reviewerPath: path, reviewerConversationId, verdict: "APPROVE" }] }] as unknown as Flow[];
+    const pipelines = () => [{ id: "lane_round", task: "Review the work", state: "running", cursor: { stageId: "stage", state: "running" },
+      runs: [{ stageId: "stage", attempts: [{ n: 1, conversationId: reviewerConversationId }] }] }] as unknown as ReturnType<QuietPorts["pipelines"]>;
+    const p = ports({ pipelines, owners: ownerCensusReader(() => ({ ...productionLivenessSources(), flows: () => flows }),
+      { readSession: (query) => f.client.readSession!(query), heldHosts: () => new Map() }) });
+    const now = Date.now();
+    const held = { quiet: false, blockers: { stages: 1 } };
+    expect(await probe(p, now)).toMatchObject(held);
+    // An idle entry records the reviewer at the round's transcript under another conversation.
+    const other = conversation(transcript("settled"));
+    f.registry.upsert({ key: other.key, artifactPath: path, cwd: f.dir, accountId: "fixture", status: "idle", host: null,
+      claimEpoch: 0, claimOwner: null, pendingAction: null, structuredHost: columns(reviewer.identity, 0) });
+    expect(f.registry.readOnlySnapshot().conversations[reviewerConversationId]).toBeUndefined();
+    for (const at of [now, now + FIVE_MINUTES + 1, now + TWELVE_HOURS]) expect(await probe(p, at)).toMatchObject(held);
+    await exit(reviewer);
+    expect(await probe(p, now + TWELVE_HOURS)).toMatchObject({ quiet: true, blockers: { stages: 0 } });
+  });
+
+  describe("a handle's health is judged on the process it names (R4)", () => {
+    const withHandle = (key: Key, state: Partial<HostState> & { pid: number }) => {
+      const handle = heldHost(state.pid, state);
+      return ports({ owners: ownerCensusReader(productionLivenessSources, { readSession: (query) => f.client.readSession!(query),
+        heldHosts: () => new Map([[sessionKeyId(key), handle.host]]) }) });
+    };
+
+    test.each(["its own start identity", "no start identity"])("stale health naming the recorded host, gone, with %s releases at once", async (shape) => {
+      const c = conversation(transcript("settled"));
+      const wrapper = spawn();
+      claimHost(c.key, c.path, wrapper.identity, "live", "w-turn");
+      await exit(wrapper);
+      const p = withHandle(c.key, { pid: wrapper.child.pid, status: "active", activeTurnRef: "w-turn",
+        processStartIdentity: shape === "no start identity" ? null : wrapper.identity.startIdentity });
+      expect(await probe(p)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
+    });
+
+    test.each(["the recorded start identity", "no start identity"])("stale health naming a reused pid with %s releases at once", async (shape) => {
+      const c = conversation(transcript("settled"));
+      const reuser = spawn();
+      const recorded = { ...reuser.identity, startIdentity: "an-earlier-process" };
+      claimHost(c.key, c.path, recorded, "live", "w-turn");
+      const p = withHandle(c.key, { pid: reuser.child.pid, status: "active", activeTurnRef: "w-turn",
+        processStartIdentity: shape === "no start identity" ? null : recorded.startIdentity });
+      expect(await probe(p)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
+    });
+
+    test("control: health naming another live process holds under that process until it exits", async () => {
+      const c = conversation(transcript("settled"));
+      const wrapper = spawn(), successor = spawn();
+      claimHost(c.key, c.path, wrapper.identity, "live", "w-turn");
+      await exit(wrapper);
+      const p = withHandle(c.key, { pid: successor.child.pid, status: "active", activeTurnRef: "s-turn" });
+      expect(await probe(p)).toMatchObject({ quiet: false, blockers: { turns: 1, turnList: [{ conversationId: c.id, reason: "host-turn" }] } });
+      await exit(successor);
+      expect(await probe(p)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
+    });
   });
 });

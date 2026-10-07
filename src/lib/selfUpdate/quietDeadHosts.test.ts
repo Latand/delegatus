@@ -1206,7 +1206,9 @@ test("a path-only owner reads its current hosted turn even when registry and tra
   const fake = new FakeEngineHost();
   const health = await fake.health();
   const host = Object.assign(fake, {
-    health: async () => ({ ...health, status: "active" as const, activeTurnRef: "replacement-turn" }),
+    // A live process the ended row does not record, named under its own start identity (R4).
+    health: async () => ({ ...health, pid: process.pid, processStartIdentity: captureProcessIdentity(process.pid)!.startIdentity,
+      status: "active" as const, activeTurnRef: "replacement-turn" }),
     onStateChange: () => () => {},
   });
   try {
