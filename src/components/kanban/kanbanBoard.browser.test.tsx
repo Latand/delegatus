@@ -351,6 +351,193 @@ describe("self-update reload notice", () => {
   }, 30_000);
 });
 
+/* #2594: the Updates dialog answers with the installation first. The dialog's
+   own stream is played by the driver, one event at a time: before any state,
+   a snapshot that failed, the installation with its work still being read,
+   the same once the reading landed, and the installation after a deployment
+   that already serves the available target (no "commits behind" left). Each
+   state is framed on the desktop and at 390 px, in en and uk, with the
+   dialog's controls measured and the Update press's confirmation read.
+   The last state arrives while a "Check now" is held: its late answer, and
+   then a late refusal of a second check, both carry the old installation and
+   neither brings back the old revision, its badge or the Update button. */
+describe("Updates dialog first state", () => {
+  browserTest("pending, error and loaded states and their controls on desktop and phone in en and uk", async () => {
+    const out = path.resolve(".artifacts/updates-dialog-first-state");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const { MANAGED_STEPS, idleCheck, idleUpdate, stoppedProcess } = await import("@/lib/selfUpdate/types");
+    const OLD = "7fb7345".padEnd(40, "1");
+    const TARGET = "2fda8a4".padEnd(40, "e");
+    const at = "2026-10-07T09:00:00.000Z";
+    const rev = (sha: string, version: string) => ({ sha, short: sha.slice(0, 7), version, date: "2026-10-07T08:00:00.000Z" });
+    const proc = (pid: number, revision: string) => ({ ...stoppedProcess(), state: "healthy" as const, pid, startedAt: "2026-10-07T07:00:00.000Z", lastHealthAt: at, lastHealthOk: true, revision, tail: [] });
+    const snapshot = (installed: string, work: "pending" | "ready" | null) => ({
+      mode: "managed", unsupportedReason: null, installed: rev(installed, installed === TARGET ? "1.9.2" : "1.9.1"),
+      serving: { web: rev(installed, ""), runtimeHost: rev(installed, "") },
+      available: installed === TARGET ? null : rev(TARGET, "1.9.2"),
+      check: installed === TARGET
+        ? { ...idleCheck(), state: "up-to-date", at, nextPollAt: "2026-10-07T10:00:00.000Z", relation: "equal" }
+        : { ...idleCheck(), state: "update-available", at, nextPollAt: "2026-10-07T10:00:00.000Z", relation: "behind", behind: 17,
+          delta: { commits: [{ short: TARGET.slice(0, 7), subject: "Production gets CPU priority over tests and pipeline work (#2574)" }], summary: { commitCount: 17, entryCount: 0, counts: [], groups: [] } } },
+      update: idleUpdate(MANAGED_STEPS), busy: null,
+      processes: { web: { ...proc(4141, installed.slice(0, 7)), port: 8899 }, runtimeHost: proc(4242, installed.slice(0, 7)) },
+      meta: { branch: "main", remote: "https://github.com/example/delegatus", checkout: null, pollMinutes: 60, serverTime: at },
+      ...(work ? { workEvidence: work === "pending"
+        ? { state: "pending", since: at, at: null, error: null, phases: null }
+        : { state: "ready", since: null, at, error: null, phases: null } } : {}),
+      ...(work === "ready" ? { resumeWork: { turns: 2, stages: 1, turnList: [], stageList: [], unreadable: null } } : {}),
+    });
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        const phone = width === 390;
+        const context = await browser.newContext({ viewport: { width, height: phone ? 844 : 900 }, colorScheme: "light", reducedMotion: "reduce", ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        const confirms: string[] = [];
+        page.on("dialog", (dialog) => { confirms.push(dialog.message()); void dialog.dismiss(); });
+        try {
+          await context.addInitScript(({ lang }) => {
+            localStorage.setItem("llv_lang", lang);
+            /* The fixture installs its silent EventSource. The dialog's own
+               stream (no readOnly) becomes one the driver speaks through. */
+            const dialogStreams: { listeners: Record<string, ((event: { data: string }) => void)[]> }[] = [];
+            let installed = window.EventSource;
+            Object.defineProperty(window, "EventSource", { configurable: true,
+              get: () => installed,
+              set: (Source: typeof EventSource) => {
+                installed = class extends Source {
+                  constructor(url: string | URL) {
+                    super(url);
+                    if (String(url).startsWith("/api/self-update/events") && !String(url).includes("readOnly")) {
+                      const stream = { listeners: {} as Record<string, ((event: { data: string }) => void)[]> };
+                      dialogStreams.push(stream);
+                      Object.assign(this, { addEventListener: (type: string, listener: (event: { data: string }) => void) => { (stream.listeners[type] ??= []).push(listener); } });
+                    }
+                  }
+                } as typeof EventSource;
+              },
+            });
+            /* The fixture installs its own fetch too. A "Check now" it is
+               handed is held here until the driver answers it. */
+            const heldChecks: ((status: number, body: unknown) => void)[] = [];
+            let fetcher = window.fetch;
+            Object.defineProperty(window, "fetch", { configurable: true,
+              get: () => fetcher,
+              set: (next: typeof fetch) => {
+                fetcher = ((input: RequestInfo | URL, init?: RequestInit) => String(input).startsWith("/api/self-update/check")
+                  ? new Promise<Response>((resolve) => { heldChecks.push((status, body) => resolve(new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } }))); })
+                  : next(input, init)) as typeof fetch;
+              },
+            });
+            Object.assign(window, { selfUpdateEmit: (type: string, data: unknown) => {
+              for (const stream of dialogStreams) for (const listener of stream.listeners[type] ?? []) listener({ data: JSON.stringify(data) });
+              return dialogStreams.length;
+            }, selfUpdateHeldChecks: () => heldChecks.length,
+            selfUpdateAnswerCheck: (index: number, status: number, body: unknown) => heldChecks[index]!(status, body) });
+          }, { lang });
+          await page.goto(server.base);
+          await page.waitForSelector(phone ? "[data-phone-card], [data-mobile2-shell], [data-mobile-shell]" : "[data-kanban-board]", { timeout: 15_000 }).catch(() => {});
+          await page.evaluate(() => window.dispatchEvent(new Event("llv:open-self-update")));
+          const dialog = page.locator("[data-self-update-dialog]");
+          await dialog.waitFor();
+          const emit = (type: string, data: unknown) => page.evaluate(([type, data]) => (window as unknown as { selfUpdateEmit(type: string, data: unknown): number }).selfUpdateEmit(type as string, data), [type, data] as const);
+          const frame = async (state: string, ready: string) => {
+            await dialog.locator(ready).first().waitFor();
+            const reading = await dialog.evaluate((element, width) => {
+              const controls = [...element.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.getClientRects().length > 0).map((button) => {
+                const box = button.getBoundingClientRect();
+                return { action: button.dataset.action ?? button.getAttribute("aria-label"), label: (button.textContent ?? "").trim(), disabled: button.disabled,
+                  clipped: button.scrollWidth > button.clientWidth + 1, inside: box.left >= 0 && box.right <= width, height: Math.round(box.height) };
+              });
+              return {
+                status: element.querySelector("[data-status]")?.textContent?.trim() ?? null,
+                loading: element.querySelector("[data-section], [data-self-update-failure]") ? null : element.querySelector("p")?.textContent?.trim() ?? null,
+                failure: element.querySelector("[data-self-update-failure]")?.textContent?.trim() ?? null,
+                actionError: element.querySelector("[data-error='action']")?.textContent?.trim() ?? null,
+                work: element.querySelector("[data-work]")?.textContent?.trim() ?? null,
+                behindBadge: /17/.test(element.querySelector("[data-status]")?.textContent ?? ""),
+                controls,
+              };
+            }, width);
+            for (const control of reading.controls) {
+              expect(control.clipped).toBe(false);
+              expect(control.inside).toBe(true);
+            }
+            await dialog.screenshot({ path: path.join(out, `${lang}-${width}-${state}.png`) });
+            readings.push({ lang, width, state, ...reading });
+            return reading;
+          };
+
+          const pending = await frame("pending", "p");
+          expect(pending.loading).toBe(translate(lang, "selfUpdate.loading"));
+
+          expect(await emit("snapshot-error", { code: "snapshot-failed", error: "launcher record unreadable" })).toBe(1);
+          const failed = await frame("error", "[data-self-update-failure]");
+          /* The server's own words stay out of the operator's sentence. */
+          expect(failed.failure).toBe(translate(lang, "selfUpdate.loadFailed"));
+          expect(await dialog.textContent()).not.toContain("launcher record unreadable");
+
+          await emit("state", snapshot(OLD, "pending"));
+          const loaded = await frame("loaded-work-pending", "[data-work='pending']");
+          expect(loaded.work).toBe(translate(lang, "selfUpdate.work.pending"));
+          expect(loaded.controls.some((control) => control.action === "update" && !control.disabled)).toBe(true);
+          await dialog.locator("[data-action='update']").click();
+          await page.waitForTimeout(100);
+          expect(confirms.at(-1)).toContain(translate(lang, "selfUpdate.work.pendingConfirm"));
+          expect(confirms.at(-1)).not.toContain(translate(lang, "selfUpdate.auto.block.turns", { count: 0 }));
+
+          await emit("state", snapshot(OLD, "ready"));
+          const read = await frame("loaded-work-read", "[data-work='ready']");
+          expect(read.work).toContain(translate(lang, "selfUpdate.auto.block.turns", { count: 2 }));
+          await dialog.locator("[data-action='update']").click();
+          await page.waitForTimeout(100);
+          expect(confirms.at(-1)).toContain(translate(lang, "selfUpdate.auto.block.turns", { count: 2 }));
+
+          /* Each "Check now" is held until the driver answers it, after the
+             stream has moved on. */
+          type Driven = { selfUpdateHeldChecks(): number; selfUpdateAnswerCheck(index: number, status: number, body: unknown): void };
+          const heldChecks = () => page.evaluate(() => (window as unknown as Driven).selfUpdateHeldChecks());
+          const check = async () => {
+            const index = await heldChecks();
+            await dialog.locator("[data-action='check']").click();
+            for (let wait = 0; wait < 100 && await heldChecks() === index; wait++) await page.waitForTimeout(50);
+            expect(await heldChecks()).toBe(index + 1);
+            return (status: number, body: unknown) => page.evaluate(([index, status, body]) =>
+              (window as unknown as Driven).selfUpdateAnswerCheck(index as number, status as number, body), [index, status, body] as const);
+          };
+          const upToDate = translate(lang, "selfUpdate.status.upToDate", { time: "" }).split(",")[0]!;
+          const answerCheck = await check();
+          await emit("state", snapshot(TARGET, "ready"));
+          const serving = await frame("serving-target", "[data-section='update'][data-update='idle']");
+          expect(serving.behindBadge).toBe(false);
+          expect(serving.status).toContain(upToDate);
+          await answerCheck(202, snapshot(OLD, "ready"));
+          await dialog.locator("[data-action='check']:not([disabled])").waitFor();
+          const late = await frame("late-check-answer", "[data-section='update']");
+          expect(late.behindBadge).toBe(false);
+          expect(late.status).toContain(upToDate);
+          expect(late.controls.some((control) => control.action === "update" && !control.disabled)).toBe(false);
+
+          const refuseCheck = await check();
+          await emit("state", { ...snapshot(TARGET, "ready"), meta: { ...snapshot(TARGET, "ready").meta, serverTime: "2026-10-07T09:00:05.000Z" } });
+          await refuseCheck(409, { error: "An update is running.", code: "busy-update", snapshot: snapshot(OLD, "ready") });
+          const refused = await frame("late-refusal", "[data-error='action']");
+          expect(refused.actionError).toBe(translate(lang, "selfUpdate.refusal.busy-update"));
+          expect(refused.behindBadge).toBe(false);
+          expect(refused.status).toContain(upToDate);
+          expect(refused.controls.some((control) => control.action === "update" && !control.disabled)).toBe(false);
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
+});
+
 /* The loading leaf draws its own header bar until the Board mounts and draws
    the same bar itself, so a ⋯ menu opened before then is thrown away with the
    bar it opened in. Open the Board's own menu and wait until it is open. */
@@ -18671,6 +18858,250 @@ describe("parallel ask idle fallback", () => {
       fs.writeFileSync("evidence/parallel-ask-fallback/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
   }, 120_000);
+});
+
+describe("running stage runtime switch", () => {
+  /*
+   * The runtime pill in the conversation of a running stage attempt (`&stage-switch` gives the running verify
+   * conversation its stage membership). A model chosen there is sent to the pipeline as `override-stage` with
+   * `applyNow`, the pill spins while the switch is under way, and a switch that does not take is the pill's
+   * error, worded by what happened to the agent and by display names. The conversation's controls are counted
+   * before and after: the selector gains none. On the phone the sheet says the change applies now, and the same
+   * conversation without its stage membership keeps the next-message words. Every measured state is framed with
+   * the pill inside the window, and the sheet's heading keeps the gap to the account line that the ordinary
+   * conversation has.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "running stage runtime switch"
+   *
+   * Measurements go to `evidence/stage-runtime-switch/geometry.json`; frames to `.artifacts/stage-runtime-switch/`.
+   */
+  type Evidence = { evidence: { setRuntimeSwitchPhase(pipeline: string, stage: string, phase: string, outcome?: string): void; pipelinePatches: Array<{ body: Record<string, unknown> }> } };
+  browserTest("the conversation's own selector moves the attempt on desktop and 390 px in en and uk", async () => {
+    const out = path.resolve(".artifacts/stage-runtime-switch"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browserServer = await chromium.launchServer(LAUNCH);
+    const browserPid = browserServer.process()?.pid;
+    fs.writeFileSync(path.join(out, "browser.pid"), String(browserPid));
+    const browser = await chromium.connect(browserServer.wsEndpoint());
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        const phone = width === 390;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=accounts&runtime=structured&stage-switch`, { width, height: 900 }, "light", lang, "reduce", phone);
+        try {
+          if (phone) {
+            await page.locator('[data-phone-card-pipeline="p-search"]').click();
+            await page.locator('[data-phone-task-lane="p-search"] [data-open-stages="p-search"]').click();
+            await page.locator('.pb-stage[data-stage="verify"] [data-open-conversation="verify"]').click();
+          } else {
+            await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
+            await page.locator(`${card("t-search")} .pblock`).evaluate((element) => element.scrollIntoView({ block: "center" }));
+            await page.click(`${card("t-search")} .pb-pills [data-stage="verify"]`);
+          }
+          const pill = page.locator("[data-runtime-pill]:visible").first();
+          await pill.waitFor({ timeout: 15_000 });
+          await page.waitForTimeout(500);
+          /* Every control of the conversation's composer and of the open selector, with the pill's own box. */
+          const measure = () => page.evaluate(() => {
+            const pill = [...document.querySelectorAll<HTMLElement>("[data-runtime-pill]")].find((element) => element.offsetParent !== null)!;
+            const form = pill.closest("form") ?? pill.parentElement!;
+            const selector = document.querySelector<HTMLElement>("[data-runtime-sheet], [data-runtime-popover]");
+            const box = pill.getBoundingClientRect();
+            const siblings = [...form.querySelectorAll<HTMLElement>("button, textarea, input")].filter((element) => element.offsetParent !== null && !pill.contains(element) && element !== pill);
+            const overlapped = siblings.filter((element) => {
+              const other = element.getBoundingClientRect();
+              return other.left < box.right - 1 && other.right > box.left + 1 && other.top < box.bottom - 1 && other.bottom > box.top + 1;
+            }).length;
+            const line = document.querySelector<HTMLElement>("[data-runtime-sheet-account-current], [data-runtime-popover-account]");
+            const heading = document.querySelector<HTMLElement>("[data-runtime-sheet-header] [data-mobile2-next-message]");
+            const accounts = document.querySelector<HTMLElement>("[data-runtime-sheet-accounts] > div");
+            return {
+              face: pill.textContent?.replace(/\s+/g, " ").trim() ?? "",
+              busy: pill.getAttribute("aria-busy") === "true",
+              error: document.querySelector("[data-runtime-pill-error]")?.textContent ?? null,
+              title: pill.getAttribute("title"),
+              accessibleName: pill.getAttribute("aria-label"),
+              selectorAccessibleName: selector?.getAttribute("aria-label") ?? null,
+              pill: { x: Math.round(box.left), right: Math.round(box.right), width: Math.round(box.width), height: Math.round(box.height), top: Math.round(box.top), bottom: Math.round(box.bottom) },
+              viewportHeight: innerHeight,
+              composerControls: siblings.length + 1,
+              overlapped,
+              selectorControls: selector ? selector.querySelectorAll("button, input, select").length : null,
+              selectorOverflow: selector ? selector.scrollWidth > selector.clientWidth + 1 : null,
+              sheetHeader: document.querySelector<HTMLElement>("[data-runtime-sheet-header]")?.textContent?.replace(/\s+/g, " ").trim() ?? null,
+              /* The heading's paragraph against the account line under it: its height says how many lines it took. */
+              headingGap: heading && accounts ? Math.round((accounts.getBoundingClientRect().top - heading.getBoundingClientRect().bottom) * 10) / 10 : null,
+              headingHeight: heading ? Math.round(heading.getBoundingClientRect().height * 10) / 10 : null,
+              accountLine: line ? { text: line.textContent?.replace(/\s+/g, " ").trim() ?? "", clipped: line.scrollWidth > line.clientWidth + 1, right: Math.round(line.getBoundingClientRect().right) } : null,
+              pageOverflow: document.documentElement.scrollWidth > innerWidth + 1,
+            };
+          });
+          const openSelector = async () => {
+            await pill.evaluate((element) => { element.scrollIntoView({ block: "center" }); (element as HTMLElement).click(); });
+            await page.waitForSelector("[data-runtime-sheet], [data-runtime-popover]", { timeout: 5_000 });
+          };
+          const closeSelector = async () => {
+            if (await page.locator("[data-runtime-sheet], [data-runtime-popover]").count()) await page.keyboard.press("Escape");
+            await page.waitForSelector("[data-runtime-sheet], [data-runtime-popover]", { state: "detached", timeout: 5_000 });
+          };
+          const frame = (name: string) => page.screenshot({ path: path.join(out, `${width}-${lang}-${name}.png`) });
+          /* A state as the operator sees it: the board re-lays its columns when the lane's state changes, so the pill is brought back into the window before it is measured and framed. */
+          const capture = async (name: string) => {
+            await pill.evaluate((element) => element.scrollIntoView({ block: "center", inline: "nearest" }));
+            await page.waitForTimeout(150);
+            const reading = await measure();
+            await frame(name);
+            return reading;
+          };
+          const setPhase = (phase: string, outcome?: string) => page.evaluate(({ phase, outcome }) => (window as unknown as Evidence).evidence.setRuntimeSwitchPhase("p-search", "verify", phase, outcome), { phase, outcome });
+
+          const before = await capture("before");
+          await openSelector();
+          const beforeOpen = await measure();
+          await frame("before-selector");
+          if (phone) {
+            expect(beforeOpen.sheetHeader).toContain(translate(lang, "mobile2.composer.stageSheetTitle"));
+            expect(beforeOpen.sheetHeader).toContain(translate(lang, "mobile2.composer.stageNow"));
+            expect(beforeOpen.sheetHeader).not.toContain(translate(lang, "mobile2.composer.sheetTitle"));
+            expect(await page.locator("[data-runtime-sheet]").innerText()).not.toContain(translate(lang, "mobile2.composer.accountNext"));
+          }
+          /* The gesture the selector already has: a model row, applied by the tap. */
+          if (phone) await page.locator("[data-runtime-sheet-row]", { hasText: /^Fable$/ }).click();
+          else {
+            await page.click('[data-runtime-row="submenu"][data-runtime-value="model"]');
+            await page.click('[data-runtime-row="model"][data-runtime-value="fable"]');
+          }
+          await page.waitForFunction(() => [...document.querySelectorAll("[data-runtime-pill]")].some((element) => element.getAttribute("aria-busy") === "true"), undefined, { timeout: 5_000 });
+          const patch = await page.evaluate(() => (window as unknown as Evidence).evidence.pipelinePatches.at(-1)!.body);
+          /* The attempt and conversation the pill was opened on, and the conversation's own engine, ride along. */
+          expect(patch).toEqual({ action: "override-stage", stageId: "verify", applyNow: true, expectedAttempt: patch.expectedAttempt, expectedConversationId: patch.expectedConversationId,
+            engine: "claude", model: "fable", effort: patch.effort, serviceTier: null });
+          expect(Number.isSafeInteger(patch.expectedAttempt)).toBe(true);
+          expect(typeof patch.expectedConversationId).toBe("string");
+          await closeSelector();
+          /* The pipeline answered: the attempt carries the switch, and the pill spins on that record. */
+          await page.waitForFunction(() => {
+            const stored = (window as unknown as { evidence: { storedPipeline(id: string): { runs: Array<{ stageId: string; attempts: Array<{ runtimeSwitches?: Array<{ phase: string }> }> }> } } }).evidence.storedPipeline("p-search");
+            return stored.runs.find((run) => run.stageId === "verify")?.attempts.at(-1)?.runtimeSwitches?.at(-1)?.phase === "requested";
+          }, undefined, { timeout: 5_000 });
+          await page.waitForTimeout(300);
+          const switching = await capture("switching");
+          expect(switching.face).toContain("Fable");
+          expect(switching.busy).toBe(true);
+
+          await setPhase("rolled-back");
+          await page.waitForSelector("[data-runtime-pill-error]", { state: "attached", timeout: 5_000 });
+          const rolledBack = await capture("rolled-back");
+          const rolledBackWords = translate(lang, "stageRuntime.rolledBack", { target: "Fable", current: "Opus 5.5", reason: translate(lang, "stageRuntime.reason.switchFailed") });
+          expect(rolledBack.error).toBe(rolledBackWords);
+          expect(rolledBack.title).toBe(rolledBackWords);
+          expect(rolledBack.face).toContain("Opus 5.5");
+          expect(rolledBack.busy).toBe(false);
+          await openSelector();
+          const rolledBackOpen = await measure();
+          await frame("rolled-back-selector");
+          expect(rolledBackOpen.accountLine).toMatchObject({ text: rolledBackWords, clipped: false });
+          expect(rolledBackOpen.accountLine!.right).toBeLessThanOrEqual(width);
+          await closeSelector();
+
+          /* Refused before the turn was cut: the agent never stopped, and the words do not say it did. */
+          await setPhase("failed", "target engine is unavailable; stage stays on its runtime");
+          const notSwitchedWords = translate(lang, "stageRuntime.notSwitched", { target: "Fable", current: "Opus 5.5", reason: translate(lang, "stageRuntime.reason.engineUnavailable") });
+          await page.waitForFunction((words) => document.querySelector("[data-runtime-pill-error]")?.textContent === words, notSwitchedWords, { timeout: 5_000 });
+          const notSwitched = await capture("not-switched");
+
+          /* The stop is not confirmed yet: the lane waits for the operator. */
+          await setPhase("switching", "runtime switch stop remains unconfirmed: host busy");
+          const waitingWords = translate(lang, "stageRuntime.waiting", { target: "Fable", current: "Opus 5.5", reason: translate(lang, "stageRuntime.reason.stopUnconfirmed") });
+          await page.waitForFunction((words) => document.querySelector("[data-runtime-pill-error]")?.textContent === words, waitingWords, { timeout: 5_000 });
+          const waiting = await capture("waiting");
+
+          await setPhase("failed", "stage stopped by kill during runtime switch");
+          const failedWords = translate(lang, "stageRuntime.failed", { target: "Fable", current: "Opus 5.5", reason: translate(lang, "stageRuntime.reason.kill") });
+          await page.waitForFunction((words) => document.querySelector("[data-runtime-pill-error]")?.textContent === words, failedWords, { timeout: 5_000 });
+          const failed = await capture("failed");
+
+          await setPhase("committed");
+          await page.waitForSelector("[data-runtime-pill-error]", { state: "detached", timeout: 5_000 });
+          /* The scan brings the runtime the conversation now runs on, and the face follows it. */
+          await page.waitForFunction(() => [...document.querySelectorAll<HTMLElement>("[data-runtime-pill]")].some((element) => element.offsetParent !== null && (element.textContent ?? "").includes("Fable")), undefined, { timeout: 10_000 });
+          const committed = await capture("committed");
+          expect(committed.face).toContain("Fable");
+          expect(committed.busy).toBe(false);
+          await openSelector();
+          const committedOpen = await measure();
+          await frame("committed-selector");
+          await closeSelector();
+
+          for (const reading of [before, switching, rolledBack, notSwitched, waiting, failed, committed]) {
+            expect(reading.composerControls).toBe(before.composerControls);
+            expect(reading.overlapped).toBe(0);
+            expect(reading.pageOverflow).toBe(false);
+            expect(reading.pill.right).toBeLessThanOrEqual(width);
+            expect(reading.pill.x).toBeGreaterThanOrEqual(0);
+            expect(reading.pill.top).toBeGreaterThanOrEqual(0);
+            expect(reading.pill.bottom).toBeLessThanOrEqual(reading.viewportHeight);
+            expect(JSON.stringify(reading)).not.toContain("claude ·");
+          }
+          for (const reading of [rolledBackOpen, committedOpen]) {
+            expect(reading.selectorControls).toBe(beforeOpen.selectorControls);
+            expect(reading.selectorOverflow).toBe(false);
+          }
+          for (const reading of [beforeOpen, rolledBackOpen, committedOpen]) {
+            expect(reading.accessibleName).toContain(translate(lang, "mobile2.composer.stageNow"));
+            expect(reading.selectorAccessibleName).toContain(translate(lang, "mobile2.composer.stageNow"));
+            expect(reading.accessibleName).not.toContain(translate(lang, "composer.runtimePill"));
+          }
+          /* The sheet's heading stays clear of the account line under it, whatever that line says. */
+          if (phone) for (const reading of [beforeOpen, rolledBackOpen, committedOpen]) expect(reading.headingGap).toBeGreaterThanOrEqual(6);
+          expect(await page.locator("[data-stage-runtime-control], [data-stage-runtime-open], [data-stage-runtime-action], [data-stage-runtime-status]").count()).toBe(0);
+          expect(pageErrors).toEqual([]);
+          readings.push({ viewportWidth: width, lang, patch, before, beforeOpen, switching, rolledBack, rolledBackOpen, notSwitched, waiting, failed, committed, committedOpen });
+        } finally { await context.close(); }
+        /* The same conversation without a stage membership: an ordinary one, whose sheet still speaks of the next message. */
+        const ordinary = await openFixture(browser, `${server.base}?scenario=accounts&runtime=structured`, { width, height: 900 }, "light", lang, "reduce", phone);
+        try {
+          if (phone) {
+            await ordinary.page.locator('[data-phone-card-pipeline="p-search"]').click();
+            await ordinary.page.locator('[data-phone-task-lane="p-search"] [data-open-stages="p-search"]').click();
+            await ordinary.page.locator('.pb-stage[data-stage="verify"] [data-open-conversation="verify"]').click();
+          } else {
+            await ordinary.page.locator(`${card("t-search")} .pblock`).evaluate((element) => element.scrollIntoView({ block: "center" }));
+            await ordinary.page.click(`${card("t-search")} .pb-pills [data-stage="verify"]`);
+          }
+          const pill = ordinary.page.locator("[data-runtime-pill]:visible").first();
+          await pill.waitFor({ timeout: 15_000 });
+          await ordinary.page.waitForTimeout(500);
+          await pill.evaluate((element) => { element.scrollIntoView({ block: "center" }); (element as HTMLElement).click(); });
+          await ordinary.page.waitForSelector("[data-runtime-sheet], [data-runtime-popover]", { timeout: 5_000 });
+          const sheet = await ordinary.page.evaluate(() => ({
+            accessibleName: document.querySelector("[data-runtime-pill]")?.getAttribute("aria-label"),
+            selectorAccessibleName: document.querySelector("[data-runtime-sheet], [data-runtime-popover]")?.getAttribute("aria-label"),
+            header: document.querySelector<HTMLElement>("[data-runtime-sheet-header]")?.textContent?.replace(/\s+/g, " ").trim() ?? null,
+            controls: document.querySelector("[data-runtime-sheet], [data-runtime-popover]")!.querySelectorAll("button, input, select").length,
+            headingGap: document.querySelector("[data-runtime-sheet]") ? Math.round((document.querySelector<HTMLElement>("[data-runtime-sheet-accounts] > div")!.getBoundingClientRect().top - document.querySelector<HTMLElement>("[data-runtime-sheet-header] [data-mobile2-next-message]")!.getBoundingClientRect().bottom) * 10) / 10 : null,
+            headingHeight: document.querySelector("[data-runtime-sheet]") ? Math.round(document.querySelector<HTMLElement>("[data-runtime-sheet-header] [data-mobile2-next-message]")!.getBoundingClientRect().height * 10) / 10 : null,
+          }));
+          await ordinary.page.screenshot({ path: path.join(out, `${width}-${lang}-ordinary-selector.png`) });
+          if (phone) {
+            expect(sheet.header).toContain(translate(lang, "mobile2.composer.sheetTitle"));
+            expect(sheet.header).not.toContain(translate(lang, "mobile2.composer.stageNow"));
+          }
+          expect(sheet.accessibleName).toContain(translate(lang, "composer.runtimePill"));
+          expect(sheet.selectorAccessibleName).toContain(translate(lang, "composer.runtimePill"));
+          const staged = (readings.at(-1) as { beforeOpen: { selectorControls: number; headingGap: number | null; headingHeight: number | null } }).beforeOpen;
+          expect(sheet.controls).toBe(staged.selectorControls);
+          /* One line of heading, and the same gap under it, as the conversation that is no stage. */
+          expect(staged.headingHeight).toEqual(sheet.headingHeight);
+          expect(staged.headingGap).toEqual(sheet.headingGap);
+          expect(ordinary.pageErrors).toEqual([]);
+          (readings.at(-1) as Record<string, unknown>).ordinarySheet = sheet;
+        } finally { await ordinary.context.close(); }
+      }
+      fs.mkdirSync("evidence/stage-runtime-switch", { recursive: true });
+      fs.writeFileSync("evidence/stage-runtime-switch/geometry.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); await browserServer.close(); server.stop(); }
+  }, 360_000);
 });
 
 describe("compact card menu and overflow menus: today and built", () => {

@@ -966,7 +966,7 @@ function ViewerApp() {
      rows and the phone's ⚠ badge all read `needsYou`, so the header counts the
      lanes the cards and the columns already mark, and a lane dismissed on its
      card leaves every count at once. */
-  const updateFeed = useSelfUpdateFeed(true);
+  const updateFeed = useSelfUpdateFeed(true, false);
   const updateDecision = updateFeed.snapshot?.auto?.decision;
   /* The update surface names the work it waits on by project name and
      conversation title; the server sends keys and ids. */
