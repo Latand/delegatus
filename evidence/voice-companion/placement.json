@@ -42,26 +42,26 @@
       "blockInEveryLoad": [
         {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         },
         {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         },
         {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         }
       ],
       "blockAt6s": {
         "x": 184,
-        "y": 448,
+        "y": 576,
         "width": 132,
         "height": 148
       },
@@ -73,39 +73,41 @@
       "direction": "up",
       "block": {
         "x": 184,
-        "y": 448,
+        "y": 576,
         "width": 132,
         "height": 148
       },
       "lane": {
         "x": 36,
-        "y": 218,
+        "y": 206,
         "width": 280,
-        "height": 220
+        "height": 360
       },
       "floaters": 0,
       "bubbles": [],
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 82,
+      "controls": 83,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 11,
+      "minClearance": 9,
       "pointerHits": 0,
       "trapped": 0,
-      "passed": 616,
+      "passed": 1008,
       "clipped": [],
       "pageOverflows": false,
       "handles": 28,
       "handleArea": 0,
-      "handleGap": 131,
+      "handleGap": 9,
       "textUnderCharacter": 0,
       "textCovered": [],
       "textUnderLane": 0,
       "rowControls": 1,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "start",
@@ -158,7 +160,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 82,
+      "controls": 83,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 9,
@@ -175,7 +177,9 @@
       "textUnderLane": 0,
       "rowControls": 1,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "start",
@@ -187,26 +191,26 @@
       "blockInEveryLoad": [
         {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         },
         {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         },
         {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         }
       ],
       "blockAt6s": {
         "x": 184,
-        "y": 448,
+        "y": 576,
         "width": 132,
         "height": 148
       },
@@ -218,39 +222,41 @@
       "direction": "up",
       "block": {
         "x": 184,
-        "y": 448,
+        "y": 576,
         "width": 132,
         "height": 148
       },
       "lane": {
         "x": 36,
-        "y": 218,
+        "y": 206,
         "width": 280,
-        "height": 220
+        "height": 360
       },
       "floaters": 0,
       "bubbles": [],
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 82,
+      "controls": 83,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 11,
+      "minClearance": 9,
       "pointerHits": 0,
       "trapped": 0,
-      "passed": 616,
+      "passed": 1008,
       "clipped": [],
       "pageOverflows": false,
       "handles": 28,
       "handleArea": 0,
-      "handleGap": 131,
+      "handleGap": 9,
       "textUnderCharacter": 0,
       "textCovered": [],
       "textUnderLane": 0,
       "rowControls": 1,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "start",
@@ -303,7 +309,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 82,
+      "controls": 83,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 9,
@@ -320,7 +326,9 @@
       "textUnderLane": 0,
       "rowControls": 1,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "start",
@@ -332,26 +340,26 @@
       "blockInEveryLoad": [
         {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         },
         {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         },
         {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         }
       ],
       "blockAt6s": {
         "x": 184,
-        "y": 448,
+        "y": 576,
         "width": 132,
         "height": 148
       },
@@ -363,39 +371,41 @@
       "direction": "up",
       "block": {
         "x": 184,
-        "y": 448,
+        "y": 576,
         "width": 132,
         "height": 148
       },
       "lane": {
         "x": 36,
-        "y": 218,
+        "y": 206,
         "width": 280,
-        "height": 220
+        "height": 360
       },
       "floaters": 0,
       "bubbles": [],
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 82,
+      "controls": 83,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 11,
+      "minClearance": 8,
       "pointerHits": 0,
       "trapped": 0,
-      "passed": 616,
+      "passed": 1008,
       "clipped": [],
       "pageOverflows": false,
       "handles": 28,
       "handleArea": 0,
-      "handleGap": 131,
+      "handleGap": 9,
       "textUnderCharacter": 0,
       "textCovered": [],
       "textUnderLane": 0,
       "rowControls": 1,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "start",
@@ -448,7 +458,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 82,
+      "controls": 83,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 9,
@@ -465,7 +475,9 @@
       "textUnderLane": 0,
       "rowControls": 1,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "start",
@@ -477,26 +489,26 @@
       "blockInEveryLoad": [
         {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         },
         {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         },
         {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         }
       ],
       "blockAt6s": {
         "x": 184,
-        "y": 448,
+        "y": 576,
         "width": 132,
         "height": 148
       },
@@ -508,39 +520,41 @@
       "direction": "up",
       "block": {
         "x": 184,
-        "y": 448,
+        "y": 576,
         "width": 132,
         "height": 148
       },
       "lane": {
         "x": 36,
-        "y": 218,
+        "y": 206,
         "width": 280,
-        "height": 220
+        "height": 360
       },
       "floaters": 0,
       "bubbles": [],
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 82,
+      "controls": 83,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 11,
+      "minClearance": 8,
       "pointerHits": 0,
       "trapped": 0,
-      "passed": 616,
+      "passed": 1008,
       "clipped": [],
       "pageOverflows": false,
       "handles": 28,
       "handleArea": 0,
-      "handleGap": 131,
+      "handleGap": 9,
       "textUnderCharacter": 0,
       "textCovered": [],
       "textUnderLane": 0,
       "rowControls": 1,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "start",
@@ -593,7 +607,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 82,
+      "controls": 83,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 9,
@@ -610,7 +624,9 @@
       "textUnderLane": 0,
       "rowControls": 1,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "start",
@@ -668,7 +684,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 51,
+      "controls": 52,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 30,
@@ -685,7 +701,9 @@
       "textUnderLane": 0,
       "rowControls": 1,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 72800,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "start",
@@ -738,7 +756,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 51,
+      "controls": 52,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 10,
@@ -755,7 +773,9 @@
       "textUnderLane": 0,
       "rowControls": 1,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "start",
@@ -813,7 +833,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 51,
+      "controls": 52,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 30,
@@ -830,7 +850,9 @@
       "textUnderLane": 0,
       "rowControls": 1,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 72800,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "start",
@@ -883,7 +905,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 51,
+      "controls": 52,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 10,
@@ -900,7 +922,9 @@
       "textUnderLane": 0,
       "rowControls": 1,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "start",
@@ -958,7 +982,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 51,
+      "controls": 52,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 57,
@@ -975,7 +999,9 @@
       "textUnderLane": 0,
       "rowControls": 1,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 50400,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "start",
@@ -1028,7 +1054,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 51,
+      "controls": 52,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 10,
@@ -1045,7 +1071,9 @@
       "textUnderLane": 0,
       "rowControls": 1,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "start",
@@ -1103,7 +1131,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 51,
+      "controls": 52,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 57,
@@ -1120,7 +1148,9 @@
       "textUnderLane": 0,
       "rowControls": 1,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 50400,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "start",
@@ -1173,7 +1203,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 51,
+      "controls": 52,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 10,
@@ -1190,7 +1220,9 @@
       "textUnderLane": 0,
       "rowControls": 1,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "delivered",
@@ -1202,26 +1234,26 @@
       "blockInEveryLoad": [
         {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         },
         {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         },
         {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         }
       ],
       "blockAt6s": {
         "x": 184,
-        "y": 448,
+        "y": 576,
         "width": 132,
         "height": 148
       },
@@ -1233,39 +1265,41 @@
       "direction": "up",
       "block": {
         "x": 184,
-        "y": 448,
+        "y": 576,
         "width": 132,
         "height": 148
       },
       "lane": {
         "x": 36,
-        "y": 218,
+        "y": 206,
         "width": 280,
-        "height": 220
+        "height": 360
       },
       "floaters": 0,
       "bubbles": [],
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 83,
+      "controls": 84,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 11,
+      "minClearance": 9,
       "pointerHits": 0,
       "trapped": 0,
-      "passed": 616,
+      "passed": 1008,
       "clipped": [],
       "pageOverflows": false,
       "handles": 28,
       "handleArea": 0,
-      "handleGap": 131,
+      "handleGap": 9,
       "textUnderCharacter": 0,
       "textCovered": [],
       "textUnderLane": 0,
       "rowControls": 2,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "delivered",
@@ -1318,7 +1352,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 83,
+      "controls": 84,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 9,
@@ -1335,7 +1369,9 @@
       "textUnderLane": 0,
       "rowControls": 2,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "delivered",
@@ -1347,26 +1383,26 @@
       "blockInEveryLoad": [
         {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         },
         {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         },
         {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         }
       ],
       "blockAt6s": {
         "x": 184,
-        "y": 448,
+        "y": 576,
         "width": 132,
         "height": 148
       },
@@ -1378,39 +1414,41 @@
       "direction": "up",
       "block": {
         "x": 184,
-        "y": 448,
+        "y": 576,
         "width": 132,
         "height": 148
       },
       "lane": {
         "x": 36,
-        "y": 218,
+        "y": 206,
         "width": 280,
-        "height": 220
+        "height": 360
       },
       "floaters": 0,
       "bubbles": [],
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 83,
+      "controls": 84,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 11,
+      "minClearance": 9,
       "pointerHits": 0,
       "trapped": 0,
-      "passed": 616,
+      "passed": 1008,
       "clipped": [],
       "pageOverflows": false,
       "handles": 28,
       "handleArea": 0,
-      "handleGap": 131,
+      "handleGap": 9,
       "textUnderCharacter": 0,
       "textCovered": [],
       "textUnderLane": 0,
       "rowControls": 2,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "delivered",
@@ -1463,7 +1501,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 83,
+      "controls": 84,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 9,
@@ -1480,7 +1518,9 @@
       "textUnderLane": 0,
       "rowControls": 2,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "delivered",
@@ -1492,26 +1532,26 @@
       "blockInEveryLoad": [
         {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         },
         {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         },
         {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         }
       ],
       "blockAt6s": {
         "x": 184,
-        "y": 448,
+        "y": 576,
         "width": 132,
         "height": 148
       },
@@ -1523,39 +1563,41 @@
       "direction": "up",
       "block": {
         "x": 184,
-        "y": 448,
+        "y": 576,
         "width": 132,
         "height": 148
       },
       "lane": {
         "x": 36,
-        "y": 218,
+        "y": 206,
         "width": 280,
-        "height": 220
+        "height": 360
       },
       "floaters": 0,
       "bubbles": [],
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 83,
+      "controls": 84,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 11,
+      "minClearance": 8,
       "pointerHits": 0,
       "trapped": 0,
-      "passed": 616,
+      "passed": 1008,
       "clipped": [],
       "pageOverflows": false,
       "handles": 28,
       "handleArea": 0,
-      "handleGap": 131,
+      "handleGap": 9,
       "textUnderCharacter": 0,
       "textCovered": [],
       "textUnderLane": 0,
       "rowControls": 2,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "delivered",
@@ -1608,7 +1650,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 83,
+      "controls": 84,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 9,
@@ -1625,7 +1667,9 @@
       "textUnderLane": 0,
       "rowControls": 2,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "delivered",
@@ -1637,26 +1681,26 @@
       "blockInEveryLoad": [
         {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         },
         {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         },
         {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         }
       ],
       "blockAt6s": {
         "x": 184,
-        "y": 448,
+        "y": 576,
         "width": 132,
         "height": 148
       },
@@ -1668,39 +1712,41 @@
       "direction": "up",
       "block": {
         "x": 184,
-        "y": 448,
+        "y": 576,
         "width": 132,
         "height": 148
       },
       "lane": {
         "x": 36,
-        "y": 218,
+        "y": 206,
         "width": 280,
-        "height": 220
+        "height": 360
       },
       "floaters": 0,
       "bubbles": [],
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 83,
+      "controls": 84,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 11,
+      "minClearance": 8,
       "pointerHits": 0,
       "trapped": 0,
-      "passed": 616,
+      "passed": 1008,
       "clipped": [],
       "pageOverflows": false,
       "handles": 28,
       "handleArea": 0,
-      "handleGap": 131,
+      "handleGap": 9,
       "textUnderCharacter": 0,
       "textCovered": [],
       "textUnderLane": 0,
       "rowControls": 2,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "delivered",
@@ -1753,7 +1799,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 83,
+      "controls": 84,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 9,
@@ -1770,7 +1816,9 @@
       "textUnderLane": 0,
       "rowControls": 2,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "delivered",
@@ -1823,7 +1871,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 52,
+      "controls": 53,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 10,
@@ -1840,7 +1888,9 @@
       "textUnderLane": 0,
       "rowControls": 2,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "delivered",
@@ -1893,7 +1943,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 52,
+      "controls": 53,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 10,
@@ -1910,7 +1960,9 @@
       "textUnderLane": 0,
       "rowControls": 2,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "delivered",
@@ -1963,7 +2015,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 52,
+      "controls": 53,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 10,
@@ -1980,7 +2032,9 @@
       "textUnderLane": 0,
       "rowControls": 2,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "delivered",
@@ -2033,7 +2087,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 52,
+      "controls": 53,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 10,
@@ -2050,7 +2104,9 @@
       "textUnderLane": 0,
       "rowControls": 2,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "delivered",
@@ -2103,7 +2159,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 52,
+      "controls": 53,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 10,
@@ -2120,7 +2176,9 @@
       "textUnderLane": 0,
       "rowControls": 2,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "delivered",
@@ -2173,7 +2231,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 52,
+      "controls": 53,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 10,
@@ -2190,7 +2248,9 @@
       "textUnderLane": 0,
       "rowControls": 2,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "delivered",
@@ -2243,7 +2303,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 52,
+      "controls": 53,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 10,
@@ -2260,7 +2320,9 @@
       "textUnderLane": 0,
       "rowControls": 2,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "delivered",
@@ -2313,7 +2375,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 52,
+      "controls": 53,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 10,
@@ -2330,7 +2392,9 @@
       "textUnderLane": 0,
       "rowControls": 2,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "full",
@@ -2342,26 +2406,26 @@
       "blockInEveryLoad": [
         {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         },
         {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         },
         {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         }
       ],
       "blockAt6s": {
         "x": 184,
-        "y": 448,
+        "y": 576,
         "width": 132,
         "height": 148
       },
@@ -2373,39 +2437,41 @@
       "direction": "up",
       "block": {
         "x": 184,
-        "y": 448,
+        "y": 576,
         "width": 132,
         "height": 148
       },
       "lane": {
         "x": 36,
-        "y": 218,
+        "y": 206,
         "width": 280,
-        "height": 220
+        "height": 360
       },
       "floaters": 0,
       "bubbles": [],
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 86,
+      "controls": 87,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 11,
+      "minClearance": 9,
       "pointerHits": 0,
       "trapped": 0,
-      "passed": 616,
+      "passed": 1008,
       "clipped": [],
       "pageOverflows": false,
       "handles": 28,
       "handleArea": 0,
-      "handleGap": 131,
+      "handleGap": 9,
       "textUnderCharacter": 0,
       "textCovered": [],
       "textUnderLane": 0,
       "rowControls": 18,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "full",
@@ -2458,7 +2524,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 86,
+      "controls": 87,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 9,
@@ -2475,7 +2541,9 @@
       "textUnderLane": 0,
       "rowControls": 18,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "full",
@@ -2487,26 +2555,26 @@
       "blockInEveryLoad": [
         {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         },
         {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         },
         {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         }
       ],
       "blockAt6s": {
         "x": 184,
-        "y": 448,
+        "y": 576,
         "width": 132,
         "height": 148
       },
@@ -2518,39 +2586,41 @@
       "direction": "up",
       "block": {
         "x": 184,
-        "y": 448,
+        "y": 576,
         "width": 132,
         "height": 148
       },
       "lane": {
         "x": 36,
-        "y": 218,
+        "y": 206,
         "width": 280,
-        "height": 220
+        "height": 360
       },
       "floaters": 0,
       "bubbles": [],
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 86,
+      "controls": 87,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 11,
+      "minClearance": 9,
       "pointerHits": 0,
       "trapped": 0,
-      "passed": 616,
+      "passed": 1008,
       "clipped": [],
       "pageOverflows": false,
       "handles": 28,
       "handleArea": 0,
-      "handleGap": 131,
+      "handleGap": 9,
       "textUnderCharacter": 0,
       "textCovered": [],
       "textUnderLane": 0,
       "rowControls": 18,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "full",
@@ -2603,7 +2673,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 86,
+      "controls": 87,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 9,
@@ -2620,7 +2690,9 @@
       "textUnderLane": 0,
       "rowControls": 18,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "full",
@@ -2632,26 +2704,26 @@
       "blockInEveryLoad": [
         {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         },
         {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         },
         {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         }
       ],
       "blockAt6s": {
         "x": 184,
-        "y": 448,
+        "y": 576,
         "width": 132,
         "height": 148
       },
@@ -2663,39 +2735,41 @@
       "direction": "up",
       "block": {
         "x": 184,
-        "y": 448,
+        "y": 576,
         "width": 132,
         "height": 148
       },
       "lane": {
         "x": 36,
-        "y": 218,
+        "y": 206,
         "width": 280,
-        "height": 220
+        "height": 360
       },
       "floaters": 0,
       "bubbles": [],
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 86,
+      "controls": 87,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 11,
+      "minClearance": 8,
       "pointerHits": 0,
       "trapped": 0,
-      "passed": 616,
+      "passed": 1008,
       "clipped": [],
       "pageOverflows": false,
       "handles": 28,
       "handleArea": 0,
-      "handleGap": 131,
+      "handleGap": 9,
       "textUnderCharacter": 0,
       "textCovered": [],
       "textUnderLane": 0,
       "rowControls": 18,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "full",
@@ -2748,7 +2822,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 86,
+      "controls": 87,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 9,
@@ -2765,7 +2839,9 @@
       "textUnderLane": 0,
       "rowControls": 18,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "full",
@@ -2777,26 +2853,26 @@
       "blockInEveryLoad": [
         {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         },
         {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         },
         {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         }
       ],
       "blockAt6s": {
         "x": 184,
-        "y": 448,
+        "y": 576,
         "width": 132,
         "height": 148
       },
@@ -2808,39 +2884,41 @@
       "direction": "up",
       "block": {
         "x": 184,
-        "y": 448,
+        "y": 576,
         "width": 132,
         "height": 148
       },
       "lane": {
         "x": 36,
-        "y": 218,
+        "y": 206,
         "width": 280,
-        "height": 220
+        "height": 360
       },
       "floaters": 0,
       "bubbles": [],
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 86,
+      "controls": 87,
       "overlapArea": 0,
       "covered": [],
-      "minClearance": 11,
+      "minClearance": 8,
       "pointerHits": 0,
       "trapped": 0,
-      "passed": 616,
+      "passed": 1008,
       "clipped": [],
       "pageOverflows": false,
       "handles": 28,
       "handleArea": 0,
-      "handleGap": 131,
+      "handleGap": 9,
       "textUnderCharacter": 0,
       "textCovered": [],
       "textUnderLane": 0,
       "rowControls": 18,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "full",
@@ -2893,7 +2971,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 86,
+      "controls": 87,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 9,
@@ -2910,7 +2988,9 @@
       "textUnderLane": 0,
       "rowControls": 18,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "full",
@@ -2963,7 +3043,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 54,
+      "controls": 55,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 8,
@@ -2980,7 +3060,9 @@
       "textUnderLane": 0,
       "rowControls": 18,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "full",
@@ -3033,7 +3115,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 54,
+      "controls": 55,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 8,
@@ -3050,7 +3132,9 @@
       "textUnderLane": 0,
       "rowControls": 18,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "full",
@@ -3103,7 +3187,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 54,
+      "controls": 55,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 8,
@@ -3120,7 +3204,9 @@
       "textUnderLane": 0,
       "rowControls": 18,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "full",
@@ -3173,7 +3259,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 54,
+      "controls": 55,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 8,
@@ -3190,7 +3276,9 @@
       "textUnderLane": 0,
       "rowControls": 18,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "full",
@@ -3243,7 +3331,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 54,
+      "controls": 55,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 8,
@@ -3260,7 +3348,9 @@
       "textUnderLane": 0,
       "rowControls": 18,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "full",
@@ -3313,7 +3403,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 54,
+      "controls": 55,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 8,
@@ -3330,7 +3420,9 @@
       "textUnderLane": 0,
       "rowControls": 18,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "full",
@@ -3383,7 +3475,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 54,
+      "controls": 55,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 8,
@@ -3400,7 +3492,9 @@
       "textUnderLane": 0,
       "rowControls": 18,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     },
     {
       "fill": "full",
@@ -3453,7 +3547,7 @@
       "calls": 0,
       "insideViewport": true,
       "floatersInsideLane": true,
-      "controls": 54,
+      "controls": 55,
       "overlapArea": 0,
       "covered": [],
       "minClearance": 8,
@@ -3470,7 +3564,9 @@
       "textUnderLane": 0,
       "rowControls": 18,
       "rowTrackHits": [],
-      "tailRoomArea": 0
+      "tailRoomArea": 0,
+      "laneOverFeedPx2": 0,
+      "rowPicturesUnderPx2": 0
     }
   ]
 }

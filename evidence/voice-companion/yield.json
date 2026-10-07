@@ -1,20 +1,20 @@
 {
   "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
   "fixture": "?scenario=voice-companion",
-  "behaviour": "the character follows the pointer while held, its lane flipping at the edges; on the drop the character and its lane move to the nearest free place, a shorter lane is tried, and with none the companion collapses",
+  "behaviour": "the character follows the pointer while held, its lane flipping at the edges; on the drop the character and its lane move to the nearest free place, a shorter lane is tried, and with none the companion collapses; a move it makes by itself while its lane holds a conversation empties the lane before the character sets off",
   "drag": {
     "before": {
       "block": {
         "x": 184,
-        "y": 448,
+        "y": 576,
         "width": 132,
         "height": 148
       },
       "lane": {
         "x": 36,
-        "y": 218,
+        "y": 206,
         "width": 280,
-        "height": 220
+        "height": 360
       }
     },
     "overComposer": {
@@ -47,7 +47,7 @@
     "overToolbar": {
       "heldOverControls": true,
       "held": {
-        "x": 126,
+        "x": 130,
         "y": 0,
         "width": 132,
         "height": 148
@@ -79,7 +79,7 @@
     },
     "home": {
       "x": 184,
-      "y": 448,
+      "y": 576,
       "width": 132,
       "height": 148
     }
@@ -87,7 +87,7 @@
   "collapsedProposal": {
     "flagged": {
       "x": 260,
-      "y": 540,
+      "y": 668,
       "width": 56,
       "height": 56
     },
@@ -97,7 +97,7 @@
     "ended": {
       "block": {
         "x": 260,
-        "y": 540,
+        "y": 668,
         "width": 56,
         "height": 56
       },
@@ -110,17 +110,17 @@
       "dispatches": 0,
       "block": {
         "x": 184,
-        "y": 448,
+        "y": 576,
         "width": 132,
         "height": 148
       }
     },
     "uk-light": {
-      "note": "left with its element",
+      "note": "Ви забрали це прохання, тож нічого не надіслано. Попросіть ще раз, і я надішлю.",
       "dispatches": 0,
       "block": {
         "x": 184,
-        "y": 448,
+        "y": 576,
         "width": 132,
         "height": 148
       }
@@ -130,7 +130,7 @@
       "dispatches": 0,
       "block": {
         "x": 184,
-        "y": 448,
+        "y": 576,
         "width": 132,
         "height": 148
       }
@@ -147,6 +147,82 @@
       "height": 56
     },
     "askedToOpen": "collapsed"
+  },
+  "controlUnderTheLane": {
+    "1440-en-light": {
+      "before": {
+        "block": {
+          "x": 184,
+          "y": 576,
+          "width": 132,
+          "height": 148
+        },
+        "lane": {
+          "x": 36,
+          "y": 206,
+          "width": 280,
+          "height": 360
+        },
+        "side": "above"
+      },
+      "after": {
+        "layout": "expanded",
+        "block": {
+          "x": 476,
+          "y": 404,
+          "width": 132,
+          "height": 148
+        },
+        "lane": {
+          "x": 618,
+          "y": 232,
+          "width": 280,
+          "height": 320
+        },
+        "side": "right",
+        "floaters": 1
+      },
+      "carriedFrames": 0,
+      "laneEmptiedBeforeTheMove": true,
+      "frames": 69
+    },
+    "1000-uk-dark": {
+      "before": {
+        "block": {
+          "x": 740,
+          "y": 404,
+          "width": 132,
+          "height": 148
+        },
+        "lane": {
+          "x": 450,
+          "y": 372,
+          "width": 280,
+          "height": 180
+        },
+        "side": "left"
+      },
+      "after": {
+        "layout": "expanded",
+        "block": {
+          "x": 120,
+          "y": 404,
+          "width": 132,
+          "height": 148
+        },
+        "lane": {
+          "x": 262,
+          "y": 372,
+          "width": 280,
+          "height": 180
+        },
+        "side": "right",
+        "floaters": 1
+      },
+      "carriedFrames": 0,
+      "laneEmptiedBeforeTheMove": true,
+      "frames": 69
+    }
   },
   "collapsedHangup": {
     "1440-en-light": {
