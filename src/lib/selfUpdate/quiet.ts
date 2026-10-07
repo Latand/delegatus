@@ -248,6 +248,13 @@ function flowCustody(flow: Flow | undefined, attemptConversationId: string | nul
    make the bound restart on every probe and hold the drain for good. */
 const firstUnresolved = new WeakMap<QuietPorts, Map<string, number>>();
 
+/* The live host owners whose own sources have shown a turn, by owner id, which
+   names the process and its start identity, with the reason that showed it. A
+   proven turn holds through a later unreadable tail until the owner's own
+   sources say idle or its process is gone or reused (R8). Kept per set of
+   ports, as `firstUnresolved` is. */
+const provenTurns = new WeakMap<QuietPorts, Map<string, OwnerReason>>();
+
 const emptyCensus: OwnerCensusReading = {
   owners: [], ownerless: [], bound: () => [], names: () => false, tail: async () => null,
 };
@@ -399,9 +406,22 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
     /* R7 per owner, then R11: owners that hold, or are unknown inside their
        bound, are grouped by display id only after every verdict is read. */
     const holding = new Map<string, { item: OwnerReading | OwnerlessReading; reason: OwnerReason; unresolved: boolean }>();
+    const proven = provenTurns.get(ports) ?? new Map<string, OwnerReason>();
+    provenTurns.set(ports, proven);
+    for (const id of proven.keys()) if (!census.owners.some((owner) => owner.id === id)) proven.delete(id);
     for (const owner of census.owners) {
       const { verdict, reason } = ownerVerdict(owner);
+      // Losing the evidence of a proven turn is no end of it: only the
+      // owner's settled tail, its handle saying idle, or its process being
+      // gone ends what its own sources showed.
+      if (verdict === "released" || owner.handle === "idle") proven.delete(owner.id);
+      else if (verdict === "holds" && owner.role === "host") proven.set(owner.id, reason);
       if (verdict === "released") continue;
+      const kept = verdict === "unknown" ? proven.get(owner.id) : undefined;
+      if (kept) {
+        holding.set(owner.id, { item: owner, reason: kept, unresolved: false });
+        continue;
+      }
       if (verdict === "unknown" && ownerPastBound(owner)) continue;
       holding.set(owner.id, { item: owner, reason, unresolved: verdict === "unknown" });
     }

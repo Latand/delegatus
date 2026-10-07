@@ -635,6 +635,17 @@ already run out and the host is released on the first probe. A host that
 keeps writing records with no turn marker in them stays held by clock 2 for as
 long as it writes.
 
+A turn an owner's own sources have proved is never made unknown by losing its
+evidence. Once a live host owner holds as `host-turn`, `turn-claimed` or
+`turn-open`, the drain remembers that under the owner's id, which names its
+pid and start identity. If a later probe reads it as unknown (its transcript
+deleted, a torn line at its end, or its markers pushed out of the read tail by
+one large record), it keeps holding under the reason that proved the turn, with
+no bound and outside `blockers.unresolved`. It is released by its own settled
+tail, by a handle that says idle, by its process being gone, or by its record
+naming another process (a reused pid). An owner that never showed a turn keeps
+the bounded grace above.
+
 ### R9 — A journal row is a claim
 
 A journal session row does two things and no more:

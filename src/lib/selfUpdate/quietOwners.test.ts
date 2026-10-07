@@ -4,7 +4,7 @@
    production owner reader and judged by `probeQuiet`. Each test names the
    table row it decides. */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, openSync, closeSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, openSync, closeSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -658,6 +658,81 @@ describe("R6b and the unknown bounds", () => {
     expect(await probe(p, now)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolved: 1, turnList: [{ reason: "turn-unread" }] } });
     expect(await probe(p, now + FIVE_MINUTES - 1)).toMatchObject({ quiet: false, blockers: { turns: 1 } });
     expect(await probe(p, now + FIVE_MINUTES)).toMatchObject({ quiet: true, blockers: { turns: 0, unresolved: 1 } });
+  });
+});
+
+/* A turn the owner's own sources proved stays held after its evidence becomes
+   unreadable: only its own settled tail, its process exiting, or its pid
+   naming another process ends it (R8). */
+describe("a proven turn whose evidence is lost", () => {
+  /** A standalone tmux owner over an open turn, held as turn-open. */
+  async function standalone(now: number) {
+    const path = transcript("open", new Date(now).toISOString());
+    const c = conversation(path);
+    const b = spawn();
+    f.registry.upsert({ key: c.key, artifactPath: path, cwd: f.dir, accountId: "fixture", status: "live", host: tmuxHost(b.identity),
+      claimEpoch: 0, claimOwner: null, pendingAction: null, structuredHost: null });
+    await fallback();
+    const p = ports();
+    expect(await probe(p, now)).toMatchObject({ quiet: false, blockers: { turns: 1, turnList: [{ conversationId: c.id, reason: "turn-open" }] } });
+    return { ...c, b, p };
+  }
+  const at = (ms: number) => new Date(ms).toISOString();
+  const losses: { name: string; lose: (path: string, now: number) => void; settle: (path: string, now: number) => void }[] = [
+    { name: "the transcript is deleted", lose: (path) => rmSync(path),
+      settle: (path, now) => writeFileSync(path, transcriptText("settled", at(now))) },
+    { name: "a partial JSON line is appended", lose: (path, now) => appendFileSync(path, `{"timestamp":"${at(now)}","type":"event_msg","payload":{"type":"agent_mess`),
+      settle: (path, now) => appendFileSync(path, `age"}}\n${JSON.stringify({ timestamp: at(now), type: "event_msg", payload: { type: "task_complete" } })}\n`) },
+    { name: "a large reasoning record pushes the markers out of the tail", lose: (path, now) => appendFileSync(path,
+      `${JSON.stringify({ timestamp: at(now), type: "response_item", payload: { type: "reasoning", summary: [], encrypted_content: "x".repeat(200 * 1024) } })}\n`),
+    settle: (path, now) => appendFileSync(path, `${JSON.stringify({ timestamp: at(now), type: "event_msg", payload: { type: "task_complete" } })}\n`) },
+  ];
+  for (const loss of losses) {
+    test(`${loss.name}: the live owner holds past five minutes until its own tail settles`, async () => {
+      const now = Date.now();
+      const s = await standalone(now);
+      loss.lose(s.path, now + 1);
+      expect(await probe(s.p, now + 1)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolvedBlocking: 0,
+        turnList: [{ conversationId: s.id, reason: "turn-open" }] } });
+      expect(await probe(s.p, now + 1 + FIVE_MINUTES + 1)).toMatchObject({ quiet: false, blockers: { turns: 1, stages: 0,
+        turnList: [{ conversationId: s.id, reason: "turn-open" }] } });
+      expect(await probe(s.p, now + TWELVE_HOURS)).toMatchObject({ quiet: false, blockers: { turns: 1 } });
+      loss.settle(s.path, now + TWELVE_HOURS);
+      expect(await probe(s.p, now + TWELVE_HOURS + 1)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
+    });
+    test(`${loss.name}: the owner's exit releases it`, async () => {
+      const now = Date.now();
+      const s = await standalone(now);
+      loss.lose(s.path, now + 1);
+      expect(await probe(s.p, now + 1 + FIVE_MINUTES + 1)).toMatchObject({ quiet: false, blockers: { turns: 1 } });
+      await exit(s.b);
+      expect(await probe(s.p, now + 1 + FIVE_MINUTES + 2)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
+    });
+  }
+
+  test("a record that names the pid under another start identity proves nothing about the turn the old process showed", async () => {
+    const now = Date.now();
+    const s = await standalone(now);
+    rmSync(s.path);
+    expect(await probe(s.p, now + 1)).toMatchObject({ quiet: false, blockers: { turns: 1, turnList: [{ reason: "turn-open" }] } });
+    const reused = { ...s.b.identity, startIdentity: `${s.b.identity.startIdentity}-reused` };
+    f.registry.upsert({ ...f.registry.readOnlySnapshot().entries[sessionKeyId(s.key)]!, host: tmuxHost(reused) });
+    expect(await probe(s.p, now + 2)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
+  });
+
+  test("control: a live owner that never showed a turn is released five minutes after its evidence is lost", async () => {
+    const now = Date.now();
+    const path = transcript("unmarked", at(now));
+    const c = conversation(path);
+    const b = spawn();
+    f.registry.upsert({ key: c.key, artifactPath: path, cwd: f.dir, accountId: "fixture", status: "live", host: tmuxHost(b.identity),
+      claimEpoch: 0, claimOwner: null, pendingAction: null, structuredHost: null });
+    await fallback();
+    const p = ports();
+    expect(await probe(p, now)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolvedBlocking: 1, turnList: [{ reason: "turn-unread" }] } });
+    rmSync(path);
+    expect(await probe(p, now + 1)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolvedBlocking: 1 } });
+    expect(await probe(p, now + 1 + FIVE_MINUTES + 1)).toMatchObject({ quiet: true, blockers: { turns: 0, unresolved: 1, unresolvedBlocking: 0 } });
   });
 });
 
