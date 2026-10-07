@@ -117,6 +117,7 @@ test("(a) native main's own file faults and failures are pre-existing; the same 
 
 test("(a) a file native main cannot complete is compared only on the cases both sides completed", async () => {
   const incomplete = fileFault("browser.test.ts", INCOMPLETE_FILE), unreported = site("unreported on main", "browser.test.ts");
+  // `passed` stands for what main's rerun of the named cases reported.
   const salvaged = site("main passed", "browser.test.ts"), candidateFault = fileFault("browser.test.ts", INCOMPLETE_FILE);
   const base = { ...recorded([incomplete], [salvaged]), completed: [] };
   const candidate = recorded([unreported, salvaged, candidateFault]);
@@ -124,6 +125,26 @@ test("(a) a file native main cannot complete is compared only on the cases both 
   const decision = await attributeBatchTests(base, recorded([unreported, candidateFault]), [12],
     async () => { throw new Error("nothing new to confirm"); }, async () => { throw new Error("must not attribute"); });
   expect(decision).toEqual({ preExisting: [candidateFault], intermittent: [], attributed: [], uncompared: [unreported] });
+});
+
+test("(a)(c) native main's named cases rerun alone when its file aborts, and decide the comparison", async () => {
+  const incomplete = fileFault("value.test.ts", INCOMPLETE_FILE);
+  const shared = site("shared invariant", "value.test.ts"), mainRed = site("red on main", "value.test.ts"), candidateOnly = site("new case", "value.test.ts");
+  const base = { ...recorded([incomplete]), completed: [] };
+  const probes: TestSite[][] = [], removals: TestSite[][] = [];
+  const decision = await attributeBatchTests(base, recorded([shared, mainRed, candidateOnly]), [12, 13],
+    async () => recorded([shared, mainRed, candidateOnly]),
+    async (removed, _files, focus) => {
+      removals.push(focus);
+      // Removing #13 restores main's abort: only the named case reports.
+      return removed.includes(13) ? { ...recorded([incomplete], [shared]), completed: [] } : recorded([shared, mainRed, candidateOnly]);
+    },
+    async sites => { probes.push(sites); return { ...recorded([mainRed], [shared]), completed: [] }; });
+  expect(probes).toEqual([[shared, mainRed, candidateOnly]]);
+  expect(removals).toEqual([[shared], [shared]]);
+  expect(decision.preExisting).toEqual([mainRed]);
+  expect(decision.uncompared).toEqual([candidateOnly]);
+  expect(decision.attributed.map(entry => [entry.test.name, entry.prs, entry.reason])).toEqual([["shared invariant", [13], "test regression"]]);
 });
 
 const octoberSixFailures: TestSite[] = [
@@ -734,6 +755,44 @@ for (const mode of ["green", "behind"] as const) {
     expect((await commandRunner(f.repo, [process.execPath, "test", "./a.test.ts", "./restored.test.ts"])).code).toBe(0);
   }, 60_000);
 }
+
+test("(a)(c) a case native main completes before aborting still names its culprit with the real sampler", async () => {
+  const f = landingFixture("green", async (cwd, args, env) => args[1] === "bun" && args[2] === "test"
+    ? commandRunner(cwd, args.slice(1), env) : successfulCommand(args));
+  f.seed("value.js", "exports.value = 1;\n");
+  f.seed("abort.txt", "main aborts this file\n");
+  f.seed("value.test.ts", "const { test, expect } = require('bun:test');\nconst { existsSync } = require('node:fs');\nconst { join } = require('node:path');\n"
+    + "test('shared invariant', () => expect(require('./value.js').value).toBe(1));\n"
+    + "test('main aborts', () => { if (existsSync(join(__dirname, 'abort.txt'))) process.exit(1); });\n");
+  const main = await commandRunner(f.repo, [process.execPath, "test", "./value.test.ts"]);
+  expect(main.code).toBe(1);
+  expect(main.output).not.toContain("1 pass");
+  const healthy = f.addPr(12, "healthy.txt", "healthy");
+  f.addPr(13, "value.js", "exports.value = 2;\n");
+  git(f.repo, ["checkout", "topic-13"]);
+  git(f.repo, ["rm", "-q", "abort.txt"]); git(f.repo, ["commit", "-m", "Stop aborting"]);
+  const regression = git(f.repo, ["rev-parse", "HEAD"]);
+  git(f.repo, ["push", "origin", `${regression}:refs/pull/13/head`, `${regression}:refs/heads/topic-13`]);
+  f.views.get(13)!.headRefOid = regression;
+  git(f.repo, ["checkout", "main"]);
+  await f.batch.build(`12@${healthy},13@${regression}`);
+  const gated = await f.batch.gate();
+  expect(gated.rows.map(row => row.status)).toEqual(["clean", "culprit"]);
+  const evidence = gated.attributionLog.find(entry => entry.test.name === "shared invariant")!;
+  expect(evidence.prs).toEqual([13]);
+  expect(evidence.confirmation).toEqual(["fail", "fail", "fail"]);
+  // Without #13 the file aborts again; the case it reached still passes.
+  expect(evidence.removals).toEqual([{ removed: [12], outcome: "fail" }, { removed: [13], outcome: "pass" }]);
+  // On the rebuilt candidate main's own abort is the only red, and pre-existing.
+  const final = gated.gated!.decisions.at(-1)!;
+  expect(final.attributed).toEqual([]);
+  expect(final.preExisting).toEqual([fileFault("value.test.ts", INCOMPLETE_FILE)]);
+  const landed = await f.batch.land();
+  expect(landed.rows.map(row => row.status)).toEqual(["merged", "culprit"]);
+  expect(git(f.repo, ["log", "--format=%s", `${landed.base}..HEAD`])).toBe("Feature 12 (#12)");
+  expect(git(f.repo, ["ls-remote", "origin", "refs/heads/topic-13"]).split(/\s/)[0]).toBe(regression);
+  expect(report(landed)).toContain("#13 | culprit test regression: value.test.ts > ");
+}, 60_000);
 
 for (const mode of ["new", "modified"] as const) {
   test(`a healthy ${mode} feature detector retains the wrong implementation failure with real git and Bun`, async () => {

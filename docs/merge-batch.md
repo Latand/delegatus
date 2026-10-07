@@ -59,8 +59,11 @@ separately and permitted regardless of main's nonzero test exit. A between-test
 error, a runner exit that disagrees with its report, or a run that leaves no
 usable report is recorded as that file's fault; a fault native main produces in
 the same file makes the candidate's fault there pre-existing. A file main cannot
-complete is compared on the cases both sides completed; the candidate's other
-failures there are listed as not compared. A gate that cannot run, including
+complete is compared on the cases both sides completed: the cases the candidate
+fails there run again on main by themselves, and the result main reports for
+each is its baseline. A removal subject whose file aborts reruns the case under
+investigation the same way. The candidate's failures main still cannot report
+are listed as not compared. A gate that cannot run, including
 installation or type checking, stops with its own cause.
 
 A new failure gets three subsequent observations of its file. Every confirmation

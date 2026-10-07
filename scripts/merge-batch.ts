@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import type { GithubRunner } from "../src/lib/monitor/githubEvidence";
-import { parseReport, type TestRun, type TestSite } from "./local-gate-tests";
+import { parseReport, testNameFilter, type TestRun, type TestSite } from "./local-gate-tests";
 import { isolatedEnvironment } from "./local-gate";
 
 // A between-test error, a runner disagreement and a file that produced no
@@ -16,7 +16,9 @@ export const INCOMPLETE_FILE = "<incomplete file: no usable report>";
 export const fileFault = (file: string, name: string): TestSite => ({ file, suite: "", name, kind: "error" });
 
 /** Native main's failures and file faults are pre-existing. A file main could
- * not complete is compared only on the cases both sides completed. */
+ * not complete is compared only on the cases both sides completed; the
+ * `passed` and `failures` it carries for that file come from a rerun of the
+ * named cases alone (see `mainCases` in attributeBatchTests). */
 export function compareBatchTests(base: TestRun, candidate: TestRun) {
   const failed = new Set(base.failures.map(testIdentity));
   const passed = new Set(base.passed.map(testIdentity));
@@ -49,10 +51,23 @@ const addUnique = (sites: TestSite[], additions: TestSite[]) => {
   for (const site of additions) if (!sites.some(other => testIdentity(other) === testIdentity(site))) sites.push(site);
 };
 
-/** Recorded results drive the decision; callbacks supply fresh file samples. */
+/** Recorded results drive the decision; callbacks supply fresh file samples.
+ * `without` receives the cases it must report even when the file aborts, and
+ * `mainCases` runs only the named cases on native main for files main could
+ * not complete, so their completed cases still name a culprit. */
 export async function attributeBatchTests(base: TestRun, candidate: TestRun, prs: number[],
-  rerun: (files: string[]) => Promise<TestRun>, without: (removed: number[], files: string[]) => Promise<TestRun>): Promise<BatchTestDecision> {
-  const comparison = compareBatchTests(base, candidate);
+  rerun: (files: string[]) => Promise<TestRun>, without: (removed: number[], files: string[], focus: TestSite[]) => Promise<TestRun>,
+  mainCases?: (sites: TestSite[]) => Promise<TestRun>): Promise<BatchTestDecision> {
+  const probed = new Set<string>();
+  const compare = async (run: TestRun) => {
+    const sites = compareBatchTests(base, run).uncompared.filter(site => !probed.has(testIdentity(site)));
+    if (!mainCases || !sites.length) return compareBatchTests(base, run);
+    for (const site of sites) probed.add(testIdentity(site));
+    const focused = await mainCases(sites);
+    base = { ...base, failures: [...base.failures, ...focused.failures], passed: [...base.passed, ...focused.passed] };
+    return compareBatchTests(base, run);
+  };
+  const comparison = await compare(candidate);
   const decision: BatchTestDecision = { preExisting: [], intermittent: [], attributed: [], uncompared: [] };
   addUnique(decision.preExisting, comparison.preExisting);
   addUnique(decision.uncompared!, comparison.uncompared);
@@ -61,7 +76,7 @@ export async function attributeBatchTests(base: TestRun, candidate: TestRun, prs
   if (!files.length) return decision;
   for (let round = 0; round < MAX_TEST_CONFIRMATION_RUNS; round++) {
     const run = await rerun(files);
-    const discovered = compareBatchTests(base, run);
+    const discovered = await compare(run);
     addUnique(decision.preExisting, discovered.preExisting);
     addUnique(decision.uncompared!, discovered.uncompared);
     for (const entry of pending.values()) entry.confirmation.push(observed(run, entry.test));
@@ -80,7 +95,7 @@ export async function attributeBatchTests(base: TestRun, candidate: TestRun, prs
   if (!confirmed.length) return decision;
   const affected = [...new Set(confirmed.map(test => test.file))];
   const removals: { removed: number[]; run: TestRun }[] = [];
-  for (const pr of prs) removals.push({ removed: [pr], run: await without([pr], affected) });
+  for (const pr of prs) removals.push({ removed: [pr], run: await without([pr], affected, confirmed) });
   for (const test of confirmed) {
     const evidence: TestObservation[] = removals.map(entry => ({ removed: entry.removed, outcome: observed(entry.run, test) }));
     let responsible = evidence.filter(entry => entry.outcome === "pass").map(entry => entry.removed[0]!);
@@ -90,7 +105,7 @@ export async function attributeBatchTests(base: TestRun, candidate: TestRun, prs
       // single removal. Find a minimal clearing removal set, retaining unrelated
       // PRs. This costs at most one all-removed sample plus one sample per PR.
       responsible = [...prs];
-      const all = await without(responsible, [test.file]);
+      const all = await without(responsible, [test.file], [test]);
       const outcome = observed(all, test);
       evidence.push({ removed: [...responsible], outcome });
       if (outcome !== "pass") {
@@ -98,7 +113,7 @@ export async function attributeBatchTests(base: TestRun, candidate: TestRun, prs
       } else {
         for (const pr of prs) {
           const removed = responsible.filter(number => number !== pr);
-          const outcome = observed(await without(removed, [test.file]), test);
+          const outcome = observed(await without(removed, [test.file], [test]), test);
           evidence.push({ removed, outcome });
           if (outcome === "pass") responsible = removed;
         }
@@ -263,7 +278,7 @@ export type BatchRow = ReviewedPr & {
   head: string; reviewBase: string; view: PrView; patch: string; status: "clean" | "deferred" | "culprit" | "head-moved" | "merged" | "needs-review";
   commit: string; paths: string[]; detail: string; resolution?: string;
 };
-export type Gate = { id: string; args: string[]; report?: boolean };
+export type Gate = { id: string; args: string[]; report?: boolean; filter?: string[] };
 export type RunState = {
   version: 3; repo: string; work: string; branch: string; base: string; tip: string;
   rows: BatchRow[]; gated: Validation | null; batch: { number: number; url: string } | null;
@@ -561,6 +576,7 @@ export class MergeBatch {
       }
       const reportFile = join(stateDir, "tests.xml");
       if (gate.report) args = [...args, "--reporter=junit", "--reporter-outfile", reportFile];
+      if (gate.filter) args = [...args, ...gate.filter];
       const env = gate.id === "tests" ? testEnvironment(stateDir) : process.env;
       const result = await this.gateRun(cwd, args, { ...env, LLV_STATE_DIR: stateDir });
       return gate.report ? { ...result, report: existsSync(reportFile) ? readFileSync(reportFile, "utf8") : result.report } : result;
@@ -602,29 +618,52 @@ export class MergeBatch {
 
   /** Each file runs alone. A between-test error, a runner disagreement or a
    * missing report is recorded as that file's fault, never thrown: whether it
-   * stops anything depends on what native main produced for the same file. */
-  private async testSample(cwd: string, files: string[], corpus: false | Record<string, string>): Promise<TestRun> {
+   * stops anything depends on what native main produced for the same file.
+   * When a file cannot complete, the named `focus` cases run again by
+   * themselves, so a case the file reached before aborting keeps its result
+   * (`only` skips the full run). Neither marks the file completed. */
+  private async testSample(cwd: string, files: string[], corpus: false | Record<string, string>,
+    focus: { sites: TestSite[]; only?: boolean } = { sites: [] }): Promise<TestRun> {
     const started = performance.now();
     const sample: TestRun = { failures: [], passed: [], completed: [], elapsedMs: 0 };
     for (const file of files) {
-      const result = await this.gateCommand(cwd, { id: "tests", args: ["bun", "test", `./${file}`], report: true }, corpus);
-      let parsed: ReturnType<typeof parseReport>;
-      try { parsed = parseReport(result.report ?? "", result.output, file, cwd); }
-      catch {
-        // A complete JUnit report keeps its cases when only the console's
-        // between-test diagnostics could not be read.
-        try { parsed = parseReport(result.report ?? "", "", file, cwd); }
-        catch { sample.failures.push(fileFault(file, INCOMPLETE_FILE)); continue; }
-        parsed.failures.push(fileFault(file, "<between-tests error> unidentified diagnostics"));
+      if (!focus.only) {
+        const result = await this.gateCommand(cwd, { id: "tests", args: ["bun", "test", `./${file}`], report: true }, corpus);
+        let parsed: ReturnType<typeof parseReport> | undefined;
+        try { parsed = parseReport(result.report ?? "", result.output, file, cwd); }
+        catch {
+          // A complete JUnit report keeps its cases when only the console's
+          // between-test diagnostics could not be read.
+          try {
+            parsed = parseReport(result.report ?? "", "", file, cwd);
+            parsed.failures.push(fileFault(file, "<between-tests error> unidentified diagnostics"));
+          } catch { sample.failures.push(fileFault(file, INCOMPLETE_FILE)); }
+        }
+        if (parsed) {
+          if ((result.code === 0) !== (parsed.failures.length === 0)) parsed.failures.push(fileFault(file, `<runner exit ${result.code} disagrees with report>`));
+          sample.failures.push(...parsed.failures); sample.passed.push(...parsed.passed); sample.completed.push(file);
+          continue;
+        }
       }
-      if ((result.code === 0) !== (parsed.failures.length === 0)) parsed.failures.push(fileFault(file, `<runner exit ${result.code} disagrees with report>`));
-      sample.failures.push(...parsed.failures); sample.passed.push(...parsed.passed); sample.completed.push(file);
+      const sites = focus.sites.filter(site => site.file === file && site.kind === "test");
+      if (!sites.length) continue;
+      const result = await this.gateCommand(cwd, { id: "tests", args: ["bun", "test", `./${file}`], report: true, filter: testNameFilter(sites) }, corpus);
+      try {
+        const parsed = parseReport(result.report ?? "", result.output, file, cwd, true);
+        const named = new Set(sites.map(testIdentity));
+        // Only a consistent report of the named cases is evidence.
+        if ((result.code === 0) === (parsed.failures.length === 0) && parsed.failures.every(site => site.kind === "test")) {
+          sample.failures.push(...parsed.failures.filter(site => named.has(testIdentity(site))));
+          sample.passed.push(...parsed.passed.filter(site => named.has(testIdentity(site))));
+        }
+      } catch { /* the named cases cannot complete either: they stay unreported */ }
     }
     sample.elapsedMs = performance.now() - started;
     return sample;
   }
 
-  private async testSubject(state: RunState, files: string[], removed?: number[], stable: false | Record<string, string> = false): Promise<TestRun> {
+  private async testSubject(state: RunState, files: string[], removed?: number[], stable: false | Record<string, string> = false,
+    focus: { sites: TestSite[]; only?: boolean } = { sites: [] }): Promise<TestRun> {
     const work = join(dirname(this.stateFile), `test-subject-${randomUUID()}`);
     git(state.work, ["worktree", "add", "--detach", work, state.base]);
     try {
@@ -636,7 +675,7 @@ export class MergeBatch {
       const install = await this.gateCommand(work, { id: "dependencies", args: ["bun", "install", "--frozen-lockfile"] }, false);
       if (install.code) throw new Error(`${removed ? "PR removal" : "Baseline"} dependency gate cannot run; batch not gated`);
       const selected = stable ? files : files.filter(file => existsSync(join(work, file)) && statSync(join(work, file)).isFile());
-      return await this.testSample(work, selected, stable);
+      return await this.testSample(work, selected, stable, focus);
     } finally { git(state.work, ["worktree", "remove", "--force", work]); }
   }
 
@@ -699,7 +738,8 @@ export class MergeBatch {
       const candidate = await this.testSample(state.work, Object.keys(detector.corpus), detector.corpus);
       const decision = await attributeBatchTests(baseline, candidate, prs,
         files => this.testSample(state.work, files, detector.corpus),
-        (removed, files) => this.testSubject(state, files, removed, detector.corpus));
+        (removed, files, sites) => this.testSubject(state, files, removed, detector.corpus, { sites }),
+        sites => this.testSubject(state, [...new Set(sites.map(site => site.file))], undefined, false, { sites, only: true }));
       validation.decisions.push(decision);
       for (const entry of decision.attributed) state.attributionLog.push({ ...entry, candidate: validation.candidate, source: detector.source });
       for (const row of state.rows) {
