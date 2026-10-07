@@ -5879,7 +5879,8 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
    * the key page saved, after Replace and missing. Shared memory and the
    * key are answered by the driver over the product's own two routes.
    *
-   * It fails when a desktop state is taller than 360 px, when a phone state is
+   * It fails when a desktop state is taller than 360 px (the Settings page
+   * 380 px, which the voice companion's row needs), when a phone state is
    * taller than today's 743 px sheet, when any state scrolls, leaves the
    * window or cuts a label, when the Settings row or the memory page shows
    * another state than the one served, when a banned word ("Jev",
@@ -5905,6 +5906,10 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
   const PANEL = "[data-rail-menu-panel]";
   const SHEET = "[data-mobile2-sheet='menu']";
   const TODAY_SHEET_PX = 743;
+  /* docs/design/header-menu.md: 360 px for every desktop state, 380 px for the Settings page and its voice row. */
+  const DESKTOP_PX = 360;
+  const SETTINGS_PX = 380;
+  const desktopBound = (state: string) => (/^settings(-|$)/.test(state) ? SETTINGS_PX : DESKTOP_PX);
   const COUNTS = { decisions: 214, delivered: 61, prepared: 69, noCandidates: 48, noMatches: 97, skipped: 12, failed: 5 };
   /* Today's fourteen entries, by the attribute each carries in the built menu. */
   const ENTRIES: Record<string, { desktop: string | null; phone: string | null }> = {
@@ -6030,7 +6035,7 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
       if (!reading.inside) failures.push(`${tag}: leaves the window ${JSON.stringify(reading.box)}`);
       if (reading.scrolls) failures.push(`${tag}: scrolls`);
       if (reading.cut.length) failures.push(`${tag}: cut labels ${JSON.stringify(reading.cut)}`);
-      if (surface === "desktop" && reading.box[3] > 360.5) failures.push(`${tag}: ${reading.box[3]} px is taller than 360`);
+      if (surface === "desktop" && reading.box[3] > desktopBound(state) + 0.5) failures.push(`${tag}: ${reading.box[3]} px is taller than ${desktopBound(state)}`);
       if (surface === "phone" && reading.box[3] > TODAY_SHEET_PX + 0.5) failures.push(`${tag}: ${reading.box[3]} px is taller than today's ${TODAY_SHEET_PX}`);
       /* The project rules' page carries «Asks you» and its own wording, which is not this menu's. */
       if (state !== "rules" && /\bJev\b|decisions|2026-10|\$\d+\.\d{3}/.test(reading.text)) failures.push(`${tag}: a banned word in ${JSON.stringify(reading.text.slice(0, 200))}`);
@@ -6262,7 +6267,7 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
       }
       fs.mkdirSync("evidence/compact-card-menu", { recursive: true });
       fs.writeFileSync("evidence/compact-card-menu/header-menu-built.json", `${JSON.stringify({
-        driver: "src/components/kanban/kanbanBoard.browser.test.tsx", block: "the header's menu, built", bound: { desktop: 360, phone: TODAY_SHEET_PX },
+        driver: "src/components/kanban/kanbanBoard.browser.test.tsx", block: "the header's menu, built", bound: { desktop: DESKTOP_PX, settings: SETTINGS_PX, phone: TODAY_SHEET_PX },
         tallest: {
           desktop: Math.max(...states.filter((entry) => entry.surface === "desktop").map((entry) => entry.box[3])),
           phone: Math.max(...states.filter((entry) => entry.surface === "phone").map((entry) => entry.box[3])),

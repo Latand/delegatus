@@ -51,6 +51,12 @@ clears it. In the menu, Details ends the month's line, so a key the route
 refuses, under a month already counted and with Details open, stays within
 360 px (355 px in uk).
 
+Every desktop state stays within 360 px except the Settings page, whose
+budget is 380 px: the desktop-only «Голосовий Delegatus / Voice Delegatus»
+row (#2519) brings it to 379 px. The orchestrator chose on 2026-10-07 to keep
+that row on the Settings page, an existing surface it fits, and to leave the
+menu's first level as it is; 380 px still opens whole in a 700 px window.
+
 By keyboard, a page opens with focus on its back row, back returns focus to
 the row that opened the page, and Escape closes the desktop menu onto ⋯.
 
