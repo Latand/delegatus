@@ -40,6 +40,7 @@ import { setRuntimeUiEnabledForTests } from "@/hooks/runtimeBus";
 import { OVERVIEW_CONTEXT, OVERVIEW_SLICE, viewBus } from "@/hooks/viewPresenceBus";
 import type { RuntimeReceipt } from "@/components/runtime/runtimeModel";
 import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
+import { ACTIVE_DELIVERY_PHASES, isDeliveryWaitReason, type DeliveryWaitReason } from "@/lib/runtime/deliveryWaitReason";
 import { relayMessageText } from "@/lib/orchestrator/relayText";
 
 import { OWN_STEPS_TOTAL, ownStepsArrival, ownStepsTranscript, type OwnStepsArrival } from "./fixtures/ownMessageStepsTranscript";
@@ -1217,16 +1218,27 @@ function DeliverySettlementFixture() {
 const STALLED_OPERATION = "evidence-stalled-operation";
 const STALL_RECORDED_AFTER_MS = 5_000;
 
+/** What the hung hand-over waits on (`?reason=`): `dispatching` by default,
+    `evidence-unreadable` for a lost admission acknowledgement or a startup
+    continuation whose journal cannot be read, `awaiting-turn` for an entry
+    Codex acknowledged into its own queue. The queue marks only an active
+    phase stalled, and so does this record. */
+function stalledReason(): DeliveryWaitReason {
+  const requested = params.get("reason");
+  return isDeliveryWaitReason(requested) ? requested : "dispatching";
+}
+
 function installStalledProgress(startedAt: number): void {
   const transport = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
     if (!url.startsWith("/api/runtime/delivery-progress")) return transport(input, init);
     const at = (ms: number) => new Date(startedAt + ms).toISOString();
-    const stalled = Date.now() - startedAt >= STALL_RECORDED_AFTER_MS;
+    const reason = stalledReason();
+    const stalled = ACTIVE_DELIVERY_PHASES.has(reason) && Date.now() - startedAt >= STALL_RECORDED_AFTER_MS;
     return Response.json({ records: [{
       operationId: STALLED_OPERATION, conversationId: "conversation_stalled", originalKey: "evidence-stalled-key", kind: "send",
-      waitReason: "dispatching", detail: null, attempt: 1, admittedAt: at(0), phaseSince: at(0), lastProgressAt: at(0),
+      waitReason: reason, detail: null, attempt: 1, admittedAt: at(0), phaseSince: at(0), lastProgressAt: at(0),
       deadlineAt: null, deadlinePolicy: null, nextWakeAt: null, stalledSince: stalled ? at(STALL_RECORDED_AFTER_MS) : null,
       wakeLostAt: null, executorId: "evidence-executor", terminal: null, updatedAt: at(stalled ? STALL_RECORDED_AFTER_MS : 0),
     }] });

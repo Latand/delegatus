@@ -2189,6 +2189,12 @@ describe("a stalled hand-over says so on its message", () => {
    * waits through the bound without touching the page and reads what the
    * resting row shows.
    */
+  /* docs/design/delivery-progress-and-drain.md, step 8: the record each
+     path leaves. `dispatching` is a hand-over in progress, `evidence-unreadable`
+     what a lost admission acknowledgement and a startup continuation show,
+     `awaiting-turn` an entry Codex acknowledged into its own queue, which is a
+     passive wait the queue never calls a stall. */
+  const REASONS = ["dispatching", "evidence-unreadable", "awaiting-turn"] as const;
   browserTest("with no hover or click, within ten seconds, at phone and desktop widths in both languages", async () => {
     const out = path.resolve(".artifacts/delivery-stalled");
     fs.mkdirSync(out, { recursive: true });
@@ -2196,19 +2202,32 @@ describe("a stalled hand-over says so on its message", () => {
     const browser = await chromium.launch(LAUNCH);
     const evidence: Record<string, unknown> = {};
     try {
-      for (const width of [390, 1440]) for (const lang of ["uk", "en"] as const) {
+      for (const waitReason of REASONS) for (const width of [390, 1440]) for (const lang of ["uk", "en"] as const) {
         const { context, page, pageErrors } = await openFixture(browser,
-          `${served.base}?case=delivery-stalled&lang=${lang}`, { width, height: 900 }, "dark", lang,
+          `${served.base}?case=delivery-stalled&lang=${lang}&reason=${waitReason}`, { width, height: 900 }, "dark", lang,
           "reduce", width === 390);
-        const key = `${width}-${lang}`;
+        const key = `${waitReason}-${width}-${lang}`;
         try {
           await page.waitForSelector("[data-evidence-case=\"delivery-stalled\"] [data-outbox-entry]");
           /* Before the queue records a stall the row is a moving delivery. */
           expect(await page.locator("[data-outbox-stalled]").count()).toBe(0);
           await page.screenshot({ path: path.join(out, `moving-${key}.png`), fullPage: true });
+          const reason = translate(lang, `delivery.wait.${waitReason}`);
+          if (waitReason === "awaiting-turn") {
+            /* Past the stall bound, the passive wait still reads as moving. */
+            await page.waitForTimeout(6_500);
+            const resting = await page.evaluate(() => ({
+              stalledLines: document.querySelectorAll("[data-outbox-stalled]").length,
+              overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+            }));
+            await page.screenshot({ path: path.join(out, `resting-${key}.png`), fullPage: true });
+            expect(pageErrors).toEqual([]);
+            expect(resting).toEqual({ stalledLines: 0, overflowX: 0 });
+            evidence[key] = { ...resting, stalled: false };
+            continue;
+          }
           const line = page.locator("[data-outbox-stalled-status]");
           await line.waitFor({ state: "visible", timeout: 10_000 });
-          const reason = translate(lang, "delivery.wait.dispatching");
           const reading = await line.evaluate((element, reasonText) => {
             const rect = element.getBoundingClientRect();
             const fixture = document.querySelector<HTMLElement>("[data-fixture-started]")!;
@@ -2244,7 +2263,7 @@ describe("a stalled hand-over says so on its message", () => {
       fs.mkdirSync("evidence/delivery-stalled", { recursive: true });
       fs.writeFileSync("evidence/delivery-stalled/status.json", JSON.stringify(evidence, null, 2) + "\n");
     } finally { await browser.close(); served.stop(); }
-  }, 180_000);
+  }, 600_000);
 });
 
 describe("delivery check card", () => {
