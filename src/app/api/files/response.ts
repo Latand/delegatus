@@ -1,5 +1,7 @@
 import { stateWriteHealth } from "@/lib/state/diskFull";
 import { filesReadSummary } from "@/lib/filesReadSummary";
+import { withPrototypeReviewSummaries, withoutPrototypeReviews, prototypeReviewNotices } from "@/lib/prototypeReview/read";
+import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -918,6 +920,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
   )];
   const summary = new URL(request.url).searchParams.get("view") === "summary"
     ? filesReadSummary(projected.flows, pipelines) : null;
+  const agentRead = request.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER);
   const body = JSON.stringify({
     files: projected.files,
     ...(responsePinOverlayPaths.size ? { pinOverlayPaths: [...responsePinOverlayPaths] } : {}),
@@ -930,7 +933,12 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     pipelines: summary?.pipelines ?? pipelines,
     ...(summary ? { readProjection: "board-summary" as const } : {}),
     workflows,
-    tasks: boardTasks,
+    /* A review's choice and comment belong to its project. This read has no
+       project fence, so a caller that presents a capability gets the tasks
+       without them; the route keeps that answer in a scope of its own. */
+    ...(agentRead
+      ? { tasks: withoutPrototypeReviews(boardTasks) }
+      : { tasks: withPrototypeReviewSummaries(boardTasks), prototypeReviewNotices: prototypeReviewNotices(boardTasks) }),
     /* #2059: map lookups against the forge cache only; the sweep, not this
        request, talks to GitHub. */
     workLinks: workLinksForBoard(pipelines, boardTasks),

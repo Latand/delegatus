@@ -1390,3 +1390,13 @@ test("a mixed persisted checklist keeps valid entries through both board project
     }
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
+
+
+test("a waiting prototype counts once in needs-you and clears after the choice", () => {
+  const review = { latestReviewId: "pr_round", waitingReviewId: "pr_round", title: "Layout", rounds: 1, createdAt: "2026-10-01T00:00:00Z" };
+  const waiting = model([task("prototype", "inbox", [], { prototypeReview: review })], []);
+  expect(waiting.totals.needsYou).toBe(1);
+  expect(waiting.columns.inbox.needsYou).toBe(1);
+  const decided = model([task("prototype", "inbox", [], { prototypeReview: { ...review, waitingReviewId: null } })], []);
+  expect(decided.totals.needsYou).toBe(0);
+});

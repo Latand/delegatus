@@ -3625,6 +3625,49 @@ test("full and summary files representations never share ETags or cached bodies"
   expect((await fullAgain.json()).readProjection).toBeUndefined();
 });
 
+/* A task's prototype review belongs to its project, and this read has no
+   project fence: a caller that presents a capability gets the board without
+   the choice, the comment and the notices, whichever representation it asks
+   for and whatever the operator's poll left in the cache. */
+test("a capability caller's files read carries no prototype review: full, summary, cached or delta", async () => {
+  const media = { id: "a".repeat(64), mime: "image/png", bytes: 8 };
+  const round = (id: string, decided: boolean) => ({
+    id: `pr_${id.repeat(32)}`, title: "Private layout round", taskId: "task-a", project: "project-a", createdAt: "2026-10-06T10:00:00.000Z",
+    source: { conversationId: null }, publicationKey: `operator:${id}`, inputDigest: "d".repeat(64),
+    variants: [{ number: 1, name: "Private variant name", description: "Private.", frames: [{ image: media, caption: "Private caption" }], videos: [] }],
+    ...(decided ? { decision: { chosen: [1], comment: "Private project A decision", at: "2026-10-06T11:00:00.000Z",
+      delivery: { state: "sent", clientMessageId: `prototype-decision:${id}`, conversationId: "conversation_seat", text: "Private project A decision" } } } : {}),
+  });
+  const boardTask = (id: string, rounds: unknown[]) => ({ id, project: "project-a", status: "inbox", placement: "unplaced", text: `Task ${id}`, assignments: [], sources: [],
+    createdAt: "2026-10-06T09:00:00.000Z", updatedAt: "2026-10-06T09:00:00.000Z", prototypeReviews: rounds });
+  boardTasksStore = () => [boardTask("task-a", [round("1", true)]), boardTask("task-b", [round("2", false)])];
+  scannedFiles = [];
+  const agent = { "x-llv-spawn-capability": "b".repeat(43) };
+  const PRIVATE = /Private project A decision|Private variant name|Private layout round|prototypeReview/;
+  for (const view of ["", "?view=summary"]) {
+    const operator = await GET(new Request(`http://127.0.0.1/api/files${view}`));
+    const operatorTag = operator.headers.get("etag")!;
+    const seen = await operator.json();
+    expect(seen.tasks[0].prototypeReview.decision.comment).toBe("Private project A decision");
+    expect(seen.prototypeReviewNotices).toHaveLength(1);
+    /* The operator's body is cached under its scope by now. */
+    const cached = await GET(new Request(`http://127.0.0.1/api/files${view}`, { headers: agent }));
+    const body = await cached.text();
+    expect(cached.status).toBe(200);
+    expect(cached.headers.get("etag")).not.toBe(operatorTag);
+    expect(body).not.toMatch(PRIVATE);
+    expect(JSON.parse(body).tasks.map((task: { id: string }) => task.id)).toEqual(["task-a", "task-b"]);
+    /* Certifying the operator's representation earns no 304 and no delta from it. */
+    const conditional = await GET(new Request(`http://127.0.0.1/api/files${view}`, { headers: { ...agent, "if-none-match": operatorTag, "x-llv-files-delta": "1" } }));
+    expect(conditional.status).toBe(200);
+    expect(conditional.headers.get("x-llv-files-delta-base")).toBeNull();
+    expect(await conditional.text()).not.toMatch(PRIVATE);
+    const again = await GET(new Request(`http://127.0.0.1/api/files${view}`));
+    expect((await again.json()).tasks[0].prototypeReview.decision.comment).toBe("Private project A decision");
+  }
+  boardTasksStore = () => [];
+});
+
 /* #1814: every projection build costs a worker process of about a gigabyte on
    production, so a burst of polls over a corpus nobody has touched has to be
    answered by one build. `loadFlows` runs exactly once per built

@@ -7,6 +7,7 @@ import type { Database as BunDatabase } from "bun:sqlite";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { prototypePublishSchema } from "@/lib/prototypeReview/input";
 
 import { FOCUS_TARGET_SHAPES } from "@/lib/attention/targets";
 import { statePath } from "@/lib/configDir";
@@ -85,6 +86,8 @@ export const MCP_TOOL_NAMES = [
   "lifecycle_events",
   "request_attention",
   "suggest_replies",
+  "publish_prototype_review",
+  "read_prototype_review",
   "dismiss_attention",
   "bridge_report",
   "bridge_directive",
@@ -140,6 +143,7 @@ export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
      clientRequestId must answer from the receipt rather than re-offer drafts
      under a question the operator has since answered. */
   "suggest_replies",
+  "publish_prototype_review",
   /* Clears a needs-you flag the operator is shown, durably and attributed. A
      replayed clientRequestId must answer with the first result rather than
      clear again something that asked anew since. */
@@ -190,6 +194,7 @@ export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
 
 /** Explicit allowlist: read-like tools with durable effects still need keys. */
 export const OPTIONAL_READ_KEY_TOOLS = new Set<McpToolName>([
+  "read_prototype_review",
   "message_receipt", "list_conversations", "search_transcripts", "get_conversation",
   "conversation_deliverability", "conversation_messages", "get_pipeline", "board_snapshot",
   "list_flows", "get_flow", "list_pipelines", "list_tasks", "get_task",
@@ -229,6 +234,12 @@ const INTERRUPTED_RECOVERABLE_TOOLS: ReadonlySet<McpToolName> = new Set<McpToolN
   // replay the completed Telegram receipt without repeating the HTTP send.
   "telegram_bot_send_media",
   "telegram_bot_send_document",
+  /* The Viewer keys a publication by its caller and clientRequestId and checks
+     the payload's digest under its publication lock, so a re-dispatch either
+     publishes the round the stopped process never wrote or answers with the
+     one it did, whose copies no longer need the source files. A changed
+     payload under the same key is refused by the digest check above. */
+  "publish_prototype_review",
   /* Deliberately NOT here: `suggest_replies`. Its write is idempotent over the
      record, but the record is retired by something outside the call — the
      operator's own answer — so re-running an interrupted write would put the
@@ -338,6 +349,12 @@ export interface McpDispatchTracker {
 export type McpToolBinding = ((args: McpToolArgs, context?: McpToolCallContext) => Promise<McpToolPayload>) & {
   /** Caller-dependent checks before receipt reads, claims or in-process joins. Must not mutate state. */
   authorizeReceipt?: (args: McpToolArgs) => void | Promise<void>;
+  /** Who the receipt belongs to, as the Viewer decides it for this call (the
+      caller and the target it is allowed to reach). Asked before every receipt
+      read, claim or in-process join, and part of the receipt's key, so one
+      caller's clientRequestId never answers another's. A refusal burns nothing.
+      Must not mutate state. */
+  receiptScope?: (args: McpToolArgs, context?: McpToolCallContext) => Promise<string>;
 };
 export type McpToolBindings = Record<McpToolName, McpToolBinding>;
 
@@ -835,10 +852,18 @@ function hasExactKeys(value: Record<string, unknown>, expected: string[]): boole
   return keys.length === expected.length && keys.every((key, index) => key === expected[index]);
 }
 
+/** A receipt's key: the tool, the owner its binding's `receiptScope` named
+    (hashed, so the key carries no identity), and the caller's request id. */
+function receiptKey(toolName: McpToolName, requestId: string, scope: string | null): string {
+  return scope === null
+    ? `${toolName}:${requestId}`
+    : `${toolName}@${crypto.createHash("sha256").update(scope).digest("hex").slice(0, 32)}:${requestId}`;
+}
+
 function receiptKeyParts(key: string): { toolName: McpToolName; requestId: string } | null {
   const separator = key.indexOf(":");
   if (separator <= 0) return null;
-  const toolName = key.slice(0, separator);
+  const toolName = key.slice(0, separator).replace(/@[0-9a-f]{32}$/, "");
   const requestId = key.slice(separator + 1);
   if (!(MCP_TOOL_NAMES as readonly string[]).includes(toolName) || !requestId.trim()) return null;
   return { toolName: toolName as McpToolName, requestId };
@@ -2425,6 +2450,30 @@ function recoveryAnswer(
   return { ...shared, ok: true, toolName, clientRequestId: requestId, replayed };
 }
 
+/** Generic board replies cannot expose task-private review history. */
+function withoutPrototypeTaskFields<T>(value: T): T {
+  const seen = new WeakMap<object, unknown>();
+  const visit = (item: unknown): unknown => {
+    if (!item || typeof item !== "object") return item;
+    if (seen.has(item)) return seen.get(item);
+    if (!Array.isArray(item) && Object.getPrototypeOf(item) !== Object.prototype && Object.getPrototypeOf(item) !== null) return item;
+    if (Array.isArray(item)) {
+      const copy: unknown[] = []; seen.set(item, copy);
+      for (const child of item) copy.push(visit(child));
+      return copy;
+    }
+    const record = item as Record<string, unknown>;
+    const task = typeof record.id === "string" && typeof record.project === "string" && typeof record.status === "string";
+    const copy: Record<string, unknown> = {}; seen.set(item, copy);
+    for (const [key, child] of Object.entries(record)) {
+      if (task && ["prototypeReviews", "prototypeReviewReplica", "prototypeReview"].includes(key)) continue;
+      Object.defineProperty(copy, key, { value: visit(child), enumerable: true, writable: true, configurable: true });
+    }
+    return copy;
+  };
+  return visit(value) as T;
+}
+
 export function createMcpToolService(
   bindings: McpToolBindings,
   receipts: McpReceiptStore,
@@ -2466,6 +2515,7 @@ export function createMcpToolService(
         ? undefined
         : Math.max(0, context.deadlineAt - Date.now());
       const finish = (result: McpToolResult, outcome: McpTimingOutcome, unfinishedAgeMs?: number): McpToolResult => {
+        result = withoutPrototypeTaskFields(result);
         const serializationStartedAt = performance.now();
         let resultSizeBytes: number | undefined;
         try {
@@ -2539,6 +2589,13 @@ export function createMcpToolService(
       } catch (error) {
         return finish(failure(typedTool, requestId, "tool_failed", error instanceof Error ? error.message : String(error), false), "failure");
       }
+      let scope: string | null;
+      try {
+        scope = await measure("caller", async () => await bindings[typedTool].receiptScope?.(effectiveArgs, context) ?? null);
+      } catch (error) {
+        // Nothing is claimed yet, so the same key may be tried again as it is.
+        return finish(failure(typedTool, requestId, "tool_failed", error instanceof Error ? error.message : String(error), true), "failure");
+      }
 
       /* #1490: `recoveryOnly` decides only whether an absent claim may start
          work, so it is excluded from the digest — the same logical call with
@@ -2548,7 +2605,7 @@ export function createMcpToolService(
         ? Object.fromEntries(Object.entries(effectiveArgs).filter(([name]) => name !== "recoveryOnly"))
         : effectiveArgs;
       const digest = requestDigest(typedTool, digestArgs);
-      const key = `${typedTool}:${requestId}`;
+      const key = receiptKey(typedTool, requestId, scope);
       /* A recoverable mutation never joins an in-process duplicate: who is
          calling is decided first, and every later call under the key — in
          this process or another — is answered from the durable record. */
@@ -3204,6 +3261,8 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Authority is the same as request_attention's, and for the same reason \u2014 this writes into the surface they are answering in: the operator's own session or a designated orchestrator seat. A worker or unidentified caller is refused (SUGGEST_REPLIES_NOT_PERMITTED) with nothing recorded.",
     "The drafts always land under your OWN message: conversationId defaults to your conversation, and naming any other one is refused. To offer drafts elsewhere, ask that conversation's own session to offer them.",
   ].join(" "),
+  publish_prototype_review: "Publish a prototype review on a TASK. In a pipeline omit taskId: the server binds your stage to its pipeline's task. Outside a pipeline supply taskId in your own project. Short form: title, dir, variants [{number:1..9,name,description}]; immediate files use variant-N or vN, viewport width, en/uk and caption in their filenames. Matching -original and -changed suffixes form before/after pairs. Full form: variants with frames [{path,originalPath?,caption,width?,lang?}] and videos [{path,caption}]. Every variant needs a short name, one or two lines about its character and differences, and media. Delegatus copies PNG/JPEG/WebP and MP4/WebM to local state; nothing is uploaded. Bounds: 9 variants, 240 files including originals, 4 MiB/image, 64 MiB/video, 48 MiB images and 192 MiB total. Read roots match the image viewer: home/worktrees, stage scratch and evidence roots (normally /var/tmp); unreadable sources refuse the whole review with a copy instruction. Same clientRequestId replays the original publication. The operator opens the task review, chooses one variant or a combination and comments; read_prototype_review returns the saved decision and history.",
+  read_prototype_review: "Read a task's prototype reviews, newest waiting round, chosen variant numbers, exact operator comment, time and delivery state. Pipeline callers may omit taskId; other callers supply it. Only your own project is readable. Media URLs are installation-local and absent where copies are unavailable. This tool makes no choice and sends no message.",
   dismiss_attention: [
     "Clear a needs-you flag the operator is shown, without answering anything (docs/design/needs-attention.md): a conversation's question, plan, prompt or undelivered message, a lane parked on a decision or a spent review budget, or everything on a task's card stops raising needs-you until something newer asks. Nothing else moves \u2014 no question is answered, no lane changes state, no message is dropped \u2014 and the card says who cleared it.",
     "Authority is the same as request_attention's: the operator's own root/gateway session or the target project's designated orchestrator seat. A worker or unidentified caller is refused (DISMISS_NOT_PERMITTED) with nothing recorded, so a stage agent cannot clear its own question off the operator's board.",
@@ -3475,6 +3534,8 @@ const taskStepsInputSchema = z.array(z.object({
 })).max(TASK_STEPS_LIMIT).describe("Up to twenty checklist steps. Pipeline references derive live step motion; other references are links.");
 
 export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
+  publish_prototype_review: prototypePublishSchema,
+  read_prototype_review: z.object({ clientRequestId: clientRequestIdSchema.optional(), taskId: z.string().min(1).optional() }).strict(),
   spawn_agent: z.object({
     clientRequestId: clientRequestIdSchema,
     cwd: z.string().min(1).describe("Existing working directory for the new agent."),
