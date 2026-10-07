@@ -1,0 +1,82 @@
+[
+  {
+    "frame": "lane-1440-en-light",
+    "waiting": "waiting for disk space: temp has 0.50 GiB free (needs 2.00 GiB); retries automatically",
+    "recovered": true,
+    "width": 428,
+    "right": 1010,
+    "bottom": 449.203125,
+    "scrollWidth": 428,
+    "clientWidth": 428
+  },
+  {
+    "frame": "lane-1440-en-dark",
+    "waiting": "waiting for disk space: temp has 0.50 GiB free (needs 2.00 GiB); retries automatically",
+    "recovered": true,
+    "width": 428,
+    "right": 1010,
+    "bottom": 449.203125,
+    "scrollWidth": 428,
+    "clientWidth": 428
+  },
+  {
+    "frame": "lane-1440-uk-light",
+    "waiting": "waiting for disk space: temp has 0.50 GiB free (needs 2.00 GiB); retries automatically",
+    "recovered": true,
+    "width": 428,
+    "right": 1010,
+    "bottom": 449.203125,
+    "scrollWidth": 428,
+    "clientWidth": 428
+  },
+  {
+    "frame": "lane-1440-uk-dark",
+    "waiting": "waiting for disk space: temp has 0.50 GiB free (needs 2.00 GiB); retries automatically",
+    "recovered": true,
+    "width": 428,
+    "right": 1010,
+    "bottom": 449.203125,
+    "scrollWidth": 428,
+    "clientWidth": 428
+  },
+  {
+    "frame": "lane-390-en-light",
+    "waiting": "waiting for disk space: temp has 0.50 GiB free (needs 2.00 GiB); retries automatically",
+    "recovered": true,
+    "width": 342,
+    "right": 366,
+    "bottom": 712.375,
+    "scrollWidth": 342,
+    "clientWidth": 342
+  },
+  {
+    "frame": "lane-390-en-dark",
+    "waiting": "waiting for disk space: temp has 0.50 GiB free (needs 2.00 GiB); retries automatically",
+    "recovered": true,
+    "width": 342,
+    "right": 366,
+    "bottom": 712.375,
+    "scrollWidth": 342,
+    "clientWidth": 342
+  },
+  {
+    "frame": "lane-390-uk-light",
+    "waiting": "waiting for disk space: temp has 0.50 GiB free (needs 2.00 GiB); retries automatically",
+    "recovered": true,
+    "width": 342,
+    "right": 366,
+    "bottom": 712.375,
+    "scrollWidth": 342,
+    "clientWidth": 342
+  },
+  {
+    "frame": "lane-390-uk-dark",
+    "waiting": "waiting for disk space: temp has 0.50 GiB free (needs 2.00 GiB); retries automatically",
+    "recovered": true,
+    "width": 342,
+    "right": 366,
+    "bottom": 712.375,
+    "scrollWidth": 342,
+    "clientWidth": 342
+  }
+]
