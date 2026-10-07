@@ -22,6 +22,7 @@ import {
   type StructuredHostAdoptionFilter,
 } from "./registry";
 import { RuntimeHostUnavailableError, runtimeHostClient, type RuntimeHostClient } from "./client";
+import { RUNTIME_STARTUP_READ_DEADLINE_MS } from "./deadlines";
 import { forEachStartupBatch } from "./startupWork";
 import type { RuntimeSession } from "./contracts";
 import type { RuntimeOperationResult } from "./contracts";
@@ -59,7 +60,6 @@ let adoptedHosts: AdoptedStructuredHost[] = [];
 let retryAdoptedHosts: AdoptedStructuredHost[] = [];
 /* The retry runner logs each failure; this diagnostic names the deferred work once. */
 let deferredAdoptionLogged = false;
-const STARTUP_READ_TIMEOUT_MS = 30_000;
 type StartupPassState = {
   generation?: string | null;
   retained?: AdoptedStructuredHost[];
@@ -869,10 +869,10 @@ async function readStartupRuntime(
   conversationIds: readonly string[],
 ): Promise<Pick<Awaited<ReturnType<RuntimeHostClient["snapshot"]>>, "sessions" | "recentOperations">> {
   // Compatibility with older embedders; the production client has session-read.
-  if (!client.readSession) return client.snapshot(undefined, { timeoutMs: STARTUP_READ_TIMEOUT_MS });
+  if (!client.readSession) return client.snapshot(undefined, { timeoutMs: RUNTIME_STARTUP_READ_DEADLINE_MS });
   const sessions: RuntimeSession[] = [];
   await forEachStartupBatch(conversationIds, async (conversationId) => {
-    const session = await client.readSession!({ conversationId }, { timeoutMs: STARTUP_READ_TIMEOUT_MS });
+    const session = await client.readSession!({ conversationId }, { timeoutMs: RUNTIME_STARTUP_READ_DEADLINE_MS });
     if (session) sessions.push(session);
   });
   return { sessions, recentOperations: sessions.flatMap((session) => session.recentReceipts ?? []) };
