@@ -22512,3 +22512,77 @@ describe("orchestrator wires after a seat action", () => {
     } finally { await browser.close(); server.stop(); server = null; }
   }, 300_000);
 });
+
+describe("sidebar and board count working agents by one rule", () => {
+  /*
+   * The sidebar row said 38 working while the board said 12 for the same
+   * project at the same moment (2026-10-07). Both now read `isWorkingAgent`:
+   * the selected project's sidebar row and the board header show one number,
+   * the Overview row is the sum of the rows, the In progress column counts the
+   * same agents on its own cards, and the phone's project list says the
+   * desktop's number. Desktop 1440 and phone 390, English and Ukrainian.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "one rule"
+   *
+   * Frames go to `.artifacts/working-agents-count/`; readings to
+   * `evidence/working-agents-count/rendered.json`.
+   */
+  browserTest("the sidebar row, the board header and the phone's project list read one number", async () => {
+    const out = path.resolve(".artifacts/working-agents-count");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    const count = (text: string | null) => Number(text?.match(/\d+/)?.[0] ?? 0);
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        const desk = await openFixture(browser, `${server.base}?rail=few`, VIEWPORT, "light", lang, "reduce");
+        let header = 0;
+        try {
+          await desk.page.waitForSelector("aside[data-project-rail] [data-rail-project='atlas']", { timeout: 20_000 });
+          await desk.page.waitForSelector("[data-bar-working]", { timeout: 20_000 });
+          await desk.page.waitForTimeout(500);
+          const read = await desk.page.evaluate(() => {
+            const text = (element: Element | null | undefined) => element?.textContent ?? null;
+            const rail = document.querySelector("aside[data-project-rail]")!;
+            const rows = [...rail.querySelectorAll<HTMLElement>("[data-rail-project]")].map((row) => ({ project: row.dataset.railProject!, live: text(row.querySelector("[data-rail-live]")) }));
+            return {
+              row: text(rail.querySelector("[data-rail-project='atlas'] [data-rail-live]")),
+              rowTitle: rail.querySelector("[data-rail-project='atlas']")?.getAttribute("title") ?? null,
+              overview: text(rail.querySelector("[data-rail-overview] [data-rail-live]")),
+              rows,
+              header: text(document.querySelector("[data-bar-working]")),
+              column: text(document.querySelector("[data-kanban-board] [data-status='assigned'] .col-head .live .ct")),
+            };
+          });
+          header = count(read.header);
+          const sum = read.rows.reduce((total, row) => total + count(row.live), 0);
+          expect(header).toBeGreaterThan(0);
+          expect(count(read.row)).toBe(header);
+          expect(read.header).toBe(translate(lang, "kanban.summaryWorking", { count: header }));
+          expect(read.rowTitle).toContain(translate(lang, "rail.rowWorking", { count: header }));
+          expect(count(read.overview)).toBe(sum);
+          expect(count(read.column)).toBeLessThanOrEqual(header);
+          await desk.page.screenshot({ path: path.join(out, `${lang}-1440.png`) });
+          expect(desk.pageErrors).toEqual([]);
+          readings.push({ lang, width: 1440, ...read, sum });
+        } finally { await desk.context.close(); }
+
+        const phone = await openFixture(browser, server.base, { width: 390, height: 844 }, "light", lang, "reduce", true);
+        try {
+          await phone.page.locator("[data-mobile2-open='projects']").first().click({ timeout: 20_000 });
+          const row = phone.page.locator("[data-mobile2-project='atlas']");
+          await row.waitFor({ timeout: 20_000 });
+          await phone.page.waitForTimeout(400);
+          const text = await row.innerText();
+          expect(text).toContain(translate(lang, "mobile2.projects.live", { count: header }));
+          await phone.page.screenshot({ path: path.join(out, `${lang}-390-projects.png`) });
+          expect(phone.pageErrors).toEqual([]);
+          readings.push({ lang, width: 390, row: text.replace(/\s+/g, " ").trim(), header });
+        } finally { await phone.context.close(); }
+      }
+      fs.mkdirSync("evidence/working-agents-count", { recursive: true });
+      fs.writeFileSync("evidence/working-agents-count/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
+});

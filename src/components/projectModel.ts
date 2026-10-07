@@ -4,6 +4,7 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import type { Workflow } from "@/lib/workflows/types";
 
 import { attentionId } from "./attention";
+import { isWorkingAgent } from "./workingAgents";
 
 export type ActivityBand = 0 | 1 | 2 | 3;
 
@@ -168,7 +169,8 @@ export function projectDraftWorkingDirectory(
 export interface ProjectSummary {
   project: string;
   displayName: string;
-  /** Live entries anywhere in the project (branches running right now). */
+  /** Agents working in the project now, by the one rule the board header,
+      its columns and its cards count with (`isWorkingAgent`). */
   liveCount: number;
   attentionCount: number;
   /** Root conversations in the project. */
@@ -177,10 +179,6 @@ export interface ProjectSummary {
   /** Present only through the full project catalog, outside the recent file set. */
   catalogOnly: boolean;
 }
-
-/* Workflow states whose strip is actively doing work: they light the rail
-   dot the way a live transcript does. */
-const WF_BUSY = new Set<Workflow["state"]>(["provisioning", "implementing", "reviewing", "finishing"]);
 
 export function buildProjectSummaries(
   files: FileEntry[],
@@ -207,7 +205,7 @@ export function buildProjectSummaries(
   for (const file of files) {
     const summary = summaryFor(projectKey(file), projectDisplayName(projectKey(file), file.projectName));
     summary.catalogOnly = false;
-    if (file.activity === "live") summary.liveCount += 1;
+    if (isWorkingAgent(file, now)) summary.liveCount += 1;
     /* Same membership the attention queue counts (hard-blocked plus in-TTL
        stalled), so the rail badge, the global badge and the title agree. */
     if (attentionId(file, now) !== null) summary.attentionCount += 1;
@@ -222,12 +220,13 @@ export function buildProjectSummaries(
   }
   /* Workflows keep their stamped project reachable even before any transcript
      exists (provisioning, a parked setup): the row must be there for the
-     strip's retry/close controls to be reachable at all. */
+     strip's retry/close controls to be reachable at all. A workflow or a lane
+     is not an agent, so neither adds to the working count: the conversation it
+     starts counts once its turn runs, under the key the scanner gave it. */
   for (const wf of workflows) {
     if (wf.state === "closed" || !wf.project) continue;
     const summary = summaryFor(wf.project, projectDisplayName(wf.project, projectDisplayNames[wf.project]));
     summary.catalogOnly = false;
-    if (WF_BUSY.has(wf.state)) summary.liveCount += 1;
     if (wf.state === "needs_decision" || wf.state === "paused") summary.attentionCount += 1;
     summary.smt = Math.max(summary.smt, (Date.parse(wf.createdAt) || 0) / 1000);
   }
@@ -235,7 +234,6 @@ export function buildProjectSummaries(
     if ((pipeline.state === "closed" && !pipeline.restored) || !pipeline.project) continue;
     const summary = summaryFor(pipeline.project, projectDisplayName(pipeline.project, projectDisplayNames[pipeline.project]));
     summary.catalogOnly = false;
-    if (pipeline.state === "provisioning" || pipeline.state === "running") summary.liveCount += 1;
     if (pipeline.state === "needs_decision" || pipeline.state === "needs_review" || pipeline.state === "paused") summary.attentionCount += 1;
     summary.smt = Math.max(summary.smt, (Date.parse(pipeline.createdAt) || 0) / 1000);
   }

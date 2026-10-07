@@ -3587,7 +3587,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "mobile2.projects.title": "Проєкти",
   "mobile2.projects.overview": "Огляд",
   "mobile2.projects.count": { one: "{count} проєкт", few: "{count} проєкти", many: "{count} проєктів", other: "{count} проєкту" },
-  "mobile2.projects.live": { one: "{count} активна", few: "{count} активні", many: "{count} активних", other: "{count} активної" },
+  "mobile2.projects.live": { one: "{count} працює", few: "{count} працюють", many: "{count} працюють", other: "{count} працюють" },
   "mobile2.projects.quiet": "тихо",
   "mobile2.projects.quietSince": "тихо · {age}",
   "mobile2.projects.archive": "Архів",
