@@ -5,6 +5,10 @@ const DECLINED = new Set(["question", "negated", "retracted", "conditional", "qu
 /** A narrow veto over the source turn while it is still arriving. */
 const REFUSED = /\b(?:don['’]?t|do not|never)\s+(?:send|delegate|ask|tell)\b|(?:не\s+(?:надсилай|відправляй|делегуй|прос[иі]|передавай))/iu;
 const words = (rows: readonly OperatorInput[]) => rows.map(row => row.text).join(" ");
+/** Instruction text as one request reads, whatever its spacing, case or closing stop. */
+export const requestText = (text: string) => text.normalize("NFC").replace(/\s+/gu, " ").trim().replace(/[.!?…]+$/u, "").toLowerCase();
+/** A request the session already holds, whatever became of it: the turn it was raised in and its words. */
+export interface EarlierRequest { turn?: number; instruction: string }
 
 /**
  * Whether a model-raised Live proposal may stand. `sourceTurn` is the operator's
@@ -14,24 +18,34 @@ const words = (rows: readonly OperatorInput[]) => rows.map(row => row.text).join
  * question, a condition, a retraction, a negation or a quote refuses, and so
  * does a completed turn that never asks for the orchestrator, unless the turns
  * just before it complete the request (a backchannel can split one sentence).
+ * That look back stops at the turn of any request the session already holds
+ * (`earlier`): a request raised once is spent, so "Thanks." after it borrows
+ * nothing and a new send needs a new explicit request.
  * Missing input, and a turn still arriving, leave the decision to the model,
- * whose request is sent at once unless it asked the operator to confirm it.
+ * whose request is sent at once unless it asked the operator to confirm it,
+ * except for the same words as a request already raised in an earlier turn:
+ * that is the model repeating itself and is refused as already requested.
  * Speech in a later turn that takes the request back ("Never mind.", "Cancel
  * that request.", "Забудь.") withdraws a confirmation that waits, finished or
  * still arriving, and is read again when the operator answers it.
  */
-export function liveProposalRefusal(instruction: string, inputs: readonly OperatorInput[], sourceTurn?: number): string | null {
+export function liveProposalRefusal(instruction: string, inputs: readonly OperatorInput[], sourceTurn?: number, earlier: readonly EarlierRequest[] = []): string | null {
   if (!instruction.trim() || instruction.length > 2_000) return "invalid_instruction";
   const turn = sourceTurn ?? inputs.at(-1)?.turn;
   if (turn === undefined) return REFUSED.test(words(inputs.slice(-1)).slice(-800)) ? "operator_refused" : null;
   const source = inputs.filter(row => row.turn === turn);
   if (REFUSED.test(words(inputs.filter(row => (row.turn ?? -1) >= turn)).slice(-2_000))) return "operator_refused";
   if (retractsRequest(words(inputs.filter(row => (row.turn ?? -1) > turn)).slice(-2_000))) return "retracted";
-  if (!source.length || source.some(row => !row.final)) return null;
+  const before = earlier.filter((row): row is Required<EarlierRequest> => row.turn !== undefined && row.turn < turn);
+  if (!source.length || source.some(row => !row.final))
+    return before.some(row => requestText(row.instruction) === requestText(instruction)) ? "already_requested" : null;
   const verdict = explicitDelegationRequest(words(source));
   if (verdict.admit) return null;
   if (DECLINED.has(verdict.reason)) return verdict.reason;
+  // Turns up to the last request already raised are spent and complete nothing.
+  const spent = Math.max(-1, ...before.map(row => row.turn));
   for (let back = 1; back <= 2; back += 1) {
+    if (turn - back <= spent) break;
     const span = inputs.filter(row => row.turn !== undefined && row.turn >= turn - back && row.turn <= turn);
     if (span.every(row => row.final) && explicitDelegationRequest(words(span)).admit) return null;
   }

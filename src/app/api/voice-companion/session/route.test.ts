@@ -159,15 +159,32 @@ test("a mint whose answer was lost keeps its reservation and blocks every new pa
   expect(restarted.storage.read().charges[row.id]).toMatchObject({ reserved: false, incomplete: true });
   expect(restarted.storage.read().charges[row.id].usd).toBeGreaterThanOrEqual(0.27);
   expect(restarted.storage.settings().incomplete).toBe(true);
-  // Once a provider session that never got its answer cannot still be running, the next Talk mints.
+  // The provider documents no way to list sessions or a WebRTC lifetime, so the
+  // length of the local reservation proves nothing: after five minutes, and
+  // after another restart, the first is still unaccounted for and still charged.
   now += 5 * 60_000 + 1;
-  const third = await POST(request({ action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId: "reconciled" }));
-  expect(third.status).toBe(201);
+  const later = restartedService(f.provider, () => now);
+  await later.service.recover();
+  const third = await POST(request({ action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId: "after-five-minutes" }));
+  expect(await third.json()).toEqual({ code: "MINT_UNCERTAIN" });
+  expect([f.provider.sessions.length, f.provider.hangups.length]).toEqual([1, 0]);
+  expect(later.storage.read().sessions[row.id]).toMatchObject({ remoteOpen: true, mintUncertain: true });
+  expect(later.storage.settings()).toMatchObject({ uncertainSession: true, incomplete: true });
+  const heldUsd = later.storage.read().charges[row.id].usd;
+  expect(heldUsd).toBeGreaterThanOrEqual(300 * 0.05 / 60);
+  // Only the operator, who can see the provider's own usage, releases it; the charge stays as it is, incomplete.
+  const { PUT: settingsPUT } = await import("../settings/route");
+  const released = await settingsPUT(new NextRequest("http://127.0.0.1/api/voice-companion/settings", { method: "PUT",
+    headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin" }, body: JSON.stringify({ releaseUncertainSession: true }) }));
+  expect(await released.json()).toMatchObject({ uncertainSession: false, incomplete: true });
+  expect(later.storage.read().sessions[row.id]).toMatchObject({ remoteOpen: false });
+  expect(later.storage.read().sessions[row.id].mintUncertain).toBeUndefined();
+  expect(later.storage.read().charges[row.id]).toMatchObject({ reserved: false, incomplete: true });
+  expect(later.storage.read().charges[row.id].usd).toBeGreaterThanOrEqual(heldUsd);
+  const fourth = await POST(request({ action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId: "released" }));
+  expect(fourth.status).toBe(201);
   expect(f.provider.sessions).toHaveLength(2);
-  expect(restarted.storage.read().sessions[row.id]).toMatchObject({ remoteOpen: false });
-  expect(restarted.storage.read().sessions[row.id].mintUncertain).toBeUndefined();
-  expect(restarted.storage.read().charges[row.id]).toMatchObject({ reserved: false, incomplete: true });
-  await POST(request({ action: "close", sessionId: (await third.json()).sessionId }));
+  await POST(request({ action: "close", sessionId: (await fourth.json()).sessionId }));
 });
 
 test("a restart between the provider creating a session and its id being recorded mints nothing more", async () => {

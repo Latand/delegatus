@@ -121,6 +121,12 @@ export function VoiceCompanionSetting() {
               {settings.reservedUsd > 0 ? ` ${t("voiceCompanion.settings.reserved", { held: money(settings.reservedUsd) })}` : ""}
             </p>
             {settings.incomplete ? <p className="mt-1 text-[12px] leading-snug text-muted">{companionErrorMessage("FINALIZATION_INCOMPLETE", speech)}</p> : null}
+            {settings.uncertainSession ? (
+              <div className="mt-2 flex flex-col items-start gap-1.5" data-voice-companion-uncertain>
+                <p role="alert" className="text-[12px] leading-snug text-danger">{companionErrorMessage("MINT_UNCERTAIN", speech)}</p>
+                <button type="button" disabled={busy} onClick={() => void change({ releaseUncertainSession: true })} className="min-h-9 rounded-[8px] border border-border px-3 text-[13px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-45">{t("voiceCompanion.settings.uncertain.release")}</button>
+              </div>
+            ) : null}
             {settings.usageUsd + settings.reservedUsd >= settings.monthlyCapUsd ? <p className="mt-1 text-[12px] leading-snug text-danger">{companionErrorMessage("CAP_REACHED", speech)}</p> : null}
           </div>
         </div>

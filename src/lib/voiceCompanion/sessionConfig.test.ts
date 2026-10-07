@@ -11,11 +11,11 @@ test("the frontend event permissions conform to the official Live server selecto
   expect(z.array(selectorSchema).safeParse(liveSessionConfiguration("en").client.data_channel.allowed_server_events).success).toBe(true);
 });
 
-test("the frontend data channel receives no transcript, error or tool event: the server's cleaned projection is the page's only text", () => {
-  // allowed_server_events selects what Live sends to the frontend (official create schema, 2026-10-06).
-  const allowed = liveSessionConfiguration("en").client.data_channel.allowed_server_events.map(row => row.type);
-  for (const type of allowed) expect(type, type).not.toMatch(/transcript|error|response|delegation|commentary|thinking|instructions/);
-  expect(allowed).toEqual(["session.closed"]);
+test("the frontend data channel receives no provider event: the server's cleaned projection is the page's only text", () => {
+  // allowed_server_events selects what Live sends to the frontend; an empty
+  // array allows none (official create schema). session.closed carries the
+  // whole session, instructions and input included, so it is not allowed either.
+  expect(liveSessionConfiguration("en").client.data_channel.allowed_server_events).toEqual([]);
 });
 
 test("Live delegates to this server, which runs the backend itself with the registry tools", () => {

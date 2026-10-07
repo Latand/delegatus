@@ -2103,6 +2103,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "voiceCompanion.settings.cap": "Місячна межа витрат",
   "voiceCompanion.settings.usage": "Витрачено за {month}: {spent} із {cap}.",
   "voiceCompanion.settings.reserved": "Ще {held} утримується для розмови, що триває.",
+  "voiceCompanion.settings.uncertain.release": "Її закрито: дозволити нову розмову",
   "render.reasoning": "міркування агента",
   "render.reasoningGroup": "Міркування · {count}",
   "render.reasoningAvailable": "Текст доступний",

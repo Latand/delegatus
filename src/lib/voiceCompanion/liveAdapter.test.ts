@@ -24,7 +24,8 @@ function fixture() {
   const event = (payload: Record<string, unknown>) => ({ ...payload, sessionId: "fixture-session", version: 1, generation: 1, seq: ++seq, eventId: `event-${seq}`, atMs: seq }) as CompanionEvent;
   const media: CompanionMedia = { open: async () => { opens++; return "v=0"; }, answer: async () => {}, mute: value => { muted = value; },
     interrupt: () => { interrupts++; }, close: async () => { closes++; } };
-  const adapter = new OfficialVoiceCompanionAdapter({ pollMs: 100_000, media: cb => { callbacks = cb; return media; },
+  let clock = 0;
+  const adapter = new OfficialVoiceCompanionAdapter({ pollMs: 100_000, now: () => clock, media: cb => { callbacks = cb; return media; },
     fetch: (async (_url, init) => {
       if (!init?.body) return Response.json({ events: serverEvents });
       const body = JSON.parse(String(init.body)); requests.push(body);
@@ -32,7 +33,7 @@ function fixture() {
       if (body.action === "close") serverEvents.push(event({ type: "session.closed", reason: "operator", incomplete: false }));
       return Response.json({ ok: true });
     }) as typeof fetch });
-  return { adapter, requests, media, event, push: (value: CompanionEvent) => serverEvents.push(value), get callbacks() { return callbacks; },
+  return { adapter, requests, media, event, push: (value: CompanionEvent) => serverEvents.push(value), advance: (ms: number) => { clock += ms; }, get callbacks() { return callbacks; },
     get opens() { return opens; }, get closes() { return closes; }, get muted() { return muted; }, get interrupts() { return interrupts; } };
 }
 test("media starts on request, mouth follows played output, barge-in cuts playback, and awaited hangup releases media", async () => {
@@ -208,4 +209,67 @@ test("played audio reaches its own line in any order: audio before text, text be
   // No line without words carries playback.
   expect(f.state.lines.filter(line => line.speaker === "companion" && !line.text)).toEqual([]);
   await f.adapter.dispose();
+});
+
+test("late words reach their own audio oldest first: a finished answer keeps its words when the next one is already playing, and a barge-in cuts only the next", async () => {
+  for (const interrupt of [false, true]) {
+    const f = await served();
+    // Answer A plays and ends with no words yet; after a pause answer B starts.
+    f.callbacks.playback({ speaking: true, rms: 0.5, playedMs: 0 });
+    f.callbacks.playback({ speaking: false, rms: 0, playedMs: 900 });
+    f.advance(2_000);
+    f.callbacks.playback({ speaking: true, rms: 0.5, playedMs: 0 });
+    f.callbacks.playback({ speaking: true, rms: 0.5, playedMs: 200 });
+    await f.says("First answer.");
+    await f.says("Second answer.");
+    expect(f.lines()).toEqual([["First answer.", "played", null], ["Second answer.", "playing", null]]);
+    expect(f.state.playedMs).toBe(200);
+    if (interrupt) {
+      f.callbacks.input(true);
+      expect(f.lines()).toEqual([["First answer.", "played", null], ["Second answer.", "cut", 200]]);
+    } else {
+      f.callbacks.playback({ speaking: false, rms: 0, playedMs: 700 });
+      expect(f.lines().map(line => line[1])).toEqual(["played", "played"]);
+    }
+    await f.adapter.dispose();
+  }
+});
+
+test("a barge-in during the next answer, before either answer's words arrive, leaves the earlier one played and the next one cut", async () => {
+  const f = await served();
+  f.callbacks.playback({ speaking: true, rms: 0.5, playedMs: 0 });
+  f.callbacks.playback({ speaking: false, rms: 0, playedMs: 900 });
+  f.advance(2_000);
+  f.callbacks.playback({ speaking: true, rms: 0.5, playedMs: 0 });
+  f.callbacks.playback({ speaking: true, rms: 0.5, playedMs: 250 });
+  f.callbacks.input(true);
+  await f.says("First answer.");
+  await f.says("Second answer.");
+  expect(f.lines()).toEqual([["First answer.", "played", null], ["Second answer.", "cut", 250]]);
+  await f.adapter.dispose();
+});
+
+test("finals in another order than the lines began change nothing: each line keeps the audio that played it", async () => {
+  for (const order of [["a", "b"], ["b", "a"]]) {
+    const f = fixture();
+    let state = INITIAL_COMPANION_STATE;
+    f.adapter.subscribe(event => { state = reduceCompanion(state, event); });
+    await f.adapter.start({ project: "fixture", locale: "en" });
+    f.callbacks.playback({ speaking: true, rms: 0.5, playedMs: 0 });
+    f.callbacks.playback({ speaking: false, rms: 0, playedMs: 900 });
+    f.advance(2_000);
+    f.callbacks.playback({ speaking: true, rms: 0.5, playedMs: 0 });
+    f.callbacks.playback({ speaking: true, rms: 0.5, playedMs: 200 });
+    const line = (id: string, text: string, final: boolean, startMs: number) => f.event({ type: "transcript.snapshot", speaker: "companion", itemId: id, text, final, startMs, endMs: startMs + 400 });
+    f.push(line("a", "First answer", false, 3_000));
+    f.push(line("b", "Second answer", false, 6_000));
+    await f.adapter.refresh();
+    for (const id of order) f.push(id === "a" ? line("a", "First answer.", true, 3_000) : line("b", "Second answer.", true, 6_000));
+    await f.adapter.refresh();
+    const rows = () => state.lines.filter(row => row.speaker === "companion").map(row => [row.text, row.playback]);
+    expect(rows()).toEqual([["First answer.", "played"], ["Second answer.", "playing"]]);
+    f.callbacks.input(true);
+    expect(rows()).toEqual([["First answer.", "played"], ["Second answer.", "cut"]]);
+    await f.adapter.dispose();
+  }
 });

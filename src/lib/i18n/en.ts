@@ -2158,6 +2158,7 @@ export const en = {
   "voiceCompanion.settings.cap": "Monthly spend cap",
   "voiceCompanion.settings.usage": "Used in {month}: {spent} of {cap}.",
   "voiceCompanion.settings.reserved": "{held} more is held for a call in progress.",
+  "voiceCompanion.settings.uncertain.release": "It is closed: allow a new call",
   "render.reasoning": "agent reasoning",
   "render.reasoningGroup": "Reasoning · {count}",
   "render.reasoningAvailable": "Text available",

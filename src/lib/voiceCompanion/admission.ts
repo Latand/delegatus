@@ -3,7 +3,7 @@ import type { BridgeReportV1 } from "@/lib/bridge/types";
 import { canonicalProject } from "@/lib/projects/aliases";
 import type { CompanionCommand, CompanionEvent, Delivery, Locale, Payload, Proposal, Recipient } from "./contract";
 import { admitDelegationProposal, type OperatorInput } from "./gate";
-import { liveConsentRefusal, liveProposalRefusal } from "./liveGate";
+import { liveConsentRefusal, liveProposalRefusal, requestText, type EarlierRequest } from "./liveGate";
 import { cleanStrings, withoutCredentials, withoutLocalPaths } from "./redaction";
 import { CompanionStorage, type StoredProposal, type StoredSession } from "./storage";
 
@@ -14,14 +14,15 @@ export interface CompanionDeliveryPaths {
   reports(project: string): BridgeReportV1[];
   receipt?(delivery: Delivery): Promise<"delivered" | "failed" | "pending">;
 }
-/** Instruction text as one request reads, whatever its spacing, case or closing stop. */
-const requestText = (text: string) => text.normalize("NFC").replace(/\s+/gu, " ").trim().replace(/[.!?…]+$/u, "").toLowerCase();
 /** One logical request: the same words from the same completed operator turn,
  * whatever Live delegation named it. Without a turn the delegation is all
  * there is to tell two requests apart. */
 const sameRequest = (row: StoredProposal, sourceItemId: string, instruction: string, sourceTurn?: number) =>
   requestText(row.proposal.instruction) === requestText(instruction)
   && (sourceTurn !== undefined && row.sourceTurn !== undefined ? row.sourceTurn === sourceTurn : row.proposal.sourceItemId === sourceItemId);
+/** Every request the session holds but `except`, for the gate's look back. */
+const earlierRequests = (session: StoredSession, except?: string): EarlierRequest[] => Object.values(session.proposals)
+  .filter(row => row.proposal.proposalId !== except).map(row => ({ turn: row.sourceTurn, instruction: row.proposal.instruction }));
 const sameRecipient = (left: Recipient | null, right: Recipient) => !!left && canonicalProject(left.project) === canonicalProject(right.project)
   && left.conversationId === right.conversationId && left.seatEpoch === right.seatEpoch && left.engine === right.engine;
 const reportStatus = (report: BridgeReportV1): "progress" | "result" | "question" | "blocked" | null => {
@@ -114,7 +115,7 @@ export class CompanionAdmission {
       const removed: StoredProposal[] = [];
       for (const row of Object.values(session.proposals)) {
         if (row.state === "pending" && this.now() > row.expiresAt) { row.state = "cancelled"; row.cancelCode = "confirmation_expired"; removed.push(row); }
-        else if (row.state === "pending" && (session.authority === "live-model" ? liveProposalRefusal(row.proposal.instruction, session.inputs, row.sourceTurn) !== null
+        else if (row.state === "pending" && (session.authority === "live-model" ? liveProposalRefusal(row.proposal.instruction, session.inputs, row.sourceTurn, earlierRequests(session, row.proposal.proposalId)) !== null
           : !admitDelegationProposal({ ...row.proposal, inputs: session.inputs, frozenSourceText: row.sourceText, waiting: true }).admit)) {
           row.state = "cancelled"; row.cancelCode = "source_changed"; removed.push(row);
         }
@@ -203,7 +204,7 @@ export class CompanionAdmission {
       if (!session || session.closed) { refusal = "session_closed"; return null; }
       const logicalDuplicate = Object.values(session.proposals).find(row => sameRequest(row, sourceItemId, instruction, sourceTurn));
       if (logicalDuplicate) { reusedLogicalRequest = true; return logicalDuplicate.proposal; }
-      const reason = session.authority === "live-model" ? liveProposalRefusal(instruction, session.inputs, sourceTurn)
+      const reason = session.authority === "live-model" ? liveProposalRefusal(instruction, session.inputs, sourceTurn, earlierRequests(session))
         : (() => { const gate = admitDelegationProposal({ sourceItemId, instruction, inputs: session.inputs }); return gate.admit ? null : gate.reason; })();
       if (reason) { refusal = reason; return null; }
       const recipient = this.paths.recipient(session.project);
@@ -253,7 +254,7 @@ export class CompanionAdmission {
       // A spoken send stands only on the operator's own yes; anything else leaves the confirmation waiting.
       if (command.via === "speech" && session.authority === "live-model"
         && liveConsentRefusal(session.inputs, row.sourceTurn, "answerTurn" in command ? command.answerTurn : undefined) !== null) { unanswered = true; return null; }
-      const allowed = session.authority === "live-model" ? liveProposalRefusal(row.proposal.instruction, session.inputs, row.sourceTurn) === null
+      const allowed = session.authority === "live-model" ? liveProposalRefusal(row.proposal.instruction, session.inputs, row.sourceTurn, earlierRequests(session, row.proposal.proposalId)) === null
         : admitDelegationProposal({ ...row.proposal, inputs: session.inputs, frozenSourceText: row.sourceText, waiting: true }).admit;
       if (session.closed || this.now() > row.expiresAt || !allowed || !sameRecipient(this.paths.recipient(session.project), row.proposal.recipient)) {
         row.state = "cancelled"; row.cancelCode = refusal = "proposal_changed"; return null;

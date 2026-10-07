@@ -19,12 +19,13 @@ export const BACKEND_INSTRUCTIONS = "Use only the supplied registry tools. Answe
 
 /** Client delegation: Live names a delegation and this server runs the backend
  * itself, one paid-for response at a time. The frontend data channel carries
- * no transcript, error or tool event: the server's cleaned projection is the
- * only text the page receives. */
+ * no provider event at all (an empty list allows none): every server event,
+ * `session.closed` included, can hold the whole session snapshot, so the
+ * server's cleaned projection is the only text the page receives. */
 export function liveSessionConfiguration(locale: Locale) {
   return { model: LIVE_MODEL, instructions: liveInstructions(locale), store: false,
     audio: { output: { voice: "marin" } },
-    client: { data_channel: { allowed_client_events: [], allowed_server_events: [{ type: "session.closed" }] } },
+    client: { data_channel: { allowed_client_events: [], allowed_server_events: [] as Array<{ type: string; response_event?: string }> } },
     delegation: { type: "client" as const } };
 }
 

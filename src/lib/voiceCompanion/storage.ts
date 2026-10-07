@@ -16,6 +16,9 @@ export interface CompanionSettings {
   usageUsd: number;
   reservedUsd: number;
   incomplete: boolean;
+  /** A mint whose answer was lost may have opened a provider session nobody
+   * can name; no new voice session starts until the operator releases it. */
+  uncertainSession: boolean;
 }
 export interface StoredProposal {
   proposal: Proposal;
@@ -43,7 +46,7 @@ export interface StoredSession {
   remoteOpen?: boolean;
   /** A mint asked of the provider whose answer never arrived: it may have
    * created a session nobody can name. Set before the request, cleared by its
-   * answer, by the provider's refusal, or once such a session cannot be open. */
+   * answer, by the provider's refusal, or by the operator's release. */
   mintUncertain?: boolean;
   /** The process and service instance that minted the provider session. */
   owner?: { pid: number; instance: string };
@@ -123,6 +126,7 @@ function writePrivate(file: string, body: string): void {
   } finally { if (fs.existsSync(temporary)) fs.unlinkSync(temporary); }
 }
 
+const uncertainMint = (session: StoredSession) => !session.providerId && !!session.mintUncertain && session.remoteOpen !== false;
 /** Session authority and accounting only. Delivery receipts and reports remain
  * in their existing stores. Reads fail closed on corrupt/unreadable state. */
 export class CompanionStorage {
@@ -170,7 +174,26 @@ export class CompanionStorage {
     return { ...document.settings, keySource: this.keySource(), keyEnvironment: "OPENAI_API_KEY", month,
       usageUsd: charges.reduce((sum, charge) => sum + (charge.reserved ? charge.observedUsd ?? 0 : charge.usd), 0),
       reservedUsd: charges.filter(charge => charge.reserved).reduce((sum, charge) => sum + charge.usd - (charge.observedUsd ?? 0), 0),
-      incomplete: charges.some(charge => charge.incomplete) };
+      incomplete: charges.some(charge => charge.incomplete),
+      uncertainSession: Object.values(document.sessions).some(uncertainMint) };
+  }
+  /** The operator's word that the provider session a lost mint answer may have
+   * opened is closed: the operator can see the provider's own usage, this
+   * service cannot. Its charge is kept, incomplete, grown to the time since it
+   * was minted at `usdPerSecond`; only then can a new session be minted. */
+  releaseUncertainMints(usdPerSecond: number): CompanionSettings {
+    if (!Number.isFinite(usdPerSecond) || usdPerSecond < 0) throw new Error("INVALID_USAGE");
+    this.change(document => {
+      for (const session of Object.values(document.sessions).filter(uncertainMint)) {
+        const charge = document.charges[session.id];
+        if (charge) {
+          charge.reserved = false; charge.incomplete = true;
+          charge.usd = Math.max(charge.usd, charge.observedUsd ?? 0, Math.max(15, (this.now() - session.createdAt) / 1_000) * usdPerSecond);
+        }
+        session.remoteOpen = false; delete session.mintUncertain;
+      }
+    });
+    return this.settings();
   }
   updateSettings(update: Partial<Pick<CompanionSettings, "enabled" | "monthlyCapUsd">>): CompanionSettings {
     if (Object.keys(update).some(key => key !== "enabled" && key !== "monthlyCapUsd")

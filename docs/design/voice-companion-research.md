@@ -301,9 +301,11 @@ that follows a withheld beginning never shows it again. Single texts (a
 proposal, a tool result, a report) are read the same way. At most a credential's first two
 characters can stand in a snapshot, which names a format at most. The backend's
 context is built from the same masked record. The frontend data channel
-receives `session.closed` alone (`allowed_server_events` selects what Live sends
-to the page), so no raw transcript, error or tool event reaches the browser
-around this cleaner. A mint whose session id or SDP answer carries the
+receives no provider event (`allowed_server_events` selects what Live sends to
+the page, and an empty list allows none). Every server event can carry the
+whole session, `session.closed` included with its instructions and input, so
+no raw snapshot, transcript, error or tool event reaches the browser around
+this cleaner; the page learns of the end through the server's cleaned events. A mint whose session id or SDP answer carries the
 credential in use, or a 16-character piece of it, is refused and hung up: an
 SDP cannot be cleaned without breaking negotiation, and it is never read for
 credential families because its own ICE password is one by their reading.
@@ -325,10 +327,16 @@ stands. A turn is the operator's speech between two of the companion's answers
 or delegations. An ordinary question ("What is on the board?"), a condition, a
 retraction, a negation or a quote refuses, and so does a completed turn that
 asks nothing of the orchestrator, unless up to two turns before it complete the
-request (a backchannel can split one sentence). The model's tool call cannot
-override it. Missing input and a turn still arriving leave the decision to the
-model: its request is sent at once unless it asked to confirm (see the
-requirement change at the top). Speech in a later turn that takes the request
+request (a backchannel can split one sentence). That look back stops at the
+turn of any request the session already holds, sent, waiting or cancelled: a
+request is spent once raised, so "Thanks.", a greeting or other speech after it
+borrows nothing, and the same holds for a restarted service, which reads the
+stored requests. A new send needs a new explicit request. The model's tool call
+cannot override it. Missing input and a turn still arriving leave the decision
+to the model: its request is sent at once unless it asked to confirm (see the
+requirement change at the top), except for the same words as a request raised
+in an earlier turn, which is the model repeating itself and is refused as
+already requested. Speech in a later turn that takes the request
 back withdraws a confirmation that waits, finished or still arriving: the
 gate's own retraction reading ("Never mind.", "Cancel that request.",
 "Забудь.", "Скасуй.", "Передумав.") is applied to everything said after the
@@ -417,11 +425,14 @@ it: the provider may have created a session that nobody can name, because the
 Live API documents no way to list sessions, so it cannot be hung up. Every
 start, in this service or a restarted one, then answers `MINT_UNCERTAIN` ("The
 provider did not confirm whether the last voice session started…") and mints
-nothing; the reservation is kept as incomplete usage. Its browser never
-received the negotiation answer and closed its peer, so no media reaches such a
-session; it is held as open, and charged, for the five-minute voice window its
-reservation pays for (`UNCERTAIN_MINT_HOLD_MS`), and the next start after that
-mints.
+nothing; the reservation is kept as incomplete usage. The provider documents no
+WebRTC session lifetime either (`expires_at` is reported only by a session that
+can be named), so the length of the local reservation proves nothing about when
+such a session ends. It is held as open, and its charge grows to the time since
+its mint at the voice rate, for as long as nothing proves it closed. The
+operator, who can see the provider's own usage, ends the hold: the settings
+dialog shows the same words with a button, "It is closed: allow a new call",
+which keeps the charge as incomplete usage and lets the next start mint.
 Each stored session names the process and service instance that minted it. A
 service closes every open session whose owner is gone when it is created and
 again before each mint, so a restart followed by a reload or a new tab leaves no

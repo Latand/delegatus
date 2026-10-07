@@ -34,7 +34,7 @@ const { companionErrorMessage } = await import("@/lib/voiceCompanion/errors");
 const FAKE_KEY = ["fixture", "voice", "value", "42"].join("-");
 const settingsOf = (over: Partial<CompanionSettings> = {}): CompanionSettings => ({
   enabled: false, monthlyCapUsd: 20, keySource: "missing", keyEnvironment: "OPENAI_API_KEY",
-  month: "2026-10", usageUsd: 0, reservedUsd: 0, incomplete: false, ...over,
+  month: "2026-10", usageUsd: 0, reservedUsd: 0, incomplete: false, uncertainSession: false, ...over,
 });
 
 /** The settings and key routes over one document, as the Viewer serves them. */
@@ -43,7 +43,11 @@ function routes(initial: CompanionSettings) {
   harness.setRoute((url, init) => {
     const path = new URL(url, "http://127.0.0.1:8898").pathname;
     const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : null;
-    if (path === "/api/voice-companion/settings") { if (body) Object.assign(document, body); return jsonResponse(document); }
+    if (path === "/api/voice-companion/settings") {
+      if (body?.releaseUncertainSession === true) document.uncertainSession = false;
+      else if (body) Object.assign(document, body);
+      return jsonResponse(document);
+    }
     if (path === "/api/voice-companion/key") {
       if (document.keySource === "env") return jsonResponse({ code: "KEY_FROM_ENV" }, 409);
       document.keySource = "file";
@@ -174,6 +178,19 @@ test("the settings rows: the switch reveals the key and the cap and nothing else
     expect(harness.calls.filter((call) => call.method === "PUT" && call.url === "/api/voice-companion/settings").map((call) => call.body)).toEqual([{ enabled: true }, { monthlyCapUsd: 35.5 }]);
     expect(sessionCalls()).toEqual([]);
   } finally { window.removeEventListener(COMPANION_SETTINGS_EVENT, heard); }
+});
+
+test("a session a lost mint answer may have opened is said in settings, and only the operator's release lets a new call start", async () => {
+  const stored = routes(settingsOf({ enabled: true, keySource: "file", usageUsd: 0.27, incomplete: true, uncertainSession: true }));
+  const host = await mount(<VoiceCompanionSetting />);
+  const notice = host.querySelector("[data-voice-companion-uncertain]");
+  expect(notice?.textContent).toContain(companionErrorMessage("MINT_UNCERTAIN", "en"));
+  expect(notice?.textContent).not.toMatch(/five minutes/u);
+  await click(notice!.querySelector("button"));
+  expect(harness.calls.filter((call) => call.method === "PUT" && call.url === "/api/voice-companion/settings").map((call) => call.body)).toEqual([{ releaseUncertainSession: true }]);
+  expect(stored.uncertainSession).toBe(false);
+  expect(host.querySelector("[data-voice-companion-uncertain]")).toBeNull();
+  expect(sessionCalls()).toEqual([]);
 });
 
 test("a key from the environment takes precedence: it is said so and the field is closed", async () => {

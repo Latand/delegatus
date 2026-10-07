@@ -102,3 +102,28 @@ test("a mint is refused only by the provider's own client-error answer; a server
     ["unreadable", async () => new Response("not json", { status: 201 })], ["no id", async () => Response.json({ transport: { type: "webrtc", sdp: "answer" } }, { status: 201 })]] as const)
     await expect(mint(answer), label).rejects.toThrow(/^PROVIDER_ERROR$/);
 });
+
+test("the frontend data channel the mint asks for carries no provider event, so a credential-bearing snapshot never reaches the page", async () => {
+  const key = ["synthetic", "frontend", "credential", "000000"].join("-");
+  let mintBody: { session: { client: { data_channel: { allowed_server_events: "all" | Array<{ type: string; response_event?: string }> } } } } | null = null;
+  const provider = new OpenAILiveProvider((async (_url, init) => {
+    mintBody = JSON.parse(String(init!.body));
+    return Response.json({ session: { id: "live_fake" }, transport: { type: "webrtc", sdp: "answer" } });
+  }) as typeof fetch);
+  await provider.create(key, "en", "v=0");
+  // The documented selector rule: "all" allows every event, a list allows the
+  // events it names, an empty list allows none (official create schema).
+  const allowed = mintBody!.session.client.data_channel.allowed_server_events;
+  const delivered = (event: { type: string; response?: { type: string } }) => allowed === "all"
+    || allowed.some(row => row.type === event.type && (row.type !== "response.event" || row.response_event === event.response?.type));
+  const credentialBearing = [
+    { type: "session.closed", session: { instructions: key, input: [] } },
+    { type: "session.started", session: { instructions: key } },
+    { type: "session.updated", session: { instructions: key } },
+    { type: "error", error: { message: key } },
+    { type: "session.input_transcript.delta", delta: key.slice(0, 12) },
+    { type: "response.event", response: { type: "response.output_text.delta" }, delta: key },
+  ];
+  const page = credentialBearing.filter(delivered).map(event => JSON.stringify(event));
+  expect(page).toEqual([]);
+});

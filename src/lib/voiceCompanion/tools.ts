@@ -32,7 +32,8 @@ const SENT = { delivered: "Sent to the orchestrator.", queued: "Sent. It is queu
   unknown: "The request was sent, and its delivery is not confirmed yet. Say exactly that.", failed: "The delivery failed. Nothing reached the orchestrator." };
 const NOT_SENT: Record<string, string> = { no_orchestrator: "This project has no designated orchestrator. Nothing was sent.",
   operator_cancelled: "The operator declined. Nothing was sent.", source_changed: "The operator took the request back. Nothing was sent.",
-  retracted: "The operator took the request back. Nothing was sent.", confirmation_expired: "The confirmation was not answered in time. Nothing was sent." };
+  retracted: "The operator took the request back. Nothing was sent.", confirmation_expired: "The confirmation was not answered in time. Nothing was sent.",
+  already_requested: "That request was already raised. Nothing new was sent." };
 const spoken = (outcome: Awaited<ReturnType<CompanionAdmission["delegate"]>>) => outcome.state === "sent" ? { status: "sent", delivery: outcome.status, speech: SENT[outcome.status] }
   : outcome.state === "awaiting" ? { status: "awaiting_confirmation", reason: outcome.proposal.confirmation?.reason ?? "",
     speech: "Nothing has been sent. Tell the operator in one sentence what would be sent and why you ask, and ask whether to send it. Their spoken yes or no comes back through resolve_orchestrator_confirmation; the card's buttons answer it too." }

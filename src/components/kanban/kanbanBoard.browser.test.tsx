@@ -19780,8 +19780,10 @@ describe("floating voice companion", () => {
           for (const button of reading.buttons) expect(button.inside && button.reachable && !button.clipped, `${label}: ${button.label} readable and reachable`).toBe(true);
           for (const button of reading.buttons) expect(button.labelContrast, `${label}: ${button.label} label against its fill`).toBeGreaterThanOrEqual(4.5);
           expect((await voiceOf(page)).dispatches, `${label}: nothing sent while asking`).toBe(0);
+          const placed = await readCompanion(page);
+          expect(placed.floatersInsideLane, `${label}: the waiting card inside the lane (lane ${JSON.stringify(placed.lane)})`).toBe(true);
           expect(pageErrors, label).toEqual([]);
-          cases.push({ viewport: `${viewport.width}x${viewport.height}`, lang, scheme, ...reading });
+          cases.push({ viewport: `${viewport.width}x${viewport.height}`, lang, scheme, ...reading, floatersInsideLane: placed.floatersInsideLane, lane: placed.lane });
           await page.screenshot({ path: path.join(HANDOFF, `proposal-${label}.png`) });
         } finally { await context.close(); }
       }
@@ -19938,9 +19940,13 @@ describe("floating voice companion", () => {
     try {
       /* A read call and the proposal in the lane together. The read is a neutral card with an icon tile, its
          tool's name and one line; the delegation is the teal card with the whole text and the two buttons. */
-      for (const [viewport, lang, scheme] of [[VIEWPORT, "en", "light"], [NARROW, "uk", "dark"]] as const) {
-        const label = `${viewport.width}-${lang}-${scheme}`;
-        const { context, page, pageErrors } = await openVoice(browser, server.base, "&script=readThenAsk", { viewport, scheme, lang, motion: "reduce" });
+      /* The card that waits keeps to the lane whatever its text: its head and both buttons stand in the lane, and
+         its reason, whole request and spoken hint scroll as one body in a lane shorter than they are. */
+      const COMBOS = [[VIEWPORT, "en", "light"], [NARROW, "uk", "dark"], [VIEWPORT, "uk", "light"], [NARROW, "en", "dark"]] as const;
+      for (const script of ["readThenAsk", "readThenAskLong"] as const) for (const [viewport, lang, scheme] of COMBOS) {
+        const long = script === "readThenAskLong";
+        const label = `${viewport.width}-${lang}-${scheme}${long ? "-long" : ""}`;
+        const { context, page, pageErrors } = await openVoice(browser, server.base, `&script=${script}`, { viewport, scheme, lang, motion: "reduce" });
         try {
           const look = (selector: string) => page.evaluate((wanted) => {
             const element = document.querySelector<HTMLElement>(wanted);
@@ -19965,14 +19971,42 @@ describe("floating voice companion", () => {
           expect(READ_TOOL_NAMES as readonly string[], label).toContain(reading.call!.tool!);
           expect(reading.call!.buttons, `${label}: a read asks nothing`).toBe(0);
           expect(reading.delegation!.buttons, `${label}: the delegation asks with two buttons`).toBe(2);
-          expect(reading.delegation!.instruction, `${label}: and shows the whole text`).toBe(demoInstruction(lang));
+          expect(reading.delegation!.instruction, `${label}: and shows the whole text`).toBe(long ? scenarioText(lang).instructionLong : demoInstruction(lang));
           expect(reading.delegation!.background, `${label}: its own ground`).not.toBe(reading.call!.background);
           expect(reading.delegation!.border, `${label}: its own border`).not.toBe(reading.call!.border);
           expect(reading.delegation!.height, `${label}: the delegation is the larger card`).toBeGreaterThan(reading.call!.height * 2);
           expect((await voiceOf(page)).dispatches, `${label}: the read sent nothing`).toBe(0);
+          /* Inside the lane it reserved, over no text and no control; the head and both buttons in view and
+             reachable, the body scrolled through to its last line. */
+          const placed = await readCompanion(page);
+          expect(placed.floatersInsideLane, `${label}: every element inside the lane (lane ${JSON.stringify(placed.lane)})`).toBe(true);
+          expect(placed.textUnderLane, `${label}: page text under the lane`).toBe(0);
+          expectFree(placed, label);
+          const fit = await page.evaluate(() => {
+            const card = document.querySelector<HTMLElement>("[data-companion-delegation]")!;
+            const lane = document.querySelector<HTMLElement>("[data-companion-lane]")!.getBoundingClientRect();
+            const body = card.querySelector<HTMLElement>("[data-companion-confirm-body]")!;
+            const within = (box: DOMRect, outer: DOMRect) => box.top >= outer.top - 1 && box.bottom <= outer.bottom + 1 && box.left >= outer.left - 1 && box.right <= outer.right + 1;
+            const head = card.querySelector<HTMLElement>(".vc-deleg-head")!.getBoundingClientRect();
+            const buttons = [...card.querySelectorAll<HTMLElement>("[data-companion-send], [data-companion-cancel]")].map((button) => {
+              const box = button.getBoundingClientRect();
+              const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+              return within(box, lane) && within(box, card.getBoundingClientRect()) && !!hit && button.contains(hit);
+            });
+            const scrolls = body.scrollHeight > body.clientHeight + 1;
+            body.scrollTop = body.scrollHeight;
+            const view = body.getBoundingClientRect();
+            const hint = body.querySelector<HTMLElement>("[data-companion-confirm-hint]")!.getBoundingClientRect();
+            const reason = body.querySelector<HTMLElement>("[data-companion-confirm-reason]")?.innerText.trim() ?? null;
+            body.scrollTop = 0;
+            return { headInLane: within(head, lane), buttons, scrolls, focusable: body.tabIndex === 0, lastLineReached: hint.bottom <= view.bottom + 1, reason,
+              bodyHeight: Math.round(view.height), cardHeight: Math.round(card.getBoundingClientRect().height), laneHeight: Math.round(lane.height) };
+          });
+          expect({ headInLane: fit.headInLane, buttons: fit.buttons, focusable: fit.focusable, lastLineReached: fit.lastLineReached, reason: fit.reason }, `${label}: the waiting card reads whole inside the lane`)
+            .toEqual({ headInLane: true, buttons: [true, true], focusable: true, lastLineReached: true, reason: long ? scenarioText(lang).unsureLong : scenarioText(lang).unsure });
           expect(pageErrors, label).toEqual([]);
           await page.screenshot({ path: path.join(HANDOFF, `cards-read-and-delegation-${label}.png`) });
-          sideBySide.push({ viewport: `${viewport.width}x${viewport.height}`, lang, scheme, ...reading });
+          sideBySide.push({ viewport: `${viewport.width}x${viewport.height}`, lang, scheme, script, ...reading, floatersInsideLane: placed.floatersInsideLane, lane: placed.lane, textUnderLane: placed.textUnderLane, fit });
         } finally { await context.close(); }
       }
       for (const lang of ["en", "uk"] as const) {
@@ -20095,7 +20129,7 @@ describe("floating voice companion", () => {
     } finally { processes = await close(); server.stop(); }
     expect(processes.leftAfterClose, "browser processes left after close").toBe(0);
     record("cards.json", {
-      driver: DRIVER, fixture: "?scenario=voice-companion&script=readThenAsk | &failure=<code> | &script=demoNoSeat&seat=none | &script=unconfirmed | &script=proposal&sendlost=1",
+      driver: DRIVER, fixture: "?scenario=voice-companion&script=readThenAsk | &script=readThenAskLong | &failure=<code> | &script=demoNoSeat&seat=none | &script=unconfirmed | &script=proposal&sendlost=1",
       rule: "a read call is a neutral card with an icon tile, the tool's real name and one line, and asks nothing; the delegation is a teal card with the whole frozen text and Cancel and Send; a failure is said in plain words in the lane (or in the delegation card when it is about a send), in the interface language",
       sideBySide, failures,
     });

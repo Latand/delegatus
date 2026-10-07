@@ -9,7 +9,7 @@ import { jsonObject, type LiveConnection, type LiveProvider } from "./provider";
 import { withoutCredentials, withoutLocalPaths } from "./redaction";
 import { backendRequest, type BackendItem } from "./sessionConfig";
 import { runCompanionTool } from "./tools";
-import { backendUsageUsd, BACKEND_RESPONSE_RESERVE_USD, BACKEND_ROUNDS, LIVE_SESSION_LIMIT_MS, LIVE_USD_PER_SECOND, SESSION_START_ROOM_USD, UNCERTAIN_MINT_HOLD_MS, VOICE_SESSION_RESERVE_USD } from "./usage";
+import { backendUsageUsd, BACKEND_RESPONSE_RESERVE_USD, BACKEND_ROUNDS, LIVE_SESSION_LIMIT_MS, LIVE_USD_PER_SECOND, SESSION_START_ROOM_USD, VOICE_SESSION_RESERVE_USD } from "./usage";
 
 function processAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true; }
@@ -387,12 +387,11 @@ export class CompanionLiveSessions {
       const session = this.admission.session(id);
       if (this.active.has(id)) return;
       const remote = !!session.providerId && (session.remoteOpen ?? !session.closed);
-      // A mint whose answer was lost names no session to hang up. It stays open,
-      // blocking the next mint, until such a session cannot still be running.
+      // A mint whose answer was lost names no session to hang up, and the
+      // provider documents no list of sessions and no WebRTC lifetime. It stays
+      // open, blocking the next mint and charged for the time since it was
+      // minted, until the operator releases it (`releaseUncertainMints`).
       const uncertain = !session.providerId && !!session.mintUncertain && session.remoteOpen !== false;
-      const holdUntil = session.createdAt + UNCERTAIN_MINT_HOLD_MS;
-      if (uncertain && this.now() >= holdUntil)
-        this.storage.change(document => { document.sessions[id].remoteOpen = false; delete document.sessions[id].mintUncertain; });
       if (remote) {
         let confirmed = false;
         try { await this.provider.hangup(session.providerId!, this.options.key?.() ?? this.storage.providerKey()); confirmed = true; }
@@ -406,7 +405,7 @@ export class CompanionLiveSessions {
         this.admission.retire(id);
       }
       if (remote) this.chargeOpenTime(id);
-      if (uncertain) this.chargeOpenTime(id, holdUntil);
+      if (uncertain) this.chargeOpenTime(id);
     })();
     this.reaping.set(id, promise);
     return promise.finally(() => { this.reaping.delete(id); });

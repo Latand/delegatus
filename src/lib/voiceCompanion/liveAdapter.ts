@@ -22,7 +22,8 @@ const CONTINUE_MS = 1_500;
  * audio is heard at once, its words come with the next poll. A stretch of audio
  * plays the oldest line nothing has played yet, or carries on the line it
  * paused in; with no such line it waits, mouth moving, and takes the next line
- * that arrives, even after it stopped. A barge-in cuts it, and lines already
+ * that arrives, even after it stopped. Stretches waiting for words take them
+ * oldest first. A barge-in cuts it, and lines already
  * shown that never played stay unplayed. */
 export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
   readonly mode = "official-realtime";
@@ -145,20 +146,23 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
     return promise.finally(() => { if (this.poll === promise) this.poll = null; });
   }
   private clock(): number { return this.options.now?.() ?? performance.now(); }
-  /** A companion line's words arrived: audio that waits for its line takes it. */
+  /** A companion line's words arrived: the oldest audio still waiting for its
+   * line takes it. Audio that already finished came first, so it goes before
+   * the stretch playing now, which waits for the line after. */
   private arrived(itemId: string): void {
     if (this.outputs.includes(itemId)) return;
     this.outputs = [...this.outputs, itemId].slice(-64);
+    const finished = this.unbound.shift();
+    if (finished) {
+      this.claimed.add(itemId);
+      this.emit({ type: "playback.stopped", responseId: finished.responseId, itemId, playedMs: finished.playedMs, reason: finished.reason });
+      return;
+    }
     if (this.playing && !this.playing.bound) {
       this.claimed.add(itemId);
       Object.assign(this.playing, { itemId, bound: true });
       this.emit({ type: "playback.started", responseId: this.playing.responseId, itemId, playedMs: this.playing.playedMs });
-      return;
     }
-    const finished = this.unbound.shift();
-    if (!finished) return;
-    this.claimed.add(itemId);
-    this.emit({ type: "playback.stopped", responseId: finished.responseId, itemId, playedMs: finished.playedMs, reason: finished.reason });
   }
   private playback(sample: { rms: number; playedMs: number; speaking: boolean }): void {
     if (!this.sessionId) return;

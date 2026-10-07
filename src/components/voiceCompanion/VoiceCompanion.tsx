@@ -1000,12 +1000,19 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
         <span className="vc-call-name">{DELEGATION_TOOL}</span>
         {delegation.stage === "refused" ? <p className="vc-deleg-note" data-companion-refused={delegation.refusal ?? ""}>{delegation.refusal === "no_orchestrator" ? companionErrorMessage("no_orchestrator", speechLocaleOf(locale)) : t("voiceCompanion.refused")}</p> : null}
         {delegation.stage === "cancelled" && delegation.refusal ? <p className="vc-deleg-note" data-companion-withdrawn={delegation.refusal}>{t(UNSENT_NOTE[delegation.refusal] ?? "voiceCompanion.withdrawn")}</p> : null}
-        {/* The model's own reason for asking first, and the two ways to answer. */}
-        {delegation.stage === "awaiting-confirmation" && delegation.proposal?.confirmation ? <p className="vc-deleg-note" data-companion-confirm-reason>{delegation.proposal.confirmation.reason}</p> : null}
-        {delegation.stage === "awaiting-confirmation" || delegation.stage === "sending" || delegation.stage === "queued" || delegation.stage === "delivered" || delegation.stage === "unknown" || delegation.stage === "answered" ? (
+        {/* The model's own reason for asking first, the whole request and the spoken way to answer, read as one
+            body that scrolls in a short lane, so the card keeps to the lane with its head and both buttons in view. */}
+        {delegation.stage === "awaiting-confirmation" ? (
+          <div className="vc-deleg-body" tabIndex={0} data-companion-confirm-body>
+            {/* A Send that was lost on its way: said first, where the body opens, above what it would send. */}
+            {delegation.proposal && unconfirmedFor.has(delegation.proposal.proposalId) ? <p className="vc-deleg-note vc-deleg-wait" role="alert" data-companion-delegation-notice="DELIVERY_UNCONFIRMED">{companionErrorMessage("SEND_UNCONFIRMED", speechLocaleOf(locale))}</p> : null}
+            {delegation.proposal?.confirmation ? <p className="vc-deleg-note" data-companion-confirm-reason>{delegation.proposal.confirmation.reason}</p> : null}
+            <p className="vc-instruction" data-companion-instruction>{delegation.instruction}</p>
+            <p className="vc-deleg-note vc-deleg-wait" data-companion-confirm-hint>{t("voiceCompanion.confirmHint")}</p>
+          </div>
+        ) : delegation.stage === "sending" || delegation.stage === "queued" || delegation.stage === "delivered" || delegation.stage === "unknown" || delegation.stage === "answered" ? (
           <p className="vc-instruction" tabIndex={0} data-companion-instruction>{delegation.instruction}</p>
         ) : null}
-        {delegation.stage === "awaiting-confirmation" ? <p className="vc-deleg-note vc-deleg-wait" data-companion-confirm-hint>{t("voiceCompanion.confirmHint")}</p> : null}
         {delegation.stage === "awaiting-confirmation" ? (
           <div className="vc-acts">
             <button type="button" className="vc-act" data-companion-cancel disabled={!!delegation.proposal && decidedFor.has(delegation.proposal.proposalId)} onClick={() => delegation.proposal && decide(delegation.proposal.proposalId, "cancel")}><X size={14} aria-hidden />{t("voiceCompanion.cancel")}</button>
@@ -1020,7 +1027,6 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
           </div>
         ) : null}
         {/* What is still owed after the send: the reply tied to this request, or the proof that it arrived. */}
-        {delegation.stage === "awaiting-confirmation" && delegation.proposal && unconfirmedFor.has(delegation.proposal.proposalId) ? <p className="vc-deleg-note vc-deleg-wait" role="alert" data-companion-delegation-notice="DELIVERY_UNCONFIRMED">{companionErrorMessage("SEND_UNCONFIRMED", speechLocaleOf(locale))}</p> : null}
         {delegation.notice && delegation.stage !== "answered" ? <p className="vc-deleg-note vc-deleg-wait" data-companion-delegation-notice={delegation.notice}>{companionErrorMessage(delegation.notice, speechLocaleOf(locale))}</p> : null}
       </div>
     );

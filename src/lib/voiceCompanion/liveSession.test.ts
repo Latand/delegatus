@@ -933,3 +933,45 @@ test("one completed request reaches the orchestrator once whatever Live delegati
     await f.service.close(s.sessionId);
   }
 });
+
+test("a request already acted on never authorizes a later turn through the lookback: thanks, a greeting, other speech and model repeats add no send, also after a restart", async () => {
+  for (const after of ["Thanks.", "Hello again.", "The weather is nice today.", "Дякую."]) {
+    fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
+    const f = fixture();
+    f.provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output") ? backendResponse(`resp_${index}`, [message("Sent.")])
+      : backendResponse(`resp_${index}`, [functionCall(`call-${index}`, "request_orchestrator_delegation", { instruction: "Review the plan" })]);
+    const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+    f.provider.replay(s.providerId, said("Ask the orchestrator to review the plan.", 0), delegationCreated("delegation_first", 600));
+    await f.service.drain(s.sessionId);
+    expect(f.sends()).toBe(1);
+    f.provider.replay(s.providerId, said("Sent.", 1_000, "output"), said(after, 3_000), delegationCreated("delegation_thanks", 3_600));
+    await f.service.drain(s.sessionId);
+    const rows = Object.values(f.admission.session(s.sessionId).proposals);
+    expect([after, f.sends(), new Set(rows.map(row => row.delivery?.clientMessageId)).size]).toEqual([after, 1, 1]);
+    // A restarted admission over the same record, asked for the later turn, sends nothing either.
+    const thanksTurn = f.admission.session(s.sessionId).inputs.at(-1)!.turn;
+    const again = new CompanionAdmission(f.storage, { recipient: () => ({ project: "fixture", conversationId: "conversation_fixture", seatEpoch: 1, engine: "claude" }),
+      send: async () => { throw new Error("unexpected delivery"); }, reports: () => [] });
+    expect((await again.delegate(s.sessionId, "call-restart", "delegation-restart", "Review the plan", { sourceTurn: thanksTurn })).state).toBe("refused");
+    expect((await again.delegate(s.sessionId, "call-other", "delegation-other", "Merge the branch", { sourceTurn: thanksTurn })).state).toBe("refused");
+    // A genuine new explicit request is its own request.
+    f.provider.replay(s.providerId, said("Sure.", 4_000, "output"), said("Ask the orchestrator to merge the branch.", 6_000), delegationCreated("delegation_new", 6_600));
+    await f.service.drain(s.sessionId);
+    expect([after, f.sends()]).toEqual([after, 2]);
+    await f.service.close(s.sessionId);
+  }
+});
+
+test("a model repeat of a sent request while the next turn is still arriving adds no send", async () => {
+  const f = fixture();
+  f.provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output") ? backendResponse(`resp_${index}`, [message("Sent.")])
+    : backendResponse(`resp_${index}`, [functionCall(`call-${index}`, "request_orchestrator_delegation", { instruction: "Review the plan" })]);
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  f.provider.replay(s.providerId, said("Ask the orchestrator to review the plan.", 0), delegationCreated("delegation_first", 600));
+  await f.service.drain(s.sessionId);
+  f.provider.replay(s.providerId, said("Sent.", 1_000, "output"),
+    { type: "session.input_transcript.delta", event_id: "unfinished", delta: "Thanks", start_ms: 3_000, end_ms: 3_400 }, delegationCreated("delegation_repeat", 3_200));
+  await f.service.drain(s.sessionId);
+  expect(f.sends()).toBe(1);
+  await f.service.close(s.sessionId);
+});

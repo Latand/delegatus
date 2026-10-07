@@ -42,7 +42,14 @@
           "height": 30,
           "labelContrast": 5.17
         }
-      ]
+      ],
+      "floatersInsideLane": true,
+      "lane": {
+        "x": 36,
+        "y": 206,
+        "width": 280,
+        "height": 360
+      }
     },
     {
       "viewport": "1440x900",
@@ -83,7 +90,14 @@
           "height": 30,
           "labelContrast": 5.68
         }
-      ]
+      ],
+      "floatersInsideLane": true,
+      "lane": {
+        "x": 36,
+        "y": 206,
+        "width": 280,
+        "height": 360
+      }
     },
     {
       "viewport": "1440x900",
@@ -124,7 +138,14 @@
           "height": 30,
           "labelContrast": 5.17
         }
-      ]
+      ],
+      "floatersInsideLane": true,
+      "lane": {
+        "x": 36,
+        "y": 206,
+        "width": 280,
+        "height": 360
+      }
     },
     {
       "viewport": "1440x900",
@@ -165,7 +186,14 @@
           "height": 30,
           "labelContrast": 5.68
         }
-      ]
+      ],
+      "floatersInsideLane": true,
+      "lane": {
+        "x": 36,
+        "y": 206,
+        "width": 280,
+        "height": 360
+      }
     },
     {
       "viewport": "1000x800",
@@ -206,7 +234,14 @@
           "height": 30,
           "labelContrast": 5.17
         }
-      ]
+      ],
+      "floatersInsideLane": true,
+      "lane": {
+        "x": 574,
+        "y": 292,
+        "width": 280,
+        "height": 260
+      }
     },
     {
       "viewport": "1000x800",
@@ -247,7 +282,14 @@
           "height": 30,
           "labelContrast": 5.68
         }
-      ]
+      ],
+      "floatersInsideLane": true,
+      "lane": {
+        "x": 574,
+        "y": 292,
+        "width": 280,
+        "height": 260
+      }
     },
     {
       "viewport": "1000x800",
@@ -288,7 +330,14 @@
           "height": 30,
           "labelContrast": 5.17
         }
-      ]
+      ],
+      "floatersInsideLane": true,
+      "lane": {
+        "x": 450,
+        "y": 372,
+        "width": 280,
+        "height": 180
+      }
     },
     {
       "viewport": "1000x800",
@@ -329,7 +378,14 @@
           "height": 30,
           "labelContrast": 5.68
         }
-      ]
+      ],
+      "floatersInsideLane": true,
+      "lane": {
+        "x": 450,
+        "y": 372,
+        "width": 280,
+        "height": 180
+      }
     }
   ],
   "spokenAnswer": [

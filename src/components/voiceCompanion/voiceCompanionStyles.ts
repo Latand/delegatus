@@ -232,10 +232,18 @@ export const VOICE_COMPANION_CSS = `
 }
 /* No taller than the lane holds (\`--vc-room\`, the lane less the room kept at its ends): in a short lane the request's
    text and the answer give up height first and scroll inside the card, so the card never stands out of the lane's
-   far end over the page. A proposal that waits keeps its whole height: its reason, its text and both buttons. */
-.vc .vc-call.vc-deleg:not([data-stage="awaiting-confirmation"]) { max-height: var(--vc-room, none); }
+   far end over the page. A proposal that waits keeps its head and both buttons in view; its reason, its whole
+   text and the spoken way to answer scroll together as one body, which keeps two lines at the least. */
+.vc .vc-call.vc-deleg { max-height: var(--vc-room, none); }
 .vc-deleg > * { flex: none; }
 .vc-deleg > .vc-instruction, .vc-deleg > .vc-answer { flex: 0 1 auto; min-height: 0; }
+.vc-deleg > .vc-deleg-body {
+  flex: 0 1 auto; min-height: 36px; display: flex; flex-direction: column; gap: 4px; overflow-y: auto; overscroll-behavior: contain;
+  border-radius: 8px; outline: none;
+}
+.vc-deleg-body:focus-visible { box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-info) 45%, transparent); }
+.vc-deleg-body > * { flex: none; }
+.vc-deleg-body > .vc-instruction, .vc-deleg-body > .vc-deleg-note { max-height: none; overflow: visible; }
 .vc-deleg-head { display: flex; align-items: center; gap: 6px; font-weight: 700; color: var(--vc-teal-ink); }
 .vc-deleg-head .vc-call-icon { width: 20px; height: 20px; border-radius: 6px; background: color-mix(in srgb, var(--color-info) 18%, transparent); color: var(--vc-teal-ink); }
 .vc-deleg[data-stage="refused"] .vc-call-icon, .vc-deleg[data-stage="failed"] .vc-call-icon, .vc-deleg[data-stage="unknown"] .vc-call-icon { color: var(--color-danger); background: var(--color-danger-soft); }

@@ -18,7 +18,7 @@ import type { ScriptStep } from "./simulator";
  */
 
 export const SCENARIOS = ["short", "three", "paragraph", "long", "many", "burst", "delegation", "interrupt", "read", "reads", "readLong"] as const;
-export const DRIVER_SCENARIOS = ["proposal", "voiceConfirm", "edge", "withdraw", "demo", "demoNoSeat", "readThenAsk", "unconfirmed"] as const;
+export const DRIVER_SCENARIOS = ["proposal", "voiceConfirm", "edge", "withdraw", "demo", "demoNoSeat", "readThenAsk", "readThenAskLong", "unconfirmed"] as const;
 export type ScenarioName = (typeof SCENARIOS)[number] | (typeof DRIVER_SCENARIOS)[number];
 
 export const isScenario = (value: unknown): value is ScenarioName =>
@@ -61,6 +61,8 @@ const TEXT = {
     instruction: "Review the export plan: three presets and one advanced sheet, with the old keys still readable.",
     readback: "I'm not sure which plan you mean. Shall I ask the atlas orchestrator to review the export plan?",
     unsure: "I am not sure which plan is meant.",
+    instructionLong: "Review the export plan end to end: three presets for the common cases (quick, full and archive), one advanced sheet that opens from the preset menu for the eleven rare switches, the old saved keys still readable, and a note on which of last month's saved exports change their defaults.",
+    unsureLong: "I am not sure which plan is meant: the presets draft from Monday or the advanced sheet proposal from Thursday.",
     sent: "Sent. I'll tell you when it answers.",
     askCritical: "Tell the orchestrator to delete the old export presets.",
     instructionCritical: "Delete the old export presets: every preset saved before the three new ones.",
@@ -114,6 +116,8 @@ const TEXT = {
     instruction: "Перевір план експорту: три пресети й один розширений аркуш, старі ключі лишаються читабельними.",
     readback: "Я не певен, про який план мова. Попросити оркестратора atlas перевірити план експорту?",
     unsure: "Я не певен, про який план мова.",
+    instructionLong: "Перевір план експорту від початку до кінця: три пресети для типових випадків (швидкий, повний і архівний), один розширений аркуш, що відкривається з меню пресетів, для одинадцяти рідкісних перемикачів, старі збережені ключі лишаються читабельними, і примітка про те, які з минуломісячних збережених експортів змінять типові значення.",
+    unsureLong: "Я не певен, про який план мова: про чернетку пресетів із понеділка чи про пропозицію розширеного аркуша з четверга.",
     sent: "Надіслав. Скажу, коли він відповість.",
     askCritical: "Скажи оркестратору видалити старі пресети експорту.",
     instructionCritical: "Видали старі пресети експорту: усі, збережені до трьох нових.",
@@ -187,11 +191,11 @@ function delegationSteps(locale: Locale): ScriptStep[] {
 }
 
 /** The exception: the model is unsure and asks first. The card waits for a tap; these scripts leave the answer to the driver. */
-function confirmationSteps(locale: Locale, readback: Partial<Extract<ScriptStep, { kind: "companion" }>> | null = {}): ScriptStep[] {
+function confirmationSteps(locale: Locale, readback: Partial<Extract<ScriptStep, { kind: "companion" }>> | null = {}, long = false): ScriptStep[] {
   const t = TEXT[locale];
   return [
     { kind: "operator", itemId: DEMO_IDS.askItem, text: t.ask },
-    { kind: "propose", callId: DEMO_IDS.callId, proposalId: DEMO_IDS.proposalId, sourceItemId: DEMO_IDS.askItem, instruction: t.instruction, confirm: t.unsure },
+    { kind: "propose", callId: DEMO_IDS.callId, proposalId: DEMO_IDS.proposalId, sourceItemId: DEMO_IDS.askItem, instruction: long ? t.instructionLong : t.instruction, confirm: long ? t.unsureLong : t.unsure },
     ...(readback ? [companion("readback", t.readback, readback)] : []),
     { kind: "deliver", clientMessageId: DEMO_IDS.clientMessageId, operationId: DEMO_IDS.operationId, settleAfterMs: 1100, cancelled: [companion("cancel", t.notSent)] },
   ];
@@ -277,8 +281,8 @@ export function scenarioScript(name: ScenarioName, locale: Locale): ScriptStep[]
       /* The operator speaks over the question and takes the request back: the card leaves, and nothing is left to send. */
       return [pause(300), ...confirmationSteps(locale, { bargeIn: { afterMs: 1_400, itemId: "item_op_hold", text: t.hold } }).map((step) => (step.kind === "deliver" ? { ...step, cancelled: [] } : step)), companion("dropped", t.dropped)];
     /* A read call and the waiting confirmation in the lane together, so the two kinds of card can be compared side by side. */
-    case "readThenAsk": {
-      const [ask, ...rest] = confirmationSteps(locale, null);
+    case "readThenAsk": case "readThenAskLong": {
+      const [ask, ...rest] = confirmationSteps(locale, null, name === "readThenAskLong");
       return [pause(300), ask!, reads("ask", [t.readCall], [700]), ...rest];
     }
     /* The send's outcome stays unknown: the card says the delivery is not confirmed, and no answer is claimed. */
