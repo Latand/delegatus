@@ -219,6 +219,8 @@ and **Pipeline actions** opens as a page with a back row. A column's ⋯, a
 conversation's ⋯ and the board's ⋯ follow the same layout, and the board's ⋯
 keeps merging and the orchestrator's switches on pages of their own.
 
+![A task card's ⋯ menu open on the board: the four columns in a row, icon actions to rename, describe, attach and hide with a line saying one agent keeps working, the three priorities, and the Appearance, Pipeline actions and More rows](docs/media/readme/card-menu.svg)
+
 When an agent has screens for you to judge, it publishes them as a prototype
 review on the task, a few numbered variants with a name and a short
 description each. The card gets a **Prototype** button, and the

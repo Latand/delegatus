@@ -129,6 +129,21 @@ export const SHOTS: ReadmeShot[] = [
     description: "A pipeline opened from its card: the stage graph with its fail edge, and each stage's conversation side by side.",
   },
   {
+    id: "card-menu",
+    target: { kind: "project", project: "harbor-api" },
+    viewport: DESKTOP,
+    requiredText: ["Idempotent refunds", "Inbox", "Done", "Top of the Inbox", "Appearance", "Pipeline actions", "keeps working"],
+    absentText: ["tmux", "Untitled task"],
+    prepare: async (page) => {
+      await foldOrchestrator(page);
+      await page.waitForTimeout(500);
+      await clickLabel(page, "Actions for «Idempotent refunds»");
+      await page.waitForSelector('[role="menu"]');
+      await page.waitForTimeout(400);
+    },
+    description: "A task card's ⋯ menu: the columns in a row, icon actions with what hiding leaves running, the priorities, and the sections that open in place.",
+  },
+  {
     id: "accounts",
     target: { kind: "project", project: "harbor-api" },
     viewport: DESKTOP,
