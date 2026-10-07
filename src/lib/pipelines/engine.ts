@@ -3405,6 +3405,129 @@ function routeFailedAttempt(
   return false;
 }
 
+/**
+ * The one repair a passed stage gets when a repository hook refuses its commit.
+ *
+ * Production lane dfcb63ab passed a read-only study whose declared output had
+ * one line ending in a space. The pre-commit hook refused the controller's
+ * commit, the lane parked, and the operator had to rewrite the stage prompt and
+ * run the stage again by hand, while the agent that wrote the file was sitting
+ * idle with the whole context. The hook's output is the instruction, so it goes
+ * back to that conversation once and the same commit runs again through the
+ * same hook.
+ *
+ * Only for a refusal the stage's own files can answer (`StageCommitRefusal`),
+ * only for a pane-less structured attempt with a delivery seam, and only once:
+ * the next refusal parks with what the hook printed, as every refusal did
+ * before. The read-only fence is the committer's and is untouched, so a repair
+ * that leaves an undeclared path changed parks there. The whole wait is bounded
+ * by `refusedAt`, which covers a delivery surface that keeps refusing and a
+ * repair turn that never ends.
+ */
+const COMMIT_REPAIR_WAIT_MS = 20 * 60_000;
+const COMMIT_REPAIR_DETAIL = "a commit hook refused the passed stage's files; the stage is repairing them once";
+const COMMIT_REPAIR_OUTPUT_CHARS = 4_000;
+const COMMIT_REPAIR_PATHS = 50;
+
+function stageCommitRepairText(stage: PipelineStage, attempt: PipelineStageAttempt, detail: string, paths: readonly string[]): string {
+  const outputs = attemptStage(stage, attempt).outputs ?? [];
+  const readOnly = attempt.effectiveRole.access !== "read-write";
+  return [
+    "Your stage passed, and the repository's commit hook then refused the pipeline controller's commit of your work."
+      + " The verdict you gave stands; nothing about it is in question.",
+    `What the hook printed:\n${redactBounded(detail, COMMIT_REPAIR_OUTPUT_CHARS)}`,
+    `Files in the refused commit:\n${paths.map((file) => `- ${file}`).join("\n")}`,
+    readOnly
+      ? `Repair those files so the hook accepts them. This stage is read-only: change only its declared outputs (${outputs.join(", ")}),`
+        + " leave every other path exactly as it is, and do not commit, stage or push. The controller commits when your turn ends."
+      : "Repair those files so the hook accepts them and leave the result in the worktree or in a commit of your own on this branch;"
+        + " the controller commits whatever is uncommitted when your turn ends.",
+    "The hook decides again on that commit, so fix what it names: never skip, disable or bypass it (no --no-verify, no skip variable,"
+      + " no hook path change). If the refusal is something your files cannot fix, change nothing and say so in one line."
+      + " No new stage report is needed. This is the only repair turn; a second refusal parks the stage for the operator.",
+  ].join("\n\n");
+}
+
+async function sendStageCommitRepair(
+  pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, ports: PipelinePorts,
+): Promise<boolean> {
+  const repair = attempt.commitRepair!;
+  const conversationId = attempt.conversationId!;
+  /* Somebody's prompt is already on its way to this conversation. */
+  if (ports.conversationDeliveryOutstanding?.(conversationId) === true) return false;
+  /* Stable across ticks and processes, so a replay cannot mint a second ask. */
+  const clientMessageId = `stage-commit-repair-${pipeline.id}-${stage.id}-${attempt.n}`;
+  const delivered = await ports.resumeSeveredTurn!({
+    conversationId,
+    transcriptPath: attempt.agentPath!,
+    clientMessageId,
+    text: stageCommitRepairText(stage, attempt, repair.detail, repair.paths),
+    project: pipeline.project,
+    cwd: pipeline.repoDir,
+    ...(attempt.startedAt ? { cohortAt: attempt.startedAt } : {}),
+  });
+  if (delivered !== true) return false;
+  repair.requestedAt = ports.now();
+  repair.clientMessageId = clientMessageId;
+  return true;
+}
+
+/** True when the refusal was handed to the stage, or is still owed to it. */
+async function requestStageCommitRepair(
+  pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
+  result: Extract<import("./git").PipelineGitResult, { ok: false }>, ports: PipelinePorts, persist: () => void | Promise<void>,
+): Promise<boolean> {
+  if (!result.commitRefusal?.repairable || attempt.commitRepair) return false;
+  if (stage.kind !== "run" || attempt.paneId || !attempt.conversationId || !attempt.agentPath || !ports.resumeSeveredTurn) return false;
+  const durable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, undefined, attempt.startedAt);
+  attempt.commitRepair = {
+    refusedAt: ports.now(),
+    detail: result.error,
+    paths: result.commitRefusal.paths.slice(0, COMMIT_REPAIR_PATHS),
+    messageTs: durable?.message?.ts ?? null,
+  };
+  await sendStageCommitRepair(pipeline, stage, attempt, ports);
+  pipeline.stateDetail = COMMIT_REPAIR_DETAIL;
+  await persist();
+  return true;
+}
+
+/** False while a requested repair is still out: the commit waits for it. */
+async function stageCommitRepairSettled(
+  pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
+  ports: PipelinePorts, persist: () => void | Promise<void>,
+): Promise<boolean> {
+  const repair = attempt.commitRepair;
+  if (!repair || repair.settledAt) return true;
+  const expired = unixMs(ports.now()) - unixMs(repair.refusedAt) >= COMMIT_REPAIR_WAIT_MS;
+  const giveUp = async (why: string) => {
+    repair.settledAt = ports.now();
+    park(pipeline, `${repair.detail}\n${why}`, attempt);
+    await persist();
+    return false;
+  };
+  if (!attempt.conversationId || !attempt.agentPath || !ports.resumeSeveredTurn) return true;
+  if (!repair.requestedAt) {
+    if (expired) return giveUp("The stage could not be asked to repair its files: its conversation accepted no message.");
+    if (await sendStageCommitRepair(pipeline, stage, attempt, ports)) await persist();
+    return false;
+  }
+  const durable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, undefined, attempt.startedAt);
+  const answered = durable?.turn === "terminal" && (durable.message?.ts ?? 0) > (repair.messageTs ?? 0)
+    && (durable.lastRecordAt ?? durable.message?.ts ?? 0) >= unixMs(repair.requestedAt)
+    && ports.conversationDeliveryOutstanding?.(attempt.conversationId) !== true
+    && await ports.conversationAgentActive(attempt.conversationId) !== true
+    && liveBackgroundTasks(durable.backgroundTasks ?? [], unixMs(ports.now())).length === 0;
+  if (!answered) {
+    if (expired) return giveUp("The stage was asked once to repair its files and did not finish that turn in time.");
+    return false;
+  }
+  repair.settledAt = ports.now();
+  if (pipeline.stateDetail === COMMIT_REPAIR_DETAIL) pipeline.stateDetail = null;
+  await persist();
+  return true;
+}
+
 async function commitPassedStage(
   pipeline: Pipeline,
   stage: PipelineStage,
@@ -3413,6 +3536,7 @@ async function commitPassedStage(
   persist: () => void | Promise<void>,
 ): Promise<void> {
   if (ports.deferStageGit) return;
+  if (!(await stageCommitRepairSettled(pipeline, stage, attempt, ports, persist))) return;
   const allowCommit = stage.kind === "run" && attempt.effectiveRole.access === "read-write";
   const protectedHead = stage.kind === "run" && !allowCommit ? pipeline.lastPassedCommit : null;
   let result = allowCommit
@@ -3428,6 +3552,7 @@ async function commitPassedStage(
       await persist();
       return;
     }
+    if (await requestStageCommitRepair(pipeline, stage, attempt, result, ports, persist)) return;
     park(pipeline, result.error, attempt);
     return;
   }

@@ -23,8 +23,35 @@ export type PipelineGitResult = ({ ok: true; sha: string; baseBranch?: string } 
   preservedLocalRef?: PreservedProvisionRef;
   /** The controller must retry this committing attempt after collecting fresh evidence. */
   deferred?: true;
+  /** Set only when `git commit` itself answered no for a passed stage. */
+  commitRefusal?: StageCommitRefusal;
 };
+/** What a refused stage commit was about. `repairable` is a hint for the
+    controller: the commit ran to its own exit and what it printed names a file
+    this stage staged, so the stage that wrote the file can act on it. A commit
+    that was killed, or a hook that names none of the staged files (a slot that
+    never came free, a missing tool), leaves it false. */
+export type StageCommitRefusal = { repairable: boolean; paths: string[] };
 export type PipelineBaseResult = { ok: true; baseBranch: string; baseRef: string } | { ok: false; error: string };
+
+function outputNamesPath(output: string, file: string): boolean {
+  for (let at = output.indexOf(file); at !== -1; at = output.indexOf(file, at + 1)) {
+    const before = output[at - 1] ?? "", after = output.slice(at + file.length, at + file.length + 2);
+    if (!/[\w.-]/.test(before) && !/^(?:[\w/-]|\.\w)/.test(after)) return true;
+  }
+  return false;
+}
+
+async function stageCommitRefusal(commit: ExecResult, staged: readonly string[] | null, exec: ExecPort, cwd: string): Promise<StageCommitRefusal> {
+  let paths = staged ? [...staged] : [];
+  if (!staged) {
+    const index = await exec("git", ["diff", "--cached", "--name-only", "--no-renames", "-z", "HEAD", "--"], cwd);
+    if (index.code === 0) paths = index.stdout.split("\0").filter(Boolean);
+  }
+  const output = `${commit.stderr}\n${commit.stdout}`;
+  const ended = typeof commit.code === "number" && !killedAtBound(commit);
+  return { repairable: ended && paths.some((file) => outputNamesPath(output, file)), paths };
+}
 
 function failure(step: string, result: ExecResult): { ok: false; error: string } {
   return { ok: false, error: `${step}: ${(result.stderr || result.stdout || "no output").trim()}` };
@@ -665,7 +692,10 @@ export async function commitPipelineStage(
   }
   const commit = (await exec("git", ["commit", "-m", `pipeline(${pipeline.id}): complete ${stageId}`,
     ...(receipt ? ["-m", `Delegatus-Stage-Commit: ${receipt.id}`] : [])], pipeline.worktreeDir, controllerCommitIdentityEnv()));
-  if (commit.code !== 0) return failure("committing the passed stage", commit);
+  if (commit.code !== 0) {
+    return { ...failure("committing the passed stage", commit),
+      commitRefusal: await stageCommitRefusal(commit, allowCommit ? null : changedOutputPaths, exec, pipeline.worktreeDir) };
+  }
   const head = (await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir));
   if (head.code !== 0 || !head.stdout.trim()) return failure("recording the passed stage commit", head);
   if (receipt && receiptFile) {

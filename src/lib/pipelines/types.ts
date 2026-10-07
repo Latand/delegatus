@@ -515,6 +515,23 @@ export type PipelineStageAttempt = {
     requestedAt?: string;
     clientMessageId?: string;
   };
+  /** The one repair the controller asked this attempt for after a repository
+      hook refused the commit of its passed work over a file the stage itself
+      staged. `detail` is the park text that refusal would have produced and
+      `messageTs` the stage's last message when it was refused, so the repair
+      is over on the first completed turn after it. `requestedAt` is set once
+      the delivery surface accepted the request and `settledAt` once the commit
+      was tried again; `refusedAt` bounds the whole wait. A refusal that finds
+      this record already written parks. */
+  commitRepair?: {
+    refusedAt: string;
+    detail: string;
+    paths: string[];
+    messageTs: number | null;
+    requestedAt?: string;
+    clientMessageId?: string;
+    settledAt?: string;
+  };
   /** Spawn calls this attempt has made across its activations, immediate
       handshake retries included (#1678). Each consumed one client attempt id,
       so the next retry index starts here. Persisted before the call is made:
