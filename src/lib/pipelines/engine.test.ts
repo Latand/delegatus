@@ -16338,7 +16338,10 @@ test("a COMMENT review flow routes only on findings the review itself reported (
 });
 
 
-async function stagedRecoveryHarness(mode: "timeout" | "reset" | "busy" | "503" | "uncertain" | "turn-started" | "absent" | "permanent" | "held" = "timeout") {
+async function stagedRecoveryHarness(
+  mode: "timeout" | "reset" | "busy" | "503" | "uncertain" | "turn-started" | "absent" | "permanent" | "held" = "timeout",
+  options: { hostProcess?: { pid: number; startIdentity: string | null }; nativeTranscript?: boolean } = {},
+) {
   const h = harness();
   let clock = Date.now();
   h.ports.now = () => new Date(clock).toISOString();
@@ -16352,8 +16355,8 @@ async function stagedRecoveryHarness(mode: "timeout" | "reset" | "busy" | "503" 
   const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
   const root = fs.mkdtempSync(path.join(process.env.LLV_STATE_DIR!, "staged-recovery-"));
   const registry = new AgentRegistry(path.join(root, "registry.json"));
-  const artifactPath = path.join(root, "session.jsonl");
   const sessionId = crypto.randomUUID();
+  const artifactPath = path.join(root, options.nativeTranscript ? `rollout-2026-10-07T11-22-37-${sessionId}.jsonl` : "session.jsonl");
   let starts = 0;
   let messages = 0;
   let failures = ["timeout", "reset", "busy", "503", "held"].includes(mode) ? 2 : 0;
@@ -16411,7 +16414,7 @@ async function stagedRecoveryHarness(mode: "timeout" | "reset" | "busy" | "503" 
       now: () => clock,
       bindHost: async (store, key, _host, owner, epoch) => {
         const entry = store.readOnlySnapshot().entries[`codex:${key.sessionId}`]!;
-        store.setStructuredHostClaimed(key, { ...entry.structuredHost!, process: { pid: process.pid, startIdentity: "fixture" } }, "live", owner, epoch);
+        store.setStructuredHostClaimed(key, { ...entry.structuredHost!, process: options.hostProcess ?? { pid: process.pid, startIdentity: "fixture" } }, "live", owner, epoch);
         return () => {};
       },
       publishHost: async () => { await client.producerCursor("codex-app-server", "test:"); return async () => {}; },
@@ -16502,8 +16505,8 @@ test("an uncertain send missing from lookup exhausts its budget without another 
    No probe ran again, the ten-minute budget ran out on the wall clock, and the
    lane parked on "runtime host recovery exhausted" while its agent was
    committing the fix; its stage_report then answered STAGE_REPORT_SETTLED. */
-async function aliveStagedLaunch() {
-  const f = await stagedRecoveryHarness("absent");
+async function aliveStagedLaunch(options: Parameters<typeof stagedRecoveryHarness>[1] = {}) {
+  const f = await stagedRecoveryHarness("absent", options);
   await tickPipelines([], f.h.ports);
   await f.wake();
   expect(f.attempt().state).toBe("spawning");
@@ -16536,29 +16539,114 @@ test("a staged launch whose agent is working is adopted when spawn recovery spen
   expect(f.starts()).toBe(1);
 });
 
-test("a live stage host whose first message is still queued keeps the attempt watched, and a lost host parks as before", async () => {
-  const f = await aliveStagedLaunch();
-  const scheduled: number[] = [];
-  f.h.ports.scheduleTick = (delay) => { scheduled.push(delay); };
-  let hostLostAt: string | null = null;
-  f.h.ports.conversationHostUnavailableSince = async () => hostLostAt;
-  f.advance(10 * 60_000);
-  await f.wake();
-  let pipeline = loadPipelines()[0]!;
-  expect(pipeline.state).toBe("running");
-  expect(f.attempt()).toMatchObject({ state: "spawning", error: null });
-  expect(pipeline.stateDetail).toMatch(/^the stage host is alive and has not answered its first message yet; spawn recovery spent its 10-minute budget after \d+ checks and keeps watching, next check at \S+$/);
-  expect(scheduled.at(-1)).toBe(30_000);
-  // Still alive on later ticks: the detail stays one bounded line.
-  await f.wake();
-  expect(loadPipelines()[0]!.stateDetail!.length).toBeLessThan(200);
+/** A host process this test started, with the start identity the kernel
+    reports for it; `end` stops it by that pid and waits for it to be reaped. */
+async function stageHostChild() {
+  const { procBackend } = await import("@/lib/proc");
+  const child = spawn("sleep", ["300"], { stdio: "ignore" });
+  const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+  const pid = child.pid!;
+  const identity = { pid, startIdentity: procBackend.processIdentity(pid) };
+  expect(identity.startIdentity).not.toBeNull();
+  return { process: identity, end: async () => { if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); await exited; } };
+}
 
-  hostLostAt = f.h.ports.now();
-  await f.wake();
-  pipeline = loadPipelines()[0]!;
-  expect(pipeline).toMatchObject({ state: "needs_decision", stateDetail: expect.stringMatching(/^stage spawn recovery stopped: runtime host recovery exhausted after \d+ checks/) });
-  expect(f.attempt().state).toBe("needs_decision");
-  expect(f.messages()).toBe(1);
+/** The registry seams production reads, over the harness's own registry: the
+    launch receipt, its failure write and the host's process evidence. A fresh
+    port set per call, so no snapshot outlives the write it should see. */
+function productionHostSeams(f: Awaited<ReturnType<typeof stagedRecoveryHarness>>) {
+  setAgentRegistryForTests(f.registry);
+  const ports = () => defaultPipelinePorts();
+  Object.assign(f.h.ports, {
+    spawnReceipt: (launchId: string) => ports().spawnReceipt(launchId),
+    failStageLaunch: (launchId: string, conversationId: string, reason: string) => ports().failStageLaunch!(launchId, conversationId, reason),
+    conversationHostUnavailableSince: (conversationId: string) => ports().conversationHostUnavailableSince!(conversationId),
+    conversationHostProcess: (conversationId: string) => ports().conversationHostProcess!(conversationId),
+  } satisfies Partial<PipelinePorts>);
+}
+
+test("a live stage host whose first message is still queued keeps the attempt watched, and a lost host parks as before", async () => {
+  const host = await stageHostChild();
+  try {
+    const f = await aliveStagedLaunch({ hostProcess: host.process, nativeTranscript: true });
+    productionHostSeams(f);
+    const scheduled: number[] = [];
+    f.h.ports.scheduleTick = (delay) => { scheduled.push(delay); };
+    f.advance(10 * 60_000);
+    await f.wake();
+    let pipeline = loadPipelines()[0]!;
+    expect(pipeline.state).toBe("running");
+    expect(f.attempt()).toMatchObject({ state: "spawning", error: null, completedAt: null });
+    expect(pipeline.stateDetail).toMatch(new RegExp(`^the stage host \\(pid ${host.process.pid}\\) is alive and has not answered its first message yet; spawn recovery spent its 10-minute budget after \\d+ checks and keeps watching, next check at \\S+$`));
+    expect(scheduled.at(-1)).toBe(30_000);
+    // Still alive on later ticks: the detail stays one bounded line.
+    await f.wake();
+    expect(loadPipelines()[0]!.stateDetail!.length).toBeLessThan(200);
+
+    await host.end();
+    await f.wake();
+    pipeline = loadPipelines()[0]!;
+    expect(pipeline).toMatchObject({ state: "needs_decision", stateDetail: expect.stringMatching(/^stage spawn recovery stopped: runtime host recovery exhausted after \d+ checks/) });
+    expect(f.attempt().state).toBe("needs_decision");
+    expect(f.messages()).toBe(1);
+    expect(f.starts()).toBe(1);
+  } finally {
+    setAgentRegistryForTests(null);
+    await host.end();
+  }
+});
+
+test("a launch whose recorded host process has exited and whose transcript holds no turn settles as before, however long it waits", async () => {
+  const host = await stageHostChild();
+  await host.end();
+  try {
+    const f = await aliveStagedLaunch({ hostProcess: host.process, nativeTranscript: true });
+    productionHostSeams(f);
+    f.advance(24 * 60 * 60_000);
+    for (let tick = 0; tick < 3; tick++) await f.wake();
+    const pipeline = loadPipelines()[0]!;
+    expect(pipeline).toMatchObject({ state: "needs_decision", stateDetail: expect.stringMatching(/^stage spawn recovery stopped: runtime host recovery exhausted after \d+ checks/) });
+    expect(f.attempt().state).toBe("needs_decision");
+    expect(f.messages()).toBe(1);
+    expect(f.starts()).toBe(1);
+  } finally {
+    setAgentRegistryForTests(null);
+  }
+});
+
+test("an unpublished launch whose host is verified alive survives the tick that spends its recovery budget", async () => {
+  const host = await stageHostChild();
+  try {
+    const f = await stagedRecoveryHarness("timeout", { hostProcess: host.process, nativeTranscript: true });
+    productionHostSeams(f);
+    const scheduled: number[] = [];
+    f.h.ports.scheduleTick = (delay) => { scheduled.push(delay); };
+    await tickPipelines([], f.h.ports);
+    expect(f.registry.readOnlySnapshot().receipts[f.launchId()]?.state).toBe("path-pending");
+    f.advance(10 * 60_000);
+    await f.wake();
+    expect(f.registry.readOnlySnapshot().receipts[f.launchId()]?.state).toBe("path-pending");
+    const pipeline = loadPipelines()[0]!;
+    expect(pipeline).toMatchObject({ state: "running", cursor: { stageId: "build", state: "spawning" } });
+    expect(pipeline.stateDetail).toStartWith(`the stage host (pid ${host.process.pid}) is alive`);
+    expect(f.attempt()).toMatchObject({ n: 1, state: "spawning", error: null, completedAt: null, launchId: f.launchId() });
+    expect(scheduled.at(-1)).toBe(30_000);
+    await f.wake();
+    expect(f.attempt()).toMatchObject({ state: "spawning", completedAt: null });
+    expect(f.starts()).toBe(1);
+    expect(f.messages()).toBe(0);
+
+    // The same launch once its host is gone terminalizes as before.
+    await host.end();
+    await f.wake();
+    expect(f.registry.readOnlySnapshot().receipts[f.launchId()]?.state).toBe("failed");
+    expect(f.attempt()).toMatchObject({ state: "failed", error: expect.stringMatching(/^stage launch never started: runtime host recovery exhausted/) });
+    expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", stateDetail: expect.stringContaining("use retry-stage") });
+    expect(f.starts()).toBe(1);
+  } finally {
+    setAgentRegistryForTests(null);
+    await host.end();
+  }
 });
 
 test("a spawn-recovery park whose own agent then reports is reopened on that attempt and the report is accepted", async () => {

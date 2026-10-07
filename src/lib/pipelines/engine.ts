@@ -42,7 +42,7 @@ import type { DismissedBy } from "@/lib/attention/dismissalTypes";
 import { OPERATOR_PAUSE_RESUME_ACTOR, pauseResumeDetail, type PauseResumeActor } from "@/lib/pauseResumeActor";
 import { isRuntimeHostTransportFailure, runtimeHostClient, type RuntimeHostClient } from "@/lib/runtime/client";
 import { structuredHostsEnabled, supervisedRuntimeHostUnavailableReason } from "@/lib/runtime/flags";
-import { conversationTurnLiveness, outstandingDeliverySince, type TurnLivenessDependencies } from "@/lib/runtime/liveness";
+import { conversationTurnLiveness, outstandingDeliverySince, readHostProcessEvidence, type TurnLivenessDependencies } from "@/lib/runtime/liveness";
 import { structuredDeliveryPublicationState } from "@/lib/runtime/structuredDeliveryController";
 import { DELIVERY_UNVERIFIED_BY_EARLIER_EXECUTOR } from "@/lib/runtime/structuredDeliveryQueue";
 import { enqueueStructuredMessage } from "@/lib/runtime/structuredMessageDelivery";
@@ -306,6 +306,13 @@ export interface PipelinePorts {
   /** Null means hosted, a timestamp means dead/absent since then, and undefined
       means the registry cannot provide authoritative host evidence. */
   conversationHostUnavailableSince?(conversationId: string): Promise<string | null | undefined>;
+  /** Whether the process the registry records as this conversation's host is
+      running right now and is still that process: `alive` only when the pid
+      exists and its start identity matches the recorded one, `gone` when the
+      row is dead or the pid is absent or now somebody else's, `unknown` when
+      nothing recorded or observed can tell. Turn liveness answers a different
+      question: a host whose first message never landed has no turn at all. */
+  conversationHostProcess?(conversationId: string): Promise<{ state: "alive" | "gone" | "unknown"; pid: number | null }>;
   /** The newest turn a Viewer release or restart cut for this conversation, as
       its interruption obligation records it (#1835). Null when none was
       recorded, which is the answer for every conversation no deploy cut. */
@@ -1504,6 +1511,23 @@ export function defaultPipelinePorts(
         ? new Date(liveness.since).toISOString()
         : null;
     },
+    conversationHostProcess: async (conversationId) => {
+      if (!conversationId.startsWith("conversation_")) return { state: "unknown", pid: null };
+      const current = snapshot();
+      const conversation = current.conversations[conversationId as ViewerConversationId];
+      const generation = conversation?.generations.at(-1);
+      const entry = conversation && generation
+        ? current.entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })]
+        : null;
+      if (!entry) return { state: "unknown", pid: null };
+      const host = readHostProcessEvidence(entry.structuredHost?.process ?? null, dependencies.liveness);
+      const pid = host.expected?.pid ?? null;
+      if (entry.status === "dead" || entry.status === "unhosted") return { state: "gone", pid };
+      if (!host.expected) return { state: "unknown", pid };
+      if (!host.present) return { state: "gone", pid };
+      if (host.observedIdentity === null || host.expected.startIdentity === null) return { state: "unknown", pid };
+      return { state: host.observedIdentity === host.expected.startIdentity ? "alive" : "gone", pid };
+    },
     conversationInterruption: (conversationId) => {
       if (!conversationId.startsWith("conversation_")) return null;
       if (!interruptions) {
@@ -1716,6 +1740,8 @@ const SPAWN_CONTROLLER_RETRY_MAX_MS = 8_000;
 const SPAWN_HOST_WAIT_BUDGET_MS = 10 * 60_000;
 const SPAWN_HOST_RETRY_MAX_MS = 60_000;
 const SPAWN_RECOVERY_PARK_PREFIX = "stage spawn recovery stopped: ";
+/** How a recovery that spent its budget, rather than met a failure, opens its reason. */
+const STAGED_RECOVERY_EXHAUSTED = "runtime host recovery exhausted";
 /** A `remote-branch` pipeline whose remote the network failed after an
     approved review asks again on this budget (#1692). Every read may hold the
     tick for its full five-second timeout, so the backoff starts at fifteen
@@ -6502,19 +6528,30 @@ function clearStagedLaunchWait(pipeline: Pipeline, attempt: PipelineStageAttempt
   pipeline.stateDetail = null;
 }
 
-/** Terminalize only the retained launch that never acquired a transcript.
- * The registry's failed receipt fences late publication and owns retry claims. */
-function settleNeverStartedLaunch(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts, exhausted = false): boolean {
-  if (attempt.report || openRuntimeSwitch(attempt)) return false;
+/** The retained launch that never acquired a transcript and may now be
+    terminalized, with its recovery record; null when it may not. */
+function neverStartedLaunch(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts, exhausted: boolean): { recovery: StagedLaunchRecovery | null } | null {
+  if (attempt.report || openRuntimeSwitch(attempt)) return null;
   if (!attempt.launchId || !attempt.conversationId || attempt.agentPath || attempt.sessionId
     || attempt.paneId || attempt.verdict || (attempt.completedAt && pipeline.state !== "closed") || attempt.activation
-    || pipelineSurvivorRefusal(pipeline)) return false;
+    || pipelineSurvivorRefusal(pipeline)) return null;
   const receipt = ports.spawnReceipt(attempt.launchId);
   if (!receipt || receipt.conversationId !== attempt.conversationId || receipt.transcript || receipt.sessionId
-    || (attempt.state === "failed" && receipt.state === "failed")) return false;
+    || (attempt.state === "failed" && receipt.state === "failed")) return null;
   const recovery = stagedLaunchRecovery(receipt);
   const stoppedByController = attempt.error?.startsWith(SPAWN_RECOVERY_PARK_PREFIX) === true;
-  if (pipeline.state !== "closed" && !exhausted && !recovery?.stopped && !stoppedByController) return false;
+  if (pipeline.state !== "closed" && !exhausted && !recovery?.stopped && !stoppedByController) return null;
+  return { recovery };
+}
+
+/** Terminalize only the retained launch that never acquired a transcript.
+ * The registry's failed receipt fences late publication and owns retry claims.
+ * Closing the pipeline and retry-stage settle here directly; the controller's
+ * own pass asks the host first (`settleAbandonedLaunch`). */
+function settleNeverStartedLaunch(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts, exhausted = false): boolean {
+  const settlement = neverStartedLaunch(pipeline, attempt, ports, exhausted);
+  if (!settlement || !attempt.launchId || !attempt.conversationId) return false;
+  const { recovery } = settlement;
   const reason = `stage launch never started: ${pipeline.state === "closed" ? "pipeline closed" : recovery?.reason ?? attempt.error ?? "spawn recovery exhausted"}`;
   if (!ports.failStageLaunch?.(attempt.launchId, attempt.conversationId, reason)) return false;
   attempt.state = "failed";
@@ -6528,6 +6565,30 @@ function settleNeverStartedLaunch(pipeline: Pipeline, attempt: PipelineStageAtte
 /** How often a stage whose host is alive is looked at again once spawn
     recovery has spent its budget on it. */
 const STAGED_ALIVE_WATCH_MS = 30_000;
+
+/** The pid of a launch whose host process is verified running, when spawn
+    recovery's only claim against it is a spent budget. A probe that stopped on
+    a concrete failure keeps its settlement, and so does a host that is gone or
+    that nothing can verify: an unverified host earns no longer wait than the
+    budget it already had. */
+async function liveHostOfSpentLaunch(attempt: PipelineStageAttempt, recovery: StagedLaunchRecovery | null, ports: PipelinePorts): Promise<number | null> {
+  const budgetSpent = recovery
+    ? !recovery.stopped || recovery.reason.startsWith(STAGED_RECOVERY_EXHAUSTED)
+    : attempt.error?.startsWith(`${SPAWN_RECOVERY_PARK_PREFIX}${STAGED_RECOVERY_EXHAUSTED}`) === true;
+  if (!budgetSpent || !attempt.conversationId || !ports.conversationHostProcess) return null;
+  const host = await ports.conversationHostProcess(attempt.conversationId);
+  return host.state === "alive" ? host.pid : null;
+}
+
+/** The controller's pass over an open lane's never-started launches. A
+    launch whose host is verified alive is still starting, so it stays the
+    attempt's and is watched by `waitForStagedLaunch`. */
+async function settleAbandonedLaunch(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts): Promise<boolean> {
+  const settlement = neverStartedLaunch(pipeline, attempt, ports, false);
+  if (!settlement) return false;
+  if (pipeline.state !== "closed" && await liveHostOfSpentLaunch(attempt, settlement.recovery, ports) !== null) return false;
+  return settleNeverStartedLaunch(pipeline, attempt, ports);
+}
 
 /** The receipt's recovery record says only what the probes saw, and a loaded
     controller can stop probing while the agent works (2026-10-07: the first
@@ -6547,22 +6608,21 @@ async function waitForStagedLaunch(
       reopenDeliveredAttempt(pipeline, attempt, turnPath);
       return;
     }
-    // A probe that stopped on a concrete failure keeps its park; only a spent
-    // budget is overruled by a live host. The registry's turn liveness bounds
-    // the watch: a host that stops answering reads as unavailable.
-    const budgetSpent = !recovery.stopped || recovery.reason.startsWith("runtime host recovery exhausted");
-    if (budgetSpent && attempt.conversationId && await ports.conversationHostUnavailableSince?.(attempt.conversationId) === null) {
+    // The host's own process bounds the watch: the tick it is gone, or can no
+    // longer be verified, the launch settles as before.
+    const livePid = await liveHostOfSpentLaunch(attempt, recovery, ports);
+    if (livePid !== null) {
       attempt.state = "spawning";
       attempt.error = null;
       pipeline.state = "running";
       setCursorState(pipeline, stage.id, "spawning");
       const next = new Date(unixMs(ports.now()) + STAGED_ALIVE_WATCH_MS).toISOString();
-      pipeline.stateDetail = `the stage host is alive and has not answered its first message yet; spawn recovery spent its ${STAGED_RECOVERY_BUDGET_MS / 60_000}-minute budget after ${recovery.checks} checks and keeps watching, next check at ${next}`;
+      pipeline.stateDetail = `the stage host (pid ${livePid}) is alive and has not answered its first message yet; spawn recovery spent its ${STAGED_RECOVERY_BUDGET_MS / 60_000}-minute budget after ${recovery.checks} checks and keeps watching, next check at ${next}`;
       ports.scheduleTick?.(STAGED_ALIVE_WATCH_MS);
       return;
     }
     const reason = recovery.stopped ? recovery.reason
-      : `runtime host recovery exhausted after ${recovery.checks} checks; original launch and first-message operation retained; last result: ${recovery.reason}`;
+      : `${STAGED_RECOVERY_EXHAUSTED} after ${recovery.checks} checks; original launch and first-message operation retained; last result: ${recovery.reason}`;
     if (!settleNeverStartedLaunch(pipeline, attempt, ports, true)) {
       park(pipeline, `${SPAWN_RECOVERY_PARK_PREFIX}${reason}; original launch retained`, attempt);
     }
@@ -7741,7 +7801,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
         if (pipeline.runs.some((run) => run.attempts.some((attempt) => attempt.activation))) return;
         let pipelineChanged = false;
         for (const run of pipeline.runs) for (const attempt of run.attempts) {
-          pipelineChanged = settleNeverStartedLaunch(pipeline, attempt, controllerPorts) || pipelineChanged;
+          pipelineChanged = await settleAbandonedLaunch(pipeline, attempt, controllerPorts) || pipelineChanged;
         }
         pipelineChanged = reconcilePipelineEmbeddedFlows(pipeline, controllerPorts) || pipelineChanged;
         pipelineChanged = reconcilePendingPipelineAdoptions(pipeline, controllerPorts) || pipelineChanged;
