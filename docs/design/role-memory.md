@@ -762,7 +762,12 @@ noted that the plan below had grown to three lanes. The orchestrator cut it on
    attempt that was asked for a lesson, and one row per project switch. Scopes
    are `role:<project>:<roleId>`, `project:<project>` and `machine`, with the
    canonical project key. Each scope renders to at most 10 000 code points.
-   Rule rows are never deleted. Nothing is written into a repository, a pull
+   Rule rows are never deleted. Every lesson is a record of its own, with its
+   own id, author and history; the 10 000 bounds a scope's rendered list of
+   records, and nothing ever folds a scope into one text (operator,
+   2026-10-07: «не одна сплошная 10 000, а отдельные отрезки»). The window
+   draws one block per rule, and the injected block lists one item per rule
+   with its id. Nothing is written into a repository, a pull
    request, an issue, a linked board or a bridge or relay payload.
 2. **Write path.** `stage_report`'s answer gains `lessonRequest` (the prompt of
    2.4, shortened, as lines) on the first accepted report of an eligible

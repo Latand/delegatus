@@ -127,3 +127,23 @@ test("the block goes below the brief and above the controller's lines, and an ov
   expect(fs.statSync(file!).mode & 0o777).toBe(0o600);
   expect(withLearnedRules(prompt, null)).toBe(prompt);
 });
+
+test("two lessons stay two records with their own ids and render as two items, never one block of text", () => {
+  /* Operator, 2026-10-07: «чтобы вот эти памяти, они были как отдельными фрагментами, не одна сплошная 10 000, а отдельные отрезки». */
+  const project = PROJECT();
+  const first = "When a change adds a branch for empty input, write the test for that branch in the same commit.";
+  const second = "Give a browser started from a pipeline stage a short temporary directory for its sockets.";
+  const { left } = leaveLessons({ request: request(), source: source(), none: null, lessons: [
+    { scope: "role", rule: first, why: "An untested empty path failed review." },
+    { scope: "role", rule: second, why: "The driver died on a socket path limit." },
+  ] });
+  expect(left).toHaveLength(2);
+  expect(left[0]!.id).not.toBe(left[1]!.id);
+  const builder = projectView(project).scopes.find((scope) => scope.roleId === "builder")!;
+  expect(builder.active.map((rule) => [rule.id, rule.rule])).toEqual([[left[0]!.id, first], [left[1]!.id, second]]);
+  expect(builder.active.every((rule) => rule.roleId === "builder" && rule.stageId === "fix")).toBe(true);
+  /* The builder's own section; the machine scope is shared with the other tests in this file. */
+  const section = learnedRulesBlock(project, "builder").split("\n\n").find((part) => part.startsWith("Builder · this project"))!;
+  const items = section.split("\n").filter((line) => line.startsWith("- ["));
+  expect(items).toEqual([`- [${left[0]!.id}] ${first} Why: An untested empty path failed review.`, `- [${left[1]!.id}] ${second} Why: The driver died on a socket path limit.`]);
+});
