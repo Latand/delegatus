@@ -234,6 +234,52 @@ Keep ordinary RPC deadlines at 3 seconds (`src/lib/runtime/client.ts:156`) and s
 
 Release remains outside this stage. Record in the eventual PR body: the operator-side worker deploys the merged SHA on the incident machine with `scripts/rebuild.sh <sha>` after its incident work reaches a safe boundary so Viewer and runtime host converge. Before promotion, run `bun scripts/verify-runtime-host.ts --runtime "$(which bun)"` under private state. Coordinate read-side changes with #2572; use the existing pipeline branch. The later publication step merges `origin/main`, runs privacy-publication from the merge base, and does not wait for hosted checks. This stage changes only this investigation and makes no git publication mutation.
 
+## After the build
+
+The build implemented plan steps 1 and 2 and the low-risk part of step 3:
+
+- `loadTasksForList` deep-freezes each task when its row changes and freezes the list. `GET /api/tasks` filters that list and binds it against `loadPipelinesForList`. The files response reads the same list: `reconcileTasks` and `projectSupersededTaskHandoffs` already copy only the tasks they change.
+- `readOnlySnapshot()` of the SQLite registry store hands out a plain data view. Its root, every collection record and every meta value are frozen, which closes the accessor-setter route (`view.receipts = {}`). Rows stay as loaded, because they are the parse cache's objects and a later load decides grants on them in place. The keyed and path readers of the loaded file still serve the view.
+- `quiet.dispatchVersion` reads that shared view through `registryAdmissionEvidence` (`src/lib/selfUpdate/quiet.ts`) instead of `agentRegistry().snapshot()`. It produces the same hash.
+- A complete read-only load drops parse-cache rows that it proved deleted (PR #2529). A read-only load no longer takes the metadata mutation baselines.
+
+The writer path that #2572 changes (`mutate`, `withWriter`) is untouched. Normalized-row caching and the duplicate held-delivery normalization on a foreign-write reload were not built. The foreign-write reload still costs about 85–105 ms per changed generation, and that is the next step if a profile shows it dominating.
+
+The same harness ran twice per side, alternating before (`d2fba8b`) and after, from fresh seeds of identical size: 32,219,217 registry bytes, 575 tasks, 150 + 194 pipelines and 881 + 827 attempts. Four cases were added to `probe-measure.ts` so that the bursts run the production handlers instead of a direct `registry.snapshot()`:
+
+```typescript
+ // Build stage additions: the production handlers that read the registry and the task store.
+ dispatchVersion:async()=>{const {quietDispatchVersion}=await import("./src/lib/selfUpdate/quiet");const {productionDeps}=await import("./src/lib/selfUpdate/instance");return quietDispatchVersion(productionDeps().quiet,Date.now());},
+ burstHandlersSummary:async()=>{const {quietDispatchVersion}=await import("./src/lib/selfUpdate/quiet");const {productionDeps}=await import("./src/lib/selfUpdate/instance");const quiet=productionDeps().quiet;const pending=runtimeGET(req("/api/runtime/snapshot?view=summary"));for(let i=0;i<6;i++){quietDispatchVersion(quiet,Date.now());await tasksGET(req("/api/tasks?project=viewer"));}return pending;},
+ burstHandlersFull:async()=>{const {quietDispatchVersion}=await import("./src/lib/selfUpdate/quiet");const {productionDeps}=await import("./src/lib/selfUpdate/instance");const quiet=productionDeps().quiet;const pending=runtimeGET(req("/api/runtime/snapshot"));for(let i=0;i<6;i++){quietDispatchVersion(quiet,Date.now());await tasksGET(req("/api/tasks?project=viewer"));}return pending;},
+ burstFilesSummary:async()=>{const pending=runtimeGET(req("/api/runtime/snapshot?view=summary"));for(let i=0;i<6;i++){const out=await buildFilesResponse(req("/api/files?project=viewer"),{listFilesWithProjectCatalog:async()=>({files:[],projectCatalog:[]})});await out.arrayBuffer();}return pending;},
+```
+
+Medians in ms (wall / Viewer CPU), runs 1 and 2. Every response was 200 with the same byte count on both sides:
+
+| Operation | Before | After |
+| --- | ---: | ---: |
+| Summary under six fence + project-task GET pairs (`burstHandlersSummary`) | 634.8 / 863.9; 608.6 / 826.5 | 14.4 / 18.2; 12.6 / 13.5 |
+| Full snapshot under the same load (`burstHandlersFull`) | 595.3 / 805.9; 639.8 / 835.6 | 14.7 / 14.9; 18.4 / 18.2 |
+| Quiet fence `quietDispatchVersion` (`dispatchVersion`) | 97.1 / 121.1; 105.7 / 139.4 | 1.71 / 2.04; 1.56 / 1.64 |
+| `GET /api/tasks?project=viewer` | 5.50 / 5.73; 5.11 / 5.15 | 0.32 / 0.33; 0.32 / 0.36 |
+| `GET /api/tasks` | 7.94 / 11.17; 8.05 / 12.03 | 2.59 / 3.12; 2.24 / 2.81 |
+| Files response, empty scan | 14.82 / 26.67; 15.04 / 18.53 | 10.68 / 16.84; 12.11 / 14.67 |
+| Files response, 96 files | 17.83 / 27.06; 19.09 / 24.29 | 15.17 / 27.56; 13.06 / 19.54 |
+| Summary under six files responses (`burstFilesSummary`) | 86.6 / 104.5; 98.1 / 118.5 | 77.0 / 122.9; 55.7 / 74.6 |
+| Quiet runtime summary / full | 1.33 / 3.18; 0.92 / 2.43 | 1.40 / 2.69; 1.16 / 2.17 |
+| Original burst, direct `registry.snapshot()` (`burstSummary`) | 604.2 / 798.6; 657.0 / 853.5 | 754.0 / 887.6; 626.3 / 811.3 |
+
+Under the production handlers, summary and full snapshot are about 35–48 times faster, and Viewer CPU drops by the same order. The original identical burst does not improve, because it calls `registry.snapshot()` directly. That API stays a detached full load for callers that mutate. After this change no Viewer request path calls it: `dispatchVersion` was the only production caller. Quiet runtime routes are unchanged, as expected, because they never read the stores.
+
+Per-request source counters (`runner.py counts`, restricted to these cases):
+
+- Task-store clones fall from 676 to 0 on both task GETs and on the files response.
+- Alias stats fall from 733 to 7 on the task GETs and from 776 to 202 on the files response.
+- `dispatchVersion` falls from 17,571 JSON parses, 6,148 stringifies and 12 collection SELECTs to 0, 2 and 0.
+
+Inside one after-state, every case compared byte for byte with the replaced computation: `projectTaskPipelineIds(loadTasks().filter(…), loadPipelines())` for `/api/tasks`, `?project=viewer` and `?status=inbox&project=project-1`, and a files response built with `loadTasks()` (tasks, pipelines, workLinks and flows). The `dispatchVersion` hash is the same before and after. Client deadlines in `src/lib/runtime/client.ts` are unchanged.
+
 ## Evidence command ledger
 
 All times below are **2026-10-06 UTC**, except rows explicitly dated 2026-10-07; start/end brackets cover the complete local command, including sandbox host startup/cleanup where applicable. Profiles/counters are in isolated state. Read-only history retrieval preceded the first production sizing command. Its exact PR/document commands were rechecked at 23:57:40.227289–23:57:41.657392, confirming the same head and 54,896-byte investigation; the bounds below distinguish that recheck from the earlier read.
