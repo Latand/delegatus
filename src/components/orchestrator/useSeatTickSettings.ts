@@ -47,6 +47,8 @@ export interface SeatTickChange {
 }
 
 export interface SeatTickSettingsRead {
+  /** The project this read and every save through it belong to. */
+  project: string;
   /** What to DISPLAY: the last read-back record, or the optimistic overlay of
       a save in flight. Null until the first answer for this project. */
   answer: SeatTickSettingsAnswer | null;
@@ -299,6 +301,7 @@ export function useSeatTickSettings(project: string, enabled: boolean): SeatTick
   }, [project, save]);
 
   return {
+    project,
     answer: shown,
     record: current,
     failed,

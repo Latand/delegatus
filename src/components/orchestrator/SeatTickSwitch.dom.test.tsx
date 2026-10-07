@@ -49,28 +49,32 @@ const gateway = { kind: "gateway" as const, conversationId: null, project: null,
 
 interface Row { enabled: boolean; wakeIntervalMinutes: number | null; reason: string | null; until: string | null }
 const DEFAULT_ROW: Row = { enabled: true, wakeIntervalMinutes: null, reason: null, until: null };
-/** The stored record. */
+/** The viewer project's stored record; the route stores no other. */
 let row: Row;
+/** Other projects' records, and how long the route takes to read one. */
+const others = new Map<string, Row>();
+const readDelay = new Map<string, number>();
 
-function answer(): SeatTickSettingsAnswer {
-  const isDefault = row.enabled && row.wakeIntervalMinutes === null;
-  const updatedAt = isDefault && !row.reason ? null : ago(60);
+function answer(project = PROJECT): SeatTickSettingsAnswer {
+  const stored = project === PROJECT ? row : others.get(project) ?? DEFAULT_ROW;
+  const isDefault = stored.enabled && stored.wakeIntervalMinutes === null;
+  const updatedAt = isDefault && !stored.reason ? null : ago(60);
   return {
     maintenance: {
       enabled: false, intervalHours: 3, defaultIntervalHours: 3, minIntervalHours: 1, maxIntervalHours: 168,
       updatedAt: null, setBy: null, live: null, lastRun: null,
       nextEligibleAt: null, nextRunAt: null, waitingOn: "off", pauseReason: null, runsError: null,
     },
-    project: PROJECT,
+    project,
     changed: false,
     at: new Date().toISOString(),
     actor: gateway,
-    settings: { project: PROJECT, ...row, monitorPrompt: null, updatedAt, setBy: updatedAt ? gateway : null },
+    settings: { project, ...stored, monitorPrompt: null, updatedAt, setBy: updatedAt ? gateway : null },
     effective: {
-      enabled: row.enabled, wakeIntervalMinutes: row.wakeIntervalMinutes ?? 60, reason: row.reason, monitorPrompt: null, until: row.until,
+      enabled: stored.enabled, wakeIntervalMinutes: stored.wakeIntervalMinutes ?? 60, reason: stored.reason, monitorPrompt: null, until: stored.until,
       isDefault, configured: updatedAt !== null, lapsed: false, updatedAt,
     },
-    defaults: { project: PROJECT, ...DEFAULT_ROW, monitorPrompt: null, updatedAt: null, setBy: null },
+    defaults: { project, ...DEFAULT_ROW, monitorPrompt: null, updatedAt: null, setBy: null },
     defaultWakeIntervalMinutes: 60,
     monitorPromptLength: 0,
     cardText: null,
@@ -95,9 +99,15 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = String(input);
   if (url.startsWith("/api/roles")) return json({ revision: "rev-1", health: "ok", launchChoices: [], roles: [] });
   if (!url.startsWith("/api/monitor/seat-tick/settings")) return json({});
-  if ((init?.method ?? "GET") !== "PUT") return json(answer());
+  if ((init?.method ?? "GET") !== "PUT") {
+    const project = new URL(url, "http://local").searchParams.get("project") ?? PROJECT;
+    const delay = readDelay.get(project);
+    if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+    return json(answer(project));
+  }
   const change = JSON.parse(String(init!.body)) as Record<string, unknown>;
   writes.push(change);
+  if (change.project !== PROJECT) return json({ error: "this route only stores the viewer's record" }, 400);
   if (putDelay) await new Promise((resolve) => setTimeout(resolve, putDelay));
   if (refuse) return json({ error: refuse }, 400);
   const next: Row = { ...row };
@@ -122,6 +132,9 @@ beforeEach(() => {
   putDelay = 0;
   refuse = null;
   row = { ...DEFAULT_ROW };
+  others.clear();
+  readDelay.clear();
+  shown = PROJECT;
 });
 afterEach(() => {
   for (const root of [...roots]) {
@@ -135,7 +148,9 @@ afterAll(() => {
   setLocale("en");
 });
 
-const view = () => <SeatTickChip project={PROJECT} projectName="Viewer" />;
+/** The project the header shows. */
+let shown = PROJECT;
+const view = () => <SeatTickChip project={shown} projectName={shown} />;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function settle(root: Root, rounds = 4): Promise<void> {
@@ -165,6 +180,12 @@ async function remount(): Promise<Root> {
   dom.document.body.replaceChildren();
   resetSeatTickSettingsCacheForTests();
   return mount();
+}
+
+/** The header switches to another project; the chip stays mounted. */
+async function switchTo(root: Root, project: string): Promise<void> {
+  shown = project;
+  await settle(root);
 }
 
 const body = () => dom.document.body as unknown as HTMLElement;
@@ -592,4 +613,62 @@ test("otherwise the thumb travels: it trails the pointer and has arrived a momen
   await sleep(700);
   expect(control().style.getPropertyValue("--tick-pos")).toBe("3.0000");
   expect(control().style.getPropertyValue("--tick")).toBe("var(--tick-3)");
+});
+
+const BETA = "beta";
+const BETA_ROW: Row = { enabled: true, wakeIntervalMinutes: 240, reason: "A quiet project: every four hours is enough.", until: null };
+
+test("a keyboard step still waiting when the header switches project is dropped, and never written to the other project", async () => {
+  others.set(BETA, BETA_ROW);
+  shown = BETA;
+  const root = await mount();
+  await switchTo(root, PROJECT);
+  expect(thumb().textContent).toBe("1 h");
+  key("ArrowLeft");
+  key("ArrowLeft");
+  expect(control().getAttribute("data-seat-tick-switch")).toBe("pending");
+  await switchTo(root, BETA);
+  await sleep(900);
+  await settle(root);
+  expect(writes).toEqual([]);
+  expect(row).toEqual(DEFAULT_ROW);
+  expect(control().getAttribute("data-seat-tick-switch")).toBe("rest");
+  expect(position()).toBe(1);
+  expect(thumb().textContent).toBe("4 h");
+});
+
+test("a step waiting when the header switches to a project not yet read ends in normal time and writes nothing", async () => {
+  readDelay.set(BETA, 1500);
+  others.set(BETA, BETA_ROW);
+  const root = await mount();
+  key("ArrowLeft");
+  key("ArrowLeft");
+  await switchTo(root, BETA);
+  await sleep(900);
+  await settle(root);
+  expect(writes).toEqual([]);
+  expect(control().getAttribute("data-seat-tick-switch")).toBe("rest");
+  await sleep(800);
+  await settle(root);
+  expect(writes).toEqual([]);
+  expect(control().getAttribute("data-seat-tick-switch")).toBe("rest");
+  expect(thumb().textContent).toBe("4 h");
+});
+
+test("a move queued behind a write in flight is dropped when the header switches project; the write in flight lands where it was made", async () => {
+  putDelay = 400;
+  others.set(BETA, BETA_ROW);
+  const root = await mount();
+  await drag(root, [10, 20]);
+  await drag(root, [-30, -62]);
+  expect(control().getAttribute("data-seat-tick-switch")).toBe("queued");
+  await switchTo(root, BETA);
+  await sleep(1000);
+  await settle(root);
+  expect(writes).toEqual([{ project: PROJECT, enabled: true, wakeIntervalMinutes: 10, untilMinutes: null, reason: SET_10 }]);
+  expect(row).toEqual({ enabled: true, wakeIntervalMinutes: 10, reason: SET_10, until: null });
+  expect(control().getAttribute("data-seat-tick-switch")).toBe("rest");
+  expect(position()).toBe(1);
+  expect(thumb().textContent).toBe("4 h");
+  expect(popover()).toBeNull();
 });

@@ -65,8 +65,16 @@ function travelOf(root: HTMLElement, fallback: number): number {
 const reducedMotion = () => typeof window !== "undefined" && typeof window.matchMedia === "function"
   && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+/** A stop someone moved to, and the project the header showed when they did:
+    a move is written to that project or not at all. */
+interface Move {
+  project: string;
+  stop: number;
+}
+
 interface Gesture {
   id: number;
+  project: string;
   startX: number;
   /** Pixels per stop while this press lasts. */
   stepPx: number;
@@ -146,53 +154,71 @@ export function SeatTickSwitch({ read, reading, now, surface, open, onOpen, onRe
      is the drag's, not a request for the settings. */
   const swallowClick = useRef(false);
   const [dragAt, setDragAt] = useState<number | null>(null);
-  const [pending, setPending] = useState<number | null>(null);
+  const [pendingMove, setPending] = useState<Move | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
 
   /* A move released while a write is in flight waits for it, and only the
      latest one is kept: once the write settles it is measured against the
      record that came back, so a move back to where that write landed sends
-     nothing. `waiting` is that move, drawn where it was released. */
-  const queued = useRef<number | null>(null);
+     nothing. `waiting` is that move, drawn where it was released.
+
+     A move that is still waiting when the header switches project stays
+     with the project it was made on: it is never sent to the one shown now,
+     and neither it nor a step pending on the keyboard is drawn there. */
+  const queued = useRef<Move | null>(null);
   const writing = useRef(false);
-  const [waiting, setWaiting] = useState<number | null>(null);
+  const [waitingMove, setWaiting] = useState<Move | null>(null);
+  const pending = pendingMove?.project === read.project ? pendingMove.stop : null;
+  const waiting = waitingMove?.project === read.project ? waitingMove.stop : null;
   const latest = useRef({ read, onRefused, locale });
   useLayoutEffect(() => {
     latest.current = { read, onRefused, locale };
   });
 
+  const drop = () => {
+    queued.current = null;
+    setWaiting(null);
+  };
+
   const drain = async () => {
     writing.current = true;
     try {
-      while (queued.current !== null) {
+      for (;;) {
         const { read: settings, locale: language } = latest.current;
+        const move = queued.current;
+        if (move === null) return;
+        if (move.project !== settings.project) return drop();
         const held = await settings.saveAfter((record) => {
-          const stop = queued.current;
-          queued.current = null;
-          setWaiting(null);
+          /* The header switched while this waited: a move made since then is
+             the next project's, and is left for its own turn. */
+          if (queued.current?.project !== settings.project) return null;
+          const { stop } = queued.current;
+          drop();
           /* The stop already set is not a move, so it writes nothing, an expiry included. */
-          if (stop === null || stop === seatTickPlace(record).stop) return null;
+          if (stop === seatTickPlace(record).stop) return null;
           return seatTickStopChange(stop, record.settings.reason, language === "uk" ? "uk" : "en");
         });
         /* Only the route refuses here; its reason is in the settings, and a
            move made behind the refused one is not sent over it. */
         if (held === false) {
-          queued.current = null;
-          setWaiting(null);
+          drop();
           latest.current.onRefused?.();
           return;
         }
+        /* Nothing was sent and the move is still there: its project has no
+           record to measure it against, so it is not written at all. */
+        if (held === null && queued.current?.project === settings.project) return drop();
       }
     } finally {
       writing.current = false;
     }
   };
 
-  const commit = (stop: number) => {
-    if (!answer || !place) return;
-    queued.current = stop;
-    setWaiting(stop);
+  const commit = (move: Move) => {
+    if (move.project !== latest.current.read.project || !latest.current.read.answer) return;
+    queued.current = move;
+    setWaiting(move);
     if (!writing.current) void drain();
   };
 
@@ -208,7 +234,7 @@ export function SeatTickSwitch({ read, reading, now, surface, open, onOpen, onRe
     dropPending();
     const stepPx = travelOf(event.currentTarget, geometry.travel) / SEAT_TICK_LAST_STOP;
     const from = waiting ?? place.position;
-    gesture.current = { id: event.pointerId, startX: event.clientX, stepPx, from, dragging: false, position: from, samples: [] };
+    gesture.current = { id: event.pointerId, project: read.project, startX: event.clientX, stepPx, from, dragging: false, position: from, samples: [] };
     try {
       event.currentTarget.setPointerCapture?.(event.pointerId);
     } catch {
@@ -241,7 +267,7 @@ export function SeatTickSwitch({ read, reading, now, surface, open, onOpen, onRe
     const first = recent[0];
     const last = recent[recent.length - 1];
     const speed = first && last && last !== first ? (last.x - first.x) / Math.max(1, last.at - first.at) : 0;
-    commit(seatTickReleaseStop(held.position, speed, held.stepPx));
+    commit({ project: held.project, stop: seatTickReleaseStop(held.position, speed, held.stepPx) });
   };
 
   const onClick = () => {
@@ -255,11 +281,12 @@ export function SeatTickSwitch({ read, reading, now, surface, open, onOpen, onRe
   const step = (stop: number) => {
     if (!place) return;
     if (timer.current) clearTimeout(timer.current);
-    setPending(stop);
+    const move = { project: read.project, stop };
+    setPending(move);
     timer.current = setTimeout(() => {
       timer.current = null;
       setPending(null);
-      commit(stop);
+      commit(move);
     }, SEAT_TICK_KEY_COMMIT_MS);
   };
 
@@ -283,7 +310,7 @@ export function SeatTickSwitch({ read, reading, now, surface, open, onOpen, onRe
       event.preventDefault();
       if (pending === null) return onOpen();
       dropPending();
-      return commit(pending);
+      return commit({ project: read.project, stop: pending });
     }
     if (from === null) return;
     const to = event.key === "ArrowRight" || event.key === "ArrowUp" || event.key === "PageUp" ? seatTickStep(from, 1)
