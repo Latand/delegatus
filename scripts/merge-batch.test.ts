@@ -850,6 +850,35 @@ test("(a)(c) a namesake main aborts on does not erase a completed occurrence's b
   expect(readdirSync(dirname(f.batch.stateFile)).filter(name => name.startsWith("merge-occurrence-"))).toEqual([]);
 }, 60_000);
 
+test("(a)(c) a skipped namesake does not shift the completed occurrence main runs alone with the real sampler", async () => {
+  const f = landingFixture("green", async (cwd, args, env) => args[1] === "bun" && args[2] === "test"
+    ? commandRunner(cwd, args.slice(1), env) : successfulCommand(args));
+  f.seed("value.js", "exports.value = 1;\n");
+  f.seed("value.test.ts", "const { test, expect } = require('bun:test');\nconst { value } = require('./value.js');\n"
+    + "test.skip('shared invariant', () => {});\n"
+    + "test('shared invariant', () => expect(value).toBe(1));\n"
+    + "test('shared invariant', () => { if (value === 1) process.exit(1); expect(value).toBe(1); });\n");
+  const healthy = f.addPr(12, "healthy.txt", "healthy");
+  const regression = f.addPr(13, "value.js", "exports.value = 2;\n");
+  await f.batch.build(`12@${healthy},13@${regression}`);
+  const gated = await f.batch.gate();
+  expect(gated.rows.map(row => row.status)).toEqual(["clean", "culprit"]);
+  // JUnit numbers the skipped case 0, the preload never sees it: occurrence 1
+  // still runs alone on main and keeps its pass there.
+  const evidence = gated.attributionLog.filter(entry => entry.test.name === "shared invariant");
+  expect(evidence.map(entry => entry.test.occurrence)).toEqual([1]);
+  expect(evidence[0]!.prs).toEqual([13]);
+  expect(evidence[0]!.removals).toEqual([{ removed: [12], outcome: "fail" }, { removed: [13], outcome: "pass" }]);
+  const final = gated.gated!.decisions.at(-1)!;
+  expect(final.attributed).toEqual([]);
+  expect(final.preExisting).toEqual([fileFault("value.test.ts", INCOMPLETE_FILE)]);
+  const landed = await f.batch.land();
+  expect(landed.rows.map(row => row.status)).toEqual(["merged", "culprit"]);
+  expect(git(f.repo, ["log", "--format=%s", `${landed.base}..HEAD`])).toBe("Feature 12 (#12)");
+  expect(git(f.repo, ["ls-remote", "origin", "refs/heads/topic-13"]).split(/\s/)[0]).toBe(regression);
+  expect(readdirSync(dirname(f.batch.stateFile)).filter(name => name.startsWith("merge-occurrence-"))).toEqual([]);
+}, 60_000);
+
 for (const mode of ["new", "modified"] as const) {
   test(`a healthy ${mode} feature detector retains the wrong implementation failure with real git and Bun`, async () => {
     const f = landingFixture("green", async (cwd, args, env) => args[1] === "bun" && args[2] === "test"

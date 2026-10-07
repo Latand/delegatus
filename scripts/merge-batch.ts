@@ -664,31 +664,45 @@ export class MergeBatch {
    * and a preload fails each one before its body except the case's own. */
   private async focusedSample(cwd: string, file: string, sites: TestSite[], corpus: false | Record<string, string>, sample: TestRun,
     alone = false): Promise<boolean> {
-    const occurrence = sites[0]!.occurrence ?? 0;
-    const guard = alone ? join(dirname(this.stateFile), `merge-occurrence-${randomUUID()}.ts`) : undefined;
-    if (guard) writeFileSync(guard, `const { beforeEach } = require("bun:test");\nlet executed = 0;\n`
-      + `beforeEach(() => { if (executed++ !== ${occurrence}) throw new Error("merge-batch: a namesake of the case under test"); });\n`, { mode: 0o600 });
+    const run = async (executedIndex?: number) => {
+      const guard = executedIndex === undefined ? undefined : join(dirname(this.stateFile), `merge-occurrence-${randomUUID()}.ts`);
+      if (guard) writeFileSync(guard, `const { beforeEach } = require("bun:test");\nlet executed = 0;\n`
+        + `beforeEach(() => { if (executed++ !== ${executedIndex}) throw new Error("merge-batch: a namesake of the case under test"); });\n`, { mode: 0o600 });
+      try {
+        const filter = [...testNameFilter(sites), ...guard ? [`--preload=${guard}`] : []];
+        const result = await this.gateCommand(cwd, { id: "tests", args: ["bun", "test", `./${file}`], report: true, filter }, corpus);
+        const parsed = parseReport(result.report ?? "", result.output, file, cwd, true);
+        if ((result.code === 0) !== (parsed.failures.length === 0) || parsed.failures.some(site => site.kind !== "test")) return undefined;
+        return parsed;
+      } finally { if (guard) rmSync(guard, { force: true }); }
+    };
     try {
-      const filter = [...testNameFilter(sites), ...guard ? [`--preload=${guard}`] : []];
-      const result = await this.gateCommand(cwd, { id: "tests", args: ["bun", "test", `./${file}`], report: true, filter }, corpus);
-      const parsed = parseReport(result.report ?? "", result.output, file, cwd, true);
-      if ((result.code === 0) !== (parsed.failures.length === 0) || parsed.failures.some(site => site.kind !== "test")) return false;
-      if (guard) {
-        // The preload counted executed cases; it let the case's own body run
-        // only when every executed case shares its name and none before it
-        // was skipped.
+      if (alone) {
         const [site] = sites;
-        const executed = [...parsed.failures, ...parsed.passed].sort((a, b) => (a.occurrence ?? 0) - (b.occurrence ?? 0));
-        if (executed.some(other => other.suite !== site!.suite || other.name !== site!.name) || executed[occurrence]?.occurrence !== occurrence) return false;
-        (parsed.failures.includes(executed[occurrence]!) ? sample.failures : sample.passed).push(executed[occurrence]!);
+        const occurrence = site!.occurrence ?? 0;
+        const executedCases = (parsed: { failures: TestSite[]; passed: TestSite[] }) => {
+          const executed = [...parsed.failures, ...parsed.passed].sort((a, b) => (a.occurrence ?? 0) - (b.occurrence ?? 0));
+          return executed.some(other => other.suite !== site!.suite || other.name !== site!.name) ? undefined : executed;
+        };
+        // JUnit numbers a skipped namesake while the preload counts only
+        // executed cases. A probe that lets no body run tells them apart.
+        const probe = await run(-1);
+        const probed = probe && !probe.passed.length ? executedCases(probe) : undefined;
+        const index = probed?.findIndex(other => other.occurrence === occurrence) ?? -1;
+        if (index < 0) return false;
+        const parsed = await run(index);
+        const executed = parsed && executedCases(parsed);
+        if (executed?.[index]?.occurrence !== occurrence) return false;
+        (parsed!.failures.includes(executed[index]!) ? sample.failures : sample.passed).push(executed[index]!);
         return true;
       }
+      const parsed = await run();
+      if (!parsed) return false;
       const named = new Set(sites.map(testIdentity));
       sample.failures.push(...parsed.failures.filter(site => named.has(testIdentity(site))));
       sample.passed.push(...parsed.passed.filter(site => named.has(testIdentity(site))));
       return true;
     } catch { return false; /* the named cases cannot complete: they stay unreported */ }
-    finally { if (guard) rmSync(guard, { force: true }); }
   }
 
   private async testSubject(state: RunState, files: string[], removed?: number[], stable: false | Record<string, string> = false,
