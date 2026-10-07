@@ -826,7 +826,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
   projected.flows = projected.flows.map((flow) => ({ ...flow, project: remapProject(flow.project) }));
   pipelines = pipelines.map((pipeline) => ({ ...pipeline, project: remapProject(pipeline.project) }));
   workflows = workflows.map((workflow) => ({ ...workflow, project: remapProject(workflow.project) }));
-  tasks.tasks = tasks.tasks.map((task) => ({ ...task, project: remapProject(task.project) }));
+  const boardTasks = tasks.tasks.map((task) => ({ ...task, project: remapProject(task.project) }));
   const projectNames = new Map(effectiveProjectCatalog.map((entry) => [entry.project, entry.displayName] as const));
   for (const file of projected.files) {
     file.projectName = projectNames.get(file.project) ?? file.projectName;
@@ -861,7 +861,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     ...projected.flows.map((flow) => flow.project),
     ...pipelines.map((pipeline) => pipeline.project),
     ...workflows.map((workflow) => workflow.project),
-    ...tasks.tasks.map((task) => task.project),
+    ...boardTasks.map((task) => task.project),
   ];
   /* Explicit project attribution can leave a foreign repository root on a
      catalog row. Keep roots the scanner resolves back into that project. */
@@ -937,11 +937,11 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
        project fence, so a caller that presents a capability gets the tasks
        without them; the route keeps that answer in a scope of its own. */
     ...(agentRead
-      ? { tasks: withoutPrototypeReviews(tasks.tasks) }
-      : { tasks: withPrototypeReviewSummaries(tasks.tasks), prototypeReviewNotices: prototypeReviewNotices(tasks.tasks) }),
+      ? { tasks: withoutPrototypeReviews(boardTasks) }
+      : { tasks: withPrototypeReviewSummaries(boardTasks), prototypeReviewNotices: prototypeReviewNotices(boardTasks) }),
     /* #2059: map lookups against the forge cache only; the sweep, not this
        request, talks to GitHub. */
-    workLinks: workLinksForBoard(pipelines, tasks.tasks),
+    workLinks: workLinksForBoard(pipelines, boardTasks),
     systemHealth: {
       tmux: routeDependencies.tmuxEndpointHealth(),
       registry: registryHealth,
