@@ -922,7 +922,7 @@ describe("#1695 K1+K2 kanban board", () => {
 
       /* A card's links look elsewhere without writing a view preference: a
          conversation the board did not load opens by id from the one line in
-         Past attempts (#2466; it opened by id since 5b70b5d6b, not the list),
+         Past attempts (#2466; it opens by id since 5b70b5d6b),
          and a stage chip whose conversation left the scheme window opens it
          by id. */
       const links = await openFixture(browser, base, VIEWPORTS[1], "light");
@@ -3382,7 +3382,7 @@ describe("#1695 K6a account chips and pickers", () => {
           await shot(page, "production", "account-picker", scheme);
           frames[`account-picker-${scheme}`] = { production: measure };
           if (!measure) return void failures.push(`conversation picker ${scheme}: the picker did not open`);
-          /* The stage's name, not its role's (#1865). */
+          /* A stage is named by its stage; the role comes second (#1865). */
           if (measure.head !== "Account · Verify · Claude") failures.push(`conversation picker ${scheme}: head ${measure.head}`);
           if (JSON.stringify(measure.now.slice(0, 2)) !== JSON.stringify([["Current turn on", "Account A · Max · 72% of 5h"], ["Stage setting", "Project's choice"]])) failures.push(`conversation picker ${scheme}: summary ${JSON.stringify(measure.now)}`);
           const tags = measure.rows.map((row) => [row.name, row.tag, row.checked, row.disabled]);
@@ -6512,8 +6512,8 @@ describe("columns balanced on large screens, stage pills and heads on one line",
               for (const pill of frame.pills) {
                 const where = `${tag} ${pill.column} ${pill.stage}`;
                 if (pill.escapes.length) failures.push(`${where}: text outside the pill: ${pill.escapes.join(" | ")}`);
-                /* A stage name is never cut: it wraps inside its pill rather than
-                   lose a word (#2072, #2363), where it once ellipsized on one line. */
+                /* A stage name is never cut: it wraps inside its pill and keeps
+                   every word (#2072, #2363); it once ellipsized on one line. */
                 if (pill.nameClipped) failures.push(`${where}: the name is cut (${pill.nameLines} lines, ${pill.ellipsis})`);
                 if (!pill.titleHasName) failures.push(`${where}: the title does not carry the name`);
                 if (!pill.partsInside) failures.push(`${where}: the dot, mark, model or bars leave the pill`);
@@ -7982,7 +7982,7 @@ describe("ghost cards: no «Untitled task» wall, and every counted conversation
             await page.locator('[data-phone-card="task:t-ghost-fixture"]').first().scrollIntoViewIfNeeded().catch(() => {});
             await page.screenshot({ path: path.join(pngDir, `${label}-board.png`) });
             if (titles["t-ghost-backfill"] === untitled) failures.push(`${label}: the ended placeholder still reads «${untitled}»`);
-            if (titles["t-ghost-young"] !== YOUNG_TITLE[lang]) failures.push(`${label}: the young launch reads ${JSON.stringify(titles["t-ghost-young"])}, not its admitted title`);
+            if (titles["t-ghost-young"] !== YOUNG_TITLE[lang]) failures.push(`${label}: the young launch reads ${JSON.stringify(titles["t-ghost-young"])}; its admitted title is ${JSON.stringify(YOUNG_TITLE[lang])}`);
             /* The ghost's own screen: no conversation to open, a launch that did not start with its Dismiss. */
             const ghost = page.locator('[data-phone-card="task:t-ghost-fixture"]');
             let screen: Record<string, number> | null = null;
@@ -11527,8 +11527,8 @@ describe("column dwell smooth", () => {
           /* Frame timing is judged where the host can keep frames at rest
              under the same throttle. On a loaded machine (load 25-35 on 24
              cores) the page misses frames at rest, so the transition's frame
-             budget and the dwell's 100 ms window measure the host, not the
-             board: the idle cadence and the load average decide, and the
+             budget and the dwell's 100 ms window measure the host there: the
+             idle cadence and the load average decide, and the
              evidence says which it was. Geometry, text, cleanup and scroll
              are judged either way. */
           const idleCadenceMs = await page.evaluate(() => new Promise<number>((resolve) => {

@@ -336,7 +336,7 @@ export function LinkedSettingsDialog({ onClose }: { onClose: () => void }) {
                     <p className="text-muted">{t("links.codeExpires", { date: new Date(code.expiresAt).toLocaleTimeString() })}</p>
                     {newGrant ? <p role="status" data-code-state="used" data-linked-connected="" className="rounded-[8px] bg-success-soft px-3 py-2 text-success">{t("links.connectedHere", { name: newGrant.label })}</p>
                       : <p role="status" data-code-state={codeState} className="text-muted">{codeState === "burned" ? t("links.codeBurned") : codeState === "used" ? t("links.codeUsed") : codeState === "expired" ? t("links.codeExpired") : codeStatus?.wrongAttempts ? t("links.wrongAttempts", { count: codeStatus.wrongAttempts }) : t("links.noWrongAttempts")}</p>}
-                    {/* A failed cancellation answers beside the code it failed on, not in the machines list below. */}
+                    {/* A failed cancellation answers beside the code it failed on, where the retry is. */}
                     {codeError ? <p role="alert" data-pair-code-error={codeError} className="rounded-[8px] bg-danger-soft px-3 py-2 text-danger">{requestErrorMessage(t, codeError)}</p> : null}
                     <button type="button" disabled={busy} onClick={() => { void linkedAction(`/api/links/codes?id=${encodeURIComponent(code.code.slice(0, 6))}`, "DELETE", undefined, setCodeError).then((removed) => { if (removed) { setCode(null); setCodeStatus(null); } }); }} className="min-h-11 rounded-[8px] border border-border px-3">{t("links.cancelCode")}</button>
                   </div>

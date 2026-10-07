@@ -260,8 +260,8 @@ export function KanbanSeat({ project, projectName, projectCwd, files, tasks, boa
   const onGripKey = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
     event.preventDefault();
-    /* Step from the height the seat is going to, not the one drawn: the
-       seat's height eases, so a held arrow read mid-transition stepped from
+    /* Step from the height the seat is going to. The seat's height eases,
+       so a held arrow that read the drawn height mid-transition stepped from
        a passing height and went nowhere, or back. */
     const current = height ?? sectionRef.current?.getBoundingClientRect().height ?? 0;
     seat.setHeight(current + (event.key === "ArrowDown" ? SEAT_KEY_STEP : -SEAT_KEY_STEP));
