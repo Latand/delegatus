@@ -30,6 +30,11 @@ type RecordLike = Record<string, unknown>;
  *  - `ScheduleWakeup`: its `tool_result` carries `toolUseResult.scheduledFor`
  *    (epoch ms); any later `ScheduleWakeup` call replaces it, and one with
  *    `stop: true` cancels it.
+ *  - Delegatus's own report: the continuation a restart or a release sends
+ *    names the work that went down with the previous engine process
+ *    ({@link killedBackgroundWorkNotice}). The harness that tracked the work
+ *    died with it and may never write its notification, so the prompt that
+ *    told the agent is the record that the work ended.
  *
  * Codex has no equivalent: its tools run inside the turn and nothing
  * re-invokes the agent after the turn ends, so a Codex conversation never
@@ -106,6 +111,42 @@ export function isTaskNotificationRecord(record: RecordLike): boolean {
     && claudeUserText(recordValue(record.message)?.content).trim().startsWith("<task-notification");
 }
 
+const KILLED_WORK_OPENING = "background work you started was still running (";
+const KILLED_WORK_CLOSING = "). The restart stopped it with your previous process";
+const WAKEUP_NAME = "a scheduled wakeup";
+
+function backgroundTaskName(task: Pick<RunningBackgroundTask, "id" | "kind">): string {
+  return task.kind === "wakeup" ? WAKEUP_NAME : `${task.kind === "monitor" ? "monitor" : "background task"} ${task.id}`;
+}
+
+/** The sentence of a continuation that tells an agent which of its background
+    work a restart ended, by the names {@link verifiedBackgroundWork} gives. The
+    fold reads the same sentence back as that work's end. */
+export function killedBackgroundWorkNotice(names: readonly string[]): string {
+  return `Your turn had ended while ${KILLED_WORK_OPENING}${names.join(", ")}${KILLED_WORK_CLOSING},`
+    + " so its completion notice will not arrive: read its output, and re-run it if it did not finish.";
+}
+
+/** The work a prompt reports as ended by a restart: task ids, and whether the
+    scheduled wakeup is among them. */
+function killedBackgroundWork(text: string): { ids: string[]; wakeup: boolean } {
+  const found = { ids: [] as string[], wakeup: false };
+  let from = 0;
+  for (;;) {
+    const opening = text.indexOf(KILLED_WORK_OPENING, from);
+    if (opening < 0) return found;
+    const start = opening + KILLED_WORK_OPENING.length;
+    const closing = text.indexOf(KILLED_WORK_CLOSING, start);
+    if (closing < 0) return found;
+    for (const name of text.slice(start, closing).split(", ")) {
+      if (name === WAKEUP_NAME) found.wakeup = true;
+      const id = name.match(/^(?:background task|monitor) (\S+)$/)?.[1];
+      if (id) found.ids.push(id);
+    }
+    from = closing;
+  }
+}
+
 function contentParts(record: RecordLike): RecordLike[] {
   const content = recordValue(record.message)?.content;
   return Array.isArray(content) ? content.map((part) => recordValue(part) ?? {}) : [];
@@ -151,9 +192,13 @@ export function foldBackgroundTaskRecord(ledger: BackgroundTaskLedger, record: R
   if (record.type === "attachment") {
     const attachment = recordValue(record.attachment);
     if (attachment?.type !== "queued_command") return next;
-    for (const notice of taskNotifications(stringValue(attachment.prompt) ?? "")) {
+    const prompt = stringValue(attachment.prompt) ?? "";
+    for (const notice of taskNotifications(prompt)) {
       if (notice.terminal) end(next, notice.id, ts);
     }
+    const killed = killedBackgroundWork(prompt);
+    for (const id of killed.ids) end(next, id, ts);
+    if (killed.wakeup) next.wakeup = null;
     return next;
   }
   if (record.type !== "user") return next;
@@ -192,9 +237,13 @@ export function foldBackgroundTaskRecord(ledger: BackgroundTaskLedger, record: R
     if (missingTask) end(next, missingTask, ts);
     return next;
   }
-  for (const notice of taskNotifications(claudeUserText(recordValue(record.message)?.content))) {
+  const text = claudeUserText(recordValue(record.message)?.content);
+  for (const notice of taskNotifications(text)) {
     if (notice.terminal) end(next, notice.id, ts);
   }
+  const killed = killedBackgroundWork(text);
+  for (const id of killed.ids) end(next, id, ts);
+  if (killed.wakeup) next.wakeup = null;
   return next;
 }
 
@@ -217,16 +266,6 @@ export function liveBackgroundTasks(tasks: readonly RunningBackgroundTask[], now
 /** What the ledger still holds at `nowMs`, oldest first. */
 export function pendingBackgroundTasks(ledger: BackgroundTaskLedger, nowMs: number): RunningBackgroundTask[] {
   return liveBackgroundTasks(heldBackgroundTasks(ledger), nowMs);
-}
-
-/** The work a transcript still holds at `nowMs`, each named for the message
-    that tells its agent the work went down with a restart. Empty when the
-    transcript cannot be read. */
-export async function pendingBackgroundTaskNames(transcriptPath: string, nowMs: number): Promise<string[]> {
-  const ledger = await readBackgroundTaskLedger(transcriptPath).catch(() => null);
-  return ledger ? pendingBackgroundTasks(ledger, nowMs).map((task) => task.kind === "wakeup"
-    ? "a scheduled wakeup"
-    : `${task.kind === "monitor" ? "monitor" : "background task"} ${task.id}`) : [];
 }
 
 /** One line naming the held tasks, for a state detail or a refusal. */
@@ -311,7 +350,7 @@ export function runningBackgroundTasks(
 }
 
 /** Lines that can move the ledger; everything else is skipped unparsed. */
-const RELEVANT_LINE = /backgroundTaskId|task-notification|"taskId"|"task_id"|scheduledFor|"ScheduleWakeup"|No task found with ID:/i;
+const RELEVANT_LINE = /backgroundTaskId|task-notification|"taskId"|"task_id"|scheduledFor|"ScheduleWakeup"|No task found with ID:|background work you started was still running/i;
 const READ_CHUNK_BYTES = 1 << 20;
 const MAX_CACHED_TRANSCRIPTS = 256;
 
@@ -369,6 +408,71 @@ export async function readBackgroundTaskLedger(transcriptPath: string): Promise<
     return ledger;
   } catch {
     return null;
+  } finally {
+    await handle?.close().catch(() => {});
+  }
+}
+
+/** B of the restart cut decision (docs/design/restart-cut-recognition.md):
+    the work a transcript still holds, each named for the message that tells
+    its agent the work went down with a restart. */
+export type VerifiedBackgroundWork =
+  | { state: "read"; names: string[] }
+  | { state: "unreadable"; reason: string };
+
+/**
+ * The background work of one whole transcript, read for a decision that may
+ * not rest on a guess. One descriptor from the first byte, with no offset kept
+ * from an earlier read, so a repaired file is read as repaired. A record that
+ * could move the ledger and cannot be parsed, an unterminated final line, or
+ * a file that changed under the read is `unreadable`: the records before a
+ * bad one are a prefix, and a prefix can hold a task its lost record ended.
+ */
+export async function verifiedBackgroundWork(transcriptPath: string, nowMs: number): Promise<VerifiedBackgroundWork> {
+  let handle: fs.promises.FileHandle | null = null;
+  try {
+    handle = await fs.promises.open(transcriptPath, "r");
+    const before = await handle.stat({ bigint: true });
+    if (!before.isFile()) return { state: "unreadable", reason: "the transcript is no regular file" };
+    const size = Number(before.size);
+    let ledger = emptyBackgroundTaskLedger();
+    let offset = 0;
+    let carry = Buffer.alloc(0);
+    const buffer = Buffer.alloc(READ_CHUNK_BYTES);
+    while (offset < size) {
+      const read = await handle.read(buffer, 0, Math.min(READ_CHUNK_BYTES, size - offset), offset);
+      if (read.bytesRead === 0) return { state: "unreadable", reason: "the transcript shrank under the read" };
+      offset += read.bytesRead;
+      const pending = carry.length ? Buffer.concat([carry, buffer.subarray(0, read.bytesRead)]) : buffer.subarray(0, read.bytesRead);
+      const lastNewline = pending.lastIndexOf(0x0a);
+      if (lastNewline < 0) {
+        carry = Buffer.from(pending);
+        continue;
+      }
+      for (const line of pending.subarray(0, lastNewline).toString("utf8").split("\n")) {
+        if (!RELEVANT_LINE.test(line)) continue;
+        let record: unknown;
+        try {
+          record = JSON.parse(line);
+        } catch {
+          return { state: "unreadable", reason: "the transcript holds a background work record that is not JSON" };
+        }
+        if (!record || typeof record !== "object" || Array.isArray(record)) {
+          return { state: "unreadable", reason: "the transcript holds a background work record that is no object" };
+        }
+        ledger = foldBackgroundTaskRecord(ledger, record as RecordLike);
+      }
+      carry = Buffer.from(pending.subarray(lastNewline + 1));
+    }
+    if (carry.length > 0) return { state: "unreadable", reason: "the transcript ends on an unterminated record" };
+    const [after, named] = await Promise.all([handle.stat({ bigint: true }), fs.promises.stat(transcriptPath, { bigint: true })]);
+    if ([after, named].some((stat) => stat.dev !== before.dev || stat.ino !== before.ino
+      || stat.size !== before.size || stat.mtimeNs !== before.mtimeNs)) {
+      return { state: "unreadable", reason: "the transcript changed under the read" };
+    }
+    return { state: "read", names: pendingBackgroundTasks(ledger, nowMs).map(backgroundTaskName) };
+  } catch (error) {
+    return { state: "unreadable", reason: `the transcript could not be read (${(error as NodeJS.ErrnoException).code ?? "unknown"})` };
   } finally {
     await handle?.close().catch(() => {});
   }

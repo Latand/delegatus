@@ -3,7 +3,7 @@ import os from "node:os";
 
 import { turnStateFromRecords } from "@/lib/accounts/migration/turnState";
 import type { AgentRegistry, ProcessIdentity, RegistryFile } from "@/lib/agent/registry";
-import { BACKGROUND_TASK_WAIT_LIMIT_MS, isTaskNotificationRecord, pendingBackgroundTaskNames } from "@/lib/pipelines/backgroundTasks";
+import { BACKGROUND_TASK_WAIT_LIMIT_MS, isTaskNotificationRecord, verifiedBackgroundWork, type VerifiedBackgroundWork } from "@/lib/pipelines/backgroundTasks";
 import { claudeTurnClosedByProviderFailure, lastAgentWorkIndex, withoutExitBookkeeping } from "@/lib/pipelines/durableEvidence";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { procBackend } from "@/lib/proc";
@@ -412,21 +412,25 @@ export async function readTranscriptCutEvidence(
   return tail.integrity === "complete" ? transcriptCutEvidenceFromRecords(tail.records, engine) : unverified;
 }
 
-/** The harness background work a Claude turn that has ended still waits on,
-    named for its continuation. The work is a child of the engine process, so
-    whatever ends that process ends the work and its completion notice. The
+/** B: the harness background work a Claude turn that has ended still waits
+    on, named for its continuation. The work is a child of the engine process,
+    so whatever ends that process ends the work and its completion notice. The
     turn ended when its host closed it, or when the agent's own records end
-    it; a shutdown marker after them changes neither. */
+    it; a shutdown marker after them changes neither. Work a continuation
+    already reported as ended is held no longer. `unreadable` when the
+    transcript's background records cannot be read whole: a prefix of them can
+    hold a task whose end was lost, and nothing may be claimed from it. */
 export async function backgroundWorkAwaitedAtCut(
   engine: "claude" | "codex",
   transcriptPath: string,
   evidence: TranscriptCutEvidence,
   now: number,
   hostClosedTurn = false,
-): Promise<string[]> {
+  read: typeof verifiedBackgroundWork = verifiedBackgroundWork,
+): Promise<VerifiedBackgroundWork> {
   if (engine !== "claude" || (evidence.turn !== "terminal" && !hostClosedTurn) || !evidence.lastWork
-    || now - evidence.lastWork.at > BACKGROUND_TASK_WAIT_LIMIT_MS) return [];
-  return pendingBackgroundTaskNames(transcriptPath, now);
+    || now - evidence.lastWork.at > BACKGROUND_TASK_WAIT_LIMIT_MS) return { state: "read", names: [] };
+  return read(transcriptPath, now);
 }
 
 /**
@@ -580,8 +584,9 @@ export interface RestartCutInput {
   };
   /** The conversation runs a launched pipeline stage attempt. */
   stage: boolean;
-  /** Harness background work a Claude turn that ended still waits on. */
-  backgroundWork: boolean;
+  /** Harness background work a Claude turn that ended still waits on;
+      `unreadable` when its records could not be read whole. */
+  backgroundWork: boolean | "unreadable";
 }
 
 export type RestartCutDecision =
@@ -596,26 +601,27 @@ export type RestartCutDecision =
 export function restartCutDecision(input: RestartCutInput): RestartCutDecision {
   const { host, record, row } = input;
   if (host.state === "unreadable") return { decision: "undecided", row: 1 };
-  if (record === "unreadable" || record === "undelimited") return { decision: "undecided", row: 2 };
+  if (record === "unreadable" || record === "undelimited" || input.backgroundWork === "unreadable") return { decision: "undecided", row: 2 };
+  const backgroundWork = input.backgroundWork;
   const iff = (cut: boolean, number: number, named: { namedBy: "turn"; turnId: string } | { namedBy: "row" }): RestartCutDecision =>
     cut ? { decision: "cut", row: number, ...named } : { decision: "no-cut", row: number };
   if (host.state === "open") {
     const named = { namedBy: "turn" as const, turnId: host.turnId };
     /* The host started the turn and nothing ended it; or it ended by itself
        after its host stopped recording. */
-    return record === "closed" ? iff(input.backgroundWork, 4, named) : iff(true, 3, named);
+    return record === "closed" ? iff(backgroundWork, 4, named) : iff(true, 3, named);
   }
   if (host.state === "closed") {
     const named = { namedBy: "turn" as const, turnId: host.turnId };
     /* The engine began work by itself and nothing ended it. */
-    return record === "open" ? iff(true, 5, named) : iff(input.backgroundWork, 6, named);
+    return record === "open" ? iff(true, 5, named) : iff(backgroundWork, 6, named);
   }
   const named = { namedBy: "row" as const };
-  if (row.status === "idle") return iff(input.backgroundWork, 8, named);
+  if (row.status === "idle") return iff(backgroundWork, 8, named);
   /* The first prompt reached the engine and nothing ended it. */
   if (row.turnRef !== null && row.neverObserved && record !== "closed") return iff(true, 7, named);
   if (record === "open") return iff(true, 9, named);
-  if (record === "closed") return iff(input.backgroundWork, 10, named);
+  if (record === "closed") return iff(backgroundWork, 10, named);
   /* The launch started the attempt and nothing ended it. A live row's turn
      word over a transcript the registry has observed can lag it (#1281), so
      by itself it is no evidence of a start. */

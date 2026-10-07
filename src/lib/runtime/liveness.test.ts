@@ -612,6 +612,16 @@ test.each([
 });
 
 test.each([
+  { host: { state: "open", turnId: "T" }, record: "closed" },
+  { host: { state: "closed", turnId: "T" }, record: "open" },
+  { host: { state: "closed", turnId: "T" }, record: "empty" },
+  { host: { state: "none" }, record: "closed" },
+] as const)("background work that cannot be read whole leaves a $host.state host over a $record record undecided (row 2)", ({ host, record }) => {
+  expect(restartCutDecision({ host, record, row: liveRow, stage: false, backgroundWork: "unreadable" }))
+    .toEqual({ decision: "undecided", row: 2 });
+});
+
+test.each([
   { slice: "Claude, after a closed turn: task notification, then a tool call", reads: "open",
     engine: "claude", host: ledgerOf({ turnId: "T", closed: "completed" }, [["a1", "assistant", "T"]]),
     records: [claudeEnd("a1"), claudeUser("n1", NOTIFICATION), claudeTool("a2", "t2")] },

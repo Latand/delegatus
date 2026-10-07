@@ -199,7 +199,9 @@ A candidate is asked when two more hold:
   are settled (`owed`, or `submitted` without arrival). That record already
   owns the conversation's next message; whatever was written since it is its
   bookkeeping or its continuation's turn. This only postpones the question;
-  the decision itself never reads earlier records;
+  the decision itself never reads earlier records. A restart record that is
+  still a proposal postpones nothing (see "A cut is a proposal until the row
+  is taken");
 - its newest durable activity lies inside the adoption age window
   (`LLV_HOST_ADOPTION_MAX_TURN_AGE_HOURS`, default 6 h). The activity is the
   newer of the host ledger's last write and the transcript's newest dated
@@ -224,7 +226,7 @@ files, so a pass without a runtime client decides as well as one with.
 | Registry row: status, `activeTurnRef` | The Viewer, from host state, after the ledger | Who is asked; H only where the ledger holds no turn |
 | Registry observation source | The registry | `turn.source === "empty"`: no record of this transcript was ever observed |
 | Pipeline membership | The pipeline engine | The conversation runs a launched stage attempt |
-| Background ledger | The engine CLI's tool results and notices | B, harness background work launched and not reported complete (Claude) |
+| Background ledger | The engine CLI's tool results and notices, and the continuation prompts Delegatus sent | B, harness background work launched and not reported ended (Claude) |
 
 Nothing else is read. Runtime receipts and interrupt receipts are out of the
 decision (C2, C3), earlier cut records only postpone it, the ledger file's
@@ -316,15 +318,36 @@ slice with no record as empty):
 | Either engine, no record | empty |
 
 **B**, the background work a Claude turn that ended still waits on
-(`pendingBackgroundTaskNames`, within `BACKGROUND_TASK_WAIT_LIMIT_MS` of the
-newest work, as on the branch). Empty for Codex.
+(`verifiedBackgroundWork`, within `BACKGROUND_TASK_WAIT_LIMIT_MS` of the
+newest work). Empty for Codex. Two properties make it evidence a cut can rest
+on.
+
+- **It is read whole or it is `unreadable`.** A task launched hours of output
+  ago lies above the 128 KiB tail, so B folds the whole transcript: one
+  descriptor from the first byte, a stat before the read and two after, and no
+  offset kept from an earlier read. A record that could move the fold and
+  cannot be parsed, an unterminated final line, or a file that changed under
+  the read makes B `unreadable`. The records before a bad one are a prefix,
+  and a prefix can hold a task whose end was the lost record. The shared
+  incremental reader (`readBackgroundTaskLedger`) skips such a record and
+  keeps its offset past it, which suits a wait that is asked again every tick
+  and never a record that authorizes a fresh attempt.
+- **Work a continuation reported as killed is held no longer.** The work is a
+  child of the engine process, and the harness that would write its
+  completion notice dies with it. The continuation of a cut names that work in
+  one fixed sentence (`killedBackgroundWorkNotice`), and the prompt arrives in
+  the transcript as a user record. The fold reads that sentence as the end of
+  the tasks it names, exactly as it reads a task notification. So the
+  conversation's own transcript says the work is over, from the moment the
+  agent was told, and no cut record is consulted. A job launched after the
+  report is new work under its own id.
 
 **The table**, read top to bottom; every combination lands on a row:
 
 | # | H | R | Decision | Named by |
 | --- | --- | --- | --- | --- |
 | 1 | `unreadable` | any | **Undecided** | — |
-| 2 | any | `unreadable` or `undelimited` | **Undecided** | — |
+| 2 | any | `unreadable` or `undelimited`, or B `unreadable` where B was read | **Undecided** | — |
 | 3 | `open T` | `open`, `empty` or `unknown` | **Cut.** The host started T and nothing ended it. | T |
 | 4 | `open T` | `closed` | T ended by itself after its host stopped recording. **Cut** iff B is non-empty | T |
 | 5 | `closed T` | `open` | **Cut.** The engine began work by itself and nothing ended it. | T |
@@ -380,9 +403,48 @@ Then, unchanged:
   and spends the stage's one fresh attempt (`engine.ts:4161-4176`);
 - the deploy inventory lists the record.
 
-**No cut.** Nothing is written. The row follows the existing adoption rules.
+**No cut.** Nothing is written, and a proposal standing for the row is
+withdrawn (below). The row follows the existing adoption rules.
 
 **Undecided.** See "Unresolved evidence". It never produces a record.
+
+### A cut is a proposal until the row is taken
+
+A pass decides before it claims, so a predecessor that is still alive can
+finish the turn after the record was written. The turn's own ending evidence
+has to decide that too. A restart record is therefore a **proposal** while
+all of these hold (`restartCutProposal`): it is a restart record of no seat;
+the row's claim epoch is the one it was written under, so no successor has
+taken the row; and it is still `owed`, or stands as the witness it was
+recorded as (a stage's or a reviewer's). Three things follow.
+
+- **Every pass asks a proposed row again.** An owed proposal postpones
+  nothing. A row decided "cut" again keeps its proposal, which still owns the
+  conversation's next message, and writes no second record. A row that reads
+  undecided keeps its proposal as well: the record was written from evidence
+  that read whole.
+- **A row decided "no cut" from evidence that the turn ended has its
+  proposals withdrawn** (rows 4, 6, 8 and 10; row 12 is the absence of
+  evidence and disproves nothing). The record is removed (`store.withdraw`),
+  so no continuation is sent, the stage controller finds no witness, and the
+  deploy inventory lists nothing. The same cut found again later is recorded
+  anew under the same id.
+- **The stamp guards a cut row like any other.** When the stamp of a proposed
+  row has moved at one of the three comparison sites below, its proposals are
+  withdrawn, the row is held, and the re-probe decides it from what the
+  evidence says then. A turn that ended by itself in the window is decided "no
+  cut". A turn whose shutdown merely wrote its marker is decided "cut" again,
+  recorded under the same name and continued once.
+
+A proposed row that reads `dead` or `unhosted` at the comparison with its
+files moved was given up by an owner that was alive to write its ledger: the
+proposal is withdrawn, and what that release cut is its own record's. This
+pass's own dead-wrapper cleanup moves no file, so a row it retired keeps its
+record.
+
+Once a successor has claimed the row the record is final: the claim succeeds
+only when the recorded engine process and the claim's owner are both gone, so
+nothing can end the turn afterwards.
 
 **The generic Codex nudge** (`enqueueInterruptedCodexContinuations`, keyed by
 claim epoch) never answers a row this pass decided cut or undecided, a row
@@ -460,9 +522,9 @@ unchanged evidence lands on the same record id, so repeating a decision adds
 nothing. A pass may reuse its own earlier reading of a row only while the
 stamp below is identical.
 
-**A stamp guards every row the pass produced nothing for.** For each
-candidate the pass decided "no cut", and each candidate it did not ask because
-its evidence was older than the window, it keeps a stamp: the identity of the
+**A stamp guards every row the pass decided.** For each candidate the pass
+decided, "cut" included, and each candidate it did not ask because its
+evidence was older than the window, it keeps a stamp: the identity of the
 ledger file, the identity of the transcript file, and the row's status and
 turn word. The stamp is compared wherever the pass would replace the
 predecessor's ownership of that row:
@@ -475,8 +537,8 @@ predecessor's ownership of that row:
 - the retain predicate of the dead-wrapper cleanup (`startup.ts:1562-1565`).
 
 A row whose stamp moved is left exactly as it was, held, and asked again by
-the re-probe below. A row with a cut on record needs no stamp: the record owns
-its next message.
+the re-probe below. A cut row is stamped too: its record is a proposal until
+the row is taken, and a moved stamp withdraws it.
 
 The claim is what makes the second comparison final. `claimStructuredHost`
 succeeds only when the recorded engine process and the claim's owner are both
@@ -533,7 +595,8 @@ transcript, so the tail is read up to three times; a tail still uncertain
 records nothing, as the background clause does today, and the release log
 names the host. Rows 1 and 2 apply before B is read: a ledger that cannot be
 read, or a tail that holds no boundary for the ledger's newest turn, records
-nothing either, and the log names the host and what could not be decided.
+nothing either, and the log names the host and what could not be decided. B is
+read up to three times as well, and a B still `unreadable` records nothing.
 
 ## Finding map
 
@@ -557,6 +620,9 @@ nothing either, and the log names the host and what could not be decided.
 | D3 | Work the CLI began by itself after its host recorded an end got no continuation | Row 5, and the same clause at an orderly release | **Open** (an idle row is decided by B alone) | New, release seam: boot and release, agent and stage |
 | D4 | A late echo of the same turn changed the cut's name and made a second witness | A ledger cut is named by T; w is the checkpoint, and a record found again moves it | **Open** (the branch names by w too) | New, release seam: three boots, then T3 |
 | D5 | An undated completion of the open turn invented a cut | R is T's own records, found by `turn_id` or by frame `uuid`: row 4 | Revision 2 only | New: Codex and Claude, release seam and liveness |
+| E1 | A background job the restart killed was cut again on every later boot and release, after its continuation had completed | B: work a continuation reported as killed is held no longer | Open at `e6401f38f` | New, release seam: "background work a continuation reported as killed is never cut again …" (the turn finishes, is cut mid-tool, launches a new job); "an orderly release … already reported as killed"; fold case in `backgroundTasks.test.ts` |
+| E2 | A corrupt task notification above the 128 KiB tail left its job pending and authorized a cut | B is read whole or is `unreadable`: row 2, held and re-probed | Open at `e6401f38f` | New, release seam: "a corrupt background record above the transcript tail invents no cut across probes and boots, and its repair decides the row" (job ended, job still pending); its valid control; the orderly release; reader cases in `backgroundTasks.test.ts`; row 2 in `liveness.test.ts` |
+| E3 | A predecessor's turn that completed after recognition and before adoption still got a continuation | A cut is a proposal until the row is taken: the stamp withdraws it and the next decision is the turn's own evidence | Open at `e6401f38f` (deferred by revision 3) | New, release seam: "a turn that ends by itself before the row is claimed / after a pass that recorded it and never adopted …" (agent and stage); "a turn whose shutdown wrote its marker before the row is claimed is still cut, once"; store cases in `interruptionObligations.test.ts` |
 
 Rounds 1-3 each landed a test that the map below keeps.
 
@@ -675,8 +741,8 @@ Stays:
 - The pipeline side, unchanged: `restartCutOf`, `recoverRestartCutStage`,
   `startReplacementAttempt`, `cutAttemptReport`, the restart prompt,
   `conversationRestartCut`, `lastAgentWorkIndex`, `lastAgentEventAt`,
-  `cutProse`, `claudeTurnClosedByProviderFailure`,
-  `pendingBackgroundTaskNames`.
+  `cutProse`, `claudeTurnClosedByProviderFailure`. The branch's
+  `pendingBackgroundTaskNames` gave way to `verifiedBackgroundWork` (E2).
 - `scripts/deploy-checkout.py` and its tests; the `startup.test.ts` edit.
 
 Goes:
@@ -913,12 +979,19 @@ tests on top.
 ## Residual risks
 
 - During a deploy the successor can decide a row while the incumbent still
-  runs its turn. A turn that then ends by itself before the incumbent's
-  release leaves an owed record, and the agent gets one continuation too many,
-  telling it to inspect its transcript. A stage controller re-checks: a cut
-  counts only when the attempt's newest work precedes the record
-  (`restartCutOf`), so the stage keeps its result. A turn still running at the
-  release is recorded by both and collapses to one continuation.
+  runs its turn. The record it writes is a proposal, and the moving evidence
+  holds the row; a turn that then ends by itself has its proposal withdrawn.
+  A stage witness is visible to its controller for as long as the proposal
+  stands, which is until the next comparison or the next pass. The controller
+  re-checks: a cut counts only when the attempt's newest work precedes the
+  record (`restartCutOf`), so a stage whose turn went on writing keeps its
+  result.
+- A continuation that never reaches the agent (a newer message resumed the
+  conversation first, or the queue refused it for good) reports no killed
+  work. The work stays in B, and the next cut of that conversation names it
+  in its one continuation.
+- B parses the records that can move the fold and skips the rest unparsed. A
+  record damaged so far that it no longer names what it was is not seen.
 - A Viewer killed in the few synchronous milliseconds between a Codex host's
   ledger append and its registry row write leaves the row `idle`, and an
   `idle` Codex row is not asked.
@@ -977,12 +1050,8 @@ tests on top.
 - **Asking only rows whose predecessor can no longer act on them.** Holding
   every row whose predecessor Viewer is still alive would remove the first
   residual risk. It changes when a deploy's cuts are recorded, which existing
-  cases pin. The stamp comparison at the claim takes the part of this the
-  findings need. Revisit if extra continuations are reported after deploys.
-- **Checking an owed record against the frozen evidence before its
-  continuation is sent.** It would withdraw a continuation for a turn that
-  ended by itself after the record was written. The evidence has to be read
-  before this process's own host opens and closes the turn in the ledger.
+  cases pin. The stamp comparison at the claim, and the proposal a moved stamp
+  withdraws, take the part of this the findings need.
 - **Asking `idle` Codex rows.** It would close the second residual risk at the
   cost of a read for every idle Codex row a predecessor left.
 - **Retiring the generic Codex nudge.** It still serves this process's own
@@ -1098,6 +1167,27 @@ What a second correctness pass settled, 2026-10-07:
 - **The orderly release applies rows 1 and 2 first.** An idle host's
   unreadable ledger, or a tail with no boundary for the ledger's newest turn,
   had still let B authorize a record. Both now record nothing.
+
+What a third correctness pass settled, 2026-10-07 (E1-E3 of the finding
+map):
+
+- **B is verified evidence.** `verifiedBackgroundWork` replaces the read
+  through the shared incremental reader, at the boot and at the orderly
+  release. A corrupt record above the tail had left its job pending in a
+  prefix, and the offset cached past it would have hidden the repair.
+- **The continuation is the report.** `killedBackgroundWorkNotice` builds the
+  sentence `interruptionContinuationText` sends, and the fold in
+  `pipelines/backgroundTasks.ts` reads it back as the end of the tasks it
+  names. A stage wait and a review flow read the same fold, so neither waits
+  on work its agent was told is gone.
+- **A cut is a proposal until the row is taken.** `store.withdraw` removes a
+  record; `restartCutProposal` says which records may be removed. Cut rows are
+  stamped, proposed rows are asked by every pass, and a proposal is withdrawn
+  when its row reads "no cut" or its stamp has moved. The check the
+  revision deferred is now part of the rule.
+- **Existing cases.** Every case of the mapped files passes with its
+  expectations unchanged. A row with an owed proposal that reads undecided
+  keeps the behaviour it had while it was postponed.
 
 No question for the operator remains: the code, read-only counts over this
 machine's own ledgers and transcripts, three scratch runs of the existing

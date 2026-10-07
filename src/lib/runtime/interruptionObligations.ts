@@ -4,6 +4,7 @@ import path from "node:path";
 
 import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import type { DeliveryOperationOwner, RegistryFile } from "@/lib/agent/registry";
+import { killedBackgroundWorkNotice } from "@/lib/pipelines/backgroundTasks";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 
 import { VIEWER_RELEASE_INTERRUPTION_OPENING, VIEWER_RESTART_INTERRUPTION_OPENING } from "./recoveryNotices";
@@ -93,6 +94,31 @@ export interface InterruptionObligationStore {
   record(input: InterruptionObligationInput): { obligation: InterruptionObligation; created: boolean };
   update(id: string, patch: Partial<Pick<InterruptionObligation,
     "state" | "operationId" | "attempts" | "resolvedAt" | "resolution">>): InterruptionObligation | null;
+  /** Removes a restart record the evidence no longer supports, so nothing
+      continues it, counts it or lists it. False when no record was there. */
+  withdraw(id: string): boolean;
+}
+
+/** Why a review round's reviewer, cut by a restart, is owed no continuation. */
+export const REVIEWER_CUT_RESOLUTION = "a review flow reviewer: its flow relaunches the round";
+
+/**
+ * Whether a restart record is still a proposal: written from evidence a
+ * predecessor could still move, with nothing yet done about it. The row's
+ * claim epoch is the one the record was written under, so no successor has
+ * taken the row; and the record is still owed, or stands as the witness it was
+ * recorded as. Every pass asks such a row again
+ * (docs/design/restart-cut-recognition.md, "A cut is a proposal until the row
+ * is taken").
+ */
+export function restartCutProposal(
+  obligation: InterruptionObligation,
+  row: { hostKey: string; claimEpoch: number },
+): boolean {
+  return obligation.reason === "viewer-restart" && obligation.seat === null && obligation.owner === null
+    && obligation.hostKey === row.hostKey && obligation.claimEpoch === row.claimEpoch
+    && (obligation.state === "owed" || (obligation.state === "discharged"
+      && (obligation.resolution === STAGE_CUT_RESOLUTION || obligation.resolution === REVIEWER_CUT_RESOLUTION)));
 }
 
 const OBLIGATION_PREFIX = "interruption-continuation-";
@@ -424,6 +450,16 @@ export function interruptionObligationStore(
       }
       return { obligation, created: true };
     },
+    withdraw(id) {
+      try {
+        if (!fs.existsSync(fileFor(id))) return false;
+        fs.rmSync(fileFor(id), { force: true });
+        return true;
+      } catch (error) {
+        console.error("[interruption recovery] a withdrawn obligation could not be removed", { obligation: id, error });
+        return false;
+      }
+    },
     update(id, patch) {
       const current = read(fileFor(id)) ?? readPending().find((pending) => pending.id === id) ?? null;
       if (!current) return null;
@@ -464,11 +500,7 @@ export function interruptionContinuationText(obligation: InterruptionObligation)
       "You were re-hosted automatically; resume that turn.",
     ];
   const background = obligation.checkpoint.backgroundTasks ?? [];
-  const waiting = background.length === 0 ? [] : [
-    `Your turn had ended while background work you started was still running (${background.join(", ")}).`
-      + " The restart stopped it with your previous process, so its completion notice will not arrive:"
-      + " read its output, and re-run it if it did not finish.",
-  ];
+  const waiting = background.length === 0 ? [] : [killedBackgroundWorkNotice(background)];
   return [
     ...opening,
     ...waiting,

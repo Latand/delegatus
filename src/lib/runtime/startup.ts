@@ -54,6 +54,8 @@ import {
   interruptionObligationStore,
   interruptionObligationUnresolved,
   interruptionStageOf,
+  restartCutProposal,
+  REVIEWER_CUT_RESOLUTION,
   STAGE_CUT_RESOLUTION,
   submittedContinuationOutcome,
   type InterruptionObligation,
@@ -437,16 +439,25 @@ interface RestartCutRecognition {
       continuation answers them, the generic Codex nudge included. A "no cut"
       on an uncorroborated turn word (row 12) is left to the nudge. */
   settled: Set<string>;
-  /** The evidence each row was decided "no cut" from, or not asked for its
-      age: compared wherever this pass would replace the predecessor's
-      ownership of the row. */
+  /** The evidence each row was decided from, or not asked for its age:
+      compared wherever this pass would replace the predecessor's ownership of
+      the row. */
   stamps: Map<string, RestartCutStamp>;
+  /** Proposals the evidence no longer supports: restart records of a row no
+      successor has taken, which this pass decided "no cut" from durable
+      evidence that the turn ended. */
+  disproved: InterruptionObligation[];
 }
 
 interface RestartCutStamp {
   sessionId: string;
   path: string;
   endpoint: string;
+  /** The row's claim epoch when it was decided: a record written under it is
+      still a proposal. */
+  claimEpoch: number;
+  /** The ledger and the transcript alone. */
+  files: string;
   value: string;
 }
 
@@ -467,13 +478,22 @@ function fileModifiedAt(filename: string): number | "absent" | "unknown" {
   }
 }
 
-function restartCutStampValue(ledger: string, transcript: string, entry: AgentRegistryEntry): string {
-  return [ledger, transcript, entry.status, entry.structuredHost?.activeTurnRef ?? ""].join("|");
+function restartCutStampFiles(ledger: string, transcript: string): string {
+  return [ledger, transcript].join("|");
+}
+
+function restartCutStampValue(files: string, entry: AgentRegistryEntry): string {
+  return [files, entry.status, entry.structuredHost?.activeTurnRef ?? ""].join("|");
+}
+
+/** The files of a held or stamped row as they stand now. */
+function currentRestartCutStampFiles(stamp: Pick<RestartCutStamp, "sessionId" | "path">): string {
+  return restartCutStampFiles(hostTurnRecordIdentity(stamp.sessionId), transcriptIdentity(stamp.path));
 }
 
 /** The stamp of a held or stamped row as its evidence stands now. */
 function currentRestartCutStamp(stamp: Pick<RestartCutStamp, "sessionId" | "path">, entry: AgentRegistryEntry): string {
-  return restartCutStampValue(hostTurnRecordIdentity(stamp.sessionId), transcriptIdentity(stamp.path), entry);
+  return restartCutStampValue(currentRestartCutStampFiles(stamp), entry);
 }
 
 /**
@@ -484,7 +504,8 @@ function currentRestartCutStamp(stamp: Pick<RestartCutStamp, "sessionId" | "path
 async function restartCutTargets(
   registry: AgentRegistry,
   seats: readonly OrchestratorSeat[],
-  unresolved: readonly InterruptionObligation[],
+  /** Every record on file, arrivals already settled. */
+  obligations: readonly InterruptionObligation[],
   scope: ReadonlySet<string> | null,
   readLedger: typeof readHostTurnRecord,
   snapshot: RegistryFile = registry.readOnlySnapshot(),
@@ -496,19 +517,30 @@ async function restartCutTargets(
   /* A conversation whose continuation is still owed or on its way is covered
      by it: whatever its transcript gained since is the provider's bookkeeping
      or that continuation's turn. One that already arrived was settled before
-     this capture and covers nothing. This only postpones the question. */
-  const postponed = new Set(unresolved.map((obligation) => registry.canonicalConversationId(obligation.conversationId)));
-  const recognition: RestartCutRecognition = { cuts: [], undecided: new Set(), settled: new Set(), stamps: new Map() };
+     this capture and covers nothing. This only postpones the question, and a
+     record that is still a proposal postpones nothing: its row is asked again
+     for as long as no successor has taken it. */
+  const recorded = new Map<string, InterruptionObligation[]>();
+  for (const obligation of obligations) {
+    const id = registry.canonicalConversationId(obligation.conversationId);
+    recorded.set(id, [...recorded.get(id) ?? [], obligation]);
+  }
+  const recognition: RestartCutRecognition = { cuts: [], undecided: new Set(), settled: new Set(), stamps: new Map(), disproved: [] };
   const self = captureProcessIdentity(process.pid);
   for (const conversation of Object.values(snapshot.conversations)) {
     const generation = conversation.generations.at(-1);
     if ((conversation.engine !== "claude" && conversation.engine !== "codex") || !generation || conversation.supersededBy) continue;
     const conversationId = registry.canonicalConversationId(conversation.id);
     /* A seat has its own capture and is not stamped by this one. */
-    if (seated.has(conversationId) || postponed.has(conversationId)) continue;
+    if (seated.has(conversationId)) continue;
     const hostKey = sessionKeyId({ engine: conversation.engine, sessionId: generation.id });
-    if (scope && !scope.has(hostKey)) continue;
     const entry = snapshot.entries[hostKey];
+    const proposals = entry
+      ? (recorded.get(conversationId) ?? []).filter((obligation) => restartCutProposal(obligation, { hostKey, claimEpoch: entry.claimEpoch }))
+      : [];
+    const unresolved = (recorded.get(conversationId) ?? []).filter(interruptionObligationUnresolved);
+    if (unresolved.some((obligation) => !proposals.includes(obligation))) continue;
+    if (scope && !scope.has(hostKey)) continue;
     /* Only a structured row a previous Viewer hosted: a pane belongs to its
        terminal, and a row this process already claimed is its own work. The
        whole identity is compared: a predecessor whose pid this process was
@@ -525,15 +557,17 @@ async function restartCutTargets(
       : await readStableTailRecords(generation.path).catch((): StableTailRead => ({ integrity: "uncertain", records: [] }));
     const evidence = tail.integrity === "complete" ? transcriptCutEvidenceFromRecords(tail.records, conversation.engine) : null;
     const at = evidence?.lastWork?.at ?? null;
+    const files = restartCutStampFiles(
+      ledger.state === "read" ? ledger.identity : ledger.state === "absent" ? "absent" : hostTurnRecordIdentity(generation.id),
+      transcript,
+    );
     const stamp: RestartCutStamp = {
       sessionId: generation.id,
       path: generation.path,
       endpoint: entry.structuredHost.endpoint,
-      value: restartCutStampValue(
-        ledger.state === "read" ? ledger.identity : ledger.state === "absent" ? "absent" : hostTurnRecordIdentity(generation.id),
-        transcript,
-        entry,
-      ),
+      claimEpoch: entry.claimEpoch,
+      files,
+      value: restartCutStampValue(files, entry),
     };
     /* The same window bounds every adoption a turn claim alone asks for. It
        dates the newest durable activity: the host ledger's last write or the
@@ -554,27 +588,41 @@ async function restartCutTargets(
     }
     const stage = interruptionStageOf(snapshot.memberships, conversationId);
     const host = hostTurnReading(ledger);
-    const backgroundTasks = evidence
+    const background = evidence
       ? await backgroundWorkAwaitedAtCut(conversation.engine, generation.path, evidence, now, host.state === "closed")
-      : [];
+      : { state: "read" as const, names: [] };
+    const backgroundTasks = background.state === "read" ? background.names : [];
     const turnWord = live ? entry.structuredHost.activeTurnRef ?? null : null;
     const decided = restartCutDecision({
       host,
       record: engineRecordSince(conversation.engine, ledger, tail),
       row: { status: live ? "live" : "idle", turnRef: turnWord, neverObserved: conversation.turn.source === "empty" },
       stage: stage !== null,
-      backgroundWork: backgroundTasks.length > 0,
+      backgroundWork: background.state === "read" ? backgroundTasks.length > 0 : "unreadable",
     });
+    /* A proposal read from evidence that was whole stands while the evidence
+       cannot be read to say otherwise: it keeps the conversation's next
+       message, as it did before its row was asked again. */
+    if (decided.decision === "undecided" && unresolved.length > 0) continue;
+    /* Every row decided here is stamped, a cut one included: what is written
+       for it is a proposal until the row is taken. */
+    recognition.stamps.set(hostKey, stamp);
     if (decided.decision === "undecided") {
       recognition.undecided.add(hostKey);
-      recognition.stamps.set(hostKey, stamp);
       continue;
     }
     if (decided.decision === "no-cut") {
-      recognition.stamps.set(hostKey, stamp);
-      if (decided.row !== 12) recognition.settled.add(hostKey);
+      /* The turn's own evidence now says it ended by itself. Row 12 is the
+         absence of evidence and disproves nothing. */
+      if (decided.row !== 12) {
+        recognition.settled.add(hostKey);
+        recognition.disproved.push(...proposals);
+      }
       continue;
     }
+    /* A proposal still owed owns the conversation's next message, and the
+       evidence still supports it. */
+    if (unresolved.length > 0) continue;
     const memberships = snapshot.memberships[conversationId] ?? [];
     recognition.cuts.push({
       conversationId,
@@ -589,7 +637,7 @@ async function restartCutTargets(
       stage,
       answeredBy: stage ? STAGE_CUT_RESOLUTION
         : memberships.some((membership) => membership.kind === "flow" && membership.role === "reviewer")
-          ? "a review flow reviewer: its flow relaunches the round"
+          ? REVIEWER_CUT_RESOLUTION
           : null,
     });
   }
@@ -634,6 +682,25 @@ function recordRestartCuts(
         ...(target.stage ? { stage: target.stage } : {}),
       });
     }
+  }
+}
+
+/** Removes proposals the evidence no longer supports. The row is decided
+    again from what the evidence says now, and a cut found again is recorded
+    again under the same name. */
+function withdrawRestartCutProposals(
+  store: InterruptionObligationStore,
+  proposals: readonly InterruptionObligation[],
+  found: Set<string>,
+  reason: string,
+): void {
+  for (const proposal of proposals) {
+    if (!store.withdraw(proposal.id)) continue;
+    found.delete(proposal.hostKey);
+    console.error("[structured hosts] withdrew a restart cut record", {
+      conversationId: proposal.conversationId, obligation: proposal.id, reason,
+      ...(proposal.stage ? { stage: proposal.stage } : {}),
+    });
   }
 }
 
@@ -1607,17 +1674,22 @@ async function adoptStructuredHostsPass(
      any of them; a decision belongs to the pass that made it. A continuation
      that already arrived covers nothing any more: settle it first, so a turn
      the agent resumed and the restart cut again is seen. */
+  settleSubmittedInterruptionObligations(registry, interruptions,
+    interruptions.list().filter(interruptionObligationUnresolved));
   const recognition = await restartCutTargets(
     registry,
     orchestratorSeats(),
-    settleSubmittedInterruptionObligations(registry, interruptions,
-      interruptions.list().filter(interruptionObligationUnresolved)),
+    interruptions.list(),
     resumeDeferred,
     dependencies.readHostTurnRecord ?? readHostTurnRecord,
   );
   const passState = startupPasses.get(registry);
   const cutHostKeys = passState ? passState.cutHostKeys ??= new Set<string>() : new Set<string>();
   recordRestartCuts(interruptions, recognition.cuts, cutHostKeys);
+  /* A cut is a proposal until its row is taken: one the turn's own evidence
+     has since disproved is withdrawn before anything answers it. */
+  withdrawRestartCutProposals(interruptions, recognition.disproved, cutHostKeys,
+    "the turn's own evidence shows it ended by itself");
   /* Rows whose evidence is undecided, or moved after it was decided: left
      exactly as they were, and asked again by the deferral re-probe. */
   const heldHostKeys = new Set(recognition.undecided);
@@ -1629,6 +1701,14 @@ async function adoptStructuredHostsPass(
   if (!admitHeldPendingWork) for (const key of heldHostKeys) holdRestartCutRow(key);
   const stamps = recognition.stamps;
   const self = captureProcessIdentity(process.pid);
+  const withdrawMovedProposals = (key: string, stamp: RestartCutStamp): void => {
+    withdrawRestartCutProposals(
+      interruptions,
+      interruptions.list().filter((obligation) => restartCutProposal(obligation, { hostKey: key, claimEpoch: stamp.claimEpoch })),
+      cutHostKeys,
+      "its evidence moved before the row was taken",
+    );
+  };
   const evidenceMoved = (entry: AgentRegistryEntry): boolean => {
     const key = sessionKeyId(entry.key);
     if (heldHostKeys.has(key)) return true;
@@ -1639,13 +1719,18 @@ async function adoptStructuredHostsPass(
        dead or unhosted was retired by this pass's own cleanup or given up by
        an owner that was alive to say so, and a release records what it cuts. */
     const claimant = entry.claimOwner ? structuredClaimIdentity(entry.claimOwner) : null;
-    if (entry.status === "dead" || entry.status === "unhosted"
-      || (claimant && sameRecordedProcessIdentity(self, claimant) && entry.structuredHost?.endpoint !== stamp.endpoint)) {
+    const ownRow = Boolean(claimant && sameRecordedProcessIdentity(self, claimant) && entry.structuredHost?.endpoint !== stamp.endpoint);
+    if (ownRow || entry.status === "dead" || entry.status === "unhosted") {
+      /* An owner that gave the row up wrote its ledger as it did, and what it
+         cut is its release's to record: a proposal read before that rests on
+         files that have since moved. This pass's own cleanup moves no file. */
+      if (!ownRow && currentRestartCutStampFiles(stamp) !== stamp.files) withdrawMovedProposals(key, stamp);
       stamps.delete(key);
       return false;
     }
     if (currentRestartCutStamp(stamp, entry) === stamp.value) return false;
     console.error("[structured hosts] restart cut evidence moved after it was decided; holding the row", { key });
+    withdrawMovedProposals(key, stamp);
     heldHostKeys.add(key);
     if (!admitHeldPendingWork) holdRestartCutRow(key);
     return true;
@@ -2193,7 +2278,7 @@ async function probeHeldRestartCutRows(
   const recognition = await restartCutTargets(
     registry,
     (dependencies.orchestratorSeats ?? activeOrchestratorSeats)(),
-    interruptions.list().filter(interruptionObligationUnresolved),
+    interruptions.list(),
     new Set(state.held.keys()),
     dependencies.readHostTurnRecord ?? readHostTurnRecord,
     snapshot,

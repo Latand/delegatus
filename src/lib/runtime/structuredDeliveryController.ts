@@ -2036,9 +2036,9 @@ const RELEASE_TAIL_READS = 3;
  *
  * This process is the ledger's only writer, so no append can land inside the
  * synchronous read. The CLI is alive and may be writing the transcript, so
- * the tail is read up to three times; one still uncertain records nothing, and
- * so does a ledger that cannot be read or a tail that holds no boundary for
- * the ledger's newest turn (rows 1 and 2).
+ * the tail and the background records are each read up to three times; one
+ * still uncertain records nothing, and so does a ledger that cannot be read
+ * or a tail that holds no boundary for the ledger's newest turn (rows 1 and 2).
  */
 async function idleHostCut(registry: AgentRegistry, key: SessionKey): Promise<{ backgroundTasks: string[]; selfStartedWork: boolean }> {
   const nothing = { backgroundTasks: [], selfStartedWork: false };
@@ -2074,10 +2074,19 @@ async function idleHostCut(registry: AgentRegistry, key: SessionKey): Promise<{ 
   }
   const evidence = transcriptCutEvidenceFromRecords(tail.records, "claude");
   const hostClosedTurn = host.state === "closed";
-  return {
-    backgroundTasks: await backgroundWorkAwaitedAtCut("claude", transcriptPath, evidence, Date.now(), hostClosedTurn),
-    selfStartedWork: hostClosedTurn && record === "open",
-  };
+  /* The CLI may be writing while its background records are read, so this
+     read is repeated like the tail's. */
+  let background = await backgroundWorkAwaitedAtCut("claude", transcriptPath, evidence, Date.now(), hostClosedTurn);
+  for (let read = 1; read < RELEASE_TAIL_READS && background.state !== "read"; read += 1) {
+    background = await backgroundWorkAwaitedAtCut("claude", transcriptPath, evidence, Date.now(), hostClosedTurn);
+  }
+  if (background.state !== "read") {
+    console.error("[viewer release] an idle host's background work could not be read whole; recording nothing for it", {
+      hostKey: sessionKeyId(key), reason: background.reason,
+    });
+    return nothing;
+  }
+  return { backgroundTasks: background.names, selfStartedWork: hostClosedTurn && record === "open" };
 }
 
 /**

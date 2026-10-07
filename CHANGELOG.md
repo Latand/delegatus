@@ -31,7 +31,10 @@ guarantees for the 1.x series.
   agent began by itself after a background task reported are all continued.
   A conversation whose records cannot be read yet is left untouched and
   asked again within seconds, in the same Delegatus, before anything takes
-  it over.
+  it over. A background command the agent was already told about is never
+  reported a second time, a turn that finishes by itself while Delegatus is
+  still taking the conversation over gets no message, and a damaged record
+  of background work holds the conversation until it can be read.
 - **Telegram never stops an agent from starting, and a connection that can be
   restored is restored by the start itself.** A conversation that holds the
   Telegram tool and whose agent was not running used to refuse every message

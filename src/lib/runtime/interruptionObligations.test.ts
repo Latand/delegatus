@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import {
   interruptionContinuationText,
   interruptionObligationStore,
+  restartCutProposal,
   type InterruptionObligationInput,
 } from "./interruptionObligations";
 
@@ -159,4 +160,30 @@ test("two restart records that differ in turn are two cuts, whatever their times
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("a withdrawn restart record is gone, and the same cut found again is recorded anew", () => {
+  const store = interruptionObligationStore(directory);
+  const owed = { ...restartInput("T1", 1_000, "2026-10-07T00:00:00.000Z"), answeredBy: undefined };
+  const first = store.record(owed);
+  expect(first.obligation.state).toBe("owed");
+  expect(store.withdraw(first.obligation.id)).toBe(true);
+  expect(store.withdraw(first.obligation.id)).toBe(false);
+  expect(interruptionObligationStore(directory).list()).toEqual([]);
+  const again = store.record(owed);
+  expect(again).toMatchObject({ created: true, obligation: { id: first.obligation.id, state: "owed" } });
+});
+
+test("a restart record is a proposal only while its row is unclaimed and nothing has answered it", () => {
+  const store = interruptionObligationStore(directory);
+  const witness = store.record(restartInput("T1", 1_000, "2026-10-07T00:00:00.000Z")).obligation;
+  const owed = store.record({ ...restartInput("T2", 2_000, "2026-10-07T00:00:01.000Z"), answeredBy: undefined }).obligation;
+  const row = { hostKey: witness.hostKey, claimEpoch: 3 };
+  expect(restartCutProposal(witness, row)).toBe(true);
+  expect(restartCutProposal(owed, row)).toBe(true);
+  /* A successor took the row. */
+  expect(restartCutProposal(owed, { ...row, claimEpoch: 4 })).toBe(false);
+  expect(restartCutProposal(store.update(owed.id, { state: "submitted" })!, row)).toBe(false);
+  expect(restartCutProposal(store.update(owed.id, { state: "discharged", resolution: "a newer message already resumed the conversation" })!, row)).toBe(false);
+  expect(restartCutProposal(store.record(releaseCut).obligation, { hostKey: releaseCut.hostKey, claimEpoch: 3 })).toBe(false);
 });
