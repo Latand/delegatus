@@ -1,9 +1,11 @@
 # Role memory: agents leave abstract lessons, the next agent of the role starts with them
 
-Status: design, with prototypes and a test plan. Written against `main` at
-`5a197eeb5` (2026-10-07). File and line references are to that commit. This
-stage wrote this document and nothing else in the repository; the prototype
-frames live outside it, under `~/Pictures/delegatus-review/role-memory/`.
+Status: design, with prototypes and a test plan, revised once after an
+independent design review (section 6 lists what changed). Written against
+`main` at `5a197eeb5` (2026-10-07). File and line references are to that
+commit. This lane wrote this document and the frame manifest and nothing else
+in the repository; the prototype frames live outside it, under
+`~/Pictures/delegatus-review/role-memory/`.
 
 ## Originating requirement
 
@@ -112,14 +114,18 @@ justifies a store of Delegatus's own, and why it does not compete.
 
 | Piece | Where | What it gives role memory |
 | --- | --- | --- |
-| Shared memory phases 1–3 | `src/lib/memory/*`, `docs/design/agent-memory.md` | A read-only index over the engines' own stores (`memory-index.sqlite`), `search_memory`, and per-prompt injection through the engines' `UserPromptSubmit` hooks. The index is a derivative, "safe to delete" (§4.7 of that design), so it cannot hold primary text. Injection runs only for the operator's own turns (`memoryGate`, `src/lib/memory/selection.ts:14`), and a launch brief from a pipeline is skipped (agent-memory.md §4.4, "holds a pipeline or flow membership"). Pipeline stages therefore receive no shared memory today. |
+| Shared memory phases 1–3 | `src/lib/memory/*`, `docs/design/agent-memory.md` | A read-only index over the engines' own stores (`memory-index.sqlite`), `search_memory`, and per-prompt injection through the engines' `UserPromptSubmit` hooks (installed for every Claude launch, `src/lib/agent/spawnPolicy.ts:493-496`). The index is a derivative, "safe to delete" (§4.7 of that design), so it cannot hold primary text. Injection runs only for the operator's own turns (`memoryGate`, `src/lib/memory/selection.ts:14`). A pipeline's launch brief is skipped, but only the launch: `src/lib/memory/controller.ts:76-88` admits a later human message in the same conversation, and nothing there looks at the conversation's role. A reviewer stage the operator writes to can therefore receive shared memory today. |
+| Native engine memory | agent-memory.md §1–2 | Claude's auto memory is on by default and is turned off by `autoMemoryEnabled` in settings or `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` (agent-memory.md, table in §1.1). Codex's memories are a feature flag (`[features] memories`), already turned off for ephemeral runs with `--disable memories` (`src/lib/agent/ephemeral.ts:211`). Pipeline stages get both today, whatever their role. |
+| The stage input composer | `composeStageInput`, `src/lib/pipelines/stageInput.ts:14` | Keeps a launch message within the 32 000-byte structured envelope (`MAX_STRUCTURED_TEXT_BYTES`, `src/lib/runtime/structuredContent.ts:40`). When substitutions do not fit, it writes them, and as a last resort the whole rendered prompt, to `.artifacts/pipeline-stage-inputs/private/` inside the checkout (`stageInput.ts:58-72`, `controllerArtifacts.ts:5,22-42`): ignored and kept out of the index, but on disk in the repository's working tree. |
+| Deferred activation | `engine.ts:5244-5288`, `engine.ts:4679-4691`, `types.ts:384-387` | A deferred or replayed launch persists its whole `spawnInput`, prompt included, on the attempt (`attempt.activation.input`), after the composer has run ("Persist the materialized bytes before reserving or replaying a launch"). |
+| Free-text writers that leave the machine | `encodeTask`, `src/lib/links/taskWire.ts:49-55`; `src/lib/bridge/reportRender.ts:149-168`; `publishPipelineBranch`, `src/lib/pipelines/git.ts:1372`; `publishPrototype`, `src/lib/prototypeReview/store.ts:128`; the agent Git guard, `src/lib/git/agentHistoryGuard.ts`, and the forge shims, `src/lib/git/agentForgeCredentials.ts:280-290` | Task text and details are copied to a linked board verbatim; bridge reports drop items by sensitive class, which says nothing about whether a text is a private rule. Commits, pull requests, prototype reviews and issues are written by agents and by the engine through these paths. |
 | The per-project memory switch | `src/lib/memory/settings.ts:17`, `src/components/memory/MemoryPage.tsx` | The operator's existing place for memory: header menu → Settings → Memory, on the desktop rail menu and the phone's menu sheet. On by default for this repository only. |
 | The stage prompt | `renderStagePrompt`, `src/lib/pipelines/prompts.ts:36` | Brief, relay, pinned task, pinned specification, role scaffold, then the controller's contract, which every stage reads last. It is re-rendered at activation and must match byte for byte (`engine.ts:4666`), so anything injected has to be frozen on the attempt. |
 | Attempt binding | `bindAttemptDefinition`, `engine.ts:2424` | Freezes a stage's prompt, role, account, sandbox and outputs when the attempt starts. |
 | `stage_report` | `src/lib/mcp/server.ts:3216`, `reportStageCompletion` at `engine.ts:11113` | The one completion channel. It resolves the calling conversation to its live attempt (`resolveStageCompletionTarget`, `engine.ts:10952`), records the report, and answers the agent. "The stage settles when this turn ends, so you may keep working after it" (`prompts.ts:107`). |
 | The role registry | `src/lib/roles/types.ts:1`, `src/lib/roles/defaults.ts` | Twelve roles: orchestrator, reviewer, verifier, builder, architect, cleaner, prod-auditor, deployer, merger, maintainer, issue-reporter, visual-critic. A fixer is the builder in `mode: apply-fixes` (`defaults.ts:223`). |
 | One-turn headless Codex | `runHeadlessCodexOnce`, `src/lib/agent/headless.ts:477` | A bounded, read-only, schema-free single answer. The rotation digest uses it with a small model (`handoffDigest.ts:562`). |
-| State in SQLite | `SqliteStateCollection`, `src/lib/state/sqliteStateStore.ts:919`; `docs/design/state-sqlite-migration.md` decision 1 | Durable collections in `state.sqlite` with WAL, integrity checks and the ten-minute backups. "No new database file is introduced." |
+| State in SQLite | `SqliteStateCollection`, `src/lib/state/sqliteStateStore.ts:919`; `docs/design/state-sqlite-migration.md` decision 1 | Durable collections in `state.sqlite` with WAL, integrity checks and the ten-minute backups. "No new database file is introduced." `patchSync` with a `companion` (`sqliteStateStore.ts:1338-1368`) writes two collections of the same database in one transaction. |
 | Privacy detectors | `staticSensitiveClasses`, `src/lib/privacy/staticDetectors.ts:32`; `scrubIssueReport`, `src/lib/issueReports/scrub.ts:67` | Hints for home paths, credentials, private addresses and ids, already used on text bound for a public issue. |
 | Linked lane rows | `src/lib/links/laneFeed.ts:1-7` | By construction carry identifiers and counts only: "no prompt, spec, finding text, summary, path or conversation id". |
 | The board maintainer | `docs/design/board-maintainer.md` | A per-project agent on the seat tick, every few hours, with board tools. |
@@ -146,13 +152,21 @@ engines, and Delegatus runs builders on Codex and critics on Claude.
    deduplicates and rewrites the rules under the bound, checked by the server
    so no rule disappears unrecorded.
 4. **Injection at start**: a stage attempt freezes the revisions it reads when
-   it binds, and the stage prompt carries a labelled "Learned rules" block.
-5. **Controls** on surfaces that exist: a second switch and the scope pages on
+   it binds; the pipeline record keeps a marker and the revision ids, and the
+   rule text enters the launch message only at the spawn boundary.
+5. **One exclusion policy** for every automatic memory path: the new block and
+   lesson request, the existing shared-memory hook for every turn of the
+   conversation, and the engines' native memory at launch (2.3).
+6. **A private-memory egress check**: one function over the known rule texts,
+   called by every path that writes free text off the machine or into the
+   repository (2.9).
+7. **Controls** on surfaces that exist: a second switch and the scope pages on
    the Memory page; one line under the stage report on the card.
 
 Everything else is reused: the conversation→attempt resolution of
-`stage_report`, the attempt binding, the headless runner, the state
-collections and their backups, the privacy detectors, the Memory page and the
+`stage_report`, the attempt binding, the stage input composer, the headless
+runner, the state collections, their two-collection transaction and their
+backups, the privacy detectors, the agent Git guard, the Memory page and the
 stage report line.
 
 Why a Delegatus store now, against the earlier deferral: the earlier design
@@ -180,7 +194,9 @@ through the succession aliases that already govern every project-keyed store
 
 **Bound.** Each scope renders to at most 10 000 characters, counted as Unicode
 code points, so a Ukrainian rule costs the same as an English one. With three
-scopes a stage receives at most 30 000 characters, about 7 500 tokens.
+scopes a stage receives at most 30 000 characters, about 7 500 tokens. In
+UTF-8 that is up to about 60 000 bytes of Ukrainian, more than the 32 000-byte
+launch envelope holds on its own; 2.6 says where such a block goes.
 
 **Storage.** Three collections in `state.sqlite` through
 `SqliteStateCollection`, so the store inherits WAL, the activation integrity
@@ -188,9 +204,16 @@ check and the ten-minute backups, and adds no database file:
 
 | Collection | One record per | Fields |
 | --- | --- | --- |
-| `role-memory-rules` | rule, ever | `id`, `scope`, `rule` (≤ 300), `why` (≤ 160), `state`: `active` · `pending` · `merged` · `archived`, `archivedReason`, `mergedInto`, `sources` (ids it was merged from), `pinned` (operator-written), `author` (`agent` · `consolidation` · `operator`), `provenance` (project, pipeline, stage, attempt, role and mode, engine and model, conversation id, time), `hints` (privacy detector classes), `createdAt`, `changedAt` |
-| `role-memory-revisions` | change of a scope's active list | `scope`, `n`, `at`, `author`, `active` (rule ids in order), `rendered` (the exact injected text), `chars`, `added`, `merged`, `archived`, `note` (a refused consolidation's reason) |
+| `role-memory-rules` | rule, ever | `id`, `scope`, `rule` (≤ 300), `why` (≤ 160), `state`: `active` · `pending` · `rewritten` · `merged` · `archived`, `archivedReason`, `successor` (the rule a rewrite or merge produced), `sources` (the ids it was rewritten or merged from), `changeReason` (consolidation's one line), `pinned` (operator-written), `publishable` (the operator's release from the egress check, 2.9), `author` (`agent` · `consolidation` · `operator`), `provenance` (project, pipeline, stage, attempt, role and mode, engine and model, conversation id, time), `hints` (privacy detector classes), `createdAt`, `changedAt` |
+| `role-memory-revisions` | change of a scope's active list | `scope`, `n`, `at`, `author`, `active` (rule ids in order), `rendered` (the exact injected text), `chars`, `added`, `kept`, `rewritten`, `merged`, `archived`, `rebasedOver` (revisions a consolidation was rebased over, 2.5), `note` (a refused consolidation's reason) |
 | `role-memory-settings` | project | `enabled` |
+
+A scope's current revision number is its version. Every change to a scope (an
+appended lesson, an operator edit, a consolidation) is one `patchSync` over
+`role-memory-revisions` with `role-memory-rules` as its companion
+(`sqliteStateStore.ts:1338`): the rule records and the new revision commit in
+one transaction, and only when the scope's latest revision is still the one the
+change was computed from. A crash leaves either both or neither.
 
 A revision is never rewritten, so an attempt that recorded `(scope, n)` renders
 the same text on every re-render. Only the Viewer process writes these
@@ -213,11 +236,37 @@ directory.
 | merger, deployer, cleaner, prod-auditor | same | yes | Recurring operational traps are where a rule pays most. |
 | a stage with no role preset | project, machine | project and machine only | It has no role scope to read or write. |
 
-An excluded stage sees no "Learned rules" block, gets no lesson request in its
-`stage_report` answer, and `leave_lesson` refuses it. On-demand search is
-outside the guarantee: a reviewer can still read a builder's transcript, which
-carries the block the builder received, through `search_transcripts`. "Clean"
-here means nothing is put into its context.
+**One policy, every automatic path.** "Clean" means no learned memory reaches
+an excluded agent's context unless it searches for it. Learned memory has five
+automatic ways in, today or after this design. One predicate,
+`learnedMemoryExcluded(conversation)` in `src/lib/memory/exclusion.ts`, closes
+the first four, and the egress check (2.9) the fifth. The predicate answers yes when the conversation's pipeline or flow membership
+role, or the role preset it was launched with, is reviewer, verifier or
+issue-reporter; the membership is read from the registry snapshot the hook
+already loads.
+
+| Path | Today | With this design |
+| --- | --- | --- |
+| The "Learned rules" block and the lesson request | new | Not rendered; `leave_lesson` refuses. |
+| Shared memory through `UserPromptSubmit` | Skips the launch brief only; a later operator message is admitted (`controller.ts:76-88`) | The controller returns empty for every turn of an excluded conversation, the operator's follow-ups included, and records "skipped: reviewer" in the status line the Memory page already shows. |
+| Claude native auto memory | On for every Claude launch | The per-launch settings `spawnPolicy.ts` writes gain `autoMemoryEnabled: false` for an excluded role, and its launch environment gains `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`. |
+| Codex native memories | On wherever `[features] memories` is on | The launch for an excluded role passes `--disable memories`, the switch ephemeral runs already pass (`ephemeral.ts:211`), or its app-server config equivalent. |
+| A relayed previous output that quotes a rule | A builder's summary reaches the next stage through `{{prev.output}}` | The egress check (2.9) replaces a quoted rule with its id, `[learned rule r_8c1e]`, when the stage report is recorded, so a reviewer reading the builder's relay reads an id. |
+
+The two native switches are documented, and their effect is observed before
+ship: a probe per engine plants a synthetic native memory holding a canary,
+launches a reviewer stage on an isolated home, asks a question that matches it
+at launch and again as an operator follow-up, and requires the canary absent
+from both answers' context. If an engine version ignores its switch, the
+excluded launch fails closed: it starts with the engine's memory home pointed
+at an empty directory, through the documented `autoMemoryDirectory` per-launch
+setting for Claude (agent-memory.md §1.1 and §6, phase 0) and an empty memory
+folder for Codex.
+
+Explicit evidence searches stay: a reviewer may still call `search_memory` or
+`search_transcripts`, and a builder's transcript carries the block the builder
+received. That is the reviewer choosing to look, which the quote does not
+forbid; nothing is put into its context for it.
 
 ### 2.4 The write path: the stage-end prompt (R3)
 
@@ -288,6 +337,10 @@ For each lesson give:
 Learned rules go into other agents' prompts, and machine rules into other
 projects. Write no account names, emails, tokens, absolute home paths,
 customer data or names of people; write paths relative to the repository.
+Learned rules stay on this machine: keep the text of a rule, yours or one you
+were given, out of commits, pull requests, issues, task text, board and bridge
+reports and prototype reviews, and name it there by its id. Delegatus refuses
+text that repeats a rule.
 
 Read the learned rules you were given at the start before you write, and
 repeat none of them unless you sharpen it.
@@ -306,7 +359,9 @@ addressed to an excluded role, a missing `why`, and a settled attempt. It
 accepts within the length bounds above, and answers with the scope each rule
 joined, the rule id, the scope's size after it, whether a consolidation was
 scheduled, and privacy hints (2.9). A second call in the same turn adds to the
-first, up to three lessons per attempt.
+first, up to three lessons per attempt. The attempt records the ids of the
+rules it left, and nothing else of them: the stage card reads their text from
+the store (2.10).
 
 **A stage that leaves nothing.** In the MVP the stage card says so (2.10) and
 the Memory page counts it, so the operator sees the rate. Slice 2 adds a nudge
@@ -358,78 +413,167 @@ minutes later.
 
 **By whom, with which model.** Delegatus itself, through `runHeadlessCodexOnce`,
 the one-turn path the rotation digest uses: an empty working directory,
-`sandbox: "read-only"`, a three-minute cap, the account selection headless
-runs already use. The model is `gpt-6.1-sol` at effort `medium`. The digest
-uses a small model because a lossy summary costs little there; here
-consolidation is the one step that decides which rule to drop, so it gets the
-model the review roles use. The board maintainer was considered and set aside:
-it runs per project every few hours with board tools and a long brief, and the
-machine scope has no project.
+`sandbox: "read-only"`, a three-minute cap. The model is `gpt-6.1-sol` at
+effort `medium`. The digest uses a small model because a lossy summary costs
+little there; here consolidation is the one step that decides which rule to
+drop, so it gets the model the review roles use. The board maintainer was
+considered and set aside: it runs per project every few hours with board tools
+and a long brief, and the machine scope has no project.
+
+**Whose account, and what leaves the machine.** The run is an ordinary Codex
+turn: the scope's rules, their reasons and the pending lessons, with the
+instructions below, are sent to OpenAI's service under a Codex account of this
+machine. A role or project scope uses the account selection the digest uses,
+fenced to the project's allowed accounts (`resolveHeadlessSpawn("codex", null,
+[], project)`, `src/lib/orchestrator/handoffDigest.ts:376`); the machine scope has
+no project and uses the same selection unfenced. The history line of every
+consolidation names the account and the model that ran it. An empty working
+directory and a read-only sandbox keep the run away from files; the inference
+still runs at the provider.
 
 **Budget.** Input at most 24 000 characters (the scope's rules, pending
 lessons, the instructions), output at most 12 000; about 8 000 tokens in and
 4 000 out per run. A lane of five stages that each leave two rules triggers
 about two runs.
 
-**The contract.** Every input rule carries an id (`R1…` active, `L1…`
-pending, `P1…` pinned). The model answers JSON:
+**The input is frozen.** A run starts from the scope's current revision N: the
+active rules, the pending lessons and the pinned rules as they stood at N, each
+with a short id (`R1…` active, `L1…` pending, `P1…` pinned). The model sees
+only that snapshot.
+
+**The contract.** The answer is a total partition of the input ids. Every
+input id appears in exactly one disposition, and every disposition is one of
+four kinds:
 
 ```json
 {
-  "rules": [{ "rule": "…", "why": "…", "from": ["R3", "L2"] }],
-  "archived": [{ "id": "R7", "reason": "duplicate | superseded | too-specific | wrong | budget", "note": "…" }]
+  "kept":      ["R1", "P1"],
+  "rewritten": [{ "from": "R2", "rule": "…", "why": "…", "reason": "generalized | sharpened | shortened" }],
+  "merged":    [{ "from": ["R3", "L2"], "rule": "…", "why": "…", "reason": "one class" }],
+  "archived":  [{ "id": "R7", "reason": "duplicate | superseded | too-specific | wrong | budget", "note": "…" }]
 }
 ```
 
+- `kept` installs the rule unchanged, by id, in the given order.
+- `rewritten` replaces one rule with one successor and says why.
+- `merged` replaces two or more rules with one successor.
+- `archived` takes a rule out with a named reason.
+
 The instructions: keep the scope useful to a new agent of the role; merge
 rules that state one class; rewrite a specific rule into its class when the
-class is clear; drop a rule a newer rule contradicts as `superseded`, or one a
-later lesson shows `wrong`; when the bound forces a choice, archive the most
-specific, least general rule first, as `budget`; keep pinned rules verbatim.
+class is clear, keeping every condition it states; archive a rule a newer rule
+contradicts as `superseded`, or one a later lesson shows `wrong`; when the
+bound forces a choice, archive the most specific, least general rule first, as
+`budget`; keep pinned rules, which only `kept` may name.
 
-The server accepts the answer only when every input id appears in some
-`from` or in `archived`, no unknown id appears, every pinned rule survives
-unchanged, every rule is within its length, and the rendered text is at most
-10 000 characters. Otherwise the scope keeps its revision, the pending lessons
-stay pending, and the history records the refusal with its reason. A rule with
-several `from` ids is a merge; its sources become `merged` and link to it.
+**The server's check.** The answer is accepted only when all of these hold:
 
-**Nothing disappears silently.** Every rule leaving the active list is either
-`merged` (its successor named) or `archived` (its reason named), shown on the
-scope's page and restorable in one action. Consolidation never deletes a
-record, and no rule is dropped for disuse: the MVP has no usage signal, and
-the operator's 2026-10-02 rule stands.
+1. Every input id appears exactly once across the four lists, and no unknown
+   id appears. An id in two dispositions (`from` and `archived`, two `from`
+   lists, `kept` and anything) is refused, so are an omitted id and a
+   duplicate.
+2. Every pinned id is in `kept`.
+3. A `merged` entry names at least two ids; a `rewritten` entry names exactly
+   one and carries a reason.
+4. Every rule and reason is within its length, and the rendered text of the
+   new active list (kept, then rewritten and merged successors, in the answer's
+   order) is at most 10 000 characters.
+
+Anything else refuses the run: the scope keeps its revision, the pending
+lessons stay pending, and the history records the refusal with its reason.
+
+**Committing against a moving scope.** Appends and operator edits do not wait
+for a consolidation, which can take three minutes. When the answer arrives the
+server reads the scope's latest revision M inside the same transaction that
+would install it:
+
+- M = N: install the answer as revision N+1.
+- Every revision after N only appended lessons (agents' `leave_lesson`, or an
+  operator's added rule): rebase. The answer is installed and the appended
+  rules follow the consolidated list in their order, active when they fit and
+  `pending` when they do not, so the next trigger consolidates them. The
+  revision records `rebasedOver`.
+- Any revision after N edited, archived, restored, pinned or unpinned a rule
+  that was in the input, or another consolidation committed: the answer is
+  discarded unapplied, the history records "superseded by revision M", and the
+  scope consolidates again at its next trigger from M.
+
+The check and the install are one `patchSync` over the revisions and the rule
+records together (2.2), so a crash at any point leaves revision M as it was,
+and no acknowledged append or edit can be lost to an answer computed before it.
+
+**Nothing disappears silently.** Every rule leaving the active list is
+`rewritten` or `merged`, with its successor and the change reason, or
+`archived`, with its reason. The scope's page shows a rewrite and a merge with
+the text before and after, side by side, and each is restorable in one action:
+restoring puts the original back as active and archives its successor as
+"replaced by your restore". A rewrite whose successor drops more than a third
+of the original's length is marked "shortened" on the page for the operator to
+check, since an id count cannot prove a rewrite kept every condition.
+Consolidation never deletes a record, and no rule is dropped for disuse: the
+MVP has no usage signal, and the operator's 2026-10-02 rule stands.
 
 ### 2.6 Injection at start (R5)
 
 **When it is frozen.** `bindAttemptDefinition` (`engine.ts:2424`) gains one
 field, `definition.memory`: the `(scope, revision)` pairs current at binding,
 for the scopes this attempt may read, or `null` when the role is excluded or
-the project's switch is off. Revisions are immutable, so the activation
-re-render (`engine.ts:4666`) produces the same bytes, a retried or restarted
+the project's switch is off. Revisions are immutable, so a retried or restarted
 attempt reads what its first launch read, and the stage card can name exactly
-which revision a stage started with. The pipeline record holds the revision
-ids only; the text stays in the role memory collections.
+which revision a stage started with.
 
-**Where it goes.** `renderStagePrompt` takes the rendered block as one more
-argument and places it after the role scaffold, before the controller's lines
+**The pipeline record holds a marker, never the text.** `renderStagePrompt`
+places one line after the role scaffold, before the controller's lines
 (publish_prototype_review, access, host access, branch contract, stage_report),
-which keep their place as what every stage reads last. So the block sits below
-the brief and the specification, and nothing the controller requires is pushed
-above it.
+which keep their place as what every stage reads last:
 
-**Format.**
+```text
+[[delegatus:learned-rules role:<project>:builder@14 project:<project>@5 machine@3]]
+```
+
+That line is what every persisted prompt carries: the activation re-render and
+its comparison (`engine.ts:4666`), the deferred activation's `spawnInput`
+(`engine.ts:5244-5288`), and the materialized prompt the composer's caller
+persists before reserving a launch (`engine.ts:4679-4691`). All of them stay
+byte-stable because the marker is a function of the frozen revision ids. No
+pipeline record, attempt input or activation holds rule text.
+
+**Where the text is materialized.** Only at the spawn port, the last step
+before the host receives the launch (`spawnAgent`, `engine.ts:1287`). The port
+expands the marker from the immutable revisions, so a replayed launch expands
+to the same bytes. Expansion runs after `composeStageInput`, so nothing the
+composer writes into the checkout (`.artifacts/pipeline-stage-inputs/private/`)
+can hold rule text, including its last-resort file holding the whole prompt.
+The size rule is the composer's own, applied once more:
+
+- When the launch message with the block inline is within
+  `MAX_STRUCTURED_TEXT_BYTES`, the block goes inline.
+- Otherwise the block is written to the pipeline's artifact directory in the
+  state directory, outside every checkout (`pipelineArtifactsDir`,
+  `src/lib/pipelines/store.ts:1702`, which resolves under
+  `statePath("pipelines")`), as `learned-rules-<sha256>.md`, mode 0600, named by
+  the digest of its content so a replay reuses it. The message carries the
+  composer's reference form ("Full learned rules file: …. Read the full file
+  before working.") with the heading lines and no rule text.
+
+The conversation's own records (its launch receipt and its transcript) hold
+the expanded block, as they hold every stage prompt; they are local and are
+named in 2.9.
+
+**Format.** Each rule carries its id, so an agent can name a rule anywhere
+without quoting it.
 
 ```text
 Learned rules (Delegatus role memory)
 Earlier agents left these after their stages. They are rules of thumb and can
 be out of date: the brief, the pinned specification and the project's
 instruction files win where they disagree. A rule that misled you is worth a
-lesson at the end. Keep these rules out of commits, pull requests, issues and
-documents.
+lesson at the end. These rules stay on this machine: never copy a rule or its
+reason into commits, pull requests, issues, task text, board or bridge reports,
+prototype reviews or your stage report; name it by its id instead.
 
 Builder · this project · revision 14 · 6 820 / 10 000 characters
-- When a change adds a branch for empty, missing or zero input, write the test for that branch in the same commit as the branch. Why: an untested empty-list path failed review.
+- [r_8c1e] When a change adds a branch for empty, missing or zero input, write the test for that branch in the same commit as the branch. Why: an untested empty-list path failed review.
 - …
 
 Every role · this project · revision 5 · 2 140 / 10 000 characters
@@ -440,12 +584,13 @@ Every project · this machine · revision 3 · 1 380 / 10 000 characters
 ```
 
 An empty scope prints no heading. A stage on an excluded role, or in a project
-whose switch is off, gets no block at all.
+whose switch is off, gets no marker and no block.
 
-**Coexistence with shared memory.** Per-prompt shared memory already skips
-pipeline launch briefs, so a stage is never offered both for the same turn.
-Claude stages still load the repository's native auto memory, as they do
-today; the two may repeat a fact, and the block's header says which wins.
+**Coexistence with shared and native memory.** For an eligible stage, shared
+memory skips the launch brief and admits the operator's later messages, as
+today, and the engine's native memory loads as today; they may repeat a fact,
+and the block's header says which wins. For an excluded stage, 2.3 closes all
+three.
 
 ### 2.7 Cross-role transfer (R6)
 
@@ -471,18 +616,37 @@ phone), with no new menu item:
   no block, no lesson request, and `leave_lesson` refuses them; its stored rules
   stay. On by default for this repository, off for every other project, the
   way the shared memory switch starts. It is separate from the shared memory
-  switch because it needs no provider key and sends nothing off the machine.
+  switch because it needs no OpenRouter key and costs nothing beyond the runs
+  the operator's own accounts already make. Its one-line description states the
+  data flow as it is: "Kept on this machine and never sent to a linked board.
+  Stage agents read the rules through their engine, and consolidation sends a
+  scope to Codex." Behind "Details" the page says which text goes where: the
+  rules of the scopes a stage reads go to that stage's engine provider with its
+  prompt (Anthropic for a Claude stage, OpenAI for a Codex stage), under the
+  account the stage runs on; a consolidation sends one scope's rules, reasons
+  and pending lessons to OpenAI under the account named on its history line.
+- **Switching off with work in flight.** A queued consolidation of the
+  project's role and project scopes is cancelled. A running one is let finish,
+  since its text has already been sent, and its answer is discarded unapplied
+  ("discarded: learned rules were switched off"). Stages already bound keep the
+  revisions they froze; stages bound after the switch get none. The machine
+  scope keeps consolidating while any project has the switch on; with every
+  project off, nothing is sent anywhere.
 - **The scopes**, one row each: Builder, Architect, Visual critic and any other
   role scope that has rules, "Every role" and "This machine", each with its
   size (6 820 / 10 000), its revision and how many rules joined today.
 - **A scope's page**: its active rules in injection order, each with who left
   it (role and mode, stage, pipeline, time) behind one tap; pending lessons;
-  `Archived (n)` and `Merged (n)` with reasons; `History`, one line per
-  revision ("+2 from fix · stage fix · 14:32", "consolidation: 3 merged, 1
-  archived as too specific"); "Consolidate now".
+  `Rewritten (n)` and `Merged (n)` with the text before and after and the
+  change reason, `Archived (n)` with reasons, each restorable; `History`, one
+  line per revision ("+2 from fix · stage fix · 14:32", "consolidation: 1
+  rewritten, 3 merged, 1 archived as too specific · gpt-6.1-sol · account B",
+  "consolidation superseded by revision 15"); "Consolidate now".
 - **Editing.** Edit a rule's text, archive a rule (reason "by you"), restore an
-  archived rule, add a rule. An operator's rule is pinned: consolidation keeps
-  it verbatim, and it counts toward the 10 000.
+  archived, rewritten or merged rule, add a rule. An operator's rule is pinned:
+  consolidation keeps it verbatim, and it counts toward the 10 000. "May be
+  published" releases one rule from the egress check (2.9), for a rule the
+  operator has copied into the instruction files by hand.
 - **The stage card** (2.10).
 
 The prototypes (section 4) show where these live.
@@ -492,26 +656,75 @@ The prototypes (section 4) show where these live.
 The repository is public, and so is anything a lane pushes. Rules hold what
 agents learned on this machine.
 
-- **Where the text lives.** Only in the role memory collections in the state
-  directory, the stage prompts that carried it, and those stages' transcripts:
-  all local. The pipeline record holds revision ids (2.6). Task text and
-  details, linked-board task sync and lane rows carry none of it; lane rows are
-  identifiers and counts by construction (`laneFeed.ts:1-7`), and this design
-  adds no field to them.
-- **No publication path.** No rule is ever written into the repository,
-  AGENTS.md or CLAUDE.md, a commit, a pull request or an issue by Delegatus.
-  The injected block tells the agent to keep its rules out of all four.
-- **Detectors are hints.** `leave_lesson` runs the static detectors the issue
-  report uses (`staticSensitiveClasses`) over each lesson. A match never
-  refuses: the answer names the class and the span ("this looks like a home
-  directory path"), the agent judges and may call again with a rewritten
-  lesson, which replaces its earlier one, and the rule carries the hint so the
-  Memory page marks it for the operator, who decides last.
-- **Machine rules cross projects.** That is their purpose («на уровне вообще
-  машины»). The prompt asks for rules about tools and the environment there,
-  and the per-project switch keeps any project out entirely.
-- **Who can read the pages.** The routes serve the installation's operator
-  under the access rules the settings routes already use.
+**Where the text is stored.** In the role memory collections in the state
+directory; in a learned-rules file under the pipeline's artifact directory in
+the state directory when a block is too large to go inline (2.6); and in each
+stage conversation's launch receipt and transcript, which hold every stage
+prompt. All local, all outside every checkout. The pipeline record holds
+markers and ids (2.6, 2.4). Lane rows are identifiers and counts by
+construction (`laneFeed.ts:1-7`), and this design adds no field to them.
+
+**Where the text is processed.** A stage's engine provider receives the rules of the scopes it reads with its
+prompt, as it receives the rest of the prompt; consolidation sends one scope to
+OpenAI through Codex (2.5). The Memory page states this flow (2.8). Nothing is
+sent to a linked board, and nothing is synced between machines.
+
+**The egress check.** Agents write free text to many places, and a rule that
+contains nothing sensitive-looking (an abstract rule usually does not) passes
+every class detector: the static detectors classify text, they do not know
+which text is a private rule. Membership has to be checked against the rules
+themselves, the way the publication gate already refuses known values from its
+fingerprint file (`scripts/privacy-publication-gate.ts:961-990`).
+
+- **One function.** `privateMemorySpans(text)` in `src/lib/memory/egress.ts`
+  normalizes the text (NFKC, lower case, punctuation and whitespace folded) and
+  looks for every rule and every reason in every state, archived ones
+  included, except rules the operator marked "May be published". A rule or a
+  reason counts as present when at least half of its five-word shingles occur
+  in the text, or, under five words, when it occurs whole. It returns the
+  rule ids and the spans.
+- **The fingerprint file.** Processes outside the Viewer (the Git hooks and
+  the `gh` shim agents run) cannot read the store, so the Viewer writes
+  `statePath("role-memory/egress.json")`, mode 0600, on every revision: keyed
+  HMAC-SHA-256 digests of the normalized shingles, under a per-installation key
+  kept in the state directory. The file holds no rule text.
+- **Where it is called.** Every path that writes agent text off the machine or
+  into the repository:
+
+| Path | Where | On a match |
+| --- | --- | --- |
+| Commits made by an agent | the `commit-msg` hook of the agent Git guard (`agentHistoryGuard.ts`) over the message, and its `pre-push` hook over the added lines of the pushed range | Refused, naming the rule id |
+| Pushes and pull requests the engine makes | `publishPipelineBranch` (`git.ts:1372`) over the commits it publishes; the engine's `gh pr create` that finishes a workflow (`agentForgeCredentials.ts:280-290`) over title and body | Refused; the lane parks with the rule id on its first line |
+| Pull requests and issues an agent opens with `gh` | the `gh` shim on the agent's PATH (the one `agentForgeWriteEnv` installs), extended to every memory-eligible launch: `pr create/edit`, `issue create/edit/comment` and `api` body fields | Refused, naming the rule id |
+| A lane's pull request text written some other way | the read of the branch's pull request the pipeline already makes at publication and before landing | The lane parks for the operator; the merger refuses to land it |
+| Task text and details | `create_task` and `update_task`, agent origin | Refused, naming the rule id |
+| Linked-board task sync | `encodeTask` (`taskWire.ts:49-55`), for every task whatever wrote it, prototype review replica included | The span is replaced by `[learned rule kept local]`; the local task is unchanged and its card says one span stayed local |
+| Bridge reports | `reportRender.ts:149-168`, beside `privateClasses` | The item is dropped and counted as "learned rule" |
+| Prototype reviews | `publishPrototype` (`prototypeReview/store.ts:128`), agent origin, names and descriptions | Refused, naming the rule id |
+| Issue reports | the scrub in `src/lib/issueReports/scrub.ts:67` | Refused, naming the rule id |
+| Stage reports and stage output | when `stage_report` is recorded and when a final output is relayed | The span is replaced by `[learned rule r_8c1e]`; the relay and the pipeline record carry the id |
+
+A refusal is a known-value match against the store, and it tells the agent
+what to do: say the class in its own words, or name the
+id. A paraphrase passes, which is the agent's judgment, as the stage-end prompt
+and the block's header ask. The hooks and the shim are the cooperative guard
+the Git guard already is ("not a sandbox against hostile shell code"): an
+agent that disables hooks and pushes on its own can still publish a copy, and
+the pull request read and the merger's refusal are the backstop for that.
+
+**Detectors stay hints.** `leave_lesson` also runs the static detectors the
+issue report uses (`staticSensitiveClasses`) over each lesson. A match never
+refuses: the answer names the class and the span ("this looks like a home
+directory path"), the agent judges and may call again with a rewritten lesson,
+which replaces its earlier one, and the rule carries the hint so the Memory
+page marks it for the operator, who decides last.
+
+**Machine rules cross projects.** That is their purpose («на уровне вообще
+машины»). The prompt asks for rules about tools and the environment there, and
+the per-project switch keeps any project out entirely.
+
+**Who can read the pages.** The routes serve the installation's operator under
+the access rules the settings routes already use.
 
 ### 2.10 The stage card
 
@@ -526,6 +739,11 @@ under it, above "Open agent":
 - an eligible stage whose turn ended with no lesson: a quiet "No rule left";
 - an excluded stage (a review): nothing.
 
+The line is a projection: the attempt holds the rule ids (2.4), and the card
+reads their text from the role memory route when it draws. The text never
+enters the pipeline record, the board snapshot sent to a linked board, or a
+lane row.
+
 The prototypes compare a line of its own with a count inside the report line.
 
 ## 3. The MVP and the slices after it
@@ -533,30 +751,87 @@ The prototypes compare a line of its own with a count inside the report line.
 ### 3.1 MVP — what gets built
 
 1. **Store**: the three collections (2.2), the scope keys, rendering and the
-   10 000 bound, revisions.
+   10 000 bound, revisions, and the versioned two-collection write every change
+   goes through.
 2. **Write path**: `leave_lesson` on the MCP server, forwarded to the Viewer;
    `lessonRequest` on the accepted `stage_report` answer for eligible roles; one
-   sentence in the stage wrapper; exclusions (2.3); privacy hints (2.9).
-3. **Consolidation**: triggers, the headless run, the contract and its server
-   check, archive and merge records (2.5).
-4. **Injection**: `definition.memory` at binding, the block in
-   `renderStagePrompt` (2.6).
-5. **Controls**: the switch, the scope rows and pages with edit, archive,
-   restore, add and "Consolidate now" on the Memory page, desktop and phone;
-   the line under the stage report (2.8, 2.10).
-6. **A test aid**: `scripts/role-memory-fill.ts`, which adds a fixed set of
-   forty generic rules to one scope of a named project through the Viewer's
-   own route, marked as synthetic, so the operator can watch consolidation
-   hold the bound within minutes (section 5, step 7). Its rules archive in one
-   action.
+   sentence in the stage wrapper; rule ids on the attempt; privacy hints (2.9).
+3. **Exclusion**: `learnedMemoryExcluded` and its four call sites: the block
+   and request, the shared-memory controller for every turn, Claude's
+   per-launch settings and environment, Codex's launch flags; the two native
+   probes (2.3).
+4. **Consolidation**: triggers, the headless run, the partition contract and
+   its check, the frozen input and the commit against a moving scope, rewrite,
+   merge and archive records, cancellation when the switch goes off (2.5, 2.8).
+5. **Injection**: `definition.memory` at binding, the marker in
+   `renderStagePrompt`, expansion at the spawn port with the out-of-checkout
+   file for a block that does not fit (2.6).
+6. **Egress**: `privateMemorySpans`, the fingerprint file, and the call sites of
+   the table in 2.9.
+7. **Controls**: the switch with its data-flow line, the scope rows and pages
+   with edit, archive, restore, add, "May be published" and "Consolidate now"
+   on the Memory page, desktop and phone; the line under the stage report (2.8,
+   2.10).
+8. **A test aid**: `scripts/role-memory.ts`, run against the Viewer's own
+   routes with the operator's control key, as `scripts/rebuild-http.ts` is
+   (AGENTS.md, "Host deploy command and team authentication"):
+   - `show --repo <path> [--scope builder|project|machine]` prints each scope's
+     revisions: number, author, size, and the dispositions of a consolidation.
+     `show --stage <pipeline>:<stage>` prints what the stage's launch received:
+     the revisions it froze, or why it was excluded and which shared and native
+     memory paths were closed for it.
+   - `fill --repo <path> --scope builder` adds one fixed batch of forty
+     synthetic lessons as pending in a single revision, starts exactly one
+     consolidation, waits for it at most six minutes, and prints the verdict:
+     installed (size ≤ 10 000; the dispositions add up to the input count) or
+     refused (the reason). `--retry` runs one more consolidation; `--archive`
+     archives the batch in one action.
+   - `probe --repo <path> --rule <id>` passes the rule's text through every call
+     site of the 2.9 table in-process (the hook checks, the shim check, the
+     task mutation check, `encodeTask`, the bridge renderer, the prototype and
+     issue checks, the stage report rewrite) and prints one verdict per path.
+   - `scan --canary <text>` searches the pipeline records in `state.sqlite`
+     (attempt inputs, activations, outputs), the linked-board outbox and the
+     bridge report log for the canary and prints the count per place.
 
-Tests that ship with it, all against isolated state: rendering and the bound
-in code points; the consolidation check (every refusal reason, and acceptance);
-byte-stable re-render with frozen revisions; the exclusion table, including a
-reviewer stage whose prompt holds no block and whose `stage_report` answer
-holds no request; `leave_lesson` provenance taken from the server resolution;
-no rule text in a lane row or a task sync payload; a refused consolidation
-leaving the scope unchanged.
+Tests that ship with it, all against isolated state:
+
+- rendering and the bound in code points;
+- the partition check: every refusal reason, including an omitted id, a
+  duplicate, an id in two dispositions, a one-source merge, a rewrite without a
+  reason, a pinned id outside `kept`;
+- consolidation against a moving scope: a model answer held while an append, an
+  operator edit, an archive, a pin and a second consolidation each land, with
+  the expected rebase or discard, and a crash injected between the rule write
+  and the revision write (`injectStateWriteFaultForTests`) that leaves the
+  scope at its earlier revision with every acknowledged change present;
+- injection: byte-stable activation re-render and replay with frozen
+  revisions; the maximum three scopes in English and in Ukrainian launching and
+  replaying byte-identically; a canary rule absent from every file in the
+  checkout, ignored artifacts included, and from every persisted pipeline
+  prompt payload;
+- exclusion: a reviewer, a verifier and an issue-reporter stage on each engine
+  receive no block, no request, no shared memory at launch or on an operator
+  follow-up, and launch with native memory off; `leave_lesson` refuses them;
+- egress: an unflagged synthetic rule and its reason refused or replaced at
+  every call site of the 2.9 table; a paraphrase passing; a rule marked "May be
+  published" passing;
+- `leave_lesson` provenance taken from the server resolution; a refused
+  consolidation leaving the scope unchanged; a switched-off project's queued
+  consolidation cancelled and its running answer discarded.
+
+**Size.** This is three lanes, built in order, each mergeable alone:
+
+1. Store, consolidation and the egress function with its fingerprint file
+   (items 1, 4, 6 without the call sites outside the store).
+2. Write path, exclusion, injection and the egress call sites (items 2, 3, 5,
+   6), behind the switch, which starts off for every project until lane 3.
+3. Controls and the test aid (items 7, 8), which turns the switch on for this
+   repository.
+
+The launch, privacy and transaction seams in lane 2 touch shared code (the
+spawn port, the Git guard, the task and bridge encoders); a one-lane cut would
+put all of it in one review.
 
 ### 3.2 Slice 2
 
@@ -601,6 +876,18 @@ leaving the scope unchanged.
 - **A follow-up turn after settlement** to ask for the lesson. It would reopen a
   settled attempt's conversation, run beside the next stage and need a live
   host; the acknowledgement asks inside the same turn for free.
+- **A second model that checks a rewrite kept the meaning.** The partition
+  check proves every rule is accounted for; whether a rewrite kept every
+  condition it cannot tell. The before-and-after view, the "shortened" mark and one-action
+  restore leave that judgment to the operator; a checking model would double
+  the cost of every consolidation for a risk the history already exposes.
+- **A sandbox that stops an agent bypassing the egress hooks.** The Git guard
+  and the `gh` shim are cooperative, as the guard is today; the pull request
+  read and the merger's refusal catch what bypasses them. A hostile-agent
+  sandbox is a separate problem from role memory.
+- **Running consolidation on a local model.** It would keep a scope's text off
+  the provider, but this machine runs no local model and the stage prompts
+  carrying the same rules go to the providers anyway.
 - **Asking for lessons up front in the stage prompt or as a `stage_report`
   field.** The quote places the question after completion, and a field would
   have the agent write its lesson before its verdict is fixed.
@@ -610,18 +897,19 @@ leaving the scope unchanged.
 Published to this task's prototype review, five numbered variants, rendered
 through the kanban evidence fixture (`issue1695BrowserHarness`) with the
 product's own components and stylesheet, desktop 1440 px and phone 390 px,
-English and Ukrainian: 44 frames. The prototype components lived in a scratch
-export of `5a197eeb5` and were never added to the repository. Frames:
+English and Ukrainian: 44 frames, re-rendered after the design review (round
+2). The prototype components lived in a scratch export of `5a197eeb5` and were
+never added to the repository. Frames:
 `~/Pictures/delegatus-review/role-memory/`. Measurements:
 `evidence/role-memory/frames.json`.
 
 | # | Name | What it shows |
 | --- | --- | --- |
-| 1 | Pages in the menu | (a) The Memory page gains the switch and the scope rows; a scope opens as a deeper page in the same menu or sheet, with rules, history and archive. No new window. |
-| 2 | Rules window | (a) The same switch and one row, "Learned rules", opening a wide window: scopes on the left, rules in the middle, history and archive on the right; on the phone a full-screen sheet with a scope picker. |
+| 1 | Pages in the menu | (a) The Memory page gains the switch, whose line states the data flow (2.8), and the scope rows; a scope opens as a deeper page in the same menu or sheet, with rules, history, rewritten, merged and archived. No new window. |
+| 2 | Rules window | (a) The same switch and one row, "Learned rules", opening a wide window: scopes on the left, rules in the middle, history, rewritten rules with their text before and after, and the archive on the right; on the phone a full-screen sheet with a scope picker. |
 | 3 | Rule line under the report | (b) A line of its own under the stage report: "Left 2 rules → Builder, Visual critic" and the first rule; "No rule left" when none. |
 | 4 | Count in the report line | (b) "2 rules" as a count inside the report line, expanding into the rules on a tap; nothing extra when collapsed. |
-| 5 | The prompt as the agent sees it | (c) The stage conversation: the "Learned rules" block in the first message, then `stage_report`, the lesson request in its answer, and the `leave_lesson` call with the example answer of 2.4. |
+| 5 | The prompt as the agent sees it | (c) The stage conversation: the "Learned rules" block with rule ids in the first message, then `stage_report`, the lesson request in its answer, and the `leave_lesson` call with the example answer of 2.4. |
 
 What the frames showed:
 
@@ -631,9 +919,11 @@ What the frames showed:
   rules means a long scroll inside the menu. A Ukrainian role name
   ("Критик вигляду") clipped beside the "+1 today" mark in the first render;
   the mark moved onto the size bar's line and the name now reads in full.
-- Variant 2 shows a whole scope with its history and archive at once on the
-  desktop. Its "Restore" links are text buttons under 16 px tall, which the
-  build would enlarge.
+- Variant 2 shows a whole scope with its history, rewrites and archive at once
+  on the desktop; a rewrite marked "shortened" stands out in the right column.
+  Its "Restore" buttons, under 16 px tall in the first round, are 24 px now.
+- The data-flow line under the switch takes six lines in Ukrainian at 232 px,
+  and the desktop menu then reaches about 790 px of a 900 px screen.
 - Variants 3 and 4 reuse the report line. On the phone's task screen the
   finished fix stage gains its report line with the lesson (2.10).
 - Variant 5 renders through the real conversation reader: the stage prompt is
@@ -653,64 +943,190 @@ row.
 
 ## 5. Test plan for the operator (D3)
 
-About an hour, on a scratch repository so nothing reaches GitHub. A pipeline
-pinned to a `baseRef` never touches the network (`create_pipeline`,
-`publication` defaults to internal).
+About fifty minutes and at most an hour, on a local repository with no
+remote, so nothing reaches GitHub. A pipeline with the default `publication: "internal"` never pushes or
+reads a remote while it runs (`create_pipeline`, `src/lib/mcp/server.ts:3695`).
+The first stage is a review of a seeded defect, so the lane reaches its fix
+round whatever a builder would have written. Every wait has a bound and a
+fallback; a fallback that fails is a defect to report, with the printed
+reason.
 
-1. **Prepare (5 min).** Create a small local repository, for example
-   `~/Projects/role-memory-trial`: one TypeScript file with `parseDuration`
-   and one test, committed, no origin. Open its project in Delegatus.
-   Header menu → Settings → Memory: switch **Learned rules for this project**
-   on. The scope rows read empty; "Every project" under "On this machine"
-   shows whatever earlier lanes left.
-2. **A lane that will fail review (20–25 min).** Ask the seat for a pipeline
-   on the trial project, pinned to the current commit: a builder stage, a
-   reviewer stage, and a fix stage the reviewer's fail edge points at (the
-   form `add-stage` builds from a review loop; a legacy `review-loop` stage
-   gets no lesson request, 2.4), task "Add `parseSize('10MB')` beside
-   `parseDuration`". Give the reviewer, and only the reviewer, one extra
-   rule in its brief: "Fail any new function whose empty-string input has no
-   test." The builder does not know it, so the first review fails with a finding
-   of that class.
-3. **Watch the fixer leave a rule (2 min after it ends).** On the card the fix
-   stage shows "Left 1 rule → Builder" (or 2, with the rule text). Open the
-   fixer's conversation: the `stage_report` answer carries the lesson request,
-   and the next call is `leave_lesson`. The reviewer's stage shows no line and
-   its first message has no "Learned rules" block.
-4. **See the rule stored (2 min).** Memory → Builder: the rule is in the
-   list, with "fix · attempt 1 · <time>" behind it; History shows revision 1,
-   "+1 from fix". While there, add one rule by hand on "Every role" for step 6.
-5. **A fresh builder starts with it (10–15 min).** A second lane on the same
-   repository, builder → reviewer, task "Add `parseRate('5/s')`", the reviewer
-   again with the same extra rule. Open the builder's first message: the
-   "Learned rules" block lists the rule under "Builder · this project". Expected,
-   though a model can still slip: the builder writes the empty-input test
-   itself and the review passes in the first round.
-6. **Cross-role (2 min).** If the fixer addressed a rule to the visual critic
-   or the project, it appears under that scope with "from a builder (fix
-   round)". The rule you added in step 4 appears under "Every role · this
-   project" in the second lane's builder prompt, and nowhere in its reviewer's.
-7. **Consolidation keeps the bound (5 min).** Run
-   `bun scripts/role-memory-fill.ts --project <trial key> --scope builder`.
-   The Builder row passes 10 000 with pending lessons; within a few minutes a
-   consolidation revision appears: the size reads at most 10 000, "Merged (n)"
-   and "Archived (n)" list what left the list and why, and nothing is missing
-   from history. Press "Consolidate now" once more and confirm a second
-   revision changes little. Archive the synthetic rules in one action.
-8. **The switch (5 min).** Turn **Learned rules for this project** off. Start a
-   one-stage builder lane: its first message has no block, its `stage_report`
-   answer has no lesson request, and the Builder page still shows its rules.
-   Turn it back on.
-9. **Privacy spot check (2 min).** Search the trial repository and its pushed
-   branches for a rule's text: nothing. On a linked board, the trial lanes show
-   no rule text.
+**1. Prepare (5 min).** Create the trial repository, copy and paste:
+
+```sh
+mkdir -p ~/Projects/role-memory-trial/src && cd ~/Projects/role-memory-trial
+git init -q -b main
+printf '{ "name": "role-memory-trial", "private": true, "type": "module" }\n' > package.json
+cat > src/size.ts <<'EOF'
+const UNITS: Record<string, number> = { B: 1, KB: 1024, MB: 1024 ** 2, GB: 1024 ** 3 };
+
+/** "10MB" -> 10485760. */
+export function parseSize(text: string): number {
+  const match = /^(\d+(?:\.\d+)?)\s*(B|KB|MB|GB)$/i.exec(text.trim());
+  if (!match) throw new Error(`invalid size: ${text}`);
+  return Math.round(Number(match[1]) * UNITS[match[2]!.toUpperCase()]!);
+}
+EOF
+cat > src/size.test.ts <<'EOF'
+import { expect, test } from "bun:test";
+import { parseSize } from "./size";
+
+test("parses megabytes", () => { expect(parseSize("10MB")).toBe(10485760); });
+EOF
+git add -A && git commit -qm "parseSize" && git rev-parse HEAD
+```
+
+The seeded defect: the specification below asks for `null` on empty input,
+and `parseSize("")` throws. Open the project in Delegatus. Header menu →
+Settings → Memory: switch **Learned rules for this project** on, and read the
+switch's line: it says the rules stay on this machine and go to the stage
+engines and to Codex for consolidation. Open "Every role" and add one rule by
+hand, the canary for step 8:
+
+> Name every input class a change handles in its stage report. ROLEMEM-CANARY-7Q2
+
+Then, from the Delegatus checkout:
+
+```sh
+bun scripts/role-memory.ts show --repo ~/Projects/role-memory-trial
+```
+
+It prints "Every role" at revision 1 (your rule) and the builder scope empty.
+Note each scope's revision; later steps compare against these numbers, never
+against an assumed 1.
+
+**2. Start the lane (2 min).** Ask the seat to create exactly this pipeline,
+with the SHA from step 1 as `baseRef`:
+
+```json
+{
+  "task": "Role memory trial: parseSize empty input",
+  "repoDir": "<home>/Projects/role-memory-trial",
+  "baseBranch": "main",
+  "baseRef": "<sha from step 1>",
+  "publication": "internal",
+  "spec": "parseSize returns null for an empty or whitespace-only string without throwing, and that branch has its own test. bun test passes.",
+  "stages": [
+    { "id": "review", "kind": "run", "role": { "roleId": "reviewer" }, "access": "read-only",
+      "prompt": "Review src/size.ts at HEAD against the specification. Run bun test, and run bun -e 'import { parseSize } from \"./src/size.ts\"; console.log(parseSize(\"\"))'. Fail with one finding per criterion that does not hold.",
+      "next": null, "onFail": { "to": "fix", "maxRounds": 1 } },
+    { "id": "fix", "kind": "run", "role": { "roleId": "builder", "params": { "mode": "apply-fixes" } }, "access": "read-write",
+      "prompt": "Fix the findings below, commit, and report.\n\n{{prev.output}}",
+      "next": "recheck" },
+    { "id": "recheck", "kind": "run", "role": { "roleId": "reviewer" }, "access": "read-only",
+      "prompt": "Review src/size.ts at HEAD against the specification. Run bun test, and run bun -e 'import { parseSize } from \"./src/size.ts\"; console.log(parseSize(\"\"))'. Fail with one finding per criterion that does not hold.",
+      "next": null }
+  ]
+}
+```
+
+**3. The review finds the defect (5–10 min).** `review` fails: `parseSize("")`
+throws and has no test. Its stage shows no lesson line, and its first message
+holds no "Learned rules" block and no learned-rules marker. Bound: if it has
+not reported in 15 minutes, open its conversation; a stage that passes the
+seeded defect is a reviewer defect to report, and the plan stops here.
+
+**4. The fixer leaves a rule (5–10 min).** `fix` runs with the finding handed
+to it. Its first message holds the block, with your canary rule under "Every
+role · this project". When it ends, the card shows "Left 1 rule → Builder" (or
+more) with the rule. Open its conversation: the `stage_report` answer carries
+the lesson request, with "This attempt was handed 1 finding…", and the next
+call is `leave_lesson`. Fallback: if the agent answered with `none`, the card
+reads "No rule left" and the conversation shows its reason; add a builder rule
+by hand on the Builder page and continue, noting that the stage left none.
+
+**5. The rule is stored, with its history (2 min).**
+
+```sh
+bun scripts/role-memory.ts show --repo ~/Projects/role-memory-trial --scope builder
+```
+
+The builder scope is one revision past the number from step 1, authored
+"agent · fix · attempt 1". The Builder page on the Memory page shows the same
+rule, and its History the same line.
+
+**6. The recheck stays clean (5 min).** `recheck` passes. Its first message
+holds no block, and if the fixer's summary quoted a rule, the relay reads
+`[learned rule r_…]` instead. Clean on follow-ups too: switch shared memory on
+for the trial project (Memory page, first switch; it costs OpenRouter credit),
+type into the `recheck` conversation "how should I name inputs in a stage
+report?", and the Memory page's last-turn line reads "skipped: reviewer". Then:
+
+```sh
+bun scripts/role-memory.ts show --stage <pipeline id>:recheck
+```
+
+prints `excluded: reviewer · block: none · shared memory: skipped · native
+memory: off`, with the setting the launch used (`--disable memories` for Codex,
+`autoMemoryEnabled: false` for Claude). Switch shared memory off again.
+
+**7. A fresh builder starts with it (10 min).** A second lane on the same
+repository, one builder stage: task "Add parseRate('5/s'), returning null for
+empty input", `baseRef` the SHA from step 1. Its
+first message lists the step 4 rule under "Builder · this project · revision
+<the step 5 number>". Bound: once its first message is visible the step is
+done; the stage may keep working.
+
+**8. Nothing private leaves (3 min).**
+
+```sh
+grep -rIl ROLEMEM-CANARY-7Q2 ~/Projects/role-memory-trial; echo "checkout: $?"
+bun scripts/role-memory.ts scan --canary ROLEMEM-CANARY-7Q2
+bun scripts/role-memory.ts probe --repo ~/Projects/role-memory-trial --rule <the canary rule's id>
+```
+
+`grep` finds nothing, ignored `.artifacts` included, and exits 1. `scan`
+prints zero for pipeline records, the linked-board outbox and bridge reports.
+`probe` prints, for the canary rule, "refused" for commit message, pushed
+lines, `gh pr create`, task update, prototype review and issue report, and
+"replaced" for the linked-board row, the bridge report and the stage report.
+Live, ask the seat to put the canary rule's sentence into the trial task's
+details: the update is refused and names the rule id.
+
+**9. Consolidation keeps the bound (8 min).**
+
+```sh
+bun scripts/role-memory.ts fill --repo ~/Projects/role-memory-trial --scope builder
+```
+
+It adds forty synthetic lessons as pending in one revision and runs one
+consolidation. While it waits, add one more builder rule by hand on the Memory
+page. Expected within six minutes: "installed", the builder scope at most
+10 000 characters, the dispositions adding up to the input count, and your
+hand-added rule active after the consolidated list with "rebased over 1" on
+the history line. The Builder page lists Rewritten, Merged and Archived with
+before and after and reasons; restore one rewritten rule and see its successor
+archived as "replaced by your restore". Fallback: on "refused" or a timeout,
+run it once more with `--retry`; a second failure is a defect to report, and
+the scope must still read its earlier revision. Finish with `fill --archive`.
+
+**10. The switch (3 min).** Press "Consolidate now" on the Builder page and,
+while it runs, turn **Learned rules for this project** off. The history shows
+"discarded: learned rules were switched off". Start a one-stage builder lane:
+its first message has no block, its `stage_report` answer has no lesson
+request, and the Builder page still shows its rules. Turn it back on.
+
+## 6. Changes after the design review
+
+An independent review of the first revision raised seven blocking findings.
+Each changed the design as follows.
+
+| Finding | Change |
+| --- | --- |
+| Reviewer exclusion covered only the new block | One predicate closes the block, shared memory on every turn, both engines' native memory at launch and quoted rules in relays, with a probe per engine (2.3). |
+| Rule text could reach checkout files and persisted pipeline prompts | The pipeline record holds a marker with revision ids; the text is expanded only at the spawn port, after the composer, inline or in a file under the state directory (2.6). |
+| Free-text writers had no private-memory check | A known-value check against the store, with a fingerprint file for hooks and shims, called by every writer in the 2.9 table; the card line is a projection by id (2.9, 2.10). |
+| Consolidation had no fence against concurrent writes | Frozen input revision; the install rebases over appends only, discards over any other change, and commits rules and revision in one transaction (2.2, 2.5). |
+| A one-source rewrite left no disposition | The answer is a total partition into kept, rewritten, merged and archived; rewrites show before and after and are restorable (2.5). |
+| The switch claimed nothing leaves the machine | The switch line, its details, 2.5 and 2.9 state which text goes to which provider under which account; switching off cancels queued runs and discards a running one (2.8). |
+| The hour-long trial relied on a builder's accidental omission | The lane opens on a review of a seeded defect, with the exact pipeline, revision numbers read from a command, bounded waits with fallbacks, and canary checks for every egress path (5). |
 
 ## Validation against the requirement
 
 | Quote | Where answered |
 | --- | --- |
 | «какое-то количество ролей … swarm builders … swarm of critiques … архитекторы» | Scopes per role in a project (2.2), roles that read and write (2.3). |
-| «ревьюер всегда чистый … чтобы они были новые» | Reviewer, verifier and issue reporter receive and write nothing (2.3). |
+| «ревьюер всегда чистый … чтобы они были новые» | Reviewer, verifier and issue reporter receive and write nothing, through any automatic path (2.3). |
 | «каждый билдер после своей работы может оставить небольшой компакт … который пойдёт в следующему билдеру, в этом проекте» | The stage-end prompt and `leave_lesson` (2.4), the builder scope per project (2.2), injection at start (2.6). |
 | «все пишут … все её читают, сразу же, и обновляют» | Append at once as a new revision; the next start reads it (2.5). |
 | «чтобы не захламлять … чтобы файл не раздувался … 10 000 символов» | The bound per scope and consolidation with a checked contract (2.2, 2.5). |
@@ -721,7 +1137,8 @@ pinned to a `baseRef` never touches the network (`create_pipeline`,
 | «после того как они закончили … stage completed … промпт … injected специально им … лучше, чтобы хоть какую-то оставил» | The request in the accepted `stage_report` answer; "No rule left" on the card; a nudge in slice 2 (2.4, 2.10). |
 | «я хочу MVP уже получить» | Section 3.1. |
 | «скажешь мне, как я смогу это протестить … прототипы увидеть» | Section 5 and section 4. |
-| 2026-10-02: «Может быть, они потом понадобятся» | Nothing is deleted; merged and archived rules stay visible and restorable (2.5). |
+| 2026-10-02: «Может быть, они потом понадобятся» | Nothing is deleted; rewritten, merged and archived rules stay visible with their before and after text and are restorable (2.5). |
+| «ревьюер всегда чистый», on every automatic path | One exclusion policy over the block, shared memory on every turn, native memory at launch and relayed output (2.3). |
 
 ## Open questions for the operator
 
@@ -736,3 +1153,7 @@ None of these blocks the MVP; each has a default the build takes.
    so the bound holds whatever is in the scope.
 4. **Variants**: which of 1–2 for the Memory page, and which of 3–4 for the
    card? Recommendation: 1 and 3.
+5. **Which provider consolidates?** Consolidation sends one scope's rules to
+   the engine that runs it. Recommendation: Codex, as designed (2.5), since the
+   same rules already reach Codex stages in their prompts; the alternative is a
+   one-turn Claude run under a Claude account, at the same contract.
