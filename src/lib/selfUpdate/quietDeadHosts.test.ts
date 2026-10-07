@@ -836,7 +836,14 @@ for (const unproven of [false, true]) for (const binding of ["conversation", "pa
   test(`a ${unproven ? "unproven" : "live"} replacement host overrides a gone ${binding}-bound headless reviewer`, async () => {
     const child = Bun.spawn(["sleep", "60"]);
     const identity = captureProcessIdentity(child.pid)!;
-    const fixture = boundHeadlessReviewer(deadProcess, deadProcess.startIdentity);
+    /* A gone reviewer of this test's own: earlier tests record the shared
+       dead process on entries of their own, and a round that records an
+       entry's exact process is that entry's owner (R1). */
+    const gone = Bun.spawn(["sleep", "30"]);
+    const reviewer = captureProcessIdentity(gone.pid)!;
+    gone.kill();
+    await gone.exited;
+    const fixture = boundHeadlessReviewer(reviewer, reviewer.startIdentity);
     try {
       const entry = registry.readOnlySnapshot().entries[`codex:${fixture.settled.entry.key.sessionId}`]!;
       registry.upsert({ ...entry, status: "live", structuredHost: {

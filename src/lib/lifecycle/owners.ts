@@ -300,12 +300,16 @@ export function registryOwners(
       }
       const binding = round.reviewerConversationId ? canonical(registry, round.reviewerConversationId)
         : round.reviewerPath ? map.byPath.get(round.reviewerPath) ?? null : null;
-      // An entry that records this process for the same transcript or
-      // conversation already is this owner (R1), and the round adds the
-      // conversation it names to it (R10).
-      const recorded = owners.filter((owner) => owner.entry && owner.identities.some((identity) => identity.pid === pid
-        && (!round.reviewerIdentity || identity.startIdentity === round.reviewerIdentity))
-        && ((!!round.reviewerPath && owner.artifactPath === round.reviewerPath) || (binding !== null && owner.binding === binding)));
+      /* An entry that records this exact process already is this owner (R1),
+         whatever transcript its artifact has moved to, and the round adds the
+         conversation it names to it (R10). Only a matching start identity
+         establishes that: a round with none keeps its own unproven verdict
+         (R4), so a reused pid an entry records cannot release it. A round
+         that names no conversation reaches the entry at its own path only. */
+      const identity = round.reviewerIdentity;
+      const recorded = !identity ? [] : owners.filter((owner) => owner.entry
+        && owner.identities.some((other) => other.pid === pid && other.startIdentity === identity)
+        && (binding !== null || (!!round.reviewerPath && owner.artifactPath === round.reviewerPath)));
       if (binding !== null) for (const owner of recorded) addCustody(owner, binding);
       if (recorded.length) continue;
       owners.push({ id: `reviewer:${flow.id}:${round.n}:${pid}:${round.reviewerIdentity ?? ""}`, role: "reviewer", kind: "headless",

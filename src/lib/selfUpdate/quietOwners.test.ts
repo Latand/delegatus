@@ -1294,6 +1294,55 @@ describe("each owner's evidence beside another record", () => {
     expect(await probe(p, now + TWELVE_HOURS)).toMatchObject({ quiet: true, blockers: { stages: 0 } });
   });
 
+  test.each(["a settled tail", "an open tail and a running journal row"])(
+    "a round with no start identity holds beside a reused entry at its pid until its own process is gone, over %s (R1, R4)", async (shape) => {
+      const open = shape !== "a settled tail";
+      const c = conversation(transcript(open ? "open" : "settled"));
+      const reviewer = spawn();
+      // The entry records an earlier process under the reviewer's pid.
+      release(c.key, claimHost(c.key, c.path, { ...reviewer.identity, startIdentity: "earlier-process" }, "idle"));
+      const flows = [{ id: "flow_unproven", reviewerMode: "headless", state: "completed", rounds: [{ n: 1, reviewerPid: reviewer.child.pid,
+        reviewerIdentity: null, reviewerPath: c.path, reviewerConversationId: c.id, verdict: "APPROVE" }] }] as unknown as Flow[];
+      if (open) publish(c.id, c.key, c.path, null, "active-review");
+      const owners = ownerCensusReader(() => ({ ...productionLivenessSources(), flows: () => flows }),
+        { readSession: (query) => f.client.readSession!(query), heldHosts: () => new Map() });
+      const p = ports({ flows: () => flows, owners });
+      const read = await owners([], {});
+      expect(read.owners.map((owner) => [owner.role, owner.process])).toEqual([["host", "gone"], ["reviewer", "alive"]]);
+      expect(await probe(p)).toMatchObject({ quiet: false, blockers: { turns: 1, turnList: [{ reason: "reviewer" }] } });
+      await exit(reviewer);
+      expect(await probe(p)).toMatchObject({ quiet: true, blockers: { turns: 0, stages: 0 } });
+    });
+
+  test("a round that records an entry's exact process after the entry's artifact moved is that entry's owner (R1, R3, R10)", async () => {
+    const now = Date.now();
+    const launchPath = transcript("open");
+    const c = conversation(launchPath);
+    const reviewer = spawn();
+    release(c.key, claimHost(c.key, launchPath, reviewer.identity, "idle"));
+    f.registry.upsert({ ...f.registry.snapshot().entries[sessionKeyId(c.key)]!, artifactPath: transcript("settled") });
+    const roundConversationId = `conversation_${randomUUID()}`;
+    const flows = [{ id: "flow_moved", reviewerMode: "headless", state: "completed", rounds: [{ n: 1, reviewerPid: reviewer.child.pid,
+      reviewerIdentity: reviewer.identity.startIdentity, reviewerPath: launchPath, reviewerConversationId: roundConversationId,
+      verdict: "APPROVE" }] }] as unknown as Flow[];
+    const owners = ownerCensusReader(() => ({ ...productionLivenessSources(), flows: () => flows }),
+      { readSession: (query) => f.client.readSession!(query), heldHosts: () => new Map() });
+    const read = await owners([], {});
+    expect(read.owners).toHaveLength(1);
+    expect(read.owners[0]).toMatchObject({ role: "host", custody: [roundConversationId] });
+    // The settled entry artifact releases the turn; the round's own flow
+    // custody holds while its process lives (R10).
+    expect(await probe(ports({ flows: () => flows, owners }), now + TWELVE_HOURS)).toMatchObject({ quiet: false, blockers: { turns: 0, stages: 1 } });
+    // A stage that names the round's conversation reaches its live process
+    // through the census alone.
+    const pipelines = () => [{ id: "lane_moved", task: "Review the work", state: "running", cursor: { stageId: "stage", state: "running" },
+      runs: [{ stageId: "stage", attempts: [{ n: 1, conversationId: roundConversationId }] }] }] as unknown as ReturnType<QuietPorts["pipelines"]>;
+    const staged = ports({ owners, pipelines });
+    expect(await probe(staged, now + TWELVE_HOURS)).toMatchObject({ quiet: false, blockers: { turns: 0, stages: 1 } });
+    await exit(reviewer);
+    expect(await probe(staged, now + TWELVE_HOURS)).toMatchObject({ quiet: true, blockers: { stages: 0 } });
+  });
+
   describe("a handle's health is judged on the process it names (R4)", () => {
     const withHandle = (key: Key, state: Partial<HostState> & { pid: number }) => {
       const handle = heldHost(state.pid, state);
