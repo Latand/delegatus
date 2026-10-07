@@ -26,7 +26,7 @@ import { readEvidence } from "./evidence";
 import type { EngineHost, HostState } from "./engineHost";
 import { StructuredDeliveryQueue } from "./structuredDeliveryQueue";
 import { applyStructuredReconfigure, type StructuredReconfigureDependencies } from "./structuredReconfigure";
-import { projectEngineHostEvent } from "./engineHostEvents";
+import { coalesceReadyEngineDeltas, projectEngineHostEvent } from "./engineHostEvents";
 import { observeCodexSubagentEvent } from "./codexSubagentDetection";
 import { PermissionRequestGuard } from "./permissionGuard";
 import { permissionDenialRecorder, resolvePermissionAttendance } from "./permissionDenials";
@@ -1520,7 +1520,7 @@ export async function bindStructuredDeliveryQueue(
     const entry = entryForHost(registry, item);
     const conversationId = entry ? conversationIdForEntry(registry, entry) : null;
     if (conversationId) permissionGuard.adopt(key, item.host, conversationId, initialState);
-    const events = item.host.attach(acknowledgedEventCursor)[Symbol.asyncIterator]();
+    const events = coalesceReadyEngineDeltas(item.host.attach(acknowledgedEventCursor)[Symbol.asyncIterator](), conversationId ?? "");
     let eventsStopped = false;
     void (async () => {
       if (!conversationId) return;

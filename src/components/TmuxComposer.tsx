@@ -123,7 +123,7 @@ import {
   writeDismissedReceipts,
 } from "./runtime/deliveryState";
 import { deliveryNoticeRun, describeReceiptFailure, failureCauseKey, sentenceCauseKey } from "./runtime/deliveryNotice";
-import { humanReceiptReasonKey, SWITCH_WAIT_REASONS, mintIdempotencyKey, receiptIsAdmitted, receiptIsTerminal, type HostAxis, type TurnAxis } from "./runtime/runtimeModel";
+import { humanReceiptReasonKey, SWITCH_WAIT_REASONS, mintIdempotencyKey, receiptIsAdmitted, receiptIsTerminal, type HostAxis, type TurnAxis, runtimeReceiptIsAutomaticRetirement } from "./runtime/runtimeModel";
 import { tmuxComposerRuntimeDependencies } from "./tmuxComposerRuntime";
 import { VoiceConversationButton } from "./VoiceConversation";
 import { commitBridgeTurn, useBridgeTurnStartDrain } from "@/hooks/useBridgeReportRelay";
@@ -436,7 +436,7 @@ export function RuntimeComposerReceipts({
   const [detailsOpen, setDetailsOpen] = useState(false);
   // Current original-operation evidence must survive text-based history folding.
   // Repeated snapshots share one row; a different operation cannot resolve it.
-  const currentReceipts = mergeRuntimeReceipts(receipts, []);
+  const currentReceipts = mergeRuntimeReceipts(receipts, []).filter((receipt) => !runtimeReceiptIsAutomaticRetirement(receipt));
   const unknownReceipts = currentReceipts.filter(receiptHasUnknownFate);
   const ordinaryReceipts = currentReceipts.filter((receipt) => !receiptHasUnknownFate(receipt));
   const attemptGroups = [
@@ -2159,7 +2159,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     [...immediateRuntimeReceipts.filter((receipt) => receipt.conversationId === cardId), ...readRecoveryReceipts(cardId)],
     outbox.flatMap((entry) => entry.deliveryReceipt?.conversationId === cardId
       && (entry.deliveryReceipt.idempotencyKey === entry.id || retryParentOperationId(entry.deliveryReceipt)) ? [entry.deliveryReceipt] : []),
-  )).map((receipt) => {
+  )).filter((receipt) => !runtimeReceiptIsAutomaticRetirement(receipt)).map((receipt) => {
     const entry = outbox.find((entry) => entry.deliveryUncertain
       && (entry.id === receipt.idempotencyKey || entry.deliveryReceipt?.operationId === receipt.operationId));
     const priorSafeAttempt = entry?.deliveryReceipt?.resend === "safe"

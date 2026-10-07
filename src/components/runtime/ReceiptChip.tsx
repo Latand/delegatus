@@ -7,7 +7,7 @@ import { useLocale, type TFunction } from "@/lib/i18n";
 
 import { describeReceiptFailure } from "./deliveryNotice";
 import { deliveryWaitText, type DeliveryWait } from "./deliveryWait";
-import { humanReceiptReasonKey, receiptIsTerminal, SWITCH_WAIT_REASONS, type ReceiptStatus, type RuntimeReceipt } from "./runtimeModel";
+import { humanReceiptReasonKey, receiptIsTerminal, SWITCH_WAIT_REASONS, type ReceiptStatus, type RuntimeReceipt, runtimeReceiptIsAutomaticRetirement } from "./runtimeModel";
 
 /** Human sentence for a rejected/failed reason: a mapped sentence for a known
     code, else the sanitized reason's terse cause behind a "not delivered:"
@@ -73,6 +73,7 @@ export interface ReceiptChipProps {
  */
 export function ReceiptChip({ receipt, wait = null, actionsDisabled = false, onRetry, onEdit, onDiscard }: ReceiptChipProps) {
   const { t } = useLocale();
+  if (runtimeReceiptIsAutomaticRetirement(receipt)) return null;
   const failed = receipt.status === "rejected" || receipt.status === "failed";
   /* Issue #1213: a delivery unconfirmed past the bound is terminal here even
      though the receipt is not — the composer stops claiming it is moving and
