@@ -3541,7 +3541,14 @@ describe("image viewers: pinch, pan and the right click", () => {
     type Finger = { x: number; y: number; id: number };
     const touch = (type: "touchStart" | "touchMove" | "touchEnd", fingers: Finger[]) =>
       cdp.send("Input.dispatchTouchEvent", { type, touchPoints: fingers.map(({ x, y, id }) => ({ x, y, id })) });
-    const now = async () => { await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))); return read(page, viewer); };
+    /* A lift can land in the same render as the last move, which brings the
+       picture's short transition back for that step; on a busy machine two
+       frames end inside it. The reading waits for the picture to arrive. */
+    const now = async () => {
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      await page.evaluate((selector) => Promise.allSettled(document.querySelector(selector)?.getAnimations().map((animation) => animation.finished) ?? []), PICTURE[viewer]);
+      return read(page, viewer);
+    };
     /** One finger from `from` by `dx`, `dy`, lifted at the end. */
     const drag = async (from: { x: number; y: number }, dx: number, dy: number, steps = 10) => {
       await touch("touchStart", [{ ...from, id: 0 }]);

@@ -20021,6 +20021,7 @@ describe("queued hold kinds on the card", () => {
           let editorKinds: string[] | null = null;
           if (!phone) {
             await page.locator(`${selector("hold-slot")} [data-menu]`).click();
+            await openMenuSection(page, "more");
             await page.locator('[role="menuitem"]', { hasText: translate(locale, "kanban.hold.edit") }).click();
             const editor = page.locator("[data-hold-editor]");
             await editor.waitFor();

@@ -2005,8 +2005,10 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
             /* Off-bottom right after a programmatic glue is layout settling
                (initial row windows, pane resizes during a scheme
                reshuffle) — hold the magnet and glue again. A preceding input
-               event identifies an operator release inside the same window. */
-            if (settling && !userInitiated) glue();
+               event identifies an operator release inside the same window.
+               The scroll event a glue triggers is that glue's own whenever
+               it arrives: a busy page delivers it past the window. */
+            if ((settling || cause?.kind === "programmatic") && !userInitiated) glue();
             else setMagnet(false);
           }
           if (memoryKey && file && (!settling || userInitiated)) {
