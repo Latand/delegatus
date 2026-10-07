@@ -14,9 +14,9 @@ process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-role-memo
 const { createPipelineFromRequest, reportStageCompletion, tickPipelines } = await import("@/lib/pipelines/engine");
 const { registerPipelineTick } = await import("@/lib/pipelines/controllerSignal");
 const { loadPipelines, savePipelines } = await import("@/lib/pipelines/store");
-const { leaveLessonForConversation, lessonRequestForReport } = await import("./stage");
+const { leaveLessonForConversation, lessonRequestForReport } = await import("./roleStage");
 type PipelinePorts = import("@/lib/pipelines/engine").PipelinePorts;
-type SpawnInput = Parameters<PipelinePorts["spawnAgent"]>[0] & { learnedRules?: string | null };
+type SpawnInput = Parameters<PipelinePorts["spawnAgent"]>[0];
 
 registerPipelineTick(async () => {});
 afterAll(() => fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true }));
@@ -101,9 +101,9 @@ async function settle(n: number, verdict: "pass" | "fail", findings: { severity:
   expect(reported.error).toBeUndefined();
   return reported;
 }
-async function endTurn(n: number) {
+async function endTurn(n: number, text = "Done.") {
   const pathname = `/codex/stage-${n}.jsonl`;
-  messages.set(pathname, { text: "Done.", ts: clock + 100_000 });
+  messages.set(pathname, { text, ts: clock + 100_000 });
   await tickPipelines([entry(pathname)], ports);
 }
 async function create(stages: unknown[]): Promise<string> {
@@ -126,6 +126,7 @@ test("a review's finding becomes the fixer's abstract rule, a fresh builder star
   /* The reviewer starts clean, is asked for nothing, and cannot leave a lesson. */
   expect(spawned[0]!.role.roleId).toBe("reviewer");
   expect(spawned[0]!.learnedRules ?? null).toBeNull();
+  expect(spawned[0]!.cleanMemory).toBe(true);
   await settle(1, "fail", [{ severity: "P2", text: "parseSize(\"\") throws instead of returning null, and the branch has no test." }]);
   expect(lessonRequestForReport(lane(first), "review", 1, conversation(1))).toBeNull();
   expect(() => leaveLessonForConversation(loadPipelines(), conversation(1), { lessons: [{ scope: "project", rule: RULE, why: "x" }] })).toThrow(/stays clean/);
@@ -134,6 +135,7 @@ test("a review's finding becomes the fixer's abstract rule, a fresh builder star
 
   /* The fixer starts with the (still empty) block that tells it a lesson will be asked for. */
   expect(spawned[1]!.role.roleId).toBe("builder");
+  expect(spawned[1]!.cleanMemory).toBeUndefined();
   expect(spawned[1]!.learnedRules).toContain("none yet");
   expect(spawned[1]!.learnedRules).toContain("leave_lesson");
   await settle(2, "pass");
@@ -182,4 +184,43 @@ test("a review's finding becomes the fixer's abstract rule, a fresh builder star
   expect(lessonRequestForReport(lane(third), "build", 1, conversation(n))).toBeNull();
   expect(() => leaveLessonForConversation(loadPipelines(), conversation(n), { lessons: [{ scope: "role", rule: RULE, why: "x" }] })).toThrow(/switched off/);
   delete process.env.LLV_ROLE_MEMORY;
+});
+
+test("a stored lesson the fixer quotes never reaches the review gate it relays to, and a gate of any role is clean", async () => {
+  /* The rule stored by the test above; the pipeline keeps the report as written. */
+  savePipelines([]);
+  const id = await create([
+    { id: "gate", kind: "run", role: { roleId: "builder" }, prompt: "Judge src/size.ts. Earlier work:\n\n{{prev.output}}", next: null, onFail: { to: "fix", maxRounds: 1 } },
+    { id: "fix", kind: "run", role: { roleId: "builder" }, prompt: "Fix the findings below.\n\n{{prev.output}}", next: null },
+  ]);
+  await tickPipelines([], ports);
+  await tickPipelines([], ports);
+  /* A builder-named stage that routes a fail edge is a review gate: clean like a reviewer. */
+  const gate = spawned.at(-1)!;
+  expect(gate.role.roleId).toBe("builder");
+  expect(gate.cleanMemory).toBe(true);
+  expect(gate.learnedRules ?? null).toBeNull();
+  let n = spawned.length;
+  await settle(n, "fail", [{ severity: "P2", text: "parseSize(\"\") still throws." }]);
+  expect(lessonRequestForReport(lane(id), "gate", 1, conversation(n))).toBeNull();
+  await endTurn(n);
+  await tickPipelines([], ports);
+
+  n = spawned.length;
+  const quoted = `Fixed. Following ${RULE.toUpperCase().replaceAll(" ", "  ")} as the learned rule says.`;
+  const reported = await reportStageCompletion({ verdict: "pass", summary: quoted }, agent(conversation(n)), ports);
+  expect(reported.error).toBeUndefined();
+  await endTurn(n, `${quoted}\n\nThe rule was: ${RULE}`);
+  await tickPipelines([], ports);
+
+  /* The gate judges the fix with the fixer's report relayed into its prompt. */
+  const recheck = spawned.at(-1)!;
+  expect(spawned.length).toBe(n + 1);
+  expect(recheck.role.roleId).toBe("builder");
+  expect(recheck.cleanMemory).toBe(true);
+  expect(recheck.learnedRules ?? null).toBeNull();
+  expect(recheck.prompt).toContain("[learned rule]");
+  expect(recheck.prompt.toLowerCase()).not.toContain("write the test for that branch");
+  /* The local record keeps what the fixer wrote. */
+  expect(JSON.stringify(lane(id))).toContain(RULE.toUpperCase().replaceAll(" ", "  "));
 });

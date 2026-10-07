@@ -7,7 +7,7 @@ import { roleNameById } from "@/components/builderCopy";
 import { Z } from "@/components/layers";
 import { useLocale, type TFunction } from "@/lib/i18n";
 import type { Pipeline, PipelineStageReportEntry } from "@/lib/pipelines/types";
-import type { RoleMemoryProjectView, RuleView, ScopeKind, ScopeView, StageLessonView } from "@/lib/roleMemory/types";
+import type { RoleMemoryProjectView, RuleView, ScopeKind, ScopeView, StageLessonView } from "@/lib/memory/roleTypes";
 
 /* Role memory on the operator's surfaces (docs/design/role-memory.md §3.1).
    The operator chose the rules window and the rule line (2026-10-07) and then

@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { stageLessons } from "@/lib/roleMemory/store";
+import { stageLessons } from "@/lib/memory/roleStore";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 /* What each stage attempt of a project left, for the line under its report on the card. */

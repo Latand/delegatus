@@ -1,4 +1,5 @@
-import { afterAll, beforeEach, expect, test } from "bun:test";
+import { afterAll, beforeEach, expect, spyOn, test } from "bun:test";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,12 +9,14 @@ const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-role-memory-store-"))
 process.env.LLV_STATE_DIR = sandbox;
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 
-const { appendRule, codePoints, nearDuplicate, scopeChars } = await import("./consolidate");
-const { deleteRule, learnedRulesBlock, leaveLessons, projectView, recordLessonRequest, restoreRule, roleMemoryEnabled, stageLessons } = await import("./store");
-const { insertLearnedRules, renderLearnedRules } = await import("./render");
-const { withLearnedRules } = await import("./launch");
-const { ROLE_MEMORY_BOUND } = await import("./types");
-type RoleMemoryRule = import("./types").RoleMemoryRule;
+const { appendRule, codePoints, sameRule, scopeChars } = await import("./roleConsolidate");
+const { deleteRule, learnedRulesBlock, leaveLessons, projectView, recordLessonRequest, restoreRule, stageLessons } = await import("./roleStore");
+const { roleMemoryEnabled } = await import("./settings");
+const { canonicalProject, persistProjectAliases } = await import("@/lib/projects/aliases");
+const { insertLearnedRules, renderLearnedRules } = await import("./roleRender");
+const { withLearnedRules } = await import("./roleLaunch");
+const { ROLE_MEMORY_BOUND } = await import("./roleTypes");
+type RoleMemoryRule = import("./roleTypes").RoleMemoryRule;
 
 let n = 0;
 const PROJECT = () => `project-${n}`;
@@ -36,18 +39,22 @@ test("the bound counts code points, so a Ukrainian rule costs what an English on
   expect(codePoints("я🙂")).toBe(2);
 });
 
-test("a lesson that restates an active rule merges with it, and the fuller text survives", () => {
-  const older = rule("r_old", "Write the test for an empty input branch in the same commit as the branch.");
-  const fuller = rule("r_new", "Write the test for an empty, missing or zero input branch in the same commit as the branch itself.");
-  expect(nearDuplicate(older.rule, fuller.rule)).toBe(true);
-  expect(nearDuplicate(older.rule, "Give a browser started from a stage a short temporary directory.")).toBe(false);
-  const outcome = appendRule([older], fuller, "2026-10-07T12:00:00.000Z");
-  expect(outcome.active.map((entry) => entry.id)).toEqual(["r_new"]);
-  expect(outcome.merged).toEqual([{ from: "r_old", into: "r_new" }]);
-  expect(outcome.changed.find((entry) => entry.id === "r_old")).toMatchObject({ state: "merged", reason: "duplicate", mergedInto: "r_new" });
-  const shorter = appendRule([fuller], rule("r_short", older.rule), "2026-10-07T12:00:00.000Z");
-  expect(shorter.active.map((entry) => entry.id)).toEqual(["r_new"]);
-  expect(shorter.changed).toEqual([expect.objectContaining({ id: "r_short", state: "merged", mergedInto: "r_new" })]);
+test("only a repeat of the same rule deduplicates: two obligations and a contradiction stay two rules", () => {
+  const atomic = rule("r_atomic", "When a change writes to the database, put every write of one operation into a single atomic commit.");
+  const retry = rule("r_retry", "When a change writes to the database, make every write of one operation safe to retry idempotently.");
+  expect(sameRule(atomic.rule, retry.rule)).toBe(false);
+  const two = appendRule([atomic], retry, "2026-10-07T12:00:00.000Z");
+  expect(two.active.map((entry) => entry.id)).toEqual(["r_atomic", "r_retry"]);
+  expect(two.merged).toEqual([]);
+  const always = rule("r_always", "Run the full test suite of the project before every push to the remote branch.");
+  const never = rule("r_never", "Never run the full test suite of the project before every push to the remote branch.");
+  expect(appendRule([always], never, "2026-10-07T12:00:00.000Z").active.map((entry) => entry.id)).toEqual(["r_always", "r_never"]);
+  /* The same words, cased, spaced and punctuated differently, are one rule: the one already injected stays. */
+  const repeat = rule("r_repeat", "  when a change writes to the DATABASE, put every write of one operation into a single atomic commit ");
+  const deduped = appendRule([atomic, retry], repeat, "2026-10-07T12:00:00.000Z");
+  expect(deduped.active.map((entry) => entry.id)).toEqual(["r_atomic", "r_retry"]);
+  expect(deduped.merged).toEqual([{ from: "r_repeat", into: "r_atomic" }]);
+  expect(deduped.changed).toEqual([expect.objectContaining({ id: "r_repeat", state: "merged", reason: "duplicate", mergedInto: "r_atomic" })]);
 });
 
 test("a scope over 10 000 characters is consolidated under the bound, and the dropped rule stays visible in history", () => {
@@ -161,4 +168,86 @@ test("two lessons stay two records with their own ids and render as two items, n
   const section = learnedRulesBlock(project, "builder").split("\n\n").find((part) => part.startsWith("Role rules · Builder on this project"))!;
   const items = section.split("\n").filter((line) => line.startsWith("- ["));
   expect(items).toEqual([`- [${left[0]!.id}] ${first} Why: An untested empty path failed review.`, `- [${left[1]!.id}] ${second} Why: The driver died on a socket path limit.`]);
+});
+
+test("a generated id that is already taken is drawn again: no lesson is ever overwritten, within one call or across scopes", () => {
+  const project = PROJECT();
+  const real = crypto.randomBytes.bind(crypto);
+  let forced = 3;
+  /* The first three draws all return one value: the second lesson of the call and a later lesson elsewhere collide with the first. */
+  const spy = spyOn(crypto, "randomBytes").mockImplementation(((size: number) => forced-- > 0 ? Buffer.alloc(size, 7) : real(size)) as typeof crypto.randomBytes);
+  try {
+    const first = "When a change adds a branch for empty input, write the test for that branch in the same commit.";
+    const second = "Give a browser started from a pipeline stage a short temporary directory for its sockets.";
+    const third = "Read the project's instruction files before changing anything the brief does not name.";
+    const one = leaveLessons({ request: request(1), source: source(1), none: null, lessons: [
+      { scope: "role", rule: first, why: "An untested empty path failed review." },
+      { scope: "project", rule: second, why: "The driver died on a socket path limit." },
+    ] }).left;
+    forced = 1;
+    const two = leaveLessons({ request: request(2), source: source(2), none: null, lessons: [{ scope: "machine", rule: third, why: "A fence was crossed." }] }).left;
+    const ids = [...one, ...two].map((entry) => entry.id);
+    expect(new Set(ids).size).toBe(3);
+    const view = projectView(project);
+    const text = (id: string) => view.scopes.flatMap((scope) => scope.active).find((entry) => entry.id === id);
+    expect(text(ids[0]!)).toMatchObject({ rule: first, stageId: "fix", roleId: "builder" });
+    expect(text(ids[1]!)).toMatchObject({ rule: second });
+    expect(text(ids[2]!)).toMatchObject({ rule: third });
+    expect(stageLessons(project).flatMap((row) => row.rules.map((entry) => entry.rule)).sort()).toEqual([first, second, third].sort());
+  } finally {
+    spy.mockRestore();
+  }
+});
+
+test("project succession keeps every stored rule, its history and the stage lines under both keys, within the bound", () => {
+  const old = `dir-${PROJECT()}-old`;
+  const current = `repo-${PROJECT()}-current`;
+  const words = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "india", "juliet", "kilo", "lima", "mike"];
+  const text = (key: string, i: number) => `${key} rule ${i}: ${words.map((word, w) => `${word}${(i * 37 + w * 11) % 991}`).join(" ")} ${"x".repeat(180)}`.slice(0, 300);
+  const fill = (project: string, key: string, from: number, rounds: number) => {
+    const ids: string[] = [];
+    for (let round = 0; round < rounds; round += 1) {
+      const attempt = from + round;
+      const req = { pipelineId: `p-${key}`, stageId: "fix", attempt };
+      recordLessonRequest({ ...req, project, roleId: "builder", conversationId: `conversation_${key}_${attempt}`, at: new Date(Date.UTC(2026, 9, 7, 0, attempt)).toISOString() });
+      const left = leaveLessons({ request: req, source: { ...source(attempt), project, pipelineId: `p-${key}`, conversationId: `conversation_${key}_${attempt}` }, none: null,
+        lessons: [0, 1, 2].map((k) => ({ scope: "role" as const, rule: text(key, attempt * 3 + k), why: `Round ${attempt} of ${key}.` })),
+        now: new Date(Date.UTC(2026, 9, 7, 0, attempt)).toISOString() }).left;
+      ids.push(...left.map((entry) => entry.id));
+    }
+    return ids;
+  };
+  /* Both keys already hold lessons, each close to the bound. */
+  const oldIds = fill(old, "old", 1, 6);
+  const removed = oldIds[oldIds.length - 1]!;
+  deleteRule(removed, "2026-10-07T01:00:00.000Z");
+  const currentIds = fill(current, "current", 20, 6);
+  expect(projectView(old).scopes.find((scope) => scope.roleId === "builder")!.active.length).toBeGreaterThan(10);
+
+  expect(persistProjectAliases([{ source: old, target: current, displayName: "succession" }])).toBe(true);
+  expect(canonicalProject(old)).toBe(current);
+
+  for (const key of [old, current]) {
+    const block = learnedRulesBlock(key, "builder");
+    const builder = projectView(key).scopes.find((scope) => scope.roleId === "builder")!;
+    expect(builder.scope).toBe(`role:${current}:builder`);
+    expect(builder.chars).toBeLessThanOrEqual(ROLE_MEMORY_BOUND);
+    /* The newest rules of both keys are injected; what the bound pushed out and what the operator removed stay in history. */
+    expect(block).toContain(oldIds[oldIds.length - 2]!);
+    expect(block).toContain(currentIds[currentIds.length - 1]!);
+    expect(block).not.toContain(removed);
+    const everything = [...builder.active, ...builder.left].map((entry) => entry.id);
+    for (const id of [...oldIds, ...currentIds]) expect(everything).toContain(id);
+    expect(builder.left).toContainEqual(expect.objectContaining({ id: removed, reason: "deleted" }));
+    expect(builder.left.some((entry) => entry.reason === "budget")).toBe(true);
+    expect(projectView(key).scopes.filter((scope) => scope.roleId === "builder")).toHaveLength(1);
+    const lines = stageLessons(key);
+    expect(lines.some((row) => row.pipelineId === "p-old")).toBe(true);
+    expect(lines.some((row) => row.pipelineId === "p-current")).toBe(true);
+  }
+  /* The removed rule comes back into the merged scope, which keeps its bound. */
+  restoreRule(removed, "2026-10-07T02:00:00.000Z");
+  const merged = projectView(current).scopes.find((scope) => scope.roleId === "builder")!;
+  expect(merged.active.map((entry) => entry.id)).toContain(removed);
+  expect(merged.chars).toBeLessThanOrEqual(ROLE_MEMORY_BOUND);
 });

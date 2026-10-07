@@ -32,7 +32,7 @@ import {
 import { PIPELINE_ACTIONS, PIPELINE_DISALLOWED_ROLE_IDS, PIPELINE_FAIL_EDGE_EXHAUSTIONS, STAGE_FINDING_SEVERITIES } from "@/lib/pipelines/types";
 import { procBackend } from "@/lib/proc";
 import { parseMessageOrigin, type MessageOrigin } from "@/lib/runtime/messageOrigin";
-import { MAX_LESSONS_PER_ATTEMPT, RULE_MAX_CHARS, RULE_MIN_CHARS, WHY_MAX_CHARS } from "@/lib/roleMemory/types";
+import { lessonTextLength, MAX_LESSONS_PER_ATTEMPT, RULE_MAX_CHARS, RULE_MIN_CHARS, WHY_MAX_CHARS } from "@/lib/memory/roleTypes";
 import { ROLE_IDS, type RoleId } from "@/lib/roles/types";
 import { SELECTED_TAIL_MAX_LINES } from "@/lib/selection/resolve";
 import { renderTaskColorRule } from "@/lib/tasks/colorRule";
@@ -3368,6 +3368,10 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
 };
 
 const clientRequestIdSchema = z.string().min(1).describe("Stable idempotency key for this logical call.");
+/** Lesson text limits count code points, as the role memory store does; a
+    UTF-16 bound would refuse valid text in supplementary scripts. */
+const lessonTextSchema = (min: number, max: number) => z.string()
+  .refine((value) => { const length = lessonTextLength(value); return length >= min && length <= max; }, { message: `must be ${min}–${max} characters (Unicode code points)` });
 /* #1490: the one recovery switch. Excluded from the argument digest, so the
    same logical call with and without it is one call. */
 const recoveryOnlySchema = z.boolean().optional()
@@ -3778,10 +3782,10 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     lessons: z.array(z.object({
       scope: z.enum(["role", "project", "machine"]).describe("role: the next agent of a role on this project (yours unless role names another); project: every role on this project; machine: every project on this machine."),
       role: z.enum(ROLE_IDS).optional().describe("With scope role only: the role the rule is for, when another role would have prevented or caught the problem earlier."),
-      rule: z.string().min(RULE_MIN_CHARS).max(RULE_MAX_CHARS).describe("One or two imperative sentences, true beyond this task: a class of mistake or situation and what to do about it."),
-      why: z.string().min(1).max(WHY_MAX_CHARS).describe("One line: what went wrong here, or what it cost."),
+      rule: lessonTextSchema(RULE_MIN_CHARS, RULE_MAX_CHARS).describe(`One or two imperative sentences, true beyond this task: a class of mistake or situation and what to do about it. ${RULE_MIN_CHARS}–${RULE_MAX_CHARS} characters.`),
+      why: lessonTextSchema(1, WHY_MAX_CHARS).describe(`One line: what went wrong here, or what it cost. At most ${WHY_MAX_CHARS} characters.`),
     })).max(MAX_LESSONS_PER_ATTEMPT).optional(),
-    none: z.string().min(1).max(WHY_MAX_CHARS).optional().describe("When this stage taught nothing new: one line saying why."),
+    none: lessonTextSchema(1, WHY_MAX_CHARS).optional().describe(`When this stage taught nothing new: one line saying why, at most ${WHY_MAX_CHARS} characters.`),
   }),
   link_task_to_pipeline: z.object({
     includeHints: z.boolean().optional().describe("true includes the static readMore hint; full:true also includes it."),

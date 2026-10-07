@@ -760,7 +760,7 @@ agent receives together, each rule small and removable, and no on/off switch:
 role memory is a default feature. This is what the lane builds.
 
 1. **Store.** One collection, `role_memory`, in `state.sqlite` through
-   `SqliteStateCollection` (`src/lib/roleMemory/store.ts`): rule rows, one row
+   `SqliteStateCollection` (`src/lib/memory/roleStore.ts`): rule rows, one row
    per scope with its active list, revision and history, one row per stage
    attempt that was asked for a lesson. Scopes
    are `role:<project>:<roleId>`, `project:<project>` and `machine`, with the
@@ -772,6 +772,18 @@ role memory is a default feature. This is what the lane builds.
    draws one block per rule, and the injected block lists one item per rule
    with its id. Nothing is written into a repository, a pull
    request, an issue, a linked board or a bridge or relay payload.
+   Role memory is part of the one memory module, `src/lib/memory` (`role*.ts`
+   beside the shared-memory controller and its settings); the stored lessons
+   stay in `state.sqlite`, apart from the disposable derived search index.
+   A rule id is 8 random bytes, drawn again inside the transaction when a
+   stored rule already holds it, so no lesson is ever overwritten. A project
+   key that moves (an origin added, a verified rename; see
+   `src/lib/projects/succession.ts`) keeps its rules: every read resolves a
+   stored scope and a stage's request rows through the project's aliases, and
+   a scope row left under the old key is joined into the current one on the
+   next read or write, both active lists in the order they were written, the
+   oldest archived while the joined scope is over its bound, both histories
+   kept.
 2. **Write path.** `stage_report`'s answer gains `lessonRequest` (the prompt of
    2.4, shortened, as lines) on the first accepted report of an eligible
    attempt; a fix round's request names the
@@ -784,24 +796,38 @@ role memory is a default feature. This is what the lane builds.
    text") and never refuses it. Instead of a sentence in the stage wrapper, the
    injected block itself tells the agent that the request will come, so
    `renderStagePrompt` and its byte-stable re-render are untouched.
-3. **Who stays clean.** `learnedMemoryExcluded` (`src/lib/roleMemory/policy.ts`):
-   role reviewer, verifier or issue-reporter, or any stage the engine
-   classifies as a review gate (`isReviewGate`, now exported from
-   `src/lib/roles/sizing.ts` and read by both the engine and role memory: a
-   review-loop stage, or a stage with a fail edge), whatever role it names.
-   Such a stage gets no block and no request, `leave_lesson` refuses it, and no
-   lesson may be addressed to a clean role. The visual critic is not excluded
+3. **Who stays clean.** One decision for every automatic memory path,
+   `automaticMemoryExcluded` (`src/lib/memory/eligibility.ts`): role reviewer,
+   verifier or issue-reporter, or any stage the engine classifies as a review
+   gate (`isReviewGate`, now exported from `src/lib/roles/sizing.ts` and read
+   by both the engine and role memory: a review-loop stage, or a stage with a
+   fail edge), whatever role it names. Such a stage gets no block and no
+   request, `leave_lesson` refuses it, and no lesson may be addressed to a
+   clean role. The engine marks its launch profile `cleanMemory` (the registry
+   does the same for a clean role whoever launched it, and a resume keeps the
+   mark), and the mark closes the rest: the shared-memory controller answers
+   no block on any of its turns, an operator's follow-up included
+   (`conversationMemoryExcluded`, which also reads a clean role on a record
+   written before the mark); the Claude launch installs no shared-memory hook
+   and sets `autoMemoryEnabled: false` and `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`
+   in its settings; the Codex launch installs no hook and passes
+   `features.memories=false` to the app-server and to the thread. Explicit
+   evidence searches (`search_memory`, `search_transcripts`) stay available:
+   the stage calls them itself. The visual critic is not excluded
    by role (2.3): it reads and writes its rules when it runs as an ordinary
    stage, and like any role it stays clean when its stage carries a fail edge.
 4. **Consolidation, without a model.** On every append, in the same
-   transaction: a lesson that restates an active rule of its scope (nearly the
-   same words, or one inside the other) merges with it and the fuller text
-   survives; then, while the scope is over 10 000 characters, its oldest rule
-   is archived with the reason "budget". A merged or archived rule keeps its
+   transaction: a lesson that repeats an active rule of its scope word for
+   word (case, spacing and punctuation aside) merges into it; similar wording
+   never merges, because two rules that share most of their words can ask for
+   different things, or opposite ones, and only a model could combine them
+   without losing one. Then, while the scope is over 10 000 characters, its
+   oldest rule is archived with the reason "budget". A merged or archived rule keeps its
    record, its state, its reason and its successor, and the rules window shows
    it under "Left the rules". Nothing is dropped for disuse.
 5. **Injection.** The engine reads the block once per activation in
-   `spawnRunStage` (`learnedRulesForLaunch`) and hands it to the spawn port as
+   `spawnRunStage` (`stageMemoryForLaunch`), before the stage input is
+   composed, and hands it to the spawn port as
    `learnedRules`, a field that is neither persisted on the attempt nor part of
    the request digest. The production port expands it into the prompt only at
    dispatch (`withLearnedRules` in `spawnPipelineAgent`), below the brief and
@@ -811,8 +837,11 @@ role memory is a default feature. This is what the lane builds.
    machine rules), each rule an item with its id. A block that would push the
    message past the 32 000-byte envelope is written to
    `statePath("role-memory/launch/learned-rules-<sha256>.md")`, mode 0600, and
-   the message points at it. No pipeline record, attempt input or composer
-   artifact in the checkout holds rule text.
+   the message points at it. `composeStageInput` leaves room for that pointer
+   (`learnedRulesReserve`), so a brief at the envelope's bound still carries
+   its rules; a message with no room even for the pointer is refused before a
+   launch is reserved, never sent without them. No pipeline record, attempt
+   input or composer artifact in the checkout holds rule text.
 6. **Controls.** No switch: role memory is always on (operator, 2026-10-07).
    The one way to stop it, for safety, is the installation's setting
    `LLV_ROLE_MEMORY=off`, which stops both the request and the injection and
@@ -834,36 +863,49 @@ role memory is a default feature. This is what the lane builds.
    one; a clean stage draws nothing. The header menu's Memory page is
    unchanged: it already reaches 355 of the 360 px its driver allows.
 7. **Privacy for the MVP** is the abstract-rule instruction in the request and
-   in the block, the detector hints, and the existing publication privacy
-   gate on everything published.
+   in the block, the detector hints, and the existing privacy checks, told
+   which text is a lesson. Every stored rule and why of at least 16 letters
+   and digits is looked for, whatever the case, spacing or punctuation between
+   its words, at the boundaries where text leaves a stage: the next stage's
+   prompt and every file the composer and a runtime handoff write for it
+   (a report relayed as the previous output becomes `[learned rule]`), a
+   task's text and details on the linked board's wire, the bridge's and the
+   issue reports' private-text filter (class "a learned rule"), and the
+   publication privacy gate, which the pipeline's publication push runs with
+   the stored lessons as known values (`LLV_PRIVACY_KNOWN_VALUES_FILE`, a 0600
+   file under the state directory). The lesson's own record is untouched.
 
 Tests on isolated state: the bound in code points, merge and archive with the
-dropped rule visible, the lane path through the real engine (a review's finding
-makes the fixer's request name it, the fixer's rule reaches a fresh builder's
-launch and no persisted pipeline record, reviewers get nothing, the kill
-switch stops both), a removed rule kept as a record and put back,
-`leave_lesson` and `lessonRequest` through the MCP service, and the
-oversized block as a file outside the checkout. Rendered evidence goes through
+dropped rule visible, two obligations and a contradiction kept apart, the lane
+path through the real engine (a review's finding makes the fixer's request
+name it, the fixer's rule reaches a fresh builder's launch and no persisted
+pipeline record, reviewers and review gates get nothing and carry the clean
+mark, a fixer's report that quotes a stored rule reaches the gate withheld,
+the kill switch stops both), the shared-memory controller answering nothing
+to a clean conversation's operator follow-up, the Claude settings and Codex
+flags of a clean launch, a removed rule kept as a record and put back, forced
+id collisions, project succession under both keys, `leave_lesson` and
+`lessonRequest` through the MCP service with code-point limits, briefs at the
+envelope's bound in English and Ukrainian with every scope full, and the
+linked-board, bridge, issue-report and publication-gate boundaries. Rendered evidence goes through
 the existing phone driver (`issue1671Evidence.browser.test.tsx`) over the
 kanban fixture, desktop and 390 px, English and Ukrainian.
 
 **Later.** Each of these is in sections 2.2–2.9 above and waits for a slice of
 its own:
 
-- The egress system of 2.9: `privateMemorySpans` and its known-value matching
-  over every rule and reason, the HMAC fingerprint file for processes outside
-  the Viewer, the `commit-msg` and `pre-push` checks in the agent Git guard,
-  the `gh` shim extended to `pr`, `issue` and `api` bodies, the scans of staged
-  blobs and pushed ranges, the checks on task text, linked-board sync, bridge
-  reports, prototype reviews and issue reports, and the replacement of a quoted
-  rule by its id in stage reports and relays.
+- The rest of the egress system of 2.9: the HMAC fingerprint file for
+  processes outside the Viewer, the `commit-msg` and `pre-push` checks in the
+  agent Git guard (an agent's own push runs the gate without the lessons), the
+  `gh` shim extended to `pr`, `issue` and `api` bodies, the scans of staged
+  blobs, the check on prototype reviews, and the replacement of a quoted rule
+  by its id rather than a placeholder.
 - Consolidation by a model (2.5): the headless Codex turn, the partition
   contract and its server check, the frozen input and the commit against a
   moving scope, rewrites with before and after.
-- Closing shared memory and the engines' native memory for clean stages (2.3):
-  the `UserPromptSubmit` controller on every turn, Claude's
-  `autoMemoryEnabled` and Codex's `--disable memories` at launch, and the
-  native probes.
+- The native probes of 2.3 against the real engines (the MVP checks the
+  settings and flags each launch passes), and the same marks on terminal
+  (tmux) launches, which pipeline stages do not use.
 - Revisions frozen at binding and the marker in the stage prompt (2.6): the
   MVP reads the current rules at each activation.
 - Operator editing beyond remove and return: add, edit and pin a rule, "May be

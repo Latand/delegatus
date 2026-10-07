@@ -13,7 +13,8 @@ const { registerPipelineTick } = await import("@/lib/pipelines/controllerSignal"
 afterAll(registerPipelineTick(async () => {}));
 const { viewerMcpBindings } = await import("./bindings");
 const { createMcpToolService, MCP_TOOL_NAMES, MemoryMcpReceiptStore, MUTATING_MCP_TOOL_NAMES, TOOL_INPUT_SCHEMAS } = await import("./server");
-const { learnedRulesBlock } = await import("@/lib/roleMemory/store");
+const { learnedRulesBlock } = await import("@/lib/memory/roleStore");
+const { parseLessons } = await import("@/lib/memory/roleStage");
 type Pipeline = import("@/lib/pipelines/types").Pipeline;
 type McpToolResult = import("./server").McpToolResult;
 
@@ -80,4 +81,27 @@ test("an accepted fix report asks for a lesson naming the handed findings, and l
   const left = await call("conversation_fix", "leave_lesson", { lessons: [{ scope: "role", rule: RULE, why: "Review failed on an untested empty path." }] });
   expect(left).toMatchObject({ ok: true, stageId: "fix", left: [{ scope: `role:${PROJECT}:builder`, state: "active" }] });
   expect(learnedRulesBlock(PROJECT, "builder")).toContain(RULE);
+});
+
+test("text limits count Unicode code points in the schema and in the store alike", async () => {
+  const emoji = (n: number) => "\u{1F600}".repeat(n);
+  const schema = TOOL_INPUT_SCHEMAS.leave_lesson;
+  const lesson = (rule: string, why = "w") => ({ clientRequestId: "x", lessons: [{ scope: "role", rule, why }] });
+  /* 151 supplementary characters are 302 UTF-16 units and well within 300 code points. */
+  expect(schema.safeParse(lesson(emoji(151))).success).toBe(true);
+  expect(schema.safeParse(lesson(emoji(300))).success).toBe(true);
+  expect(schema.safeParse(lesson(emoji(301))).success).toBe(false);
+  expect(schema.safeParse(lesson(RULE, emoji(160))).success).toBe(true);
+  expect(schema.safeParse(lesson(RULE, emoji(161))).success).toBe(false);
+  expect(schema.safeParse({ clientRequestId: "x", none: emoji(160) }).success).toBe(true);
+  expect(schema.safeParse({ clientRequestId: "x", none: emoji(161) }).success).toBe(false);
+  expect(parseLessons({ lessons: [{ scope: "role", rule: emoji(300), why: emoji(160) }], none: emoji(160) }, "builder").lessons).toHaveLength(1);
+  expect(() => parseLessons({ lessons: [{ scope: "role", rule: emoji(301), why: "w" }] }, "builder")).toThrow(/at most|1–300|20–300/);
+
+  /* Through the real service: the fix attempt was asked for a lesson by the test above. */
+  const over = await call("conversation_fix", "leave_lesson", { lessons: [{ scope: "role", rule: emoji(301), why: "w" }] });
+  expect(over.ok).toBe(false);
+  const atCap = await call("conversation_fix", "leave_lesson", { lessons: [{ scope: "role", rule: emoji(300), why: emoji(160) }] });
+  expect(atCap).toMatchObject({ ok: true, stageId: "fix" });
+  expect(learnedRulesBlock(PROJECT, "builder")).toContain(emoji(300));
 });

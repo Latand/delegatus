@@ -14,6 +14,7 @@ import { taskSeatHoldingSnapshot } from "@/lib/tasks/seatHolding";
 import { lastScannedFiles } from "@/lib/scanner/scanCache";
 import { loadPipelinesForList } from "@/lib/pipelines/store";
 import { initializeStateCollections, readStateCollectionRevision, SqliteStateCollection, stateCollectionsInitialized, stateDatabaseSignature } from "@/lib/state/sqliteStateStore";
+import { withoutStoredLessons } from "@/lib/memory/roleStore";
 
 import { encodeTask, type WireRow } from "./taskWire";
 import { isTombstone, tombstoneCollection, tombstoneKey, tombstoneRowKey } from "./tombstones";
@@ -62,8 +63,16 @@ class Page {
 }
 
 function encoded(task: BoardTask, filter: FeedFilter) {
-  const { row, bytes } = encodeTask(task, filter.self, { includeBoard: filter.includeBoard, includePrototypeReview: filter.includePrototypeReview });
+  const { row, bytes } = encodeTask(outboundTask(task), filter.self, { includeBoard: filter.includeBoard, includePrototypeReview: filter.includePrototypeReview });
   return { row, bytes, stub: "withheld" in row };
+}
+
+/** A task as it leaves this machine: a role-memory lesson its text or details
+    quote is withheld (src/lib/memory/roleStore.ts); the local task keeps it. */
+export function outboundTask(task: BoardTask): BoardTask {
+  const text = withoutStoredLessons(task.text);
+  const details = task.details === undefined ? undefined : withoutStoredLessons(task.details);
+  return text === task.text && details === task.details ? task : { ...task, text, ...(details === undefined ? {} : { details }) };
 }
 
 type OmittedTask = { id: string; project: string };

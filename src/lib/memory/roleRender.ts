@@ -1,6 +1,6 @@
-import { ruleLine } from "./consolidate";
-import { scopeKind, scopeRole } from "./scopes";
-import { RULE_MAX_CHARS, WHY_MAX_CHARS, type RoleMemoryRule } from "./types";
+import { ruleLine } from "./roleConsolidate";
+import { scopeKind, scopeRole } from "./roleScopes";
+import { RULE_MAX_CHARS, WHY_MAX_CHARS, type RoleMemoryRule } from "./roleTypes";
 
 /* What a stage agent reads: the learned rules below its brief when it starts,
    and the lesson request in the answer to its stage_report. Kept short on

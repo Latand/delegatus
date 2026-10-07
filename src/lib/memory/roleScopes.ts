@@ -1,4 +1,4 @@
-import type { ScopeKind } from "./types";
+import type { ScopeKind } from "./roleTypes";
 
 /* Scope keys as text, with nothing that touches the disk, so the renderer and
    a browser fixture can read them: `role:<project>:<roleId>`, `project:<project>`

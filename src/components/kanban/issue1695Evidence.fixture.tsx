@@ -7,7 +7,7 @@ import { SeatDeputyChip } from "@/components/orchestrator/SeatDeputyChip";
 import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
 import { NativeQueuePanel } from "@/components/NativeQueuePanel";
 import { translate } from "@/lib/i18n";
-import { insertLearnedRules, lessonRequestLines, renderLearnedRules } from "@/lib/roleMemory/render";
+import { insertLearnedRules, lessonRequestLines, renderLearnedRules } from "@/lib/memory/roleRender";
 import { taskReferencePrelude } from "@/lib/selection/selectedContext";
 import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import { AgentMappingTable } from "@/components/onboarding/AgentMappingTable";

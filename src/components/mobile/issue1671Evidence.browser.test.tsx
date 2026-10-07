@@ -8376,7 +8376,7 @@ describe("role memory: rules window and the rule line", () => {
     const memory = await import("@/app/api/memory/settings/route");
     const rolesRoute = await import("@/app/api/role-memory/route");
     const lessonsRoute = await import("@/app/api/role-memory/lessons/route");
-    const store = await import("@/lib/roleMemory/store");
+    const store = await import("@/lib/memory/roleStore");
     const out = path.resolve(".artifacts/role-memory-mvp");
     fs.mkdirSync(out, { recursive: true });
     const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();

@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { requireOperatorAuthority } from "@/lib/agent/operatorAuthority";
-import { deleteRule, projectView, restoreRule, RoleMemoryRefusal } from "@/lib/roleMemory/store";
+import { deleteRule, projectView, restoreRule, RoleMemoryRefusal } from "@/lib/memory/roleStore";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

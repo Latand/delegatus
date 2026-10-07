@@ -67,6 +67,11 @@ export interface LaunchProfile {
       interpretation for durable generations created before the axis split. */
   sandbox?: "full" | "restricted" | null;
   allowSubagents: boolean;
+  /** No automatic memory reaches this conversation: no learned rules, no
+      shared-memory hook, and its engine's own memory off. Set at spawn for a
+      clean role or review gate (src/lib/memory/eligibility.ts) and kept on
+      every resume. Absent means memory is allowed. */
+  cleanMemory?: boolean;
   mcpServers: string[];
   /** Codex plugins granted to this session (issue #687). Decided once, at
       spawn, from the session's origin; a resume replays it and can never

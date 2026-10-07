@@ -13,8 +13,16 @@ export const WHY_MAX_CHARS = 160;
 export const RULE_MIN_CHARS = 20;
 export const MAX_LESSONS_PER_ATTEMPT = 3;
 
-/** Roles that stay clean: they read no learned rules and leave none. */
-export const CLEAN_ROLE_IDS = ["reviewer", "verifier", "issue-reporter"] as const;
+/** A lesson's text as it is stored: trimmed, each run of spacing one space. */
+export function lessonText(value: string): string {
+  return value.trim().replace(/\s+/g, " ");
+}
+
+/** The length every lesson limit counts: code points of the stored text, so
+    the MCP schema and the store admit exactly the same input. */
+export function lessonTextLength(value: string): number {
+  return [...lessonText(value)].length;
+}
 
 export type ScopeKind = "role" | "project" | "machine";
 
@@ -40,7 +48,7 @@ export interface RoleMemoryRule {
   rule: string;
   why: string;
   state: RuleState;
-  /** Why a rule left the injected text: a near-duplicate merged into a fuller rule, the bound, or the operator removed it. */
+  /** Why a rule left the injected text: it repeated an active rule word for word, the bound, or the operator removed it. */
   reason?: RuleLeftReason;
   mergedInto?: string;
   hints: StaticFindingClass[];
@@ -52,8 +60,9 @@ export interface RoleMemoryRule {
 export interface ScopeHistoryEntry {
   revision: number;
   at: string;
-  /** Who changed the scope: a stage agent's lesson, or the operator in the rules window. */
-  by: "agent" | "operator";
+  /** Who changed the scope: a stage agent's lesson, the operator in the rules
+      window, or the join of a scope stored under a project key that moved. */
+  by: "agent" | "operator" | "succession";
   added: string[];
   merged: { from: string; into: string }[];
   archived: string[];

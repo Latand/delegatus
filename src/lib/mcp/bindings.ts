@@ -132,8 +132,8 @@ import { productionManagerAuthoritySources } from "@/lib/orchestrator/managerAut
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
 import { contextReading, readOrchestratorTranscriptFacts, rotationRecommendation } from "@/lib/orchestrator/health";
 import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
-import { leaveLessonForConversation, lessonRequestForReport } from "@/lib/roleMemory/stage";
-import { RoleMemoryRefusal } from "@/lib/roleMemory/store";
+import { leaveLessonForConversation, lessonRequestForReport } from "@/lib/memory/roleStage";
+import { RoleMemoryRefusal, storedLessonTexts } from "@/lib/memory/roleStore";
 import { continueReviewActorRefusal, createPipelineFromRequest, legacyReviewActorRefusal, decisionAnswerActorRefusal, getPipeline as getPipelineRecord, getPipelines, patchPipeline, reportStageCompletion, type PipelineMutationResult, type StageCompletionRequest } from "@/lib/pipelines/engine";
 import { latestOperationalPipelineAttempt, latestOperationalStageAttempt } from "@/lib/pipelines/attemptSelection";
 import { requestPipelineTick } from "@/lib/pipelines/controllerSignal";
@@ -3679,7 +3679,12 @@ async function productionPublicDenyList(project: string | null, control: ViewerC
     if (requireComplete) throw error;
     // An unreadable catalog contributes nothing.
   }
-  return { accounts, people, local, projects };
+  let lessons: string[] = [];
+  try { lessons = storedLessonTexts(); } catch (error) {
+    if (requireComplete) throw error;
+    // An unreadable role memory contributes nothing.
+  }
+  return { accounts, people, local, projects, lessons };
 }
 
 async function telegramPeople(control: ViewerControlDependencies, requireComplete = false): Promise<string[]> {

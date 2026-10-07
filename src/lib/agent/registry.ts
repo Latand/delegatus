@@ -71,6 +71,7 @@ import {
   type SpawnOrigin,
   type SpawnRejection,
 } from "./spawnAdmission";
+import { roleIsClean } from "@/lib/memory/eligibility";
 import { sessionKeyFromTranscript, sessionKeyId, type SessionKey } from "./sessionKey";
 import {
   defaultRegistrySqliteFilename,
@@ -1166,6 +1167,8 @@ function mergeResumeLaunchProfile(current: LaunchProfile, requested: LaunchProfi
     readOnly: requested.readOnly ?? current.readOnly,
     sandbox: requested.sandbox ?? current.sandbox ?? null,
     allowSubagents: current.allowSubagents || requested.allowSubagents,
+    /* Clean once, clean for good: a resume never brings memory back. */
+    ...(current.cleanMemory || requested.cleanMemory ? { cleanMemory: true } : {}),
     mcpServers: current.mcpServers,
     /* The plugin grant was decided at spawn from the session's origin; a
        resume replays the durable value and can never widen it (issue #687). */
@@ -4047,6 +4050,7 @@ function compactLaunchProfile(profile: LaunchProfile): Partial<LaunchProfile> {
   if (compact.cwd === "") delete compact.cwd;
   if (compact.role === "worker") delete compact.role;
   if (compact.allowSubagents === false) delete compact.allowSubagents;
+  if (compact.cleanMemory !== true) delete compact.cleanMemory;
   if (compact.mcpServers?.length === 1 && compact.mcpServers[0] === "viewer") delete compact.mcpServers;
   if (compact.plugins?.length === 0) delete compact.plugins;
   return compact;
@@ -5527,6 +5531,8 @@ export class AgentRegistry {
          corrupted profile are both overridden here, so restart adoption and
          resume successors re-derive their launch flags from a denying profile. */
       if (isSpawnDeniedRole(existingConversation?.agentRole)) profile.allowSubagents = false;
+      /* A clean role reads no automatic memory, whoever launched it. */
+      if (roleIsClean(existingConversation?.agentRole ?? role)) profile.cleanMemory = true;
       /* A delegated conversation never acquires a plugin grant (#687): a role
          preset or a lineage parent denies it on resume, successor and restart
          adoption alike, whatever a stored or requested profile claims. */

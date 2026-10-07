@@ -6128,7 +6128,7 @@ export const en = {
   "roleMemory.undo": "Undo",
   "roleMemory.restore": "Return",
   "roleMemory.history": "Left the rules",
-  "roleMemory.left.duplicate": "merged into a fuller rule",
+  "roleMemory.left.duplicate": "repeated an active rule",
   "roleMemory.left.budget": "archived to keep 10 000",
   "roleMemory.left.deleted": "removed by you",
   "roleMemory.off": "Role memory is stopped on this installation (LLV_ROLE_MEMORY=off).",

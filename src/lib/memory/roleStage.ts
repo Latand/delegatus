@@ -1,11 +1,11 @@
 import type { Pipeline, PipelineStage, PipelineStageAttempt } from "@/lib/pipelines/types";
 import { ROLE_IDS } from "@/lib/roles/types";
 
-import { codePoints } from "./consolidate";
-import { learnedMemoryExcluded, roleIsClean } from "./policy";
-import { lessonRequestLines, type HandedFindings } from "./render";
-import { learnedRulesBlock, leaveLessons, lessonRequest, recordLessonRequest, RoleMemoryRefusal, roleMemoryEnabled, type LeftLesson } from "./store";
-import { MAX_LESSONS_PER_ATTEMPT, RULE_MAX_CHARS, RULE_MIN_CHARS, WHY_MAX_CHARS, type LessonInput, type ScopeKind } from "./types";
+import { automaticMemoryExcluded, roleIsClean } from "./eligibility";
+import { lessonRequestLines, type HandedFindings } from "./roleRender";
+import { learnedRulesBlock, leaveLessons, lessonRequest, recordLessonRequest, RoleMemoryRefusal, type LeftLesson } from "./roleStore";
+import { roleMemoryEnabled } from "./settings";
+import { lessonText, lessonTextLength, MAX_LESSONS_PER_ATTEMPT, RULE_MAX_CHARS, RULE_MIN_CHARS, WHY_MAX_CHARS, type LessonInput, type ScopeKind } from "./roleTypes";
 
 /* The three points where role memory meets a pipeline stage: the block at
    spawn, the request in the answer to an accepted stage_report, and the
@@ -18,13 +18,25 @@ function attemptOf(pipeline: Pipeline, stageId: string, n: number): PipelineStag
 
 /** Whether a stage reads and writes learned rules, by role and by the engine's review-gate classification. */
 export function stageMemoryExcluded(stage: Pick<PipelineStage, "kind" | "onFail"> | null, roleId: string | null): boolean {
-  return learnedMemoryExcluded({ roleId, stage });
+  return automaticMemoryExcluded({ roleId, stage });
 }
 
 /** The learned rules a stage launch starts with, or null for a clean stage or an installation with the kill switch set. */
 export function learnedRulesForLaunch(pipeline: Pick<Pipeline, "project">, stage: Pick<PipelineStage, "kind" | "onFail">, roleId: string | null): string | null {
   if (stageMemoryExcluded(stage, roleId) || !roleMemoryEnabled()) return null;
   return learnedRulesBlock(pipeline.project, roleId);
+}
+
+/** What a stage launch carries from memory: whether it is clean (no automatic
+    memory of any kind, its engine's own included), and its learned rules. A
+    failed read of the rules never holds a launch; the clean mark never fails. */
+export function stageMemoryForLaunch(pipeline: Pick<Pipeline, "id" | "project">, stage: Pick<PipelineStage, "id" | "kind" | "onFail">, roleId: string | null): { cleanMemory: boolean; learnedRules: string | null } {
+  if (stageMemoryExcluded(stage, roleId)) return { cleanMemory: true, learnedRules: null };
+  try { return { cleanMemory: false, learnedRules: learnedRulesForLaunch(pipeline, stage, roleId) }; }
+  catch (error) {
+    console.warn(`[role-memory] learned rules unavailable for ${pipeline.id}/${stage.id}: ${error instanceof Error ? error.message : String(error)}`);
+    return { cleanMemory: false, learnedRules: null };
+  }
 }
 
 function handedFindings(pipeline: Pipeline, attempt: PipelineStageAttempt): HandedFindings | null {
@@ -48,8 +60,8 @@ export function lessonRequestForReport(pipeline: Pipeline, stageId: string, n: n
 
 function text(value: unknown, field: string, min: number, max: number): string {
   if (typeof value !== "string") throw new RoleMemoryRefusal("LESSON_INVALID", `${field} must be text`);
-  const trimmed = value.trim().replace(/\s+/g, " ");
-  const length = codePoints(trimmed);
+  const trimmed = lessonText(value);
+  const length = lessonTextLength(trimmed);
   if (length < min || length > max) throw new RoleMemoryRefusal("LESSON_INVALID", `${field} must be ${min}–${max} characters; it has ${length}`);
   return trimmed;
 }

@@ -6037,7 +6037,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "roleMemory.undo": "Повернути",
   "roleMemory.restore": "Повернути",
   "roleMemory.history": "Вибули з правил",
-  "roleMemory.left.duplicate": "злито з повнішим правилом",
+  "roleMemory.left.duplicate": "повторювало чинне правило",
   "roleMemory.left.budget": "в архіві, щоб тримати 10 000",
   "roleMemory.left.deleted": "прибрали ви",
   "roleMemory.off": "Пам'ять ролей зупинено на цій установці (LLV_ROLE_MEMORY=off).",

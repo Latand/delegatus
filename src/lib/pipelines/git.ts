@@ -16,6 +16,7 @@ import type { Pipeline, PipelinePublicationFailure, PipelinePublicationResult } 
 import { pathIsDeclaredOutput } from "./stageAccess";
 import { CpuContainmentUnavailable, wrapWorkCommand } from "@/lib/runtime/cpuPlacement";
 import { isCpuPressureDetail, machineCpuPressureGate, machineCpuPressurePollMs, waitForCpuPressure } from "@/lib/runtime/cpuPressure";
+import { lessonPublicationEnv } from "@/lib/memory/roleStore";
 import { CONTROLLER_ARTIFACT_GIT_PATHS, CONTROLLER_ARTIFACT_PATHSPECS, protectExistingControllerArtifacts } from "./controllerArtifacts";
 
 export type PreservedProvisionRef = { ref: string; sha: string; unpublishedCommits: number };
@@ -1217,6 +1218,15 @@ export function publicationInterruptionCause(failure?: PipelinePublicationFailur
     a publication identity or commit guard handed to this process. Anything
     else a publication command needs (forge credentials, say) is spread over
     this result, so the Viewer's settings are removed first. */
+/** Role memory's stored lessons as known values for the publication privacy
+    gate, which refuses a push that carries one. Unreadable memory adds none. */
+function lessonPublicationEnvOrNone(): Partial<NodeJS.ProcessEnv> {
+  try { return lessonPublicationEnv(); } catch (error) {
+    console.warn(`[role-memory] publication known values unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    return {};
+  }
+}
+
 export function pipelinePublicationHookEnv(source: NodeJS.ProcessEnv = process.env): Partial<NodeJS.ProcessEnv> {
   const env: Partial<NodeJS.ProcessEnv> = {};
   for (const key of Object.keys(source)) {
@@ -1739,7 +1749,7 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
      or is refused; any other push is the one it always was. The App's
      variables are spread over the hook environment, which removes the
      Viewer's own settings first. */
-  const push = (await exec("git", ["push", pipeline.delivery?.target.remote || "origin", `${acceptedSha}:${pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`}`], pipeline.worktreeDir, { ...pipelinePublicationHookEnv(), ...engineForgeWriteEnv() }, { timeoutMs: 900_000 }));
+  const push = (await exec("git", ["push", pipeline.delivery?.target.remote || "origin", `${acceptedSha}:${pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`}`], pipeline.worktreeDir, { ...pipelinePublicationHookEnv(), ...lessonPublicationEnvOrNone(), ...engineForgeWriteEnv() }, { timeoutMs: 900_000 }));
   if (push.code === null) return { ok: true, sha: acceptedSha, remote: "unreachable", uncertain: true, detail: "remote write was interrupted; reconcile its outcome" };
   if (push.code !== 0) return failure("publishing the pipeline branch", push);
   const confirm = (await readRemotePipelineBranch(pipeline, exec, "confirming the published pipeline branch"));
