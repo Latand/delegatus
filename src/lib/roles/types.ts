@@ -10,6 +10,7 @@ export const ROLE_IDS = [
   "merger",
   "maintainer",
   "issue-reporter",
+  "visual-critic",
 ] as const;
 
 export type RoleId = typeof ROLE_IDS[number];
