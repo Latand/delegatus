@@ -563,6 +563,11 @@ export async function captureSeatMandateHandover(browser: Browser, base: string,
         }
         await page.locator("[data-orchestrator-confirm]").first().click();
         await page.locator("[data-mandate-card]").first().waitFor();
+        /* Until the launch's own record arrives the card holds the mandate the
+           page expected to send, and a section opened then keeps that text
+           until it is reopened (MandateCard). The fixture's seat delivers a
+           one-line mandate of its own: open the card once it shows that. */
+        await page.waitForFunction(() => /·\s*1\s+\S+\s*·/.test(document.querySelector("[data-mandate-card] .text-muted")?.textContent ?? ""));
         await page.locator("[data-mandate-card] summary").first().click();
         await page.waitForFunction(() => document.querySelector("[data-mandate-card] details[open] > div")?.textContent?.includes("Keep the project moving."));
         await page.evaluate(() => {
