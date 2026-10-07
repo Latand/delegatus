@@ -276,17 +276,14 @@ function WorkLine({ s, t }: { s: Snapshot; t: TFunction }) {
   if (evidence.state === "pending") {
     return <p data-work="pending" className="m-0 flex items-center gap-2 text-ui text-secondary"><Icon kind="running" />{t("selfUpdate.work.pending")}</p>;
   }
-  if (evidence.state === "unavailable" || !s.resumeWork) {
-    return <p data-work="unavailable" className={ERROR_LINE}>{t("selfUpdate.auto.block.unreadable", { detail: evidence.error ?? "" })}</p>;
+  /* A reading that stopped at an unreadable journal counted only what it read
+     before it stopped: no count is shown for it. */
+  if (evidence.state === "unavailable" || !s.resumeWork || s.resumeWork.unreadable) {
+    return <p data-work="unavailable" className={ERROR_LINE}>{t("selfUpdate.auto.block.unreadable", { detail: evidence.error ?? s.resumeWork?.unreadable ?? "" })}</p>;
   }
   const work = s.resumeWork;
   const parts = [t("selfUpdate.auto.block.turns", { count: work.turns }), t("selfUpdate.auto.block.stages", { count: work.stages }), t("selfUpdate.work.readAt", { time: clock(evidence.at) })];
-  return (
-    <>
-      <p data-work="ready" className="m-0 text-ui text-secondary tabular-nums">{parts.join(" · ")}</p>
-      {work.unreadable ? <p data-work="unreadable" className={ERROR_LINE}>{t("selfUpdate.auto.block.unreadable", { detail: work.unreadable })}</p> : null}
-    </>
-  );
+  return <p data-work="ready" className="m-0 text-ui text-secondary tabular-nums">{parts.join(" · ")}</p>;
 }
 
 function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState; actions: ViewActions; t: TFunction }) {

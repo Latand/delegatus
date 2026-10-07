@@ -530,6 +530,14 @@ describe("work in progress beside an available update", () => {
     expect(text(line(failed))).toBe(locale === "en" ? "Cannot read agent activity: runtime host is unavailable" : "Не вдалося прочитати активність агентів: runtime host is unavailable");
   });
 
+  test("a reading that stopped at an unreadable journal shows no counts", () => {
+    setLocale("en");
+    const el = render(work({ state: "ready", since: null, at: AT }, { turns: 0, stages: 0, turnList: [], stageList: [], unreadable: "custody journal unreadable" }));
+    expect(line(el)?.dataset.work).toBe("unavailable");
+    expect(text(section(el, "update"))).toContain("Cannot read agent activity: custody journal unreadable");
+    expect(text(section(el, "update"))).not.toMatch(/running: 0/);
+  });
+
   test("a snapshot read without the work says nothing about it", () => {
     const el = render(snapshot(available()));
     expect(line(el)).toBeNull();

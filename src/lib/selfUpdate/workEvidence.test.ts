@@ -48,7 +48,8 @@ function within<T>(promise: Promise<T>, ms: number): Promise<T | "timed out"> {
 
 /** A managed installation serving TARGET from both processes, whose work
     reader waits on `held` for every reading until the test opens it. */
-function managed(options: { persisted?: unknown; installed?: string; hostRevision?: string; mode?: ServiceDeps["mode"] } = {}) {
+function managed(options: { persisted?: unknown; installed?: string; hostRevision?: string; mode?: ServiceDeps["mode"];
+  quiet?: Partial<QuietPorts>; hostHealth?: ServiceDeps["hostHealth"] } = {}) {
   const dir = mkdtempSync(join(root, "managed-"));
   if (options.persisted) writeFileSync(join(dir, "state.json"), JSON.stringify(options.persisted));
   let now = Date.parse("2026-10-07T09:00:00Z");
@@ -59,6 +60,7 @@ function managed(options: { persisted?: unknown; installed?: string; hostRevisio
     runtimeSnapshot: async () => { reads++; await held.opened; return { sessions } as never; },
     pipelines: () => [], flows: () => [], presence: () => [], registryHealth: () => [], memoryAvailableMb: () => 8_192,
     controllerBusyReason: async () => null,
+    ...options.quiet,
   };
   const deps: ServiceDeps = {
     now: () => now, env: {}, dir, remote: "https://github.com/example/project", branch: "main", pollMinutes: 60, bun: "bun",
@@ -68,7 +70,7 @@ function managed(options: { persisted?: unknown; installed?: string; hostRevisio
     createRunner: () => { throw new Error("no runner in managed mode"); },
     requestRestart: () => { throw new Error("no launcher in managed mode"); },
     processAlive: () => true, processIdentity: () => null,
-    hostHealth: async () => ({ pid: 4242, generation: { revision: options.hostRevision ?? options.installed ?? TARGET } }) as never,
+    hostHealth: options.hostHealth ?? (async () => ({ pid: 4242, generation: { revision: options.hostRevision ?? options.installed ?? TARGET } }) as never),
     requestDeployment: async () => { throw new Error("no deployment in this test"); },
     readDeployment: async () => null, findDeploymentByIdempotencyKey: async () => null,
     releaseTarget: () => ({ revision: options.installed ?? TARGET }),
@@ -152,6 +154,72 @@ test("the first SSE state arrives while the work reader is pending, and the land
   } finally { abort.abort(); h.release(); }
 });
 
+const nextTurn = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+/** Holds the thread for `ms`, as a synchronous registry read on a long-lived
+    installation does: no timer or promise runs meanwhile. */
+function blockFor(ms: number): void {
+  const until = performance.now() + ms;
+  while (performance.now() < until) { /* synchronous work */ }
+}
+
+test("the first GET and the first SSE state answer before the work reader's synchronous phases run", async () => {
+  // The journal stays pending, and loading the pipelines holds the thread for
+  // 700 ms before the probe reaches its first await.
+  let pipelineReads = 0;
+  const h = managed({ quiet: { pipelines: () => { pipelineReads++; blockFor(700); return []; } } });
+  const abort = new AbortController();
+  try {
+    let started = performance.now();
+    const response = await readOnly();
+    expect(performance.now() - started).toBeLessThan(200);
+    expect(await response.json()).toMatchObject({ mode: "managed", installed: { sha: TARGET }, workEvidence: { state: "pending" } });
+    expect(pipelineReads).toBe(0);
+
+    started = performance.now();
+    const first = await events(abort.signal)();
+    expect(performance.now() - started).toBeLessThan(200);
+    expect(first).toMatchObject({ event: "state", data: { installed: { sha: TARGET }, workEvidence: { state: "pending" } } });
+
+    // The reading still runs, once, for both readers.
+    await nextTurn();
+    await readOnly();
+    expect(pipelineReads).toBe(1);
+    h.release();
+    await h.service.workSettled();
+    expect(pipelineReads).toBe(1);
+    expect(h.reads()).toBe(1);
+  } finally { abort.abort(); h.release(); }
+});
+
+test("a reading that could not read the journal is unavailable with its reason, never zero work", async () => {
+  const h = managed({ quiet: { runtimeSnapshot: async () => { throw new Error("custody journal unreadable"); } } });
+  const abort = new AbortController();
+  try {
+    const next = events(abort.signal);
+    expect(await next()).toMatchObject({ event: "state", data: { workEvidence: { state: "pending" } } });
+    const landed = await within(next(), 2_000);
+    expect(landed).toMatchObject({ event: "state", data: { workEvidence: { state: "unavailable", error: "custody journal unreadable" } } });
+    expect((landed as { data: Snapshot }).data.resumeWork).toBeUndefined();
+    await h.service.workSettled();
+    const snapshot = await (await readOnly()).json() as Snapshot;
+    expect(snapshot.workEvidence).toMatchObject({ state: "unavailable", error: "custody journal unreadable" });
+    expect(snapshot.workEvidence!.phases).not.toBeNull();
+    expect(snapshot.resumeWork).toBeUndefined();
+  } finally { abort.abort(); }
+});
+
+test("a reading over a registry it could not read whole is unavailable, and names the records", async () => {
+  const h = managed({ quiet: { registryHealth: () => [{ collection: "pipelines", id: "future-lane", reason: "unknown-but-preserved", detail: "stage.kind" }] } });
+  await readOnly();
+  h.release();
+  await h.service.workSettled();
+  const snapshot = await (await readOnly()).json() as Snapshot;
+  expect(snapshot.workEvidence?.state).toBe("unavailable");
+  expect(snapshot.workEvidence?.error).toContain("future-lane");
+  expect(snapshot.resumeWork).toBeUndefined();
+});
+
 test("a snapshot that fails answers an error at once: the GET says why and the stream's first event is the error", async () => {
   managed({ mode: async () => { throw new Error("launcher record unreadable"); } });
   const response = await within(readOnly(), 2_000);
@@ -189,6 +257,8 @@ test("overlapping observations share the one reading in flight and never stack p
     const next = events(abort.signal);
     const answers = await within(Promise.all([readOnly(), readOnly(), readOnly(), next(), readOnly()]), 2_000);
     expect(answers).not.toBe("timed out");
+    // The one reading begins on the next turn of the event loop.
+    await nextTurn();
     expect(h.reads()).toBe(1);
     // A second tab and a poll every second while the reading is still held.
     for (let i = 0; i < 5; i++) { h.advance(1_000); await readOnly(); }
@@ -201,6 +271,7 @@ test("overlapping observations share the one reading in flight and never stack p
     h.hold();
     h.advance(5_000);
     await Promise.all([readOnly(), readOnly(), readOnly()]);
+    await nextTurn();
     expect(h.reads()).toBe(2);
     const refreshing = await (await readOnly()).json() as Snapshot;
     expect(refreshing.workEvidence?.state).toBe("ready");
@@ -308,6 +379,23 @@ test("the commits-behind badge is gone once both processes serve the available t
   expect(snapshot.check).toMatchObject({ state: "up-to-date", relation: "equal", behind: 0, ahead: 0, delta: null, at: "2026-10-07T08:55:00.000Z" });
   // The correction is the service's own state, so the next process reads it too.
   expect(JSON.parse(readFileSync(join(h.deps.dir, "state.json"), "utf8")).slice.check.behind).toBe(0);
+});
+
+test("the badge stays while either process does not serve the available target, and nothing persists as current", async () => {
+  for (const options of [{ hostRevision: OLD }, { hostHealth: async () => null }] as const) {
+    // TARGET is installed and the web serves it; the runtime host still serves
+    // OLD, or does not answer at all.
+    const h = managed({ persisted: staleCheck(OLD), installed: TARGET, ...options });
+    h.release();
+    const snapshot = await (await readOnly()).json() as Snapshot;
+    expect(snapshot.serving.web?.sha).toBe(TARGET);
+    expect(snapshot.serving.runtimeHost?.sha ?? null).not.toBe(TARGET);
+    expect(snapshot.available?.sha).toBe(TARGET);
+    expect(snapshot.check).toMatchObject({ state: "update-available", behind: 17 });
+    const persisted = JSON.parse(readFileSync(join(h.deps.dir, "state.json"), "utf8")).slice;
+    expect(persisted.check).toMatchObject({ state: "update-available", behind: 17 });
+    expect(persisted.available.sha).toBe(TARGET);
+  }
 });
 
 test("a check about the installed revision keeps its answer", async () => {

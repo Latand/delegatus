@@ -1855,10 +1855,16 @@ export class SelfUpdateService {
    * behind" names a distance nothing serves any more, and the next poll can be
    * an hour away. The check's own answer for that revision is "equal", so it
    * reads so from here on, for the dialog and for the automatic path alike.
+   * Only once the web AND the runtime host both serve it: an installed pointer
+   * one process has not reached yet, or a host that does not answer, is an
+   * update still on its way, and its badge stays.
    */
-  private reconcileCheck(installed: Revision): void {
+  private reconcileCheck(snapshot: Pick<Snapshot, "installed" | "serving">): void {
     const { check, available } = this.slice;
-    if (!installed.sha || available?.sha !== installed.sha || check.state !== "update-available") return;
+    const target = available?.sha;
+    if (!target || snapshot.installed.sha !== target || check.state !== "update-available") return;
+    const serves = (revision: Revision | null) => !!revision && (revision.sha === target || (!!revision.short && revision.short === shortSha(target)));
+    if (!serves(snapshot.serving.web) || !serves(snapshot.serving.runtimeHost)) return;
     this.slice = { installed: available, available: null,
       check: { ...check, state: "up-to-date", relation: "equal", ahead: 0, behind: 0, delta: null } };
     this.saveNow();
@@ -1896,7 +1902,7 @@ export class SelfUpdateService {
     // A packaged install names its revisions by registry version; the two
     // modes compared here name both sides by the same full git SHA.
     if (snapshot.mode === "managed" || snapshot.mode === "checkout") {
-      this.reconcileCheck(snapshot.installed);
+      this.reconcileCheck(snapshot);
       snapshot.available = this.slice.available;
       snapshot.check = this.slice.check;
     }

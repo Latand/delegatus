@@ -94,11 +94,11 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
     /* Work not read yet is not "no work": it is said so, never counted as 0. */
     if (s?.workEvidence?.state === "pending") lines.push(t("selfUpdate.work.pendingConfirm"));
     else if (s?.workEvidence?.state === "unavailable") lines.push(t("selfUpdate.auto.block.unreadable", { detail: s.workEvidence.error ?? "" }));
-    if (work) {
+    if (work?.unreadable) lines.push(t("selfUpdate.auto.block.unreadable", { detail: work.unreadable }));
+    else if (work) {
       lines.push(t("selfUpdate.auto.block.turns", { count: work.turns }), t("selfUpdate.auto.block.stages", { count: work.stages }));
       lines.push(...(work.stageList ?? []).map(stage => `${stage.stageId} · ${stage.task}`));
       lines.push(...(work.turnList ?? []).filter(turn => !turn.stage).map(turn => `${turn.engine} · ${turn.project ?? turn.conversationId.replace(/^conversation_/, "").slice(0, 12)}`));
-      if (work.unreadable) lines.push(t("selfUpdate.auto.block.unreadable", { detail: work.unreadable }));
     }
     return window.confirm(lines.join("\n"));
   };

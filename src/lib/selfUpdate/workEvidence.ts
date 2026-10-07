@@ -147,6 +147,20 @@ function resumeWork(blockers: QuietBlockers): ResumeWork {
   return { turns: blockers.turns, stages: blockers.stages, turnList: blockers.turnList, stageList: blockers.stageList, unreadable: blockers.unreadable };
 }
 
+/* Why a reading cannot say how much work runs, or null when it can.
+   `probeQuiet` answers an unreadable journal or registry inside its
+   blockers rather than by rejecting, and its counts then stop wherever the
+   read failed; a registry record it could not parse is a pipeline it did not
+   count. Either way the counts are a lower bound, and shown as counts they
+   would read as the work there is. */
+function incomplete(blockers: QuietBlockers): string | null {
+  if (blockers.unreadable) return blockers.unreadable;
+  const issues = blockers.registryIssues ?? [];
+  if (!issues.length) return null;
+  const named = issues.slice(0, 3).map((issue) => `${issue.collection}/${issue.id} (${issue.reason})`).join(", ");
+  return `pipeline registry incomplete: ${named}${issues.length > 3 ? ` and ${issues.length - 3} more` : ""}`;
+}
+
 type Landed = { at: number; work: ResumeWork; phases: WorkPhases } | { at: number; error: string; phases: WorkPhases | null };
 
 /**
@@ -193,23 +207,32 @@ export class ObservedWork {
     return this.running ?? Promise.resolve();
   }
 
+  /* The reading is reserved here, so every reader that arrives meanwhile
+     shares it, and begins on a later turn of the event loop: `probeQuiet`
+     runs synchronous phases (the registry, the pipelines, the flows) before
+     its first await, and inside this call they would run before the caller
+     could answer with the installation. */
   private start(snapshot: Snapshot, now: number): void {
     this.started++;
     this.pendingSince ??= now;
+    this.running = new Promise<void>((resolve) => { setTimeout(resolve, 0); }).then(() => this.read(snapshot, now));
+  }
+
+  private async read(snapshot: Snapshot, now: number): Promise<void> {
     const instrumented = this.instrumented;
-    this.running = (async () => {
-      instrumented.begin();
-      const startedAt = this.clock();
-      try {
-        const { blockers } = await probeQuiet(snapshot, instrumented.ports, now);
-        this.latest = { at: this.now(), work: resumeWork(blockers), phases: instrumented.finish(this.clock() - startedAt) };
-      } catch (error) {
-        this.latest = { at: this.now(), error: error instanceof Error ? error.message : String(error), phases: instrumented.finish(this.clock() - startedAt) };
-      } finally {
-        this.running = null;
-        this.pendingSince = null;
-        this.landed();
-      }
-    })();
+    instrumented.begin();
+    const startedAt = this.clock();
+    try {
+      const { blockers } = await probeQuiet(snapshot, instrumented.ports, now);
+      const phases = instrumented.finish(this.clock() - startedAt);
+      const error = incomplete(blockers);
+      this.latest = error === null ? { at: this.now(), work: resumeWork(blockers), phases } : { at: this.now(), error, phases };
+    } catch (error) {
+      this.latest = { at: this.now(), error: error instanceof Error ? error.message : String(error), phases: instrumented.finish(this.clock() - startedAt) };
+    } finally {
+      this.running = null;
+      this.pendingSince = null;
+      this.landed();
+    }
   }
 }
