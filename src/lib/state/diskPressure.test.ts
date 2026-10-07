@@ -210,6 +210,136 @@ test.skipIf(process.platform !== "linux")("Docker admission checks actual host c
   }
 });
 
+for (const unrelated of [false, true]) test.skipIf(process.platform !== "linux")(`Docker admission checks idle host destinations with an unrelated agent: ${unrelated}`, () => {
+  const previous = process.env.LLV_STATE_DIR;
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pressure-idle-host-"));
+  const state = path.join(fixture, "state");
+  const namespace = "mnt:[12345]";
+  const source = { NODE_ENV: "test" as const, TMPDIR: os.tmpdir(), CLAUDE_CODE_TMPDIR: "/srv/claude-temp", LLV_DOCKER_NSENTER_SHIMS: "1" };
+  process.env.LLV_STATE_DIR = state;
+  const readlink = fs.readlinkSync;
+  const hostNamespace = spyOn(fs, "readlinkSync").mockImplementation(((file: fs.PathLike, options?: unknown) =>
+    String(file) === "/proc/1/ns/mnt" ? namespace : readlink(file, options as undefined)) as typeof fs.readlinkSync);
+  const via = path.join(fixture, "proc/43/root");
+  fs.mkdirSync(path.join(fixture, "proc/43/ns"), { recursive: true });
+  fs.symlinkSync("mnt:[67890]", path.join(fixture, "proc/43/ns/mnt"));
+  const views = unrelated ? [{ path: os.tmpdir(), via, anchor: { pid: 43, namespace: "mnt:[67890]" } }] : [];
+  try {
+    const config = agentConfigSandboxRoot({ ...source, TMPDIR: path.join(state, "scratch/tmp") });
+    for (const usesClaude of [false, true]) {
+      let freeBytes = GiB;
+      const visited: string[] = [];
+      const stub: DiskProbe = directory => {
+        visited.push(directory);
+        const hostConfig = directory === "/proc/1/root" + config;
+        return { volume: hostConfig ? "host-temp" : "healthy", freeBytes: hostConfig ? freeBytes : 500 * GiB, totalBytes: 1000 * GiB };
+      };
+      expect(worktreeDiskWait("/srv/repo", "/srv/lane", stub, source, views, usesClaude)).toContain("1.00 GiB free");
+      expect(visited).toContain("/proc/1/root" + config);
+      expect(visited.some(directory => directory.startsWith(via))).toBe(false);
+      freeBytes = 20 * GiB;
+      expect(worktreeDiskWait("/srv/repo", "/srv/lane", stub, source, views, usesClaude)).toBeNull();
+    }
+    const claudeLow: DiskProbe = directory => ({ volume: directory.endsWith(source.CLAUDE_CODE_TMPDIR) ? "claude" : "healthy",
+      freeBytes: directory.endsWith(source.CLAUDE_CODE_TMPDIR) ? GiB : 500 * GiB, totalBytes: 1000 * GiB });
+    expect(worktreeDiskWait("/srv/repo", "/srv/lane", claudeLow, source, views, false)).toBeNull();
+    expect(worktreeDiskWait("/srv/repo", "/srv/lane", claudeLow, source, views, true)).toContain("1.00 GiB free");
+  } finally {
+    hostNamespace.mockRestore();
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test.skipIf(process.platform !== "linux")("System warns on idle host config pressure and clears after recovery", async () => {
+  const previousState = process.env.LLV_STATE_DIR, previousShim = process.env.LLV_DOCKER_NSENTER_SHIMS;
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pressure-idle-observation-"));
+  process.env.LLV_STATE_DIR = path.join(fixture, "state");
+  process.env.LLV_DOCKER_NSENTER_SHIMS = "1";
+  const readlink = fs.readlinkSync;
+  const hostNamespace = spyOn(fs, "readlinkSync").mockImplementation(((file: fs.PathLike, options?: unknown) =>
+    String(file) === "/proc/1/ns/mnt" ? "mnt:[12345]" : readlink(file, options as undefined)) as typeof fs.readlinkSync);
+  const config = agentConfigSandboxRoot({ ...process.env, TMPDIR: path.join(process.env.LLV_STATE_DIR, "scratch/tmp") });
+  const caches = new Map();
+  let freeBytes = GiB, time = Date.parse("2026-10-07T00:00:00Z");
+  const options = { caches, worktrees: [], tempRoots: [], now: () => time,
+    probe: (directory: string) => ({ volume: directory === "/proc/1/root" + config ? "host-temp" : "healthy",
+      freeBytes: directory === "/proc/1/root" + config ? freeBytes : 500 * GiB, totalBytes: 1000 * GiB }) };
+  try {
+    const low = await readDiskPressure(options);
+    expect(low.episode).not.toBeNull();
+    expect(low.volumes).toContainEqual(expect.objectContaining({ volume: "host-temp", level: "critical", provisioning: true }));
+    expect(diskPressureLabel(low)).toContain("1.00 GiB free");
+    await Promise.all([...caches.values()].map(row => row.measuring));
+    freeBytes = 20 * GiB; time += 60_000;
+    expect((await readDiskPressure(options)).episode).toBeNull();
+  } finally {
+    await Promise.all([...caches.values()].map(row => row.measuring));
+    hostNamespace.mockRestore();
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+    if (previousShim === undefined) delete process.env.LLV_DOCKER_NSENTER_SHIMS; else process.env.LLV_DOCKER_NSENTER_SHIMS = previousShim;
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+for (const emptyGroups of [false, true]) test.skipIf(process.platform !== "linux")(`an idle host probe restores credentials with empty groups ${emptyGroups} and measures a missing destination`, () => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pressure-host-probe-"));
+  const requested = path.join(fixture, "new/config");
+  const namespace = fs.readlinkSync("/proc/self/ns/mnt");
+  const stat = fs.statSync(fixture), disk = fs.statfsSync(fixture);
+  const readlink = fs.readlinkSync, readStat = fs.statSync, spawn = childProcess.spawnSync;
+  const groupList = emptyGroups ? spyOn(process, "getgroups").mockReturnValue([]) : null;
+  const hostLink = spyOn(fs, "readlinkSync").mockImplementation(((file: fs.PathLike, options?: unknown) => {
+    if (String(file) === "/proc/1/ns/mnt") throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+    return readlink(file, options as undefined);
+  }) as typeof fs.readlinkSync);
+  const hostStat = spyOn(fs, "statSync").mockImplementation(((file: fs.PathLike, options?: unknown) => {
+    if (String(file).startsWith("/proc/1/root")) throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+    return readStat(file, options as undefined);
+  }) as typeof fs.statSync);
+  const enter = spyOn(childProcess, "spawnSync").mockImplementation(((command: string, args: string[], options: object) => {
+    expect(command).toBe("nsenter");
+    expect(args).toEqual(expect.arrayContaining(["-t", "1", "-m", "-p", "/usr/bin/setpriv",
+      `--reuid=${process.getuid!()}`, `--regid=${process.getgid!()}`]));
+    const groups = args.find(arg => arg.startsWith("--groups="))!.slice(9).split(",").map(Number);
+    expect(new Set(groups)).toEqual(new Set([process.getgid!(), ...process.getgroups!()]));
+    if (args.includes("/bin/readlink")) return { status: 0, stdout: namespace + "\n", stderr: "" };
+    expect(args).toContain(path.join(os.homedir(), ".bun/bin/bun"));
+    // Run the actual probe program in a child, against this test's own tree.
+    return spawn(process.execPath, ["-e", args.at(-2)!, args.at(-1)!], options);
+  }) as typeof childProcess.spawnSync);
+  try {
+    const observed = probeDisk("/proc/1/root" + requested);
+    expect(observed?.volume).toBe(String(stat.dev));
+    expect(observed?.totalBytes).toBe(disk.blocks * disk.bsize);
+    expect(observed?.freeBytes).toBeGreaterThan(0);
+    expect(observed?.freeBytes).toBeLessThanOrEqual(observed!.totalBytes!);
+  } finally {
+    enter.mockRestore(); hostStat.mockRestore(); hostLink.mockRestore(); groupList?.mockRestore();
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+for (const failure of ["command", "malformed", "namespace", "negative", "capacity", "changed"] as const)
+test.skipIf(process.platform !== "linux")(`an idle host probe rejects ${failure} observations`, () => {
+  let namespace = "mnt:[12345]";
+  const readlink = fs.readlinkSync, readStat = fs.statSync;
+  const hostLink = spyOn(fs, "readlinkSync").mockImplementation(((file: fs.PathLike, options?: unknown) =>
+    String(file) === "/proc/1/ns/mnt" ? namespace : readlink(file, options as undefined)) as typeof fs.readlinkSync);
+  const hostStat = spyOn(fs, "statSync").mockImplementation(((file: fs.PathLike, options?: unknown) => {
+    if (String(file).startsWith("/proc/1/root")) throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+    return readStat(file, options as undefined);
+  }) as typeof fs.statSync);
+  const enter = spyOn(childProcess, "spawnSync").mockImplementation((() => {
+    const observed = { namespace: failure === "namespace" ? "mnt:[67890]" : namespace, volume: "host",
+      freeBytes: failure === "negative" ? -1 : GiB, totalBytes: failure === "capacity" ? 0 : 1000 * GiB };
+    if (failure === "changed") namespace = "mnt:[67890]";
+    return { status: failure === "command" ? 1 : 0, stdout: failure === "malformed" ? "incomplete" : JSON.stringify(observed), stderr: "" } as ReturnType<typeof childProcess.spawnSync>;
+  }) as typeof childProcess.spawnSync);
+  try { expect(probeDisk("/proc/1/root/tmp/llv-config")).toBeNull(); }
+  finally { enter.mockRestore(); hostStat.mockRestore(); hostLink.mockRestore(); }
+});
+
 test.skipIf(process.platform === "win32")("shared agent sandboxes and tmux state count once across temp-root aliases and remain protected", async () => {
   const previous = process.env.LLV_STATE_DIR;
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pressure-shared-consumers-"));

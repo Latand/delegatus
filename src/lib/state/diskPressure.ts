@@ -61,7 +61,8 @@ export const probeDisk: DiskProbe = (directory) => {
       const disk = fs.statfsSync(current);
       return { volume: String(stat.dev), freeBytes: disk.bavail * disk.bsize, totalBytes: disk.blocks * disk.bsize };
     } catch {
-      if (current === namespaceRoot) return null;
+      if (current === namespaceRoot) return namespaceRoot === "/proc/1/root"
+        ? probeStageHost(path.resolve(directory).slice(namespaceRoot.length) || "/") : null;
       const parent = path.dirname(current);
       if (parent === current) return null;
       current = parent;
@@ -72,6 +73,8 @@ export const probeDisk: DiskProbe = (directory) => {
 function tempViewAvailable(root: TempSweepRoot): boolean {
   if (!root.via) return true;
   if (!root.anchor) return false;
+  if (root.via === "/proc/1/root" && root.anchor.pid === 1)
+    return stageHostNamespace() === root.anchor.namespace;
   try { return fs.readlinkSync(path.join(path.dirname(root.via), "ns/mnt")) === root.anchor.namespace; }
   catch { return false; }
 }
@@ -83,12 +86,48 @@ function stageHostNamespace(): string | null {
   try { return fs.readlinkSync("/proc/1/ns/mnt"); }
   catch { /* PID 1 can belong to another user. */ }
   try {
-    const result = childProcess.spawnSync("nsenter", ["-t", "1", "-m", "-p", "--", "/usr/bin/setpriv",
-      `--reuid=${process.getuid?.() ?? 0}`, `--regid=${process.getgid?.() ?? 0}`,
-      `--groups=${process.getgroups?.().join(",") ?? ""}`, "--", "/bin/readlink", "/proc/self/ns/mnt"],
-    { encoding: "utf8", timeout: 2_000 });
+    const result = enterStageHost("/bin/readlink", ["/proc/self/ns/mnt"]);
     const namespace = result.stdout?.trim();
     return result.status === 0 && /^mnt:\[\d+\]$/.test(namespace) ? namespace : null;
+  } catch { return null; }
+}
+
+function enterStageHost(command: string, args: string[]): childProcess.SpawnSyncReturns<string> {
+  const gid = process.getgid?.() ?? 0;
+  const groups = [...new Set([gid, ...(process.getgroups?.() ?? [])])].sort((a, b) => a - b);
+  return childProcess.spawnSync("nsenter", ["-t", "1", "-m", "-p", "--", "/usr/bin/setpriv",
+    `--reuid=${process.getuid?.() ?? 0}`, `--regid=${gid}`,
+    `--groups=${groups.join(",")}`, "--", command, ...args],
+  { encoding: "utf8", timeout: 2_000 });
+}
+
+/** An idle host still has PID 1. If procfs refuses its root to this user,
+    read the same filesystem through the image's credential-restoring shim. */
+function probeStageHost(directory: string): ReturnType<DiskProbe> {
+  const namespace = stageHostNamespace();
+  if (!namespace) return null;
+  try {
+    const result = enterStageHost(path.join(os.homedir(), ".bun/bin/bun"), ["-e", `
+      const fs = require("node:fs"), path = require("node:path");
+      let directory = path.resolve(process.argv[1]);
+      for (;;) {
+        try {
+          const stat = fs.statSync(directory), disk = fs.statfsSync(directory);
+          console.log(JSON.stringify({ namespace: fs.readlinkSync("/proc/self/ns/mnt"), volume: String(stat.dev),
+            freeBytes: disk.bavail * disk.bsize, totalBytes: disk.blocks * disk.bsize }));
+          break;
+        } catch {
+          const parent = path.dirname(directory);
+          if (parent === directory) process.exit(1);
+          directory = parent;
+        }
+      }`, directory]);
+    if (result.status !== 0) return null;
+    const observed = JSON.parse(String(result.stdout)) as ReturnType<DiskProbe> & { namespace?: string };
+    if (!observed || observed.namespace !== namespace || stageHostNamespace() !== namespace
+      || typeof observed.volume !== "string" || !Number.isFinite(observed.freeBytes) || observed.freeBytes < 0
+      || !Number.isFinite(observed.totalBytes) || observed.totalBytes! <= 0) return null;
+    return { volume: observed.volume, freeBytes: observed.freeBytes, totalBytes: observed.totalBytes };
   } catch { return null; }
 }
 
@@ -128,8 +167,10 @@ function stageDiskRoots(source: NodeJS.ProcessEnv, tempRoots: readonly TempSweep
   // paths can name another volume there; use the same validated views as
   // cleanup, and include only actual stage destinations in admission.
   const namespaces = new Set<string>();
-  const hostNamespace = source.LLV_DOCKER_NSENTER_SHIMS === "1" && tempRoots.some(root => root.via) ? stageHostNamespace() : null;
-  if (source.LLV_DOCKER_NSENTER_SHIMS === "1") for (const temp of tempRoots) {
+  const hostNamespace = source.LLV_DOCKER_NSENTER_SHIMS === "1" ? stageHostNamespace() : null;
+  const views = [...tempRoots];
+  if (hostNamespace) views.push({ path: "/", via: "/proc/1/root", anchor: { pid: 1, namespace: hostNamespace } });
+  if (source.LLV_DOCKER_NSENTER_SHIMS === "1") for (const temp of views) {
     if (!temp.via || !temp.anchor) continue;
     if (temp.anchor.namespace !== hostNamespace) continue;
     if (namespaces.has(temp.anchor.namespace)) continue;
