@@ -522,6 +522,48 @@ test("independent readers with a pre-episode cache join the persisted episode ac
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
 
+test("concurrent process observers persist one disk pressure episode", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pressure-processes-"));
+  const file = path.join(directory, "report.json");
+  const program = `
+    import fs from "node:fs";
+    import { observeDiskPressureReport } from ${JSON.stringify(path.join(import.meta.dir, "diskPressure.ts"))};
+    const [file, ready, at] = process.argv.slice(1);
+    fs.writeFileSync(ready, "ready");
+    await Bun.stdin.text();
+    const pressure = observeDiskPressureReport(file, () => {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+      return [{ volume: "fixture", roles: ["state"], freeBytes: 1024 ** 3, level: "critical" }];
+    }, at);
+    console.log(pressure.episode);
+  `;
+  const ready = [0, 1, 2].map(index => path.join(directory, `ready-${index}`));
+  const children: Bun.Subprocess<"pipe", "pipe", "pipe">[] = [];
+  try {
+    for (let index = 0; index < ready.length; index++) children.push(Bun.spawn({
+      cmd: [process.execPath, "--eval", program, file, ready[index]!, `2026-10-06T10:${20 + index}:00Z`],
+      env: { ...process.env, LLV_STATE_DIR: path.join(directory, "state") },
+      stdin: "pipe", stdout: "pipe", stderr: "pipe",
+    }));
+    const deadline = Date.now() + 5_000;
+    while (!ready.every(marker => fs.existsSync(marker)) && Date.now() < deadline) await Bun.sleep(10);
+    expect(ready.every(marker => fs.existsSync(marker))).toBeTrue();
+    for (const child of children) child.stdin.end();
+    const results = await Promise.all(children.map(async child => ({
+      stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text(), code: await child.exited,
+    })));
+    for (const result of results) expect(result.code, result.stderr).toBe(0);
+    const episodes = results.map(result => result.stdout.trim());
+    expect(episodes[0]).toMatch(/^2026-10-06T10:2[0-2]:00Z$/);
+    expect(new Set(episodes).size).toBe(1);
+    expect(JSON.parse(fs.readFileSync(file, "utf8")).episode).toBe(episodes[0]);
+  } finally {
+    for (const child of children) if (child.exitCode === null) child.kill();
+    await Promise.all(children.map(child => child.exited));
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}, 10_000);
+
 test.skipIf(process.platform !== "linux")("a disappeared pressured volume preserves its episode across restart until that volume recovers", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pressure-lost-volume-"));
   const file = path.join(directory, "report.json");
