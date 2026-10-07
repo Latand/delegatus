@@ -206,7 +206,10 @@ export type SeatTickWakeReasonKind =
   /** A lane's stage or a spawned child holds a tool permission request nobody
       has answered (#2215). Unattended ones are denied at once, so one standing
       here is a request the automatic answer could not settle. */
-  | "permission-request";
+  | "permission-request"
+  /** Free space on a volume Delegatus writes to fell below the warning
+      threshold: once per pressure episode, without waiting for the interval. */
+  | "disk-pressure";
 
 export const SEAT_TICK_WAKE_REASON_KINDS: readonly SeatTickWakeReasonKind[] = [
   "lane-event",
@@ -219,6 +222,7 @@ export const SEAT_TICK_WAKE_REASON_KINDS: readonly SeatTickWakeReasonKind[] = [
   "maintenance-settled",
   "deploy-settled",
   "permission-request",
+  "disk-pressure",
 ];
 
 export interface SeatTickWakeReason {
@@ -229,6 +233,7 @@ export interface SeatTickWakeReason {
 
 /** One line of the wake's body. Bounded and structural — never transcript text. */
 export interface SeatTickItem {
+  diskPressureEpisode?: string;
   /** Version credited only by delivery of this visible item. */
   itemVersion?: string;
   outcomeId?: string;
@@ -788,6 +793,8 @@ export interface SeatTickChildInput {
 /** A durable log line the Viewer already writes: a deploy outcome, the host
     retirement report, a seat whose own turn stopped progressing. */
 export interface SeatTickSignalInput {
+  /** Stable pressure crossing; free-space changes do not create a new warning. */
+  episode?: string;
   id: string;
   label: string;
 }
@@ -830,6 +837,7 @@ export interface SeatTickPolicy {
  * from anything else would credit the seat with a different message.
  */
 export interface SeatTickWakeCommit {
+  diskPressure?: { episode: string; version: string };
   /** Versions of agenda items carried by this frozen delivery plan. */
   itemsShown?: string[];
   /** Complete redacted bullets used to verify visibility in the frozen text. */
@@ -1056,6 +1064,7 @@ export interface SeatTickReportsInput {
 
 /** Project tick state; SQLite accounting owns persistence and legacy migration. */
 export interface SeatTickProjectState {
+  diskPressureShown?: string;
   /** Latest delivered versions, bounded to 2000 recent agenda items. */
   itemsShown?: string[];
   accounting?: { filename: string; revision: number; gap: string | null };

@@ -27,6 +27,7 @@ import { forkClaudeHistory } from "@/lib/accounts/migration/safeHistoryCopy";
 import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 import { CONTROLLER_ARTIFACT_GIT_PATHS } from "./controllerArtifacts";
 import { realExec } from "@/lib/workflows/provision";
+import { worktreeDiskWait } from "@/lib/state/diskPressure";
 
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-engine-"));
 const engineModule = await import("./engine");
@@ -20912,4 +20913,82 @@ test("transport traversals before a terminal park cannot shorten a later grant",
   const continued = (await driveWithController(h)).pipeline;
   expect(continued.state).toBe("needs_decision");
   expect(continued.runs.find(run => run.stageId === "critique")!.attempts.filter(attempt => attempt.verdict)).toHaveLength(completedBefore + 3);
+});
+
+test("Codex quota pressure reseats the same attempt onto the next permitted account", async () => {
+  const f = await providerRecoveryHarness("codex", "usage_limit_exceeded", "You've hit your usage limit", 120_000);
+  f.h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { engine: "codex", accountId: SPARE_ACCOUNT, kind: "managed", home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } });
+  const switches: string[] = [];
+  f.h.ports.requestConversationReseat = async (_id, account) => { switches.push(account); };
+  await tickPipelines([], f.h.ports);
+  expect(switches).toEqual([SPARE_ACCOUNT]);
+  expect(f.sends).toHaveLength(1);
+  expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+  expect(f.h.spawnInputs).toHaveLength(1);
+});
+
+test("a persisted Codex migration retry stays fenced after its target account is revoked", async () => {
+  const f = await providerRecoveryHarness("codex", "usage_limit_exceeded", "You've hit your usage limit", 120_000);
+  let allowed = [LIMITED_ACCOUNT, SPARE_ACCOUNT];
+  f.h.ports.allowedAccountIds = () => allowed;
+  f.h.ports.resolveProjectSpawn = () => ({ kind: "available", account: {
+    engine: "codex", accountId: SPARE_ACCOUNT, kind: "managed", home: process.env.LLV_STATE_DIR!, transcriptRoot: process.env.LLV_STATE_DIR!, env: { NODE_ENV: "test" } } });
+  const switches: string[] = [];
+  f.h.ports.requestConversationReseat = async (_id, account) => { switches.push(account); };
+  await tickPipelines([], f.h.ports);
+  expect(switches).toEqual([SPARE_ACCOUNT]);
+  allowed = [LIMITED_ACCOUNT];
+  f.h.ports.conversationMigration = () => ({ phase: "failed-recoverable", targetId: SPARE_ACCOUNT, retry: true, sourceFailure: false, error: "retry pending" }) as never;
+  await tickPipelines([], f.h.ports);
+  expect(switches).toEqual([SPARE_ACCOUNT]);
+  expect(loadPipelines()[0]!.stateDetail).toContain("target is no longer allowed");
+  expect(f.h.spawnInputs).toHaveLength(1);
+});
+
+test("critical disk pressure defers new provisioning without parking and automatically resumes", async () => {
+  const h = harness();
+  savePipelines([]);
+  const { scheduled, advance } = provisionRetryClock(h);
+  let low = true;
+  h.ports.worktreeDiskWait = () => low ? "waiting for disk space: worktrees has 0.50 GiB free; retries automatically" : null;
+  await createPipelineFromRequest({ task: "Disk admission", repoDir: "/repo", stages: RUN_STAGES as never }, h.ports);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "provisioning", stateDetail: expect.stringContaining("waiting for disk space:") });
+  expect(h.calls.some(call => call.includes("worktree add"))).toBe(false);
+  expect(scheduled).toContain(60_000);
+  // The wait has no exhausted retry budget, even after days of pressure.
+  advance(7 * 24 * 60 * 60_000);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("provisioning");
+  low = false;
+  advance(60_000);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "running", stateDetail: null });
+  expect(h.calls.some(call => call.includes("worktree add"))).toBe(true);
+});
+
+test.each(["codex", "claude"].flatMap(engine => ["full", "restricted"].map(sandbox => [engine, sandbox] as const)))("provisioning selects actual %s/%s stage temp destinations at both admission boundaries", async (engine, sandbox) => {
+  const h = harness();
+  savePipelines([]);
+  const stages = RUN_STAGES.map(stage => ({ ...stage, engine, sandbox, model: engine === "codex" ? "gpt-6.1-sol" : "fable" }));
+  const source = { NODE_ENV: "test" as const, TMPDIR: "/srv/agent-temp", CLAUDE_CODE_TMPDIR: "/srv/claude-temp" };
+  const observed: boolean[] = [];
+  h.ports.worktreeDiskWait = (repo, worktree, usesClaude) => {
+    observed.push(usesClaude);
+    return worktreeDiskWait(repo, worktree, directory => ({ volume: directory === source.CLAUDE_CODE_TMPDIR ? "claude" : "writer",
+      freeBytes: directory === source.CLAUDE_CODE_TMPDIR ? 1024 ** 3 : 500 * 1024 ** 3, totalBytes: 1000 * 1024 ** 3 }), source, [], usesClaude);
+  };
+  const created = await createPipelineFromRequest({ task: "Stage volume admission", repoDir: "/repo", stages: stages as never }, h.ports);
+  expect(created.error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  expect(observed.every(value => value === (engine === "claude"))).toBeTrue();
+  if (engine === "codex") {
+    expect(observed.length).toBeGreaterThanOrEqual(2);
+    expect(h.calls.some(call => call.includes("worktree add"))).toBeTrue();
+    expect(loadPipelines()[0]!.state).toBe("running");
+  } else {
+    expect(observed).toHaveLength(1);
+    expect(h.calls.some(call => call.includes("worktree add"))).toBeFalse();
+    expect(loadPipelines()[0]).toMatchObject({ state: "provisioning", stateDetail: expect.stringContaining("1.00 GiB free") });
+  }
 });

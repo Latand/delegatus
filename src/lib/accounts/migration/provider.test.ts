@@ -25,10 +25,110 @@ import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH, TELEGRAM_UNAVAILABLE_THIS_RUN_NOT
 import { setTelegramLaunchRepairForTests } from "@/lib/telegram/launchReadiness";
 import { clearTelegramConnection, deleteTelegramSession, saveTelegramSession, writeTelegramConnection, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
 import * as structuredSpawn from "@/lib/runtime/structuredSpawn";
+import * as tmux from "@/lib/tmux";
+import { advanceConversationMigration } from "./coordinator";
 import type { EngineHost, HostState } from "@/lib/runtime/engineHost";
 import { StructuredDeliveryControllerUnavailableError } from "@/lib/runtime/structuredDeliveryController";
 
 const roots: string[] = [];
+
+for (const retireAt of ["cancel", "forget", "allowed"] as const) {
+  test(`a reused legacy Claude receipt checks target authorization after retirement: ${retireAt}`, async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provider-retirement-fence-"));
+    roots.push(base);
+    const source = accountRoot("claude", base, "source");
+    const target = accountRoot("claude", base, "target");
+    const registry = new AgentRegistry(path.join(base, "registry.json"));
+    const sourcePath = path.join(source.transcriptRoot, "source.jsonl");
+    const nativeId = crypto.randomUUID();
+    const transcript = path.join(target.transcriptRoot, `${nativeId}.jsonl`);
+    fs.writeFileSync(transcript, JSON.stringify({ sessionId: nativeId }) + "\n", { mode: 0o600 });
+    const profile = emptyLaunchProfile({ cwd: base, title: "Retirement fence", model: "opus", effort: "high" });
+    registry.reconcileConversations([{
+      engine: "claude", path: sourcePath, accountId: "source", launchProfile: profile,
+      turn: { state: "idle", source: "empty", terminalAt: null }, observedAt: "2026-10-05T10:00:00.000Z",
+    }]);
+    const conversation = registry.conversationForPath(sourcePath)!;
+    let migration = registry.requestConversationReseat(conversation.id, "target").migration!;
+    migration = registry.transitionConversationMigration(conversation.id, migration.revision, [migration.phase], { phase: "successor-starting" }).migration!;
+    const legacyHost = claudeHost("%47", 4747);
+    const receipt: ProviderReceipt = {
+      operationId: migration.operationId, nativeId, path: transcript, continuityPaths: [transcript], historyHash: "history",
+      host: { kind: "claude-stream", identity: "%47:4747", epoch: 1, verifiedAt: "2026-10-05T10:00:00.000Z", tmuxHost: legacyHost },
+    };
+    registry.persistMigrationProviderReceipt(conversation.id, migration.revision, migration.operationId, receipt);
+    // The running-stage reconfigure joins a migration that already holds its legacy receipt.
+    registry.claimConversationReconfigure(conversation.id, {
+      operationId: "stage-switch", revision: 1, accountId: "target", profile: { model: "opus", effort: "high", fast: null },
+    });
+    registry.requestConversationReseat(conversation.id, "target", { operationId: "stage-switch", revision: 1 });
+    const before = registry.conversation(conversation.id)!.generations;
+    let allowed = true;
+    let cancellations = 0;
+    let launches = 0;
+    let registrations = 0;
+    let releases = 0;
+    const forget = spyOn(tmux, "forgetResumePaneIfMatches").mockImplementation(async () => {
+      await Promise.resolve();
+      if (retireAt === "forget") allowed = false;
+    });
+    const adopt = spyOn(ClaudeStreamBrokerHost, "adopt").mockImplementation(async () => {
+      launches += 1;
+      return {
+        identity: { sessionId: nativeId }, setWriterFence() {},
+        health: async () => ({ status: "idle", sessionKey: nativeId, endpoint: "stdio:retirement-fence", pid: process.pid, processStartIdentity: null,
+          eventCursor: 0, protocolVersion: "test", activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null }),
+        onStateChange: () => () => {}, release: async () => { releases += 1; },
+      } as unknown as ClaudeStreamBrokerHost;
+    });
+    const provider = new RegisteredSuccessorProvider({
+      accounts: { resolveSpawn: () => target, resolveTranscriptOwner: () => source }, registry,
+      startCodex: async () => { throw new Error("unexpected Codex client"); }, claudeStatus: async () => ({ loggedIn: true }),
+      verifyClaudeHost: async () => true,
+      cancelClaude: async () => {
+        cancellations += 1;
+        await Promise.resolve();
+        if (retireAt === "cancel") allowed = false;
+        return "absent";
+      },
+      now: () => "2026-10-05T10:00:00.000Z",
+    });
+    const structuredFlag = process.env.LLV_STRUCTURED_HOSTS;
+    process.env.LLV_STRUCTURED_HOSTS = "1";
+    const controller = (process as typeof process & {
+      __llvStructuredDeliveryController?: { registerActiveHost: ((item: unknown) => Promise<() => Promise<void>>) | null };
+    }).__llvStructuredDeliveryController!;
+    const originalRegister = controller.registerActiveHost;
+    controller.registerActiveHost = async () => { registrations += 1; return async () => {}; };
+    try {
+      const result = await advanceConversationMigration(conversation.id, registry, provider, {
+        reconfigureOperationId: "stage-switch", authorizeTarget: () => {
+          if (!allowed) throw new Error("target account is no longer allowed on this project");
+        },
+      });
+      if (retireAt === "allowed") {
+        expect({ launches, registrations }).toEqual({ launches: 1, registrations: 1 });
+        expect(result.migration?.phase).toBe("committed");
+        expect(result.generations.at(-1)).toMatchObject({ id: nativeId, accountId: "target" });
+      } else {
+        expect({ launches, registrations }).toEqual({ launches: 0, registrations: 0 });
+        expect(result.generations).toEqual(before);
+        expect(result.migration).toMatchObject({ phase: "failed-recoverable", errorCode: "target-account-unavailable", error: expect.stringContaining("no longer allowed") });
+        expect(registry.snapshot().pendingSuccessorCleanups).toEqual({});
+        expect(registry.snapshot().entries[`claude:${nativeId}`]?.claimOwner ?? null).toBeNull();
+        expect(cancellations).toBe(2); // Retirement and the coordinator's confirmed discarded-receipt cleanup.
+      }
+    } finally {
+      await provider.cleanup(receipt);
+      expect(releases).toBe(launches);
+      controller.registerActiveHost = originalRegister;
+      adopt.mockRestore();
+      forget.mockRestore();
+      if (structuredFlag === undefined) delete process.env.LLV_STRUCTURED_HOSTS;
+      else process.env.LLV_STRUCTURED_HOSTS = structuredFlag;
+    }
+  });
+}
 
 function accountRoot(engine: "claude" | "codex", base: string, id: string) {
   const home = path.join(base, id);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { flushSync } from "react-dom";
 
 import { FLOWS_CHANGED_EVENT } from "@/components/flows/flowModel";
@@ -1185,6 +1185,17 @@ export function applyPipelineSnapshot(pipeline: Pipeline, confirmed: boolean): v
 export function applyTaskSnapshot(task: BoardTask): void {
   flushSync(() => filesClientCache.applyTask(task));
   if (typeof window !== "undefined") window.dispatchEvent(new Event(PIPELINES_PATCHED_EVENT));
+}
+
+/**
+ * One pipeline record as the client cache holds it, overlays included. It only
+ * listens: a surface that reads a record this way starts no catalog request of
+ * its own, so it follows whatever the mounted `useFiles` keeps current.
+ */
+export function usePipelineRecord(id: string | null | undefined): Pipeline | null {
+  const subscribe = useCallback((notify: () => void) => filesClientCache.subscribe(() => notify()), []);
+  const read = useCallback(() => (id ? filesClientCache.read().pipelines.find((pipeline) => pipeline.id === id) ?? null : null), [id]);
+  return useSyncExternalStore(subscribe, read, () => null);
 }
 
 /** Roll back a failed optimistic pipeline mutation to the server snapshot. */

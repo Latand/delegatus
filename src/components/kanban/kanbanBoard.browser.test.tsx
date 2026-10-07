@@ -18860,6 +18860,250 @@ describe("parallel ask idle fallback", () => {
   }, 120_000);
 });
 
+describe("running stage runtime switch", () => {
+  /*
+   * The runtime pill in the conversation of a running stage attempt (`&stage-switch` gives the running verify
+   * conversation its stage membership). A model chosen there is sent to the pipeline as `override-stage` with
+   * `applyNow`, the pill spins while the switch is under way, and a switch that does not take is the pill's
+   * error, worded by what happened to the agent and by display names. The conversation's controls are counted
+   * before and after: the selector gains none. On the phone the sheet says the change applies now, and the same
+   * conversation without its stage membership keeps the next-message words. Every measured state is framed with
+   * the pill inside the window, and the sheet's heading keeps the gap to the account line that the ordinary
+   * conversation has.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "running stage runtime switch"
+   *
+   * Measurements go to `evidence/stage-runtime-switch/geometry.json`; frames to `.artifacts/stage-runtime-switch/`.
+   */
+  type Evidence = { evidence: { setRuntimeSwitchPhase(pipeline: string, stage: string, phase: string, outcome?: string): void; pipelinePatches: Array<{ body: Record<string, unknown> }> } };
+  browserTest("the conversation's own selector moves the attempt on desktop and 390 px in en and uk", async () => {
+    const out = path.resolve(".artifacts/stage-runtime-switch"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browserServer = await chromium.launchServer(LAUNCH);
+    const browserPid = browserServer.process()?.pid;
+    fs.writeFileSync(path.join(out, "browser.pid"), String(browserPid));
+    const browser = await chromium.connect(browserServer.wsEndpoint());
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        const phone = width === 390;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=accounts&runtime=structured&stage-switch`, { width, height: 900 }, "light", lang, "reduce", phone);
+        try {
+          if (phone) {
+            await page.locator('[data-phone-card-pipeline="p-search"]').click();
+            await page.locator('[data-phone-task-lane="p-search"] [data-open-stages="p-search"]').click();
+            await page.locator('.pb-stage[data-stage="verify"] [data-open-conversation="verify"]').click();
+          } else {
+            await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
+            await page.locator(`${card("t-search")} .pblock`).evaluate((element) => element.scrollIntoView({ block: "center" }));
+            await page.click(`${card("t-search")} .pb-pills [data-stage="verify"]`);
+          }
+          const pill = page.locator("[data-runtime-pill]:visible").first();
+          await pill.waitFor({ timeout: 15_000 });
+          await page.waitForTimeout(500);
+          /* Every control of the conversation's composer and of the open selector, with the pill's own box. */
+          const measure = () => page.evaluate(() => {
+            const pill = [...document.querySelectorAll<HTMLElement>("[data-runtime-pill]")].find((element) => element.offsetParent !== null)!;
+            const form = pill.closest("form") ?? pill.parentElement!;
+            const selector = document.querySelector<HTMLElement>("[data-runtime-sheet], [data-runtime-popover]");
+            const box = pill.getBoundingClientRect();
+            const siblings = [...form.querySelectorAll<HTMLElement>("button, textarea, input")].filter((element) => element.offsetParent !== null && !pill.contains(element) && element !== pill);
+            const overlapped = siblings.filter((element) => {
+              const other = element.getBoundingClientRect();
+              return other.left < box.right - 1 && other.right > box.left + 1 && other.top < box.bottom - 1 && other.bottom > box.top + 1;
+            }).length;
+            const line = document.querySelector<HTMLElement>("[data-runtime-sheet-account-current], [data-runtime-popover-account]");
+            const heading = document.querySelector<HTMLElement>("[data-runtime-sheet-header] [data-mobile2-next-message]");
+            const accounts = document.querySelector<HTMLElement>("[data-runtime-sheet-accounts] > div");
+            return {
+              face: pill.textContent?.replace(/\s+/g, " ").trim() ?? "",
+              busy: pill.getAttribute("aria-busy") === "true",
+              error: document.querySelector("[data-runtime-pill-error]")?.textContent ?? null,
+              title: pill.getAttribute("title"),
+              accessibleName: pill.getAttribute("aria-label"),
+              selectorAccessibleName: selector?.getAttribute("aria-label") ?? null,
+              pill: { x: Math.round(box.left), right: Math.round(box.right), width: Math.round(box.width), height: Math.round(box.height), top: Math.round(box.top), bottom: Math.round(box.bottom) },
+              viewportHeight: innerHeight,
+              composerControls: siblings.length + 1,
+              overlapped,
+              selectorControls: selector ? selector.querySelectorAll("button, input, select").length : null,
+              selectorOverflow: selector ? selector.scrollWidth > selector.clientWidth + 1 : null,
+              sheetHeader: document.querySelector<HTMLElement>("[data-runtime-sheet-header]")?.textContent?.replace(/\s+/g, " ").trim() ?? null,
+              /* The heading's paragraph against the account line under it: its height says how many lines it took. */
+              headingGap: heading && accounts ? Math.round((accounts.getBoundingClientRect().top - heading.getBoundingClientRect().bottom) * 10) / 10 : null,
+              headingHeight: heading ? Math.round(heading.getBoundingClientRect().height * 10) / 10 : null,
+              accountLine: line ? { text: line.textContent?.replace(/\s+/g, " ").trim() ?? "", clipped: line.scrollWidth > line.clientWidth + 1, right: Math.round(line.getBoundingClientRect().right) } : null,
+              pageOverflow: document.documentElement.scrollWidth > innerWidth + 1,
+            };
+          });
+          const openSelector = async () => {
+            await pill.evaluate((element) => { element.scrollIntoView({ block: "center" }); (element as HTMLElement).click(); });
+            await page.waitForSelector("[data-runtime-sheet], [data-runtime-popover]", { timeout: 5_000 });
+          };
+          const closeSelector = async () => {
+            if (await page.locator("[data-runtime-sheet], [data-runtime-popover]").count()) await page.keyboard.press("Escape");
+            await page.waitForSelector("[data-runtime-sheet], [data-runtime-popover]", { state: "detached", timeout: 5_000 });
+          };
+          const frame = (name: string) => page.screenshot({ path: path.join(out, `${width}-${lang}-${name}.png`) });
+          /* A state as the operator sees it: the board re-lays its columns when the lane's state changes, so the pill is brought back into the window before it is measured and framed. */
+          const capture = async (name: string) => {
+            await pill.evaluate((element) => element.scrollIntoView({ block: "center", inline: "nearest" }));
+            await page.waitForTimeout(150);
+            const reading = await measure();
+            await frame(name);
+            return reading;
+          };
+          const setPhase = (phase: string, outcome?: string) => page.evaluate(({ phase, outcome }) => (window as unknown as Evidence).evidence.setRuntimeSwitchPhase("p-search", "verify", phase, outcome), { phase, outcome });
+
+          const before = await capture("before");
+          await openSelector();
+          const beforeOpen = await measure();
+          await frame("before-selector");
+          if (phone) {
+            expect(beforeOpen.sheetHeader).toContain(translate(lang, "mobile2.composer.stageSheetTitle"));
+            expect(beforeOpen.sheetHeader).toContain(translate(lang, "mobile2.composer.stageNow"));
+            expect(beforeOpen.sheetHeader).not.toContain(translate(lang, "mobile2.composer.sheetTitle"));
+            expect(await page.locator("[data-runtime-sheet]").innerText()).not.toContain(translate(lang, "mobile2.composer.accountNext"));
+          }
+          /* The gesture the selector already has: a model row, applied by the tap. */
+          if (phone) await page.locator("[data-runtime-sheet-row]", { hasText: /^Fable$/ }).click();
+          else {
+            await page.click('[data-runtime-row="submenu"][data-runtime-value="model"]');
+            await page.click('[data-runtime-row="model"][data-runtime-value="fable"]');
+          }
+          await page.waitForFunction(() => [...document.querySelectorAll("[data-runtime-pill]")].some((element) => element.getAttribute("aria-busy") === "true"), undefined, { timeout: 5_000 });
+          const patch = await page.evaluate(() => (window as unknown as Evidence).evidence.pipelinePatches.at(-1)!.body);
+          /* The attempt and conversation the pill was opened on, and the conversation's own engine, ride along. */
+          expect(patch).toEqual({ action: "override-stage", stageId: "verify", applyNow: true, expectedAttempt: patch.expectedAttempt, expectedConversationId: patch.expectedConversationId,
+            engine: "claude", model: "fable", effort: patch.effort, serviceTier: null });
+          expect(Number.isSafeInteger(patch.expectedAttempt)).toBe(true);
+          expect(typeof patch.expectedConversationId).toBe("string");
+          await closeSelector();
+          /* The pipeline answered: the attempt carries the switch, and the pill spins on that record. */
+          await page.waitForFunction(() => {
+            const stored = (window as unknown as { evidence: { storedPipeline(id: string): { runs: Array<{ stageId: string; attempts: Array<{ runtimeSwitches?: Array<{ phase: string }> }> }> } } }).evidence.storedPipeline("p-search");
+            return stored.runs.find((run) => run.stageId === "verify")?.attempts.at(-1)?.runtimeSwitches?.at(-1)?.phase === "requested";
+          }, undefined, { timeout: 5_000 });
+          await page.waitForTimeout(300);
+          const switching = await capture("switching");
+          expect(switching.face).toContain("Fable");
+          expect(switching.busy).toBe(true);
+
+          await setPhase("rolled-back");
+          await page.waitForSelector("[data-runtime-pill-error]", { state: "attached", timeout: 5_000 });
+          const rolledBack = await capture("rolled-back");
+          const rolledBackWords = translate(lang, "stageRuntime.rolledBack", { target: "Fable", current: "Opus 5.5", reason: translate(lang, "stageRuntime.reason.switchFailed") });
+          expect(rolledBack.error).toBe(rolledBackWords);
+          expect(rolledBack.title).toBe(rolledBackWords);
+          expect(rolledBack.face).toContain("Opus 5.5");
+          expect(rolledBack.busy).toBe(false);
+          await openSelector();
+          const rolledBackOpen = await measure();
+          await frame("rolled-back-selector");
+          expect(rolledBackOpen.accountLine).toMatchObject({ text: rolledBackWords, clipped: false });
+          expect(rolledBackOpen.accountLine!.right).toBeLessThanOrEqual(width);
+          await closeSelector();
+
+          /* Refused before the turn was cut: the agent never stopped, and the words do not say it did. */
+          await setPhase("failed", "target engine is unavailable; stage stays on its runtime");
+          const notSwitchedWords = translate(lang, "stageRuntime.notSwitched", { target: "Fable", current: "Opus 5.5", reason: translate(lang, "stageRuntime.reason.engineUnavailable") });
+          await page.waitForFunction((words) => document.querySelector("[data-runtime-pill-error]")?.textContent === words, notSwitchedWords, { timeout: 5_000 });
+          const notSwitched = await capture("not-switched");
+
+          /* The stop is not confirmed yet: the lane waits for the operator. */
+          await setPhase("switching", "runtime switch stop remains unconfirmed: host busy");
+          const waitingWords = translate(lang, "stageRuntime.waiting", { target: "Fable", current: "Opus 5.5", reason: translate(lang, "stageRuntime.reason.stopUnconfirmed") });
+          await page.waitForFunction((words) => document.querySelector("[data-runtime-pill-error]")?.textContent === words, waitingWords, { timeout: 5_000 });
+          const waiting = await capture("waiting");
+
+          await setPhase("failed", "stage stopped by kill during runtime switch");
+          const failedWords = translate(lang, "stageRuntime.failed", { target: "Fable", current: "Opus 5.5", reason: translate(lang, "stageRuntime.reason.kill") });
+          await page.waitForFunction((words) => document.querySelector("[data-runtime-pill-error]")?.textContent === words, failedWords, { timeout: 5_000 });
+          const failed = await capture("failed");
+
+          await setPhase("committed");
+          await page.waitForSelector("[data-runtime-pill-error]", { state: "detached", timeout: 5_000 });
+          /* The scan brings the runtime the conversation now runs on, and the face follows it. */
+          await page.waitForFunction(() => [...document.querySelectorAll<HTMLElement>("[data-runtime-pill]")].some((element) => element.offsetParent !== null && (element.textContent ?? "").includes("Fable")), undefined, { timeout: 10_000 });
+          const committed = await capture("committed");
+          expect(committed.face).toContain("Fable");
+          expect(committed.busy).toBe(false);
+          await openSelector();
+          const committedOpen = await measure();
+          await frame("committed-selector");
+          await closeSelector();
+
+          for (const reading of [before, switching, rolledBack, notSwitched, waiting, failed, committed]) {
+            expect(reading.composerControls).toBe(before.composerControls);
+            expect(reading.overlapped).toBe(0);
+            expect(reading.pageOverflow).toBe(false);
+            expect(reading.pill.right).toBeLessThanOrEqual(width);
+            expect(reading.pill.x).toBeGreaterThanOrEqual(0);
+            expect(reading.pill.top).toBeGreaterThanOrEqual(0);
+            expect(reading.pill.bottom).toBeLessThanOrEqual(reading.viewportHeight);
+            expect(JSON.stringify(reading)).not.toContain("claude ·");
+          }
+          for (const reading of [rolledBackOpen, committedOpen]) {
+            expect(reading.selectorControls).toBe(beforeOpen.selectorControls);
+            expect(reading.selectorOverflow).toBe(false);
+          }
+          for (const reading of [beforeOpen, rolledBackOpen, committedOpen]) {
+            expect(reading.accessibleName).toContain(translate(lang, "mobile2.composer.stageNow"));
+            expect(reading.selectorAccessibleName).toContain(translate(lang, "mobile2.composer.stageNow"));
+            expect(reading.accessibleName).not.toContain(translate(lang, "composer.runtimePill"));
+          }
+          /* The sheet's heading stays clear of the account line under it, whatever that line says. */
+          if (phone) for (const reading of [beforeOpen, rolledBackOpen, committedOpen]) expect(reading.headingGap).toBeGreaterThanOrEqual(6);
+          expect(await page.locator("[data-stage-runtime-control], [data-stage-runtime-open], [data-stage-runtime-action], [data-stage-runtime-status]").count()).toBe(0);
+          expect(pageErrors).toEqual([]);
+          readings.push({ viewportWidth: width, lang, patch, before, beforeOpen, switching, rolledBack, rolledBackOpen, notSwitched, waiting, failed, committed, committedOpen });
+        } finally { await context.close(); }
+        /* The same conversation without a stage membership: an ordinary one, whose sheet still speaks of the next message. */
+        const ordinary = await openFixture(browser, `${server.base}?scenario=accounts&runtime=structured`, { width, height: 900 }, "light", lang, "reduce", phone);
+        try {
+          if (phone) {
+            await ordinary.page.locator('[data-phone-card-pipeline="p-search"]').click();
+            await ordinary.page.locator('[data-phone-task-lane="p-search"] [data-open-stages="p-search"]').click();
+            await ordinary.page.locator('.pb-stage[data-stage="verify"] [data-open-conversation="verify"]').click();
+          } else {
+            await ordinary.page.locator(`${card("t-search")} .pblock`).evaluate((element) => element.scrollIntoView({ block: "center" }));
+            await ordinary.page.click(`${card("t-search")} .pb-pills [data-stage="verify"]`);
+          }
+          const pill = ordinary.page.locator("[data-runtime-pill]:visible").first();
+          await pill.waitFor({ timeout: 15_000 });
+          await ordinary.page.waitForTimeout(500);
+          await pill.evaluate((element) => { element.scrollIntoView({ block: "center" }); (element as HTMLElement).click(); });
+          await ordinary.page.waitForSelector("[data-runtime-sheet], [data-runtime-popover]", { timeout: 5_000 });
+          const sheet = await ordinary.page.evaluate(() => ({
+            accessibleName: document.querySelector("[data-runtime-pill]")?.getAttribute("aria-label"),
+            selectorAccessibleName: document.querySelector("[data-runtime-sheet], [data-runtime-popover]")?.getAttribute("aria-label"),
+            header: document.querySelector<HTMLElement>("[data-runtime-sheet-header]")?.textContent?.replace(/\s+/g, " ").trim() ?? null,
+            controls: document.querySelector("[data-runtime-sheet], [data-runtime-popover]")!.querySelectorAll("button, input, select").length,
+            headingGap: document.querySelector("[data-runtime-sheet]") ? Math.round((document.querySelector<HTMLElement>("[data-runtime-sheet-accounts] > div")!.getBoundingClientRect().top - document.querySelector<HTMLElement>("[data-runtime-sheet-header] [data-mobile2-next-message]")!.getBoundingClientRect().bottom) * 10) / 10 : null,
+            headingHeight: document.querySelector("[data-runtime-sheet]") ? Math.round(document.querySelector<HTMLElement>("[data-runtime-sheet-header] [data-mobile2-next-message]")!.getBoundingClientRect().height * 10) / 10 : null,
+          }));
+          await ordinary.page.screenshot({ path: path.join(out, `${width}-${lang}-ordinary-selector.png`) });
+          if (phone) {
+            expect(sheet.header).toContain(translate(lang, "mobile2.composer.sheetTitle"));
+            expect(sheet.header).not.toContain(translate(lang, "mobile2.composer.stageNow"));
+          }
+          expect(sheet.accessibleName).toContain(translate(lang, "composer.runtimePill"));
+          expect(sheet.selectorAccessibleName).toContain(translate(lang, "composer.runtimePill"));
+          const staged = (readings.at(-1) as { beforeOpen: { selectorControls: number; headingGap: number | null; headingHeight: number | null } }).beforeOpen;
+          expect(sheet.controls).toBe(staged.selectorControls);
+          /* One line of heading, and the same gap under it, as the conversation that is no stage. */
+          expect(staged.headingHeight).toEqual(sheet.headingHeight);
+          expect(staged.headingGap).toEqual(sheet.headingGap);
+          expect(ordinary.pageErrors).toEqual([]);
+          (readings.at(-1) as Record<string, unknown>).ordinarySheet = sheet;
+        } finally { await ordinary.context.close(); }
+      }
+      fs.mkdirSync("evidence/stage-runtime-switch", { recursive: true });
+      fs.writeFileSync("evidence/stage-runtime-switch/geometry.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); await browserServer.close(); server.stop(); }
+  }, 360_000);
+});
+
 describe("compact card menu and overflow menus: today and built", () => {
   /*
    * The board's compact menus (docs/design/compact-card-menu.md), opened on the
@@ -20238,6 +20482,10 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
   /* `everywhere` states are shot at both sizes, both schemes and both languages; the rest at 1440x900 light, once in `lang` or once per language. */
   interface State {
     name: string; query: string; folded?: boolean; detail?: boolean; click?: string; first?: boolean; bare?: boolean; everywhere: boolean; lang?: "en" | "uk" | "both";
+    /** Shot in the dark scheme too, at 1440x900. */
+    dark?: boolean;
+    /** A low-disk state: the frame of the same sidebar without the warning, and the level it draws. */
+    disk?: { beside: string; level: "warning" | "critical" };
     /** The frame of the replaced sidebar this state stands beside, when its name differs. */
     today?: string;
     /** What the state is about: a selector that has to match something drawn inside the window. A click that opens no panel names what it opens here. */
@@ -20274,9 +20522,22 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
     { name: "panel-telegram", query: "rail=few", click: "[data-rail-footer] button[aria-haspopup='dialog']", everywhere: false, lang: "uk" },
     { name: "crown-hover", query: "rail=few", crown: "hover", everywhere: false, lang: "uk" },
     { name: "crown-focus", query: "rail=few", crown: "focus", everywhere: false, lang: "both" },
+    /* Low disk space on the block's grid: one volume under state, worktrees and temp, three consumers, at each level. */
+    ...(["critical", "warning"] as const).flatMap((level): State[] => {
+      const query = `disk-role=all${level === "warning" ? "&disk-level=warning" : ""}`;
+      const shared = { everywhere: false, lang: "both", dark: true, shows: "[data-disk-pressure] [data-meter-line]" } as const;
+      return [
+        { name: `disk-${level}`, query: `rail=few&${query}`, disk: { beside: "selected", level }, ...shared },
+        { name: `disk-${level}-many`, query: `rail=many&${query}`, disk: { beside: "many", level }, ...shared },
+        { name: `disk-${level}-detail`, query: `rail=few&${query}`, detail: true, disk: { beside: "detail", level }, ...shared },
+      ];
+    }),
   ];
-  /* The fixture's machine: what a memory line's amount is a share of. */
-  const TOTAL_GIB: Record<string, number> = { RAM: 32, Swap: 8 };
+  /* The fixture's machine: what a memory or disk line's amount is a share of. */
+  const TOTAL_GIB: Record<string, number> = { RAM: 32, Swap: 8, Disk: 256, "Диск": 256 };
+  /* What the disk warning may add to the compact block, and the rows a long list keeps beside it. */
+  const DISK_ADDS = 66;
+  const DISK_ROWS = 13;
 
   interface Reading {
     frame: string; state: string; width: number; height: number; scheme: Scheme; lang: "en" | "uk";
@@ -20299,6 +20560,8 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
     archive: { labelLeft: number | null; open: boolean; rows: number };
     /** How many elements the state is about are drawn inside the window; null when the state names none. */
     shows: number | null;
+    /** The low-disk lines: each volume's level and the colour its reading is drawn in. */
+    disk: { level: string; color: string }[];
     /** A panel opened in this frame, and whether all of it is inside the window. */
     panel: { width: number; height: number; inside: boolean } | null;
     /** A row whose crown control is reached: the control and the row's age, and whether one is drawn over the other. */
@@ -20366,6 +20629,7 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
           rows: [...rail.querySelectorAll<HTMLElement>("[data-rail-archived] [data-rail-project]")].map((row) => row.getBoundingClientRect()).filter((box) => box.height > 0 && box.bottom <= within + 1).length,
         };
       })(),
+      disk: [...rail.querySelectorAll<HTMLElement>("[data-disk-pressure] [data-disk-level]")].map((line) => ({ level: line.dataset.diskLevel ?? "", color: getComputedStyle(line.querySelector("[data-meter-value] span") ?? line).color })),
       shows: shows === null ? null : [...rail.querySelectorAll<HTMLElement>(shows)].map((element) => element.getBoundingClientRect()).filter((box) => box.width > 0 && box.height > 0 && box.top >= 0 && box.bottom <= innerHeight).length,
       panel: dialog ? { width: Math.round(dialog.width), height: Math.round(dialog.height), inside: dialog.left >= 0 && dialog.top >= 0 && dialog.right <= innerWidth && dialog.bottom <= innerHeight } : null,
       crown: (() => {
@@ -20453,7 +20717,7 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
     try {
       const jobs: { state: State; size: (typeof SIZES)[number]; scheme: Scheme; lang: "en" | "uk"; frame: string }[] = [];
       for (const state of STATES) for (const size of SIZES) for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) {
-        if (!state.everywhere && !(size.width === 1440 && scheme === "light" && langsOf(state).includes(lang))) continue;
+        if (!state.everywhere && !(size.width === 1440 && (scheme === "light" || state.dark) && langsOf(state).includes(lang))) continue;
         const frame = `built-${state.name}-${size.width}x${size.height}-${scheme}-${lang}`;
         if (!ONLY || ONLY.test(frame)) jobs.push({ state, size, scheme, lang, frame });
       }
@@ -20582,6 +20846,23 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
       }));
       const order = new Map(jobs.map((job, index) => [job.frame, index]));
       readings.sort((one, other) => order.get(one.frame)! - order.get(other.frame)!);
+      /* The disk warning is judged beside the same sidebar without it: what it adds, what the list keeps, and a critical volume that reads apart from a warning. */
+      for (const reading of readings) {
+        const disk = STATES.find((state) => state.name === reading.state)?.disk;
+        if (!disk) continue;
+        const fail = (text: string) => failures.push(`${reading.frame}: ${text}`);
+        const combo = (scheme: Scheme) => `${reading.width}x${reading.height}-${scheme}-${reading.lang}`;
+        /* The schemes share a geometry, and the frame without the warning is shot in the light one. */
+        const beside = readings.find((entry) => entry.frame === `built-${disk.beside}-${combo(reading.scheme)}`) ?? readings.find((entry) => entry.frame === `built-${disk.beside}-${combo("light")}`);
+        if (reading.disk.length !== 1 || reading.disk[0]!.level !== disk.level) fail(`the block draws ${JSON.stringify(reading.disk)} for one ${disk.level} volume`);
+        if (!beside) fail(`no frame of "${disk.beside}" to stand beside`);
+        else if (disk.beside === "detail") {
+          if (reading.rail.footerHeight >= reading.rail.listHeight) fail(`behind "All windows" the footer is ${reading.rail.footerHeight} px over a list of ${reading.rail.listHeight} px`);
+        } else if (reading.rail.footerHeight - beside.rail.footerHeight > DISK_ADDS) fail(`the warning adds ${reading.rail.footerHeight - beside.rail.footerHeight} px to a footer of ${beside.rail.footerHeight} px`);
+        if (disk.beside === "many" && reading.rail.rowsInView < DISK_ROWS) fail(`${reading.rail.rowsInView} of ${reading.rail.rows} rows in view beside the warning`);
+        const other = readings.find((entry) => entry.frame === reading.frame.replace(`disk-${disk.level}`, `disk-${disk.level === "critical" ? "warning" : "critical"}`));
+        if (other?.disk[0] && other.disk[0].color === reading.disk[0]?.color) fail(`a ${disk.level} volume is drawn in the colour of the other level, ${other.disk[0].color}`);
+      }
       failures.sort();
     } finally {
       await running.browser.close().catch(() => {});
@@ -20634,11 +20915,120 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
       const kept = [];
       for (const state of STATES.filter((entry) => !entry.everywhere)) for (const lang of langsOf(state)) kept.push(await cell(`built · ${state.name} · ${lang}`, path.join(OUT, `built-${state.name}-1440x900-light-${lang}.png`), 0, 760, 1));
       await sheet(path.join(OUT, "sheet-built-states.png"), 4, kept);
+      /* The disk warning beside the same sidebar without it: the sidebars alone, per scheme and language. */
+      for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) {
+        const combo = `1440x900-${scheme}-${lang}`;
+        const cells = [];
+        for (const name of ["selected", "disk-critical", "disk-warning", "many", "disk-critical-many", "disk-warning-many", "disk-critical-detail", "disk-warning-detail"]) cells.push(await cell(`built · ${name}`, path.join(OUT, `built-${name}-${combo}.png`), 0, CROP, 1));
+        await sheet(path.join(OUT, `sheet-disk-${combo}.png`), 8, cells);
+      }
       fs.writeFileSync(path.resolve("evidence/sidebar-redesign/built.json"), `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", block: "the left sidebar: one tidy panel with a compact system block", readings, failures }, null, 2)}\n`);
     }
     if (failures.length) throw new Error(failures.join("\n"));
     expect(failures).toEqual([]);
   }, 3_600_000);
+});
+
+describe("disk warning destinations", () => {
+  browserTest("waiting lanes name free space and clear the reason after recovery", async () => {
+    const out = path.resolve(".artifacts/disk-warning-destinations");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    const detail = "waiting for disk space: temp has 0.50 GiB free (needs 2.00 GiB); retries automatically";
+    const reasonSelector = '[data-pipeline-reason="p-admitted"]';
+    type DiskLaneEvidence = { admitLane(title: string, detail: string): void; admitted: { pipeline: Pipeline } };
+    try {
+      for (const size of [{ width: 1440, height: 900 }, { width: 390, height: 844 }])
+        for (const lang of ["en", "uk"] as const)
+          for (const scheme of ["light", "dark"] as const) {
+            const { context, page, pageErrors } = await openFixture(browser, size.width < 640 ? server.base : `${server.base}?scenario=issue1820-quiet`, size, scheme, lang, "reduce", size.width < 640);
+            try {
+              try { await page.waitForSelector(size.width < 640 ? "[data-phone-kanban]" : "[data-kanban-board]"); }
+              catch (error) {
+                await page.screenshot({ path: path.join(out, `lane-${size.width}-${lang}-${scheme}-unavailable.png`) });
+                throw error;
+              }
+              await page.evaluate(detail => {
+                (window as unknown as { evidence: DiskLaneEvidence }).evidence.admitLane("Prepare a checkout", detail);
+                document.dispatchEvent(new Event("visibilitychange"));
+              }, detail);
+              if (size.width < 640) await page.locator('[data-phone-kanban-tab="assigned"]').click();
+              const reason = page.locator(reasonSelector).first();
+              await reason.waitFor({ state: "visible" });
+              await reason.scrollIntoViewIfNeeded();
+              expect(await reason.innerText()).toContain(detail);
+              const geometry = await reason.evaluate(element => {
+                const box = element.getBoundingClientRect();
+                return { width: box.width, right: box.right, bottom: box.bottom, scrollWidth: element.scrollWidth, clientWidth: element.clientWidth };
+              });
+              expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth);
+              expect(geometry.right).toBeLessThanOrEqual(size.width);
+              expect(geometry.bottom).toBeLessThanOrEqual(size.height);
+              const frame = `lane-${size.width}-${lang}-${scheme}`;
+              await page.screenshot({ path: path.join(out, frame + "-waiting.png") });
+              await page.evaluate(() => {
+                const lane = (window as unknown as { evidence: DiskLaneEvidence }).evidence.admitted.pipeline;
+                lane.state = "running";
+                lane.stateDetail = null;
+                document.dispatchEvent(new Event("visibilitychange"));
+              });
+              await page.waitForSelector(reasonSelector, { state: "hidden" });
+              expect(await page.locator('[data-pipeline="p-admitted"][data-lane-state="running"]').count()).toBeGreaterThan(0);
+              expect(pageErrors).toEqual([]);
+              await page.screenshot({ path: path.join(out, frame + "-recovered.png") });
+              readings.push({ frame, waiting: detail, recovered: true, ...geometry });
+            } finally { await context.close(); }
+          }
+      fs.mkdirSync("evidence/disk-pressure", { recursive: true });
+      fs.writeFileSync("evidence/disk-pressure/waiting-lanes.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
+
+  browserTest("critical temp and state notices describe admission and fit desktop and phone", async () => {
+    const out = path.resolve(".artifacts/disk-warning-destinations");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    try {
+      for (const density of ["line", "detail", "full"] as const)
+        for (const role of ["state", "temp", "required-temp"] as const)
+          for (const lang of ["en", "uk"] as const)
+            for (const scheme of ["light", "dark"] as const) {
+              const size = density === "full" ? { width: 390, height: 844 } : { width: 1280, height: 800 };
+              const { context, page, pageErrors } = await openFixture(browser,
+                `${server.base}?disk-density=${density}&disk-role=${role}`, size, scheme, lang, "reduce", density === "full");
+              try {
+                await page.waitForSelector("[data-disk-pressure]");
+                const notice = page.locator("[data-disk-pressure]");
+                const text = await notice.innerText();
+                /* The phone's block prints the sentence. The sidebar's line is short and its tooltip carries the sentence; behind "All windows" the volume's tooltip does. */
+                const waiting = translate(lang, "resources.diskWaiting");
+                if (density === "full") expect(text.includes(waiting)).toBe(role !== "temp");
+                else {
+                  expect(text.includes(translate(lang, "resources.diskWaitingShort"))).toBe(density === "line" && role !== "temp");
+                  expect(await notice.locator(`[title*="${waiting}"]`).count()).toBe(role === "temp" ? 0 : 1);
+                }
+                const geometry = await notice.evaluate(element => {
+                  const box = element.getBoundingClientRect();
+                  return { width: box.width, right: box.right, bottom: box.bottom, scrollWidth: element.scrollWidth, clientWidth: element.clientWidth };
+                });
+                expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth);
+                expect(geometry.right).toBeLessThanOrEqual(size.width);
+                expect(geometry.bottom).toBeLessThanOrEqual(size.height);
+                expect(pageErrors).toEqual([]);
+                const frame = `${density}-${role}-${lang}-${scheme}`;
+                await page.screenshot({ path: path.join(out, frame + ".png") });
+                readings.push({ frame, ...geometry });
+              } finally { await context.close(); }
+            }
+      const record = path.resolve("evidence/disk-pressure/destinations.json");
+      fs.mkdirSync(path.dirname(record), { recursive: true });
+      fs.writeFileSync(record, JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
 });
 
 /* A worker slot wait reads as a free worker, and a resource hold carries its
