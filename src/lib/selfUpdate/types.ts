@@ -174,8 +174,47 @@ export const REFUSAL_CODES: readonly RefusalCode[] = [
   "cannot-update", "cannot-restart", "managed-restart", "deployment-busy", "deployment-refused", "bad-key", "bad-role", "confirm-required", "auto-unavailable",
 ];
 
+/** The work in progress a restart would land on, as the last observational
+    reading saw it (#2594). Display only: a mutation reads its own, fresh. */
+export type ResumeWork = Pick<QuietBlockers, "turns" | "stages" | "turnList" | "stageList" | "unreadable">;
+
+/** Where each millisecond of one observational reading went, read through
+    the probe's ports. `judgingMs` is the probe's own loops between them. */
+export interface WorkPhases {
+  totalMs: number;
+  /** The runtime host's journal (`runtimeSnapshot`). */
+  journalMs: number;
+  /** Loading pipelines and the registry health, and the custody readings of pipeline attempts. */
+  pipelinesMs: number;
+  /** Loading flows, recorded reviewer processes, and the readings of each flow's current owners. */
+  flowsMs: number;
+  /** Readings of reviewers from rounds a flow has moved past. */
+  historicalReviewersMs: number;
+  /** Readings of journal rows that claim an open turn. */
+  turnsMs: number;
+  /** Controller state, seats, presence and memory. */
+  otherMs: number;
+  judgingMs: number;
+  /** How many custody readings each phase asked for. */
+  readings: { pipelines: number; flows: number; historicalReviewers: number; turns: number };
+}
+
+/** Whether the snapshot's work is known. `pending`: no reading has landed
+    yet (`since` it started), so nothing is said about the work at all.
+    `ready`: `resumeWork` is the reading that landed `at`. `unavailable`: the
+    last reading failed with `error`. */
+export interface WorkEvidence {
+  state: "pending" | "ready" | "unavailable";
+  since: string | null;
+  at: string | null;
+  error: string | null;
+  phases: WorkPhases | null;
+}
+
 export interface Snapshot {
-  resumeWork?: Pick<QuietBlockers, "turns" | "stages" | "turnList" | "stageList" | "unreadable">;
+  /** Present only while `workEvidence.state` is `ready`: unknown work is never zero work. */
+  resumeWork?: ResumeWork;
+  workEvidence?: WorkEvidence;
   action?: InstallAction | null;
   mode: InstallMode;
   unsupportedReason: UnsupportedReason | null;
