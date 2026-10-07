@@ -193,7 +193,7 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
   const body = s
     ? <SelfUpdateView snapshot={s} live={feed.live} state={state} actions={actions} />
     : feed.failure !== null
-      ? <p role="alert" data-self-update-failure="" className="m-0 rounded-[8px] bg-danger-soft px-2.5 py-2 text-ui text-danger [overflow-wrap:anywhere]">{t("selfUpdate.loadFailed", { detail: feed.failure })}</p>
+      ? <p role="alert" data-self-update-failure="" className="m-0 rounded-[8px] bg-danger-soft px-2.5 py-2 text-ui text-danger [overflow-wrap:anywhere]">{t("selfUpdate.loadFailed")}</p>
       : <p className="m-0 text-ui text-muted">{t("selfUpdate.loading")}</p>;
 
   if (isMobile) {

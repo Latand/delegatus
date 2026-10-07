@@ -152,7 +152,8 @@ That reading is display only: the automatic path, the launcher admission and
 every other decision still call `probeQuiet` themselves, at the moment they
 decide. The Viewer's background feed asks with `work=0` and never starts a
 reading. A snapshot that fails answers `503 {code: "snapshot-failed"}` on GET
-and a `snapshot-error` event first on the stream. A check whose available
+and a `snapshot-error` event first on the stream. The dialog then shows one
+line in the operator's language; the reason stays in the answer. A check whose available
 target is now installed and served by both the web and the runtime host reads
 as equal, so a deployment made outside the dialog no longer leaves its "N
 commits behind" up until the next hourly poll; while either process serves

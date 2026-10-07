@@ -5334,7 +5334,7 @@ export const en = {
   "selfUpdate.title": "Update",
   "selfUpdate.close": "Close",
   "selfUpdate.loading": "Reading this install…",
-  "selfUpdate.loadFailed": "Cannot read this install: {detail}. Trying again…",
+  "selfUpdate.loadFailed": "Cannot read this install. Trying again…",
   "selfUpdate.work.pending": "Reading the work in progress…",
   "selfUpdate.work.readAt": "read at {time}",
   "selfUpdate.work.pendingConfirm": "The work in progress is still being read, so it is not listed here.",

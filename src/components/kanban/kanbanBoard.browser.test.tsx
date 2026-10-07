@@ -477,7 +477,9 @@ describe("Updates dialog first state", () => {
 
           expect(await emit("snapshot-error", { code: "snapshot-failed", error: "launcher record unreadable" })).toBe(1);
           const failed = await frame("error", "[data-self-update-failure]");
-          expect(failed.failure).toBe(translate(lang, "selfUpdate.loadFailed", { detail: "launcher record unreadable" }));
+          /* The server's own words stay out of the operator's sentence. */
+          expect(failed.failure).toBe(translate(lang, "selfUpdate.loadFailed"));
+          expect(await dialog.textContent()).not.toContain("launcher record unreadable");
 
           await emit("state", snapshot(OLD, "pending"));
           const loaded = await frame("loaded-work-pending", "[data-work='pending']");

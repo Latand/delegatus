@@ -5243,7 +5243,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "selfUpdate.title": "Оновлення",
   "selfUpdate.close": "Закрити",
   "selfUpdate.loading": "Читаю стан цієї установки…",
-  "selfUpdate.loadFailed": "Не вдалося прочитати стан цієї установки: {detail}. Пробую ще раз…",
+  "selfUpdate.loadFailed": "Не вдалося прочитати стан цієї установки. Пробую ще раз…",
   "selfUpdate.work.pending": "Читаю роботу, що триває…",
   "selfUpdate.work.readAt": "прочитано о {time}",
   "selfUpdate.work.pendingConfirm": "Роботу, що триває, ще читаю, тож її тут не перелічено.",
