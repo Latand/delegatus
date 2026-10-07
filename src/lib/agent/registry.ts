@@ -1880,6 +1880,9 @@ export class MigrationRevisionError extends Error {
   }
 }
 
+/** The refusal of a retry whose minted attempt id another request's row owns. */
+export const RETRY_ATTEMPT_ID_OWNED_ELSEWHERE = "the retry attempt's operation id is already owned by another request";
+
 export class DeliveryReservationConflictError extends Error {
   constructor(message = "client message id is already reserved for another request") {
     super(message);
@@ -9624,7 +9627,22 @@ export class AgentRegistry {
       }
       const { operationId: retryOperationId, retryOf: previousOperationId, identity } = admission;
       const recorded = file.deliveryOperationOwners[retryOperationId];
+      const previous = file.deliveryOperationOwners[previousOperationId];
+      const delivery = previous
+        ? file.heldDeliveries[previous.deliveryId]
+        : Object.values(file.heldDeliveries).find((candidate) => candidate.command.operationId === previousOperationId);
       if (recorded) {
+        /* The id a retry mints can already name another request's row: a
+           Queue-for-Codex hand-off that supplied it, or another send's attempt.
+           Only an attempt of the same send is this retry's to return or
+           reopen; any other row is refused here, before the caller records a
+           wait or sends a command under it, and is left as it was. */
+        const sourceDeliveryId = previous?.deliveryId ?? delivery?.id ?? null;
+        const sameSend = recorded.retryOfOperationId !== null
+          && !recorded.directAdmission
+          && (recorded.retryOfOperationId === previousOperationId
+            || (sourceDeliveryId !== null && recorded.deliveryId === sourceDeliveryId));
+        if (!sameSend) throw new DeliveryReservationConflictError(RETRY_ATTEMPT_ID_OWNED_ELSEWHERE);
         /* An attempt the journal refused outright ended `lost`: nothing ran
            under its id. A new explicit retry, which mints the same id, reopens
            it rather than sending under a row that fences it. */
@@ -9637,10 +9655,6 @@ export class AgentRegistry {
         }
         return clone(recorded);
       }
-      const previous = file.deliveryOperationOwners[previousOperationId];
-      const delivery = previous
-        ? file.heldDeliveries[previous.deliveryId]
-        : Object.values(file.heldDeliveries).find((candidate) => candidate.command.operationId === previousOperationId);
       const source = previous ?? (delivery
         ? {
           conversationId: delivery.conversationId,

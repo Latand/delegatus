@@ -1246,6 +1246,72 @@ test("a retry's own operation id is answerable, settles at its own deadline, and
   }
 });
 
+/* docs/design/delivery-progress-and-drain.md, P14 and A2: the id a terminal
+   retry mints may already name another request's row. */
+test("a terminal retry whose attempt id another request's hand-off owns is refused before any wait or command, and a retry of its own send stays idempotent", async () => {
+  const active = fixture("retry-collision");
+  const { terminalRetryOperationId } = await import("./contracts");
+  const { DeliveryProgressStore } = await import("./deliveryProgress");
+  try {
+    const failSend = (key: string, text: string) => {
+      const { operationId } = acceptSend(active, { clientMessageId: key, text });
+      active.journal.transitionOperation(operationId, "delivering");
+      active.journal.transitionOperation(operationId, "failed", { reason: "dead-host" });
+      active.registry.recordDeliveryOutcomeForOperation(active.conversationId, operationId, "failed", "dead-host");
+      return operationId;
+    };
+    const a = failSend("retry-collision-a", "message A");
+    const taken = terminalRetryOperationId(a);
+    /* Another request's Queue-for-Codex hand-off supplied that id first. */
+    const handOff = active.registry.recordDirectAdmission({ handOff: { conversationId: active.conversationId, clientMessageId: "retry-collision-b",
+      command: { operationId: taken, kind: "send", policy: "queue" }, text: "message B", contentDigest: null,
+      evidenceText: "message B", evidenceImageCount: 0 } })!;
+    expect(handOff.command.operationId).toBe(taken);
+    const progress = new DeliveryProgressStore(null);
+    progress.note(taken, active.conversationId, { waitReason: "awaiting-turn", originalKey: "retry-collision-b" });
+    const rowBefore = structuredClone(active.registry.snapshot().deliveryOperationOwners[taken]);
+    const recordBefore = structuredClone(progress.get(taken));
+    let retries = 0;
+    const client = {
+      ...active.client,
+      retryOperation: async (operationId: string, key: string) => { retries += 1; return active.client.retryOperation(operationId, key); },
+    } as RuntimeHostClient;
+    const retry = (operationId: string) => handleRuntimeRetry(
+      new NextRequest(`http://127.0.0.1/api/runtime/operations/${operationId}`, { method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" } }),
+      operationId,
+      {
+        enabled: () => true,
+        client: () => client,
+        recover: async () => ({ target: null, path: active.transcriptPath, conversationId: active.conversationId, spawned: false }),
+        kick: () => {},
+        progress,
+      },
+    );
+    setAgentRegistryForTests(active.registry);
+    const refused = await retry(a);
+    expect(refused.status).toBe(409);
+    expect(retries).toBe(0);
+    expect(active.registry.snapshot().deliveryOperationOwners[taken]).toEqual(rowBefore);
+    expect(progress.get(taken)).toEqual(recordBefore);
+
+    /* A retry of a send whose attempt id is free is admitted once, and its
+       replay converges on the same attempt and row. */
+    const c = failSend("retry-collision-c", "message C");
+    const first = await retry(c);
+    expect(first.status).toBe(202);
+    const attempt = (await first.json() as { operationId: string }).operationId;
+    expect(attempt).toBe(terminalRetryOperationId(c));
+    const replay = await retry(c);
+    expect(replay.status).toBe(202);
+    expect((await replay.json() as { operationId: string }).operationId).toBe(attempt);
+    expect(retries).toBe(1);
+    expect(active.registry.snapshot().deliveryOperationOwners[attempt]).toMatchObject({ retryOfOperationId: c, terminalState: null });
+  } finally {
+    setAgentRegistryForTests(null);
+    active.close();
+  }
+});
+
 test("a migration-cancelled held send admits the one-tap retry its receipt offers", async () => {
   const active = fixture("migration-cancelled-retry");
   try {

@@ -456,7 +456,9 @@ async function recoverCandidate(
     try {
       await assertAccountAuthorized();
     } catch (error) {
-      registry.failSpawn(begun.receipt.launchId, "structured recovery account is no longer allowed");
+      /* Off the loop (rule c). Refused for the lock, the launch is left to the
+         stale-launch convergence (C5) and the held send to the next pass. */
+      await registry.failSpawnOffLoop(begun.receipt.launchId, "structured recovery account is no longer allowed");
       throw error;
     }
     const response = await (dependencies.spawn ?? spawnStructuredConversation)({

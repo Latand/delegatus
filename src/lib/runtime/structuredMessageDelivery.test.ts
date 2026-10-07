@@ -3098,6 +3098,146 @@ test("a failed session read while reconciling an uncertain send does not authori
   registry.close();
 });
 
+test("a reconcile whose runtime read fails leaves the record a queue executor leads, and records the cause on its own unresolved admission", async () => {
+  /* docs/design/delivery-progress-and-drain.md, P9 and A5. */
+  const { registry, conversation } = registryWithConversation();
+  recordStructuredOwner(registry, conversation);
+  let clock = Date.parse("2026-07-13T00:00:00.000Z");
+  const progress = new DeliveryProgressStore(null, () => clock);
+  const reconcile = (held: ReturnType<typeof registry.holdDelivery>) => deliverHeldStructuredMessage({
+    conversationId: conversation.id, path: artifactPath, deliveryId: held.id, clientMessageId: held.clientMessageId!, text: held.text,
+    command: held.command, reconcileUncertain: true,
+  }, {
+    enabled: () => true, registry: () => registry, progress,
+    client: () => ({ readSession: async () => { throw new Error("runtime read failed once"); },
+      command: async () => { throw new Error("no command may be dispatched"); } }) as unknown as RuntimeHostClient,
+  });
+  const led = registry.holdDelivery(conversation.id, "the queue is dispatching this", "led-by-queue");
+  registry.beginDeliveryAttempt(led.id, conversation.generations.at(-1)!.id);
+  progress.note(led.command.operationId, conversation.id, { waitReason: "dispatching", executorId: "queue-executor", nextWakeMs: 30_000, originalKey: "led-by-queue" });
+  clock += 5_000;
+  progress.stalled(led.command.operationId);
+  const before = structuredClone(progress.get(led.command.operationId)!);
+  clock += 5_000;
+  await reconcile(led);
+  expect(progress.get(led.command.operationId)).toEqual(before);
+
+  const own = registry.holdDelivery(conversation.id, "the admission lost its acknowledgement", "own-admission");
+  registry.beginDeliveryAttempt(own.id, conversation.generations.at(-1)!.id);
+  progress.note(own.command.operationId, conversation.id, { waitReason: "evidence-unreadable", detail: "the runtime journal did not acknowledge the admission", originalKey: "own-admission" });
+  await reconcile(own);
+  expect(progress.get(own.command.operationId)).toMatchObject({ waitReason: "evidence-unreadable", detail: "the runtime journal could not be read: runtime read failed once", terminal: null });
+  registry.close();
+});
+
+test("a held drain names the host's recovery on the send's record before awaiting it, stalls within the bound while it hangs, and a refused recovery leaves the reservation for the next pass untyped", async () => {
+  /* docs/design/delivery-progress-and-drain.md, P9 and A5. */
+  const { StructuredDeliveryQueue } = await import("./structuredDeliveryQueue");
+  const { registry, conversation } = registryWithConversation();
+  const generation = conversation.generations.at(-1)!;
+  registry.upsert({
+    key: { engine: conversation.engine, sessionId: generation.id },
+    artifactPath: generation.path, cwd: generation.launchProfile.cwd, accountId: generation.accountId,
+    launchProfile: generation.launchProfile, status: "idle", host: null,
+    structuredHost: { kind: "codex-app-server", endpoint: "stdio:released", process: null, eventCursor: 11, protocolVersion: "v2",
+      writerClaimEpoch: 8, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+    claimEpoch: 8, claimOwner: "structured-host:stale-owner", pendingAction: null,
+  });
+  const held = registry.holdDelivery(conversation.id, "deliver after the host recovers", "drain-recovery-key");
+  registry.beginDeliveryAttempt(held.id, generation.id);
+  const claimed = structuredClone(registry.snapshot().heldDeliveries[held.id]);
+  const operationId = held.command.operationId;
+  let clock = Date.parse("2026-07-13T00:00:00.000Z");
+  const progress = new DeliveryProgressStore(null, () => clock);
+  progress.note(operationId, conversation.id, { waitReason: "awaiting-host", originalKey: "drain-recovery-key" });
+  let commands = 0;
+  let refuse!: () => void;
+  const draining = deliverHeldStructuredMessage({
+    conversationId: conversation.id, path: artifactPath, deliveryId: held.id, clientMessageId: "drain-recovery-key", text: held.text, command: held.command,
+  }, {
+    enabled: () => true, registry: () => registry, progress, kick: () => {},
+    client: () => ({ readSession: async () => null, command: async () => { commands += 1; throw new Error("nothing may be commanded"); } }) as unknown as RuntimeHostClient,
+    recover: () => new Promise((resolve) => { refuse = () => resolve(null); }),
+  });
+  for (let attempt = 0; attempt < 200 && !refuse; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  expect(typeof refuse).toBe("function");
+  clock += 10_001;
+  const queue = new StructuredDeliveryQueue({ effects: async () => [], transition: async () => {}, status: async () => null, progress },
+    () => null, undefined, undefined, undefined, undefined, undefined, undefined, { stallMs: 4_000, now: () => clock });
+  await queue.tick();
+  const recovering = progress.get(operationId)!;
+  expect(recovering).toMatchObject({ waitReason: "recovering-host", originalKey: "drain-recovery-key", terminal: null });
+  expect(typeof recovering.stalledSince).toBe("string");
+  refuse();
+  const outcome = await draining;
+  expect(outcome).toMatchObject({ outcome: "held" });
+  expect(progress.get(operationId)).toMatchObject({ waitReason: "awaiting-host", terminal: null });
+  /* The claim the drain made is left for the coordinator to requeue. */
+  expect(registry.snapshot().heldDeliveries[held.id]).toEqual(claimed);
+  expect(commands).toBe(0);
+  registry.close();
+});
+
+test("an injection a switch overtook between preflight and its reservation is recorded before its ending waits for the lock, and ends failed or stays held, never typed", async () => {
+  /* docs/design/delivery-progress-and-drain.md, P1/P5, A1, Note 2. */
+  const { sqliteRegistryFixture, registryLockHolder } = await import("@/lib/agent/registryLockHolderFixture");
+  const overtaken = async (lockHeldMs: number) => {
+    const made = sqliteRegistryFixture("llv-inject-switch-race", { sqliteWriterDeadlineMs: 150 });
+    const holder = registryLockHolder(made.sqliteFilename);
+    const registry = made.registry;
+    try {
+      registry.reconcileConversations([{ engine: "codex", path: artifactPath, accountId: "default",
+        launchProfile: emptyLaunchProfile({ cwd: "/repo", project: "repo" }), turn: { state: "idle", source: "empty", terminalAt: null },
+        observedAt: "2026-07-13T00:00:00.000Z" }]);
+      const conversation = registry.conversationForPath(artifactPath)!;
+      recordStructuredOwner(registry, conversation);
+      const progress = new DeliveryProgressStore(null);
+      let commands = 0;
+      const originalHold = registry.holdDeliveryOffLoop.bind(registry);
+      registry.holdDeliveryOffLoop = (async (...args: Parameters<AgentRegistry["holdDeliveryOffLoop"]>) => {
+        /* The switch lands between the preflight and the reservation. */
+        registry.commitMigrationIntent({ engine: "codex", targetId: "b", origin: "manual", requestId: "inject-race",
+          expectedRevision: registry.engineRouting("codex").revision });
+        const held = await originalHold(...args);
+        if (lockHeldMs > 0) await holder.hold(lockHeldMs);
+        return held;
+      }) as AgentRegistry["holdDeliveryOffLoop"];
+      let duringEnding: ReturnType<DeliveryProgressStore["get"]> | undefined;
+      const originalWrite = registry.deliveryWrite.bind(registry);
+      registry.deliveryWrite = ((correlation: { label: string; operationId?: string | null }, write: () => unknown, correlate?: never) => {
+        if (correlation.label === "delivery.terminalize" && correlation.operationId) duringEnding = progress.get(correlation.operationId);
+        return originalWrite(correlation, write as never, correlate);
+      }) as AgentRegistry["deliveryWrite"];
+      const result = await enqueueStructuredMessage({ path: artifactPath, conversationId: conversation.id, clientMessageId: "overtaken-injection",
+        kind: "inject", text: "context the switch overtook" }, {
+        enabled: () => true, registry: () => registry, progress, kick: () => {}, requestMigrationTick: () => {},
+        client: () => ({ readSession: sessionReader(async () => snapshot(conversation.id)),
+          command: async () => { commands += 1; throw new Error("nothing may be commanded"); } }) as unknown as RuntimeHostClient,
+      } as never);
+      const operationId = (result as { operationId: string }).operationId;
+      return { result, duringEnding, after: progress.get(operationId), commands, operationId,
+        reservation: Object.values(registry.snapshot().heldDeliveries).find((delivery) => delivery.clientMessageId === "overtaken-injection") };
+    } finally {
+      await holder.close();
+      registry.close();
+      made.cleanup();
+    }
+  };
+
+  const refused = await overtaken(600);
+  expect(refused.result).toMatchObject({ ok: true, outcome: "held" });
+  expect(refused.duringEnding).toMatchObject({ operationId: refused.operationId, waitReason: "switching-accounts", originalKey: "overtaken-injection", terminal: null });
+  expect(refused.after).toMatchObject({ waitReason: "switching-accounts", terminal: null });
+  expect(refused.reservation).toMatchObject({ state: "held" });
+  expect(refused.commands).toBe(0);
+
+  const ended = await overtaken(0);
+  expect(ended.result).toMatchObject({ ok: false, outcome: "failed", status: 409 });
+  expect(ended.duringEnding).toMatchObject({ operationId: ended.operationId, waitReason: "switching-accounts", terminal: null });
+  expect(ended.after).toMatchObject({ terminal: { state: "failed" } });
+  expect(ended.commands).toBe(0);
+});
+
 test("held delivery authorizes legacy fallback from persisted tmux ownership", async () => {
   const { registry, conversation } = registryWithConversation();
   recordLegacyOwner(registry, conversation);

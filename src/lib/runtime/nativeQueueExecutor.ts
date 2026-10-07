@@ -9,6 +9,13 @@ import type { DeliveryWaitReason } from "./deliveryWaitReason";
     (docs/design/delivery-progress-and-drain.md, A6). */
 export type NativeQueueWaitNote = (reason: DeliveryWaitReason, detail?: string | null) => void;
 
+/** Runs one read the entry's hand-off waits on, with the caller tracking it as
+    the entry's current `checking` step (A6): a step that outlasts the stall
+    bound is recorded with its cause and the moment it began. */
+export type NativeQueueStep = <T>(detail: string, wait: () => Promise<T>) => Promise<T>;
+
+const untracked: NativeQueueStep = (_detail, wait) => wait();
+
 export interface NativeQueueHost {
   queue: NativeCodexQueue;
   prepare(entry: NativeQueueRecord, version: NativeQueueVersion): Promise<NativeQueueInput[]>;
@@ -40,14 +47,15 @@ export class NativeQueueExecutor {
     command: NativeQueueCommand & { operationId: string; eventSeq?: number },
     refusalReason?: string,
     note: NativeQueueWaitNote = () => {},
+    step: NativeQueueStep = untracked,
   ): Promise<void | false> {
     const { client } = this.port;
     if (!client.nativeQueueRead || !client.nativeQueueTransition) throw new Error("native queue journal is unavailable");
     const transition = (change: Parameters<NonNullable<RuntimeHostClient["nativeQueueTransition"]>>[1]) => client.nativeQueueTransition!(command.operationId, change);
-    const prior = await client.operationStatus(command.operationId);
+    const prior = await step("reading the delivery journal status", () => client.operationStatus(command.operationId));
     if (!prior || (prior.receipt.status !== "queued" && prior.receipt.status !== "pending")) return;
     if (refusalReason) { await transition({ phase: "refused", reason: refusalReason }); return; }
-    const records = await client.nativeQueueRead(command.conversationId);
+    const records = await step("reading the native queue journal", () => client.nativeQueueRead!(command.conversationId));
     /* Reorders and queue-level starts have no journal entry of their own. */
     const entryTargeted = command.action !== "reorder" && (command.action === "add" || command.entryId !== undefined);
     const entry = entryTargeted ? records.find(e => e.entryId === (command.action === "add" ? command.operationId : command.entryId)) : null;
@@ -88,8 +96,10 @@ export class NativeQueueExecutor {
     let actuated = false;
     let prepared = false;
     try {
-      const input = entry && version ? version.input ?? await native.prepare({ ...entry, binding }, version) : [];
-      const health = await host.health().catch(error => {
+      const input = entry && version
+        ? version.input ?? await step("preparing the message for Codex's queue", () => native.prepare({ ...entry, binding }, version))
+        : [];
+      const health = await step("reading the host's health", () => host.health()).catch(error => {
         if (rebinding && owns()) return null;
         throw error;
       });

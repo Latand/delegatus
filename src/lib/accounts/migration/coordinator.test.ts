@@ -4863,6 +4863,61 @@ describe("per-conversation lanes in the account-migration coordinator", () => {
     }
   });
 
+  test("the inventory sidecar types no legacy send: it puts the claim back, and the Viewer's drain records dispatching while it types once", async () => {
+    const { setAgentRegistryForTests } = await import("@/lib/agent/registry");
+    const store = registry();
+    setAgentRegistryForTests(store);
+    const previous = process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER;
+    try {
+      store.reconcileConversations([observation("/sidecar-legacy.jsonl", "a", "idle")]);
+      const conversation = store.conversationForPath("/sidecar-legacy.jsonl")!;
+      const held = store.holdDelivery(conversation.id, "typed by the Viewer", "sidecar-legacy-key");
+      const viewerProgress = new DeliveryProgressStore(null);
+      viewerProgress.note(held.command.operationId, conversation.id, { waitReason: "conversation-busy", kind: "send", originalKey: "sidecar-legacy-key" });
+      const recorded = structuredClone(viewerProgress.get(held.command.operationId));
+      let typed = 0;
+      let release!: () => void;
+      const legacyOverrides = {
+        recover: async () => null,
+        listFiles: async () => [{
+          path: "/sidecar-legacy.jsonl", root: "codex-sessions", name: "sidecar-legacy.jsonl", project: "viewer", title: "legacy",
+          engine: "codex", kind: "session", fmt: "codex", parent: null, mtime: 1, size: 0, activity: "idle", proc: null, pid: null,
+          model: "gpt-5.6-sol", effort: "high", fast: false, pendingQuestion: null, waitingInput: null,
+        } as unknown as FileEntry],
+        pathAllowed: () => true,
+        resumeSpecFor: () => ({ command: "codex resume", cwd: "/", windowName: "codex-resume", engine: "codex" }),
+        deliver: async () => {
+          typed += 1;
+          await new Promise<void>((resolve) => { release = resolve; });
+          return { ok: true, outcome: "resumed", target: "%7" };
+        },
+      } as never;
+
+      /* The sidecar process owns no store. */
+      process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER = "1";
+      await drainHeldDeliveries(conversation.id, createMigrationDeliveryPort({ progress: null, structuredDelivery: async () => null, legacyOverrides }), store);
+      expect(typed).toBe(0);
+      expect(store.readOnlySnapshot().heldDeliveries[held.id]).toMatchObject({ state: "assigned", error: null });
+      expect(viewerProgress.get(held.command.operationId)).toEqual(recorded);
+
+      /* The Viewer's pass types it, on the record it owns. */
+      if (previous === undefined) delete process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER;
+      else process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER = previous;
+      const draining = drainHeldDeliveries(conversation.id, createMigrationDeliveryPort({ progress: viewerProgress, structuredDelivery: async () => null, legacyOverrides }), store);
+      for (let attempt = 0; attempt < 400 && !release; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(typed).toBe(1);
+      expect(viewerProgress.get(held.command.operationId)).toMatchObject({ waitReason: "dispatching", originalKey: "sidecar-legacy-key", terminal: null });
+      release();
+      await draining;
+      expect(viewerProgress.get(held.command.operationId)).toMatchObject({ terminal: { state: "delivered" } });
+      expect(store.readOnlySnapshot().heldDeliveries[held.id]?.state).toBe("delivered");
+    } finally {
+      if (previous === undefined) delete process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER;
+      else process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER = previous;
+      setAgentRegistryForTests(null);
+    }
+  });
+
   test("repeated passes during an unanswered drain neither erase its stall nor mark progress, and its followers show their own wait", async () => {
     const store = registry();
     const [conversation] = committedPair(store, ["stall-acting", "stall-other"]);

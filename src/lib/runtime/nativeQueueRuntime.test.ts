@@ -779,6 +779,43 @@ test("a native entry whose journal status read has not answered shows that step 
   f.journal.close();
 });
 
+test("the executor's own status read, after the queue's answered, shows that step and its stall within the bound, and the entry is added once when it answers", async () => {
+  const f = fixture();
+  const add = command("op-native-executor-status-hangs");
+  f.journal.executeOperation(add);
+  const { DeliveryProgressStore } = await import("./deliveryProgress");
+  let clock = Date.now();
+  const progress = new DeliveryProgressStore(null, () => clock);
+  progress.note(add.operationId, conversationId, { waitReason: "queued", originalKey: add.idempotencyKey });
+  let answer!: () => void;
+  const hanging = { ...f.client, operationStatus: async (operationId: string) => {
+    await new Promise<void>((resolve) => { answer = resolve; });
+    return f.journal.operationResult(operationId);
+  } } as RuntimeHostClient;
+  const executor = new NativeQueueExecutor({ client: hanging, resolveHost: () => f.host, binding: () => binding });
+  const queue = new StructuredDeliveryQueue({
+    effects: async (kinds, afterEventSeq) => f.journal.effectBatch(100, kinds, afterEventSeq),
+    transition: async () => {},
+    status: async (operationId) => f.journal.operationResult(operationId)?.receipt ?? null,
+    progress,
+    nativeQueueExecute: (effect, refusal, note, step) => executor.execute(effect as never, refusal, note, step),
+  }, () => f.host, undefined, undefined, undefined, undefined, undefined, undefined, { stallMs: 4_000, now: () => clock });
+  const draining = queue.drain();
+  for (let attempt = 0; attempt < 200 && !answer; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  expect(typeof answer).toBe("function");
+  clock += 5_000;
+  await queue.tick();
+  const waiting = progress.get(add.operationId)!;
+  expect(waiting).toMatchObject({ waitReason: "checking", detail: "reading the delivery journal status", terminal: null });
+  expect(typeof waiting.stalledSince).toBe("string");
+  expect(clock - Date.parse(waiting.phaseSince)).toBeLessThanOrEqual(10_000);
+  answer();
+  await draining;
+  expect(f.calls.filter((call) => call.endsWith("/add"))).toHaveLength(1);
+  expect(progress.get(add.operationId)).toMatchObject({ waitReason: "awaiting-turn" });
+  f.journal.close();
+});
+
 function handOffFixture(name: string) {
   const f = fixture();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), `llv-handoff-${name}-`));
@@ -900,6 +937,39 @@ test("a hand-off whose acknowledgement is lost after Codex already holds the ent
     expect(record).toMatchObject({ waitReason: "awaiting-turn", attempt: 0, terminal: null });
     expect(Date.parse(record.lastProgressAt)).toBeLessThan(Date.now() - 4_000);
     expect(kicks).toBe(1);
+    expect(f.calls.filter((call) => call.endsWith("/add"))).toHaveLength(1);
+  } finally {
+    setSystemTime();
+    cleanup();
+  }
+});
+
+test("a replay of a hand-off the executor already acknowledged leaves the executor's phase, clocks and wake as they were, and the entry is added once", async () => {
+  const { f, registry, cleanup } = handOffFixture("replay-acknowledged");
+  const { DeliveryProgressStore } = await import("./deliveryProgress");
+  const progress = new DeliveryProgressStore(null);
+  const dependencies = { client: () => f.client, enabled: () => true, kick: () => {}, admitImages: () => ({ images: [], error: null }), storeImages: () => [],
+    registry: () => registry, progress };
+  try {
+    const first = await handleNativeQueue(handOff("replay-acknowledged"), dependencies as never);
+    expect(first.status).toBe(202);
+    const operationId = (await first.json()).operationId as string;
+    const effect = f.journal.effectBatch(100).find((candidate) => candidate.kind === "runtime.native-queue")!;
+    await f.executor.execute(effect.payload as never, undefined, (reason, detail) => {
+      progress.note(operationId, conversationId, { waitReason: reason, detail: detail ?? null, progressed: true });
+    });
+    const acknowledged = structuredClone(progress.get(operationId)!);
+    expect(acknowledged).toMatchObject({ waitReason: "awaiting-turn", terminal: null });
+    setSystemTime(new Date(Date.now() + 5_000));
+    const replay = await handleNativeQueue(handOff("replay-acknowledged"), dependencies as never);
+    expect(replay.status).toBe(202);
+    expect((await replay.json()).operationId).toBe(operationId);
+    const after = progress.get(operationId)!;
+    expect(after).toMatchObject({ waitReason: "awaiting-turn", terminal: null });
+    expect(after.phaseSince).toBe(acknowledged.phaseSince);
+    expect(after.lastProgressAt).toBe(acknowledged.lastProgressAt);
+    expect(after.nextWakeAt).toBe(acknowledged.nextWakeAt);
+    expect(after.stalledSince).toBe(acknowledged.stalledSince);
     expect(f.calls.filter((call) => call.endsWith("/add"))).toHaveLength(1);
   } finally {
     setSystemTime();

@@ -162,7 +162,13 @@ under the same operation. Writers take turns:
    last, or, when it wrote none, while there is no record
    (`stillOwnsRecord`, `recordWait.ts`). A queue or native executor that
    already moved the record owns it: the late writer keeps its kick and
-   writes nothing, so the phase, its clocks and its stall stand.
+   writes nothing, so the phase, its clocks and its stall stand. The same
+   holds before a command for an admitting request that finds its operation's
+   row already written (a replay of a hand-off key, a repeated terminal
+   retry): `admissionRecordStanding` (`recordWait.ts`) lets it open a record
+   only when there is no open one, carry on unchanged one an admitting request
+   wrote, and write nothing over one the queue or the native executor leads
+   (round 8).
 5. An observer never writes the acting operation's record and never replaces
    an active phase. It writes `conversation-busy` only to that conversation's
    `assigned` reservations other than the acting one, whose record is missing
@@ -295,6 +301,21 @@ Its second critique found six more:
 14. **P19(b)**: A2 let startup retry a continuation older code admitted with no
     row and no deadline.
 
+Round 8 found sub-paths between and inside paths already listed:
+
+15. **P14 × P25**: a terminal retry's deterministic id can already be a
+    hand-off's supplied operation id; the retry returned that row and ended it.
+16. **P17**: Copilot transcripts are legacy targets too; A9 refused them.
+17. **P25, P14 replays**: a replay that finds its row rewrote a record the
+    queue or the native executor already leads.
+18. **P9 inside the drain**: the drain's reconcile, its dead-host recovery and
+    its pre-command reads; and the inventory sidecar's legacy drain, which
+    types with no progress writer.
+19. **P18 inside the executor**: the executor's own reads after the queue's
+    status read answered.
+20. **P1/P5 switch race for an injection**, and **P4/P9** the recovery's
+    authorization refusal after its admission.
+
 ## Rule (a): one record from the reservation on
 
 ### A1. Open at the reservation, update at every step
@@ -327,6 +348,7 @@ The structured live path (P1) then writes this sequence on the same record:
 | P4 resume threw | `awaiting-host`, the error | migration pass |
 | reservation ended by the request (rejected payload, unpublished resume) | settled `failed` with the reason | — |
 | an ending the request could not write (C2 refusal) | `awaiting-host` or `checking`, naming the refused write | migration pass |
+| an injection a switch overtook between the preflight and its reservation (`held` on admission) | `switching-accounts`, written before its ending is awaited; settled `failed` when the ending is written, kept when the lock refused it | migration pass |
 
 The legacy path (P17), which always reserves once A9 lands, writes on its
 record: `checking` "claiming the delivery record" after the hold; `dispatching` "typing into the conversation's pane"
@@ -445,6 +467,18 @@ operation) keeps reading `retryOfOperationId`.
    kicked (the P7 rule); a
    definitive refusal (the 409 family, or a `rejected` receipt) → the row
    settles `failed`, `lost`, with the refusal, and the record with it.
+
+**A retry id another request already holds** (round 8). The deterministic id
+below is not reserved for the retry: a hand-off may supply it as its own
+`operationId` (A8) before the retry is asked. `recordDirectAdmission` returns
+or reopens an existing row for a retry only when it is an attempt of the same
+send: a retry row (`retryOfOperationId` set, no `directAdmission`) whose
+`retryOfOperationId` is the operation being retried or whose `deliveryId` is
+that operation's reservation. Any other row is refused with
+`RETRY_ATTEMPT_ID_OWNED_ELSEWHERE`, which the route answers `409` before it
+writes a record or sends the retry; the other request's row, record and entry
+stay as they were. A retry of the same send keeps converging on its row, as
+the replay below does.
 
 The operation ids: a terminal retry's id is deterministic,
 `retry_<sha256(previous operation id)>` (`runtime-host/journal.ts:190`, `:964`),
@@ -584,8 +618,25 @@ not list. For each one it now reads the reservation:
 `heldDrainProgress` skips every write while reconciling an uncertain row
 (`structuredMessageDelivery.ts:899`), because the queue may own the record. A
 reconcile whose runtime read fails (`heldOutcomeDuringRuntimeSynchronization`
-returns `delivery-uncertain`) knows the queue cannot list the journal either,
-so that outcome writes `evidence-unreadable` with its cause. The drain reports
+returns `delivery-uncertain`) writes `evidence-unreadable` with its cause only
+on a record no queue executor leads (no `executorId`, not ended). The first
+revision assumed one failed read proved the queue could not list the journal
+either; round 8 showed a queue dispatching the same operation through a
+journal that still answered, whose phase, clocks and stall that note replaced.
+A failed read proves nothing about the journal, so a led record is left as it
+stands, and the reconcile of an admission whose own acknowledgement was lost
+(a record the admission wrote) still gets the cause.
+
+Every wait the drain decides before its command is recorded before it is
+awaited (round 8). The dead-host recovery inside the drain writes
+`recovering-host`, "the conversation's host was reclaimed", before
+`recover` is called, so a recovery that hangs is named and stalls within the
+bound like P4's; a refused recovery leaves the reservation for the next pass,
+recorded `awaiting-host`, with no input. The runtime session read and the
+republish of a dead host are tracked the way the queue's own reads are: kept
+off the record while they answer within the stall bound (4 s), so a pass does
+not restart the phase the send already shows, and recorded as `checking` from
+when they began once they last. The drain reports
 the waits it decides itself through an optional port method,
 `HeldDeliveryPort.wait(delivery, reason, detail)`, implemented in
 `deliveryPort.ts` with `recordWait`: a claim refused for the lock (`checking`,
@@ -613,6 +664,14 @@ journal answers). From the queue's listing on:
   transition (`:90`). The queue writes each with its retry wake. Any other
   `false` (`:83`) keeps the last reason and sets the retry wake, so the
   watchdog still sees a due wake;
+- the executor's own reads before its first recorded phase (its status read,
+  the native queue journal read, the input's preparation and the host's
+  health) take a fourth argument, `step(detail, read)`, passed through
+  `nativeQueueExecute`. The queue runs each as one of its own `checking` steps
+  on the conversation's lane, so a read that has not answered shows
+  "reading the delivery journal status" (or its own step) and its stall from
+  the moment it began, after the queue's own status read answered (round 8).
+  The `prepared` CAS and the turn fences are unchanged;
 - after the acknowledgement the journal answers `queued` while Codex holds the
   entry in its own queue (`journal.ts:596`): the record says `awaiting-turn`,
   "held in Codex's own queue", a passive phase, until the proof settles it
@@ -668,7 +727,16 @@ now runs A2's sequence:
    unresolved row on a `503` and replays the same envelope, which reaches step
    3 under the same operation id.
 
-Four cases the direct command never had to decide:
+Five cases the direct command never had to decide:
+
+- **A replay of a key whose entry the queue already leads.** The replay's
+  command is sent again so the journal answers it, but the route opens the
+  `checking` record only when the operation has no open record, carries on one
+  the route wrote itself (its `checking` or its lost-acknowledgement note), and
+  writes nothing over a record the queue or the native executor moved (rule
+  (a) step 4). A replay of a `queued` or acknowledged hand-off keeps the
+  executor's phase, clocks, wake and stall, and the entry is added once
+  (round 8). An adopted older operation is opened only under the same rule.
 
 - **A supplied operation id that names another admission.** The add may carry
   its own `operationId`. When a row or reservation already holds that id for a
@@ -724,8 +792,14 @@ entry.path, null)`, the rule `beginRegistryResume` already applies on this same
 ladder when it resumes that path (`agent/transcriptHost.ts:806`–`:808`), written
 off-loop (`conversation.ensure`, C2). The send then takes the reserved branch,
 so it holds the actuation section, writes the reservation and its record (A1),
-and a replay of its key is answered from the reservation (`delivery.ts:853`). A
-pid or path that names no Claude or Codex transcript is refused before anything
+and a replay of its key is answered from the reservation (`delivery.ts:853`).
+The transcripts the ladder types into are every engine the registry keeps
+conversations for: Claude, Codex and Copilot. The first revision named only
+Claude and Codex, which turned a live Copilot pid the ladder had always typed
+into into a `404` (round 8, a wrong premise); a Copilot pid or path now
+registers its conversation the same way, reserves under its original key, and
+a replay of the key is answered from the reservation. A
+pid or path that names no such transcript (a shell, an OpenClaw log) is refused before anything
 is reserved or typed, with today's answers (`403` "process is unknown to the
 viewer", "file is unknown to the viewer"), now given ahead of actuation. A request
 that still names no conversation after that (only an unknown conversation id,
@@ -958,7 +1032,7 @@ mutation; only how its lock is waited for changes.
 
 | Site | Write | Effect | Label | A refused acquisition |
 |---|---|---|---|---|
-| `failSpawn` (`registry.ts:6503`) and `failStructuredSpawn` (`:6563`) gain `failSpawnOffLoop` and `failStructuredSpawnOffLoop`, the same transaction through `deliveryWrite`; every caller awaits them: `tmux.ts:1485` `:1505`; `structuredRecovery.ts:434`; `structuredSpawn.ts:495` `:786` `:788` `:896` `:997` `:1336` `:1361` `:1379` `:1394` `:1407` `:1434` `:2473` `:2477`; controller `:1071`; `pipelines/engine.ts:692` `:716` `:1329` (the `failStageLaunch` port becomes async); `tasks/[id]/spawn/route.ts:432` `:437` `:447` `:510`; `spawnCommand.ts:826` `:827` `:1026` `:1027` `:1033` `:1034` `:1214` `:1403` | ends the launch and its never-attempted first message | settle | `spawn.fail`, the first message's operation id (`spawn_message_<launchId>`) | the launch keeps its state and its first message stays held, which is what a crash just before the write leaves. The stale-launch convergence (`terminalizeStaleStructuredSpawns`, `structuredSpawn.ts:948`, in the sidecar's reaper cycle) fails a structured launch past its setup bound, and its own `failSpawn`/`failStructuredSpawn` ends the first message in that transaction; the failed-spawn convergence (C4 `:972`) repairs either ordering. The caller's own answer is unchanged (it is already on its failure path). A tmux launch has no first-message reservation (only structured spawns write one, `structuredSpawn.ts:619` `:1478` `:1793`), so its refused failure leaves only its receipt, as a crash at that point does today |
+| `failSpawn` (`registry.ts:6503`) and `failStructuredSpawn` (`:6563`) gain `failSpawnOffLoop` and `failStructuredSpawnOffLoop`, the same transaction through `deliveryWrite`; every caller awaits them: `tmux.ts:1485` `:1505`; `structuredRecovery.ts:434`, and its second call, where the account authorization is lost after the recovery's admission (the first revision listed only the ownership refusal beside it; round 8); `structuredSpawn.ts:495` `:786` `:788` `:896` `:997` `:1336` `:1361` `:1379` `:1394` `:1407` `:1434` `:2473` `:2477`; controller `:1071`; `pipelines/engine.ts:692` `:716` `:1329` (the `failStageLaunch` port becomes async); `tasks/[id]/spawn/route.ts:432` `:437` `:447` `:510`; `spawnCommand.ts:826` `:827` `:1026` `:1027` `:1033` `:1034` `:1214` `:1403` | ends the launch and its never-attempted first message | settle | `spawn.fail`, the first message's operation id (`spawn_message_<launchId>`) | the launch keeps its state and its first message stays held, which is what a crash just before the write leaves. The stale-launch convergence (`terminalizeStaleStructuredSpawns`, `structuredSpawn.ts:948`, in the sidecar's reaper cycle) fails a structured launch past its setup bound, and its own `failSpawn`/`failStructuredSpawn` ends the first message in that transaction; the failed-spawn convergence (C4 `:972`) repairs either ordering. The caller's own answer is unchanged (it is already on its failure path). A tmux launch has no first-message reservation (only structured spawns write one, `structuredSpawn.ts:619` `:1478` `:1793`), so its refused failure leaves only its receipt, as a crash at that point does today |
 | `beginSpawnRequest`'s membership refusal (`registry.ts:5482`–`:5483`) | fails a receipt created in the same synchronous call, before any first message exists | none on rows once narrowed | — | stays synchronous. The failed-spawn sweep inside `failSpawn`/`failStructuredSpawn` is narrowed to the launch being failed (`terminalizeFailedSpawnDeliveriesInFile(file, launchId)`), so this call touches no delivery row; other launches' rows are the convergence's (C4), which already repairs them |
 | `retireAccount` (`registry.ts:8037`) from the removal's step 4 (`accounts/removal.ts:758`) | path rewrite, pins, owed deliveries ended with the account-removed reason, parked migrations settled | settle, bind | `account.retire` | `deliveryWriteNow`. The removal runs inside the accounts registry file lock, whose waiters spin with a synchronous sleep (`accounts/codex.ts:296`–`:320`, `claude.ts:282`); holding it across an `await` would let a same-process waiter spin on the loop while the holder cannot run. So the write makes one attempt and never waits. A refusal takes the step's existing failure branch (`putHomeBack`, journal cleared, `removal.ts:759`–`:765`): nothing retired, the held sends still held, and the operator's dialog answers that the registry was busy and to try again |
 | `retireAccount` from removal recovery (`removal.ts:834`) | the same | settle, bind | `account.retire` | `deliveryWriteNow`; a refusal is the recovery's existing `return null` ("busy: retried by the next listing", `:835`–`:837`) |
@@ -988,7 +1062,11 @@ has its ending outside the request:
   `{ outcome: "rejected", cause }` and the coordinator records `failed` with that
   cause and the `lost` disposition (C1 `delivery.reject`). Today's capability
   check at `:1018` tests support only; the size limit is new to the drain.
-- **Held injection** (`:1490`): the commit fails a held injection with the
+- **Held injection** (`:1490`): an injection the switch overtook between the
+  preflight and its reservation is recorded `switching-accounts` before its
+  ending is awaited, so the accepted send has its record during the lock wait;
+  a written ending settles it `failed`, a refused one keeps the recorded hold
+  (round 8). The commit fails a held injection with the
   injection reason (`registry.ts:1446`, `NOT_CARRIED_DELIVERY_REASONS`), and a
   rollback returns it to its own thread, so it is never replayed into the
   successor's. The first revision's extra drain guard for this case is cut: it
@@ -1061,6 +1139,15 @@ transaction it waited for.
 | 7 | P2 a legacy held drain records no phase while it types | P9, P17 | (a) | open at `0ceb54b7f` | A1 legacy paragraph: the drain's claimed reservation handed to the actuation |
 | 7 | P2 an unreadable progress file lets the checkpoint skip an ending | P11, P15 | (a) | open at `0ceb54b7f` | A3 `presence`, incomplete sweep takes no checkpoint, load retried |
 | 7 | P2 an unanswered native status read shows no `checking` step | P18, P25 | (a) | open at `0ceb54b7f` | A6: native adds tracked by `checking` |
+| 8 | P1 a terminal retry whose id another request's hand-off holds rewrites and ends that owner | P14, P25 | (a), once | open at `8bb90fa54` | A2 "A retry id another request already holds": lineage checked before the row is returned or reopened, `409` before any record or command |
+| 8 | P1 WRONG-PREMISE A9 refused a live Copilot pid the ladder always typed into | P17 | (a), once | open at `8bb90fa54` | A9: every engine the registry keeps conversations for reserves; a shell or log pid is still refused untyped |
+| 8 | P2 a replayed hand-off rewrites the executor's phase and clocks before its command | P25 | (a) step 4 | open at `8bb90fa54` | rule (a) step 4 `admissionRecordStanding`; A8 fifth case; the terminal retry route and adoption under the same rule |
+| 8 | P2 WRONG-PREMISE one failed runtime read replaced the queue's acting record | P9 | (a) step 4 | open at `8bb90fa54` | A5 corrected: a reconcile's unreadable note only on a record no queue executor leads |
+| 8 | P2 the native executor's own status, journal, prepare and health reads were untracked | P18, P25 | (a) | open at `8bb90fa54` | A6: the executor's `step` runs each as the lane's `checking` step |
+| 8 | P2 a held drain recorded `recovering-host` only after the recovery returned | P9 | (a) | open at `8bb90fa54` | A5: recorded before `recover`; the session read and republish tracked as steps |
+| 8 | P2 a switch-raced injection had no record while its ending waited for the lock | P1, P5 | (a) | open at `8bb90fa54` | A1 table row; Note 2 "Held injection" |
+| 8 | P2 WRONG-PREMISE the inventory sidecar typed legacy sends with no progress writer | P9, P17 | (a) | open at `8bb90fa54` | the sidecar leaves legacy actuation to the Viewer (`actuatesLegacy`, `deliveryPort.ts`); the deferral of sidecar records is withdrawn |
+| 8 | P2 the recovery's authorization refusal still failed its launch on the loop | P4, P9 | (c) | open at `8bb90fa54` | C5: `structuredRecovery.ts` second call through `failSpawnOffLoop` |
 
 Earlier rounds, all fixed at this head and kept: round 1 (async probe followed
 by a synchronous write → `withWriter`; one stalled conversation stopped the
@@ -1093,6 +1180,23 @@ registry lock off the loop …" (P8, P21; (c) with a real lock holder, and its
 refusal); `coordinator.test.ts` "a legacy held drain records dispatching on
 the original key …" (P9, P17; (a), once); `deliveryProgress.test.ts` "a
 progress file the sweep cannot read proves no ending …" (P11, P15; (a)).
+
+Round 8, one per finding, each failing on `8bb90fa54`:
+`sendSettlement.test.ts` "a terminal retry whose attempt id another request's
+hand-off owns is refused …" (P14, P25; once, no RPC, the replay idempotent);
+`delivery.test.ts` "a live Copilot pid remains messageable …" (P17; (a), once);
+`nativeQueueRuntime.test.ts` "a replay of a hand-off the executor already
+acknowledged …" (P25; (a) step 4, once) and "the executor's own status read,
+after the queue's answered, shows that step and its stall …" (P18; (a), once);
+`structuredMessageDelivery.test.ts` "a reconcile whose runtime read fails
+leaves the record a queue executor leads …" (P9; (a) step 4), "a held drain
+names the host's recovery … before awaiting it …" (P9; (a), no input) and "an
+injection a switch overtook between preflight and its reservation …" (P1, P5;
+(a) with a real SQLite lock holder, refused and written endings);
+`coordinator.test.ts` "the inventory sidecar types no legacy send …" (P9, P17;
+(a), once); `structuredRecovery.test.ts` "an account authorization lost after
+the recovery's admission ends its launch off the loop …" (P4, P9; (c) with a
+real lock holder, and its refusal).
 
 `structuredDeliveryQueue.progress.test.ts`:
 
@@ -1618,8 +1722,6 @@ parts of 7a677014 belong to lanes b49993f7 and b3a827ad.
 - **Holding a hand-off across a switch or an outage.** The journal refuses a
   hand-off it cannot admit, and the browser keeps it as an unresolved row with
   its replay; holding it would hide it from Codex's panel (A8, Options).
-- **Progress records written by the inventory sidecar.** It owns no store; A3
-  and the queue record what it drains.
 - **Pre-acceptance waits** (the account mutation lock and the image admission
   lock in `admitDurably`): nothing is accepted yet, so the three rules do not
   apply; the composer's own row covers them.
@@ -1640,8 +1742,14 @@ parts of 7a677014 belong to lanes b49993f7 and b3a827ad.
 - The inventory sidecar drains held deliveries every 60 s in its own process,
   with its own actuation sections, lanes and permit. The registry claim keeps
   it and the Viewer from actuating one reservation twice, and the migration
-  revision keeps them from advancing one switch twice. That is existing
-  behavior; the design relies on it and does not change it.
+  revision keeps them from advancing one switch twice. It owns no progress
+  store, so it types no legacy send (round 8): a pane input has no journal
+  effect the Viewer's queue could list, and the phase of a send it typed would
+  reach no record. Its legacy drain puts the claim back untyped, and the
+  Viewer's pass, which owns the record and is woken by it, types the send with
+  its `dispatching` phase. A structured send it drains reaches the journal,
+  where the Viewer's queue records it; its pre-command waits are the ones A3
+  restores.
 - A continuation retry whose original was admitted by code older than this
   design gets its row from the identity startup already holds (A2), so it has
   the same owner, record and deadline as any other retry. The first revision's

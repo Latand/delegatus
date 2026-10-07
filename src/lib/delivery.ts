@@ -1,6 +1,6 @@
 import { memoryIndex } from "@/lib/memory/service";
 import { registeredHostForPath } from "@/lib/conversation/registeredHost";
-import { resumeEligibility, resumeSpecFor } from "@/lib/agent/cli";
+import { resumeEligibility, resumeSpecFor, type AgentEngine } from "@/lib/agent/cli";
 import type { AgentReconfiguration } from "@/lib/agent/reconfigure";
 import { agentRegistry, deliveryMayHaveArrived, REGISTRY_WRITER_BUSY, serviceTierForSpeed, type AgentRegistry, type AgentRegistryEntry, type RegistryConversation, type TmuxHostEvidence } from "@/lib/agent/registry";
 import type { HeldDelivery } from "@/lib/accounts/migration/contracts";
@@ -729,23 +729,30 @@ export interface DeliveryOverrides {
 /**
  * The transcript a legacy request addresses when the registry knows no
  * conversation for it (docs/design/delivery-progress-and-drain.md, A9): its
- * path, else the scanner entry of its pid. A pid or path that names no Claude
- * or Codex transcript is refused with the answers the ladder gives today,
- * before anything is reserved or typed.
+ * path, else the scanner entry of its pid. A pid or path that names no agent
+ * transcript the ladder can type into (Claude, Codex or Copilot) is refused with
+ * the answers the ladder gives today, before anything is reserved or typed.
  */
 async function addressedTranscript(
   message: ConversationMessage,
   overrides: DeliveryOverrides,
-): Promise<{ entry: FileEntry } | { refused: DeliveryFailure } | null> {
+): Promise<{ entry: AgentTranscript } | { refused: DeliveryFailure } | null> {
   if (message.path) {
     const entry = (await (overrides.listFiles ?? listFiles)({ pin: message.path })).find((item) => item.path === message.path);
     if (!entry) return { refused: failure("file is unknown to the viewer", 403) };
-    return entry.engine === "claude" || entry.engine === "codex" ? { entry } : null;
+    return agentTranscript(entry) ? { entry } : null;
   }
   if (message.pid === null) return null;
   const entry = (await (overrides.listFiles ?? listFiles)()).find((item) => item.pid === message.pid && item.proc === "running");
   if (!entry) return { refused: failure("process is unknown to the viewer", 403) };
-  return entry.engine === "claude" || entry.engine === "codex" ? { entry } : null;
+  return agentTranscript(entry) ? { entry } : null;
+}
+
+type AgentTranscript = FileEntry & { engine: AgentEngine };
+
+/** A transcript of an engine the registry keeps conversations for. */
+function agentTranscript(entry: FileEntry): entry is AgentTranscript {
+  return entry.engine === "claude" || entry.engine === "codex" || entry.engine === "copilot";
 }
 
 /**
@@ -779,9 +786,8 @@ export async function deliverConversationMessage(message: ConversationMessage, o
       const { entry } = addressed;
       conversation = registry.conversationForPath(entry.path);
       if (!conversation) {
-        const engine = entry.engine as "claude" | "codex";
         const ensured = await registry.deliveryWrite({ label: "conversation.ensure" },
-          () => registry.ensureConversation(engine, entry.path, null));
+          () => registry.ensureConversation(entry.engine, entry.path, null));
         if (!ensured.acquired) return failure(REGISTRY_WRITER_BUSY, 503);
         conversation = ensured.value;
       }

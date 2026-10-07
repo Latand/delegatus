@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
 
-import { ownedDeliveryProgressStore, readDeliveryProgress } from "./deliveryProgress";
-import { recordDirectWait, recordRearm, recordWait, stillAtStep, stillOwnsRecord, type DeliveryProgressPort } from "./recordWait";
+import { ownedDeliveryProgressStore, readDeliveryProgress, type DeliveryProgressRecord } from "./deliveryProgress";
+import { admissionRecordStanding, recordDirectWait, recordRearm, recordWait, stillAtStep, stillOwnsRecord, type DeliveryProgressPort } from "./recordWait";
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "node:crypto";
 
 import { recordOperatorRequest } from "@/lib/activity/requestLedger";
-import { agentRegistry, type AgentRegistry } from "@/lib/agent/registry";
+import { agentRegistry, RETRY_ATTEMPT_ID_OWNED_ELSEWHERE, type AgentRegistry } from "@/lib/agent/registry";
 import { withConversationActuation } from "@/lib/deliveryActuation";
 import { structuredAttachmentOutcome, type AttachmentDeliveryOutcome } from "@/lib/attachmentRetention";
 import type { InboxFileUpload, StagedInboxFiles } from "@/lib/inboxFiles";
@@ -102,6 +102,15 @@ async function recordDeliveryRetryAttempt(
   return written.acquired && written.value !== null;
 }
 
+const ADMITTING_RETRY = "admitting to the runtime journal";
+const RETRY_UNACKNOWLEDGED = "the runtime journal did not acknowledge the retry";
+
+/** A record the retry route itself wrote, before the queue listed the attempt. */
+function retryRouteWrote(record: DeliveryProgressRecord): boolean {
+  return (record.waitReason === "checking" && record.detail === ADMITTING_RETRY)
+    || (record.waitReason === "evidence-unreadable" && Boolean(record.detail?.startsWith(RETRY_UNACKNOWLEDGED)));
+}
+
 /** Whether the runtime host answered a call with a refusal, so nothing it
     names was admitted (as opposed to a call that may have reached it). */
 function definitiveRuntimeRefusal(error: unknown): boolean {
@@ -126,6 +135,11 @@ const RETRY_RECORD_UNAVAILABLE = "retry attempt could not be recorded durably";
 const DISCARDABLE_RECEIPT_STATUSES = ["pending", "queued"] as const;
 
 function retryRecordUnavailable(recorded: Evidence<boolean>): NextResponse {
+  /* The attempt id names another request's row: nothing was written or sent,
+     and asking again mints the same id, so the refusal is final. */
+  if (!recorded.readable && recorded.reason === RETRY_ATTEMPT_ID_OWNED_ELSEWHERE) {
+    return NextResponse.json({ error: recorded.reason }, { status: 409 });
+  }
   return NextResponse.json({
     error: recorded.readable ? RETRY_RECORD_UNAVAILABLE : recorded.reason,
     retryable: true,
@@ -965,13 +979,20 @@ export async function handleRuntimeRetry(
     const attemptOwner = retryRegistry.deliverySnapshotForOperation(attemptOperationId).deliveryOperationOwners[attemptOperationId] ?? null;
     if (attemptOwner?.terminalState === null && attemptProgress?.get(attemptOperationId)?.terminal && attemptProgress.rearm) {
       attemptProgress.rearm(attemptOperationId, attemptOwner.runtimeConversationId, {
-        waitReason: "checking", detail: "admitting to the runtime journal", nextWakeMs: null,
+        waitReason: "checking", detail: ADMITTING_RETRY, nextWakeMs: null,
         originalKey: attemptOwner.clientMessageId, admittedAt: attemptOwner.createdAt, kind: attemptOwner.command.kind,
       });
     }
-    const attemptRecorded = attemptOwner
-      ? recordDirectWait(attemptProgress, retryRegistry, attemptOwner, { reason: "checking", detail: "admitting to the runtime journal", nextWakeMs: null })
+    /* A repeat that finds the attempt's record carries on the one this route
+       wrote, and leaves one the queue already leads as it stands. */
+    const attemptStanding = attemptOwner
+      ? admissionRecordStanding(attemptProgress, attemptOperationId, retryRouteWrote)
       : null;
+    const attemptRecorded = !attemptOwner || !attemptStanding
+      ? null
+      : attemptStanding.standing === "fresh"
+        ? recordDirectWait(attemptProgress, retryRegistry, attemptOwner, { reason: "checking", detail: ADMITTING_RETRY, nextWakeMs: null })
+        : attemptStanding.standing === "continue" ? attemptStanding.record : null;
     const retry = () => client.retryOperation(previous.operationId, nextIdempotencyKey, {
       requireHostedConversationId: previous.receipt.conversationId,
     });
@@ -1006,7 +1027,7 @@ export async function handleRuntimeRetry(
            attempt owns it. */
         if (stillOwnsRecord(attemptProgress, attemptOperationId, attemptRecorded)) recordDirectWait(attemptProgress, retryRegistry, attemptOwner, {
           reason: "evidence-unreadable",
-          detail: `the runtime journal did not acknowledge the retry: ${message}`,
+          detail: `${RETRY_UNACKNOWLEDGED}: ${message}`,
           attempted: true,
           nextWakeMs: STRUCTURED_DELIVERY_TIMING.retryMs,
         });

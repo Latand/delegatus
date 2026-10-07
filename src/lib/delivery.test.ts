@@ -1892,6 +1892,43 @@ test("a legacy send whose request names only a pid reserves on its transcript's 
   expect(progress.get(reservation!.command.operationId)).toMatchObject({ originalKey: "pid-only-key", terminal: { state: "delivered" } });
 });
 
+test("a live Copilot pid remains messageable: its send reserves on the transcript's conversation, types once, and a replay of its key is answered from the reservation", async () => {
+  const registry = new AgentRegistry(path.join(SANDBOX, "legacy-copilot-pid-registry.json"));
+  setAgentRegistryForTests(registry);
+  const transcript = path.join(SANDBOX, "copilot-session.jsonl");
+  const { DeliveryProgressStore } = await import("./runtime/deliveryProgress");
+  const progress = new DeliveryProgressStore(null);
+  const typed: string[] = [];
+  const copilot = { ...legacyEntry(transcript, 4242), root: "copilot-sessions", engine: "copilot", fmt: "copilot" } as FileEntry;
+  const send = () => deliverConversationMessage({
+    pid: 4242, path: "", text: "copilot, once", images: [], clientMessageId: "copilot-key",
+  }, {
+    listFiles: async () => [copilot],
+    targetForKnownPid: async () => "%4",
+    recover: async () => null,
+    sendText: async (_target: string, payload: string) => { typed.push(payload); },
+    progress,
+  } as never);
+  expect(await send()).toMatchObject({ ok: true });
+  expect(await send()).toMatchObject({ ok: true });
+  expect(typed).toEqual(["copilot, once"]);
+  const conversation = registry.conversationForPath(transcript);
+  expect(conversation).toMatchObject({ engine: "copilot" });
+  const reservations = Object.values(registry.snapshot().heldDeliveries).filter((delivery) => delivery.clientMessageId === "copilot-key");
+  expect(reservations).toHaveLength(1);
+  expect(reservations[0]).toMatchObject({ state: "delivered", conversationId: conversation!.id });
+  expect(progress.get(reservations[0]!.command.operationId)).toMatchObject({ originalKey: "copilot-key", terminal: { state: "delivered" } });
+
+  /* A pid whose transcript is no agent's is still refused before actuation. */
+  const shell = await deliverConversationMessage({ pid: 5151, path: "", text: "nobody", images: [], clientMessageId: "shell-key" }, {
+    listFiles: async () => [{ ...legacyEntry(path.join(SANDBOX, "shell.log"), 5151), engine: "shell", fmt: "plain" } as FileEntry],
+    targetForKnownPid: async () => "%5",
+    sendText: async (_target: string, payload: string) => { typed.push(payload); },
+  } as never);
+  expect(shell).toMatchObject({ ok: false, status: 404 });
+  expect(typed).toEqual(["copilot, once"]);
+});
+
 test("a legacy send to an unregistered transcript path reserves the same way, and an unknown pid is refused before anything is reserved or typed", async () => {
   const registry = new AgentRegistry(path.join(SANDBOX, "legacy-unregistered-registry.json"));
   setAgentRegistryForTests(registry);

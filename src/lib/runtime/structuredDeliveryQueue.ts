@@ -57,6 +57,8 @@ export interface StructuredDeliveryQueuePort {
     command: NativeQueueCommand & { operationId: string; eventSeq: number },
     refusalReason?: string,
     note?: (reason: DeliveryWaitReason, detail?: string | null) => void,
+    /** Tracks one read the entry waits on as the lane's `checking` step. */
+    step?: <T>(detail: string, wait: () => Promise<T>) => Promise<T>,
   ): Promise<void | false>;
   nativeQueueReconcile?(): Promise<void>;
   /** Startup owns recovery for hosts it has not registered yet. Leave their
@@ -1485,7 +1487,7 @@ export class StructuredDeliveryQueue {
   /** Native execution has its own target budget: a parked pick or a successful
       send elsewhere must not reset a failed journal read. Keep the original
       effect/receipt in custody, and let controls reach their own drain. */
-  private async executeNative(effect: Extract<DeliveryEffect, { kind: "native-queue" }>, reason?: string): Promise<boolean> {
+  private async executeNative(effect: Extract<DeliveryEffect, { kind: "native-queue" }>, reason?: string, lane?: DeliveryLane): Promise<boolean> {
     const retry = this.nativeExecutionRetries.get(effect.conversationId) ?? new RetryBackoff();
     this.nativeExecutionRetries.set(effect.conversationId, retry);
     if (!retry.ready()) { this.retrySoon(); return false; }
@@ -1493,7 +1495,11 @@ export class StructuredDeliveryQueue {
       if (!this.port.nativeQueueExecute) throw new Error("native queue executor is unavailable");
       const note = (wait: DeliveryWaitReason, detail?: string | null) =>
         this.noteWait(effect, wait, { wake: wait === "awaiting-turn" ? "event" : "retry", ...(detail !== undefined ? { detail } : {}) });
-      if (await this.port.nativeQueueExecute(effect, reason, note) === false) {
+      /* The executor's own reads (status, the native journal, the input, the
+         host's health) come before its first recorded phase, and each is
+         tracked on the lane the same way the queue's own reads are. */
+      const step = <T>(detail: string, wait: () => Promise<T>) => this.checking(lane, effect, detail, wait);
+      if (await this.port.nativeQueueExecute(effect, reason, note, step) === false) {
         this.retrySoon();
         return false;
       }
@@ -1692,7 +1698,7 @@ export class StructuredDeliveryQueue {
       if (hold && isEngagement(effect)) {
         const reason = `account switch failed: ${hold.reason}`;
         if (effect.kind === "native-queue") {
-          if (!await this.executeNative(effect, reason)) return true;
+          if (!await this.executeNative(effect, reason, lane)) return true;
         } else if (durableStatuses.get(effect.operationId)?.status === "delivering") {
           // A switch failure cannot establish the fate of an earlier actuation.
           this.noteWait(effect, "switch-failed", { wake: "retry", detail: hold.reason });
@@ -1713,7 +1719,7 @@ export class StructuredDeliveryQueue {
         }
         const boundary = this.successfulKillBoundaries.get(effect.conversationId);
         if (!await this.executeNative(effect, boundary && effect.eventSeq <= boundary.eventSeq
-          ? "conversation was intentionally terminated" : undefined)) return true;
+          ? "conversation was intentionally terminated" : undefined, lane)) return true;
         continue;
       }
       const killBoundary = this.successfulKillBoundaries.get(effect.conversationId);

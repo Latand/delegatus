@@ -168,6 +168,31 @@ export function stillOwnsRecord(progress: DeliveryProgressPort | null, operation
 }
 
 /**
+ * What an admitting request may do with the record of an operation whose row it
+ * found already written (rule a, step 4): a replay of its key, or a retry whose
+ * attempt row exists. `fresh`: there is no open record, so the request writes
+ * its own. `continue`: the open record is one an admitting request wrote
+ * (`admitterWrote`), and nothing else has moved it, so the request carries it
+ * on as it stands, without restarting its clocks. `leave`: the queue or an
+ * executor leads the record now, and the request writes nothing over its
+ * phase, clocks or stall.
+ */
+export function admissionRecordStanding(
+  progress: DeliveryProgressPort | null,
+  operationId: string,
+  admitterWrote: (record: DeliveryProgressRecord) => boolean,
+): { standing: "fresh" } | { standing: "continue" | "leave"; record: DeliveryProgressRecord } {
+  let record: DeliveryProgressRecord | null = null;
+  try {
+    record = progress?.get(operationId) ?? null;
+  } catch (error) {
+    logged(error);
+  }
+  if (!record || record.terminal) return { standing: "fresh" };
+  return { standing: admitterWrote(record) || record.detail === RESTORED_DETAIL ? "continue" : "leave", record };
+}
+
+/**
  * An observer's note (rule a, step 5): a pass that found the conversation's
  * lane running, a drain refused the section, the watchdog. It writes
  * `conversation-busy` only to an `assigned` reservation other than the acting

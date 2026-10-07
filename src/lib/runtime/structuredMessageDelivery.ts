@@ -898,22 +898,45 @@ function heldDrainProgress(
   let delivery: HeldDelivery | null | undefined;
   let attempted = false;
   let written: DeliveryProgressRecord | null = null;
-  const wait = (reason: DeliveryWaitReason, detail: string | null = null) => {
+  const wait = (reason: DeliveryWaitReason, detail: string | null = null, sinceMs?: number) => {
     if (!progress || request.reconcileUncertain) return;
     if (delivery === undefined) {
       try { delivery = reservationFor(registry, operationId); }
       catch { delivery = null; }
     }
     if (!delivery) return;
-    written = recordWait(progress, registry, delivery, { reason, detail, attempted: !attempted });
+    written = recordWait(progress, registry, delivery, { reason, detail, attempted: !attempted, ...(sinceMs !== undefined ? { sinceMs } : {}) });
     attempted = true;
   };
   return {
     wait,
-    /** A reconcile whose runtime read failed: the queue cannot list the
-        journal either, so the reconcile, acting on this operation, says so. */
+    /** A read the attempt waits on before its first recorded step. It stays
+        off the record while it answers within the stall bound, as the queue's
+        own reads do, so a pass does not restart the phase the send already
+        shows; one that lasts is recorded as `checking` from when it began. */
+    async step<T>(detail: string, read: () => Promise<T>): Promise<T> {
+      if (!progress || request.reconcileUncertain) return read();
+      const began = Date.now();
+      const bound = setTimeout(() => wait("checking", detail, began), STRUCTURED_DELIVERY_TIMING.stallMs);
+      (bound as { unref?: () => void }).unref?.();
+      try {
+        return await read();
+      } finally {
+        clearTimeout(bound);
+      }
+    },
+    /** A reconcile whose runtime read failed says so on a record no queue
+        leads: one read that failed proves nothing about the journal, and a
+        record a queue executor wrote (its phase, clocks and stall) is that
+        executor's, which may be acting on the operation right now. */
     unreadable(cause: string) {
       if (!progress || !request.reconcileUncertain) return;
+      try {
+        const current = progress.get(operationId);
+        if (current && (current.terminal || current.executorId !== null)) return;
+      } catch {
+        return;
+      }
       let reservation: HeldDelivery | null = null;
       try { reservation = reservationFor(registry, operationId); }
       catch { reservation = null; }
@@ -968,7 +991,8 @@ async function deliverHeldAttempt(
   }
   let session: RuntimeSession | null;
   try {
-    session = await readRuntimeSession(client, { conversationId: request.conversationId ?? undefined, artifactPath: request.path || undefined });
+    session = await progress.step("reading the recipient's runtime session",
+      () => readRuntimeSession(client, { conversationId: request.conversationId ?? undefined, artifactPath: request.path || undefined }));
   } catch (error) {
     console.error("[structured delivery] runtime session read failed", error);
     progress.unreadable(error instanceof Error ? error.message : String(error));
@@ -994,6 +1018,10 @@ async function deliverHeldAttempt(
        used to be recorded `delivery-uncertain`, which settlement must treat
        as possibly executed, for a message that provably never left. */
     if (deliverability.condition !== "reclaimed") return heldForRetry(deliverability.reason);
+    /* Recorded before the recovery is awaited (A5): a recovery that hangs is
+       named on the send's record and stalls within the bound. A refused one
+       leaves the reservation for the next pass, recorded `awaiting-host`. */
+    progress.wait("recovering-host", "the conversation's host was reclaimed");
     try {
       const recovered = await (dependencies.recover ?? recoverDeadStructuredConversation)({
         path: request.path,
@@ -1007,7 +1035,6 @@ async function deliverHeldAttempt(
           void (dependencies.kick ?? kickStructuredDeliveryQueue)();
         },
       });
-      if (recovered) progress.wait("recovering-host", "the conversation's host was reclaimed");
       return recovered ? "held" : heldForRetry(deliverabilityFailureMessage({ condition: "reclaimed" }));
     } catch (error) {
       if (error instanceof StructuredRecoveryHeldForUpdateError) {
@@ -1018,11 +1045,12 @@ async function deliverHeldAttempt(
     }
   }
   try {
-    const refreshed = await refreshRepublishedSession(
-      session,
+    const current = session;
+    const refreshed = await progress.step("making the recipient's host ready", () => refreshRepublishedSession(
+      current,
       client,
       dependencies.republish ?? republishStructuredDeliveryHost,
-    );
+    ));
     session = refreshed.session;
     if (refreshed.republished && (session.host === "dead" || session.host === "unhosted")) {
       return heldForRetry("the recipient's host was republished without a live process");
@@ -1496,13 +1524,15 @@ export async function enqueueStructuredMessage(
          releasing it leaves the thread untouched (#1560). */
       if (request.kind === "inject") {
         const injected = reservation;
+        /* Rule (a): the record exists from the reservation on, before the
+           ending is awaited. */
+        recordWait(progress, registry, injected, { reason: "switching-accounts" });
         const released = await registry.deliveryWrite({ label: "delivery.terminalize", operationId: injected.command.operationId },
           () => registry.terminalizeHeldDelivery(injected.id, "injected context cannot be held across an account switch"));
         /* Refused for the lock: it stays held, and the switch's commit fails a
            held injection with its own reason, or a rollback returns it to
            this thread. Never replayed into the successor's. */
         if (!released.acquired) {
-          recordWait(progress, registry, injected, { reason: "switching-accounts" });
           return acceptedHeld(injected.command.operationId, recoveredHost ? null : conversation.id, recoveredHost);
         }
         settleRecord(progress, injected.command.operationId, "failed", "injected context cannot be held across an account switch");

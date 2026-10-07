@@ -919,7 +919,7 @@ export async function bindStructuredDeliveryQueue(
         if (bound === null) throw new Error(REGISTRY_WRITER_BUSY);
         return bound;
       },
-      nativeQueueExecute: (command, refusalReason, note) => nativeQueueExecutor.execute(command, refusalReason, note),
+      nativeQueueExecute: (command, refusalReason, note, step) => nativeQueueExecutor.execute(command, refusalReason, note, step),
       nativeQueueReconcile: async () => {
         if (!client.nativeQueueRead) return;
         const readyHosts = [...hosts].filter(([key, host]) => {

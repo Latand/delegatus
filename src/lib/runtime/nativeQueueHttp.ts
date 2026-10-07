@@ -18,8 +18,8 @@ import { nativeQueueDeliveryKey } from "./deliveryDedup";
 import { API_CLIENT_ORIGIN } from "./messageOrigin";
 import { agentMessageOrigin } from "./agentMessageAuthor";
 import { isRuntimeHostTransportFailure, RuntimeHostUnavailableError, runtimeHostClient, type RuntimeHostClient } from "./client";
-import { ownedDeliveryProgressStore } from "./deliveryProgress";
-import { recordDirectWait, stillAtStep, stillOwnsRecord, type DeliveryProgressPort } from "./recordWait";
+import { ownedDeliveryProgressStore, type DeliveryProgressRecord } from "./deliveryProgress";
+import { admissionRecordStanding, recordDirectWait, stillAtStep, stillOwnsRecord, type DeliveryProgressPort } from "./recordWait";
 import { STRUCTURED_DELIVERY_TIMING } from "./structuredDeliveryQueue";
 import { structuredHostsEnabled } from "./flags";
 import { admitRuntimeImagePayload, type RuntimeImageAdmissionResult } from "./runtimeImageAdmission";
@@ -212,7 +212,14 @@ export async function handleNativeQueue(request: NextRequest, dependencies: Depe
           return NextResponse.json({ ...current, replayed: true }, { status: current.receipt.status === "rejected" ? 409 : 202 });
         }
         command = { ...command, operationId: owner.command.operationId };
-        written = recordDirectWait(progress, registry!, owner, { reason: "checking", detail: "handing the message to Codex's queue", nextWakeMs: null });
+        /* A replay of the key finds the record its first request started. One
+           that request wrote is carried on as it stands; one the queue or the
+           native executor moved is theirs, and the replay's command answers
+           without touching its phase, clocks or stall. */
+        const standing = admissionRecordStanding(progress, owner.command.operationId, handOffWrote);
+        written = standing.standing === "fresh"
+          ? recordDirectWait(progress, registry!, owner, { reason: "checking", detail: HANDING_OFF, nextWakeMs: null })
+          : standing.standing === "continue" ? standing.record : null;
       }
       const result = await client.command(command);
       outcome = result.receipt.status === "rejected" ? "refused" : "accepted";
@@ -223,7 +230,10 @@ export async function handleNativeQueue(request: NextRequest, dependencies: Depe
         const adopted = await writeRow(result.operationId);
         if (!(adopted instanceof NextResponse)) {
           owner = adopted;
-          written = recordDirectWait(progress, registry!, owner, { reason: "queued", nextWakeMs: STRUCTURED_DELIVERY_TIMING.retryMs });
+          /* The journal's operation may already be listed and led. */
+          written = admissionRecordStanding(progress, owner.command.operationId, handOffWrote).standing === "leave"
+            ? null
+            : recordDirectWait(progress, registry!, owner, { reason: "queued", nextWakeMs: STRUCTURED_DELIVERY_TIMING.retryMs });
         }
       } else if (owner && result.receipt.status === "rejected") {
         await endRow(owner.command.operationId, result.receipt.reason || "native queue admission was refused");
@@ -250,7 +260,7 @@ export async function handleNativeQueue(request: NextRequest, dependencies: Depe
              native executor moved it, they own it. */
           if (stillOwnsRecord(progress, owner.command.operationId, written)) recordDirectWait(progress, registry!, owner, {
             reason: "evidence-unreadable",
-            detail: `the runtime journal did not acknowledge the hand-off: ${message}`,
+            detail: `${HAND_OFF_UNACKNOWLEDGED}: ${message}`,
             attempted: true,
             nextWakeMs: STRUCTURED_DELIVERY_TIMING.retryMs,
           });
@@ -279,6 +289,15 @@ export async function handleNativeQueue(request: NextRequest, dependencies: Depe
     }
     return admit(staged);
   });
+}
+
+const HANDING_OFF = "handing the message to Codex's queue";
+const HAND_OFF_UNACKNOWLEDGED = "the runtime journal did not acknowledge the hand-off";
+
+/** A record the hand-off route itself wrote, before the queue listed the entry. */
+function handOffWrote(record: DeliveryProgressRecord): boolean {
+  return (record.waitReason === "checking" && record.detail === HANDING_OFF)
+    || (record.waitReason === "evidence-unreadable" && Boolean(record.detail?.startsWith(HAND_OFF_UNACKNOWLEDGED)));
 }
 
 /**
