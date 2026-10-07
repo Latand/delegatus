@@ -4630,7 +4630,8 @@ test("a send held because the runtime socket is missing records why it waits fro
     terminal: null,
   });
   expect(record.detail).toContain("the runtime session could not be read");
-  expect(Date.parse(record.deadlineAt!)).toBe(Date.parse(reservation!.createdAt) + 10 * 60_000);
+  /* The settlement window runs from the reservation's assignment. */
+  expect(Date.parse(record.deadlineAt!)).toBe(Date.parse(reservation!.assignedAt ?? reservation!.createdAt) + 10 * 60_000);
   expect(Date.parse(record.nextWakeAt!)).toBeGreaterThan(Date.parse(record.updatedAt));
 
   /* The watchdog marks the stall once the stall bound passes, well inside ten
