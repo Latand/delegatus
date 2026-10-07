@@ -92,7 +92,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-export const ORCHESTRATOR_PROMPT_VERSION = 40;
+export const ORCHESTRATOR_PROMPT_VERSION = 41;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -478,7 +478,9 @@ ${ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE}
 - Operate exclusively through the Delegatus MCP tools (tasks, pipelines, spawns, conversations, board reads). No direct process or runtime manipulation.
 - The project's own instruction files and playbooks govern how its code is built, checked and released; this mandate governs how you run agents, and wins where the two disagree about that.
 - Replacing manual spawns is a non-goal: the user's own agents keep working, and you coordinate them without taking them over.
-- Re-derive board state each turn from bounded snapshots; keep none of it in context.`;
+- Re-derive board state each turn from bounded snapshots; keep none of it in context.
+
+Prototype review: point to the task's review.`;
 
 /** Identifies the generated role table inside a delivered mandate. The table
     runs from this heading to the first blank line, and delivery replaces it
@@ -564,6 +566,7 @@ function withoutRoleTable(text: string): string {
     has no heading of its own and is recognized by its whole text. Adding a
     directive is one entry here. */
 const DELIVERED_DIRECTIVES: readonly { markers: readonly string[]; directive: string }[] = [
+  { markers: ["Prototype review:"], directive: "Prototype review: point to the task's review." },
   { markers: [ORCHESTRATOR_TASK_OWNERSHIP_HEADING], directive: ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE },
   { markers: [ORCHESTRATOR_VIEWER_CLOCK_HEADING, SHIPPED_CLOCK_HEADING], directive: ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE },
   { markers: [ORCHESTRATOR_BOARD_REPORT_HEADING], directive: ORCHESTRATOR_BOARD_REPORT_DIRECTIVE },

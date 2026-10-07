@@ -122,6 +122,7 @@ attention: <task id> | <what the operator should decide or look at, in the opera
 left: <task id> | <why you left it alone>
 An attention line carries two or three options when it asks a question and none when it only points at something. Write no attention line when nothing needs the operator. Questions about tasks are the normal result of a completed run, so such a run finishes with pass. Finish with fail only when you could not complete the pass, for example because the board or the forge could not be read, and say what stopped you. Use needs_decision only when the run itself cannot go on without the operator.`;
 
+export const PROTOTYPE_PUBLICATION_RULE = "For design and UI work, publish variants through publish_prototype_review: give each a number, name and short description; the pipeline binds the review to its task automatically.";
 // #2518 — a seat that meets a Delegatus failure holds the evidence and had no
 // sanctioned way to report it; filing by itself would put private data into a
 // public repository. The reporter judges, the tool offers hints, and nobody but the
@@ -223,7 +224,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
       { key: "domain", label: "Domain", description: "Product domain for the implementation. docs is README, docs and public text, which stays on Claude.", kind: "select", options: ["general", "frontend", "docs"] },
       SIZE_PARAMETER,
     ],
-    promptScaffold: `You are a Builder in {{mode}} mode. Implement the brief with focused checks. ${BUILDER_FINISH_LINE} Review your own diff before you finish and report the verification evidence. Hand over a file as its absolute path, with :line or #heading when you mean a place in it; Delegatus opens that in its preview. ${SCOPE} ${SHARED_RULES}`,
+    promptScaffold: `You are a Builder in {{mode}} mode. Implement the brief with focused checks. ${BUILDER_FINISH_LINE} Review your own diff before you finish and report the verification evidence. Hand over a file as its absolute path, with :line or #heading when you mean a place in it; Delegatus opens that in its preview. ${SCOPE} ${PROTOTYPE_PUBLICATION_RULE} ${SHARED_RULES}`,
     safetyFences: ["Product source changes stay inside the scope the brief names.", "A deployment requires a Deployer and explicit operator approval."],
     capabilities: [],
   },
@@ -235,7 +236,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     parameters: [
       { key: "mode", label: "Mode", description: "Architecture output mode.", kind: "select", options: ["design", "spec", "architecture-audit"] },
     ],
-    promptScaffold: `You are an Architect in {{mode}} mode. Ground the design in the current code, state options and trade-offs, and deliver a design document. Product-source edits are prohibited. Write the document to the output path the stage declares, or, outside a pipeline, where the brief says; when neither names a path, deliver it in your final message. Open the document with the requester's originating requirement verbatim (with date and source; redact credentials and personal data). The default answer to "should we build this" is no unless that requirement demands it; validate the final design against the quote, and keep cut scope in a "Deferred — not currently justified" section; never delete it. Verdict: pass when the document is complete; needs_decision when a question only the operator can answer changes the design, with each question, its options and your recommendation in the summary and in the document; fail when you could not finish for a reason a retry can fix. When you review a plan or a design, the finding rules apply. ${FINDINGS_RULE} ${SHARED_RULES} ${REVIEW_FRAME_RULES}`,
+    promptScaffold: `You are an Architect in {{mode}} mode. Ground the design in the current code, state options and trade-offs, and deliver a design document. Product-source edits are prohibited. Write the document to the output path the stage declares, or, outside a pipeline, where the brief says; when neither names a path, deliver it in your final message. Open the document with the requester's originating requirement verbatim (with date and source; redact credentials and personal data). The default answer to "should we build this" is no unless that requirement demands it; validate the final design against the quote, and keep cut scope in a "Deferred — not currently justified" section; never delete it. Verdict: pass when the document is complete; needs_decision when a question only the operator can answer changes the design, with each question, its options and your recommendation in the summary and in the document; fail when you could not finish for a reason a retry can fix. When you review a plan or a design, the finding rules apply. ${FINDINGS_RULE} ${PROTOTYPE_PUBLICATION_RULE} ${SHARED_RULES} ${REVIEW_FRAME_RULES}`,
     safetyFences: ["Product-source edits, staging, commits, pushes, and service restarts are prohibited.", "Capture an ADR only for a hard-to-reverse decision with a material trade-off."],
     capabilities: ["read-only"],
   },

@@ -177,6 +177,11 @@ export interface TaskSyncStamps {
 }
 
 export interface BoardTask {
+  /** Task-bound review history; linked boards exchange metadata, never media. */
+  prototypeReviews?: import("@/lib/prototypeReview/types").PrototypeReviewRound[];
+  /** Derived by server reads; never supplied by a task update. */
+  prototypeReview?: import("@/lib/prototypeReview/types").PrototypeReviewSummary;
+  prototypeReviewReplica?: import("@/lib/prototypeReview/types").PrototypeReviewReplica;
   /** Current situation, replaced by each writer; no thread. */
   note?: TaskNote;
   id: string; // crypto.randomUUID(), server-side

@@ -27,6 +27,7 @@ import { remoteLaneNote, remoteLaneSummary } from "@/components/pipelines/remote
 import { pipelineTitle } from "@/components/kanban/PipelineSection";
 import { useTaskMutations, type StatusMoveOutcome, type StatusMoveOptions, type TaskMutationPorts } from "@/components/kanban/useTaskMutations";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
+import { PhoneCardPrototypeButton, usePrototypeButton } from "@/components/prototypeReview/PrototypeReviewButton";
 import { TaskIcon } from "@/components/tasks/TaskIcon";
 import { updateTask } from "@/components/tasks/taskApi";
 import { blockAgeSeconds } from "@/components/pipelines/pipelineBlockModel";
@@ -511,7 +512,7 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
   const loose = item.kind === "conversation" || item.kind === "flow";
   /* High and low only, as on the desktop card; the card's label says it. */
   const priority = item.kind === "task" && card.priority !== "normal" ? card.priority : null;
-  const label = [t(item.kind === "task" ? "mobile2.kanban.openTask" : "mobile2.kanban.openRow", { title }), priority ? t(`kanban.priorityMark.${priority}`) : null, project].filter(Boolean).join(", ");
+  const label = [t(item.kind === "task" ? "mobile2.kanban.openTask" : "mobile2.kanban.openRow", { title }), priority ? t(`kanban.priorityMark.${priority}`) : null, item.waitsOnPrototype ? t("proto.notice.ready") : null, project].filter(Boolean).join(", ");
   const body = (
     <>
       {project ? (
@@ -564,10 +565,14 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
   const quiet = item.kind === "task" && item.finished && !item.need;
   const tone = `${quiet ? QUIET : ""} ${item.edge ? EDGE[item.edge] : ""}${remote ? " remote-surface" : ""}`;
   const aside = onDismiss || onUndo;
-  const className = aside ? BODY : `${CARD} ${tone}`;
+  /* The task's prototype review has its own button under the face, so the
+     card's one tap still opens the task and the review is one tap away. */
+  const review = usePrototypeButton(item.kind === "task" ? card.task ?? null : null);
+  const framed = Boolean(aside || review);
+  const className = framed ? `${BODY}${aside ? "" : " pr-3"}${review ? " pb-1" : ""}` : `${CARD} ${tone}`;
   /* The phone draws no borders, so the remote card's tinted line joins the
      shadows its colour edge and its lift already write. */
-  const faceStyle = aside ? undefined : remote
+  const faceStyle = framed ? undefined : remote
     ? { boxShadow: [colour ? colour.boxShadow : quiet ? null : "var(--shadow-1)", "inset 0 0 0 1px var(--remote-edge)"].filter(Boolean).join(", ") }
     : colour;
   const data = {
@@ -585,11 +590,10 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
   );
   return (
     <>
-    <Pressable onLongPress={onLongPress} lift={lift} waits={item.reasons.length > 0}>
-      {aside ? (
-        <div data-phone-card-frame={item.key} className={`${FRAME} ${tone}`} style={colour}>
-          {face}
-          {onDismiss ? (
+    <Pressable onLongPress={onLongPress} lift={lift} waits={item.reasons.length > 0 || item.waitsOnPrototype}>
+      {framed ? (
+        <div data-phone-card-frame={item.key} className={`${FRAME} ${review ? "flex-col" : ""} ${tone}`} style={colour}>
+          {aside ? <div className="flex w-full min-w-0 items-stretch">{face}{onDismiss ? (
             <button
               type="button"
               data-phone-card-dismiss={item.key}
@@ -610,11 +614,16 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onLongPres
             >
               {t("needs.undo")}
             </button>
-          )}
+          )}</div> : face}
+          {review && card.task ? (
+            <div data-phone-card-review-row="" className="flex justify-end px-1 pb-1">
+              <PhoneCardPrototypeButton task={card.task} title={title} review={review} />
+            </div>
+          ) : null}
         </div>
       ) : face}
     </Pressable>
-    {remoteAgents.length ? <div className="rounded-b-xl bg-card px-3 pb-1" data-phone-card-shell="" data-attention={item.reasons.length > 0 ? "needs" : undefined}><RemoteAgents rows={remoteAgents} nowMs={nowMs} /></div> : null}
+    {remoteAgents.length ? <div className="rounded-b-xl bg-card px-3 pb-1" data-phone-card-shell="" data-attention={item.reasons.length > 0 || item.waitsOnPrototype ? "needs" : undefined}><RemoteAgents rows={remoteAgents} nowMs={nowMs} /></div> : null}
     </>
   );
 }

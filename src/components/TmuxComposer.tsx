@@ -51,6 +51,7 @@ import { ComposerBar, composerSlotKind, type ComposerSlotKind } from "./Composer
 import { chatState } from "./mobile/mobileChatState";
 import { SelectedContextBadge } from "./SelectedContextBadge";
 import { TaskChipRow } from "./orchestrator/TaskChipRow";
+import { PrototypeNoticeRow } from "./prototypeReview/PrototypeNoticeRow";
 import { readTaskChips, taskChipRefs, restoreTaskChips, settleTaskChips, captureTaskChipSnapshot, settleTaskChipSnapshot, useSeatChipProject, type TaskChip } from "./orchestrator/taskChips";
 import { OutboxDispatcher } from "./conversation/OutboxDispatcher";
 import {
@@ -5491,6 +5492,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
           noise. The transcript row renders the same badge from the same
           component afterwards, so the before and after can be compared. */}
       <ComposerContextBadge />
+      {chipProject ? <PrototypeNoticeRow project={chipProject} /> : null}
       {chipProject ? <TaskChipRow project={chipProject} /> : null}
       {/* Proactive hold hint: while the card is switching accounts, the next
           send is queued for the successor rather than delivered live. Shown
