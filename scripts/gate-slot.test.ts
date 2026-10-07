@@ -169,3 +169,24 @@ test.skipIf(process.platform !== "linux")("pressure that rises while a gate wait
   expect(stderr).toMatch(/gate-slot: admitted after \d+s of CPU pressure/);
   expect(readFileSync(f.marker, "utf8")).toBe("run\n");
 }, 20_000);
+// The work slice's ceiling is one machine-wide value: a caller pinned to fewer
+// CPUs (a service under AllowedCPUs=0-5) sets the same quota a gate does.
+const onlineCpus = Number(spawnSync("getconf", ["_NPROCESSORS_ONLN"], { encoding: "utf8" }).stdout.trim());
+test.skipIf(process.platform !== "linux" || !Bun.which("taskset") || !(onlineCpus > 1))("runtime, installer and gate set one aggregate quota under a narrowed CPU affinity", () => {
+  const pinned = (args: string[], env: NodeJS.ProcessEnv) => spawnSync(Bun.which("taskset")!, ["-c", "0", ...args], { env, encoding: "utf8" });
+  const expected = `CPUQuota=${Math.floor(onlineCpus * 0.75) * 100}%`;
+  const quietEnv = { PATH: process.env.PATH, HOME: tmpdir(), NODE_ENV: "test" };
+  const affinity = pinned([process.execPath, "-e", "console.log(require('node:os').availableParallelism())"], quietEnv);
+  expect(affinity.stdout.trim()).toBe("1");
+  const runtime = pinned([process.execPath, "-e", `const { cpuSettings, workSliceProperties } = await import(${JSON.stringify(join(import.meta.dir, "../src/lib/runtime/cpuPlacement.ts"))});
+console.log(workSliceProperties(cpuSettings({}).aggregateQuotaPercent).join(" "))`], quietEnv);
+  expect(runtime.stderr).toBe("");
+  expect(runtime.stdout).toContain(expected);
+  const f = cpuFixture({ manager: true });
+  const dir = join(f.root, "units");
+  expect(pinned([process.execPath, join(import.meta.dir, "../bin/install-cpu-placement.mjs"), "--dir", dir], quietEnv).status).toBe(0);
+  expect(readFileSync(join(dir, "delegatus-agents-work.slice"), "utf8")).toContain(`${expected}\n`);
+  rmSync(join(f.root, "getconf")); symlinkSync(Bun.which("getconf")!, join(f.root, "getconf"));
+  expect(pinned(["/bin/bash", join(import.meta.dir, "gate-slot.sh"), "/bin/bash", "-c", f.script], f.env).status).toBe(0);
+  expect(readFileSync(join(f.root, "systemctl.log"), "utf8")).toContain(` ${expected} `);
+});

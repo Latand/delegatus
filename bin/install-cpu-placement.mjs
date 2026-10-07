@@ -20,7 +20,12 @@ export function workAggregateCpuQuota(cpus) {
   return Math.max(100, Math.floor(Math.max(1, cpus) * 0.75) * 100);
 }
 
-export function cpuPlacementFiles({ unit = "delegatus.service", cpus = os.availableParallelism() } = {}) {
+/** Matches onlineCpuCount: the machine's online CPUs, whatever this process's affinity. */
+export function onlineCpuCount() {
+  return os.cpus().length || os.availableParallelism();
+}
+
+export function cpuPlacementFiles({ unit = "delegatus.service", cpus = onlineCpuCount() } = {}) {
   return [
     { path: `${unit}.d/cpu.conf`, text: "[Service]\nSlice=delegatus.slice\nCPUAccounting=yes\nCPUWeight=1000\n" },
     { path: "delegatus-agents.slice.d/cpu.conf", text: "[Slice]\nCPUAccounting=yes\nCPUWeight=100\n" },

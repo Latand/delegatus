@@ -35,6 +35,17 @@ export function workAggregateCpuQuota(cpus: number): number {
   return Math.max(100, Math.floor(Math.max(1, cpus) * 0.75) * 100);
 }
 
+/**
+ * The machine's online CPUs, as `getconf _NPROCESSORS_ONLN` counts them in
+ * scripts/gate-slot.sh. The work slice's quota is one machine-wide ceiling that
+ * every launch path sets, so it ignores the caller's affinity: a Viewer pinned
+ * to six CPUs (AllowedCPUs=0-5) would otherwise lower it to 400% until the next
+ * gate raised it again.
+ */
+export function onlineCpuCount(): number {
+  return os.cpus().length || os.availableParallelism();
+}
+
 export interface AgentCpuPlan {
   workload: AgentWorkload;
   slice: string;
@@ -87,7 +98,7 @@ export interface CpuSettings {
   aggregateQuotaPercent: number;
 }
 
-export function cpuSettings(env: Readonly<Record<string, string | undefined>> = process.env, cpus = os.availableParallelism()): CpuSettings {
+export function cpuSettings(env: Readonly<Record<string, string | undefined>> = process.env, cpus = onlineCpuCount()): CpuSettings {
   const raw = delegatusSetting(env, "AGENT_CPU") ?? "auto";
   if (raw !== "auto" && raw !== "off") diagnostic("DELEGATUS_AGENT_CPU", "Invalid DELEGATUS_AGENT_CPU; using auto.");
   return {

@@ -19,7 +19,7 @@ user@<uid>.service
    ├─ delegatus.service              production, CPUWeight=1000 (after the installation files)
    └─ delegatus-agents.slice         memory budget for every agent (MemoryMax set at runtime)
       ├─ delegatus-agent-*.scope     operator hosts and tmux panes: CPUWeight=1000, no CPU ceiling
-      └─ delegatus-agents-work.slice CPUWeight=100, CPUQuota=75% of the logical CPUs
+      └─ delegatus-agents-work.slice CPUWeight=100, CPUQuota=75% of the online CPUs
          ├─ delegatus-agent-*.scope  pipeline and flow hosts, headless runs, work tmux panes: CPUWeight=100, CPUQuota=300%
          ├─ delegatus-work-*.scope   publication install and push, release install and build, workflow setup
          └─ run-*.scope              gates from scripts/gate-slot.sh
@@ -121,12 +121,15 @@ inside a container CPU placement does not apply and nothing is refused.
 |---|---|---|
 | `DELEGATUS_AGENT_CPU` | `auto` | `off` turns CPU placement off everywhere, including gates |
 | `DELEGATUS_WORK_SCOPE_CPU_QUOTA` | `300` | percent of one CPU per work scope |
-| `DELEGATUS_WORK_CPU_QUOTA` | 75% of logical CPUs, in whole CPUs | percent for the whole work slice |
+| `DELEGATUS_WORK_CPU_QUOTA` | 75% of the machine's online CPUs, in whole CPUs | percent for the whole work slice |
 
 The Viewer sets the work slice's aggregate quota at runtime
 (`systemctl --user set-property --runtime`) the first time it places work, and
 every gate sets the same values, so the ceiling holds before the installation
-files exist.
+files exist. The Viewer, the gates and the installer all count the machine's
+online CPUs (`os.cpus()`, `getconf _NPROCESSORS_ONLN`) and ignore the caller's
+CPU affinity, so a service pinned with `AllowedCPUs=` sets the same ceiling a
+gate does.
 
 ## CPU-pressure admission
 

@@ -27,7 +27,7 @@ const runner = (command: string, args: string[]) => execFileSync(command, args, 
 const prefix = `llvcputest${process.pid}x${randomUUID().slice(0, 6)}`;
 const slices = { top: `${prefix}.slice`, agents: `${prefix}-agents.slice`, work: `${prefix}-agents-work.slice`,
   // A work slice whose scopes get no cpu controller, and a branch where the agents slice gets none either.
-  workOff: `${prefix}-agents-off.slice`, off: `${prefix}-off.slice`, offAgents: `${prefix}-off-agents.slice`, offWork: `${prefix}-off-agents-work.slice` };
+  workOff: `${prefix}-agents-off.slice`, pinned: `${prefix}-agents-pinned.slice`, off: `${prefix}-off.slice`, offAgents: `${prefix}-off-agents.slice`, offWork: `${prefix}-off-agents-work.slice` };
 const ports: CpuPorts = { agentSlice: slices.agents, workSlice: slices.work, cpus: 24, runner };
 const env = { DELEGATUS_AGENT_CPU: "auto", DELEGATUS_WORK_CPU_QUOTA: "1800" };
 const units: string[] = [];
@@ -37,8 +37,8 @@ const quiet = (command: string, args: string[]) => { try { runner(command, args)
 afterEach(() => { for (const unit of units.splice(0)) quiet("systemctl", ["--user", "stop", unit]); });
 afterAll(() => {
   setCpuPortsForTests(null);
-  quiet("systemctl", ["--user", "stop", slices.offWork, slices.offAgents, slices.off, slices.workOff, slices.work, slices.agents, slices.top]);
-  quiet("systemctl", ["--user", "revert", slices.work, slices.workOff, slices.off, slices.offWork]);
+  quiet("systemctl", ["--user", "stop", slices.offWork, slices.offAgents, slices.off, slices.workOff, slices.pinned, slices.work, slices.agents, slices.top]);
+  quiet("systemctl", ["--user", "revert", slices.work, slices.workOff, slices.pinned, slices.off, slices.offWork]);
   fs.rmSync(sandbox, { recursive: true, force: true });
 });
 
@@ -95,6 +95,32 @@ scopeTest("a work host keeps its descendants and an orphaned fixture in its quot
   runner("systemctl", ["--user", "stop", plan.unit!]);
   for (let i = 0; i < 50 && [child.pid!, descendant, orphan].some(alive); i++) await Bun.sleep(100);
   expect([child.pid!, descendant, orphan].filter(alive)).toEqual([]);
+}, 30_000);
+
+const taskset = Bun.which("taskset");
+const onlineCpus = Number(spawnSync("getconf", ["_NPROCESSORS_ONLN"], { encoding: "utf8" }).stdout.trim());
+(reachable && taskset && onlineCpus > 1 ? test : test.skip)("a caller pinned to one CPU and a gate give the work slice the same machine-wide quota", () => {
+  const expected = `${Math.floor(onlineCpus * 0.75) * 100 * 200} 20000`;
+  // Inherited CPU settings (a hook's own gate) must not choose the quota.
+  const childEnv: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: sandbox, NODE_ENV: "test",
+    XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS, DELEGATUS_AGENT_CPU: "auto", DELEGATUS_CPU_PRESSURE: "off",
+    LLV_GATE_SLICE: slices.pinned, LLV_GATE_SLOTS: "1", LLV_GATE_LOCK_DIR: sandbox };
+  const sliceMax = () => {
+    const unit = `${prefix}-pinned-${randomUUID().slice(0, 8)}.scope`;
+    units.push(unit);
+    return report(runner("systemd-run", ["--user", "--scope", "--quiet", "--collect", `--slice=${slices.pinned}`, `--unit=${unit}`, "/bin/sh", "-c", REPORT])).parentMax;
+  };
+  const lower = () => runner("systemctl", ["--user", "set-property", "--runtime", slices.pinned, "CPUQuota=100%", "CPUQuotaPeriodSec=20ms"]);
+  lower();
+  expect(sliceMax()).toBe("20000 20000");
+  const runtime = spawnSync(taskset!, ["-c", "0", process.execPath, "-e", `const { planAgentCpu } = await import(${JSON.stringify(path.join(import.meta.dir, "cpuPlacement.ts"))});
+planAgentCpu("work", process.env, { agentSlice: ${JSON.stringify(slices.agents)}, workSlice: ${JSON.stringify(slices.pinned)} });`], { env: childEnv, encoding: "utf8" });
+  expect([runtime.status, runtime.stderr]).toEqual([0, ""]);
+  expect(sliceMax()).toBe(expected);
+  lower();
+  const gate = spawnSync(taskset!, ["-c", "0", "/bin/bash", path.join(import.meta.dir, "../../../scripts/gate-slot.sh"), "/bin/sh", "-c", REPORT], { env: childEnv, encoding: "utf8" });
+  expect(gate.status).toBe(0);
+  expect(report(gate.stdout).parentMax).toBe(expected);
 }, 30_000);
 
 scopeTest("memory mode off still gets the work scope's CPU quota", () => {
