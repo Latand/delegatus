@@ -248,3 +248,31 @@ test("a Viewer page whose hasMore contradicts its cursor is still refused", asyn
   await expect(viewerMcpBindings(undefined, control).deployment_status({ clientRequestId: "contradiction" }))
     .rejects.toThrow("malformed deployment pagination");
 });
+
+/* That same Viewer ignores a cursor and answers page one again in the same
+   shape, so a continuation read from it is refused instead of repeating rows. */
+test("a continuation answered with a null cursor and no hasMore is refused as unavailable pagination", async () => {
+  const rows = [3, 2].map(index => checkoutRow(index));
+  const requested: string[] = [];
+  const control: ViewerControlDependencies = {
+    async get(route) { requested.push(route); return { count: 2, deployments: rows, nextCursor: null }; },
+    async post() { throw new Error("unexpected write"); },
+  };
+  const cursor = viewerDeploymentListCursor(Date.parse(rows[1]!.createdAt), rows[1]!.deploymentId);
+
+  await expect(viewerMcpBindings(undefined, control).deployment_status({ clientRequestId: "legacy-continuation", limit: 2, cursor }))
+    .rejects.toThrow("pagination is unavailable");
+  expect(requested).toEqual([`/api/runtime/deployments?limit=2&cursor=${encodeURIComponent(cursor)}`]);
+});
+
+test("a continuation answered with an explicit terminal page still reads as the last page", async () => {
+  const row = checkoutRow(1);
+  const control: ViewerControlDependencies = {
+    async get() { return { count: 1, deployments: [row], nextCursor: null, hasMore: false }; },
+    async post() { throw new Error("unexpected write"); },
+  };
+  const cursor = viewerDeploymentListCursor(Date.parse(checkoutRow(2).createdAt), "checkout-2");
+
+  expect(await viewerMcpBindings(undefined, control).deployment_status({ clientRequestId: "modern-terminal", limit: 2, cursor }))
+    .toEqual({ count: 1, deployments: [row], nextCursor: null, hasMore: false });
+});
