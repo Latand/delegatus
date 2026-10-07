@@ -20593,9 +20593,10 @@ describe("prototype review on a task: the card's button, the review and the orch
           await shot("files-gone");
           await frameCheck("files-gone");
           await accentCheck("files-gone", true);
-          const goneState = await page.evaluate(() => ({ retired: Boolean(document.querySelector("[data-prototype-retired]")), decision: Boolean(document.querySelector("[data-prototype-decision]")), images: document.querySelectorAll("[data-prototype-canvas] img").length }));
+          const goneState = await page.evaluate(() => ({ retired: Boolean(document.querySelector("[data-prototype-retired]")), banner: document.querySelector("[data-prototype-retired]")?.textContent ?? "", decision: Boolean(document.querySelector("[data-prototype-decision]")), images: document.querySelectorAll("[data-prototype-canvas] img").length }));
           record("files-gone", goneState);
           if (!goneState.retired || !goneState.decision || goneState.images) failures.push(`${label}: a retired round reads ${JSON.stringify(goneState)}`);
+          if (lang === "en" && /\d+\/\d+\/\d{4}/.test(goneState.banner)) failures.push(`${label}: the files-gone banner writes a numeric date: ${goneState.banner}`);
           await closeReview();
           if (size.phone) { await page.goBack(); await page.waitForTimeout(400); }
 

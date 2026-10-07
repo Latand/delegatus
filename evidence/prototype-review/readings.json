@@ -811,7 +811,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "7 Oct, 03:00",
+      "time": "7 Oct, 07:40",
       "posts": [
         {
           "taskId": "t-search",
@@ -1366,6 +1366,7 @@
     },
     "desktop-1440-en-light-files-gone": {
       "retired": true,
+      "banner": "The pictures and videos of this round were retired on 5 Oct 2026. The variants and the decision stay.",
       "decision": true,
       "images": 0
     },
@@ -2339,7 +2340,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "7 Oct, 03:01",
+      "time": "7 Oct, 07:41",
       "posts": [
         {
           "taskId": "t-search",
@@ -2894,6 +2895,7 @@
     },
     "desktop-1440-en-dark-files-gone": {
       "retired": true,
+      "banner": "The pictures and videos of this round were retired on 5 Oct 2026. The variants and the decision stay.",
       "decision": true,
       "images": 0
     },
@@ -3867,7 +3869,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "7 жовт., 03:01",
+      "time": "7 жовт., 07:41",
       "posts": [
         {
           "taskId": "t-search",
@@ -4422,6 +4424,7 @@
     },
     "desktop-1440-uk-light-files-gone": {
       "retired": true,
+      "banner": "Зображення й відео цього раунду прибрано 5 жовт. 2026 р. Варіанти й рішення лишаються.",
       "decision": true,
       "images": 0
     },
@@ -5395,7 +5398,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "7 жовт., 03:02",
+      "time": "7 жовт., 07:41",
       "posts": [
         {
           "taskId": "t-search",
@@ -5950,6 +5953,7 @@
     },
     "desktop-1440-uk-dark-files-gone": {
       "retired": true,
+      "banner": "Зображення й відео цього раунду прибрано 5 жовт. 2026 р. Варіанти й рішення лишаються.",
       "decision": true,
       "images": 0
     },
@@ -6965,7 +6969,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "7 Oct, 03:02",
+      "time": "7 Oct, 07:42",
       "posts": [
         {
           "taskId": "t-search",
@@ -7520,6 +7524,7 @@
     },
     "pane-1000-en-light-files-gone": {
       "retired": true,
+      "banner": "The pictures and videos of this round were retired on 5 Oct 2026. The variants and the decision stay.",
       "decision": true,
       "images": 0
     },
@@ -8535,7 +8540,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "7 Oct, 03:02",
+      "time": "7 Oct, 07:42",
       "posts": [
         {
           "taskId": "t-search",
@@ -9090,6 +9095,7 @@
     },
     "pane-1000-en-dark-files-gone": {
       "retired": true,
+      "banner": "The pictures and videos of this round were retired on 5 Oct 2026. The variants and the decision stay.",
       "decision": true,
       "images": 0
     },
@@ -10105,7 +10111,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "7 жовт., 03:03",
+      "time": "7 жовт., 07:43",
       "posts": [
         {
           "taskId": "t-search",
@@ -10660,6 +10666,7 @@
     },
     "pane-1000-uk-light-files-gone": {
       "retired": true,
+      "banner": "Зображення й відео цього раунду прибрано 5 жовт. 2026 р. Варіанти й рішення лишаються.",
       "decision": true,
       "images": 0
     },
@@ -11675,7 +11682,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "7 жовт., 03:03",
+      "time": "7 жовт., 07:43",
       "posts": [
         {
           "taskId": "t-search",
@@ -12230,6 +12237,7 @@
     },
     "pane-1000-uk-dark-files-gone": {
       "retired": true,
+      "banner": "Зображення й відео цього раунду прибрано 5 жовт. 2026 р. Варіанти й рішення лишаються.",
       "decision": true,
       "images": 0
     },
@@ -12653,7 +12661,7 @@
         "chevron": 290
       },
       {
-        "row": "/repo/links-impl.jsonl:waiting:1791330407",
+        "row": "/repo/links-impl.jsonl:waiting:1791347199",
         "title": 16,
         "chevron": 290
       },
@@ -13170,7 +13178,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "7 Oct, 03:03",
+      "time": "7 Oct, 07:43",
       "posts": [
         {
           "taskId": "t-search",
@@ -13677,6 +13685,7 @@
     },
     "phone-390-en-light-files-gone": {
       "retired": true,
+      "banner": "The pictures and videos of this round were retired on 5 Oct 2026. The variants and the decision stay.",
       "decision": true,
       "images": 0
     },
@@ -14076,7 +14085,7 @@
         "chevron": 290
       },
       {
-        "row": "/repo/links-impl.jsonl:waiting:1791330431",
+        "row": "/repo/links-impl.jsonl:waiting:1791347223",
         "title": 16,
         "chevron": 290
       },
@@ -14593,7 +14602,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "7 Oct, 03:04",
+      "time": "7 Oct, 07:44",
       "posts": [
         {
           "taskId": "t-search",
@@ -15100,6 +15109,7 @@
     },
     "phone-390-en-dark-files-gone": {
       "retired": true,
+      "banner": "The pictures and videos of this round were retired on 5 Oct 2026. The variants and the decision stay.",
       "decision": true,
       "images": 0
     },
@@ -15499,7 +15509,7 @@
         "chevron": 300
       },
       {
-        "row": "/repo/links-impl.jsonl:waiting:1791330454",
+        "row": "/repo/links-impl.jsonl:waiting:1791347247",
         "title": 16,
         "chevron": 300
       },
@@ -16010,7 +16020,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "7 жовт., 03:04",
+      "time": "7 жовт., 07:44",
       "posts": [
         {
           "taskId": "t-search",
@@ -16517,6 +16527,7 @@
     },
     "phone-390-uk-light-files-gone": {
       "retired": true,
+      "banner": "Зображення й відео цього раунду прибрано 5 жовт. 2026 р. Варіанти й рішення лишаються.",
       "decision": true,
       "images": 0
     },
@@ -16916,7 +16927,7 @@
         "chevron": 300
       },
       {
-        "row": "/repo/links-impl.jsonl:waiting:1791330477",
+        "row": "/repo/links-impl.jsonl:waiting:1791347270",
         "title": 16,
         "chevron": 300
       },
@@ -17427,7 +17438,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "7 жовт., 03:05",
+      "time": "7 жовт., 07:45",
       "posts": [
         {
           "taskId": "t-search",
@@ -17934,6 +17945,7 @@
     },
     "phone-390-uk-dark-files-gone": {
       "retired": true,
+      "banner": "Зображення й відео цього раунду прибрано 5 жовт. 2026 р. Варіанти й рішення лишаються.",
       "decision": true,
       "images": 0
     },
