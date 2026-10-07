@@ -210,6 +210,8 @@ export interface RuntimeReceipt {
   idempotencyKey: string;
   conversationId: string;
   kind: OperationKind;
+  /** Kill authorship, derived by the journal from the admitted idle fence. */
+  origin?: "system" | "operator";
   status: ReceiptStatus;
   turnId?: string | null;
   queuePosition?: number | null;
@@ -226,6 +228,11 @@ export interface RuntimeReceipt {
   /** Durable settlement guidance for choosing the retry identity. */
   resend?: "not-needed" | "safe" | "verify-first";
   revision: number;
+}
+
+/** Automatic lifecycle work has its own audit receipt outside message history. */
+export function runtimeReceiptIsAutomaticRetirement(receipt: Pick<RuntimeReceipt, "kind" | "origin">): boolean {
+  return receipt.kind === "kill" && receipt.origin === "system";
 }
 
 export interface RuntimeEdge {

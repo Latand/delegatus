@@ -447,3 +447,25 @@ test("a pending move away from an operator hold uses the shared stopped motion",
   expect(phone.columns.assigned.needsYou).toBe(0);
   expect(phone.columns.assigned.cards[0]?.card.motion.key).toBe("stopped");
 });
+
+test("a card that waits only on its prototype review is pinned, counted and says so; a card with a reason of its own keeps that reason", () => {
+  const review = { latestReviewId: "pr_round", waitingReviewId: "pr_round", title: "Layout", rounds: 1, createdAt: "2026-10-01T00:00:00Z" };
+  const model = desktop([
+    task("quiet", "assigned"),
+    task("prototype", "assigned", [], { prototypeReview: review }),
+    task("asks", "assigned", [file(1).path], { prototypeReview: review }),
+    task("chosen", "assigned", [], { prototypeReview: { ...review, waitingReviewId: null } }),
+  ], [asking(1, 300)]);
+  const phone = buildPhoneKanban({ model, now: NOW });
+  const column = phone.columns.assigned;
+  expect(model.columns.assigned.needsYou).toBe(2);
+  expect(column.needsYou).toBe(2);
+  expect(keys(column.pinned).sort()).toEqual(["asks", "prototype"]);
+  const card = (id: string) => [...column.pinned, ...column.cards].find((item) => item.card.task?.id === id)!;
+  expect(card("prototype").waitsOnPrototype).toBe(true);
+  expect(card("prototype").edge).toBe("warning");
+  expect(card("asks").waitsOnPrototype).toBe(false);
+  expect(card("asks").need?.kind).toBe("conversation");
+  expect(card("chosen").waitsOnPrototype).toBe(false);
+  expect(card("quiet").waitsOnPrototype).toBe(false);
+});

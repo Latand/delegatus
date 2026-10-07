@@ -127,7 +127,7 @@ test("the desktop header carries no counters — only the product name, the hide
   expect(rows).toMatch(/\d/);
 });
 
-test("the menu holds language, QR and notifications, each said in words", async () => {
+test("the menu leads with three places as icon cells, then Open on phone, Settings and Help; language and notifications are on Settings, each said in words", async () => {
   const host = await renderRail();
   const trigger = headerIn(host).querySelector("[data-rail-menu]") as HTMLButtonElement;
   expect(trigger.getAttribute("aria-expanded")).toBe("false");
@@ -137,21 +137,28 @@ test("the menu holds language, QR and notifications, each said in words", async 
 
   const panel = host.querySelector("[data-rail-menu-panel]") as HTMLElement;
   expect(panel).not.toBeNull();
+  const cells = [...panel.querySelectorAll("[data-header-menu-cells] > *")].map((cell) => (cell.textContent ?? "").trim());
+  expect(cells).toEqual(["headerMenu.cell.activity", "headerMenu.cell.team", "headerMenu.cell.update"].map((key) => translate("en", key as never)));
   const text = panel.textContent ?? "";
-  expect(text).toContain(translate("en", "rail.menuLanguage"));
-  expect(text).toContain("English");
-  expect(text).toContain(translate("en", "rail.menuQr"));
+  expect(text).toContain(translate("en", "headerMenu.openOnPhone"));
+  expect(text).toContain(translate("en", "headerMenu.settings"));
+  expect(text).toContain(translate("en", "headerMenu.help"));
+
+  await click(panel.querySelector("[data-rail-menu-settings]") as HTMLElement);
+  const page = panel.querySelector("[data-header-menu-page='settings']") as HTMLElement;
+  expect(page).not.toBeNull();
+  expect(page.textContent ?? "").toContain(`${translate("en", "rail.menuLanguage")}: English`);
   /* The bell reports its own state to the label. Under happy-dom there is no
      PushManager, so the honest state is «unavailable» — which is the point: the
      row says what it is and where it stands instead of being a bare icon. */
-  expect(text).toContain(translate("en", "rail.menuNotificationsUnavailable"));
+  expect(page.textContent ?? "").toContain(translate("en", "rail.menuNotificationsUnavailable"));
 
   /* The behaviour is the existing controls', not a rewrite: the language
      button still switches the locale, from inside the menu. */
-  const language = [...panel.querySelectorAll("button")].find((button) => (button.textContent ?? "").trim() === "EN") as HTMLElement;
+  const language = [...page.querySelectorAll("button")].find((button) => (button.textContent ?? "").trim() === "EN") as HTMLElement;
   expect(language).not.toBeUndefined();
   await click(language);
-  expect((host.querySelector("[data-rail-menu-panel]")?.textContent ?? "")).toContain(translate("uk", "rail.menuQr"));
+  expect((host.querySelector("[data-rail-menu-panel]")?.textContent ?? "")).toContain(translate("uk", "headerMenu.settings"));
 });
 
 test("Escape closes the menu", async () => {

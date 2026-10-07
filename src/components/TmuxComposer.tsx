@@ -51,6 +51,7 @@ import { ComposerBar, composerSlotKind, type ComposerSlotKind } from "./Composer
 import { chatState } from "./mobile/mobileChatState";
 import { SelectedContextBadge } from "./SelectedContextBadge";
 import { TaskChipRow } from "./orchestrator/TaskChipRow";
+import { PrototypeNoticeRow } from "./prototypeReview/PrototypeNoticeRow";
 import { readTaskChips, taskChipRefs, restoreTaskChips, settleTaskChips, captureTaskChipSnapshot, settleTaskChipSnapshot, useSeatChipProject, type TaskChip } from "./orchestrator/taskChips";
 import { OutboxDispatcher } from "./conversation/OutboxDispatcher";
 import {
@@ -123,7 +124,7 @@ import {
   writeDismissedReceipts,
 } from "./runtime/deliveryState";
 import { deliveryNoticeRun, describeReceiptFailure, failureCauseKey, sentenceCauseKey } from "./runtime/deliveryNotice";
-import { humanReceiptReasonKey, SWITCH_WAIT_REASONS, mintIdempotencyKey, receiptIsAdmitted, receiptIsTerminal, type HostAxis, type TurnAxis } from "./runtime/runtimeModel";
+import { humanReceiptReasonKey, SWITCH_WAIT_REASONS, mintIdempotencyKey, receiptIsAdmitted, receiptIsTerminal, type HostAxis, type TurnAxis, runtimeReceiptIsAutomaticRetirement } from "./runtime/runtimeModel";
 import { tmuxComposerRuntimeDependencies } from "./tmuxComposerRuntime";
 import { VoiceConversationButton } from "./VoiceConversation";
 import { commitBridgeTurn, useBridgeTurnStartDrain } from "@/hooks/useBridgeReportRelay";
@@ -436,7 +437,7 @@ export function RuntimeComposerReceipts({
   const [detailsOpen, setDetailsOpen] = useState(false);
   // Current original-operation evidence must survive text-based history folding.
   // Repeated snapshots share one row; a different operation cannot resolve it.
-  const currentReceipts = mergeRuntimeReceipts(receipts, []);
+  const currentReceipts = mergeRuntimeReceipts(receipts, []).filter((receipt) => !runtimeReceiptIsAutomaticRetirement(receipt));
   const unknownReceipts = currentReceipts.filter(receiptHasUnknownFate);
   const ordinaryReceipts = currentReceipts.filter((receipt) => !receiptHasUnknownFate(receipt));
   const attemptGroups = [
@@ -2159,7 +2160,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
     [...immediateRuntimeReceipts.filter((receipt) => receipt.conversationId === cardId), ...readRecoveryReceipts(cardId)],
     outbox.flatMap((entry) => entry.deliveryReceipt?.conversationId === cardId
       && (entry.deliveryReceipt.idempotencyKey === entry.id || retryParentOperationId(entry.deliveryReceipt)) ? [entry.deliveryReceipt] : []),
-  )).map((receipt) => {
+  )).filter((receipt) => !runtimeReceiptIsAutomaticRetirement(receipt)).map((receipt) => {
     const entry = outbox.find((entry) => entry.deliveryUncertain
       && (entry.id === receipt.idempotencyKey || entry.deliveryReceipt?.operationId === receipt.operationId));
     const priorSafeAttempt = entry?.deliveryReceipt?.resend === "safe"
@@ -5491,6 +5492,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
           noise. The transcript row renders the same badge from the same
           component afterwards, so the before and after can be compared. */}
       <ComposerContextBadge />
+      {chipProject ? <PrototypeNoticeRow project={chipProject} /> : null}
       {chipProject ? <TaskChipRow project={chipProject} /> : null}
       {/* Proactive hold hint: while the card is switching accounts, the next
           send is queued for the successor rather than delivered live. Shown

@@ -2,10 +2,12 @@ import { expect, test } from "bun:test";
 
 import { needsDecisionPipelineRows } from "@/components/mobile/mobileBoardModel";
 import type { Pipeline } from "@/lib/pipelines/types";
+import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
 import { advanceAttentionCycle, buildAttentionQueue } from "../attention";
-import { attentionEntryProject, buildMobileAttentionQueue, buildNeedsYouQueue, laneFocusId, laneFocusPath } from "./attentionQueue";
+import { attentionEntryProject, buildMobileAttentionQueue, buildNeedsYouQueue, laneFocusId, laneFocusPath, type MobileAttentionEntry } from "./attentionQueue";
+import { needsYouCounts, needsYouDismissal, needsYouDismissibleCount, needsYouEntrySince } from "./needsYouPanel";
 
 /*
  * One list for the phone (README §4.1, §4.6): conversations waiting on the
@@ -39,7 +41,7 @@ const pipelines = needsDecisionPipelineRows([pipeline("p-decide", "needs_decisio
 
 test("conversations and needs_decision pipelines are ONE list, conversations in queue order first, then the pipelines", () => {
   const entries = buildMobileAttentionQueue(conversations, pipelines);
-  expect(entries.map((entry) => `${entry.kind}:${entry.kind === "conversation" ? entry.item.file.path : entry.kind === "pipeline" ? entry.row.id : entry.decision.id}`)).toEqual([
+  expect(entries.map((entry) => `${entry.kind}:${entry.kind === "conversation" ? entry.item.file.path : entry.kind === "pipeline" ? entry.row.id : entry.id}`)).toEqual([
     "conversation:/p/old.jsonl",
     "conversation:/p/new.jsonl",
     "pipeline:p-decide",
@@ -105,4 +107,35 @@ test("a six-hour update decision joins Needs-you and uses its own choices", () =
   const decision = { id: "drain-1", at: "2026-01-01T06:00:00Z", project: PROJECT, blockers: null };
   const entries = buildNeedsYouQueue([], [], NOW, [], decision);
   expect(entries).toEqual([{ kind: "update", id: "auto-update:drain-1", decision }]);
+});
+
+/* A task's prototype review that waits for a choice is counted where
+   everything else that needs the operator is counted: one entry per task
+   beside the conversations and the lanes, cleared by the choice and brought
+   back by a newer round. */
+test("a waiting prototype review joins the one queue, leaves on its decision and returns with a newer round", () => {
+  const review = (id: string, waitingReviewId: string | null) => ({ latestReviewId: id, waitingReviewId, title: `Layout ${id}`, rounds: 1, createdAt: new Date((NOW - 300) * 1_000).toISOString() });
+  const boardTask = (id: string, project: string, prototypeReview?: ReturnType<typeof review>) => ({
+    id, project, status: "inbox", placement: "unplaced", text: `Task ${id}`, assignments: [], createdAt: "", updatedAt: "", ...(prototypeReview ? { prototypeReview } : {}),
+  }) as unknown as BoardTask;
+  const files = [waiting("/p/old.jsonl", NOW - 900)];
+  const parked = pipeline("p-decide", "needs_decision", NOW - 3_600);
+  const ready = [boardTask("t-ready", PROJECT, review("pr_1", "pr_1")), boardTask("t-other", "borealis", review("pr_2", "pr_2")), boardTask("t-plain", PROJECT)];
+  const entries = buildNeedsYouQueue(files, [parked], NOW, [], undefined, ready);
+  /* The neighbours keep their own entries: nothing is lost and nothing is counted twice. */
+  const names = (queue: readonly MobileAttentionEntry[]) => queue.map((entry) => (entry.kind === "conversation" ? `conversation:${entry.item.file.path}` : `${entry.kind}:${entry.id}`));
+  expect(names(entries)).toEqual(["conversation:/p/old.jsonl", "pipeline:p-decide", "prototype:prototype:pr_1", "prototype:prototype:pr_2"]);
+  expect(entries.map(attentionEntryProject)).toEqual([PROJECT, PROJECT, PROJECT, "borealis"]);
+  expect(needsYouCounts(entries)).toEqual(new Map([[PROJECT, 3], ["borealis", 1]]));
+  const waitingEntry = entries.find((entry) => entry.kind === "prototype")!;
+  expect(needsYouEntrySince(waitingEntry)).toBe(NOW - 300);
+  /* The choice is what clears it, so «Dismiss all» never names it. */
+  expect(needsYouDismissibleCount(entries)).toBe(2);
+  expect(needsYouDismissal(entries).subjects.map((subject) => subject.kind)).toEqual(["conversation", "pipeline"]);
+  expect(buildNeedsYouQueue(files, [parked], NOW, [])).toHaveLength(2);
+
+  const decided = [boardTask("t-ready", PROJECT, review("pr_1", null)), ready[1]!, ready[2]!];
+  expect(names(buildNeedsYouQueue(files, [parked], NOW, [], undefined, decided))).toEqual(["conversation:/p/old.jsonl", "pipeline:p-decide", "prototype:prototype:pr_2"]);
+  const newer = [boardTask("t-ready", PROJECT, review("pr_3", "pr_3")), ready[1]!, ready[2]!];
+  expect(names(buildNeedsYouQueue(files, [parked], NOW, [], undefined, newer))).toEqual(["conversation:/p/old.jsonl", "pipeline:p-decide", "prototype:prototype:pr_3", "prototype:prototype:pr_2"]);
 });
