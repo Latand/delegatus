@@ -41,11 +41,14 @@ function insertRaw(root: string, id: string, json: string) {
   } finally { db.close(); }
 }
 
-async function olderStore(root: string): Promise<typeof import("./store")> {
-  // Exercise the real store with the pre-merger role vocabulary, including its
-  // separate SQLite cache. All other validation and persistence code is intact.
-  const source = fs.readFileSync(path.join(import.meta.dir, "store.ts"), "utf8")
-    .replace('"deployer", "merger"', '"deployer"')
+async function olderStore(root: string, vocabulary: [string, string] = ['"deployer", "merger"', '"deployer"']): Promise<typeof import("./store")> {
+  // Exercise the real store with an older role vocabulary (pre-merger by
+  // default), including its separate SQLite cache. All other validation and
+  // persistence code is intact.
+  const original = fs.readFileSync(path.join(import.meta.dir, "store.ts"), "utf8");
+  expect(original).toContain(vocabulary[0]);
+  const source = original
+    .replace(vocabulary[0], vocabulary[1])
     .replaceAll('from "@/lib/', `from "${path.resolve(import.meta.dir, '..')}/`)
     .replaceAll('from "./', `from "${import.meta.dir}/`);
   const modulePath = path.join(root, "older-store.ts");
@@ -63,6 +66,28 @@ test("an older role validator reads and writes healthy lanes beside the newer me
   expect(older.loadPipelinesForStartup().map((row) => row.id)).toEqual(["healthy"]);
   await older.withPipelineMutation((rows, persist) => { rows[0]!.stateDetail = "stage report persisted"; persist(); });
   expect(older.loadPipelines()[0]!.stateDetail).toBe("stage report persisted");
+}));
+
+/* The visual critic joined the pipeline roles after the merger. A release that
+   predates it keeps every stored lane of the older roles readable and writable,
+   and preserves a visual-critic lane byte for byte until the newer release
+   reads it again. */
+test("a release before the visual critic keeps older-role lanes and preserves a visual-critic lane", async () => isolated(async (root) => {
+  const critic = fixture("critic");
+  critic.stages[0]!.role = { roleId: "visual-critic" };
+  critic.stages[0]!.effectiveRole = { roleId: "visual-critic", engine: "claude", model: "opus", effort: "high", access: "read-only", promptScaffold: "You are a Visual-critic." };
+  savePipelines([fixture("healthy"), fixture("merge", true)]);
+  const bytes = JSON.stringify(critic, null, 2);
+  insertRaw(root, "critic", bytes);
+  expect(loadPipelines().map((row) => [row.id, row.stages[0]!.effectiveRole.roleId])).toEqual([["healthy", null], ["merge", "merger"], ["critic", "visual-critic"]]);
+  const older = await olderStore(root, ['"merger", "visual-critic"]', '"merger"]']);
+  expect(older.isEffectiveRole(critic.stages[0]!.effectiveRole)).toBe(false);
+  expect(older.isEffectiveRole(fixture("merge", true).stages[0]!.effectiveRole)).toBe(true);
+  expect(older.loadPipelines().map((row) => row.id)).toEqual(["healthy", "merge"]);
+  await older.withPipelineMutation((rows, persist) => { rows[1]!.stateDetail = "older write"; persist(); });
+  expect(storedBytes(root, "critic")).toBe(bytes);
+  expect(loadPipelines().map((row) => [row.id, row.stateDetail ?? null])).toEqual([["healthy", null], ["merge", "older write"], ["critic", null]]);
+  expect(findPipelineRecord("critic")!.stages[0]!.effectiveRole).toMatchObject({ roleId: "visual-critic", access: "read-only" });
 }));
 
 function storedBytes(root: string, id: string): string {

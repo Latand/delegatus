@@ -520,6 +520,222 @@ describe("composer stays usable with a dead host", () => {
   }, 240_000);
 });
 
+/** The refusals a Telegram launch can leave on a message, by the fixture's
+    `?cause=`, with the lines each one renders. */
+const TELEGRAM_REFUSALS = ["off", "withdrawn", "conflict"] as const;
+const TELEGRAM_REFUSAL_KEYS = {
+  off: { outbox: "outbox.failure.telegramOff", cause: "receipt.cause.telegramOff", remedy: "receipt.remedy.telegramOff" },
+  withdrawn: { outbox: "outbox.failure.telegramWithdrawn", cause: "receipt.cause.telegramWithdrawn", remedy: "receipt.remedy.telegramWithdrawn" },
+  conflict: { outbox: "outbox.failure.telegramNameTaken", cause: "receipt.cause.telegramNameTaken", remedy: "receipt.remedy.telegramNameTaken" },
+} as const;
+
+describe("a restart refused for Telegram reads as one line with what to do", () => {
+  /*
+   * A conversation that holds the Telegram tool used to refuse every message
+   * while Telegram was disconnected, and the operator read the runtime's
+   * sentence about it twice inside a Ukrainian interface. The restart is no
+   * longer refused for that; journals still carry the sentence, and a
+   * withdrawn grant still refuses, so the row has to say it well.
+   *
+   *   LLV_CONVERSATION_BROWSER_TEST=1 CHROME_BIN=google-chrome-stable \
+   *     bun test src/components/conversation/conversationWindow.browser.test.tsx -t "refused for Telegram"
+   *
+   * The failed row over `?case=dead-host-telegram-refused`, for the three
+   * refusals (Telegram disconnected, the grant withdrawn, the account's own
+   * entry in the way), at 390 and 1440 px in en and uk: the reason is one
+   * sentence in the interface language with its action, it appears once, and
+   * the disclosure behind it prints no raw sentence. Readings go to `evidence/telegram-refusal/outbox.json`; frames to
+   * `.artifacts/telegram-refusal/`, which is not committed.
+   */
+  const OUT = path.resolve(".artifacts/telegram-refusal");
+  const EVIDENCE = path.resolve("evidence/telegram-refusal");
+  const VIEWPORTS = [
+    { name: "phone-390", width: 390, height: 844 },
+    { name: "desktop-1440", width: 1440, height: 900 },
+  ] as const;
+
+  browserTest("at 390 and 1440 px in en and uk, said once in the interface language", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    let browser: Browser | null = null;
+    const readings: Record<string, unknown> = {};
+    try {
+      browser = await chromium.launch(LAUNCH);
+      for (const refusal of TELEGRAM_REFUSALS) for (const viewport of VIEWPORTS) {
+        for (const lang of ["en", "uk"] as const) {
+          const sentence = translate(lang, TELEGRAM_REFUSAL_KEYS[refusal].outbox);
+          const { context, page, pageErrors } = await openFixture(
+            browser,
+            `${served.base}?case=dead-host-telegram-refused&cause=${refusal}&lang=${lang}`,
+            { width: viewport.width, height: viewport.height },
+            "dark",
+            lang,
+          );
+          try {
+            await page.waitForSelector('[data-evidence-case="dead-host-telegram-refused"]');
+            await page.waitForSelector("[data-outbox-reason]");
+            const read = () => page.evaluate((sentence: string) => {
+              const failure = document.querySelector("[data-outbox-failure]");
+              const reason = document.querySelector<HTMLElement>("[data-outbox-reason]");
+              const box = reason?.getBoundingClientRect();
+              const text = document.body.innerText;
+              return {
+                statusLabel: document.querySelector("[data-outbox-status]")?.textContent?.trim() ?? null,
+                timesSaid: text.split(sentence).length - 1,
+                runtimeWords: /MCP|connector|structured host|reclaimed/i.test(text),
+                rawLines: document.querySelectorAll("[data-outbox-raw], [data-outbox-transport]").length,
+                actions: [...(failure?.querySelectorAll("button") ?? [])].filter((button) => !button.hasAttribute("data-outbox-reason")).length,
+                reasonInsideViewport: box ? box.left >= 0 && box.right <= window.innerWidth : false,
+                reasonWidth: box ? Math.round(box.width) : 0,
+                reasonHeight: box ? Math.round(box.height) : 0,
+                overflowX: Math.max(0, document.documentElement.scrollWidth - window.innerWidth),
+                viewportWidth: window.innerWidth,
+              };
+            }, sentence);
+            const closed = await read();
+            await page.screenshot({ path: path.join(OUT, `${refusal}-${viewport.name}-${lang}.png`), fullPage: true });
+            await page.locator("[data-outbox-reason]").first().click();
+            await page.waitForSelector("[data-outbox-detail]");
+            const open = await read();
+            await page.screenshot({ path: path.join(OUT, `${refusal}-${viewport.name}-${lang}-open.png`), fullPage: true });
+            readings[`${refusal}-${viewport.name}-${lang}`] = { closed, open };
+            expect(pageErrors).toEqual([]);
+            for (const reading of [closed, open]) {
+              expect(reading.statusLabel).toBe(sentence);
+              expect(reading.timesSaid).toBe(1);
+              expect(reading.runtimeWords).toBe(false);
+              expect(reading.rawLines).toBe(0);
+              expect(reading.actions).toBe(1);
+              expect(reading.reasonInsideViewport).toBe(true);
+              expect(reading.overflowX).toBe(0);
+            }
+          } finally {
+            await context.close();
+          }
+        }
+      }
+      fs.writeFileSync(path.join(EVIDENCE, "outbox.json"), `${JSON.stringify(readings, null, 2)}\n`);
+    } finally {
+      await browser?.close();
+      served.stop();
+    }
+  }, 240_000);
+});
+
+describe("the composer's notice for a Telegram refusal fits a phone and says what to do", () => {
+  /*
+   * The composer's own notice for the same refusal is one clipping line, and
+   * its chip is another. With the whole sentence in both, a 390 px phone cut
+   * the line before the action, said "send again" twice, and kept the rest in
+   * a hover title a phone never shows.
+   *
+   *   LLV_CONVERSATION_BROWSER_TEST=1 CHROME_BIN=google-chrome-stable \
+   *     bun test src/components/conversation/conversationWindow.browser.test.tsx -t "composer's notice for a Telegram refusal"
+   *
+   * `?case=telegram-refused-composer` — one message that failed twice — for
+   * the three refusals (Telegram disconnected, the grant withdrawn, the
+   * account's own entry in the way), at 390 and
+   * 1440 px in en and uk, at rest and expanded: the line and the chip carry the
+   * short cause unclipped, the action is a wrapped sentence in the expanded
+   * detail, and no line of the notice repeats another. Readings go to
+   * `evidence/telegram-refusal/composer-notice.json`; frames to
+   * `.artifacts/telegram-refusal/`, which is not committed.
+   */
+  const OUT = path.resolve(".artifacts/telegram-refusal");
+  const EVIDENCE = path.resolve("evidence/telegram-refusal");
+  const VIEWPORTS = [
+    { name: "phone-390", width: 390, height: 844 },
+    { name: "desktop-1440", width: 1440, height: 900 },
+  ] as const;
+
+  browserTest("at 390 and 1440 px in en and uk, unclipped, with the action in the expanded detail", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    let browser: Browser | null = null;
+    const readings: Record<string, unknown> = {};
+    try {
+      browser = await chromium.launch(LAUNCH);
+      for (const refusal of TELEGRAM_REFUSALS) for (const viewport of VIEWPORTS) {
+        for (const lang of ["en", "uk"] as const) {
+          const { context, page, pageErrors } = await openFixture(
+            browser,
+            `${served.base}?case=telegram-refused-composer&cause=${refusal}&lang=${lang}`,
+            { width: viewport.width, height: viewport.height },
+            "dark",
+            lang,
+          );
+          try {
+            await page.waitForSelector('[data-evidence-case="telegram-refused-composer"]');
+            await page.waitForSelector("[data-delivery-notice-cause]");
+            const read = () => page.evaluate(() => {
+              const clipped = (element: HTMLElement | null) => element ? Math.max(0, element.scrollWidth - element.clientWidth) : null;
+              const inside = (element: Element | null) => {
+                const box = element?.getBoundingClientRect();
+                return box ? box.width > 0 && box.left >= 0 && box.right <= window.innerWidth : false;
+              };
+              const line = document.querySelector<HTMLElement>("[data-delivery-notice-cause]");
+              const detail = document.querySelector<HTMLElement>("[data-delivery-notice-sentence]");
+              const open = document.querySelector<HTMLDetailsElement>("[data-delivery-notice]")?.open ?? false;
+              const chip = document.querySelector<HTMLElement>("[data-receipt-status] .truncate");
+              return {
+                line: line?.textContent ?? null,
+                lineClippedPx: clipped(line),
+                lineWidth: line ? Math.round(line.getBoundingClientRect().width) : 0,
+                attempts: document.querySelector("[data-delivery-notice-count] [aria-hidden]")?.textContent ?? null,
+                detail: open ? detail?.textContent ?? null : null,
+                detailInsideViewport: open ? inside(detail) : false,
+                detailLines: open && detail ? Math.round(detail.getBoundingClientRect().height / parseFloat(getComputedStyle(detail).lineHeight)) : 0,
+                chip: open ? chip?.textContent ?? null : null,
+                chipClippedPx: open ? clipped(chip) : null,
+                chipInsideViewport: open ? inside(chip) : false,
+                runtimeWords: /MCP|connector|structured host|reclaimed/i.test(document.body.innerText),
+                overflowX: Math.max(0, document.documentElement.scrollWidth - window.innerWidth),
+                viewportWidth: window.innerWidth,
+              };
+            });
+            const closed = await read();
+            await page.screenshot({ path: path.join(OUT, `composer-${refusal}-${viewport.name}-${lang}.png`), fullPage: true });
+            await page.locator("[data-delivery-notice] > summary").click({ position: { x: 8, y: 20 } });
+            await page.waitForSelector("[data-delivery-notice-sentence]", { state: "visible" });
+            const open = await read();
+            await page.screenshot({ path: path.join(OUT, `composer-${refusal}-${viewport.name}-${lang}-open.png`), fullPage: true });
+            readings[`${refusal}-${viewport.name}-${lang}`] = { closed, open };
+            expect(pageErrors).toEqual([]);
+            const cause = translate(lang, TELEGRAM_REFUSAL_KEYS[refusal].cause);
+            const remedy = translate(lang, TELEGRAM_REFUSAL_KEYS[refusal].remedy);
+            for (const reading of [closed, open]) {
+              /* One line for two failed attempts, with the short cause whole. */
+              expect(reading.line).toBe(`${translate(lang, "composer.deliveryFailed")} — ${cause}`);
+              expect(reading.lineClippedPx).toBe(0);
+              expect(reading.attempts).toBe("×2");
+              expect(reading.runtimeWords).toBe(false);
+              expect(reading.overflowX).toBe(0);
+            }
+            /* What to do is read without hover: a wrapped sentence on the page. */
+            expect(open.detail).toBe(remedy);
+            expect(open.detailInsideViewport).toBe(true);
+            expect(open.chip).toBe(translate(lang, "receipt.human.verbatim", { reason: cause }));
+            expect(open.chipClippedPx).toBe(0);
+            expect(open.chipInsideViewport).toBe(true);
+            /* No line of the notice is a copy of another. */
+            expect(new Set([open.line, open.detail, open.chip]).size).toBe(3);
+            expect(open.line).not.toContain(remedy);
+            expect(open.chip).not.toContain(remedy);
+          } finally {
+            await context.close();
+          }
+        }
+      }
+      fs.writeFileSync(path.join(EVIDENCE, "composer-notice.json"), `${JSON.stringify(readings, null, 2)}\n`);
+    } finally {
+      await browser?.close();
+      served.stop();
+    }
+  }, 240_000);
+});
+
 describe("send latency slice 3: one message, one row", () => {
   /*
    * Rendered evidence for the operator's complaint that a sent message passes
@@ -1929,12 +2145,16 @@ describe("delivery outcome settlement", () => {
         try {
           const line = page.locator("[data-delivery-notice-cause]");
           await line.waitFor();
-          expect(await line.textContent()).toBe(translate(lang, "composer.deliveryChecking"));
+          /* The notice line speaks for a send that has ended, so an unknown
+             outcome there is a check that is over: since #2545 it reads
+             "Delivery unconfirmed", and "Checking delivery…" belongs to a
+             delivery still in flight, which the card case below draws. */
+          expect(await line.textContent()).toBe(translate(lang, "composer.deliveryCheckEnded"));
           expect(await page.locator("[data-delivery-notice-retry]").getAttribute("aria-label"))
             .toBe(translate(lang, "composer.payloadRecheck"));
           await page.locator("[data-delivery-notice-retry]").click();
           expect(await page.locator("[data-fixture-sends]").textContent()).toBe("0");
-          await page.screenshot({ path: path.join(out, `checking-${key}.png`), fullPage: true });
+          await page.screenshot({ path: path.join(out, `unconfirmed-${key}.png`), fullPage: true });
           await page.locator("[data-confirm-delivery]").click();
           await page.waitForFunction(() => !document.querySelector("[data-runtime-receipt-stack]"));
           await page.screenshot({ path: path.join(out, `delivered-${key}.png`), fullPage: true });
@@ -1959,6 +2179,146 @@ describe("delivery outcome settlement", () => {
       fs.writeFileSync("evidence/delivery-outcome/receipts.json", JSON.stringify(evidence, null, 2) + "\n");
     } finally { await browser.close(); served.stop(); }
   }, 120_000);
+});
+
+describe("delivery check card", () => {
+  /*
+   * The card for a delivery whose fate is unconfirmed, above the production
+   * composer: an English handoff relayed by another project's orchestrator.
+   * Three states and widths, both languages, both schemes. `LLV_DELIVERY_CARD_SIDE=before`
+   * runs the same case over a checkout that still draws the earlier card and
+   * records its geometry under `before`; the default records `after` and gates
+   * it. Geometry goes to `evidence/delivery-check-card/card.json`; frames to
+   * `.artifacts/delivery-check-card/`, which is not committed.
+   */
+  const side = process.env.LLV_DELIVERY_CARD_SIDE === "before" ? "before" : "after";
+  const VIEWPORTS = [
+    { name: "desktop-1440", width: 1440, height: 900, touch: false },
+    { name: "pane-1000", width: 1000, height: 800, touch: false },
+    { name: "phone-390", width: 390, height: 844, touch: true },
+  ] as const;
+
+  browserTest("the card is compact, says its status once and stays clear of the composer", async () => {
+    const out = path.resolve(".artifacts/delivery-check-card");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    const browserServer = await chromium.launchServer(LAUNCH);
+    const browserProcess = browserServer.process();
+    const browserPid = browserProcess.pid;
+    const browser = await chromium.connect(browserServer.wsEndpoint());
+    const readings: Record<string, unknown> = {};
+    try {
+      for (const state of ["failed", "uncertain", "delivering"] as const) for (const viewport of VIEWPORTS) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser,
+          `${served.base}?case=delivery-check-card&lang=${lang}&state=${state}`, { width: viewport.width, height: viewport.height },
+          scheme, lang, "reduce", viewport.touch);
+        const key = state === "failed" ? `${viewport.name}-${lang}-${scheme}` : `${state}-${viewport.name}-${lang}-${scheme}`;
+        try {
+          const status = translate(lang, side === "before" || state !== "failed" ? "composer.deliveryChecking" : "composer.deliveryCheckEnded");
+          await page.locator("[data-runtime-receipt-stack] > summary").click();
+          await page.locator("[data-receipt-discard]").waitFor();
+          const read = () => page.evaluate((statusText) => {
+            const box = (element: Element) => { const r = element.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, height: r.height, width: r.width }; };
+            const stack = document.querySelector("[data-runtime-receipt-stack]")!;
+            const details = document.querySelector("[data-runtime-receipt-details]")!;
+            const card = details.firstElementChild as HTMLElement;
+            const message = card.querySelector("[data-receipt-message]") as HTMLElement;
+            const messageStyle = getComputedStyle(message);
+            const buttons = [...card.querySelectorAll("[data-receipt-uncertain-retry], [data-receipt-discard]")].map(box);
+            const detail = card.querySelector("[data-receipt-uncertain-why]") as HTMLElement;
+            const detailStyle = getComputedStyle(detail);
+            const field = document.querySelector("textarea")!;
+            /* Elements whose own text is the status and that take up room. */
+            const statusShown = [...stack.querySelectorAll("*")].filter((node) =>
+              node.children.length === 0 && node.textContent?.trim() === statusText
+              && (node as HTMLElement).getBoundingClientRect().width > 1).length;
+            const cardStyle = getComputedStyle(card);
+            const children = [...card.children].filter((child) => getComputedStyle(child).position !== "absolute");
+            const used = children.reduce((sum, child) => sum + child.getBoundingClientRect().height, 0)
+              + parseFloat(cardStyle.rowGap || "0") * Math.max(0, children.length - 1)
+              + parseFloat(cardStyle.paddingTop) + parseFloat(cardStyle.paddingBottom);
+            return {
+              stack: box(stack), card: box(card), field: box(field),
+              messageAlign: messageStyle.textAlign,
+              messageWidth: Math.round(message.getBoundingClientRect().width),
+              messageLines: Math.round(message.getBoundingClientRect().height / parseFloat(messageStyle.lineHeight)),
+              buttonHeights: buttons.map((button) => Math.round(button.height)),
+              statusShown,
+              detailText: detail.textContent?.trim(),
+              detailLines: Math.round(detail.getBoundingClientRect().height / parseFloat(detailStyle.lineHeight)),
+              detailFullyVisible: detail.scrollHeight <= detail.clientHeight + 1 && detail.scrollWidth <= detail.clientWidth + 1,
+              discardDisabled: (card.querySelector("[data-receipt-discard]") as HTMLButtonElement).disabled,
+              boilerplateShown: card.textContent!.includes("carries no operator authority"),
+              /* Column cards only: room the card holds beyond its own rows. */
+              cardSlack: cardStyle.flexDirection === "column" ? Math.round(card.getBoundingClientRect().height - used) : null,
+              detailsScrolls: details.scrollHeight > details.clientHeight + 1,
+              /* Both controls are inside the part of the list that is drawn. */
+              controlsInView: buttons.every((button) => button.bottom <= details.getBoundingClientRect().bottom + 0.5
+                && button.top >= details.getBoundingClientRect().top - 0.5),
+              overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+            };
+          }, status);
+          const reading = await read();
+          readings[key] = reading;
+          await page.screenshot({ path: path.join(out, `${side}-${key}.png`), fullPage: true });
+          expect(pageErrors).toEqual([]);
+          expect(reading.overflowX).toBe(0);
+          if (side === "after") {
+            expect(reading.statusShown).toBe(1);
+            expect(["left", "start"]).toContain(reading.messageAlign);
+            expect(reading.messageLines).toBeLessThanOrEqual(2);
+            expect(reading.boilerplateShown).toBe(false);
+            expect(reading.cardSlack).toBeLessThanOrEqual(1);
+            expect(reading.detailsScrolls).toBe(false);
+            expect(reading.controlsInView).toBe(true);
+            expect(reading.discardDisabled).toBe(state === "delivering");
+            expect(reading.detailFullyVisible).toBe(true);
+            expect(reading.detailText).toBe(translate(lang, state === "delivering"
+              ? "composer.deliveryDiscardHandover" : state === "failed"
+                ? "composer.deliveryCheckEndedDetail" : "composer.deliveryCheckingDetail"));
+            if (viewport.touch) {
+              if (state === "failed") expect(reading.card.height).toBeLessThanOrEqual(144);
+              expect(reading.detailLines).toBeLessThanOrEqual(2);
+            }
+            /* The settled chips' size: a caption-height pill with a mouse, the
+               44px touch target on a phone. */
+            for (const height of reading.buttonHeights) {
+              if (viewport.touch) expect(height).toBe(44);
+              else expect(height).toBe(23);
+            }
+            /* Nothing of the card reaches the field under it. */
+            expect(reading.stack.bottom).toBeLessThanOrEqual(reading.field.top);
+            expect(await page.locator("[data-receipt-relay-label]").textContent())
+              .toBe(translate(lang, "composer.relayLabel", { project: "Atlas" }));
+            /* Expanding shows the whole handoff and still clears the field. */
+            await page.locator("[data-receipt-message-toggle]").click();
+            const expanded = await read();
+            expect(expanded.messageLines).toBeGreaterThan(2);
+            expect(expanded.controlsInView).toBe(true);
+            expect(expanded.stack.bottom).toBeLessThanOrEqual(expanded.field.top);
+            expect(expanded.overflowX).toBe(0);
+            await page.screenshot({ path: path.join(out, `${side}-${key}-expanded.png`), fullPage: true });
+            await page.locator("[data-receipt-message-toggle]").click();
+            await page.locator("[data-receipt-uncertain-retry]").click();
+            expect(await page.locator("[data-fixture-retries]").textContent()).toBe("1");
+            if (state !== "delivering") {
+              await page.locator("[data-receipt-discard]").click();
+              await page.waitForFunction(() => !document.querySelector("[data-runtime-receipt-stack]"));
+            }
+          }
+        } finally { await context.close(); }
+      }
+      const file = "evidence/delivery-check-card/card.json";
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      const recorded = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown> : {};
+      fs.writeFileSync(file, JSON.stringify({ ...recorded, [side]: readings }, null, 2) + "\n");
+    } finally {
+      await browser.close();
+      await browserServer.close();
+      console.error(`delivery check card: closed owned browser PID ${browserPid}`);
+      served.stop();
+    }
+  }, 300_000);
 });
 
 describe("own-message step row", () => {
@@ -2915,4 +3275,845 @@ describe("own-message step row", () => {
     }
   }, 120_000);
 
+});
+
+describe("image viewers: pinch, pan and the right click", () => {
+  /*
+   * The file preview's image pane and the fullscreen viewer under real input:
+   * a mouse at 1280 px and two fingers at 390 px (CDP `Input.dispatchTouchEvent`,
+   * so the viewer's `touch-action` meets Chromium's own gesture recognizer).
+   * Every step reads the picture's box, and a step that leaves it somewhere
+   * the operator did not put it is a failure.
+   *
+   * Headless Chromium draws no context menu, so the menu is played the way a
+   * desktop delivers it: the press of the button, no release (the menu takes
+   * it), then the pointer moving with no button held.
+   *
+   *   IMAGE_VIEWER_STAMP=before records the readings and asserts nothing, for
+   *   a run against the viewers as they were. Frames go to
+   *   `IMAGE_VIEWER_PNG_DIR` (default `.artifacts/image-viewer/`), readings to
+   *   `evidence/image-viewer/<stamp>.json`.
+   */
+
+  const STAMP = process.env.IMAGE_VIEWER_STAMP === "before" ? "before" : "after";
+  const OUT = path.resolve(process.env.IMAGE_VIEWER_PNG_DIR ?? ".artifacts/image-viewer");
+  const EVIDENCE = path.resolve("evidence/image-viewer");
+  const VIEWERS = ["pane", "fullscreen"] as const;
+  type ViewerName = (typeof VIEWERS)[number];
+  type Page = Awaited<ReturnType<typeof openFixture>>["page"];
+  const PICTURE: Record<ViewerName, string> = {
+    pane: '[data-evidence-case="image-viewers"] img',
+    fullscreen: "[role=dialog] img:not([hidden])",
+  };
+
+  interface Reading {
+    /** The picture's drawn box, and the box of the frame that clips it. */
+    x: number; y: number; w: number; h: number;
+    frame: { x: number; y: number; w: number; h: number };
+    /** Drawn width over natural width. */
+    scale: number;
+    position: string | null;
+    closed: boolean;
+    /** What the page itself did under the viewer. */
+    pageScale: number; scrollY: number; innerWidth: number;
+    /** Pointer captures taken and context menus refused since the page loaded. */
+    captures: number; menus: number; menusRefused: number; menuOnPicture: boolean;
+  }
+
+  const read = (page: Page, viewer: ViewerName): Promise<Reading> => page.evaluate((selector) => {
+    const round = (value: number) => Math.round(value * 10) / 10;
+    const img = document.querySelector<HTMLImageElement>(selector);
+    const rect = img?.getBoundingClientRect() ?? new DOMRect();
+    const frame = img?.closest(".overflow-hidden")?.getBoundingClientRect() ?? new DOMRect();
+    const seen = (window as unknown as { viewerInput: { captures: number; menus: number; refused: number; onPicture: boolean } }).viewerInput;
+    return {
+      x: round(rect.x), y: round(rect.y), w: round(rect.width), h: round(rect.height),
+      frame: { x: round(frame.x), y: round(frame.y), w: round(frame.width), h: round(frame.height) },
+      scale: img?.naturalWidth ? Math.round((rect.width / img.naturalWidth) * 10_000) / 10_000 : 0,
+      position: document.querySelector("[data-lightbox-position]")?.textContent?.trim() ?? null,
+      closed: document.querySelector("[data-viewer-closed]") !== null,
+      pageScale: round(window.visualViewport?.scale ?? 1), scrollY: round(window.scrollY), innerWidth: window.innerWidth,
+      captures: seen.captures, menus: seen.menus, menusRefused: seen.refused, menuOnPicture: seen.onPicture,
+    };
+  }, PICTURE[viewer]);
+
+  const WATCH = `window.viewerInput = { captures: 0, menus: 0, refused: 0, onPicture: false };
+    const capture = Element.prototype.setPointerCapture;
+    Element.prototype.setPointerCapture = function (id) { window.viewerInput.captures += 1; return capture.call(this, id); };
+    addEventListener("contextmenu", (event) => { setTimeout(() => {
+      window.viewerInput.menus += 1;
+      if (event.defaultPrevented) window.viewerInput.refused += 1;
+      window.viewerInput.onPicture = event.target instanceof HTMLImageElement;
+    }); }, true);`;
+
+  const centre = (reading: Reading) => ({ x: reading.frame.x + reading.frame.w / 2, y: reading.frame.y + reading.frame.h / 2 });
+  /** How far the picture's centre moved between two readings. */
+  const moved = (from: Reading, to: Reading) => ({ dx: Math.round((to.x + to.w / 2 - from.x - from.w / 2) * 10) / 10, dy: Math.round((to.y + to.h / 2 - from.y - from.h / 2) * 10) / 10 });
+  const far = (delta: { dx: number; dy: number }) => Math.hypot(delta.dx, delta.dy);
+  /** Where the picture's own point that sat under `point` in `from` is drawn in `to`, as a distance from `point`. */
+  const drift = (from: Reading, to: Reading, point: { x: number; y: number }) => {
+    const fx = (point.x - from.x) / from.w;
+    const fy = (point.y - from.y) / from.h;
+    return Math.round(Math.hypot(to.x + fx * to.w - point.x, to.y + fy * to.h - point.y) * 10) / 10;
+  };
+  /** How much of the picture is inside its frame, along each axis. */
+  const overlap = (from: number, size: number, frameFrom: number, frameSize: number) => Math.round(Math.min(from + size, frameFrom + frameSize) - Math.max(from, frameFrom));
+  const inView = ({ x, y, w, h, frame }: Reading) => ({ w: overlap(x, w, frame.x, frame.w), h: overlap(y, h, frame.y, frame.h) });
+  const sameBox = (a: Reading, b: Reading) => Math.abs(a.x - b.x) <= 1 && Math.abs(a.y - b.y) <= 1 && Math.abs(a.w - b.w) <= 1 && Math.abs(a.h - b.h) <= 1;
+  const settle = (page: Page, ms = 180) => page.waitForTimeout(ms);
+
+  async function open(browser: Browser, base: string, viewer: ViewerName, phone: boolean) {
+    const opened = await openFixture(
+      browser, `${base}?case=image-viewers&viewer=${viewer}&lang=en`,
+      phone ? { width: 390, height: 844 } : { width: 1280, height: 800 }, "dark", "en", "reduce", phone, phone ? 2 : 1,
+    );
+    await opened.page.addScriptTag({ content: WATCH });
+    await opened.page.waitForFunction((selector) => {
+      const img = document.querySelector<HTMLImageElement>(selector);
+      return Boolean(img?.complete && img.naturalWidth > 0);
+    }, PICTURE[viewer]);
+    await settle(opened.page, 300);
+    return { ...opened, cdp: await opened.context.newCDPSession(opened.page) };
+  }
+
+  async function desktop(browser: Browser, base: string, viewer: ViewerName, fail: (text: string) => void) {
+    const { context, page, pageErrors, cdp } = await open(browser, base, viewer, false);
+    const out: Record<string, unknown> = {};
+    const mouse = (type: "mousePressed" | "mouseReleased" | "mouseMoved" | "mouseWheel", x: number, y: number, more: Record<string, unknown> = {}) =>
+      cdp.send("Input.dispatchMouseEvent", { type, x, y, button: "none", buttons: 0, ...more } as never);
+    const now = () => read(page, viewer);
+    try {
+      const fit = await now();
+      out.fit = fit;
+      await page.screenshot({ path: path.join(OUT, `${STAMP}-desktop-${viewer}-fit.png`) });
+      const zoomIn = page.locator(`button[aria-label="${translate("en", "lightbox.zoomIn")}"]`);
+      await zoomIn.click();
+      await zoomIn.click();
+      await settle(page);
+      const zoomed = await now();
+      out.zoomed = zoomed;
+      if (!(zoomed.scale > fit.scale)) fail("the zoom-in button did not zoom");
+      const at = centre(zoomed);
+
+      /* A press that is not the primary button: the menu owns the release, and
+         the pointer then moves with no button held. */
+      const presses = [
+        { name: "right", press: { button: "right", buttons: 2 } },
+        { name: "middle", press: { button: "middle", buttons: 4 } },
+        { name: "ctrl-primary", press: { button: "left", buttons: 1, modifiers: 2 } },
+        { name: "shift-primary", press: { button: "left", buttons: 1, modifiers: 8 } },
+      ] as const;
+      for (const { name, press } of presses) {
+        await mouse("mouseMoved", at.x, at.y);
+        const before = await now();
+        if (name === "right") await page.screenshot({ path: path.join(OUT, `${STAMP}-desktop-${viewer}-right-click-1-before.png`) });
+        await mouse("mousePressed", at.x, at.y, { ...press, clickCount: 1 });
+        await settle(page, 60);
+        for (let step = 1; step <= 7; step += 1) await mouse("mouseMoved", at.x + step * 20, at.y + step * 13);
+        await settle(page);
+        const after = await now();
+        if (name === "right") await page.screenshot({ path: path.join(OUT, `${STAMP}-desktop-${viewer}-right-click-2-after-menu.png`) });
+        const follow = moved(before, after);
+        out[`press-${name}`] = { before: { x: before.x, y: before.y }, after: { x: after.x, y: after.y }, follow, captures: after.captures - before.captures, menus: after.menus - before.menus, menusRefused: after.menusRefused, menuOnPicture: after.menuOnPicture };
+        if (far(follow) > 0.5) fail(`${name} press: the picture followed the pointer by ${follow.dx}, ${follow.dy}`);
+        if (after.captures !== before.captures) fail(`${name} press captured the pointer`);
+        if (name === "right" && (after.menus - before.menus !== 1 || after.menusRefused || !after.menuOnPicture)) fail("the picture's own menu did not open on the right press");
+        /* Let go wherever the pointer is, so the next press starts clean. */
+        await mouse("mouseReleased", at.x + 140, at.y + 91, { button: press.button, clickCount: 1 });
+        await settle(page, 60);
+      }
+
+      /* The primary button pans, and the pan ends with the release. */
+      await mouse("mouseMoved", at.x, at.y);
+      const panFrom = await now();
+      await mouse("mousePressed", at.x, at.y, { button: "left", buttons: 1, clickCount: 1 });
+      for (let step = 1; step <= 6; step += 1) await mouse("mouseMoved", at.x - step * 10, at.y + step * 7, { button: "left", buttons: 1 });
+      await settle(page);
+      const panned = await now();
+      await mouse("mouseReleased", at.x - 60, at.y + 42, { button: "left", clickCount: 1 });
+      await mouse("mouseMoved", at.x + 90, at.y + 120);
+      await settle(page);
+      const released = await now();
+      out.pan = { drag: moved(panFrom, panned), afterRelease: moved(panned, released) };
+      if (far({ dx: moved(panFrom, panned).dx + 60, dy: moved(panFrom, panned).dy - 42 }) > 1) fail(`a primary drag of -60, 42 moved the picture by ${JSON.stringify(moved(panFrom, panned))}`);
+      if (far(moved(panned, released)) > 0.5) fail("the picture kept following after the release");
+
+      /* A pan the window loses: its focus, then its capture. */
+      for (const loss of ["blur", "lost-capture"] as const) {
+        await mouse("mouseMoved", at.x, at.y);
+        await mouse("mousePressed", at.x, at.y, { button: "left", buttons: 1, clickCount: 1 });
+        await mouse("mouseMoved", at.x + 20, at.y, { button: "left", buttons: 1 });
+        await settle(page, 60);
+        const held = await now();
+        await page.evaluate((kind) => {
+          if (kind === "blur") { window.dispatchEvent(new Event("blur")); return; }
+          for (const node of document.querySelectorAll("*")) if (node.hasPointerCapture(1)) node.releasePointerCapture(1);
+        }, loss);
+        for (let step = 1; step <= 5; step += 1) await mouse("mouseMoved", at.x + 20 + step * 20, at.y + step * 20, { button: "left", buttons: 1 });
+        await settle(page);
+        const after = await now();
+        out[`pan-${loss}`] = { follow: moved(held, after) };
+        if (far(moved(held, after)) > 0.5) fail(`after ${loss} the picture followed the pointer by ${JSON.stringify(moved(held, after))}`);
+        await mouse("mouseReleased", at.x + 120, at.y + 100, { button: "left", clickCount: 1 });
+        await settle(page, 60);
+      }
+
+      /* The wheel, plain and as a trackpad pinch, zooms about the cursor. */
+      const reset = page.locator(`button[aria-label="${translate("en", viewer === "pane" ? "preview.fitImage" : "lightbox.resetZoom")}"]`);
+      for (const [name, more, delta] of [["wheel", {}, -100], ["ctrl-wheel", { modifiers: 2 }, -30]] as const) {
+        await reset.click();
+        await settle(page);
+        const start = await now();
+        const point = { x: centre(start).x + 120, y: centre(start).y - 70 };
+        await mouse("mouseMoved", point.x, point.y);
+        for (let turn = 0; turn < 3; turn += 1) await mouse("mouseWheel", point.x, point.y, { ...more, deltaX: 0, deltaY: delta });
+        await settle(page);
+        const end = await now();
+        out[name] = { from: start.scale, to: end.scale, drift: drift(start, end, point), pageScale: end.pageScale, innerWidth: end.innerWidth, scrollY: end.scrollY };
+        if (!(end.scale > start.scale * 1.2)) fail(`${name} did not zoom in (${start.scale} to ${end.scale})`);
+        if (drift(start, end, point) > 1.5) fail(`${name} moved the point under the cursor by ${drift(start, end, point)}px`);
+        if (end.innerWidth !== start.innerWidth || end.pageScale !== 1 || end.scrollY !== 0) fail(`${name} zoomed or scrolled the page`);
+      }
+
+      /* Thrown as far as a drag goes, some of the picture stays in the frame. */
+      const edge = await now();
+      const grip = centre(edge);
+      for (let throwAt = 0; throwAt < 4; throwAt += 1) {
+        await mouse("mouseMoved", grip.x, grip.y);
+        await mouse("mousePressed", grip.x, grip.y, { button: "left", buttons: 1, clickCount: 1 });
+        for (let step = 1; step <= 10; step += 1) await mouse("mouseMoved", grip.x + step * 60, grip.y + step * 36, { button: "left", buttons: 1 });
+        await mouse("mouseReleased", grip.x + 600, grip.y + 360, { button: "left", clickCount: 1 });
+      }
+      await settle(page);
+      const thrown = await now();
+      out.thrown = { box: { x: thrown.x, y: thrown.y, w: thrown.w, h: thrown.h }, inView: inView(thrown) };
+      await page.screenshot({ path: path.join(OUT, `${STAMP}-desktop-${viewer}-thrown.png`) });
+      if (inView(thrown).w < 40 || inView(thrown).h < 40) fail(`the picture was thrown out of the frame: ${JSON.stringify(inView(thrown))} left in view`);
+
+      /* Zooming out past fit is fit. */
+      await mouse("mouseMoved", grip.x, grip.y);
+      for (let turn = 0; turn < 40; turn += 1) await mouse("mouseWheel", grip.x, grip.y, { deltaX: 0, deltaY: 100 });
+      await settle(page);
+      const out40 = await now();
+      out.zoomedOut = { scale: out40.scale, fit: fit.scale, box: { x: out40.x, y: out40.y, w: out40.w, h: out40.h } };
+      if (!sameBox(out40, fit)) fail(`zooming out past fit left the picture at ${JSON.stringify(out.zoomedOut)}`);
+
+      /* A double click goes to zoomed and back. */
+      await reset.click();
+      await settle(page);
+      const twice = async () => {
+        for (const clickCount of [1, 2]) {
+          await mouse("mousePressed", grip.x, grip.y, { button: "left", buttons: 1, clickCount });
+          await mouse("mouseReleased", grip.x, grip.y, { button: "left", clickCount });
+        }
+        await settle(page);
+        return now();
+      };
+      const doubled = await twice();
+      const back = await twice();
+      out.doubleClick = { fit: fit.scale, zoomed: doubled.scale, back: back.scale };
+      if (!(doubled.scale > fit.scale * 1.2)) fail("a double click at fit did not zoom");
+      if (!sameBox(back, fit)) fail("a second double click did not return to fit");
+      if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+    } finally {
+      await context.close();
+    }
+    return out;
+  }
+
+  async function phone(browser: Browser, base: string, viewer: ViewerName, fail: (text: string) => void) {
+    const { context, page, pageErrors, cdp } = await open(browser, base, viewer, true);
+    const out: Record<string, unknown> = {};
+    type Finger = { x: number; y: number; id: number };
+    const touch = (type: "touchStart" | "touchMove" | "touchEnd", fingers: Finger[]) =>
+      cdp.send("Input.dispatchTouchEvent", { type, touchPoints: fingers.map(({ x, y, id }) => ({ x, y, id })) });
+    const now = async () => { await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))); return read(page, viewer); };
+    /** One finger from `from` by `dx`, `dy`, lifted at the end. */
+    const drag = async (from: { x: number; y: number }, dx: number, dy: number, steps = 10) => {
+      await touch("touchStart", [{ ...from, id: 0 }]);
+      for (let step = 1; step <= steps; step += 1) {
+        await touch("touchMove", [{ x: from.x + (dx * step) / steps, y: from.y + (dy * step) / steps, id: 0 }]);
+        await page.waitForTimeout(12);
+      }
+      await touch("touchEnd", []);
+    };
+    /** Two fingers about `mid`, from `from` px apart to `to`, each lifted in turn. */
+    const pinch = async (mid: { x: number; y: number }, from: number, to: number, watch?: (reading: Reading) => void) => {
+      const pair = (gap: number): Finger[] => [{ x: mid.x - gap / 2, y: mid.y, id: 0 }, { x: mid.x + gap / 2, y: mid.y, id: 1 }];
+      await touch("touchStart", [pair(from)[0]!]);
+      const one = await now();
+      await touch("touchStart", pair(from));
+      const two = await now();
+      for (let step = 1; step <= 16; step += 1) {
+        await touch("touchMove", pair(from + ((to - from) * step) / 16));
+        if (watch) watch(await now());
+        else await page.waitForTimeout(12);
+      }
+      const spread = await now();
+      await touch("touchEnd", [pair(to)[0]!]);
+      const lifted = await now();
+      await touch("touchEnd", []);
+      const done = await now();
+      return { one, two, spread, lifted, done };
+    };
+    try {
+      const fit = await now();
+      out.fit = fit;
+      await page.screenshot({ path: path.join(OUT, `${STAMP}-phone-390-${viewer}-1-fit.png`) });
+      const mid = { x: centre(fit).x + 30, y: centre(fit).y - 20 };
+      const reset = page.locator(`button[aria-label="${translate("en", viewer === "pane" ? "preview.fitImage" : "lightbox.resetZoom")}"]`);
+
+      /* At fit one finger belongs to the viewer's own navigation. */
+      if (viewer === "fullscreen") {
+        await drag(mid, -190, 6);
+        await settle(page, 350);
+        const next = await now();
+        await drag(mid, 190, -6);
+        await settle(page, 350);
+        const previous = await now();
+        out.fitSwipe = { afterLeft: next.position, afterRight: previous.position, pictureLeftAt: moved(fit, previous) };
+        if (next.position !== "2 / 3" || previous.position !== "1 / 3") fail(`a sideways swipe at fit read ${next.position} then ${previous.position}`);
+        if (!sameBox(previous, fit)) fail(`two sideways swipes at fit left the picture moved by ${JSON.stringify(moved(fit, previous))}`);
+      } else {
+        await drag(mid, -150, 40);
+        await settle(page);
+        const still = await now();
+        out.fitDrag = { moved: moved(fit, still), scrollY: still.scrollY };
+        if (!sameBox(still, fit)) fail(`one finger at fit moved the picture by ${JSON.stringify(moved(fit, still))} and scrolled the page to ${still.scrollY}`);
+        await page.evaluate(() => window.scrollTo(0, 0));
+      }
+
+      /* Zoomed with the button, one finger pans, and a later touch somewhere
+         else finds the picture where that finger left it. */
+      const zoomIn = page.locator(`button[aria-label="${translate("en", "lightbox.zoomIn")}"]`);
+      /* Chromium now and then drops the click of a tap that lands within half
+         a second of the last finger lifting, in either viewer and before this
+         change too, so a button is tapped a second after the gesture. */
+      await settle(page, 1200);
+      await zoomIn.tap();
+      await zoomIn.tap();
+      await settle(page);
+      const byButton = await now();
+      await drag(mid, -50, 60);
+      const dragged = await now();
+      await page.waitForTimeout(400);
+      const elsewhere = { x: mid.x + 60, y: mid.y - 30 };
+      await touch("touchStart", [{ ...elsewhere, id: 0 }]);
+      await touch("touchMove", [{ x: elsewhere.x + 3, y: elsewhere.y, id: 0 }]);
+      const stuck = await now();
+      await touch("touchEnd", []);
+      out.buttonZoomThenTouch = { zoomed: byButton.scale, drag: moved(byButton, dragged), laterTouch: moved(dragged, stuck), scrollY: stuck.scrollY, pageScale: stuck.pageScale };
+      if (!(byButton.scale > fit.scale)) fail("the zoom-in button did not zoom");
+      if (far({ dx: moved(byButton, dragged).dx + 50, dy: moved(byButton, dragged).dy - 60 }) > 1.5) fail(`one finger dragged -50, 60 moved the button-zoomed picture by ${JSON.stringify(moved(byButton, dragged))}`);
+      if (far(moved(dragged, stuck)) > 4) fail(`the picture jumped to a later touch by ${JSON.stringify(moved(dragged, stuck))}`);
+      if (stuck.scrollY !== 0) fail(`a pan of the zoomed picture scrolled the page to ${stuck.scrollY}`);
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await settle(page, 1200);
+      await reset.tap();
+      await settle(page);
+
+      /* Two fingers spread to three times their distance about `mid`. */
+      const scales: number[] = [];
+      const grown = await pinch(mid, 80, 240, (reading) => scales.push(reading.scale));
+      await settle(page);
+      await page.screenshot({ path: path.join(OUT, `${STAMP}-phone-390-${viewer}-2-pinched.png`) });
+      const steps = scales.map((scale, at) => scale / (scales[at - 1] ?? grown.two.scale));
+      out.pinch = {
+        fit: fit.scale, to: grown.spread.scale, ratio: Math.round((grown.spread.scale / fit.scale) * 100) / 100, scales,
+        secondFingerLands: { ...moved(grown.one, grown.two), scale: grown.two.scale / grown.one.scale },
+        midpointDrift: drift(grown.two, grown.spread, mid),
+        firstFingerLifts: { ...moved(grown.spread, grown.lifted), scale: grown.lifted.scale / grown.spread.scale },
+        lastFingerLifts: { ...moved(grown.lifted, grown.done), scale: grown.done.scale / grown.lifted.scale },
+        largestStep: Math.round(Math.max(...steps) * 1000) / 1000, smallestStep: Math.round(Math.min(...steps) * 1000) / 1000,
+        pageScale: grown.done.pageScale, scrollY: grown.done.scrollY,
+      };
+      if (far(moved(grown.one, grown.two)) > 0.5 || grown.two.scale !== grown.one.scale) fail(`the picture jumped when the second finger landed: ${JSON.stringify(moved(grown.one, grown.two))}`);
+      if (Math.abs(grown.spread.scale / fit.scale - 3) > 0.1) fail(`fingers spread to three times their distance scaled the picture ${grown.spread.scale / fit.scale} times`);
+      if (Math.min(...steps) < 0.999 || Math.max(...steps) > 1.2) fail(`the pinch did not grow evenly: steps between ${Math.min(...steps)} and ${Math.max(...steps)}`);
+      if (drift(grown.two, grown.spread, mid) > 2) fail(`the point between the fingers moved by ${drift(grown.two, grown.spread, mid)}px`);
+      if (far(moved(grown.spread, grown.lifted)) > 0.5 || far(moved(grown.lifted, grown.done)) > 0.5 || grown.done.scale !== grown.spread.scale) fail("the picture jumped when a finger lifted");
+      if (grown.done.pageScale !== 1 || grown.done.scrollY !== 0) fail(`the page itself zoomed to ${grown.done.pageScale} or scrolled to ${grown.done.scrollY} under the pinch`);
+
+      /* A later touch somewhere else: the picture stays where the fingers left it. */
+      const later = { x: mid.x - 70, y: mid.y + 130 };
+      await touch("touchStart", [{ ...later, id: 0 }]);
+      const touched = await now();
+      await touch("touchMove", [{ x: later.x + 3, y: later.y, id: 0 }]);
+      const nudged = await now();
+      await touch("touchEnd", []);
+      out.laterTouch = { onTouch: moved(grown.done, touched), onNudge: moved(grown.done, nudged) };
+      if (far(moved(grown.done, touched)) > 0.5 || far(moved(grown.done, nudged)) > 4) fail(`the picture jumped to a later touch: ${JSON.stringify(out.laterTouch)}`);
+
+      /* One finger pans the zoomed picture by what the finger travelled. */
+      const panFrom = await now();
+      await drag(mid, -50, 60);
+      const panned = await now();
+      out.onefingerPan = { drag: moved(panFrom, panned), scale: panned.scale / panFrom.scale, pageScale: panned.pageScale, scrollY: panned.scrollY };
+      if (far({ dx: moved(panFrom, panned).dx + 50, dy: moved(panFrom, panned).dy - 60 }) > 1.5 || panned.scale !== panFrom.scale) fail(`one finger dragged -50, 60 moved the zoomed picture by ${JSON.stringify(moved(panFrom, panned))}`);
+      if (panned.scrollY !== 0) fail("a one-finger pan scrolled the page");
+
+      for (let throwAt = 0; throwAt < 4; throwAt += 1) await drag({ x: 60, y: centre(fit).y - 200 }, 300, 380);
+      await settle(page);
+      const thrown = await now();
+      out.thrown = { box: { x: thrown.x, y: thrown.y, w: thrown.w, h: thrown.h }, inView: inView(thrown), scrollY: thrown.scrollY };
+      await page.screenshot({ path: path.join(OUT, `${STAMP}-phone-390-${viewer}-3-thrown.png`) });
+      if (inView(thrown).w < 40 || inView(thrown).h < 40) fail(`the picture was thrown out of the frame: ${JSON.stringify(inView(thrown))} left in view`);
+
+      /* Fingers closed past fit: fit. */
+      await pinch(centre(fit), 300, 40);
+      const shrunk = await pinch(centre(fit), 300, 40);
+      await settle(page);
+      out.pinchedIn = { scale: shrunk.done.scale, fit: fit.scale, box: { x: shrunk.done.x, y: shrunk.done.y, w: shrunk.done.w, h: shrunk.done.h } };
+      await page.screenshot({ path: path.join(OUT, `${STAMP}-phone-390-${viewer}-4-pinched-in.png`) });
+      if (!sameBox(shrunk.done, fit)) fail(`closing the fingers past fit left the picture at ${JSON.stringify(out.pinchedIn)}`);
+
+      /* A double tap goes to zoomed and back. */
+      const tapTwice = async () => {
+        for (let tap = 0; tap < 2; tap += 1) {
+          await touch("touchStart", [{ ...mid, id: 0 }]);
+          await touch("touchEnd", []);
+          await page.waitForTimeout(90);
+        }
+        await settle(page, 450);
+        return now();
+      };
+      const doubled = await tapTwice();
+      const back = await tapTwice();
+      out.doubleTap = { fit: fit.scale, zoomed: doubled.scale, back: back.scale };
+      if (!(doubled.scale > fit.scale * 1.2)) fail("a double tap at fit did not zoom");
+      if (!sameBox(back, fit)) fail("a second double tap did not return to fit");
+
+      /* A vertical drag at fit closes the fullscreen viewer. */
+      if (viewer === "fullscreen") {
+        const open = await page.locator("[data-viewer-closed]").count() === 0;
+        await drag(mid, 5, 260);
+        await settle(page, 350);
+        const closed = await page.locator("[data-viewer-closed]").count() === 1;
+        out.fitVerticalDrag = { openBefore: open, closed };
+        if (!open) fail("the viewer had closed before the vertical drag");
+        if (!closed) fail("a vertical drag at fit did not close the viewer");
+      }
+      const last = await page.evaluate(() => ({ pageScale: window.visualViewport?.scale ?? 1, scrollY: window.scrollY }));
+      out.page = last;
+      if (last.pageScale !== 1 || last.scrollY !== 0) fail(`the page ended zoomed to ${last.pageScale} or scrolled to ${last.scrollY}`);
+      if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+    } finally {
+      await context.close();
+    }
+    return out;
+  }
+
+  browserTest("the picture goes where the hand put it, and nowhere after the hand lets go", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    const server = await chromium.launchServer(LAUNCH);
+    const browserPid = server.process().pid!;
+    fs.writeFileSync(path.join(OUT, "browser.pid"), `${browserPid}\n`);
+    const browser = await chromium.connect(server.wsEndpoint());
+    const failures: string[] = [];
+    const readings: Record<string, unknown> = {};
+    try {
+      for (const viewer of VIEWERS) for (const surface of ["desktop-1280", "phone-390"] as const) {
+        const key = `${surface}-${viewer}`;
+        const fail = (text: string) => failures.push(`${key}: ${text}`);
+        try {
+          readings[key] = await (surface === "phone-390" ? phone : desktop)(browser, served.base, viewer, fail);
+        } catch (error) {
+          fail(error instanceof Error ? error.message.split("\n")[0]! : String(error));
+        }
+      }
+      fs.writeFileSync(path.join(EVIDENCE, `${STAMP}.json`), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+      if (STAMP === "after") expect(failures).toEqual([]);
+    } finally {
+      await browser.close(); await server.close(); served.stop();
+      let alive = false;
+      try { process.kill(browserPid, 0); alive = true; } catch { /* Recorded browser exited. */ }
+      expect(alive).toBe(false);
+    }
+  }, 600_000);
+});
+
+describe("a control's hint never outlives its click", () => {
+  /*
+   * Operator report: after a click on Compact its hint stayed on screen, and
+   * it was still there after switching to another orchestrator.
+   *
+   * The production strip in the orchestrator conversation, under a real
+   * mouse and a real keyboard. Chromium drops a button's focus the moment
+   * React writes `disabled` onto it, inside the commit, and React delivers no
+   * blur from there: a Hint that opened on the click's focus never heard that
+   * the focus was gone. The strip is mounted unkeyed, so that Hint was carried
+   * into the next conversation.
+   *
+   * Compact and Stop both disable themselves while their request is out; the
+   * request is held here so each is read while busy.
+   */
+
+  type Page = Awaited<ReturnType<typeof openFixture>>["page"];
+  const HINT_SHOWN_MS = 400;
+  const URL_QUERY = "?case=own-message-steps&surface=orchestrator&lang=en";
+  const compact = `button[aria-label^="${translate("en", "composer.compactAria")}"]`;
+  const stop = `button[aria-label^="${translate("en", "composer.interruptAria")}"]`;
+  const sendButton = `button[aria-label="${translate("en", "composer.sendToAgent")}"]`;
+  const HOLD = `window.heldControls = [];
+    const send = window.fetch;
+    window.fetch = async (input, init) => {
+      const url = String(input);
+      if (url === "/api/tmux" || url.startsWith("/api/conversation-host")) {
+        await new Promise((resolve) => window.heldControls.push(resolve));
+        return Response.json({ ok: true });
+      }
+      return send(input, init);
+    };`;
+
+  const hints = (page: Page) => page.evaluate(() => [...document.querySelectorAll('[role="tooltip"]')].map((node) => node.textContent));
+  const disabled = (page: Page, selector: string) => page.evaluate((query) => document.querySelector<HTMLButtonElement>(query)!.disabled, selector);
+  const release = (page: Page) => page.evaluate(() => {
+    for (const answer of (window as unknown as { heldControls: (() => void)[] }).heldControls.splice(0)) answer();
+  });
+  const switchConversation = (page: Page) => page.evaluate(() => {
+    (window as unknown as { ownSteps: { open: (conversation: string) => void } }).ownSteps.open("another-orchestrator");
+  });
+  async function rest(page: Page, selector: string): Promise<void> {
+    const box = (await page.locator(selector).first().boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.waitForTimeout(HINT_SHOWN_MS);
+  }
+  async function press(page: Page): Promise<void> {
+    await page.mouse.down();
+    await page.mouse.up();
+    await page.waitForTimeout(HINT_SHOWN_MS);
+  }
+  async function leave(page: Page): Promise<void> {
+    await page.mouse.move(40, 40, { steps: 4 });
+    await page.waitForTimeout(HINT_SHOWN_MS);
+  }
+
+  browserTest("Compact, Stop, Send and a keyboard-focus hint in Chromium", async () => {
+    const out = path.resolve(".artifacts/control-hints");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    let browser: Browser | null = null;
+    try {
+      browser = await chromium.launch(LAUNCH);
+
+      /* Compact: hover, arm, confirm, leave, answer, switch. */
+      {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}${URL_QUERY}`, { width: 1280, height: 900 }, "dark", "en");
+        try {
+          await page.waitForSelector(compact, { timeout: 20_000 });
+          await page.evaluate(HOLD);
+          await rest(page, compact);
+          expect(await hints(page)).toEqual([translate("en", "composer.compactTitle")]);
+          await press(page);
+          expect(await hints(page)).toEqual([]);
+          await press(page);
+          expect(await disabled(page, compact)).toBe(true);
+          expect(await hints(page)).toEqual([]);
+          await leave(page);
+          expect(await hints(page)).toEqual([]);
+          await release(page);
+          await page.waitForFunction((query) => !document.querySelector<HTMLButtonElement>(query)!.disabled, compact);
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([]);
+          await switchConversation(page);
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([]);
+          await page.screenshot({ path: path.join(out, "compact-after-switch.png") });
+          /* A pointer that arrives anew is still told what the control does. */
+          await rest(page, compact);
+          expect(await hints(page)).toEqual([translate("en", "composer.compactTitle")]);
+          await leave(page);
+          expect(await hints(page)).toEqual([]);
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+      }
+
+      /* Stop: one click disables it; the conversation is switched while it is busy. */
+      {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}${URL_QUERY}`, { width: 1280, height: 900 }, "dark", "en");
+        try {
+          await page.waitForSelector(stop, { timeout: 20_000 });
+          await page.evaluate(HOLD);
+          await rest(page, stop);
+          expect(await hints(page)).toEqual([translate("en", "composer.interruptTitle")]);
+          await press(page);
+          expect(await disabled(page, stop)).toBe(true);
+          expect(await hints(page)).toEqual([]);
+          await leave(page);
+          await switchConversation(page);
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([]);
+          await release(page);
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([]);
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+      }
+
+      /* Send with an empty field keeps its menu, so it stays enabled, says it
+         cannot send, and stops its own click from propagating. */
+      {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}${URL_QUERY}`, { width: 1280, height: 900 }, "dark", "en");
+        try {
+          await page.waitForSelector(sendButton, { timeout: 20_000 });
+          expect(await page.evaluate((query) => document.querySelector(query)!.getAttribute("aria-disabled"), sendButton)).toBe("true");
+          await rest(page, sendButton);
+          expect(await hints(page)).toEqual([translate("en", "composer.sendToAgent")]);
+          await press(page);
+          expect(await disabled(page, sendButton)).toBe(false);
+          expect(await hints(page)).toEqual([]);
+          await leave(page);
+          await rest(page, sendButton);
+          expect(await hints(page)).toEqual([translate("en", "composer.sendToAgent")]);
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+      }
+
+      /* Keyboard: Tab onto a control shows its hint, activating it closes the
+         hint, and so does a key pressed with the focus still on the control. */
+      {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}${URL_QUERY}`, { width: 1280, height: 900 }, "dark", "en");
+        try {
+          await page.waitForSelector(compact, { timeout: 20_000 });
+          await page.evaluate(HOLD);
+          await page.locator(stop).first().focus();
+          await page.keyboard.press("Tab");
+          await page.keyboard.press("Tab");
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await page.evaluate((query) => document.activeElement === document.querySelector(query), compact)).toBe(true);
+          expect(await hints(page)).toEqual([translate("en", "composer.compactTitle")]);
+          await page.screenshot({ path: path.join(out, "keyboard-focus.png") });
+          await page.keyboard.press("Escape");
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([]);
+          await page.keyboard.press("Shift+Tab");
+          await page.keyboard.press("Tab");
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([translate("en", "composer.compactTitle")]);
+          await page.keyboard.press("Enter");
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([]);
+          await page.keyboard.press("Enter");
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await disabled(page, compact)).toBe(true);
+          expect(await hints(page)).toEqual([]);
+          await release(page);
+          await switchConversation(page);
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([]);
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+      }
+
+      /* A hint already open when the dock is handed another conversation, with
+         no input in between: by keyboard focus on Compact, then by a pointer
+         resting on Stop. */
+      {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}${URL_QUERY}`, { width: 1280, height: 900 }, "dark", "en");
+        try {
+          await page.waitForSelector(compact, { timeout: 20_000 });
+          await page.locator(stop).first().focus();
+          await page.keyboard.press("Tab");
+          await page.keyboard.press("Tab");
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([translate("en", "composer.compactTitle")]);
+          await switchConversation(page);
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await page.evaluate(() => document.querySelector("[data-link-path]")!.getAttribute("data-link-path"))).toBe("/another-orchestrator.jsonl");
+          expect(await page.evaluate((query) => document.activeElement === document.querySelector(query), compact)).toBe(true);
+          expect(await hints(page)).toEqual([]);
+          await page.screenshot({ path: path.join(out, "open-hint-after-handoff.png") });
+          await rest(page, stop);
+          expect(await hints(page)).toEqual([translate("en", "composer.interruptTitle")]);
+          await page.evaluate(() => {
+            (window as unknown as { ownSteps: { open: (conversation: string) => void } }).ownSteps.open("third-orchestrator");
+          });
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([]);
+          /* The pointer leaves and arrives anew: the hint is back. */
+          await leave(page);
+          await rest(page, stop);
+          expect(await hints(page)).toEqual([translate("en", "composer.interruptTitle")]);
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+      }
+
+      /* Touch: a held finger still opens the hint, and lifting it closes it. */
+      {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}${URL_QUERY}`, { width: 1280, height: 900 }, "dark", "en");
+        try {
+          await page.waitForSelector(compact, { timeout: 20_000 });
+          const box = (await page.locator(compact).first().boundingBox())!;
+          const point = { x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2) };
+          const cdp = await context.newCDPSession(page);
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point] });
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([translate("en", "composer.compactTitle")]);
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([]);
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser?.close();
+      served.stop();
+    }
+  }, 240_000);
+});
+
+describe("prototype review: the orchestrator's open composer says a prototype is ready", () => {
+  /*
+   * The phone's half of the orchestrator's notice. With the composer put away
+   * the seat's card carries one chip, which the kanban driver measures; with
+   * the orchestrator's conversation open the notice stands above the message
+   * field. This block opens that composer at 390 with three tasks waiting, in
+   * English and Ukrainian, light and dark, and reads: the one line the phone
+   * shows and the count folded behind it, the 44 px action, that the line and
+   * the field do not overlap and nothing leaves the screen, the unfolded list,
+   * and that «Go to prototype» opens the waiting round of the task it names.
+   *
+   *   LLV_CONVERSATION_BROWSER_TEST=1 bun test src/components/conversation/conversationWindow.browser.test.tsx -t "prototype review"
+   *
+   * Readings go to `evidence/prototype-review/composer-notice.json`; frames to
+   * PROTOTYPE_REVIEW_PNG_DIR (default `.artifacts/prototype-review/`), which
+   * is not committed.
+   */
+  const OUT = path.resolve(".artifacts/prototype-review");
+  const EVIDENCE = path.resolve("evidence/prototype-review");
+  const VIEWPORT = { width: 390, height: 844 };
+
+  browserTest("prototype review: the notice above the phone's open composer, its count and its jump", async () => {
+    const pngDir = process.env.PROTOTYPE_REVIEW_PNG_DIR ?? OUT;
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    let browser: Browser | null = null;
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      browser = await chromium.launch(LAUNCH);
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const label = `phone-390-${lang}-${scheme}`;
+        const tr = (key: Parameters<typeof translate>[1], vars?: Record<string, string | number>) => translate(lang, key, vars);
+        /* Each line names the task its jump lands on, the fixture's task text. */
+        const taskTitles: Record<string, string> = lang === "uk"
+          ? { "t-search": "Повернути результати пошуку після перебудови індексу", "t-links": "Полагодити старі посилання в нотатках до випуску", "t-upload": "Переробити завантаження великих вкладень" }
+          : { "t-search": "Restore search results after the index rebuild", "t-links": "Repair old links in the release notes", "t-upload": "Redesign attachment upload for large files" };
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?case=prototype-notice&lang=${lang}`, VIEWPORT, scheme, lang, "reduce", true);
+        const shot = (name: string) => page.screenshot({ path: path.join(pngDir, `${label}-composer-${name}.png`) });
+        /* The notice, the message field and the screen: what the line says,
+           where it stands and whether anything overlaps or leaves the frame. */
+        const read = () => page.evaluate(() => {
+          const box = (element: Element) => { const rect = element.getBoundingClientRect(); return [Math.round(rect.left * 10) / 10, Math.round(rect.top * 10) / 10, Math.round(rect.width * 10) / 10, Math.round(rect.height * 10) / 10]; };
+          const crosses = (a: number[], b: number[]) => a[0]! < b[0]! + b[2]! - 0.5 && b[0]! < a[0]! + a[2]! - 0.5 && a[1]! < b[1]! + b[3]! - 0.5 && b[1]! < a[1]! + a[3]! - 0.5;
+          const list = document.querySelector<HTMLElement>("[data-evidence-composer] [data-prototype-notices]");
+          const field = document.querySelector<HTMLTextAreaElement>("[data-evidence-composer] textarea");
+          const rows = [...document.querySelectorAll<HTMLElement>("[data-evidence-composer] [data-prototype-notice]")];
+          const more = document.querySelector<HTMLElement>("[data-evidence-composer] [data-prototype-notice-more]");
+          const parts = [...rows.map(box), ...(more ? [box(more)] : []), ...(field ? [box(field)] : [])];
+          const overlaps: string[] = [];
+          for (let i = 0; i < parts.length; i += 1) for (let j = i + 1; j < parts.length; j += 1) if (crosses(parts[i]!, parts[j]!)) overlaps.push(`${i} × ${j}`);
+          return {
+            waiting: list?.dataset.prototypeNotices ?? null,
+            rows: rows.map((row) => {
+              const action = row.querySelector<HTMLElement>("[data-prototype-notice-open]")!;
+              const title = row.querySelector<HTMLElement>("span.truncate")!;
+              return {
+                task: row.dataset.prototypeNotice, text: row.textContent, box: box(row), action: box(action), actionLabel: action.getAttribute("aria-label"),
+                titleClear: title.getBoundingClientRect().right <= action.getBoundingClientRect().left + 0.5,
+                titleCut: title.scrollWidth > title.clientWidth,
+              };
+            }),
+            more: more ? { folded: more.dataset.prototypeNoticeMore, text: more.textContent, expanded: more.getAttribute("aria-expanded"), box: box(more) } : null,
+            field: field ? box(field) : null,
+            fieldEnabled: field ? !field.disabled : null,
+            overlaps,
+            outside: parts.filter((part) => part[0]! < -0.5 || part[0]! + part[2]! > window.innerWidth + 0.5 || part[1]! < -0.5 || part[1]! + part[3]! > window.innerHeight + 0.5).length,
+            overflowX: document.documentElement.scrollWidth - window.innerWidth,
+            viewport: [window.innerWidth, window.innerHeight],
+          };
+        });
+        try {
+          await page.waitForSelector('[data-evidence-case="prototype-notice"] [data-prototype-notice]', { timeout: 20_000 });
+          await page.waitForTimeout(400);
+          const folded = await read();
+          readings[`${label}-notice`] = folded;
+          await shot("notice");
+          const first = folded.rows[0];
+          /* Three tasks wait: the phone shows one line and folds two behind the count. */
+          if (folded.waiting !== "3" || folded.rows.length !== 1 || folded.more?.folded !== "2" || !folded.more.text?.includes("2")) failures.push(`${label}: the composer's notice reads ${JSON.stringify({ waiting: folded.waiting, rows: folded.rows.length, more: folded.more })}`);
+          if (!first || first.task !== "t-search" || !first.text?.includes(tr("proto.notice.ready")) || !first.text.includes(tr("proto.notice.open")) || !first.titleClear) failures.push(`${label}: the notice line reads ${JSON.stringify(first)}`);
+          if (first && (!first.text?.includes(taskTitles[first.task!]!) || !first.actionLabel?.includes(taskTitles[first.task!]!))) failures.push(`${label}: the notice line does not name its task: «${first.text}», «${first.actionLabel}»`);
+          if (first && (first.action[3]! < 44 || first.action[2]! < 44)) failures.push(`${label}: «${tr("proto.notice.open")}» is ${first.action[2]}×${first.action[3]}, under a 44 px touch target`);
+          if (folded.more && folded.more.box[3]! < 44) failures.push(`${label}: the count behind the notice is ${folded.more.box[3]} px tall`);
+          if (!folded.field || !folded.fieldEnabled || (first && first.box[1]! + first.box[3]! > folded.field[1]! + 0.5)) failures.push(`${label}: the notice does not stand above a usable message field: ${JSON.stringify({ row: first?.box, field: folded.field })}`);
+          if (folded.overlaps.length || folded.outside || folded.overflowX > 0) failures.push(`${label}: the notice overlaps ${folded.overlaps.join(", ")}, leaves the screen (${folded.outside}) or scrolls the page sideways by ${folded.overflowX}px`);
+
+          /* Unfolded: every waiting task has its line, the long title is cut before the action and the field stays on screen. */
+          await page.locator("[data-evidence-composer] [data-prototype-notice-more]").click();
+          await page.waitForFunction(() => document.querySelectorAll("[data-evidence-composer] [data-prototype-notice]").length === 3);
+          await page.waitForTimeout(200);
+          const all = await read();
+          readings[`${label}-notice-all`] = all;
+          await shot("notice-all");
+          if (all.rows.length !== 3 || all.more?.expanded !== "true" || all.rows.some((row) => !row.titleClear || row.action[3]! < 44)) failures.push(`${label}: the unfolded notice reads ${JSON.stringify(all.rows.map((row) => ({ task: row.task, clear: row.titleClear, action: row.action })))}`);
+          for (const row of all.rows) if (!row.text?.includes(taskTitles[row.task!]!)) failures.push(`${label}: the unfolded notice of ${row.task} does not name its task: «${row.text}»`);
+          if (!all.rows.some((row) => row.titleCut)) failures.push(`${label}: the long title was expected to be cut and was not`);
+          if (all.overlaps.length || all.outside || all.overflowX > 0) failures.push(`${label}: unfolded, the notice overlaps ${all.overlaps.join(", ")}, leaves the screen (${all.outside}) or scrolls sideways by ${all.overflowX}px`);
+          await page.locator("[data-evidence-composer] [data-prototype-notice-more]").click();
+          await page.waitForFunction(() => document.querySelectorAll("[data-evidence-composer] [data-prototype-notice]").length === 1);
+
+          /* The jump: the review of the task the line names, on its waiting round. */
+          await page.locator('[data-evidence-composer] [data-prototype-notice-open="t-search"]').click();
+          await page.waitForSelector('[data-mobile2-sheet="prototype-review"] [data-prototype-variant]', { timeout: 10_000 });
+          await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>("[data-prototype-canvas] img")].every((image) => image.complete && image.naturalWidth > 0));
+          await page.waitForTimeout(400);
+          const jump = await page.evaluate(() => {
+            const review = document.querySelector<HTMLElement>("[data-prototype-review]");
+            const sheet = document.querySelector<HTMLElement>('[data-mobile2-sheet="prototype-review"]')!.getBoundingClientRect();
+            return {
+              review: review?.dataset.prototypeReview ?? null, round: review?.dataset.prototypeRoundShown ?? null,
+              variants: document.querySelectorAll("[data-prototype-review] button[data-prototype-variant]").length,
+              sheet: [Math.round(sheet.left), Math.round(sheet.top), Math.round(sheet.width), Math.round(sheet.height)],
+              sheetInside: sheet.left >= -0.5 && sheet.right <= window.innerWidth + 0.5 && sheet.bottom <= window.innerHeight + 0.5,
+              overflowX: document.documentElement.scrollWidth - window.innerWidth,
+            };
+          });
+          readings[`${label}-jump`] = jump;
+          await shot("jump");
+          if (jump.review !== "t-search" || jump.round !== "r-search" || jump.variants !== 2 || !jump.sheetInside || jump.overflowX > 0) failures.push(`${label}: «${tr("proto.notice.open")}» opened ${JSON.stringify(jump)}`);
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("[data-prototype-review]", { state: "detached", timeout: 5_000 });
+          if (!await page.locator("[data-evidence-composer] [data-prototype-notice]").count()) failures.push(`${label}: the notice of an undecided review left the composer after the review was closed`);
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}${pageErrors.length ? ` (page errors: ${pageErrors.join(" | ")})` : ""}`);
+          await shot("failed-here").catch(() => {});
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser?.close();
+      served.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "composer-notice.json"), `${JSON.stringify({ driver: "src/components/conversation/conversationWindow.browser.test.tsx", readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 600_000);
 });

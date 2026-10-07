@@ -151,6 +151,14 @@
  * set before each one, and the document's language and the dictation
  * button's name are checked.
  *
+ * With BOARD_CAPTURE_CASE=relay-answers it renders the relay card's Recent
+ * answers (docs/design/relay.md §B.9) on a home with one paired relay, a
+ * fake relay service on loopback that never hands a request out, and five
+ * invented answer records: the member limit field, the list, a hand-off
+ * opened read-only, and a long answer with its received input unfolded, at
+ * 1440 × 900 and 390 × 844 in en and uk. It requires each label in its language, no editable field, no
+ * sideways overflow and 44 px controls on the phone.
+ *
  * With BOARD_CAPTURE_CASE=seat-creation it renders what the orchestrator pane
  * says when a creation did not land, on a signed-in home with no seat: the
  * designation still waiting on its launch, a failure recorded with the account
@@ -192,6 +200,7 @@ import { nestProcessTempUnder } from "../src/lib/tempDirs";
 import { createTailscaleStub, STUB_DNS_NAME } from "../src/test-helpers/tailscaleStub";
 
 import { createCaptureDirectory } from "./capture-directory";
+import { procBackend } from "../src/lib/proc";
 import { idleCheck, idleUpdate, stoppedProcess, type Snapshot } from "../src/lib/selfUpdate/types";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
@@ -1332,11 +1341,14 @@ async function captureOnboarding(): Promise<void> {
             if (viewport.phone) {
               await page.waitForSelector('[data-mobile2-open="menu"]', { timeout: 60_000 });
               await page.click('[data-mobile2-open="menu"]');
+              /* The roles table is on the menu's Settings page. */
+              await page.click('[data-mobile2-menu-row="settings"]');
               await page.waitForSelector('[data-testid="menu-agent-mapping"]');
               await page.screenshot({ path: path.join(OUT_DIR, `${tag}-menu.png`) });
               await page.click('[data-testid="menu-agent-mapping"]');
             } else {
               await page.click("[data-rail-menu]");
+              await page.click("[data-rail-menu-settings]");
               await page.waitForSelector("[data-rail-menu-agent-mapping]");
               await page.screenshot({ path: path.join(OUT_DIR, `${tag}-menu.png`) });
               await page.click("[data-rail-menu-agent-mapping]");
@@ -1352,10 +1364,13 @@ async function captureOnboarding(): Promise<void> {
             await page.waitForSelector("[data-onboarding-dialog]", { state: "detached" });
             if (viewport.phone) {
               await page.click('[data-mobile2-open="menu"]');
+              /* The setup guide is under «Help and learning». */
+              await page.click('[data-mobile2-menu-row="help"]');
               await page.waitForSelector('[data-testid="menu-setup-guide"]');
               await page.click('[data-testid="menu-setup-guide"]');
             } else {
               await page.click("[data-rail-menu]");
+              await page.click("[data-rail-menu-help]");
               await page.waitForSelector("[data-rail-menu-setup-guide]");
               await page.click("[data-rail-menu-setup-guide]");
             }
@@ -1500,11 +1515,14 @@ async function captureOnboarding(): Promise<void> {
             const openGuide = async (row: "setup-guide" | "dictation") => {
               if (viewport.phone) {
                 await page.click('[data-mobile2-open="menu"]');
+                /* The guide is under «Help and learning», dictation on the Settings page. */
+                await page.click(row === "dictation" ? '[data-mobile2-menu-row="settings"]' : '[data-mobile2-menu-row="help"]');
                 await page.waitForSelector(`[data-testid="menu-${row}"]`);
                 if (row === "dictation") await page.screenshot({ path: path.join(OUT_DIR, `${tag}-menu-slice3.png`) });
                 await page.click(`[data-testid="menu-${row}"]`);
               } else {
                 await page.click("[data-rail-menu]");
+                await page.click(row === "dictation" ? "[data-rail-menu-settings]" : "[data-rail-menu-help]");
                 await page.waitForSelector(`[data-rail-menu-${row}]`);
                 if (row === "dictation") await page.screenshot({ path: path.join(OUT_DIR, `${tag}-menu-slice3.png`) });
                 await page.click(`[data-rail-menu-${row}]`);
@@ -6832,7 +6850,7 @@ async function installPingMain(): Promise<void> {
       const noticeBackground = await notice.evaluate(node => getComputedStyle(node).backgroundColor);
       if (noticeBackground === "rgba(0, 0, 0, 0)") report.failures.push(`${lang}-${width}: transparent notice`);
       await page.screenshot({ path: path.join(evidenceDir, `${lang}-${width}-notice.png`) });
-      await notice.getByRole("button", { name: translate(lang, "telemetry.settings"), exact: true }).click();
+      await notice.getByRole("button", { name: translate(lang, "headerMenu.ping"), exact: true }).click();
       const dialog = page.locator("[data-telemetry-settings]");
       await dialog.waitFor({ state: "visible" });
       const toggle = dialog.getByRole("switch");
@@ -6977,7 +6995,218 @@ async function hydrationMain(): Promise<void> {
   console.log(`hydration acceptance: ${Object.keys(report.frames).length} loads, no hydration warnings or page errors`);
 }
 
+/* ------------------------------------------------------------------------- */
+/* BOARD_CAPTURE_CASE=relay-answers                                           */
+/* ------------------------------------------------------------------------- */
+
+const RELAY_ANSWERS_ROOT = path.join(STATE_DIR, "external-relay", "answers", "relay-1", "bot-1");
+
+/** One answer record as `src/lib/externalRelay/answers.ts` writes it (relay.md §B.2). */
+function writeRelayAnswer(minutesAgo: number, requestId: string, over: Record<string, unknown>): void {
+  const started = Date.now() - minutesAgo * 60_000;
+  const durationMs = typeof over.durationMs === "number" ? over.durationMs : 5_400;
+  const record = {
+    v: 1, requestId, relayId: "relay-1", targetId: "bot-1", targetName: "Club helper", engine: "claude", model: "opus",
+    claimedAt: new Date(started - 400).toISOString(), startedAt: new Date(started).toISOString(),
+    finishedAt: new Date(started + durationMs).toISOString(), durationMs, state: "finished", outcome: "answered",
+    answer: null, delivery: "accepted", input: null, ...over,
+  };
+  fs.mkdirSync(RELAY_ANSWERS_ROOT, { recursive: true });
+  fs.writeFileSync(path.join(RELAY_ANSWERS_ROOT, `${started}_${requestId}.json`), JSON.stringify(record) + "\n");
+}
+
+/** Invented exchanges of one club chat: a hand-off, a long answer, a time-out, a busy decline and one still running. */
+function seedRelayAnswers(): void {
+  const message = (id: string, key: string, name: string, text: string, minutesAgo: number, replyTo: string | null = null) => ({
+    id, author: { key, name, self: key === "self" }, sent_at: new Date(Date.now() - minutesAgo * 60_000).toISOString(), text, reply_to: replyTo,
+  });
+  const frame = { instructions: "You answer as the club's helper. Plain text, at most three sentences.", owner_instructions: "Friendly and brief.", documents: [] };
+  const tools = [
+    { name: "lookup_notes", summary: "Search the club's documents.", mode: "handoff" },
+    { name: "restrict_member", summary: "Mute a participant for a while.", mode: "handoff" },
+    { name: "poll_attendees", summary: "Post a poll in the chat.", mode: "handoff" },
+    { name: "draw_picture", summary: "Draw a picture and post it.", mode: "handoff" },
+  ];
+  writeRelayAnswer(2, "rq_running", { state: "running", outcome: null, finishedAt: null, durationMs: null, delivery: null,
+    input: { ...frame, conversation: [message("m90", "u_c", "Member C", "@helper what should I bring on Thursday?", 2)], respond_to: "m90", request_text: null } });
+  // Keep the invented running answer under this capture process's custody.
+  // Without its ledger entry, startup correctly settles it as interrupted.
+  const ownerIdentity = procBackend.processIdentity(process.pid);
+  if (!ownerIdentity) throw new Error("relay capture process identity unavailable");
+  fs.writeFileSync(path.join(STATE_DIR, "external-relay", "runs.json"), JSON.stringify({ v: 1, runs: [{
+    requestId: "rq_running", leaseId: "ls_bbbbbbbbbbbbbbbbbbbbbbbbbbbbb", relayId: "relay-1", targetId: "bot-1",
+    childPid: null, childIdentity: null, ownerPid: process.pid, ownerIdentity,
+    runDir: path.join(BASE, "running-relay"), startedAt: new Date(Date.now() - 2 * 60_000).toISOString(),
+  }] }) + "\n");
+  writeRelayAnswer(9, "rq_handoff", { outcome: "declined:handoff", answer: { action: "handoff", text: "", reply_to: null }, durationMs: 4_200,
+    input: { ...frame,
+      conversation: [
+        message("m71", "u_x", "Visitor X", "Cheap followers here: example.invalid/promo", 11),
+        message("m72", "u_a", "Admin A", "@helper mute the person posting promo links, for an hour", 9, "m71"),
+      ],
+      respond_to: "m72", request_text: null,
+      requester: { key: "u_a", is_admin: true, can_restrict_members: true, can_delete_messages: true, is_owner: false, is_anonymous_admin: false },
+      short_term_memory: "The Thursday meetup moved to the north pier this week.", tools } });
+  const longAnswer = "The meetup is on Thursday at 18:30 at the north pier, because the hall is being painted this week. "
+    + "Bring a warm layer: it gets windy by the water after sunset. If you are new, look for the blue flag by the cafe; someone will meet you there. "
+    + "We usually walk to the lighthouse and back, about five kilometres at an easy pace, and finish with tea at the cafe around 20:00.";
+  writeRelayAnswer(34, "rq_answered", { answer: { action: "reply", text: longAnswer, reply_to: "m55" }, durationMs: 7_800,
+    input: { ...frame,
+      conversation: [
+        message("m54", "self", "Club helper", "Welcome to the club chat!", 60),
+        message("m55", "u_b", "Member B", "@helper when and where is the next meetup? [Voice message, 0:12. Transcript: and is it the usual route or something new?]", 34),
+      ],
+      respond_to: "m55", request_text: null,
+      requester: { key: "u_b", is_admin: false, can_restrict_members: false, can_delete_messages: false, is_owner: false, is_anonymous_admin: false }, short_term_memory: null, tools: tools.filter((tool) => tool.name !== "restrict_member") } });
+  writeRelayAnswer(80, "rq_hard_cap", { outcome: "failed:hard_cap", durationMs: 1_800_000, delivery: "unconfirmed",
+    input: { ...frame, conversation: [message("m30", "u_d", "Member D", "@helper summarise everything from last month", 80)], respond_to: "m30", request_text: null } });
+  writeRelayAnswer(140, "rq_busy", { outcome: "declined:busy", engine: null, model: null, durationMs: 300,
+    input: { ...frame, conversation: [message("m12", "u_e", "Member E", "@helper hi", 140)], respond_to: "m12", request_text: null } });
+}
+
+function seedRelayStore(apiOrigin: string): void {
+  const dir = path.join(STATE_DIR, "external-relay");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "relays.json"), JSON.stringify({
+    v: 1, installId: crypto.randomUUID(), label: "Delegatus", pending: [],
+    relays: [{
+      id: "relay-1", origin: apiOrigin, api_base: `${apiOrigin}/v1`, name: "Example Connect", description: "Answers club chats with the owner's own agent.",
+      credential: "c".repeat(43), owner: { namespace: "example", id: "owner-1", display_name: "Person A", handle: null },
+      pairedAt: new Date(Date.now() - 3 * 86_400_000).toISOString(), paused: false,
+      limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
+      targets: [{ id: "bot-1", name: "Club helper", answered_by: "install", fallback: "service", enabled: true, engine: "claude", model: "opus", effort: null, project: null, concurrency: 1, hardCapMinutes: 30 }],
+    }],
+  }) + "\n");
+}
+
+/**
+ * The relay card's Recent answers (relay.md §B.9 [rc]) in the real settings
+ * dialog of the production build: a fake relay service on a loopback port 0
+ * answers the target list and holds every claim, so nothing is ever claimed.
+ * At 1440 × 900 and 390 × 844 in en and uk it renders the list, a hand-off
+ * opened read-only and a long answer with its received input unfolded, and
+ * requires the language of each label, no field to type into, no sideways
+ * overflow and 44 px controls. Frames go to RELAY_ANSWERS_RENDER_DIR (or the
+ * run's out directory), readings to relay-answers.json beside them.
+ */
+async function relayAnswersMain(): Promise<void> {
+  seedHome();
+  const service = Bun.serve({
+    port: 0, hostname: "127.0.0.1",
+    async fetch(request) {
+      const { pathname } = new URL(request.url);
+      if (pathname === "/v1/targets") return Response.json({ targets: [{ target_id: "bot-1", name: "Club helper", answered_by: "install", fallback: "service" }] });
+      if (pathname === "/v1/requests/claim") { await Bun.sleep(20_000); return new Response(null, { status: 204 }); }
+      return Response.json({ error: { code: "not_found", message: "not found" } }, { status: 404 });
+    },
+  });
+  seedRelayStore(`http://127.0.0.1:${service.port}`);
+  seedRelayAnswers();
+  const renderDir = process.env.RELAY_ANSWERS_RENDER_DIR?.trim() || OUT_DIR;
+  fs.mkdirSync(renderDir, { recursive: true });
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const report: { commit: string; frames: Record<string, unknown>; failures: string[] } = { commit: captureCommit(), frames: {}, failures: [] };
+  const must = (ok: boolean, message: string) => { if (!ok) report.failures.push(message); };
+  let server: ChildProcess | null = null;
+  let browser: Browser | null = null;
+  try {
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    await waitForBoard(baseUrl, false);
+    await fetch(`${baseUrl}/api/onboarding`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ dismissed: true }) });
+    /* The telemetry notice sits above every dialog; this case is about the relay card. */
+    await fetch(`${baseUrl}/api/telemetry`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ enabled: false, noticeDismissed: true }) });
+    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+    for (const width of [1440, 390]) for (const lang of ["en", "uk"] as const) {
+      const localeWrite = await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ locale: lang, source: "chosen" }) });
+      if (!localeWrite.ok) throw new Error(`setting ${lang} answered ${localeWrite.status}`);
+      const tag = `${lang}-${width}`;
+      const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 }, reducedMotion: "reduce" });
+      await context.addInitScript(seedInit);
+      await context.addInitScript((language: string) => localStorage.setItem("llv_lang", language), lang);
+      const page = await context.newPage();
+      await page.goto(`${baseUrl}/`);
+      await page.waitForFunction(() => {
+        if (document.querySelector("[data-external-relay-settings]")) return true;
+        window.dispatchEvent(new Event("delegatus:open-external-relay-settings"));
+        return false;
+      }, undefined, { timeout: 60_000 });
+      const toggle = page.locator("[data-external-relay-target=bot-1] [data-external-relay-answers-toggle]");
+      await toggle.waitFor({ timeout: 30_000 });
+      const measure = (scope: string) => page.evaluate((selector) => {
+        const dialog = document.querySelector<HTMLElement>("[data-external-relay-settings]")!;
+        const scroller = [...dialog.querySelectorAll<HTMLElement>("div")].find((node) => getComputedStyle(node).overflowY === "auto") ?? dialog;
+        const area = document.querySelector<HTMLElement>(selector)!;
+        const outer = dialog.getBoundingClientRect();
+        const visible = (node: Element) => (node as HTMLElement).offsetParent !== null;
+        const controls = [...area.querySelectorAll("button, summary")].filter(visible);
+        return {
+          overflow: Math.max(dialog.scrollWidth - dialog.clientWidth, scroller.scrollWidth - scroller.clientWidth),
+          outside: [...area.querySelectorAll("*")].filter(visible).filter((node) => { const rect = node.getBoundingClientRect(); return rect.width > 0 && (rect.left < outer.left - 0.5 || rect.right > outer.right + 0.5); }).length,
+          shortControls: controls.filter((node) => node.getBoundingClientRect().height < 43.5).map((node) => node.textContent?.slice(0, 40)),
+          editable: area.querySelectorAll("input, textarea, [contenteditable=true]").length,
+          lang: document.documentElement.lang,
+          text: area.innerText,
+        };
+      }, scope);
+      const t = (key: Parameters<typeof translate>[1]) => translate(lang, key);
+      must((await toggle.textContent()) === t("externalRelay.answers.open"), `${tag}: the toggle reads ${await toggle.textContent()}`);
+      /* The member limit field sits in the same row, showing the default. */
+      const limit = page.locator("[data-external-relay-target=bot-1] [data-external-relay-member-limit]");
+      await limit.evaluate((node) => node.scrollIntoView({ block: "center" }));
+      const limitBox = await limit.boundingBox();
+      must((await limit.inputValue()) === "10", `${tag}: the member limit shows ${await limit.inputValue()}`);
+      must((limitBox?.height ?? 0) >= 43.5, `${tag}: the member limit field is ${limitBox?.height} px tall`);
+      await page.screenshot({ path: path.join(renderDir, `${tag}-member-limit.png`) });
+      await toggle.click();
+      await page.waitForSelector("[data-external-relay-answer-list]", { timeout: 15_000 });
+      await page.evaluate(() => document.querySelector("[data-external-relay-answers=bot-1]")?.scrollIntoView({ block: "start" }));
+      const rows = await page.locator("[data-external-relay-answer]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-external-relay-answer")));
+      must(JSON.stringify(rows) === JSON.stringify(["rq_running", "rq_handoff", "rq_answered", "rq_hard_cap", "rq_busy"]), `${tag}: the list is ${rows.join(", ")}`);
+      const list = await measure("[data-external-relay-answers=bot-1]");
+      must(list.text.includes(t("externalRelay.outcome.handoff")) && list.text.includes(t("externalRelay.answers.running")), `${tag}: the list misses the hand-off or running label`);
+      await page.screenshot({ path: path.join(renderDir, `${tag}-list.png`) });
+      await page.locator("[data-external-relay-answer=rq_handoff]").click();
+      const exchange = page.locator("[data-external-relay-exchange=rq_handoff]");
+      await exchange.waitFor({ timeout: 15_000 });
+      await exchange.scrollIntoViewIfNeeded();
+      await page.evaluate(() => document.querySelector("[data-external-relay-exchange]")?.scrollIntoView({ block: "start" }));
+      const handoff = await measure("[data-external-relay-answers=bot-1]");
+      must((await page.locator("[data-external-relay-exchange-outcome]").textContent()) === t("externalRelay.outcome.handoff"), `${tag}: the exchange outcome is not the hand-off label`);
+      must((await page.locator("[data-external-relay-exchange-answer]").textContent()) === t("externalRelay.answers.handedOff"), `${tag}: the hand-off answer line`);
+      must(handoff.text.includes(`Admin A · ${t("externalRelay.answers.role.admin")}`), `${tag}: who asked is missing`);
+      await page.screenshot({ path: path.join(renderDir, `${tag}-handoff.png`) });
+      await page.getByRole("button", { name: t("externalRelay.answers.back"), exact: true }).click();
+      await page.locator("[data-external-relay-answer=rq_answered]").click();
+      await page.locator("[data-external-relay-exchange=rq_answered]").waitFor({ timeout: 15_000 });
+      await page.locator("[data-external-relay-exchange=rq_answered] summary").click();
+      await page.evaluate(() => document.querySelector("[data-external-relay-exchange-answer]")?.scrollIntoView({ block: "start" }));
+      const answered = await measure("[data-external-relay-answers=bot-1]");
+      must(answered.text.includes("north pier, because the hall"), `${tag}: the long answer is missing`);
+      await page.screenshot({ path: path.join(renderDir, `${tag}-answer-input.png`) });
+      for (const [name, reading] of Object.entries({ list, handoff, answered })) {
+        must(reading.overflow <= 1, `${tag} ${name}: ${reading.overflow} px sideways overflow`);
+        must(reading.outside === 0, `${tag} ${name}: ${reading.outside} elements outside the dialog`);
+        must(reading.editable === 0, `${tag} ${name}: ${reading.editable} editable fields in a read-only view`);
+        must(reading.lang === lang, `${tag} ${name}: document language ${reading.lang}`);
+        if (width === 390) must(reading.shortControls.length === 0, `${tag} ${name}: controls under 44 px: ${reading.shortControls.join(" | ")}`);
+        report.frames[`${tag}-${name}`] = { ...reading, text: undefined };
+      }
+      await context.close();
+    }
+  } finally {
+    await browser?.close();
+    await stop(server);
+    service.stop(true);
+  }
+  fs.writeFileSync(path.join(renderDir, "relay-answers.json"), JSON.stringify(report, null, 2) + "\n");
+  if (report.failures.length) throw new Error(report.failures.join("; "));
+  console.log(`relay answers: ${Object.keys(report.frames).length} readings passed in ${renderDir}`);
+}
+
 if (process.env.BOARD_CAPTURE_CASE === "hydration") await hydrationMain();
+else if (process.env.BOARD_CAPTURE_CASE === "relay-answers") await relayAnswersMain();
 else if (process.env.BOARD_CAPTURE_CASE === "install-ping") await installPingMain();
 else if (process.env.BOARD_CAPTURE_CASE === "header") await headerMain();
 else if (process.env.BOARD_CAPTURE_CASE === "self-update-auto") await selfUpdateAutoMain();

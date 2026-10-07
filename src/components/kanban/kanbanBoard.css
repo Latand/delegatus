@@ -235,7 +235,12 @@
 .kb .board:not(.scroll):not(.tabs) { contain: strict; transition: none; }
 /* Tabs show one column and animate no width. Scroll anchoring stays on there:
    it holds a draft opened under a launched agent in the window at 1000 px. */
-.kb .board:not(.tabs), .kb .board:not(.tabs) .col-body { overflow-anchor: none; }
+.kb .board:not(.tabs) { overflow-anchor: none; }
+/* A column keeps the browser's scroll anchoring: a card above the window that
+   grows on a data refresh, or a card arriving above it, would otherwise push
+   what the operator is reading. Only a width change takes it away, because
+   there the layout helper holds the first card in the window itself. */
+.kb[data-column-layout-active] .board:not(.tabs) .col-body { overflow-anchor: none; }
 /* Promotion exists only while these real surfaces are moving. */
 .kb[data-column-layout-active] .column { transition: none; }
 .kb [data-layout-animating="card"], .kb [data-layout-animating="frame"] { transform-origin: top left; will-change: transform; }
@@ -316,6 +321,13 @@
 /* The bottom padding clears one receipt of two lines (56 px) and the stack's
    16 px foot, so a list scrolled to its end shows its last card above it. */
 .kb .col-body { contain: size layout style; flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 4px 12px 84px; display: flex; flex-direction: column; gap: 12px; scrollbar-width: thin; }
+/* A card whose contents the browser skips (`content-visibility: auto`, below)
+   has no content to stop a flex item shrinking, and this column always
+   overflows, so each skipped card was squeezed to its padding: 26 px in place
+   of the height it had been drawn at. A card scrolled far enough above the
+   window collapsed there, the cards under the pointer leapt up by its height,
+   and at the end of a long column the scroll position fell back on its own. */
+.kb .col-body > .card { flex-shrink: 0; }
 .kb .empty { border: 1px dashed var(--border-strong); border-radius: var(--radius-surface); padding: 20px 14px; text-align: center; color: var(--color-muted); font-size: var(--text-ui); }
 .kb .empty strong { display: block; color: var(--color-secondary); font-weight: 600; margin-bottom: 2px; }
 
@@ -466,6 +478,7 @@
 .kb .pill[data-status="done"] { --st: var(--color-success); --st-soft: var(--color-success-soft); }
 .kb .card .age { color: var(--color-muted); font-size: var(--text-label); white-space: nowrap; }
 .kb .card .foot .spacer { flex: 1; }
+.kb .card .foot-acts { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
 .kb .card .add { display: inline-flex; align-items: center; gap: 4px; height: var(--target, 32px); margin-block: calc((16px - var(--target, 32px)) / 2); padding: 0 8px; border-radius: var(--radius-control); font-size: var(--text-label); font-weight: 600; color: var(--color-secondary); }
 .kb .card .add .plus { color: var(--color-accent); font-size: 14px; line-height: 1; }
 .kb .card .add:hover { background: var(--surface-well); color: var(--color-primary); }
@@ -476,6 +489,16 @@
 .host-chip-icon { width: 12px; height: 12px; flex: none; color: var(--color-info); }
 .host-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kb .card .album svg { width: 14px; height: 14px; color: var(--color-muted); }
+/* The prototype review's button: always the word, after the state's mark. A
+   soft accent fill while a round waits unopened, the accent word once it was
+   opened, a check after the decision and a warning while it is undelivered. */
+.kb .card .proto { white-space: nowrap; }
+.kb .card .proto svg { width: 14px; height: 14px; color: var(--color-muted); flex: none; }
+.kb .card .proto[data-prototype-state="ready"] { background: var(--color-accent-soft); color: var(--color-accent); }
+.kb .card .proto[data-prototype-state="ready"] svg, .kb .card .proto[data-prototype-state="opened"] svg { color: var(--color-accent); }
+.kb .card .proto[data-prototype-state="opened"] { color: var(--color-accent); }
+.kb .card .proto[data-prototype-state="decided"] svg { color: var(--color-success); }
+.kb .card .proto[data-prototype-state="unsent"] svg { color: var(--color-warning); }
 .kb .card .ask svg { width: 14px; height: 14px; color: var(--color-accent); }
 .kb .card .ask.on { background: var(--color-accent-soft); color: var(--color-accent); }
 .kb .card .album .album-new { display: inline-flex; align-items: center; gap: 4px; margin-left: 2px; color: var(--color-accent); white-space: nowrap; }
@@ -1718,3 +1741,28 @@
 .kb .card:not(.folded):focus-visible [data-task-note="compact"],
 .kb .card:not(.folded)[data-note-pointer-full] [data-task-note="compact"],
 .kb .card:not(.folded).has-reader [data-task-note="compact"] { display: none; }
+
+/* The orchestrator's wires (docs/design/orchestrator-arrows.md, Variant 2): a
+   layer that exists only for a while after the seat acted on a card
+   (`orchestratorWires.ts`). A wire is the board's pipeline edge: solid is a
+   link, and a link to a running lane flows the way `.pedge.live` does. The
+   layer is the board root's child on the desktop and on the phone, so these
+   rules name no board. */
+[data-orchestrator-wires] { position: fixed; inset: 0; z-index: 5; pointer-events: none; }
+[data-orchestrator-wires] > svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+[data-orchestrator-wires] > div { position: absolute; inset: 0; }
+[data-orchestrator-wires] .oa-wire { fill: none; stroke: var(--color-accent); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+[data-orchestrator-wires] [data-tone="needs"] .oa-wire { stroke: var(--color-warning); }
+[data-orchestrator-wires] .oa-wire[data-stub] { stroke: color-mix(in srgb, var(--color-muted) 55%, transparent); stroke-dasharray: 5 4; }
+[data-orchestrator-wires] .oa-flow { display: none; fill: none; stroke: var(--color-accent); stroke-width: 2.25; stroke-linecap: round; stroke-dasharray: 7 5; animation: kb-edge-flow 700ms linear infinite; }
+[data-orchestrator-wires] [data-flow] .oa-flow { display: inline; }
+[data-orchestrator-wires][data-paused] .oa-flow { animation-play-state: paused; }
+[data-orchestrator-wires] .oa-port { fill: var(--color-card); stroke: var(--color-accent); stroke-width: 1.5; }
+[data-orchestrator-wires] [data-tone="needs"] .oa-port { stroke: var(--color-warning); fill: var(--color-warning-soft); }
+[data-orchestrator-wires] .oa-port[data-seat] { fill: var(--color-accent); }
+[data-orchestrator-wires] .oa-ring { fill: none; stroke: color-mix(in srgb, var(--color-accent) 60%, transparent); stroke-width: 2; }
+[data-orchestrator-wires] .oa-stub { position: absolute; padding: 0 6px; border-radius: var(--radius-control); background: var(--surface-card); border: 1px solid var(--border-default); font: 700 var(--text-caption)/18px var(--font-sans); font-variant-numeric: tabular-nums; color: var(--color-secondary); white-space: nowrap; }
+[data-orchestrator-wires] .oa-dot { position: absolute; left: 0; top: 0; width: 8px; height: 8px; border-radius: 50%; background: var(--color-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 22%, transparent); }
+@media (prefers-reduced-motion: reduce) {
+  [data-orchestrator-wires] [data-flow] .oa-flow { display: none; }
+}

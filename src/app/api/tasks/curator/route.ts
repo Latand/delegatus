@@ -7,6 +7,7 @@ import {
   collectTaskCuratorProjects,
   type TaskCuratorProposal,
 } from "@/lib/tasks/curator";
+import { taskForResponse } from "@/lib/prototypeReview/read";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
 
@@ -75,5 +76,5 @@ export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; c
     now: new Date(),
     lookbackMs: hours * 60 * 60 * 1000,
   });
-  return NextResponse.json({ ok: true, created: result.created, skipped: result.skipped });
+  return NextResponse.json({ ok: true, created: result.created.map((task) => taskForResponse(req, task)), skipped: result.skipped });
 }

@@ -2,6 +2,9 @@ import type { MobileBoardPipelineRow } from "@/components/mobile/mobileBoardMode
 import { overviewPipelineRows } from "@/components/mobile/overviewPhone";
 import type { AutoView } from "@/lib/selfUpdate/auto";
 import type { Pipeline } from "@/lib/pipelines/types";
+import { prototypeReviewNotices } from "@/lib/prototypeReview/model";
+import type { PrototypeReviewNotice } from "@/lib/prototypeReview/types";
+import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
 import { buildAttentionQueue, type AttentionItem } from "../attention";
@@ -26,7 +29,9 @@ import { buildAttentionQueue, type AttentionItem } from "../attention";
 export type MobileAttentionEntry =
   | { kind: "conversation"; id: string; item: AttentionItem }
   | { kind: "pipeline"; id: string; row: MobileBoardPipelineRow }
-  | { kind: "update"; id: string; decision: NonNullable<AutoView["decision"]> };
+  | { kind: "update"; id: string; decision: NonNullable<AutoView["decision"]> }
+  /** A task's prototype review that waits for the operator's choice. */
+  | { kind: "prototype"; id: string; notice: PrototypeReviewNotice };
 
 /** Conversations first in queue order, then the pipelines — the board's
     Needs-you order (`buildMobileBoard`), so the sheet and the section under
@@ -48,6 +53,8 @@ export function buildMobileAttentionQueue(
  * authority (docs/design/needs-attention.md §1) and ride beside the
  * conversations, so a lane the card names counts in the header too, and a lane
  * dismissed on its card, or closing, leaves both counts with the card's mark.
+ * A task's prototype review that waits for a choice is an entry of its own,
+ * one per task: the choice clears it and a newer round brings it back.
  */
 export function buildNeedsYouQueue(
   files: readonly FileEntry[],
@@ -55,8 +62,10 @@ export function buildNeedsYouQueue(
   now: number,
   closing: readonly string[],
   decision?: AutoView["decision"],
+  tasks: readonly BoardTask[] = [],
 ): MobileAttentionEntry[] {
   const queue = buildMobileAttentionQueue(buildAttentionQueue([...files], now), overviewPipelineRows(pipelines, now, closing));
+  for (const notice of prototypeReviewNotices(tasks)) queue.push({ kind: "prototype", id: notice.id, notice });
   if (decision) queue.push({ kind: "update", id: `auto-update:${decision.id}`, decision });
   return queue;
 }
@@ -70,5 +79,6 @@ export const laneFocusId = (path: string): string | null => (path.startsWith(LAN
 /** The project an entry belongs to. */
 export function attentionEntryProject(entry: MobileAttentionEntry): string {
   if (entry.kind === "update") return entry.decision.project;
+  if (entry.kind === "prototype") return entry.notice.project;
   return entry.kind === "conversation" ? entry.item.project : entry.row.pipeline.project;
 }

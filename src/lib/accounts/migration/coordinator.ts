@@ -432,7 +432,8 @@ async function inventory(files: FileEntry[], registry: AgentRegistry): Promise<C
         ? existing.turn.observedAt
         : observationUnchanged(existing, turn, mtimeMs, deliveredAt)
           ? existing.turn.observedAt
-          : new Date(Math.max(mtimeMs, inventoryStartedAt)).toISOString(),
+          // ISO stamps must still cover the file's fractional millisecond mtime.
+          : new Date(Math.max(Math.ceil(mtimeMs), inventoryStartedAt)).toISOString(),
     });
   });
   return observations;

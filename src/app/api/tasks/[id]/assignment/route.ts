@@ -8,6 +8,7 @@ import { headCwd } from "@/lib/agent/transcript";
 import { ensureTaskPipelineForAssignment } from "@/lib/pipelines/engine";
 import { loadPipelinesForProjection } from "@/lib/pipelines/store";
 import type { TaskPipelineSpawnParams } from "@/lib/pipelines/taskBinding";
+import { taskForResponse } from "@/lib/prototypeReview/read";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { applyAssignmentPatches, assignmentRefFromBody, dismissUnstartedLaunch, removeAssignment, type AssignmentPatch } from "@/lib/tasks/commands";
 import { isoNow } from "@/lib/tasks/helpers";
@@ -99,7 +100,7 @@ async function postAssignment(
     return { tasks: outcome.ok ? outcome.tasks : undefined, result: outcome };
   });
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status });
-  return NextResponse.json({ ok: true, task: result.task });
+  return NextResponse.json({ ok: true, task: taskForResponse(req, result.task) });
 }
 
 export const POST = Object.assign(
@@ -127,7 +128,7 @@ export async function DELETE(req: NextRequest, ctx: TaskRouteContext): Promise<N
     return { tasks: outcome.ok ? outcome.tasks : undefined, result: outcome };
   });
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status });
-  return NextResponse.json({ ok: true, task: result.task });
+  return NextResponse.json({ ok: true, task: taskForResponse(req, result.task) });
 }
 
 interface DismissRouteDependencies {
@@ -216,7 +217,7 @@ async function patchAssignment(
   });
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status });
   await dependencies.clearAttention?.(ref);
-  return NextResponse.json({ ok: true, task: result.task });
+  return NextResponse.json({ ok: true, task: taskForResponse(req, result.task) });
 }
 
 export const PATCH = Object.assign(

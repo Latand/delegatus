@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -4283,7 +4283,7 @@ describe("Codex canonical root conversation and fork recovery (#708)", () => {
     };
   }
 
-  test("five recoverable failures in a row leave one fork artifact and one operation identity", async () => {
+  test.each(["filesystem", "fractional"] as const)("five recoverable failures in a row leave one fork artifact and one operation identity (%s mtime)", async (mtime) => {
     const store = registry();
     const base = fs.mkdtempSync(path.join(os.tmpdir(), "llv-708-multi-failure-"));
     roots.push(base);
@@ -4291,7 +4291,25 @@ describe("Codex canonical root conversation and fork recovery (#708)", () => {
     const target = accountRoot(base, "b");
     const sourcePath = path.join(source.transcriptRoot, `rollout-${SOURCE_THREAD}.jsonl`);
     fs.writeFileSync(sourcePath, sessionMeta(SOURCE_THREAD), { mode: 0o600 });
-    await reconcileMigrationInventory(store, [fileEntry(sourcePath)]);
+    if (mtime === "fractional") {
+      const inventoryTime = Date.now();
+      const modifiedAt = (inventoryTime + 1_000.5) / 1000;
+      fs.utimesSync(sourcePath, modifiedAt, modifiedAt);
+      const mtimeMs = fs.statSync(sourcePath).mtimeMs;
+      expect(mtimeMs % 1).toBeGreaterThan(0);
+      const clock = spyOn(Date, "now").mockReturnValue(inventoryTime);
+      try {
+        await reconcileMigrationInventory(store, [fileEntry(sourcePath)]);
+        const observedAt = store.conversationForPath(sourcePath)!.turn.observedAt!;
+        expect(Date.parse(observedAt)).toBeGreaterThanOrEqual(mtimeMs);
+        await reconcileMigrationInventory(store, [fileEntry(sourcePath)]);
+        expect(store.conversationForPath(sourcePath)!.turn.observedAt).toBe(observedAt);
+      } finally {
+        clock.mockRestore();
+      }
+    } else {
+      await reconcileMigrationInventory(store, [fileEntry(sourcePath)]);
+    }
     store.reconcileConversations([observation(sourcePath, "a", "idle")]);
     const conversation = store.conversationForPath(sourcePath)!;
     store.commitMigrationIntent({

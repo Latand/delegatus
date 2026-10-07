@@ -43,8 +43,9 @@ export function changedFieldNames(before: Map<string, string | undefined>, after
 
 export function taskAcknowledgement(task: BoardTask, args: Record<string, unknown>, fields: string[]) {
   const full = fullAnswer(args);
+  const { prototypeReviews: _reviews, prototypeReviewReplica: _replica, prototypeReview: _summary, ...publicTask } = task;
   return {
-    taskId: task.id, revision: taskRevision(task), task: full ? task : compactTask(task),
+    taskId: task.id, revision: taskRevision(task), task: full ? publicTask : compactTask(task),
     changedFields: fields,
     /* The agent's details are answered by length, never echoed (#1845): a line
        edit exists so a one-line change costs one line each way. */

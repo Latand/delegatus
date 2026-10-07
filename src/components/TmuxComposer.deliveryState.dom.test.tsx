@@ -113,6 +113,55 @@ const receipt = (overrides: Partial<RuntimeReceipt> & { operationId: string }): 
   ...overrides,
 });
 
+test.each(["en", "uk"] as const)("automatic retirement receipts stay out of the composer history in %s", async (locale) => {
+  setLocale(locale);
+  mockTargets();
+  const retirements = Array.from({ length: 8 }, (_, index) => receipt({
+    operationId: `retire-${index}`, kind: "kill", origin: "system",
+    status: index % 2 ? "failed" : "rejected", reason: "idle-retirement-deferred", text: null,
+  }));
+  publishReceipts(retirements);
+  const { host, root } = await renderInto(<TmuxComposer file={file(1)} />);
+  try {
+    expect(host.querySelectorAll("[data-receipt-status]")).toHaveLength(0);
+    await settle(() => publishReceipts([
+      ...retirements,
+      receipt({ operationId: "operator-message", status: "failed", reason: "dead-host" }),
+      receipt({ operationId: "legacy-kill", kind: "kill", status: "failed", reason: "dead-host", text: null }),
+      // The same reason on an explicit kill still belongs to the operator.
+      receipt({ operationId: "operator-kill", kind: "kill", origin: "operator", status: "failed",
+        reason: "idle-retirement-deferred", text: null }),
+      receipt({ operationId: "future-retirement", kind: "kill", origin: "system", status: "failed",
+        reason: "another-internal-cause", text: null }),
+    ]));
+    expect(host.querySelectorAll("[data-receipt-status]")).toHaveLength(3);
+    expect(host.querySelector('[data-operation="operator-message"]')).not.toBeNull();
+    expect(host.querySelector('[data-operation="operator-kill"]')).not.toBeNull();
+    expect(host.querySelector('[data-operation="legacy-kill"]')).not.toBeNull();
+    expect(host.querySelector('[data-operation="future-retirement"]')).toBeNull();
+    await settle(() => root.render(<TmuxComposer file={file(2)} />));
+    expect(host.querySelectorAll("[data-receipt-status]")).toHaveLength(3);
+  } finally {
+    flushSync(() => root.unmount());
+  }
+});
+
+test("the standalone receipt stack excludes automatic lifecycle operations in every state", async () => {
+  const { host, root } = await renderInto(<RuntimeComposerReceipts
+    receipts={(["queued", "delivering", "failed", "rejected", "delivered"] as const).map((status) => receipt({
+      operationId: `automatic-${status}`, kind: "kill", origin: "system", status, text: null,
+    }))}
+    onRetry={() => {}}
+    onEdit={() => {}}
+  />);
+  try {
+    expect(host.textContent).toBe("");
+    expect(host.querySelectorAll("[data-receipt-status]")).toHaveLength(0);
+  } finally {
+    await settle(() => root.unmount());
+  }
+});
+
 const structuredRuntimeView = (
   liveTurn: { turnId: string; text: string } | null,
 ): RuntimeSessionView => ({

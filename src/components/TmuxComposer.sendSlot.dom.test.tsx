@@ -23,11 +23,12 @@ import { Window } from "happy-dom";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
-import { emptyStore } from "@/components/runtime/runtimeModel";
+import { emptyStore, applyEvent } from "@/components/runtime/runtimeModel";
 import type { ConnectionState } from "@/components/runtime/runtimeModel";
 import { setRuntimeBusForTests, type RuntimeBus, type RuntimeBusState } from "@/hooks/runtimeBus";
-import { setLocale } from "@/lib/i18n";
+import { setLocale, translate } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
+import { chatStateBits } from "@/components/mobile/mobileChatState";
 
 const dom = new Window();
 installActEnv();
@@ -88,6 +89,7 @@ beforeEach(() => {
   setLocale("en");
   connection = "live";
   calls.length = 0;
+  for (const key of Object.keys(STATES)) delete STATES[key];
   setRuntimeBusForTests(testBus);
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
@@ -185,6 +187,54 @@ test("an idle conversation keeps the ordinary send", async () => {
   const { host, root } = await render(conversation({ proc: null, pid: null, activity: "idle", lastTurn: { startedAt: Date.now() - 900_000, endedAt: Date.now() - 800_000 } }));
   expect(slotKind(host)).toBe("send");
   flushSync(() => root.unmount());
+});
+
+/* A structured host can settle while the scanner still holds the transcript's
+   turn open, and the reverse. The phone's bar renders `chatStateBits` from the
+   scanner, so the slot follows the same projection in both directions and the
+   two never show different states. */
+function structuredStore(turn: "running" | "idle") {
+  const event = applyEvent(emptyStore(), {
+    schemaVersion: 1, seq: 1, eventId: `host-${turn}`, revision: 1,
+    scope: { type: "session", id: "conversation_slot" }, kind: "session-status",
+    payload: { conversationId: "conversation_slot", sessionKey: { engine: "codex", sessionId: "slot-thread" },
+      hostKind: "codex-app-server", host: "hosted", turn, activeTurnId: turn === "running" ? "slot-turn" : null,
+      artifactPath: "/slot-1439.jsonl", provenance: "structured", capabilities: { steer: true, structuredAttention: true } },
+  });
+  if (event.outcome !== "applied") throw new Error(`${turn} fixture event was refused`);
+  return event.store;
+}
+
+interface Agreement {
+  locale: "en" | "uk";
+  turn: "running" | "idle";
+  scanner: "open" | "closed";
+  endedAt: number | null;
+  slot: "stop" | "send";
+  phrase: RegExp;
+}
+
+const agreement: Agreement[] = [
+  { locale: "en", turn: "idle", scanner: "open", endedAt: null, slot: "stop", phrase: /^working \d/ },
+  { locale: "uk", turn: "idle", scanner: "open", endedAt: null, slot: "stop", phrase: /^працює \d/ },
+  { locale: "en", turn: "running", scanner: "closed", endedAt: Date.now() - 30_000, slot: "send", phrase: /^done/ },
+  { locale: "uk", turn: "running", scanner: "closed", endedAt: Date.now() - 30_000, slot: "send", phrase: /^готово/ },
+];
+
+test.each(agreement)("the slot and the bar agree when the structured turn is $turn and the scanner turn is $scanner ($locale)", async ({ locale, turn, endedAt, slot: expected, phrase }) => {
+  setLocale(locale);
+  const file = conversation({ conversationId: "conversation_slot", lastTurn: { startedAt: Date.now() - 90_000, endedAt } });
+  stateFor("live").store = structuredStore(turn);
+  const tr = ((key: string, vars?: Record<string, string | number>) => translate(locale, key as never, vars)) as never;
+  const bar = chatStateBits(tr, file);
+  const { host, root } = await render(file);
+  try {
+    expect(bar.phrase).toMatch(phrase);
+    expect(slotKind(host)).toBe(expected);
+    expect(bar.key === "working").toBe(slotKind(host) === "stop");
+  } finally {
+    flushSync(() => root.unmount());
+  }
 });
 
 test("offline, the slot is Queue and says the text is delivered on reconnect", async () => {

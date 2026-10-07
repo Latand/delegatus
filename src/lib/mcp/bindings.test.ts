@@ -37,6 +37,7 @@ import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { claimInstall } from "@/lib/team/members";
+import { clearTelegramConnection, deleteTelegramSession, saveTelegramSession, writeTelegramConnection } from "@/lib/telegram/sessionStore";
 import { resetTeamStoreForTests, teamStore } from "@/lib/team/store";
 
 import type { CompletedGenerationRead } from "@/lib/lifecycle/inventorySelection";
@@ -442,6 +443,29 @@ test("Telegram spawn grants use the server-attributed seat, never a worker-suppl
   const worker = viewerMcpBindings(undefined, control, { callerAttribution: () => ({
     kind: "agent", conversationId: "conversation_worker", role: "builder",
   }) } as never).spawn_agent;
+  /* Where Telegram is not set up there is no grant to guard: the request goes
+     on to admission, which leaves the server out. */
+  await worker({ ...args, clientRequestId: "worker-telegram-not-set-up" });
+  expect(dispatched).toHaveLength(1);
+  dispatched.length = 0;
+  const session = saveTelegramSession("placeholder-session-for-bindings-test");
+  writeTelegramConnection({ version: 1, status: "connected", credentialRef: session.credentialRef,
+    identity: null, lastHealthCheckAt: null, errorCode: null, identityIdUpgradedAt: null });
+  try {
+    await telegramGrantRefusals(worker, args, control, dispatched, seatId);
+  } finally {
+    deleteTelegramSession();
+    clearTelegramConnection();
+  }
+});
+
+async function telegramGrantRefusals(
+  worker: (args: Record<string, unknown>) => Promise<unknown>,
+  args: Record<string, unknown>,
+  control: { post(pathname: string, body: Record<string, unknown>): Promise<Record<string, unknown>> },
+  dispatched: Record<string, unknown>[],
+  seatId: string,
+): Promise<void> {
   await expect(worker(args)).rejects.toThrow("only by the operator or their orchestrator seat");
   expect(dispatched).toHaveLength(0);
 
@@ -467,7 +491,7 @@ test("Telegram spawn grants use the server-attributed seat, never a worker-suppl
   await expect(deputy({ ...args, clientRequestId: "deputy-telegram-child" }))
     .rejects.toThrow("seat's own spawn capability");
   expect(dispatched).toHaveLength(1);
-});
+}
 
 test("gateway spawn with no MCP selection sends the Viewer baseline explicitly", async () => {
   const dispatched: Record<string, unknown>[] = [];
@@ -699,14 +723,18 @@ test("runtime-bound MCP tools use the live Viewer control surface", async () => 
     },
   }, designatedSeat);
 
+  /* `/repo` is no project of this seat's, so the launch quotes the operator's
+     request for it (#2518); the quote never reaches the spawn route. */
   await bindings.spawn_agent({
     clientRequestId: "spawn-http-control",
     cwd: "/repo",
     ["prompt"]: "implement",
     title: "Implement durable identity",
     mcpServers: ["viewer", "agent-browser"],
+    crossProjectRequest: "Start the builder in that repository yourself.",
   });
   expect(requests[0]?.body.title).toBe("Implement durable identity");
+  expect(requests[0]?.body).not.toHaveProperty("crossProjectRequest");
   const exactMessage = " \tcontinue\nПривіт 🌍\n ";
   await bindings.send_message({
     clientRequestId: "send-http-control",
