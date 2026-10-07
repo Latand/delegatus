@@ -417,6 +417,24 @@ test("an account pick carries the sends it holds back that no host was handed, a
   expect(carried).toEqual([["never-dispatched"]]);
 });
 
+test("a switch refused the registry writer goes back to queued with the reason the composer shows", async () => {
+  const transitions: Array<[string, string, string | null | undefined]> = [];
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => [
+      { id: "effect:pick-b", kind: "runtime.reconfigure", eventSeq: 1,
+        payload: { operationId: "pick-b", conversationId: "conversation-one", model: "claude-haiku-4-5", effort: "low", fast: false, accountId: "account-b" } },
+      { id: "effect:carried", kind: "runtime.send", eventSeq: 2,
+        payload: { kind: "send", operationId: "carried", conversationId: "conversation-one", text: "Second message", policy: "queue" } },
+    ],
+    status: async () => ({ status: "queued", revision: 1 }),
+    transition: async (operationId, next, details) => { transitions.push([operationId, next, details?.reason]); },
+  }, () => host(async () => ({ outcome: "turn-started", turnId: "turn-one" })), undefined, () => {}, undefined, async () => "writer-busy");
+
+  await queue.drain();
+
+  expect(transitions).toEqual([["pick-b", "applying", undefined], ["pick-b", "queued", "switch-writer-busy"]]);
+});
+
 test("a busy structured turn keeps reconfigure queued and applies it before later messages", async () => {
   const actions: string[] = [];
   const terminal = new Set<string>();

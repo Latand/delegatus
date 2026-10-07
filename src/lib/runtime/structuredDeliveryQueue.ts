@@ -234,7 +234,7 @@ export interface StructuredReconfigureOwnership {
 export type StructuredReconfigureHandler = (
   effect: StructuredReconfigureEffect,
   ownership: StructuredReconfigureOwnership,
-) => Promise<void | "applied" | "pending">;
+) => Promise<void | "applied" | "pending" | "writer-busy">;
 
 type NativeEffect = NativeQueueCommand & { operationId: string; eventSeq: number };
 type DeliveryEffect = NativeEffect | SendEffect | InjectEffect | ControlEffect | CompactEffect | StructuredReconfigureEffect;
@@ -2033,8 +2033,11 @@ export class StructuredDeliveryQueue {
     }
     // Journal timeouts after the executor returns cannot turn its outcome into
     // a failed switch. Read/reconcile the original receipt on a bounded retry.
-    if (outcome === "pending") {
-      await this.transitionReconfigure(effect, "queued", { reason: "turn-boundary" });
+    /* `writer-busy`: the switch found the delivery record's write lock held
+       past its bound and wrote nothing. The reason rides on the switch's own
+       receipt, so the composer says why the switch is waiting. */
+    if (outcome === "pending" || outcome === "writer-busy") {
+      await this.transitionReconfigure(effect, "queued", { reason: outcome === "writer-busy" ? "switch-writer-busy" : "turn-boundary" });
       retry.fail();
       this.retrySoon();
       return true;

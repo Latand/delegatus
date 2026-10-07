@@ -3,8 +3,10 @@ import { describe, expect, test } from "bun:test";
 import type { FileEntry } from "@/lib/types";
 
 import {
+  conversationFileIndex,
   conversationIdentity,
   currentConversationFile,
+  currentMemberPath,
   formatConversationHash,
   isArchivedPredecessor,
   isMigrationSuccessor,
@@ -98,6 +100,25 @@ describe("withoutArchivedPredecessors", () => {
     const current = file({ path: "/gen3", conversationId: "c", generation: 3, predecessorPath: "/gen2" });
     expect(withoutArchivedPredecessors([older, newest, current, other])).toEqual([current, other]);
   });
+});
+
+describe("an archived stand-in is one row for the resolver, the index and the board", () => {
+  /* 2026-10-07: after two switches the resolver took the first archived row
+     and the board kept the newest, so a link to the conversation opened nothing. */
+  const older = file({ path: "/s/old.jsonl", conversationId: "c", generation: 1, migratedTo: "/s/newer.jsonl" });
+  const newer = file({ path: "/s/newer.jsonl", conversationId: "c", generation: 2, migratedTo: "/s/successor.jsonl" });
+  for (const [order, rows] of [["older first", [older, newer]], ["newer first", [newer, older]]] as const) {
+    test(`every selector picks the newest archived row, ${order}`, () => {
+      const files = [file({ path: "/other", conversationId: "d" }), ...rows];
+      const kept = withoutArchivedPredecessors(files).find((entry) => entry.conversationId === "c");
+      expect(kept).toBe(newer);
+      expect(currentConversationFile(files, "c")).toBe(newer);
+      expect(conversationFileIndex(files).currentByConversation.get("c")).toBe(newer);
+      expect(resolveConversationTarget(files, parseConversationHash("#c=c"))).toBe(newer);
+      expect(resolveConversationTarget(files, parseConversationHash("#f=%2Fs%2Fold.jsonl"))).toBe(newer);
+      expect(currentMemberPath("/s/old.jsonl", null, files)).toBe("/s/newer.jsonl");
+    });
+  }
 });
 
 describe("succession keeps a stable card identity (finding 6)", () => {

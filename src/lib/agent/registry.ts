@@ -4124,6 +4124,9 @@ export interface AgentRegistryStorageOptions {
       bound has none and an empty bound proves nothing about the origin rule. */
   mcpGrantPolicy?: McpGrantPolicy;
   sqliteFilename?: string;
+  /** How long an off-loop delivery write waits for the lock before it is
+      refused (5 s). Tests shorten it to exercise a refusal quickly. */
+  sqliteWriterDeadlineMs?: number;
   onSqliteWriterWait?: (durationMs: number) => void;
   onSqliteSnapshotLoad?: () => void;
   onSqliteRowPayloadRead?: (collection: string, count: number) => void;
@@ -4302,6 +4305,7 @@ function journalStructuredTermination(registryFilename: string, record: Record<s
 export class AgentRegistry {
   private readonly sqliteMode: AgentRegistrySqliteMode;
   private readonly mcpGrantPolicy: McpGrantPolicy | undefined;
+  private readonly writerDeadlineMs: number | undefined;
   private readonly sqliteStore: SqliteAgentRegistryStore | null;
   private readonly beforeDualWriteMutationReplace: (() => void) | undefined;
   private readOnlyCache: { signature: string; snapshot: RegistryFile } | null = null;
@@ -4355,6 +4359,7 @@ export class AgentRegistry {
       ?? backend.sqliteFilename
       ?? defaultRegistrySqliteFilename(filename);
     this.mcpGrantPolicy = storage.mcpGrantPolicy;
+    this.writerDeadlineMs = storage.sqliteWriterDeadlineMs;
     this.mirrorCheckpointMs = Math.max(0, storage.mirrorCheckpointMs ?? 5_000);
     this.now = storage.now ?? Date.now;
     this.scheduleMirrorCheckpoint = storage.scheduleMirrorCheckpoint
@@ -5181,6 +5186,32 @@ export class AgentRegistry {
     return this.sqliteMode === "read" || this.sqliteMode === "sqlite"
       ? this.sqliteStore!.snapshot().file
       : readFile(this.filename, this.mcpGrantPolicy);
+  }
+
+  /**
+   * Runs one registry mutation with the write lock waited for off the event
+   * loop, for callers on the Viewer's delivery path. `operation` runs in the
+   * synchronous step that acquired the lock and its mutation commits inside
+   * that transaction, so the wait and the write cannot be separated by another
+   * writer. `{ acquired: false }` means the lock stayed held past the deadline
+   * and nothing ran; the refusal is logged with the operation it was for, and
+   * the caller defers. `operation` must go straight to its mutation, with no
+   * snapshot read before it. Stores without a SQLite writer run it at once.
+   */
+  private async whenWriterHeld<T>(
+    correlation: { label: string; operationId?: string | null },
+    operation: () => T,
+  ): Promise<{ acquired: true; value: T } | { acquired: false }> {
+    if (this.sqliteMode !== "read" && this.sqliteMode !== "sqlite") return { acquired: true, value: operation() };
+    const written = await this.sqliteStore!.withWriter(operation, {
+      ...(this.writerDeadlineMs !== undefined ? { deadlineMs: this.writerDeadlineMs } : {}),
+    });
+    if (!written.acquired) {
+      console.warn(`[registry] ${correlation.label}${correlation.operationId ? ` for ${correlation.operationId}` : ""} `
+        + `found the write lock held for ${Math.round(written.waitedMs)}ms and wrote nothing`);
+      return { acquired: false };
+    }
+    return { acquired: true, value: written.value };
   }
 
   /** Shared process-local snapshot for projections that never mutate registry
@@ -9590,11 +9621,20 @@ export class AgentRegistry {
    * queue names the operations it holds behind the switch that it never
    * dispatched, and each one's claim on the source generation goes back to a
    * hold the switch carries to the successor, the same hold a send made after
-   * the pick gets. Returns how many claims were handed over.
+   * the pick gets. Answers how many claims were handed over, or that the write
+   * lock stayed held and nothing was written.
    */
-  holdUndispatchedClaimsForSwitch(id: ViewerConversationId, operationIds: readonly string[]): number {
-    if (operationIds.length === 0) return 0;
-    return this.mutate((file) => {
+  async holdUndispatchedClaimsForSwitch(
+    id: ViewerConversationId,
+    operationIds: readonly string[],
+    switchOperationId: string,
+  ): Promise<{ acquired: true; value: number } | { acquired: false }> {
+    if (operationIds.length === 0) return { acquired: true, value: 0 };
+    /* The switch runs on the Viewer's event loop, so the lock is waited for off
+       it: a writer in another process held it for up to five seconds of frozen
+       requests. A refusal writes nothing and the switch's next pass hands the
+       same claims over. */
+    return this.whenWriterHeld({ label: "switch.hand-over-claims", operationId: switchOperationId }, () => this.mutate((file) => {
       const canonicalId = resolveConversationAlias(file, id);
       const migration = file.conversations[canonicalId]?.migration;
       if (!migration || !IN_FLIGHT_MIGRATION_PHASES.has(migration.phase)) return 0;
@@ -9612,7 +9652,7 @@ export class AgentRegistry {
         handed += 1;
       }
       return handed;
-    }, { deliveryOnly: true });
+    }, { deliveryOnly: true }));
   }
 
   requeueUnactuatedDelivery(id: string, cause?: string): HeldDelivery {

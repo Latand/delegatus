@@ -22,6 +22,7 @@ import { createRoot, type Root } from "react-dom/client";
 import type { ConversationMigration, FileEntry } from "@/lib/types";
 import { setLocale, translate } from "@/lib/i18n";
 import { setRuntimeUiEnabledForTests } from "@/hooks/runtimeBus";
+import type { RuntimeReceipt } from "@/components/runtime/runtimeModel";
 
 const dom = new Window();
 installActEnv();
@@ -53,6 +54,7 @@ Object.assign(globalThis, {
    `file.proc` is the host authority and the composer sends through /api/tmux. */
 import { TmuxComposer } from "./TmuxComposer";
 import { enqueueOutbox, readOutbox, resetOutboxForTests } from "./conversation/outbox";
+import { setTmuxComposerRuntimeDependenciesForTests } from "./tmuxComposerRuntime";
 
 const realFetch = globalThis.fetch;
 
@@ -304,4 +306,34 @@ test("a switching card with an undelivered message says it is held", async () =>
 
   expect(host.querySelector("[data-composer-switch-hint]")?.textContent).toBe(translate("en", "migrate.heldSend"));
   await act(async () => root.unmount());
+});
+
+test("a switch waiting for the delivery record's write lock says so under the composer", async () => {
+  /* The switch's own receipt carries the wait when another writer held the
+     registry lock past the handover's bound (2026-10-07 review, P1). */
+  const waiting: RuntimeReceipt[] = [{
+    operationId: "pick-account-b",
+    idempotencyKey: "pick-account-b",
+    conversationId: CARD,
+    kind: "reconfigure",
+    status: "queued",
+    reason: "switch-writer-busy",
+    at: "2026-10-07T08:00:00.000Z",
+    revision: 3,
+  }];
+  setTmuxComposerRuntimeDependenciesForTests({ useRuntimeReceiptsForArtifact: () => waiting });
+  try {
+    for (const locale of ["en", "uk"] as const) {
+      setLocale(locale);
+      stubHeldSend();
+      const { host, root } = await renderInto(<TmuxComposer file={fileWith(switching)} />);
+      await settle();
+
+      expect(host.querySelector("[data-composer-switch-hint]")?.textContent).toBe(translate(locale, "receipt.human.switchWriterBusy"));
+
+      await act(async () => root.unmount());
+    }
+  } finally {
+    setTmuxComposerRuntimeDependenciesForTests(null);
+  }
 });

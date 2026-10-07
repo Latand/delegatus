@@ -25,7 +25,8 @@ export function conversationFileIndex(files: readonly FileEntry[]): Conversation
     if (!isArchivedPredecessor(file)) visible.push(file);
     if (!file.conversationId) continue;
     const previous = currentByConversation.get(file.conversationId);
-    if (!previous || rank(file) > rank(previous)) currentByConversation.set(file.conversationId, file);
+    if (!previous || rank(file) > rank(previous)
+      || (rank(file) === 1 && rank(previous) === 1 && newerStandIn(file, previous))) currentByConversation.set(file.conversationId, file);
   }
   const index = { byPath, currentByConversation, visible };
   fileIndexes.set(files, index);
@@ -129,6 +130,16 @@ export function isLaunchPlaceholder(file: Pick<FileEntry, "path">): boolean {
   return file.path.startsWith("spawn:");
 }
 
+/** Whether archived `candidate` stands for its conversation in place of
+    archived `incumbent` while no current generation is listed: the newest
+    generation does, the first listed on a tie. The resolver, the index and the
+    board's fold all choose by this one rule, so a link resolves to the very row
+    the board keeps (2026-10-07: after two switches the resolver took the first
+    archived row and the board kept the newest, and the link opened nothing). */
+function newerStandIn(candidate: Pick<FileEntry, "generation">, incumbent: Pick<FileEntry, "generation">): boolean {
+  return (candidate.generation ?? 0) > (incumbent.generation ?? 0);
+}
+
 /** The current, visible entry for a stable id: the one generation that is not an
     archived predecessor. A materialized transcript always wins over the launch
     placeholder of the same conversation — the placeholder is that conversation's
@@ -142,8 +153,8 @@ export function currentConversationFile(files: readonly FileEntry[], conversatio
       placeholder = placeholder ?? file;
       continue;
     }
-    fallback = fallback ?? file;
     if (!isArchivedPredecessor(file)) return file;
+    if (!fallback || newerStandIn(file, fallback)) fallback = file;
   }
   return fallback ?? placeholder;
 }
@@ -267,7 +278,10 @@ export function withoutArchivedPredecessors(files: FileEntry[]): FileEntry[] {
   for (const file of files) {
     if (!file.conversationId) continue;
     if (!isArchivedPredecessor(file)) current.add(file.conversationId);
-    else if ((file.generation ?? 0) >= (standIn.get(file.conversationId)?.generation ?? 0)) standIn.set(file.conversationId, file);
+    else {
+      const incumbent = standIn.get(file.conversationId);
+      if (!incumbent || newerStandIn(file, incumbent)) standIn.set(file.conversationId, file);
+    }
   }
   return files.filter((file) => !isArchivedPredecessor(file)
     || (file.conversationId !== undefined && !current.has(file.conversationId) && standIn.get(file.conversationId) === file));

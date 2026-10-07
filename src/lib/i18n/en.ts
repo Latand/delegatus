@@ -1050,6 +1050,7 @@ export const en = {
   "receipt.human.switchingAccounts": "Switching accounts — your message goes out right after",
   "receipt.human.switchAfterTurn": "Switching accounts when the current turn ends — your message goes out right after",
   "receipt.human.switchFailed": "Account switch failed — your message waits for the switch to be retried or cancelled",
+  "receipt.human.switchWriterBusy": "Switching accounts — the delivery record is busy, the switch retries in a moment",
   "receipt.human.noTurn": "there is no active turn",
   "receipt.human.discarded": "Discarded",
   "receipt.human.unsupportedCapability": "Delegatus has no channel for this control here",

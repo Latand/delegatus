@@ -9,7 +9,9 @@ import type { SessionKey } from "@/lib/agent/sessionKey";
 import type { StructuredReconfigureEffect } from "./structuredDeliveryQueue";
 import { recoverDeadStructuredConversation } from "./structuredRecovery";
 
-export type StructuredReconfigureOutcome = "applied" | "pending";
+/** `writer-busy`: the delivery record's write lock stayed held past its bound
+    and the step wrote nothing; the next pass repeats it. */
+export type StructuredReconfigureOutcome = "applied" | "pending" | "writer-busy";
 
 class StructuredReconfigureSupersededError extends Error {
   constructor() {
@@ -228,11 +230,12 @@ export async function applyStructuredReconfigure(
         operationId: effect.operationId,
         revision: effect.eventSeq,
       });
-      registry.holdUndispatchedClaimsForSwitch(conversationId, dependencies.carriedSends ?? []);
     } catch (error) {
       if (ownerCancelled()) throw new StructuredReconfigureCancelledError();
       throw error;
     }
+    const handover = await registry.holdUndispatchedClaimsForSwitch(conversationId, dependencies.carriedSends ?? [], effect.operationId);
+    if (!handover.acquired) return "writer-busy";
     const committedSuccessorAfterCapturedPredecessor = (): RegistryConversation["generations"][number] | null => {
       const latest = registry.conversation(conversationId);
       if (!latest) return null;

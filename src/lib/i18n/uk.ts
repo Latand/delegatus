@@ -1090,6 +1090,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "receipt.human.switchingAccounts": "Перемикається акаунт — повідомлення піде одразу після цього",
   "receipt.human.switchAfterTurn": "Акаунт перемкнеться, щойно закінчиться поточний хід — повідомлення піде одразу після цього",
   "receipt.human.switchFailed": "Не вдалося перемкнути акаунт — повідомлення чекає на повторну спробу або скасування перемикання",
+  "receipt.human.switchWriterBusy": "Перемикається акаунт — журнал доставки зайнятий, перемикання повториться за мить",
   "receipt.human.noTurn": "немає активного ходу",
   "receipt.human.discarded": "Відкинуто",
   "receipt.human.unsupportedCapability": "Delegatus не має каналу для цієї команди тут",
