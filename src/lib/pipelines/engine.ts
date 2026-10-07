@@ -689,7 +689,7 @@ async function spawnPipelineAgent(
   } catch (error) {
     if (error instanceof ActivationSuperseded && begun.kind !== "replay") {
       // This adapter has not dispatched; only its own fresh reservation is safe to cancel.
-      registry.failStructuredSpawn(begun.receipt.launchId, "stage activation cancelled before dispatch");
+      await registry.failStructuredSpawnOffLoop(begun.receipt.launchId, "stage activation cancelled before dispatch");
     }
     throw error;
   }
@@ -713,7 +713,7 @@ async function spawnPipelineAgent(
     /* Nothing was dispatched, and the receipt has to say so itself (#1678):
        the engine re-dispatches only on the receipt's own terminal verdict,
        exactly as the spawn layer records one after its transport fails. */
-    registry.failStructuredSpawn(begun.receipt.launchId, unavailable);
+    await registry.failStructuredSpawnOffLoop(begun.receipt.launchId, unavailable);
     throw new Error(unavailable);
   }
   let response: Awaited<ReturnType<typeof spawnStructuredConversation>>;
@@ -1326,7 +1326,10 @@ export function defaultPipelinePorts(
       const recovery = stagedLaunchRecovery(receipt);
       // An uncertain/delivered operation can outlive the controller's budget.
       if (recovery && recovery.phase !== "unpublished") return false;
-      const failed = registry.failSpawn(launchId, reason);
+      /* The engine's tick is synchronous here: a non-waiting write, and a
+         lock held elsewhere answers false, which the next tick asks again
+         (docs/design/delivery-progress-and-drain.md, C5). */
+      const failed = registry.failSpawnNow(launchId, reason);
       invalidateRegistryProjection();
       return failed;
     },

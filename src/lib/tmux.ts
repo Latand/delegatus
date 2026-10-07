@@ -1482,7 +1482,7 @@ export async function spawnAgentWithPrompt(spec: ResumeSpec, text: string, exist
     agentPublicationIdentityEnv(process.env);
   } catch (error) {
     if (existingReceipt?.state === "starting") {
-      agentRegistry().failSpawn(existingReceipt.launchId, error instanceof Error ? error.message : String(error));
+      await agentRegistry().failSpawnOffLoop(existingReceipt.launchId, error instanceof Error ? error.message : String(error));
     }
     throw error;
   }
@@ -1502,7 +1502,7 @@ export async function spawnAgentWithPrompt(spec: ResumeSpec, text: string, exist
     const prepared = await prepareAgentPublicationSpec(spec);
     return { ...(await spawnAgentWithPromptUnchecked(prepared, text, receipt)), receipt };
   } catch (error) {
-    agentRegistry().failSpawn(receipt.launchId, error instanceof Error ? error.message : String(error));
+    await agentRegistry().failSpawnOffLoop(receipt.launchId, error instanceof Error ? error.message : String(error));
     throw error;
   }
 }

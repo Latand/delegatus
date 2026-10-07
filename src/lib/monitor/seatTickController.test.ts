@@ -7266,3 +7266,27 @@ test("a second interruption parking an announced running stall wakes its seat de
   await runSeatTickCheck(PROJECT, parked.deps);
   expect(parked.sent).toHaveLength(1);
 });
+
+test("a wake's journal settlement waits for the lock off the loop, and a write the lock refused answers undecided until the next tick", async () => {
+  /* docs/design/delivery-progress-and-drain.md, C2. */
+  const { sqliteRegistryFixture, registryLockHolder, longestLoopGap } = await import("@/lib/agent/registryLockHolderFixture");
+  const made = sqliteRegistryFixture("llv-wake-settlement", { sqliteWriterDeadlineMs: 150 });
+  const holder = registryLockHolder(made.sqliteFilename);
+  const registry = made.registry;
+  try {
+    const conversation = registry.ensureConversation("codex", "/wake-settlement.jsonl", "default");
+    const held = registry.holdDelivery(conversation.id, "seat wake", "wake-settlement-key");
+    registry.beginDeliveryAttempt(held.id, held.generationId!);
+    const target = { conversationId: conversation.id, operationId: held.command.operationId, deliveryId: held.id };
+    await holder.hold(500);
+    const { value: refused, gapMs } = await longestLoopGap(() => settleRecordFromJournal(registry, target, { status: "delivered", reason: null }));
+    expect(refused).toBeNull();
+    expect(gapMs).toBeLessThan(50);
+    await Bun.sleep(550);
+    expect(await settleRecordFromJournal(registry, target, { status: "delivered", reason: null })).toMatchObject({ state: "delivered" });
+  } finally {
+    await holder.close();
+    registry.close();
+    made.cleanup();
+  }
+});

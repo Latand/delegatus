@@ -2631,11 +2631,14 @@ function failInitialSpawnReceiptForDelivery(file: RegistryFile, delivery: HeldDe
     Only attempts-zero held/assigned rows are failed from receipt evidence. An
     attempted/uncertain delivery keeps its ambiguity and settles from its own
     journal outcome. Returns changed delivery ids and is idempotent. */
-function terminalizeFailedSpawnDeliveriesInFile(file: RegistryFile): string[] {
+function terminalizeFailedSpawnDeliveriesInFile(file: RegistryFile, onlyLaunchId?: string): string[] {
   const changed: string[] = [];
   for (const delivery of Object.values(file.heldDeliveries)) {
     const receipt = initialSpawnReceiptOf(file, delivery);
     if (!receipt) continue;
+    /* A launch's own failure ends its own first message; other launches'
+       rows are the convergence's (docs/design/delivery-progress-and-drain.md, C5). */
+    if (onlyLaunchId !== undefined && receipt.launchId !== onlyLaunchId) continue;
     if (delivery.state === "failed" && !["completed", "failed", "conflicted"].includes(receipt.state)) {
       const previousState = receipt.state;
       failInitialSpawnReceiptForDelivery(file, delivery);
@@ -6595,6 +6598,39 @@ export class AgentRegistry {
   }
 
   failSpawn(launchId: string, error: string): boolean {
+    const failed = this.failSpawnInFile(launchId, error);
+    if (failed.receipt) settleFailedLaunch(failed.receipt);
+    return failed.result;
+  }
+
+  /**
+   * {@link failSpawn} with the registry lock waited for off the event loop
+   * (docs/design/delivery-progress-and-drain.md, C5): the launch's failure and
+   * its never-attempted first message's ending stay one transaction, only the
+   * wait for its lock leaves the loop. Refused, nothing changed: the launch
+   * keeps its state and its first message stays held, as a crash just before
+   * the write leaves them, for the stale-launch convergence. Answers false then.
+   */
+  async failSpawnOffLoop(launchId: string, error: string): Promise<boolean> {
+    const written = await this.whenWriterHeld({ label: "spawn.fail", operationId: `spawn_message_${launchId}` },
+      () => this.failSpawnInFile(launchId, error));
+    if (!written.acquired) return false;
+    if (written.value.receipt) settleFailedLaunch(written.value.receipt);
+    return written.value.result;
+  }
+
+  /** {@link failSpawn} as a non-waiting write, for a caller that runs inside
+      a synchronous transaction of its own (the pipeline engine's tick): one
+      request for the lock, and false with nothing changed when it is held. */
+  failSpawnNow(launchId: string, error: string): boolean {
+    const written = this.deliveryWriteNow({ label: "spawn.fail", operationId: `spawn_message_${launchId}` },
+      () => this.failSpawnInFile(launchId, error));
+    if (!written.acquired) return false;
+    if (written.value.receipt) settleFailedLaunch(written.value.receipt);
+    return written.value.result;
+  }
+
+  private failSpawnInFile(launchId: string, error: string): { result: boolean; receipt: SpawnReceipt | null } {
     /* A fresh launch that failed here leaves its task where it was (#2170). */
     const failed: { receipt: SpawnReceipt | null } = { receipt: null };
     const result = this.mutate((file) => {
@@ -6619,12 +6655,11 @@ export class AgentRegistry {
       /* A promote/admission race can fail through this pre-identity path with a
          held or assigned attempts-zero initial delivery. Converge it in the
          same transaction instead of waiting for the reaper. */
-      terminalizeFailedSpawnDeliveriesInFile(file);
+      terminalizeFailedSpawnDeliveriesInFile(file, launchId);
       if (receipt.state === "failed") failed.receipt = clone(receipt);
       return receipt.state === "failed";
     });
-    if (failed.receipt) settleFailedLaunch(failed.receipt);
-    return result;
+    return { result, receipt: failed.receipt };
   }
 
   /** Durably reconcile terminal launches and attempts-zero initial deliveries
@@ -6632,6 +6667,18 @@ export class AgentRegistry {
       receipt/delivery failure. Peeks first so a quiet registry stays byte-stable
       across polls. Returns the reservation ids whose durable state changed. */
   terminalizeFailedSpawnDeliveries(): string[] {
+    if (!this.failedSpawnDeliveryCandidates()) return [];
+    return this.mutate((file) => terminalizeFailedSpawnDeliveriesInFile(file));
+  }
+
+  /** The convergence's mutation alone, for a caller that waits for the lock
+      off the loop (C0); it re-checks every row inside its transaction. */
+  terminalizeFailedSpawnDeliveriesNow(): string[] {
+    return this.mutate((file) => terminalizeFailedSpawnDeliveriesInFile(file));
+  }
+
+  /** The read half of {@link terminalizeFailedSpawnDeliveries}. */
+  failedSpawnDeliveryCandidates(): boolean {
     const snapshot = this.readOnlySnapshot();
     const hasCandidate = Object.values(snapshot.heldDeliveries).some(
       (delivery) => {
@@ -6645,8 +6692,7 @@ export class AgentRegistry {
           && (delivery.state === "held" || delivery.state === "assigned");
       },
     );
-    if (!hasCandidate) return [];
-    return this.mutate((file) => terminalizeFailedSpawnDeliveriesInFile(file));
+    return hasCandidate;
   }
 
   /** Atomically claims terminal failure and returns only the host identity this
@@ -6659,6 +6705,23 @@ export class AgentRegistry {
     options: { retainRegisteredHost?: boolean } = {},
   ): StructuredSpawnFailureClaim {
     const claim = this.failStructuredSpawnInFile(launchId, error, options);
+    if (claim.claimed && claim.receipt?.state === "failed") settleFailedLaunch(claim.receipt);
+    return claim;
+  }
+
+  /** {@link failStructuredSpawn} with the lock waited for off the loop (C5).
+      Refused, nothing was claimed and the receipt is as it was. */
+  async failStructuredSpawnOffLoop(
+    launchId: string,
+    error: string,
+    options: { retainRegisteredHost?: boolean } = {},
+  ): Promise<StructuredSpawnFailureClaim> {
+    const written = await this.whenWriterHeld({ label: "spawn.fail", operationId: `spawn_message_${launchId}` },
+      () => this.failStructuredSpawnInFile(launchId, error, options));
+    if (!written.acquired) {
+      return { claimed: false, receipt: this.readOnlySnapshot().receipts[launchId] ?? null, cleanup: null };
+    }
+    const claim = written.value;
     if (claim.claimed && claim.receipt?.state === "failed") settleFailedLaunch(claim.receipt);
     return claim;
   }
@@ -6687,7 +6750,7 @@ export class AgentRegistry {
          its still-`held` `spawn_<launchId>` reservation is terminalized in the
          same transaction (issue #653) rather than left as an eternal owed
          delivery. */
-      terminalizeFailedSpawnDeliveriesInFile(file);
+      terminalizeFailedSpawnDeliveriesInFile(file, launchId);
       if (!receipt.key || !receipt.artifactPath) {
         return { claimed: true, receipt: clone(receipt), cleanup: null };
       }
@@ -8134,7 +8197,40 @@ export class AgentRegistry {
     liveness: AccountLivenessOptions = {},
     options: { rewrite?: readonly AccountPathRewrite[] } = {},
   ): AccountRetirementReport {
-    return withAccountMutationLock(() => this.mutate((file) => {
+    return withAccountMutationLock(() => this.retireAccountInFile(engine, accountId, fallbackAccountId, liveness, options));
+  }
+
+  /**
+   * {@link retireAccount} as a non-waiting write (docs/design/
+   * delivery-progress-and-drain.md, C5). The removal runs it inside the
+   * accounts registry's file lock, whose waiters spin synchronously, so it may
+   * neither spin for the registry lock nor hold that lock across an `await`:
+   * the lock is asked for once, and {@link RegistryWriterBusyError} answers a
+   * lock held elsewhere with nothing retired.
+   */
+  retireAccountNow(
+    engine: MigrationEngine,
+    accountId: string,
+    fallbackAccountId: string,
+    liveness: AccountLivenessOptions = {},
+    options: { rewrite?: readonly AccountPathRewrite[] } = {},
+  ): AccountRetirementReport {
+    return withAccountMutationLock(() => {
+      const written = this.deliveryWriteNow({ label: "account.retire" },
+        () => this.retireAccountInFile(engine, accountId, fallbackAccountId, liveness, options));
+      if (!written.acquired) throw new RegistryWriterBusyError("account.retire");
+      return written.value;
+    });
+  }
+
+  private retireAccountInFile(
+    engine: MigrationEngine,
+    accountId: string,
+    fallbackAccountId: string,
+    liveness: AccountLivenessOptions,
+    options: { rewrite?: readonly AccountPathRewrite[] },
+  ): AccountRetirementReport {
+    return this.mutate((file) => {
       if (accountHasLiveSessions(file, engine, accountId, liveness)) throw new Error("account has live sessions");
       if (liveAccountConversationIds(file, engine, accountId, liveness).length > 0) throw new Error("account has current conversations");
       const changedAt = now();
@@ -8196,7 +8292,7 @@ export class AgentRegistry {
         file.conversationRevision[conversation.engine] += 1;
       }
       return report;
-    }));
+    });
   }
 
   /** Moves registry paths back after an interrupted account removal returned

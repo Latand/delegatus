@@ -428,7 +428,7 @@ async function migrationTickAndReaper(registry: AgentRegistry, port: HeldDeliver
     remapBoardPaths: (project) => boardFor(project),
     transferBoardPathPlacements: () => {},
   });
-  terminalizeStaleUndeliverableHeldDeliveries(registry);
+  await terminalizeStaleUndeliverableHeldDeliveries(registry);
 }
 
 test("a held record from before fencedBy existed, admitted after the switch's own intent began, is re-armed by its cancel", async () => {

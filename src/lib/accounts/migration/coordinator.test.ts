@@ -2645,7 +2645,7 @@ describe("durable account migration coordinator", () => {
       attempts: 0,
       error: null,
     });
-    expect(terminalizeStaleUndeliverableHeldDeliveries(restarted)).toEqual([]);
+    expect(await terminalizeStaleUndeliverableHeldDeliveries(restarted)).toEqual([]);
 
     const delivered: Array<{ clientMessageId: string; path: string; text: string }> = [];
     await reconcileMigrations(provider([]), {
@@ -2802,7 +2802,7 @@ describe("durable account migration coordinator", () => {
 
     await reconcileMigrations(provider([]), port, store);
     await reconcileMigrations(provider([]), port, store);
-    terminalizeStaleUndeliverableHeldDeliveries(store);
+    await terminalizeStaleUndeliverableHeldDeliveries(store);
     await reconcileMigrations(provider([]), port, store);
 
     expect(store.conversation(conversation.id)?.migration).toMatchObject({ phase: "rolled-back" });
@@ -2814,7 +2814,7 @@ describe("durable account migration coordinator", () => {
     const { store, conversation } = rolledBackResidue("/rolled-back-reaper-first.jsonl", "rolled-back-reaper-first");
     const assigned = store.holdDelivery(conversation.id, "sent after the rollback", "post-rollback-reaper-first");
 
-    expect(terminalizeStaleUndeliverableHeldDeliveries(store)).toEqual(["owned-by-rollback"]);
+    expect(await terminalizeStaleUndeliverableHeldDeliveries(store)).toEqual(["owned-by-rollback"]);
     expect(store.conversation(conversation.id)?.migration).toMatchObject({ phase: "rolled-back" });
     const delivered: string[] = [];
     await reconcileMigrations(provider([]), {

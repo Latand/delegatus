@@ -429,12 +429,12 @@ async function postTaskSpawn(
     try {
       const admitted = persistAssignment(dependencies, id, admittedPatch, admittedAt);
       if (!admitted.ok) {
-        registry.failSpawn(launchReceipt.launchId, admitted.error);
+        await registry.failSpawnOffLoop(launchReceipt.launchId, admitted.error);
         return NextResponse.json({ error: admitted.error }, { status: admitted.status });
       }
       admittedTask = admitted.task;
     } catch (error) {
-      registry.failSpawn(launchReceipt.launchId, "task admission could not be persisted");
+      await registry.failSpawnOffLoop(launchReceipt.launchId, "task admission could not be persisted");
       const failed = registry.readOnlySnapshot().receipts[launchReceipt.launchId] ?? launchReceipt;
       return NextResponse.json(taskSpawnResponse(failed, task, { ...admittedPatch, state: "failed" }, {
         error: error instanceof Error ? error.message : "task admission could not be persisted",
@@ -444,7 +444,7 @@ async function postTaskSpawn(
     if (dependencies.ensureTaskPipelineForAssignment) {
       const binding = await dependencies.ensureTaskPipelineForAssignment(admittedTask, pipelineSpawnParams(null));
       if (!binding.pipeline) {
-        registry.failSpawn(launchReceipt.launchId, binding.error ?? "could not reserve task pipeline");
+        await registry.failSpawnOffLoop(launchReceipt.launchId, binding.error ?? "could not reserve task pipeline");
         const failed = registry.readOnlySnapshot().receipts[launchReceipt.launchId] ?? launchReceipt;
         const failedAt = isoNow();
         const failedPatch = assignmentPatch(failed, failedAt, account.accountId, engine);
@@ -507,7 +507,7 @@ async function postTaskSpawn(
         error: error instanceof Error ? error.message : "task spawn attribution is pending",
       }), { status: 202 });
     }
-    registry.failSpawn(launchReceipt.launchId, error instanceof Error ? error.message : "task spawn failed");
+    await registry.failSpawnOffLoop(launchReceipt.launchId, error instanceof Error ? error.message : "task spawn failed");
     const failed = registry.readOnlySnapshot().receipts[launchReceipt.launchId] ?? observed;
     const at = isoNow();
     const patch = assignmentPatch(failed, at, account.accountId, engine);

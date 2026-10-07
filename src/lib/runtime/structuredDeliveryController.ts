@@ -1111,7 +1111,7 @@ export async function bindStructuredDeliveryQueue(
             || (receipt.state === "failed" && receipt.error !== reason)) continue;
           // The registry and runtime journal settle separately. A retry must
           // finish the journal write even if the registry already recorded kill.
-          const failure = registry.failStructuredSpawn(receipt.launchId, reason);
+          const failure = await registry.failStructuredSpawnOffLoop(receipt.launchId, reason);
           if (failure.receipt?.state !== "failed" || failure.receipt.error !== reason) continue;
           const operation = await client.operationStatus(receipt.launchId);
           if (operation?.receipt.status === "pending" || operation?.receipt.status === "queued" || operation?.receipt.status === "delivering") {

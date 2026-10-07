@@ -823,8 +823,8 @@ export async function executeSpawnRequest(
         return NextResponse.json({ error: "spawn attempt conflicts with its original request" }, { status: 409 });
       }
       if (begun.kind === "created") {
-        if (transport === "structured") registry.failStructuredSpawn(begun.receipt.launchId, reason);
-        else registry.failSpawn(begun.receipt.launchId, reason);
+        if (transport === "structured") await registry.failStructuredSpawnOffLoop(begun.receipt.launchId, reason);
+        else await registry.failSpawnOffLoop(begun.receipt.launchId, reason);
       }
       const receipt = registry.readOnlySnapshot().receipts[begun.receipt.launchId] ?? begun.receipt;
       return NextResponse.json(spawnResponseForReceipt(receipt, receipt.artifactPath, {
@@ -1023,15 +1023,15 @@ export async function executeSpawnRequest(
     if (begun.kind === "conflict") return NextResponse.json({ error: "spawn attempt conflicts with its original request" }, { status: 409 });
     if (begun.kind === "created" && requestedTelegram && !telegramLeftOut && !begun.receipt.launchProfile.mcpServers.includes("telegram")) {
       const reason = "telegram MCP grant was revoked during spawn admission";
-      if (transport === "structured") registry.failStructuredSpawn(begun.receipt.launchId, reason);
-      else registry.failSpawn(begun.receipt.launchId, reason);
+      if (transport === "structured") await registry.failStructuredSpawnOffLoop(begun.receipt.launchId, reason);
+      else await registry.failSpawnOffLoop(begun.receipt.launchId, reason);
       return refuse(reason);
     }
     if (begun.kind === "created" && requestedTelegram && begun.receipt.telegramSeatGrant
       && !isCurrentOperatorSeat(begun.receipt.parentConversationId ?? "", registry)) {
       const reason = TELEGRAM_SEAT_INACTIVE_BEFORE_LAUNCH;
-      if (transport === "structured") registry.failStructuredSpawn(begun.receipt.launchId, reason);
-      else registry.failSpawn(begun.receipt.launchId, reason);
+      if (transport === "structured") await registry.failStructuredSpawnOffLoop(begun.receipt.launchId, reason);
+      else await registry.failSpawnOffLoop(begun.receipt.launchId, reason);
       return refuse(reason);
     }
     if (begun.kind === "created") launchId = begun.receipt.launchId;
@@ -1211,7 +1211,7 @@ export async function executeSpawnRequest(
              failed launch is claimable for retry under the same launch id, so
              a transient blip cannot become a second launch. */
           if (error instanceof RuntimeHostUnavailableError) {
-            registry.failStructuredSpawn(
+            await registry.failStructuredSpawnOffLoop(
               receipt.launchId,
               `structured spawn transport failed: ${error.message}`.slice(0, 240),
             );
@@ -1400,7 +1400,7 @@ export async function executeSpawnRequest(
   } catch (error) {
     const receipt = launchId ? registry.readOnlySnapshot().receipts[launchId] : null;
     if (!receipt || receipt.pane === null) {
-      if (receipt) registry.failSpawn(receipt.launchId, "spawn failed before pane binding");
+      if (receipt) await registry.failSpawnOffLoop(receipt.launchId, "spawn failed before pane binding");
       deleteInboxImages(imagePaths);
     }
     if (error instanceof SpawnParentError) return NextResponse.json({ error: error.message }, { status: error.status });

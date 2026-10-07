@@ -431,7 +431,7 @@ async function recoverCandidate(
     try {
       await assertOwnership();
     } catch (error) {
-      registry.failSpawn(begun.receipt.launchId, "structured recovery operation was superseded");
+      await registry.failSpawnOffLoop(begun.receipt.launchId, "structured recovery operation was superseded");
       throw error;
     }
     const response = await (dependencies.spawn ?? spawnStructuredConversation)({
