@@ -5183,10 +5183,12 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       <CircleAlert className="h-3 w-3 shrink-0 text-warning" aria-hidden />
       <span className="min-w-0 flex-1 truncate" data-payload-reason title={detail}>
         <span className="font-semibold text-warning" role="status">{checking ? t("composer.deliveryChecking") : status}</span>
+        <span data-payload-excerpt>{` — ${preview}`}</span>
+        {/* After the excerpt: on a phone the time must not squeeze out the
+            only part that says which message this line is about. */}
         {!checking && checkedAt !== null
           ? <span className="text-muted" data-payload-checked>{` · ${t("composer.payloadCheckedAt", { time: hhmm(checkedAt) })}`}</span>
           : null}
-        <span>{` — ${preview}`}</span>
         <span className="sr-only">{` · ${detail}`}</span>
       </span>
       <span className="-mr-1 flex shrink-0 items-center sm:mr-0">

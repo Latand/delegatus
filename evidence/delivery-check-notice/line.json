@@ -3,6 +3,7 @@
     "before": {
       "height": 44,
       "width": 370,
+      "excerptShown": 146,
       "lineHeight": 15,
       "textHeight": 15,
       "border": "0px",
@@ -27,12 +28,13 @@
     "checked": {
       "height": 44,
       "width": 370,
+      "excerptShown": 146,
       "lineHeight": 15,
       "textHeight": 15,
       "border": "0px",
       "paragraphs": 0,
       "status": "Доставку не підтверджено",
-      "text": "Доставку не підтверджено · перевірено о 21:49 — Here is the phone screenshot of the composer: the notice above it covers the draft and the button does not respond. · Результат доставки невідомий. Автоматичного повторного надсилання не буде.",
+      "text": "Доставку не підтверджено — Here is the phone screenshot of the composer: the notice above it covers the draft and the button does not respond. · перевірено о 22:26 · Результат доставки невідомий. Автоматичного повторного надсилання не буде.",
       "actions": [
         {
           "label": "Перевірити доставку",
@@ -53,6 +55,7 @@
     "before": {
       "height": 44,
       "width": 370,
+      "excerptShown": 176,
       "lineHeight": 15,
       "textHeight": 15,
       "border": "0px",
@@ -77,12 +80,13 @@
     "checked": {
       "height": 44,
       "width": 370,
+      "excerptShown": 176,
       "lineHeight": 15,
       "textHeight": 15,
       "border": "0px",
       "paragraphs": 0,
       "status": "Delivery unconfirmed",
-      "text": "Delivery unconfirmed · checked 21:49 — Here is the phone screenshot of the composer: the notice above it covers the draft and the button does not respond. · Delivery outcome is unknown. This message will not be sent again automatically.",
+      "text": "Delivery unconfirmed — Here is the phone screenshot of the composer: the notice above it covers the draft and the button does not respond. · checked 22:26 · Delivery outcome is unknown. This message will not be sent again automatically.",
       "actions": [
         {
           "label": "Re-check delivery",
@@ -103,6 +107,7 @@
     "before": {
       "height": 24,
       "width": 1420,
+      "excerptShown": 529,
       "lineHeight": 15,
       "textHeight": 15,
       "border": "0px",
@@ -127,12 +132,13 @@
     "checked": {
       "height": 24,
       "width": 1420,
+      "excerptShown": 529,
       "lineHeight": 15,
       "textHeight": 15,
       "border": "0px",
       "paragraphs": 0,
       "status": "Доставку не підтверджено",
-      "text": "Доставку не підтверджено · перевірено о 21:49 — Here is the phone screenshot of the composer: the notice above it covers the draft and the button does not respond. · Результат доставки невідомий. Автоматичного повторного надсилання не буде.",
+      "text": "Доставку не підтверджено — Here is the phone screenshot of the composer: the notice above it covers the draft and the button does not respond. · перевірено о 22:26 · Результат доставки невідомий. Автоматичного повторного надсилання не буде.",
       "actions": [
         {
           "label": "Перевірити доставку",
@@ -153,6 +159,7 @@
     "before": {
       "height": 24,
       "width": 1420,
+      "excerptShown": 529,
       "lineHeight": 15,
       "textHeight": 15,
       "border": "0px",
@@ -177,12 +184,13 @@
     "checked": {
       "height": 24,
       "width": 1420,
+      "excerptShown": 529,
       "lineHeight": 15,
       "textHeight": 15,
       "border": "0px",
       "paragraphs": 0,
       "status": "Delivery unconfirmed",
-      "text": "Delivery unconfirmed · checked 21:49 — Here is the phone screenshot of the composer: the notice above it covers the draft and the button does not respond. · Delivery outcome is unknown. This message will not be sent again automatically.",
+      "text": "Delivery unconfirmed — Here is the phone screenshot of the composer: the notice above it covers the draft and the button does not respond. · checked 22:26 · Delivery outcome is unknown. This message will not be sent again automatically.",
       "actions": [
         {
           "label": "Re-check delivery",

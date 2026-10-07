@@ -2370,8 +2370,12 @@ describe("retained message notice over the composer", () => {
               const box = button.getBoundingClientRect();
               return { label: button.getAttribute("aria-label"), width: Math.round(box.width), height: Math.round(box.height) };
             });
+            const excerpt = (line.querySelector("[data-payload-excerpt]") as HTMLElement).getBoundingClientRect();
+            const shown = text.getBoundingClientRect();
             return {
               height: Math.round(rect.height), width: Math.round(rect.width),
+              /* How much of the message excerpt the line actually shows. */
+              excerptShown: Math.round(Math.max(0, Math.min(excerpt.right, shown.right) - excerpt.left)),
               lineHeight: parseFloat(getComputedStyle(text).lineHeight),
               textHeight: Math.round(text.getBoundingClientRect().height),
               border: style.borderTopWidth, paragraphs: line.querySelectorAll("p").length,
@@ -2406,6 +2410,9 @@ describe("retained message notice over the composer", () => {
           expect(await owed.locator("[data-payload-checked]").textContent()).toContain(lang === "uk" ? "перевірено" : "checked");
           const checked = await read();
           expect(checked.textHeight).toBeLessThanOrEqual(Math.ceil(checked.lineHeight) + 1);
+          /* The check time never takes room from the excerpt. */
+          expect(checked.excerptShown).toBeGreaterThanOrEqual(before.excerptShown);
+          expect(checked.overflowX).toBe(0);
           await page.screenshot({ path: path.join(out, `${key}-checked.png`) });
 
           /* Delivered: the next tap takes the line and the region away. */
