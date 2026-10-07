@@ -72,6 +72,8 @@ export interface TailReading { turn: "busy" | "idle" | "unknown"; lastRecordAt: 
 interface OwnerPlace {
   id: string;
   binding: string | null;
+  /** The conversations of the receipts that record the same process (R1, R10). */
+  custody?: readonly string[];
   artifactPath: string | null;
   entryKey: string | null;
   launchId?: string | null;

@@ -301,8 +301,10 @@ export interface AgentLivenessSources {
    * whole-corpus sweep #860 exists to remove.
    */
   listFiles?(): Promise<FileEntry[]>;
-  /** One transcript by path, described with no sweep of any kind. */
-  describeTranscript(transcriptPath: string): Promise<LivenessTranscript | null>;
+  /** One transcript by path, described with no sweep of any kind. `strict`
+      throws a stat failure other than a missing file, which otherwise reads
+      as null like a path that names no file. */
+  describeTranscript(transcriptPath: string, options?: { strict?: boolean }): Promise<LivenessTranscript | null>;
   registrySnapshot(): LivenessRegistrySnapshot;
   pipelines(): Pipeline[];
   /** Active review-loop ownership, read only to resolve detached reviewers that

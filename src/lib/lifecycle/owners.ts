@@ -56,6 +56,10 @@ export interface RecordedOwner {
   /** The canonical conversation the owner is shown under and found by. It is
       used for display and custody lookups, never to choose evidence. */
   binding: string | null;
+  /** The conversations of the launch receipts that record this same process
+      (R1). A stage or a flow that names one reaches the owner through it
+      (R10), before the conversation's own row binds the entry. */
+  custody?: string[];
   engine: string | null;
   cwd: string | null;
 }
@@ -230,14 +234,11 @@ export function registryOwners(
   const map = bindings(registry);
   const owners: RecordedOwner[] = [];
   const ownerless: OwnerlessRecord[] = [];
-  const entryProcesses: ProcessIdentity[] = [];
   for (const entry of Object.values(registry.entries)) {
     const read = entryOwners(entry, probe, { binding: entryBinding(map, entry), viewer });
     owners.push(...read.owners);
-    for (const owner of read.owners) entryProcesses.push(...owner.identities);
     if (read.ownerless) ownerless.push(read.ownerless);
   }
-  const recordedByEntry = (identity: ProcessIdentity) => entryProcesses.some((other) => sameProcess(other, identity));
   for (const receipt of Object.values(registry.receipts ?? {})) {
     const open = OPEN_RECEIPT.has(receipt.state);
     const base = {
@@ -256,7 +257,13 @@ export function registryOwners(
       ownerless.push({ ...base, id: `open-receipt:${receipt.launchId}`, kind: "open-receipt", updatedAt: null });
     }
     const launched = [receipt.verifiedHost?.agent, receipt.pane?.panePid].filter(usable);
-    if (launched.length && !launched.some(recordedByEntry)) {
+    if (!launched.length) continue;
+    /* An entry that records the launched process is that owner already (R1):
+       the receipt adds the conversation it was launched for, and the
+       artifact stays the entry's. */
+    const recorded = owners.filter((owner) => owner.entry && owner.identities.some((identity) => launched.some((other) => sameProcess(other, identity))));
+    for (const owner of recorded) if (owner.binding !== base.binding && !owner.custody?.includes(base.binding)) (owner.custody ??= []).push(base.binding);
+    if (!recorded.length) {
       owners.push({ ...base, id: `launched:${receipt.launchId}:${launched[0]!.pid}:${launched[0]!.startIdentity}`, role: "host", kind,
         pid: launched[0]!.pid, identities: launched });
     }
@@ -310,11 +317,12 @@ export interface CensusIndex {
   /**
    * The items bound to a reference (R10): every entry of every generation and
    * alias of its conversation, every entry and receipt at its path, every
-   * round that names either. A reference to a deleted earlier path still
+   * entry that records the process a receipt of its conversation launched,
+   * every round that names either. A reference to a deleted earlier path still
    * reaches the conversation's current process, because the lookup returns the
    * whole set.
    */
-  boundTo<T extends { binding: string | null; artifactPath: string | null; entryKey: string | null }>(items: readonly T[], reference: OwnerReference): T[];
+  boundTo<T extends { binding: string | null; custody?: readonly string[]; artifactPath: string | null; entryKey: string | null }>(items: readonly T[], reference: OwnerReference): T[];
   /** Whether the registry holds anything a reference names (R9): an entry
       under its key, a conversation or receipt under its id, an entry or a
       generation at its path. */
@@ -352,6 +360,7 @@ export function censusIndex(registry: CensusRegistry): CensusIndex {
       if (id !== null) ids.add(id);
       const key = reference.sessionKey ? rowKeyId(reference.sessionKey) : null;
       return items.filter((item) => (item.binding !== null && ids.has(item.binding))
+        || !!item.custody?.some((id) => ids.has(id))
         || (!!reference.artifactPath && item.artifactPath === reference.artifactPath)
         || (key !== null && item.entryKey === key));
     },

@@ -178,15 +178,18 @@ function rootForPath(transcriptPath: string): [RootKey, string] | null {
  * Describes one transcript straight from its path: a stat and the same
  * project/title/engine derivation the scan uses, with no root walk, no process
  * table and no tmux subprocess. Returns null for a path outside every scanner
- * root or one that is not a readable file.
+ * root or one that is not a readable file. `strict` throws a stat failure
+ * other than a missing file, as the strict tail read does.
  */
-export async function describeTranscriptPath(transcriptPath: string): Promise<LivenessTranscript | null> {
+export async function describeTranscriptPath(transcriptPath: string, options: { strict?: boolean } = {}): Promise<LivenessTranscript | null> {
   const rootEntry = rootForPath(transcriptPath);
   if (!rootEntry) return null;
   let stat: fs.Stats;
   try {
     stat = await fs.promises.stat(transcriptPath);
-  } catch {
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (options.strict && code !== "ENOENT" && code !== "ENOTDIR") throw error;
     return null;
   }
   if (!stat.isFile()) return null;

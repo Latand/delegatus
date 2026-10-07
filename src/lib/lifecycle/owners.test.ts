@@ -124,6 +124,27 @@ test("receipts and flow rounds record processes; one an entry already records is
   expect(census.ownerless.map((record) => record.id)).toEqual(["open-receipt:unowned"]);
 });
 
+test("an entry that records a receipt's launched process carries that receipt's conversation, at the entry's own artifact (R1, R10)", () => {
+  const launched = receipt({ launchId: "launched", conversationId: "conversation_launch" as never, state: "completed",
+    verifiedHost: { agent: { pid: 4242, startIdentity: START } } as never });
+  const alone = registry({ receipts: { launched } as never });
+  expect(registryOwners(alone, [], probe(true)).owners.map((owner) => [owner.id, owner.binding, owner.artifactPath]))
+    .toEqual([[`launched:launched:4242:${START}`, "conversation_launch", "/sessions/launch.jsonl"]]);
+  // The entry is written before the conversation row that would bind it.
+  const file = registry({ entries: { "codex:session": structured(4242) }, receipts: { launched } as never });
+  const census = registryOwners(file, [], probe(true));
+  expect(census.owners.map((owner) => [owner.id, owner.binding, owner.custody, owner.artifactPath]))
+    .toEqual([[`structured:codex:session:4242:${START}`, null, ["conversation_launch"], "/sessions/host.jsonl"]]);
+  const index = censusIndex(file);
+  expect(index.boundTo(census.owners, { conversationId: "conversation_launch" }).map((owner) => owner.pid)).toEqual([4242]);
+  expect(index.boundTo(census.owners, { conversationId: "conversation_other" })).toEqual([]);
+  // A receipt for another process adds nothing to the entry's owner.
+  const other = registry({ entries: { "codex:session": structured(4242) },
+    receipts: { launched: { ...launched, verifiedHost: { agent: { pid: 4343, startIdentity: START } } } } as never });
+  expect(registryOwners(other, [], probe(true)).owners.map((owner) => [owner.pid, owner.custody ?? null]).sort())
+    .toEqual([[4242, null], [4343, null]]);
+});
+
 test("a hosted row a headless round records the process for is that round's owner, never a second, ownerless one (R1)", () => {
   const file = registry({
     entries: { "codex:reviewer": { ...structured(null, { status: "starting", structuredHost: null, claimEpoch: 0 }),

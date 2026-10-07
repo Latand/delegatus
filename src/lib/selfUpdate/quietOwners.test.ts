@@ -1125,3 +1125,114 @@ describe("each owner's evidence, whole", () => {
     expect(await probe(ports(), now + FIVE_MINUTES)).toMatchObject(released);
   });
 });
+
+/* What one owner reads stays its own when another record stands beside it: a
+   row of another engine at its transcript, an idle mark of its own writer on
+   a listed row, a directory that refuses the description of a path, and an
+   entry that records the process a receipt launched. */
+describe("each owner's evidence beside another record", () => {
+  const noHandles = (overrides: Partial<QuietPorts> = {}) => ports({ owners: ownerCensusReader(productionLivenessSources,
+    { readSession: (query) => f.client.readSession!(query), heldHosts: () => new Map() }), ...overrides });
+
+  test.each(["claude row first", "codex row first"])("each owner's engine reads its own tail, whichever row the registry lists first: %s (R3, R12)", async (order) => {
+    const now = Date.now();
+    const path = transcript("open", new Date(now - 2 * FIVE_MINUTES).toISOString());
+    const claude = spawn(), codex = spawn();
+    const record = (engine: "claude" | "codex", identity: ProcessIdentity) => f.registry.upsert({ key: { engine, sessionId: randomUUID() },
+      artifactPath: path, cwd: f.dir, accountId: "fixture", status: "idle", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
+      structuredHost: { ...columns(identity, 0), kind: engine === "claude" ? "claude-broker" : "codex-app-server" } });
+    if (order === "claude row first") { record("claude", claude.identity); record("codex", codex.identity); }
+    else { record("codex", codex.identity); record("claude", claude.identity); }
+    expect(Object.values(f.registry.readOnlySnapshot().entries).map((entry) => entry.key.engine))
+      .toEqual(order === "claude row first" ? ["claude", "codex"] : ["codex", "claude"]);
+    const held = { quiet: false, blockers: { turns: 1, turnList: [{ engine: "codex", reason: "turn-open" }] } };
+    expect(await probe(noHandles(), now)).toMatchObject(held);
+    expect(await probe(noHandles(), now + TWELVE_HOURS)).toMatchObject(held);
+    await exit(codex);
+    expect(await probe(noHandles(), now)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
+  });
+
+  test.each(["beside a listed idle mark", "alone"])("a running mark on a row the snapshot omits is fetched %s (R5, R9)", async (shape) => {
+    const own = conversation(transcript("settled"));
+    const other = conversation(transcript("settled"));
+    const host = spawn();
+    const claim = claimHost(own.key, own.path, host.identity, "idle");
+    if (shape === "beside a listed idle mark") publish(other.id, own.key, other.path, claim.fence, null);
+    publish(own.id, own.key, own.path, claim.fence, "own-turn");
+    const held = { quiet: false, blockers: { turns: 1, turnList: [{ conversationId: own.id, reason: "turn-claimed" }] } };
+    expect(await probe(noHandles())).toMatchObject(held);
+    // A write that names no writer moves the row behind the cap and leaves the mark and the fence.
+    f.journal.append({ scope: { type: "session", id: own.id }, kind: "session-status",
+      producer: { kind: "fixture", eventKey: randomUUID() }, payload: { host: "dead" } });
+    for (let n = 0; n < 129; n++) {
+      const id = `conversation_${randomUUID()}`;
+      f.journal.append({ scope: { type: "session", id }, kind: "session-status", producer: { kind: "fixture", eventKey: randomUUID() },
+        payload: { conversationId: id, sessionKey: { engine: "codex", sessionId: randomUUID() }, hostKind: "unhosted", host: "dead",
+          turn: "idle", activeTurnId: null, provenance: "derived" } });
+    }
+    expect(f.journal.snapshot().sessions.some((session) => session.conversationId === own.id)).toBe(false);
+    expect(row(own.id)).toMatchObject({ host: "dead", writerClaim: claim.fence, writerStatus: { writerClaim: claim.fence, turn: "running" } });
+    expect(await probe(noHandles())).toMatchObject(held);
+    expect(await probe(noHandles(), Date.now() + TWELVE_HOURS)).toMatchObject(held);
+    release(own.key, claim);
+    await exit(host);
+    expect(await probe(noHandles())).toMatchObject({ quiet: true, blockers: { turns: 0 } });
+  });
+
+  test("a journal path whose directory refuses its description holds through unreadable past the bound (R7, R8, R9)", async () => {
+    if (process.getuid?.() === 0) return;
+    const directory = join(process.env.LLV_CODEX_HOME!, "sessions", "2026", "01", "02");
+    mkdirSync(directory, { recursive: true });
+    const sessionId = randomUUID();
+    const path = join(directory, `rollout-2026-01-02T00-00-00-${sessionId}.jsonl`);
+    writeFileSync(path, transcriptText("open", new Date().toISOString(), sessionId));
+    const id = `conversation_${randomUUID()}`;
+    publish(id, { engine: "codex", sessionId }, path, null, "unknown-turn");
+    expect(f.registry.readOnlySnapshot()).toMatchObject({ entries: {}, conversations: {} });
+    chmodSync(directory, 0o000);
+    try {
+      await expect(productionLivenessSources().transcriptEvidence("codex", path, { strict: true })).rejects.toThrow(/EACCES/);
+      const p = ports(), now = Date.now();
+      for (const at of [now, now + FIVE_MINUTES, now + TWELVE_HOURS]) {
+        expect(await probe(p, at)).toMatchObject({ quiet: false, blockers: { unreadable: expect.stringContaining("EACCES") } });
+      }
+      chmodSync(directory, 0o700);
+      expect(await probe(p, now)).toMatchObject({ quiet: false, blockers: { unreadable: null, turns: 1,
+        turnList: [{ conversationId: id, reason: "unresolved", unresolved: true }] } });
+    } finally {
+      chmodSync(directory, 0o700);
+    }
+  });
+
+  test("an entry that records a receipt's launched process keeps that receipt's conversation custody (R1, R10)", async () => {
+    const path = transcript("settled");
+    const host = spawn();
+    const begun = beginLegacySpawnFixture(f.registry, { engine: "codex", cwd: f.dir, transport: "tmux", accountId: "fixture" });
+    if (begun.kind !== "created") throw new Error("fixture launch receipt unavailable");
+    const launchId = begun.receipt.launchId, evidence = tmuxHost(host.identity);
+    f.registry.bindSpawnPane(launchId, { endpoint: evidence.endpoint, server: evidence.server, paneId: evidence.paneId, panePid: evidence.panePid, target: evidence.paneId });
+    f.registry.markSpawnHostVerified(launchId, evidence);
+    const key = { engine: "codex" as const, sessionId: randomUUID() };
+    const entry = { key, artifactPath: path, cwd: f.dir, accountId: "fixture", status: "idle" as const, host: evidence,
+      claimEpoch: 0, claimOwner: null, pendingAction: null, structuredHost: null };
+    expect(f.registry.settleSpawn(launchId, entry).kind).toBe("settled");
+    // The receipt as it stands before its conversation row and its entry are written.
+    const disk = f.registry.snapshot(), receipt = disk.receipts[launchId]!;
+    expect(receipt).toMatchObject({ state: "completed", verifiedHost: { agent: host.identity } });
+    delete disk.conversations[receipt.conversationId];
+    delete disk.entries[sessionKeyId(key)];
+    writeFileSync(f.registry.filename, JSON.stringify(disk));
+    const pipelines = () => [{ id: "lane_receipt", task: "Finish the work", state: "running", cursor: { stageId: "stage", state: "running" },
+      runs: [{ stageId: "stage", attempts: [{ n: 1, conversationId: receipt.conversationId }] }] }] as unknown as ReturnType<QuietPorts["pipelines"]>;
+    const p = noHandles({ pipelines }), now = Date.now();
+    expect(await probe(p, now)).toMatchObject({ quiet: false, blockers: { stages: 1 } });
+    f.registry.upsert(entry);
+    expect(f.registry.readOnlySnapshot()).toMatchObject({ entries: { [sessionKeyId(key)]: { host: { agent: host.identity } } } });
+    expect(f.registry.readOnlySnapshot().conversations[receipt.conversationId]).toBeUndefined();
+    expect(await probe(p, now)).toMatchObject({ quiet: false, blockers: { stages: 1 } });
+    expect(await probe(p, now + TWELVE_HOURS)).toMatchObject({ quiet: false, blockers: { stages: 1 } });
+    await exit(host);
+    // With the process gone the stage's settled transcript holds it for the bound only.
+    expect(await probe(p, now + TWELVE_HOURS + FIVE_MINUTES)).toMatchObject({ quiet: true, blockers: { stages: 0 } });
+  });
+});

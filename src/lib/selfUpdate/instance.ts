@@ -178,24 +178,30 @@ export function ownerCensusReader(
     /* A missing file or a torn tail reads as null, which R8 bounds. A read
        that fails on anything else (a denied open, an I/O error) is no
        verdict: the strict read throws it, it reaches the probe as
-       `unreadable`, and the next probe reads again (R7). */
+       `unreadable`, and the next probe reads again (R7). The description
+       that names a path's engine is read the same way. A reading is kept for
+       the probe under the engine it was read with, so a row of another
+       engine at the same path reads its own (R3, R12). */
     const tail = (path: string | null, engine?: string | null): Promise<TailReading | null> => {
       if (!path) return Promise.resolve(null);
-      if (!tails.has(path)) tails.set(path, (async () => {
-        const kind = engine ?? engines.get(path) ?? (await liveness.describeTranscript(path))?.engine ?? null;
+      const known = engine ?? engines.get(path) ?? null;
+      const memo = `${known ?? ""}\0${path}`;
+      if (!tails.has(memo)) tails.set(memo, (async () => {
+        const kind = known ?? (await liveness.describeTranscript(path, { strict: true }))?.engine ?? null;
         if (!kind) return null;
         const evidence = await liveness.transcriptEvidence(kind as "claude" | "codex", path, { strict: true });
         return evidence ? { turn: evidence.turn === "busy" ? "busy" : evidence.turn === "idle" ? "idle" : "unknown", lastRecordAt: evidence.lastRecordTs } : null;
       })());
-      return tails.get(path)!;
+      return tails.get(memo)!;
     };
     /* The journal rows that can speak for an entry key: the rows whose status
        mark names it, and the rows filed under it, which carry an
        unattributed claim when they have no mark (R5). A row is found by the
        key, never by the conversation it is filed under, so a display binding
        or a copy of the registry cannot hide an owner's own statement. When
-       the snapshot holds none and omits the owner's conversation or its
-       artifact, a keyed read fetches the row the snapshot omits. */
+       the snapshot omits the owner's conversation or its artifact, a keyed
+       read fetches the row the snapshot omits, and it is read together with
+       the listed rows: the owner's writer can stand on both. */
     const byKey = new Map<string, RuntimeSession[]>();
     const file = (key: string, row: RuntimeSession) => {
       const rows = byKey.get(key) ?? [];
@@ -215,24 +221,24 @@ export function ownerCensusReader(
       (!!row.writerStatus?.sessionKey && rowKeyId(row.writerStatus.sessionKey) === key) || (!!row.sessionKey && rowKeyId(row.sessionKey) === key);
     const rowsFor = (owner: RecordedOwner): Promise<RuntimeSession[]> => {
       const key = owner.entryKey!;
-      const listed = byKey.get(key);
-      if (listed) return Promise.resolve(listed);
       if (!keyed.has(key)) keyed.set(key, (async () => {
-        const rows: RuntimeSession[] = [];
+        const fetched: RuntimeSession[] = [];
         if (owner.binding && !listedIds.has(owner.binding)) {
           const row = await readSession({ conversationId: owner.binding });
-          if (row) rows.push(row);
+          if (row) fetched.push(row);
         }
-        if (owner.artifactPath && !listedPaths.has(owner.artifactPath) && !rows.some(speaksFor(key))) {
+        if (owner.artifactPath && !listedPaths.has(owner.artifactPath) && !fetched.some(speaksFor(key))) {
           const row = await readSession({ artifactPath: owner.artifactPath });
-          if (row && !rows.some((other) => other.conversationId === row.conversationId)) rows.push(row);
+          if (row && !fetched.some((other) => other.conversationId === row.conversationId)) fetched.push(row);
         }
-        return rows.filter(speaksFor(key));
+        const listed = byKey.get(key) ?? [];
+        return [...listed, ...fetched.filter((row) => speaksFor(key)(row) && !listed.some((other) => other.conversationId === row.conversationId))];
       })());
       return keyed.get(key)!;
     };
     const owners: OwnerReading[] = [];
     const place = (owner: RecordedOwner | OwnerlessRecord) => ({ id: owner.id, binding: owner.binding, artifactPath: owner.artifactPath,
+      ...("custody" in owner && owner.custody ? { custody: owner.custody } : {}),
       entryKey: owner.entryKey, launchId: owner.launchId, engine: owner.engine, cwd: owner.cwd });
     /* A handle speaks for the structured host its entry records. When its
        health names another pid, or the entry records no process, the handle
