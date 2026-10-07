@@ -6027,7 +6027,6 @@ export const uk: Record<keyof typeof en, Message> = {
   "roleMemory.machineSubtitle": "Усі проєкти на цій машині",
   "roleMemory.size": "{chars} / {bound}",
   "roleMemory.why": "Чому:",
-  "roleMemory.new": "нове",
   "roleMemory.fixRound": "раунд виправлень",
   "roleMemory.checkText": "перевірте текст",
   "roleMemory.empty": "Правил ще немає.",

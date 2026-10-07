@@ -8486,12 +8486,18 @@ describe("role memory: rules window and the rule line", () => {
           const ruleId = (await target.getAttribute("data-learned-rule"))!;
           await target.locator("[data-learned-rule-delete]").click();
           await page.locator("[data-rules-undo]").waitFor();
-          /* The notice is one line, inside the window's margins. */
+          /* The notice is one line, inside the window's margins, in the removed row's place: inside the column × was pressed in, over no rule. */
           const notice = await page.locator("[data-rules-undo]").evaluate((node) => {
             const box = node.getBoundingClientRect(); const label = node.firstElementChild!;
-            return { left: box.left, right: box.right, lines: Math.round(label.getBoundingClientRect().height / parseFloat(getComputedStyle(label).lineHeight)) };
+            const covered = [...document.querySelectorAll("[data-rules-window] [data-learned-rule]")].filter((row) => {
+              const other = row.getBoundingClientRect();
+              return other.top < box.bottom - 0.5 && other.bottom > box.top + 0.5 && other.left < box.right - 0.5 && other.right > box.left + 0.5;
+            }).length;
+            return { left: box.left, right: box.right, column: node.closest("[data-rules-section]")?.getAttribute("data-rules-section"), covered,
+              lines: Math.round(label.getBoundingClientRect().height / parseFloat(getComputedStyle(label).lineHeight)) };
           });
           expect(notice.lines).toBe(1); expect(notice.left).toBeGreaterThanOrEqual(12); expect(notice.right).toBeLessThanOrEqual(width - 12);
+          expect(notice.column).toBe("role"); expect(notice.covered).toBe(0);
           await page.waitForFunction((id) => !document.querySelector(`[data-rules-section="role"] [data-learned-rule="${id}"]`), ruleId);
           const removed = store.projectView("atlas").scopes.find((scope) => scope.roleId === "builder")!.left.find((rule) => rule.id === ruleId);
           expect(removed).toMatchObject({ state: "archived", reason: "deleted" });
@@ -8561,6 +8567,25 @@ describe("role memory: rules window and the rule line", () => {
           await row.scrollIntoViewIfNeeded();
           expect(await page.locator(`${container} [role="switch"][data-learned-rules-switch]`).count()).toBe(0);
           expect(await row.locator(".truncate").evaluateAll((nodes) => nodes.filter((node) => node.scrollWidth > node.clientWidth + 1).length)).toBe(0);
+          /* The row is drawn like its neighbours: on the desktop the same label inset and chevron as the section heads under it; on the phone no icon, and the switches' label inset and label offset from the row's top. */
+          const aligned = await row.evaluate((node, onPhone) => {
+            const firstText = (element: Element) => {
+              const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+              for (let text = walker.nextNode(); text; text = walker.nextNode()) if (text.textContent?.trim()) { const range = document.createRange(); range.selectNodeContents(text); return range.getBoundingClientRect(); }
+              throw Error("no text");
+            };
+            const textLeft = (element: Element) => Math.round(firstText(element).left);
+            const textTop = (element: Element) => Math.round(firstText(element).top - element.getBoundingClientRect().top);
+            if (onPhone) {
+              const neighbour = node.closest("[data-mobile2-sheet]")!.querySelector("[role='switch']")!.parentElement!.parentElement!;
+              return { label: textLeft(node), neighbourLabel: textLeft(neighbour), icons: node.querySelectorAll("svg").length, top: textTop(node), neighbourTop: textTop(neighbour) };
+            }
+            const neighbour = node.closest("[data-bar-more-menu]")!.querySelector("[data-bar-menu-head='merging']")!;
+            const chevron = (element: Element) => { const box = [...element.querySelectorAll("svg")].at(-1)!.getBoundingClientRect(); return { right: Math.round(box.right), width: Math.round(box.width) }; };
+            return { label: textLeft(node), neighbourLabel: textLeft(neighbour), chevron: chevron(node), neighbourChevron: chevron(neighbour) };
+          }, phone);
+          expect(aligned.label).toBe(aligned.neighbourLabel);
+          if (phone) { expect(aligned.icons).toBe(1); expect(aligned.top).toBe(aligned.neighbourTop); } else expect(aligned.chevron).toEqual(aligned.neighbourChevron);
           const menu = await inside(container);
           expect(menu.left).toBeGreaterThanOrEqual(0); expect(menu.right).toBeLessThanOrEqual(width);
           expect(menu.bottom).toBeLessThanOrEqual(height);
@@ -8572,9 +8597,13 @@ describe("role memory: rules window and the rule line", () => {
           /* The row's figure is what the window adds up to: its role chips plus its project and machine headings. */
           const shown = await page.locator("[data-rules-window] [data-rules-role] span, [data-rules-window] [data-rules-count]").allInnerTexts();
           expect(shown.reduce((sum, text) => sum + Number(text), 0)).toBe(6);
+          /* A chip switch changes the columns' contents and leaves the window's top where it was. */
+          const topOf = () => page.locator("[data-rules-window]").evaluate((node) => Math.round(node.getBoundingClientRect().top));
+          const topBefore = await topOf();
           await page.locator('[data-rules-window] [data-rules-role="visual-critic"]').click();
           await page.locator('[data-rules-window] [data-rules-role="visual-critic"][aria-selected="true"]').waitFor();
           expect(await page.locator('[data-rules-section="role"] [data-learned-rule]').count()).toBe(1);
+          expect(await topOf()).toBe(topBefore);
           await page.locator('[data-rules-window] [data-rules-role="builder"]').click();
           await page.locator('[data-rules-window] [data-rules-history="role"]').click();
           /* History holds the repeat, merged; the rule removed and put back is active again. */

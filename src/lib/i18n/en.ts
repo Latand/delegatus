@@ -6118,7 +6118,6 @@ export const en = {
   "roleMemory.machineSubtitle": "Every project on this machine",
   "roleMemory.size": "{chars} / {bound}",
   "roleMemory.why": "Why:",
-  "roleMemory.new": "new",
   "roleMemory.fixRound": "fix round",
   "roleMemory.checkText": "check the text",
   "roleMemory.empty": "No rules yet.",

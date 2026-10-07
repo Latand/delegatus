@@ -1,10 +1,12 @@
 "use client";
 
+import { ChevronRight } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 import { roleNameById } from "@/components/builderCopy";
 import { Z } from "@/components/layers";
+import { BAR_MENU_ROW } from "@/components/ProjectBar";
 import { useLocale, type TFunction } from "@/lib/i18n";
 import type { Pipeline, PipelineStageReportEntry } from "@/lib/pipelines/types";
 import type { RoleMemoryProjectView, RuleView, ScopeKind, ScopeView, StageLessonView } from "@/lib/memory/roleTypes";
@@ -81,9 +83,9 @@ export function StageLessonLine({ pipeline, entry }: { pipeline: Pipeline; entry
   );
 }
 
-function SparkGlyph() {
+function SparkGlyph({ size = 13 }: { size?: number }) {
   return (
-    <svg aria-hidden viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
+    <svg aria-hidden viewBox="0 0 16 16" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
       <path d="M8 1.5v3M8 11.5v3M1.5 8h3M11.5 8h3M3.4 3.4l1.8 1.8M10.8 10.8l1.8 1.8M3.4 12.6l1.8-1.8M10.8 5.2l1.8-1.8" />
     </svg>
   );
@@ -181,10 +183,9 @@ function RuleRow({ rule, kind, focused, scopeRole, onDelete }: { rule: RuleView;
             {meta ? <span className="text-muted"> · {meta}</span> : null}
           </span>
         ) : null}
-        {rule.fresh || rule.hints.length ? (
-          <span className="mt-0.5 flex flex-wrap gap-1 text-[10.5px] font-semibold leading-4">
-            {rule.fresh ? <span className="rounded-full bg-success-soft px-1.5 text-success">{t("roleMemory.new")}</span> : null}
-            {rule.hints.length ? <span data-learned-rule-hint="" className="rounded-full bg-warning-soft px-1.5 text-warning">{t("roleMemory.checkText")}</span> : null}
+        {rule.hints.length ? (
+          <span className="mt-0.5 flex text-[10.5px] font-semibold leading-4">
+            <span data-learned-rule-hint="" className="rounded-full bg-warning-soft px-1.5 text-warning">{t("roleMemory.checkText")}</span>
           </span>
         ) : null}
       </button>
@@ -209,18 +210,36 @@ function LeftRow({ rule, onRestore }: { rule: RuleView; onRestore: (rule: RuleVi
   );
 }
 
+/** A rule just removed: the scope it left and where its row stood, so the undo takes that row's place. */
+type Removed = { rule: RuleView; scope: string; at: number };
+
+function UndoRow({ onUndo }: { onUndo: () => void }) {
+  const { t } = useLocale();
+  return (
+    <li data-rules-undo="" aria-live="polite" className="flex min-h-8 items-center gap-3 rounded-[8px] bg-sunken px-2 py-1 text-[12px] text-secondary">
+      <span className="min-w-0 flex-1 truncate">{t("roleMemory.deleted")}</span>
+      <button type="button" data-rules-undo-button="" onClick={onUndo}
+        className="h-7 shrink-0 rounded-[6px] px-1.5 text-[11.5px] font-semibold text-accent hover:bg-well focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">{t("roleMemory.undo")}</button>
+    </li>
+  );
+}
+
 /* A scope's size is news only near its bound; below this share of it the heading stays free of the counter. */
 const NEAR_BOUND = 0.8;
 
 /** One kind of rule: its heading in its colour, its rows, what left it behind one toggle, and its size once it nears 10 000. A picker carries the counts itself. */
-export function RuleSection({ kind, title, subtitle, scope, picker, focusRule, onDelete, onRestore }: {
-  kind: ScopeKind; title: string; subtitle: string; scope: ScopeView | null; picker?: ReactNode; focusRule?: string;
+export function RuleSection({ kind, title, subtitle, scope, picker, focusRule, removed, onDelete, onRestore }: {
+  kind: ScopeKind; title: string; subtitle: string; scope: ScopeView | null; picker?: ReactNode; focusRule?: string; removed?: Removed | null;
   onDelete: (rule: RuleView) => void; onRestore: (rule: RuleView) => void;
 }) {
   const { t, locale } = useLocale();
   const [history, setHistory] = useState(false);
   const chars = scope?.chars ?? 0;
   const bound = scope?.bound ?? 10_000;
+  const shown = scope?.active.slice().reverse() ?? [];
+  const undo = removed && scope && removed.scope === scope.scope ? removed : null;
+  const rows: ReactNode[] = shown.map((rule) => <RuleRow key={rule.id} rule={rule} kind={kind} focused={rule.id === focusRule} scopeRole={scope!.roleId} onDelete={onDelete} />);
+  if (undo) rows.splice(Math.min(undo.at, rows.length), 0, <UndoRow key="undo" onUndo={() => onRestore(undo.rule)} />);
   return (
     <section data-rules-section={kind} data-rules-scope-page={scope?.scope ?? ""} className={`flex min-h-0 min-w-0 flex-col rounded-[10px] border border-border border-t-[3px] bg-card ${KIND_TONE[kind].bar}`}>
       <header className="flex flex-col gap-1 px-3 pb-1.5 pt-2">
@@ -233,11 +252,7 @@ export function RuleSection({ kind, title, subtitle, scope, picker, focusRule, o
         {picker}
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto px-1 pb-1">
-        {scope?.active.length ? (
-          <ol className="m-0 flex list-none flex-col p-0">
-            {scope.active.slice().reverse().map((rule) => <RuleRow key={rule.id} rule={rule} kind={kind} focused={rule.id === focusRule} scopeRole={scope.roleId} onDelete={onDelete} />)}
-          </ol>
-        ) : <p className="m-0 px-2 py-1.5 text-[11.5px] text-muted">{t("roleMemory.empty")}</p>}
+        {rows.length ? <ol className="m-0 flex list-none flex-col p-0">{rows}</ol> : <p className="m-0 px-2 py-1.5 text-[11.5px] text-muted">{t("roleMemory.empty")}</p>}
         {scope?.left.length ? (
           <div className="border-t border-border pt-0.5">
             <button type="button" data-rules-history={kind} aria-expanded={history} onClick={() => setHistory((was) => !was)}
@@ -257,7 +272,7 @@ export function RulesWindow({ project, focusRule, onClose }: { project: string; 
   const { t } = useLocale();
   const { view, failed, act } = useProjectRules(project);
   const [chosenRole, setChosenRole] = useState<string | null>(null);
-  const [undo, setUndo] = useState<RuleView | null>(null);
+  const [undo, setUndo] = useState<Removed | null>(null);
   useEffect(() => {
     const escape = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
     window.addEventListener("keydown", escape);
@@ -277,7 +292,11 @@ export function RulesWindow({ project, focusRule, onClose }: { project: string; 
   const projectScope = scopes.find((scope) => scope.kind === "project") ?? null;
   const machineScope = scopes.find((scope) => scope.kind === "machine") ?? null;
   const roleName = roleNameById(t, role);
-  const remove = async (rule: RuleView) => { if (await act("delete", rule.id)) setUndo(rule); };
+  const remove = async (rule: RuleView) => {
+    const from = scopes.find((scope) => scope.active.some((candidate) => candidate.id === rule.id));
+    if (!from || !await act("delete", rule.id)) return;
+    setUndo({ rule, scope: from.scope, at: from.active.length - 1 - from.active.findIndex((candidate) => candidate.id === rule.id) });
+  };
   const restore = async (rule: RuleView) => { if (await act("restore", rule.id)) setUndo(null); };
   if (typeof document === "undefined") return null;
   const picker = roles.length > 1 ? (
@@ -294,10 +313,11 @@ export function RulesWindow({ project, focusRule, onClose }: { project: string; 
       })}
     </div>
   ) : null;
+  /* On the desktop the window's top stays where the tallest window would start, so a chip switch or a removal moves only its bottom edge. */
   return createPortal(
-    <div className={`fixed inset-0 ${Z.overlay} flex items-stretch justify-center bg-black/40 md:items-center md:p-6`} onClick={onClose}>
+    <div className={`fixed inset-0 ${Z.overlay} flex items-stretch justify-center bg-black/40 md:items-start md:px-6 md:pb-6 md:pt-[max(1.5rem,calc((100dvh_-_min(640px,90dvh))/2))]`} onClick={onClose}>
       <section data-rules-window="" role="dialog" aria-modal="true" aria-labelledby="rules-window-title"
-        className="relative flex h-full w-full flex-col overflow-hidden bg-canvas text-primary shadow-xl md:h-auto md:max-h-[min(640px,90dvh)] md:max-w-[1120px] md:rounded-xl md:border md:border-border"
+        className="flex h-full w-full flex-col overflow-hidden bg-canvas text-primary shadow-xl md:h-auto md:max-h-[min(640px,90dvh)] md:max-w-[1120px] md:rounded-xl md:border md:border-border"
         onClick={(event) => event.stopPropagation()}>
         <header className="flex min-h-12 items-center gap-2 border-b border-border px-4 py-2">
           <SparkGlyph />
@@ -313,15 +333,9 @@ export function RulesWindow({ project, focusRule, onClose }: { project: string; 
         {view && !view.enabled ? <p data-rules-window-off="" className="m-0 border-b border-border bg-warning-soft px-4 py-1.5 text-[12px] text-primary">{t("roleMemory.off")}</p> : null}
         {view ? (
           <div className="grid min-h-0 flex-1 grid-cols-1 content-start gap-3 overflow-y-auto p-3 md:grid-cols-3 md:grid-rows-[minmax(0,1fr)] md:overflow-hidden">
-            <RuleSection kind="role" title={t("roleMemory.roleSection")} subtitle={picker ? t("roleMemory.roleSubtitle.chosen") : t("roleMemory.roleSubtitle", { role: roleName })} scope={roleScope} picker={picker} focusRule={focusRule} onDelete={remove} onRestore={restore} />
-            <RuleSection kind="project" title={t("roleMemory.projectSection")} subtitle={t("roleMemory.projectSubtitle")} scope={projectScope} focusRule={focusRule} onDelete={remove} onRestore={restore} />
-            <RuleSection kind="machine" title={t("roleMemory.machineSection")} subtitle={t("roleMemory.machineSubtitle")} scope={machineScope} focusRule={focusRule} onDelete={remove} onRestore={restore} />
-          </div>
-        ) : null}
-        {undo ? (
-          <div role="status" data-rules-undo="" className="absolute bottom-3 left-1/2 flex w-max max-w-[calc(100%-24px)] -translate-x-1/2 items-center gap-3 whitespace-nowrap rounded-full bg-primary px-4 py-1.5 text-[12px] text-canvas shadow-xl">
-            <span>{t("roleMemory.deleted")}</span>
-            <button type="button" data-rules-undo-button="" onClick={() => void restore(undo)} className="min-h-7 font-semibold underline underline-offset-2 focus-visible:outline-none">{t("roleMemory.undo")}</button>
+            <RuleSection kind="role" title={t("roleMemory.roleSection")} subtitle={picker ? t("roleMemory.roleSubtitle.chosen") : t("roleMemory.roleSubtitle", { role: roleName })} scope={roleScope} picker={picker} focusRule={focusRule} removed={undo} onDelete={remove} onRestore={restore} />
+            <RuleSection kind="project" title={t("roleMemory.projectSection")} subtitle={t("roleMemory.projectSubtitle")} scope={projectScope} focusRule={focusRule} removed={undo} onDelete={remove} onRestore={restore} />
+            <RuleSection kind="machine" title={t("roleMemory.machineSection")} subtitle={t("roleMemory.machineSubtitle")} scope={machineScope} focusRule={focusRule} removed={undo} onDelete={remove} onRestore={restore} />
           </div>
         ) : null}
       </section>
@@ -332,25 +346,33 @@ export function RulesWindow({ project, focusRule, onClose }: { project: string; 
 
 /* ---- the way in ---- */
 
-/** One row that opens the window: on the board's ⋯ and among the phone's project rules. No switch: memory is always on. */
+/** One row that opens the window: on the board's ⋯, drawn like the rows beside it, and among the phone's project rules, drawn like the switches there. No switch: memory is always on. */
 export function LearnedRulesRow({ project, size, onOpened }: { project: string | null; size: "menu" | "sheet"; onOpened?: () => void }) {
   const { t } = useLocale();
   const { view } = useProjectRules(project);
   if (!project) return null;
-  const sheet = size === "sheet";
   /* Every rule of the project, whatever its kind or role: the window's chips and headings add up to it. */
   const total = view?.scopes.reduce((sum, scope) => sum + scope.active.length, 0) ?? 0;
+  const count = t("roleMemory.total", { count: total });
+  const open = () => { openRulesWindow(project); onOpened?.(); };
+  if (size === "sheet") {
+    return (
+      <button type="button" data-learned-rules-open="" onClick={open}
+        className="flex w-full flex-col gap-0.5 px-4 py-1 text-left active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+        <span className="flex min-h-11 w-full items-center gap-2">
+          <span className="min-w-0 flex-1 truncate text-body font-semibold text-primary">{t("roleMemory.row")}</span>
+          <ChevronRight className="h-[15px] w-[15px] shrink-0 text-muted" aria-hidden />
+        </span>
+        <span data-learned-rules-count="" className="text-[11px] leading-snug text-muted">{count}</span>
+      </button>
+    );
+  }
   return (
-    <button type="button" data-learned-rules-open="" onClick={() => { openRulesWindow(project); onOpened?.(); }}
-      className={sheet
-        ? "flex min-h-11 w-full items-center gap-2 px-4 text-left active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-        : "flex min-h-8 w-full items-center gap-2 rounded-[6px] px-2 py-1 text-left hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"}>
-      <SparkGlyph />
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className={`font-semibold text-primary ${sheet ? "text-body" : "text-[12px]"}`}>{t("roleMemory.row")}</span>
-        <span data-learned-rules-count="" className={`truncate text-muted ${sheet ? "text-label" : "text-[11px] leading-[14px]"}`}>{t("roleMemory.total", { count: total })}</span>
-      </span>
-      <span aria-hidden className="text-muted">›</span>
+    <button type="button" data-learned-rules-open="" onClick={open} className={BAR_MENU_ROW}>
+      <SparkGlyph size={15} />
+      <span className="min-w-0 flex-1 truncate">{t("roleMemory.row")}</span>
+      <span data-learned-rules-count="" className="shrink-0 text-[11px] font-normal tabular-nums text-muted">{count}</span>
+      <ChevronRight className="h-[15px] w-[15px] shrink-0 text-muted" aria-hidden />
     </button>
   );
 }
