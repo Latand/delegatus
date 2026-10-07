@@ -151,6 +151,38 @@ test("the store's parse cache stays its own: the view shares no object with it, 
   expect(view.conversations[conversation.id]?.continuityPaths).not.toContain("/sessions/written-after-a-read.jsonl");
 });
 
+test("a write built from a view row can still be edited inside its mutation, and the view stays as it was", () => {
+  const { open, kept, conversation } = fixture();
+  const store = open();
+  const view = store.readOnlySnapshot().file;
+  const row = view.conversations[conversation.id]!;
+  const path = row.generations[0]!.path;
+  const revision = view.engineRouting.codex.revision;
+
+  /* `upsert({ ...view.entries[id], … })` is how a writer reaches this: the
+     spread is new, everything nested in it is the view's own frozen object. */
+  store.mutate((file) => {
+    file.conversations[conversation.id] = { ...row, title: "spread from the view" };
+    file.conversations[conversation.id]!.generations[0]!.path = "/sessions/edited-in-the-mutation.jsonl";
+    file.conversations[conversation.id]!.continuityPaths.push("/sessions/pushed-in-the-mutation.jsonl");
+    file.receipts[kept]!.launchProfile = view.receipts[kept]!.launchProfile;
+    file.receipts[kept]!.launchProfile!.title = "edited in the mutation";
+    file.engineRouting = view.engineRouting;
+    file.engineRouting.codex.revision += 1;
+  }, false);
+
+  const next = store.readOnlySnapshot().file;
+  expect(next.conversations[conversation.id]?.title).toBe("spread from the view");
+  expect(next.conversations[conversation.id]?.generations[0]?.path).toBe("/sessions/edited-in-the-mutation.jsonl");
+  expect(next.conversations[conversation.id]?.continuityPaths).toContain("/sessions/pushed-in-the-mutation.jsonl");
+  expect(next.receipts[kept]?.launchProfile?.title).toBe("edited in the mutation");
+  expect(next.engineRouting.codex.revision).toBe(revision + 1);
+  expect(row.generations[0]!.path).toBe(path);
+  expect(row.continuityPaths).not.toContain("/sessions/pushed-in-the-mutation.jsonl");
+  expect(view.receipts[kept]?.launchProfile?.title).toBe("Kept receipt");
+  expect(view.engineRouting.codex.revision).toBe(revision);
+});
+
 test("a reload copies only the rows whose decided value changed", () => {
   const { open, kept, removed, conversation, delivery } = fixture();
   const reader = open();

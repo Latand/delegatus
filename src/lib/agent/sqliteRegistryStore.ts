@@ -423,6 +423,30 @@ interface LazyRegistrySnapshot extends SqliteRegistrySnapshot {
   changes(): RegistryChanges;
 }
 
+/**
+ * A value about to enter a mutation, with every frozen object in it replaced by
+ * a mutable copy. A writer that spreads a row of the shared reader view
+ * (`upsert({ ...view.entries[id], status })`) carries the view's frozen nested
+ * objects in: the tracking proxy cannot wrap a frozen object, and a later edit
+ * in the same mutation could not change it. A frozen object cannot have been
+ * changed by whoever holds it, so the copy loses no write.
+ */
+function writableJson<T>(value: T): T {
+  if (value === null || typeof value !== "object") return value;
+  if (Object.isFrozen(value)) return structuredClone(value);
+  const record = value as Record<string, unknown>;
+  for (const key of Object.keys(record)) {
+    const child = record[key];
+    const next = writableJson(child);
+    if (next !== child) record[key] = next;
+  }
+  return value;
+}
+
+function writableDescriptor(descriptor: PropertyDescriptor): PropertyDescriptor {
+  return "value" in descriptor ? { ...descriptor, value: writableJson(descriptor.value) } : descriptor;
+}
+
 function trackMutableJson<T>(
   value: T,
   markDirty: () => void,
@@ -436,7 +460,7 @@ function trackMutableJson<T>(
     get: (target, property, receiver) => trackMutableJson(Reflect.get(target, property, receiver), markDirty, seen),
     set: (target, property, next) => {
       markDirty();
-      return Reflect.set(target, property, next);
+      return Reflect.set(target, property, writableJson(next));
     },
     deleteProperty: (target, property) => {
       markDirty();
@@ -444,7 +468,7 @@ function trackMutableJson<T>(
     },
     defineProperty: (target, property, descriptor) => {
       markDirty();
-      return Reflect.defineProperty(target, property, descriptor);
+      return Reflect.defineProperty(target, property, writableDescriptor(descriptor));
     },
   });
   seen.set(object, proxy);
@@ -1377,7 +1401,7 @@ export class SqliteAgentRegistryStore {
               },
               set: (target, property, next) => {
                 if (typeof property === "string") dirty.add(property);
-                return Reflect.set(target, property, next);
+                return Reflect.set(target, property, writableJson(next));
               },
               deleteProperty: (target, property) => {
                 if (typeof property === "string") dirty.add(property);
@@ -1385,7 +1409,7 @@ export class SqliteAgentRegistryStore {
               },
               defineProperty: (target, property, descriptor) => {
                 if (typeof property === "string") dirty.add(property);
-                return Reflect.defineProperty(target, property, descriptor);
+                return Reflect.defineProperty(target, property, writableDescriptor(descriptor));
               },
             }) as typeof value;
           }
@@ -1505,7 +1529,7 @@ export class SqliteAgentRegistryStore {
                 deleted.delete(property);
                 rowProxies.delete(property);
               }
-              return Reflect.set(target, property, next);
+              return Reflect.set(target, property, writableJson(next));
             },
             deleteProperty: (target, property) => {
               if (typeof property === "string") {
@@ -1523,7 +1547,7 @@ export class SqliteAgentRegistryStore {
                 deleted.delete(property);
                 rowProxies.delete(property);
               }
-              return Reflect.defineProperty(target, property, descriptor);
+              return Reflect.defineProperty(target, property, writableDescriptor(descriptor));
             },
             has: (_target, property) => typeof property === "string"
               ? readRow(property) !== undefined
@@ -1557,7 +1581,7 @@ export class SqliteAgentRegistryStore {
         set: (next: typeof value) => {
           load();
           loadAllBaseline();
-          value = next;
+          value = writableJson(next);
           loadedCollections.set(collection, value);
           reorderedCollections.add(collection);
         },
@@ -1588,7 +1612,7 @@ export class SqliteAgentRegistryStore {
         },
         set: (next: typeof value) => {
           load();
-          value = next;
+          value = writableJson(next);
           loadedMeta.set(field, value);
         },
       });
