@@ -774,11 +774,11 @@ test("the role table keeps the delivered default inside the structured envelope"
      The scheduled maintainer row uses another 200 bytes of that room. v40
      (#2518) takes 1 100 more: the bug report and other-project section and
      the issue-reporter row. The visual-critic row and the UI-lane step that
-     ends on it take 150 more. The prototype-review pointer takes another
-     100-byte share; the merged delivered default measures 29 363 bytes.
+     ends on it take 150 more. The prototype-review pointer adds 47 bytes;
+     the merged delivered default measures 29 363 bytes.
      The scaffold is 750 bytes, and
      handoffDigest.test.ts still finds a full history section beside it. */
-  expect(Buffer.byteLength(delivered)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 2_550);
+  expect(Buffer.byteLength(delivered)).toBeLessThan(MAX_STRUCTURED_TEXT_BYTES - 2_600);
 });
 
 /* docs/design/model-sizing-tiers.md §4: the seat sizes every lane, reads each
