@@ -253,8 +253,22 @@ export function currentMemberPath(
  * Filters archived predecessors out of a board/switchboard/attention list so a
  * migrated conversation shows as exactly one card (its current generation).
  * A no-op on pre-migration payloads.
+ *
+ * Until the list carries the current generation, the newest predecessor stands
+ * for the conversation. A switch commits before the file scan has found the
+ * successor's transcript, and folding the predecessor away in that window took
+ * the agent off its card for 5 to 8 s at the end of every account switch on
+ * production (2026-10-07).
  */
 export function withoutArchivedPredecessors(files: FileEntry[]): FileEntry[] {
   if (!files.some(isArchivedPredecessor)) return files;
-  return files.filter((file) => !isArchivedPredecessor(file));
+  const current = new Set<string>();
+  const standIn = new Map<string, FileEntry>();
+  for (const file of files) {
+    if (!file.conversationId) continue;
+    if (!isArchivedPredecessor(file)) current.add(file.conversationId);
+    else if ((file.generation ?? 0) >= (standIn.get(file.conversationId)?.generation ?? 0)) standIn.set(file.conversationId, file);
+  }
+  return files.filter((file) => !isArchivedPredecessor(file)
+    || (file.conversationId !== undefined && !current.has(file.conversationId) && standIn.get(file.conversationId) === file));
 }

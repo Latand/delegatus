@@ -1112,7 +1112,7 @@ export class SqliteAgentRegistryStore {
     }
   }
 
-  mutate<T>(operation: (file: RegistryFile) => T, includeSnapshot = true, options: { updateSnapshotCache?: boolean; operationName?: string } = {}): SqliteRegistryMutation<T> {
+  mutate<T>(operation: (file: RegistryFile) => T, includeSnapshot = true, options: { operationName?: string } = {}): SqliteRegistryMutation<T> {
     let operationName = options.operationName ?? operation.name;
     for (let attempt = 1; attempt <= this.maxMutationAttempts; attempt += 1) {
       const pessimistic = attempt > 1;
@@ -1166,8 +1166,13 @@ export class SqliteAgentRegistryStore {
       }
       if (changed) {
         this.secureFiles();
-        // A narrow delivery commit must not clone populated snapshot maps.
-        if (options.updateSnapshotCache === false) this.readOnlyCache = null;
+        /* A delivery commit patches the cached reader view like any other
+           narrow commit. Dropping it instead cost the next whole-registry
+           reader a full reload, 0.28 to 0.40 s on a copy of the production
+           registry (3,052 conversations, 3,254 deliveries) where the patch
+           costs nothing measurable, and an account switch interleaves dozens
+           of such commits with such readers on the Viewer's main thread
+           (2026-10-07: every request stalled 3 to 6 s as a switch started). */
         this.updateCachesAfterCommit(current.file, changes, revision, stamps);
         this.rememberRevision(revision);
       }

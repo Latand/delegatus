@@ -5114,7 +5114,7 @@ export class AgentRegistry {
     };
     if (this.sqliteMode === "read" || this.sqliteMode === "sqlite") {
       const operationName = new Error().stack?.split("\n")[3]?.match(/at (\w+)/)?.[1] ?? "anonymous";
-      const mutation = this.sqliteStore!.mutate(mutator, false, { updateSnapshotCache: !options.deliveryOnly, operationName });
+      const mutation = this.sqliteStore!.mutate(mutator, false, { operationName });
       if (this.sqliteMode === "read") {
         this.mirrorDirty = this.lastMirroredRevision === null || mutation.revision > this.lastMirroredRevision;
         if (this.mirrorDirty) this.scheduleRollbackMirrorForCadence();
@@ -9577,6 +9577,42 @@ export class AgentRegistry {
       compactDeliveryReservations(file, delivery.conversationId, this.now());
       return clone(delivery);
     });
+  }
+
+  /**
+   * Hands the switch the sends it is holding back (2026-10-07, run 3).
+   *
+   * A send admitted just after an account pick, before the queue claimed the
+   * pick, is claimed on the predecessor and journaled behind the pick. The
+   * queue runs the pick first and holds every later message of the
+   * conversation behind it, while the switch waits for that claim to settle:
+   * neither moved until the ten-minute settlement failed the message. The
+   * queue names the operations it holds behind the switch that it never
+   * dispatched, and each one's claim on the source generation goes back to a
+   * hold the switch carries to the successor, the same hold a send made after
+   * the pick gets. Returns how many claims were handed over.
+   */
+  holdUndispatchedClaimsForSwitch(id: ViewerConversationId, operationIds: readonly string[]): number {
+    if (operationIds.length === 0) return 0;
+    return this.mutate((file) => {
+      const canonicalId = resolveConversationAlias(file, id);
+      const migration = file.conversations[canonicalId]?.migration;
+      if (!migration || !IN_FLIGHT_MIGRATION_PHASES.has(migration.phase)) return 0;
+      const carried = new Set(operationIds);
+      let handed = 0;
+      for (const delivery of Object.values(file.heldDeliveries)) {
+        if (delivery.state !== "delivery-uncertain"
+          || !carried.has(delivery.command.operationId)
+          || delivery.generationId !== migration.sourceGenerationId
+          || resolveConversationAlias(file, delivery.conversationId) !== canonicalId) continue;
+        /* The claim never reached a host, so it is no attempt the commit has
+           to fear may have reached the previous account. */
+        delivery.attempts = Math.max(0, delivery.attempts - 1);
+        placeDeliveryForRetryInFile(file, delivery, true);
+        handed += 1;
+      }
+      return handed;
+    }, { deliveryOnly: true });
   }
 
   requeueUnactuatedDelivery(id: string, cause?: string): HeldDelivery {

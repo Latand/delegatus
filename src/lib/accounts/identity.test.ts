@@ -88,6 +88,16 @@ describe("withoutArchivedPredecessors", () => {
     const all = [file({ path: "/gen1", conversationId: "c", migratedTo: "/gen2" }), ...kept];
     expect(withoutArchivedPredecessors(all)).toEqual(kept);
   });
+  test("keeps the newest predecessor while the list has no current generation yet", () => {
+    /* 2026-10-07: a switch committed before the scan found the successor's
+       transcript, and the card lost its agent for 5 to 8 s. */
+    const older = file({ path: "/gen1", conversationId: "c", generation: 1, migratedTo: "/gen3" });
+    const newest = file({ path: "/gen2", conversationId: "c", generation: 2, migratedTo: "/gen3" });
+    const other = file({ path: "/other", conversationId: "d" });
+    expect(withoutArchivedPredecessors([older, newest, other])).toEqual([newest, other]);
+    const current = file({ path: "/gen3", conversationId: "c", generation: 3, predecessorPath: "/gen2" });
+    expect(withoutArchivedPredecessors([older, newest, current, other])).toEqual([current, other]);
+  });
 });
 
 describe("succession keeps a stable card identity (finding 6)", () => {

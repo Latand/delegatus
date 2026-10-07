@@ -205,6 +205,23 @@ Measured: the main thread at 93% of a core with no switch running, and every API
 
 From the spawn's 202 to the first message being queued took 6.0, 5.3, 6.8 and 4.9 s: generation reserved, Claude CLI started, host published. Then 0.5–1.1 s to the turn's start and 1.5–2.3 s from there to the first token. Nothing stalled there.
 
+## What this branch changes
+
+Each change has a focused test that fails without it.
+
+| # | Change | Test |
+|---|---|---|
+| F1 | The queue names the sends it holds behind an account pick that no host was ever handed (receipt still `queued` at revision 1). The switch hands their claims on the old account back to the hold it carries (`holdUndispatchedClaimsForSwitch`), with the never-dispatched attempt uncounted, so the commit does not cancel them. The switch runs at once and the message goes out on account B. | `structuredAccountSwitch.test.ts` (the run 3 shape, and the guard that a send which may have reached the old host still holds the switch); `structuredDeliveryQueue.test.ts` (only undispatched sends are carried) |
+| F2 | A host release republishes only the host of the released conversation's current generation, or its fallback projection. An unknown conversation still republishes all. | `structuredDeliveryRebind.test.ts`: releasing one host reads no other host |
+| F3 | Not changed here: #2572 bounds the pass. F2 removes most of the 16–32 s a kill spent in that pass. | – |
+| F4 | `withoutArchivedPredecessors` keeps the newest archived predecessor while the list has no current generation for its conversation, so the card keeps its agent until the scan finds the successor's transcript. A new transcript waits for the scan's 10 s membership coalescing (`src/lib/scanner/scanCache.ts`), and the old row was folded away as soon as the switch committed. | `identity.test.ts` |
+| F5 | With nothing undelivered on the card, the hint reads "Перемикається акаунт — нове повідомлення надійде після перемикання". "Повідомлення утримано" stays for a message that is actually waiting. | `TmuxComposer.migrationHold.dom.test.tsx` |
+| F6 | A settled operator message publishes a files revision, so the board refetches the projection that carries its needs-you and first-message state. | `structuredDeliveryRebind.test.ts` |
+| F7 | Measured on a private copy of the production registry (3,052 conversations, 3,254 deliveries): every delivery-only commit dropped the shared reader view, and the next whole-registry read rebuilt it in 0.28–0.40 s on the main thread, with the commit itself at 0.09–0.12 s. A delivery commit now patches the view like other narrow commits: the next read takes 0.1 ms and the commit 0.02 s. The switch start interleaves many such commits and reads (send admission, reconfigure claim, reseat, migration transitions, controller ticks, the files projection). | `registry.sqlite.test.ts`: a delivery commit keeps the view warm and current |
+| F8 | Not changed: the #1709 ordering holds. F1 and F3 bound how long one entry can hold the rest. | – |
+
+The idle load of 93% on the main thread is not attributed to a code path here.
+
 ## Not measured, and why
 
 - The busy case together with a switch, the seat incident's exact shape: it would have needed two more messages beyond a budget already exceeded. Its code path is the `waiting-turn` hold that #2573 describes, and run 3 shows the same ribbon and the same 30 s reconfigure cycle.

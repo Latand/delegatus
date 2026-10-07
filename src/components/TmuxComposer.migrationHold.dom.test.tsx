@@ -274,3 +274,34 @@ test("a card that IS switching still promises the switch on a direct send", asyn
   expect(host.textContent).not.toContain(translate("en", "composer.deliveryHeldWaiting"));
   await act(async () => root.unmount());
 });
+
+/** The switch past its turn boundary, the window in which the composer holds every send. */
+const switching = { ...pendingWithoutTarget, phase: "successor-starting", targetLabel: "Account B" } as ConversationMigration;
+
+test("a switching card with nothing sent never says a message is held", async () => {
+  /* 2026-10-07, production runs 1 and 4: "Message held — delivers after the
+     switch" for about 8 s of a switch the operator sent nothing into. */
+  for (const locale of ["en", "uk"] as const) {
+    setLocale(locale);
+    stubHeldSend();
+    const { host, root } = await renderInto(<TmuxComposer file={fileWith(switching)} />);
+    await settle();
+
+    const hint = host.querySelector("[data-composer-switch-hint]");
+    expect(hint?.textContent).toBe(translate(locale, "migrate.nextSendHeld"));
+    expect(host.textContent).not.toContain(translate(locale, "migrate.heldSend"));
+
+    await act(async () => root.unmount());
+    resetOutboxForTests();
+  }
+});
+
+test("a switching card with an undelivered message says it is held", async () => {
+  stubHeldSend();
+  enqueueOutbox(CARD, { id: "key-held", text: "message for the successor", images: 0, at: Date.now() });
+  const { host, root } = await renderInto(<TmuxComposer file={fileWith(switching)} />);
+  await settle();
+
+  expect(host.querySelector("[data-composer-switch-hint]")?.textContent).toBe(translate("en", "migrate.heldSend"));
+  await act(async () => root.unmount());
+});

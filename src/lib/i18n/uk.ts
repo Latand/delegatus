@@ -830,6 +830,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "migrate.divider": "Продовжено з «{label}» — попередній запис в архіві",
   "migrate.openPrevious": "Відкрити попередній запис",
   "migrate.heldSend": "Повідомлення утримано — надійде після перемикання",
+  "migrate.nextSendHeld": "Перемикається акаунт — нове повідомлення надійде після перемикання",
   "migrate.readOnlyPredecessor": "В архіві — розмову продовжено під «{label}»",
   "migrate.retryFailed": "Не вдалося повторити перемикання",
   "migrate.keepFailed": "Не вдалося лишити цю сесію на поточному акаунті",

@@ -551,3 +551,82 @@ test("held receipts follow a failed switch, retry and rollback in both languages
   expect(registry.deliverySnapshotForOperation(held.command.operationId)!.heldDeliveries[held.id]).toMatchObject({ state: "assigned", waitReason: null });
   expect(receipt()!.reason).not.toBe("switching-accounts");
 });
+
+/** The run 3 race on production (2026-10-07): the operator picked account B
+    in the composer of an idle conversation and sent a message 0.09 s later.
+    The send was admitted before the queue claimed the pick, so it was claimed
+    on account A and journaled behind the pick. */
+function sendClaimedBehindPick() {
+  const root = path.join(sandbox, `case-${caseNumber += 1}`);
+  fs.mkdirSync(root);
+  setBoardFileForTests(path.join(root, "board.json"));
+  const registry = new AgentRegistry(path.join(root, "registry.json"));
+  const sourcePath = path.join(root, "source.jsonl");
+  const successorPath = path.join(root, "successor.jsonl");
+  claudeTranscript(sourcePath);
+  registry.reconcileConversations([{
+    engine: "claude",
+    path: sourcePath,
+    accountId: "account-a",
+    launchProfile: emptyLaunchProfile({ cwd: "/repo", project: "repo" }),
+    turn: { state: "terminal", source: "assistant", terminalAt: "2026-07-21T10:00:26.000Z" },
+    observedAt: "2026-07-21T10:00:30.000Z",
+  }]);
+  const conversation = registry.conversationForPath(sourcePath)!;
+  const generationId = conversation.generations.at(-1)!.id;
+  recordStructuredHost(registry, { engine: "claude", sessionId: generationId }, sourcePath, "account-a", null);
+  const admitted = registry.holdDelivery(conversation.id, "Second message: reply with the single word OK", "send-behind-pick",
+    "text", [], null, { operationId: "send-behind-pick" });
+  const claimed = registry.beginDeliveryAttempt(admitted.id, generationId);
+  expect(claimed).toMatchObject({ state: "delivery-uncertain", generationId });
+  const effect: StructuredReconfigureEffect = {
+    operationId: "pick-account-b",
+    conversationId: conversation.id,
+    kind: "reconfigure",
+    model: "claude-haiku-4-5",
+    effort: "low",
+    fast: false,
+    accountId: "account-b",
+    eventSeq: 7,
+  };
+  const reconfigure = (carriedSends?: readonly string[]) => applyStructuredReconfigure(effect, {
+    registry,
+    validateAccount: async () => {},
+    resolveAccount: ((engine: string, accountId: string) => ({ accountId, home: root, engine })) as never,
+    releaseHost: async () => true,
+    recover: (async () => true) as never,
+    migrate: (conversationId, targetAccountId, store, ownsOperation, reconfigureOperationId) =>
+      advanceConversationMigration(conversationId, store, successorProvider(successorPath), {
+        ownsOperation,
+        reconfigureOperationId,
+        deferBoardRepair: true,
+      }),
+    ...(carriedSends ? { carriedSends } : {}),
+  });
+  return { registry, conversation, successorPath, reconfigure };
+}
+
+test("a send claimed on the old account behind the pick moves with the switch instead of holding it", async () => {
+  const { registry, conversation, successorPath, reconfigure } = sendClaimedBehindPick();
+
+  expect(await reconfigure(["send-behind-pick"])).toBe("applied");
+
+  const switched = registry.conversation(conversation.id)!;
+  expect(switched.migration?.phase).toBe("committed");
+  expect(switched.generations.at(-1)).toMatchObject({ path: successorPath, accountId: "account-b" });
+  /* The message waits for the successor's host, never for itself. */
+  expect(registry.pendingDeliveries(conversation.id)).toMatchObject([{
+    clientMessageId: "send-behind-pick",
+    state: "assigned",
+    generationId: "successor-native",
+  }]);
+});
+
+test("a send the queue may already have handed the old host still holds the switch", async () => {
+  const { registry, conversation, reconfigure } = sendClaimedBehindPick();
+
+  expect(await reconfigure()).toBe("pending");
+
+  expect(registry.conversation(conversation.id)!.migration?.phase).toBe("waiting-turn");
+  expect(registry.pendingDeliveries(conversation.id)).toMatchObject([{ state: "delivery-uncertain" }]);
+});

@@ -47,6 +47,10 @@ export interface StructuredReconfigureDependencies {
     ownsOperation: () => Promise<boolean>,
     reconfigureOperationId?: string,
   ) => Promise<RegistryConversation>;
+  /** Sends the queue holds behind this switch and never dispatched. Their
+      claims on the predecessor go back to holds the switch carries, so the
+      switch never waits for a message that waits for it. */
+  carriedSends?: readonly string[];
 }
 
 async function validateAccountAuthentication(engine: "claude" | "codex", accountId: string): Promise<void> {
@@ -224,6 +228,7 @@ export async function applyStructuredReconfigure(
         operationId: effect.operationId,
         revision: effect.eventSeq,
       });
+      registry.holdUndispatchedClaimsForSwitch(conversationId, dependencies.carriedSends ?? []);
     } catch (error) {
       if (ownerCancelled()) throw new StructuredReconfigureCancelledError();
       throw error;

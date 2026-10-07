@@ -834,6 +834,7 @@ export const en = {
   "migrate.divider": "Continued from «{label}» — previous transcript archived",
   "migrate.openPrevious": "Open previous transcript",
   "migrate.heldSend": "Message held — delivers after the switch",
+  "migrate.nextSendHeld": "Switching accounts — a new message delivers after the switch",
   "migrate.readOnlyPredecessor": "Archived — this conversation continued under «{label}»",
   "migrate.retryFailed": "Couldn't retry the switch",
   "migrate.keepFailed": "Couldn't keep this session on its current account",
