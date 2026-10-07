@@ -201,7 +201,7 @@ test("a superseded conversation keeps its terminal projection", async () => {
   try {
     const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
     const file = structuredFile(registry, directory, { pid: 75, startIdentity: "75:1000" });
-    const snapshot = registry.readOnlySnapshot();
+    const snapshot = registry.snapshot();
     const conversation = Object.values(snapshot.conversations).find((candidate) => candidate.generations.at(-1)?.path === file.path)!;
     conversation.supersededBy = {
       conversationId: "conversation_replacement",
@@ -228,7 +228,7 @@ test("current legacy ownership overrides retained structured metadata without a 
   try {
     const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
     const file = structuredFile(registry, directory, { pid: 1001, startIdentity: "old" });
-    const snapshot = registry.readOnlySnapshot();
+    const snapshot = registry.snapshot();
     const conversation = Object.values(snapshot.conversations)[0]!;
     file.conversationId = conversation.id;
     const entry = Object.values(snapshot.entries)[0]!;

@@ -35,10 +35,9 @@ import { detectMode, productionModePorts } from "./mode";
 import { sameProcess } from "./pid";
 import { procBackend } from "@/lib/proc";
 import { SelfUpdateService, type ServiceDeps } from "./service";
-import { sessionClaimsOpenTurn, type OwnerlessReading, type OwnerReading, type QuietPorts, type TailReading } from "./quiet";
+import { registryAdmissionEvidence, sessionClaimsOpenTurn, type OwnerlessReading, type OwnerReading, type QuietPorts, type TailReading } from "./quiet";
 import { memAvailableMb, realPorts, UpdateRunner } from "./steps";
 import type { Snapshot } from "./types";
-import { admittedRecords } from "../../../bin/self-update-supervisor.mjs";
 
 const POLL_MINUTES = 60;
 const SSE_MIN_GAP_MS = 250;
@@ -366,16 +365,9 @@ export function productionDeps(env: Readonly<Record<string, string | undefined>>
     quiet: {
       // Admitted work by identity. The journal is left out on purpose: every
       // event of a turn already running moves it, so it cannot fence new work.
-      dispatchVersion: () => {
-        const registry = agentRegistry().snapshot();
-        const records = admittedRecords(registry);
-        if (!records) throw new Error("Runtime admission evidence is unavailable");
-        const receiptOwners = Object.values(registry.receipts).map((receipt) => [
-          receipt.launchId, receipt.conversationId, receipt.state, receipt.artifactPath,
-          receipt.admissionOwner, receipt.verifiedHost?.agent, receipt.pane?.panePid,
-        ]).sort((left, right) => String(left[0]).localeCompare(String(right[0])));
-        return createHash("sha256").update(JSON.stringify([records, receiptOwners, flowPipelineController().idle(), seatTickIdle()])).digest("hex");
-      },
+      dispatchVersion: () => createHash("sha256")
+        .update(JSON.stringify([...registryAdmissionEvidence(agentRegistry().readOnlySnapshot()), flowPipelineController().idle(), seatTickIdle()]))
+        .digest("hex"),
       runtimeSnapshot: async () => {
         const client = runtimeHostClient();
         if (!client) throw new Error("runtime host is unavailable");

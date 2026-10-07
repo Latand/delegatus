@@ -4,6 +4,8 @@ import { STARTING_GRACE_MS } from "@/lib/lifecycle/liveness";
 import type { OwnerReference, OwnerRole } from "@/lib/lifecycle/owners";
 import type { RuntimeSession, RuntimeSnapshot } from "@/lib/runtime/contracts";
 import type { Pipeline } from "@/lib/pipelines/types";
+import type { RegistryFile } from "@/lib/agent/registry";
+import { admittedRecords } from "../../../bin/self-update-supervisor.mjs";
 import { pipelineRegistryHealth } from "@/lib/pipelines/store";
 import type { RegistryRecordIssue } from "@/lib/state/registryRecords";
 import type { Flow, Round } from "@/lib/flows/types";
@@ -465,6 +467,23 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
     blockers.unreadable = error instanceof Error ? error.message : String(error);
   }
   return { quiet: !blockers.turns && !blockers.stages && !blockers.operatorActiveAt && !blockers.busy && !blockers.unreadable && blockers.memoryMb === null, blockers, work };
+}
+
+/**
+ * The registry half of the quiet fence's dispatch version: the admitted entries
+ * and the owner of every spawn receipt. The fence reads it before and after
+ * each awaited step of an adoption, so it reads the shared registry view, which
+ * a repeated read at an unchanged revision answers without loading anything,
+ * and only reads it: nothing here writes into the view it is given.
+ */
+export function registryAdmissionEvidence(registry: RegistryFile): [records: NonNullable<ReturnType<typeof admittedRecords>>, receiptOwners: unknown[][]] {
+  const records = admittedRecords(registry);
+  if (!records) throw new Error("Runtime admission evidence is unavailable");
+  const receiptOwners = Object.values(registry.receipts).map((receipt) => [
+    receipt.launchId, receipt.conversationId, receipt.state, receipt.artifactPath,
+    receipt.admissionOwner, receipt.verifiedHost?.agent, receipt.pane?.panePid,
+  ]).sort((left, right) => String(left[0]).localeCompare(String(right[0])));
+  return [records, receiptOwners];
 }
 
 /** What a synchronous fence compares across an awaited read: the stages and
