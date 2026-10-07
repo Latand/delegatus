@@ -61,8 +61,9 @@ usable report is recorded as that file's fault; a fault native main produces in
 the same file makes the candidate's fault there pre-existing. A file main cannot
 complete is compared on the cases both sides completed: the cases the candidate
 fails there run again on main by themselves, and the result main reports for
-each is its baseline. A removal subject whose file aborts reruns the case under
-investigation the same way. The candidate's failures main still cannot report
+each is its baseline. When those cases cannot report together, each runs alone,
+so one case that aborts main never erases another's result. A removal subject
+whose file aborts reruns the cases under investigation the same way. The candidate's failures main still cannot report
 are listed as not compared. A gate that cannot run, including
 installation or type checking, stops with its own cause.
 

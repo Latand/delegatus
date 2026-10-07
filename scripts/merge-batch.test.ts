@@ -794,6 +794,33 @@ test("(a)(c) a case native main completes before aborting still names its culpri
   expect(report(landed)).toContain("#13 | culprit test regression: value.test.ts > ");
 }, 60_000);
 
+test("(a)(c) a named case main aborts on does not erase another named case's baseline with the real sampler", async () => {
+  const f = landingFixture("green", async (cwd, args, env) => args[1] === "bun" && args[2] === "test"
+    ? commandRunner(cwd, args.slice(1), env) : successfulCommand(args));
+  f.seed("value.js", "exports.value = 1;\n");
+  f.seed("value.test.ts", "const { test, expect } = require('bun:test');\nconst { value } = require('./value.js');\n"
+    + "test('shared invariant', () => expect(value).toBe(1));\n"
+    + "test('main aborts', () => { if (value === 1) process.exit(1); expect(value).toBe(1); });\n");
+  const healthy = f.addPr(12, "healthy.txt", "healthy");
+  const regression = f.addPr(13, "value.js", "exports.value = 2;\n");
+  await f.batch.build(`12@${healthy},13@${regression}`);
+  const gated = await f.batch.gate();
+  expect(gated.rows.map(row => row.status)).toEqual(["clean", "culprit"]);
+  // Both named cases fail on the candidate; together they abort main again,
+  // so each runs alone there and the shared invariant keeps its pass.
+  const evidence = gated.attributionLog.find(entry => entry.test.name === "shared invariant")!;
+  expect(evidence.prs).toEqual([13]);
+  expect(evidence.removals).toEqual([{ removed: [12], outcome: "fail" }, { removed: [13], outcome: "pass" }]);
+  expect(gated.attributionLog.some(entry => entry.test.name === "main aborts")).toBe(false);
+  const final = gated.gated!.decisions.at(-1)!;
+  expect(final.attributed).toEqual([]);
+  expect(final.preExisting).toEqual([fileFault("value.test.ts", INCOMPLETE_FILE)]);
+  const landed = await f.batch.land();
+  expect(landed.rows.map(row => row.status)).toEqual(["merged", "culprit"]);
+  expect(git(f.repo, ["log", "--format=%s", `${landed.base}..HEAD`])).toBe("Feature 12 (#12)");
+  expect(git(f.repo, ["ls-remote", "origin", "refs/heads/topic-13"]).split(/\s/)[0]).toBe(regression);
+}, 60_000);
+
 for (const mode of ["new", "modified"] as const) {
   test(`a healthy ${mode} feature detector retains the wrong implementation failure with real git and Bun`, async () => {
     const f = landingFixture("green", async (cwd, args, env) => args[1] === "bun" && args[2] === "test"

@@ -620,7 +620,8 @@ export class MergeBatch {
    * missing report is recorded as that file's fault, never thrown: whether it
    * stops anything depends on what native main produced for the same file.
    * When a file cannot complete, the named `focus` cases run again by
-   * themselves, so a case the file reached before aborting keeps its result
+   * themselves, together and then one by one if that aborts too, so a case
+   * the file reached keeps its result whatever another named case does
    * (`only` skips the full run). Neither marks the file completed. */
   private async testSample(cwd: string, files: string[], corpus: false | Record<string, string>,
     focus: { sites: TestSite[]; only?: boolean } = { sites: [] }): Promise<TestRun> {
@@ -647,19 +648,27 @@ export class MergeBatch {
       }
       const sites = focus.sites.filter(site => site.file === file && site.kind === "test");
       if (!sites.length) continue;
-      const result = await this.gateCommand(cwd, { id: "tests", args: ["bun", "test", `./${file}`], report: true, filter: testNameFilter(sites) }, corpus);
-      try {
-        const parsed = parseReport(result.report ?? "", result.output, file, cwd, true);
-        const named = new Set(sites.map(testIdentity));
-        // Only a consistent report of the named cases is evidence.
-        if ((result.code === 0) === (parsed.failures.length === 0) && parsed.failures.every(site => site.kind === "test")) {
-          sample.failures.push(...parsed.failures.filter(site => named.has(testIdentity(site))));
-          sample.passed.push(...parsed.passed.filter(site => named.has(testIdentity(site))));
-        }
-      } catch { /* the named cases cannot complete either: they stay unreported */ }
+      // One named case that aborts must not erase another's result: when the
+      // named cases cannot report together, each runs by itself.
+      if (await this.focusedSample(cwd, file, sites, corpus, sample) || sites.length === 1) continue;
+      for (const site of sites) await this.focusedSample(cwd, file, [site], corpus, sample);
     }
     sample.elapsedMs = performance.now() - started;
     return sample;
+  }
+
+  /** Records the named cases' results only from a consistent report of them;
+   * returns whether there was one. */
+  private async focusedSample(cwd: string, file: string, sites: TestSite[], corpus: false | Record<string, string>, sample: TestRun): Promise<boolean> {
+    const result = await this.gateCommand(cwd, { id: "tests", args: ["bun", "test", `./${file}`], report: true, filter: testNameFilter(sites) }, corpus);
+    try {
+      const parsed = parseReport(result.report ?? "", result.output, file, cwd, true);
+      if ((result.code === 0) !== (parsed.failures.length === 0) || parsed.failures.some(site => site.kind !== "test")) return false;
+      const named = new Set(sites.map(testIdentity));
+      sample.failures.push(...parsed.failures.filter(site => named.has(testIdentity(site))));
+      sample.passed.push(...parsed.passed.filter(site => named.has(testIdentity(site))));
+      return true;
+    } catch { return false; /* the named cases cannot complete: they stay unreported */ }
   }
 
   private async testSubject(state: RunState, files: string[], removed?: number[], stable: false | Record<string, string> = false,
