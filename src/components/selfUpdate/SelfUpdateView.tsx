@@ -267,6 +267,28 @@ function StepRow({ step, short, state, actions, t, managed }: { step: Step; shor
   );
 }
 
+/* What a restart would land on, as the last reading saw it (#2594). The
+   installation answers first; until that reading lands nothing is said about
+   the work, so it never reads as none. */
+function WorkLine({ s, t }: { s: Snapshot; t: TFunction }) {
+  const evidence = s.workEvidence;
+  if (!evidence) return null;
+  if (evidence.state === "pending") {
+    return <p data-work="pending" className="m-0 flex items-center gap-2 text-ui text-secondary"><Icon kind="running" />{t("selfUpdate.work.pending")}</p>;
+  }
+  if (evidence.state === "unavailable" || !s.resumeWork) {
+    return <p data-work="unavailable" className={ERROR_LINE}>{t("selfUpdate.auto.block.unreadable", { detail: evidence.error ?? "" })}</p>;
+  }
+  const work = s.resumeWork;
+  const parts = [t("selfUpdate.auto.block.turns", { count: work.turns }), t("selfUpdate.auto.block.stages", { count: work.stages }), t("selfUpdate.work.readAt", { time: clock(evidence.at) })];
+  return (
+    <>
+      <p data-work="ready" className="m-0 text-ui text-secondary tabular-nums">{parts.join(" · ")}</p>
+      {work.unreadable ? <p data-work="unreadable" className={ERROR_LINE}>{t("selfUpdate.auto.block.unreadable", { detail: work.unreadable })}</p> : null}
+    </>
+  );
+}
+
 function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState; actions: ViewActions; t: TFunction }) {
   const update = s.update;
   const managed = s.mode === "managed";
@@ -316,6 +338,7 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
         </div>
         <p className="m-0 text-ui text-secondary">{t(managed ? "selfUpdate.update.noteManaged" : s.action ? "selfUpdate.update.note" : "selfUpdate.update.noteApply")}</p>
         {s.mode === "package" ? <p data-note="package-manual" className="m-0 text-ui text-secondary">{t("selfUpdate.update.packageManual")}</p> : null}
+        <WorkLine s={s} t={t} />
         {steps(target.short, update.steps.map((step) => ({ ...step, state: "pending", tail: [], durationMs: null, startedAt: null })))}
       </section>
     );

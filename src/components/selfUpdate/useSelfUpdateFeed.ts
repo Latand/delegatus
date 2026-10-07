@@ -17,15 +17,20 @@ export interface Feed {
   live: Live;
   /** The last read failed: nothing answers right now. */
   offline: boolean;
+  /** The server answered that it could not read the install, and why (#2594). */
+  failure: string | null;
   accept(snapshot: Snapshot): void;
 }
 
 const POLL_MS = 1_000;
 
-export function useSelfUpdateFeed(readOnly = false): Feed {
+/** `work: false` leaves out the work in progress, which only the dialog
+    shows: a background reader then never starts the reading of it. */
+export function useSelfUpdateFeed(readOnly = false, work = true): Feed {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [live, setLive] = useState<Live>("connecting");
   const [offline, setOffline] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
   const source = useRef<EventSource | null>(null);
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const closed = useRef(false);
@@ -33,11 +38,13 @@ export function useSelfUpdateFeed(readOnly = false): Feed {
   const accept = useCallback((next: Snapshot) => {
     setSnapshot(next);
     setOffline(false);
+    setFailure(null);
   }, []);
 
   useEffect(() => {
     closed.current = false;
-    const suffix = readOnly ? "?readOnly=1" : "";
+    const query = [readOnly ? "readOnly=1" : "", work ? "" : "work=0"].filter(Boolean).join("&");
+    const suffix = query ? `?${query}` : "";
     let errors = 0;
     const stopPolling = () => {
       if (pollTimer.current) clearInterval(pollTimer.current);
@@ -53,6 +60,11 @@ export function useSelfUpdateFeed(readOnly = false): Feed {
         setLive("sse");
         stopPolling();
         try { accept(JSON.parse((event as MessageEvent<string>).data) as Snapshot); } catch { /* next event */ }
+      });
+      events.addEventListener("snapshot-error", (event) => {
+        errors = 0;
+        setLive("sse");
+        try { setFailure((JSON.parse((event as MessageEvent<string>).data) as { error?: string }).error ?? ""); } catch { setFailure(""); }
       });
       events.addEventListener("error", () => {
         errors += 1;
@@ -70,6 +82,10 @@ export function useSelfUpdateFeed(readOnly = false): Feed {
       const tick = async () => {
         try {
           const response = await fetch(`/api/self-update${suffix}`, { cache: "no-store" });
+          if (response.status === 503) {
+            const body = await response.json().catch(() => null) as { code?: string; error?: string } | null;
+            if (body?.code === "snapshot-failed") { setOffline(false); setFailure(body.error ?? ""); return; }
+          }
           if (!response.ok) throw new Error(String(response.status));
           accept(await response.json() as Snapshot);
           answered += 1;
@@ -97,7 +113,7 @@ export function useSelfUpdateFeed(readOnly = false): Feed {
       source.current = null;
       stopPolling();
     };
-  }, [accept, readOnly]);
+  }, [accept, readOnly, work]);
 
-  return { snapshot, live, offline, accept };
+  return { snapshot, live, offline, failure, accept };
 }

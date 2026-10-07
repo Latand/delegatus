@@ -230,11 +230,19 @@ export function setSelfUpdateServiceForTests(service: SelfUpdateService | null):
   holder[KEY] = service;
 }
 
+/** Why the install could not be read, for the surface to say so (#2594). */
+export function snapshotFailure(error: unknown): { code: "snapshot-failed"; error: string } {
+  return { code: "snapshot-failed", error: error instanceof Error ? error.message : String(error) };
+}
+
 /** The Snapshot as a server-sent event stream: one `state` event on every
     change (at most one per 250 ms), and a re-read of the install every
     second while something runs and every five seconds otherwise, since the
-    launcher, the runtime host and a deployment move without telling us. */
-export function snapshotStream(service: SelfUpdateService, signal: AbortSignal): ReadableStream<Uint8Array> {
+    launcher, the runtime host and a deployment move without telling us.
+    The work in progress follows in a later `state` once its reading lands;
+    a read that fails is a `snapshot-error` event, never silence. */
+export function snapshotStream(service: SelfUpdateService, signal: AbortSignal, options: { work?: boolean } = {}): ReadableStream<Uint8Array> {
+  const read = options.work === false ? () => service.snapshot() : () => service.observe();
   const encoder = new TextEncoder();
   let closed = false;
   let last = "";
@@ -262,7 +270,13 @@ export function snapshotStream(service: SelfUpdateService, signal: AbortSignal):
     pending = null;
     if (closed) return;
     let snapshot: Snapshot;
-    try { snapshot = await service.snapshot(); } catch { return; }
+    try { snapshot = await read(); } catch (error) {
+      const failure = JSON.stringify(snapshotFailure(error));
+      if (!force && failure === last) return;
+      last = failure;
+      send(`event: snapshot-error\ndata: ${failure}\n\n`);
+      return;
+    }
     const body = JSON.stringify(snapshot);
     /* serverTime moves every read; compare without it. */
     const comparable = body.replace(/"serverTime":"[^"]*"/, "");

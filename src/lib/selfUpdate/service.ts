@@ -23,6 +23,7 @@ import { activeDrain, DRAIN_NOTICE_MS, DRAIN_LEASE_MS, releaseDrain, writeDrain 
 import { GreenReader, type GreenVerdict } from "./green";
 import { appendHistory, findAutoSwitchRequest, readHistory, storeAutoSwitchResponse } from "./history";
 import { probeQuiet, quietDispatchVersion, type QuietBlockers, type QuietPorts } from "./quiet";
+import { ObservedWork } from "./workEvidence";
 import { activeRestartGate, ownsRestartGate, beginRestartGate, endRestartGate, restartGateFile } from "./restartGate";
 import { headOf, releaseDirFor } from "./release";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
@@ -201,6 +202,7 @@ export class SelfUpdateService {
   private admittedWork: { gateId: string; ids: Set<string> } | null = null;
   private autoBlockers: QuietBlockers | null = null;
   private readonly greenReader: GreenReader;
+  private observedWork: ObservedWork | null = null;
 
   constructor(private readonly deps: ServiceDeps) {
     this.apply = new ApplyController(deps.dir);
@@ -1820,8 +1822,46 @@ export class SelfUpdateService {
     return this.checking !== null || (this.runner?.state.state === "running") || managedActive(this.managed) || this.pendingRestart !== null;
   }
 
+  /** The installation as it is now, without the work in progress: what every
+      decision inside the service reads before it asks `probeQuiet` itself. */
   async snapshot(): Promise<Snapshot> {
     return this.buildSnapshot();
+  }
+
+  /**
+   * What the Update surface shows (#2594): the installation at once, with the
+   * work in progress as the last observational reading saw it. That reading
+   * is never awaited here; one runs at a time and every reader shares it, and
+   * until one lands the work is `pending`, never zero. It is display only:
+   * no mutation reads it.
+   */
+  async observe(): Promise<Snapshot> {
+    const snapshot = await this.snapshot();
+    if (!this.deps.quiet) return snapshot;
+    this.observedWork ??= new ObservedWork(this.deps.quiet, () => this.deps.now(), () => this.changes.emit());
+    const { evidence, resumeWork } = this.observedWork.observe(snapshot);
+    return { ...snapshot, workEvidence: evidence, ...(resumeWork ? { resumeWork } : {}) };
+  }
+
+  /** The observational reading in flight, if any; tests wait on it. */
+  workSettled(): Promise<void> {
+    return this.observedWork?.settled() ?? Promise.resolve();
+  }
+
+  /**
+   * A check answers for the revision that was installed when it ran. When a
+   * deployment outside this dialog, or one a previous web process watched,
+   * has since installed the very target that check found, its "N commits
+   * behind" names a distance nothing serves any more, and the next poll can be
+   * an hour away. The check's own answer for that revision is "equal", so it
+   * reads so from here on, for the dialog and for the automatic path alike.
+   */
+  private reconcileCheck(installed: Revision): void {
+    const { check, available } = this.slice;
+    if (!installed.sha || available?.sha !== installed.sha || check.state !== "update-available") return;
+    this.slice = { installed: available, available: null,
+      check: { ...check, state: "up-to-date", relation: "equal", ahead: 0, behind: 0, delta: null } };
+    this.saveNow();
   }
 
   private async buildSnapshot(replayAuto?: AutoState): Promise<Snapshot> {
@@ -1853,16 +1893,19 @@ export class SelfUpdateService {
       processes: { web: { ...stoppedProcess(), tail: [] }, runtimeHost: { ...stoppedProcess(), tail: [] } },
       busy: null,
     };
+    // A packaged install names its revisions by registry version; the two
+    // modes compared here name both sides by the same full git SHA.
+    if (snapshot.mode === "managed" || snapshot.mode === "checkout") {
+      this.reconcileCheck(snapshot.installed);
+      snapshot.available = this.slice.available;
+      snapshot.check = this.slice.check;
+    }
     if (snapshot.mode === "managed") this.finishManagedAuto(snapshot);
     // Ordinary reads use the controller state after awaited deployment
     // refreshes. Receipt snapshots pass replayAuto to preserve their original
     // immutable response across later changes.
     const auto = replayAuto ?? this.auto;
     snapshot.auto = await this.autoView(decision, snapshot, auto);
-    if (this.deps.quiet) {
-      const { blockers } = await probeQuiet(snapshot, this.deps.quiet, now);
-      snapshot.resumeWork = { turns: blockers.turns, stages: blockers.stages, turnList: blockers.turnList, stageList: blockers.stageList, unreadable: blockers.unreadable };
-    }
     snapshot.history = readHistory(this.historyFile);
     snapshot.meta.pollMinutes = auto.enabled ? 15 : this.deps.pollMinutes;
     return snapshot;

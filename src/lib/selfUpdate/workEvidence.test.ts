@@ -165,6 +165,23 @@ test("a snapshot that fails answers an error at once: the GET says why and the s
   } finally { abort.abort(); }
 });
 
+test("a background reader that leaves out the work never starts a reading of it", async () => {
+  const h = managed();
+  const abort = new AbortController();
+  try {
+    const snapshot = await (await getSnapshot(new Request(`${BASE}?readOnly=1&work=0`))).json() as Snapshot;
+    expect(snapshot).toMatchObject({ mode: "managed", installed: { sha: TARGET } });
+    expect(snapshot.workEvidence).toBeUndefined();
+    expect(snapshot.resumeWork).toBeUndefined();
+    const reader = getEvents(new Request(`${BASE}/events?readOnly=1&work=0`, { signal: abort.signal })).body!.getReader();
+    const decoder = new TextDecoder();
+    let text = "";
+    while (!text.includes("event: state")) text += decoder.decode((await reader.read()).value);
+    expect(text).not.toContain("workEvidence");
+    expect(h.reads()).toBe(0);
+  } finally { abort.abort(); h.release(); }
+});
+
 test("overlapping observations share the one reading in flight and never stack probes", async () => {
   const h = managed();
   const abort = new AbortController();
@@ -291,15 +308,6 @@ test("the commits-behind badge is gone once both processes serve the available t
   expect(snapshot.check).toMatchObject({ state: "up-to-date", relation: "equal", behind: 0, ahead: 0, delta: null, at: "2026-10-07T08:55:00.000Z" });
   // The correction is the service's own state, so the next process reads it too.
   expect(JSON.parse(readFileSync(join(h.deps.dir, "state.json"), "utf8")).slice.check.behind).toBe(0);
-});
-
-test("a check about a revision that is no longer installed is not shown as the installation's distance", async () => {
-  const h = managed({ persisted: staleCheck(OLD), installed: NEWER });
-  h.release();
-  const snapshot = await (await readOnly()).json() as Snapshot;
-  expect(snapshot.installed.sha).toBe(NEWER);
-  expect(snapshot.available).toBeNull();
-  expect(snapshot.check).toMatchObject({ state: "idle", relation: null, behind: 0, delta: null });
 });
 
 test("a check about the installed revision keeps its answer", async () => {

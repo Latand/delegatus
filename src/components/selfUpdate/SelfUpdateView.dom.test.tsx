@@ -503,6 +503,39 @@ describe("update available and what changes", () => {
   });
 });
 
+/* #2594: the installation answers before the work in progress is read. */
+describe("work in progress beside an available update", () => {
+  const work = (evidence: Partial<NonNullable<Snapshot["workEvidence"]>>, resumeWork?: Snapshot["resumeWork"]) => snapshot({ ...available(),
+    workEvidence: { state: "pending", since: AT, at: null, error: null, phases: null, ...evidence }, ...(resumeWork ? { resumeWork } : {}) });
+  const line = (el: HTMLElement) => el.querySelector<HTMLElement>("[data-work]");
+
+  test.each(["en", "uk"] as const)("pending, read and unreadable in %s, and the Update button stays usable", (locale) => {
+    setLocale(locale);
+    const pending = render(work({}));
+    expect(line(pending)?.dataset.work).toBe("pending");
+    expect(text(line(pending))).toBe(locale === "en" ? "Reading the work in progress…" : "Читаю роботу, що триває…");
+    expect(text(section(pending, "update"))).not.toMatch(/: 0/);
+    expect(button(pending, "update")?.disabled).toBe(false);
+    root?.unmount(); host?.remove();
+
+    const ready = render(work({ state: "ready", since: null, at: AT }, { turns: 2, stages: 1, turnList: [], stageList: [], unreadable: null }));
+    expect(line(ready)?.dataset.work).toBe("ready");
+    expect(text(line(ready))).toBe(locale === "en"
+      ? "Agent turns running: 2 · Pipeline stages running: 1 · read at 12:04"
+      : "Працюють ходи агентів: 2 · Працюють етапи пайплайна: 1 · прочитано о 12:04");
+    root?.unmount(); host?.remove();
+
+    const failed = render(work({ state: "unavailable", since: null, at: AT, error: "runtime host is unavailable" }));
+    expect(line(failed)?.dataset.work).toBe("unavailable");
+    expect(text(line(failed))).toBe(locale === "en" ? "Cannot read agent activity: runtime host is unavailable" : "Не вдалося прочитати активність агентів: runtime host is unavailable");
+  });
+
+  test("a snapshot read without the work says nothing about it", () => {
+    const el = render(snapshot(available()));
+    expect(line(el)).toBeNull();
+  });
+});
+
 describe("changelog items as formatted text", () => {
   const RELEASE = fs.readFileSync(new URL("../../lib/selfUpdate/__fixtures__/changelog-1.4.0.md", import.meta.url), "utf8");
   const BEFORE = RELEASE.replace(/## \[1\.4\.0\][\s\S]*?(?=## \[1\.3\.0\])/, "");

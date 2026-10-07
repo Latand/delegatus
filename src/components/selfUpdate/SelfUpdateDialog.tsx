@@ -91,6 +91,9 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
   const confirmApply = () => {
     const work = s?.resumeWork;
     const lines = [t("selfUpdate.applyConfirm")];
+    /* Work not read yet is not "no work": it is said so, never counted as 0. */
+    if (s?.workEvidence?.state === "pending") lines.push(t("selfUpdate.work.pendingConfirm"));
+    else if (s?.workEvidence?.state === "unavailable") lines.push(t("selfUpdate.auto.block.unreadable", { detail: s.workEvidence.error ?? "" }));
     if (work) {
       lines.push(t("selfUpdate.auto.block.turns", { count: work.turns }), t("selfUpdate.auto.block.stages", { count: work.stages }));
       lines.push(...(work.stageList ?? []).map(stage => `${stage.stageId} · ${stage.task}`));
@@ -185,7 +188,9 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
   const title = t("selfUpdate.title");
   const body = s
     ? <SelfUpdateView snapshot={s} live={feed.live} state={state} actions={actions} />
-    : <p className="m-0 text-ui text-muted">{t("selfUpdate.loading")}</p>;
+    : feed.failure !== null
+      ? <p role="alert" data-self-update-failure="" className="m-0 rounded-[8px] bg-danger-soft px-2.5 py-2 text-ui text-danger [overflow-wrap:anywhere]">{t("selfUpdate.loadFailed", { detail: feed.failure })}</p>
+      : <p className="m-0 text-ui text-muted">{t("selfUpdate.loading")}</p>;
 
   if (isMobile) {
     return (
