@@ -16,6 +16,7 @@ import { readForgeCache, resetForgeCacheForTests, type ForgeCacheFile } from "@/
 import { sweepForgeLinks } from "@/lib/forge/sweep";
 import type { GithubRunner } from "@/lib/monitor/githubEvidence";
 import type { Pipeline } from "@/lib/pipelines/types";
+import type { RunState as MergeBatchState } from "../../../scripts/merge-batch";
 
 import {
   FINISHED_WORKTREE_RETENTION_MS,
@@ -1161,8 +1162,15 @@ function mergerBatch() {
   const branch = "merge-batch/11111111-1111-1111-1111-111111111111";
   const { dir, tip } = lane(root, path.join(run, "merge-batch-fixture/checkout"), branch);
   const file = path.join(run, "merge-batch.json");
-  const state = { version: 1, repo: root, work: dir, branch, landed: true,
-    rows: [{ status: "merged", detail: "closed" }, { status: "deferred", detail: "" }] };
+  const base = git(["rev-parse", "main"], root);
+  const row = (number: number) => ({ number, reviewed: tip, head: tip, reviewBase: base,
+    view: { number, title: "Reviewed change", body: "", state: "OPEN", isDraft: false, baseRefName: "main",
+      headRefOid: tip, headRefName: "topic/reviewed", closingIssuesReferences: [], headRepository: { name: "widgets" } },
+    patch: "", commit: tip, paths: [], detail: "" });
+  // Bind the fixture to the production writer's full current contract.
+  const state: MergeBatchState = { version: 3, repo: root, work: dir, branch, base, tip, landed: true,
+    gated: null, batch: { number: 77, url: merged(77, branch, tip).url }, published: tip, refreshes: 0, gates: [], attributionLog: [],
+    rows: [{ ...row(77), status: "merged", detail: "closed" }, { ...row(78), status: "deferred" }] };
   const save = () => fs.writeFileSync(file, JSON.stringify(state));
   const options = ports({ repositories: [root], prs: [merged(77, branch, tip)], now: () => RETAIN_NOW });
   return { root, run, branch, dir, tip, file, state, save, options };
@@ -2449,4 +2457,69 @@ test.each(["checkout", "git-file", "bare", "damaged-bare"].flatMap(kind => ["ini
   expect(report.trimmed).toEqual([]);
   expect(fs.readFileSync(fixture, "utf8")).toBe("unique uncommitted fixture edit");
   expect(fs.existsSync(path.join(foreign, kind === "bare" || kind === "damaged-bare" ? "objects" : ".git"))).toBe(true);
+});
+
+
+for (const version of [1, 3]) test(`a settled supported merger state version ${version} releases after retention`, async () => {
+  const batch = mergerBatch();
+  batch.state.rows[1]!.status = "needs-review";
+  fs.writeFileSync(batch.file, JSON.stringify({ ...batch.state, version }));
+  if (version === 3) {
+    const { MergeBatch } = await import("../../../scripts/merge-batch");
+    expect(new MergeBatch(batch.root, batch.file).read()).toEqual(batch.state);
+  }
+  const first = await sweepMergedWorktrees(batch.options);
+  expect(first.kept[0]!.reason).toBe("retention");
+  const after = await sweepMergedWorktrees({ ...batch.options, previous: first, now: () => RETAIN_NOW + FINISHED_WORKTREE_RETENTION_MS });
+  expect(after.errors).toEqual([]);
+  expect(after.removed.map(row => row.path)).toEqual([batch.dir]);
+  expect(branchExists(batch.root, batch.branch)).toBe(true);
+});
+
+for (const version of [0, 2, 4]) test(`an unsupported merger state version ${version} keeps its checkout`, async () => {
+  const batch = mergerBatch();
+  const first = await sweepMergedWorktrees(batch.options);
+  batch.state.rows[1]!.status = "needs-review";
+  fs.writeFileSync(batch.file, JSON.stringify({ ...batch.state, version }));
+  const report = await sweepMergedWorktrees({ ...batch.options, previous: first, now: () => RETAIN_NOW + FINISHED_WORKTREE_RETENTION_MS });
+  expect(report.removed).toEqual([]);
+  expect(report.kept[0]!.reason).toBe("in-use");
+  expect(fs.existsSync(batch.dir)).toBe(true);
+});
+
+for (const proof of ["base", "remote-ref"]) for (const timestamp of ["closedAt", "completedAt"]) test.each(["final-list", "final-status", "last-files"])(`late ${timestamp} during %s restarts retention with ${proof} preservation`, async phase => {
+  const root = repository();
+  const dir = path.join(caseDir, "widgets-pipeline-late-settle");
+  const branch = "topic/late-settle";
+  if (proof === "base") git(["worktree", "add", "-q", "-b", branch, dir, "main"], root);
+  else {
+    lane(root, dir, branch);
+    remoteRepository(root); git(["push", "-q", "origin", branch], root);
+  }
+  const attempt = { n: 1, state: "passed", completedAt: OLD_TERMINAL } as Pipeline["runs"][number]["attempts"][number];
+  const owner = pipeline({ id: "late-settle", repoDir: root, worktreeDir: dir, branch,
+    ...(proof === "base" ? { baseRef: git(["rev-parse", "HEAD"], dir) } : {}),
+    ...(timestamp === "closedAt" ? { closedAt: OLD_TERMINAL } : { runs: [{ attempts: [attempt] } as Pipeline["runs"][number]] }),
+  });
+  const ordinary = ports({ pipelines: [owner], now: () => RETAIN_NOW });
+  let listings = 0, statuses = 0, changed = false;
+  const report = await sweepMergedWorktrees({ ...ordinary, git: async (args, cwd) => {
+    const answer = await ordinary.git(args, cwd);
+    const boundary = phase === "final-list" ? args[0] === "worktree" && args[1] === "list" && ++listings === 2
+      : phase === "final-status" ? args[0] === "status" && ++statuses === 2
+      : args.join(" ") === "ls-files --cached -v -z";
+    if (boundary && !changed) {
+      changed = true;
+      if (timestamp === "closedAt") owner.closedAt = new Date(RETAIN_NOW).toISOString();
+      else attempt.completedAt = new Date(RETAIN_NOW).toISOString();
+    }
+    return answer;
+  } });
+  expect(changed).toBe(true);
+  expect(report.errors).toEqual([]);
+  expect(report.removed).toEqual([]);
+  expect(report.kept[0]!.reason).toBe("retention");
+  expect(report.kept[0]!.firstSettledAt).toBe(new Date(RETAIN_NOW).toISOString());
+  expect(fs.existsSync(dir)).toBe(true);
+  git(["commit", "--allow-empty", "-q", "-m", "locks released on retention hold"], dir);
 });

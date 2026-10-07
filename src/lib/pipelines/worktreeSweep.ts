@@ -594,7 +594,7 @@ function mergeBatchOwnership(directory: string, branch: string | null, scan: Pro
       const stat = fs.statSync(accessible(file));
       if (!stat.isFile()) throw new Error("unreadable batch state");
       state = JSON.parse(fs.readFileSync(accessible(file), "utf8"));
-      if (!state || state.version !== 1 || typeof state.work !== "string" || typeof state.branch !== "string"
+      if (!state || (state.version !== 1 && state.version !== 3) || typeof state.work !== "string" || typeof state.branch !== "string"
         || !/^merge-batch\/[a-f0-9-]{36}$/.test(state.branch) || !Array.isArray(state.rows)) throw new Error("invalid batch state");
     } catch (error) {
       if (knownLayout && (locked || (error as NodeJS.ErrnoException).code !== "ENOENT"))
@@ -1026,7 +1026,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
           if (freshOwners.some(pipelineHoldsCheckout)) return { ...base, reason: "open-pipeline" };
           const freshSettled = Math.max(settledSince, latestTerminalTime(freshOwners));
           if (now() - freshSettled < FINISHED_WORKTREE_RETENTION_MS)
-            return { ...base, reason: "retention", detail: `eligible after ${new Date(freshSettled + FINISHED_WORKTREE_RETENTION_MS).toISOString()}` };
+            return { ...base, firstSettledAt: new Date(freshSettled).toISOString(), reason: "retention", detail: `eligible after ${new Date(freshSettled + FINISHED_WORKTREE_RETENTION_MS).toISOString()}` };
         }
         let known = false;
         for (const pr of [...prs.values()].sort((a, b) => b.number - a.number)) {
@@ -1118,6 +1118,16 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
         if (finalIgnored.length || newlyIgnored.length) { keep({ ...base, reason: "ignored-files" }); continue; }
         const finalBusy = heldBy(readGuards(), worktree, entry.branch);
         if (finalBusy) { keep({ ...finalBusy, ...base }); continue; }
+        if (retained) {
+          // A lane can run and settle again during any of the final Git
+          // reads. Refresh its terminal clock after the last awaited read.
+          const freshSettled = Math.max(settledSince, latestTerminalTime(ownersOf(ownershipPipelines(), worktree)));
+          if (now() - freshSettled < FINISHED_WORKTREE_RETENTION_MS) {
+            keep({ ...base, firstSettledAt: new Date(freshSettled).toISOString(), reason: "retention",
+              detail: `eligible after ${new Date(freshSettled + FINISHED_WORKTREE_RETENTION_MS).toISOString()}` });
+            continue;
+          }
+        }
         if (dryRun) {
           report.removed.push(removal);
           report.removedBytes += bytes;
