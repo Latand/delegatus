@@ -2705,7 +2705,7 @@ test("held delivery stays fenced when persisted ownership is unavailable", async
     enabled: () => true,
     client: () => missingSessionClient,
     registry: () => registry,
-  })).toEqual({ outcome: "held", cause: "the durable registry has no current generation for this conversation" });
+  })).toEqual({ outcome: "held", cause: "the durable registry has no current generation for this conversation", waitReason: "awaiting-host" });
 });
 
 test("held delivery fences a missing runtime client without startup failure evidence", async () => {

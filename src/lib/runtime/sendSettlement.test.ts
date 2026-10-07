@@ -39,7 +39,7 @@ const {
   sendIsSettled,
   sendReceiptFor,
   settleDueSends,
-  mirrorLateAcknowledgements,
+  mirrorSettledReceipts,
 } = await import("./sendSettlement");
 const { handleRuntimeOperationQuery, handleRuntimeRetry } = await import("./http");
 const { NextRequest } = await import("next/server");
@@ -2315,7 +2315,7 @@ test("a late canonical acknowledgement corrects the progress record that ended u
     progress.note(later.operationId, active.conversationId, { waitReason: "dispatching", originalKey: "late-ack-elsewhere" });
     progress.settle(later.operationId, "uncertain", SEND_UNVERIFIED_REASON);
     active.registry.recordDeliveryOutcome(later.deliveryId, "delivered");
-    mirrorLateAcknowledgements(active.registry, progress);
+    mirrorSettledReceipts(active.registry, progress);
     expect(progress.get(later.operationId)?.terminal?.state).toBe("delivered");
     /* A proven ending is never promoted. */
     progress.note("operation-lost", active.conversationId, { waitReason: "queued" });

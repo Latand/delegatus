@@ -1,5 +1,9 @@
 type MigrationTick = () => Promise<void>;
 
+/** How often the account-migration controller runs a pass with nobody asking:
+    the latest a reservation it holds is looked at again. */
+export const ACCOUNT_MIGRATION_PASS_INTERVAL_MS = 60_000;
+
 interface ControllerSignalState {
   tick: MigrationTick | null;
   scheduled: boolean;

@@ -218,6 +218,35 @@ test("a lost admission wake is replaced by the watchdog, and the record keeps th
   expect(record.wakeLostAt).not.toBeNull();
 });
 
+test("an overdue wake of a send the journal does not hold yet goes to the drain that holds it, and the queue does not spin on it", async () => {
+  const time = clock();
+  const journal = fakeJournal();
+  const progress = new DeliveryProgressStore(null, time.now);
+  let listings = 0;
+  const handed: string[][] = [];
+  const base = journal.port({ progress });
+  const queue = queueFor({
+    ...base,
+    effects: async (...args) => { listings += 1; return base.effects(...args); },
+    unlistedWakeDue: (records) => { handed.push(records.map((record) => record.operationId)); },
+  }, {}, { safetyPassMs: 60_000, now: time.now });
+  await queue.drain();
+  const listedBefore = listings;
+  /* Held before the journal, with a wake from the drain that holds it. */
+  time.advance(10);
+  progress.note("op-held", "conversation-a", { waitReason: "evidence-unreadable", nextWakeMs: 1_000 });
+  time.advance(3_000);
+  await queue.tick();
+  /* Newer than the last listing: one pass looks for it in the journal. */
+  expect(listings).toBe(listedBefore + 1);
+  expect(handed).toEqual([]);
+  time.advance(1_000);
+  await queue.tick();
+  await queue.tick();
+  expect(listings).toBe(listedBefore + 1);
+  expect(handed).toEqual([["op-held"], ["op-held"]]);
+});
+
 test("a lost turn-end wake costs one safety interval: the waiting send is delivered once by the watchdog", async () => {
   const time = clock();
   const journal = fakeJournal();

@@ -26,12 +26,11 @@ import { spawnViewerResidentWorker } from "@/lib/viewerWorkerLifecycle";
 import { reconcileMigrationInventory, reconcileMigrations, type HeldDeliveryPort } from "./coordinator";
 import { createMigrationDeliveryPort } from "./deliveryPort";
 export { createMigrationDeliveryPort } from "./deliveryPort";
-import { registerAccountMigrationTick } from "./controllerSignal";
+import { ACCOUNT_MIGRATION_PASS_INTERVAL_MS, registerAccountMigrationTick } from "./controllerSignal";
 import type { SuccessorProviderPort } from "./contracts";
 import { RegisteredSuccessorProvider } from "./provider";
 import { QuotaController } from "./quotaController";
 
-const CONTROLLER_INTERVAL_MS = 60_000;
 const INITIAL_INVENTORY_DELAY_MS = 1_000;
 const INVENTORY_WORKER_RESTART_MS = 1_000;
 
@@ -271,7 +270,7 @@ export function pollAccountMigrationInventory(
     void controller.poll().catch(error => {
       console.error("[account migration controller] durable reconciliation tick failed", error);
     }).finally(() => {
-      if (!stopped) cancel = schedule(run, CONTROLLER_INTERVAL_MS);
+      if (!stopped) cancel = schedule(run, ACCOUNT_MIGRATION_PASS_INTERVAL_MS);
     });
   };
   cancel = schedule(run, INITIAL_INVENTORY_DELAY_MS);

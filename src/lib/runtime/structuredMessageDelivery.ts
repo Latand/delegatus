@@ -10,7 +10,7 @@ import {
 import { structuredHostsEnabled } from "./flags";
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { advanceConversationMigration, deliveryFence } from "@/lib/accounts/migration/coordinator";
-import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
+import { ACCOUNT_MIGRATION_PASS_INTERVAL_MS, requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import { withConversationActuation, type ActuationLease } from "@/lib/deliveryActuation";
 import { deputyDeliveryRefusal } from "@/lib/orchestrator/deputies";
 import type { HeldDelivery, HeldDeliveryCommand, ViewerConversationId } from "@/lib/accounts/migration/contracts";
@@ -44,7 +44,9 @@ import {
   type StructuredImageRef,
 } from "./structuredContent";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
-import { ownedDeliveryProgressStore, type DeliveryProgressSink } from "./deliveryProgress";
+import { ownedDeliveryProgressStore, type DeliveryProgressRecord, type DeliveryProgressSink } from "./deliveryProgress";
+import type { DeliveryWaitReason } from "./deliveryWaitReason";
+import { sendSettlementDeadline } from "./sendSettlement";
 import { STRUCTURED_DELIVERY_TIMING } from "./structuredDeliveryQueue";
 import { markStructuredRuntimeSessionRecovered } from "./startupStatus";
 import { isInterruptionObligationId } from "./interruptionObligations";
@@ -122,15 +124,21 @@ export interface StructuredMessageDependencies {
       a request body carries can set it. It admits that continuation to a
       seat's live deputy, whose one job the release cut. */
   interruptionContinuation?: boolean;
-  /** Where the admitted operation's first wait is recorded; the Viewer's own
+  /** Where the admitted operation's waits are recorded; the Viewer's own
       store by default, and nothing in a process that holds none. */
-  progress?: Pick<DeliveryProgressSink, "get" | "note"> | null;
+  progress?: DeliveryProgressPort | null;
+}
+
+type DeliveryProgressPort = Pick<DeliveryProgressSink, "get" | "note" | "deadline">;
+
+function progressPort(progress: DeliveryProgressPort | null | undefined): DeliveryProgressPort | null {
+  return progress === undefined ? ownedDeliveryProgressStore() : progress;
 }
 
 /** The first progress record of an operation the journal just admitted. One
     already there was written by the queue, which is further along. */
 function noteAdmitted(
-  progress: Pick<DeliveryProgressSink, "get" | "note"> | null,
+  progress: DeliveryProgressPort | null,
   admitted: { operationId: string; conversationId: string; kind: string; originalKey: string; admittedAt: string },
 ): void {
   if (!progress) return;
@@ -146,6 +154,61 @@ function noteAdmitted(
   } catch (error) {
     console.error("[structured delivery] progress record failed", { error: error instanceof Error ? error.message : String(error) });
   }
+}
+
+/** The switch phase a send held behind its conversation's account switch
+    waits on, in the codes the hold itself writes. */
+function switchWaitReason(registry: AgentRegistry, conversationId: ViewerConversationId): DeliveryWaitReason {
+  const phase = registry.conversation(conversationId)?.migration?.phase;
+  if (phase === "failed-recoverable") return "switch-failed";
+  if (phase === "waiting-turn") return "switch-after-turn";
+  return "switching-accounts";
+}
+
+/**
+ * Records what an accepted send waits on while the runtime journal does not
+ * hold it yet (incident 2026-10-06): a reservation admitted during a runtime
+ * outage or an account switch, or one whose claim was deferred, and every
+ * retry of the account-migration drain that delivers it. The record is keyed
+ * by the send's original operation, so the queue continues the same record
+ * once the journal admits it, and the settlement deadline ends it. Its next
+ * wake is the drain's own schedule; a drain that misses it is a lost wake the
+ * watchdog replaces.
+ *
+ * Answers the record as written, or null when nothing was recorded.
+ */
+function noteHeldWait(
+  progress: DeliveryProgressPort | null,
+  registry: AgentRegistry,
+  delivery: HeldDelivery,
+  wait: { reason: DeliveryWaitReason; detail?: string | null; attempted?: boolean },
+): DeliveryProgressRecord | null {
+  if (!progress || !delivery.command.operationId) return null;
+  const operationId = delivery.command.operationId;
+  try {
+    const switching = delivery.state === "held";
+    progress.note(operationId, delivery.runtimeConversationId, {
+      waitReason: switching ? switchWaitReason(registry, delivery.conversationId) : wait.reason,
+      detail: switching ? null : wait.detail ?? null,
+      kind: delivery.command.kind,
+      originalKey: delivery.clientMessageId,
+      admittedAt: delivery.createdAt,
+      nextWakeMs: ACCOUNT_MIGRATION_PASS_INTERVAL_MS,
+      ...(wait.attempted ? { attempted: true } : {}),
+    });
+    const deadline = sendSettlementDeadline(operationId, { registry });
+    progress.deadline(operationId, deadline?.deadlineAt ?? null, deadline?.policy ?? null);
+    return progress.get(operationId);
+  } catch (error) {
+    console.error("[structured delivery] progress record failed", { error: error instanceof Error ? error.message : String(error) });
+    return null;
+  }
+}
+
+/** The reservation behind one accepted operation, read by its key. */
+function reservationFor(registry: AgentRegistry, operationId: string): HeldDelivery | null {
+  return Object.values(registry.deliverySnapshotForOperation(operationId).heldDeliveries)
+    .find((candidate) => candidate.command.operationId === operationId) ?? null;
 }
 
 /** Serializes preflight → publication → reservation per (conversation,
@@ -186,6 +249,8 @@ export interface HeldStructuredMessageDependencies {
   startupRecovered?: () => void;
   republish?: (key: RuntimeSession["sessionKey"]) => Promise<boolean>;
   recover?: typeof recoverDeadStructuredConversation;
+  /** Where each drain attempt's wait is recorded; the Viewer's own store by default. */
+  progress?: DeliveryProgressPort | null;
 }
 
 /** A held delivery that never reached dispatch, left queued with the reason
@@ -194,12 +259,14 @@ export interface HeldStructuredMessageDependencies {
 export interface HeldForRetry {
   outcome: "held";
   cause: string;
+  /** What the send waits on meanwhile, for its progress record. */
+  waitReason?: DeliveryWaitReason;
 }
 
 export type HeldStructuredMessageOutcome = "delivered" | "failed" | "delivery-uncertain" | "held" | HeldForRetry | null;
 
-function heldForRetry(cause: string): HeldForRetry {
-  return { outcome: "held", cause };
+function heldForRetry(cause: string, waitReason: DeliveryWaitReason = "awaiting-host"): HeldForRetry {
+  return { outcome: "held", cause, waitReason };
 }
 
 /**
@@ -369,7 +436,7 @@ function heldOutcomeDuringRuntimeSynchronization(
   // retry that retains the runtime-read cause.
   if (owner?.kind === "legacy") return requiresStructuredHeldCommand(request) ? "failed" : null;
   const ownerHint = owner?.kind === "structured" ? "structured runtime owner is synchronizing" : "runtime owner is unavailable";
-  return heldForRetry(`${ownerHint}: ${cause}`);
+  return heldForRetry(`${ownerHint}: ${cause}`, "evidence-unreadable");
 }
 
 /**
@@ -385,12 +452,20 @@ interface SynchronizationImageAdmission {
   withImageAdmissionLock?: StructuredMessageDependencies["withImageAdmissionLock"];
 }
 
+/** What a send held at admission waits on, and where that is recorded. */
+interface HeldAdmissionWait {
+  progress: DeliveryProgressPort | null;
+  reason: DeliveryWaitReason;
+  detail?: string | null;
+}
+
 async function holdDuringRuntimeSynchronization(
   request: StructuredMessageRequest,
   registry: AgentRegistry,
   requestTick: () => void,
   allowReclaimed = false,
   admission: SynchronizationImageAdmission = {},
+  wait: HeldAdmissionWait = { progress: null, reason: "awaiting-host" },
 ): Promise<StructuredMessageResult | null> {
   const owner = persistedCurrentOwner(request, registry);
   const unresolvedConversation = request.conversationId?.startsWith("conversation_")
@@ -555,6 +630,7 @@ async function holdDuringRuntimeSynchronization(
         status: 409,
       };
     }
+    noteHeldWait(wait.progress, registry, reservation, wait);
     requestTick();
     return {
       ok: true,
@@ -725,17 +801,18 @@ async function recoverReclaimedMessage(
     ? registry.conversation(request.conversationId as ViewerConversationId)
     : registry.conversationForPath(request.path);
   if (!conversation) return ownershipUnavailable("unknown");
+  const progress = progressPort(dependencies.progress);
   const admitted = await holdDuringRuntimeSynchronization(
     request,
     registry,
     dependencies.requestMigrationTick ?? requestAccountMigrationTick,
     true,
     synchronizationImageAdmission(dependencies, rawImages),
+    { progress, reason: "recovering-host", detail: "the conversation's host was reclaimed" },
   );
   if (!admitted) return ownershipUnavailable("unknown");
   if (!admitted.ok || admitted.outcome === "delivered") return admitted;
-  const reservation = Object.values(registry.deliverySnapshotForOperation(admitted.operationId).heldDeliveries)
-    .find((candidate) => candidate.command.operationId === admitted.operationId);
+  const reservation = reservationFor(registry, admitted.operationId);
   if (reservation?.state === "delivery-uncertain") {
     return uncertainReservationFailure(reservation);
   }
@@ -766,6 +843,10 @@ async function recoverReclaimedMessage(
         operationId: admitted.operationId,
       };
     }
+    noteHeldWait(progress, registry, reservation, {
+      reason: "awaiting-host",
+      detail: `starting a host failed: ${error instanceof Error ? error.message : String(error)}`,
+    });
     requestDeliveryDrain(dependencies.kick ?? kickStructuredDeliveryQueue);
     return {
       ok: true,
@@ -799,12 +880,68 @@ async function recoverReclaimedMessage(
   };
 }
 
+/**
+ * The progress record of one drain attempt on a reservation the journal does
+ * not hold yet. The attempt is counted once, on its first note; a drain that
+ * only reconciles an earlier attempt records nothing, since the queue or the
+ * settlement owns that record.
+ */
+function heldDrainProgress(
+  progress: DeliveryProgressPort | null,
+  registry: AgentRegistry,
+  request: HeldStructuredMessageRequest,
+) {
+  const operationId = request.command?.operationId ?? request.deliveryId;
+  let delivery: HeldDelivery | null | undefined;
+  let attempted = false;
+  let written: DeliveryProgressRecord | null = null;
+  const wait = (reason: DeliveryWaitReason, detail: string | null = null) => {
+    if (!progress || request.reconcileUncertain) return;
+    if (delivery === undefined) {
+      try { delivery = reservationFor(registry, operationId); }
+      catch { delivery = null; }
+    }
+    if (!delivery) return;
+    written = noteHeldWait(progress, registry, delivery, { reason, detail, attempted: !attempted });
+    attempted = true;
+  };
+  return {
+    wait,
+    /** The journal admitted the attempt: the record says so unless the queue,
+        further along, already wrote it. */
+    admitted() {
+      if (!progress || !written) return;
+      try {
+        if (progress.get(operationId) !== written) return;
+        progress.note(operationId, written.conversationId, {
+          waitReason: "queued",
+          nextWakeMs: STRUCTURED_DELIVERY_TIMING.retryMs,
+        });
+      } catch (error) {
+        console.error("[structured delivery] progress record failed", { error: error instanceof Error ? error.message : String(error) });
+      }
+    },
+  };
+}
+
 export async function deliverHeldStructuredMessage(
   request: HeldStructuredMessageRequest,
   dependencies: HeldStructuredMessageDependencies = {},
 ): Promise<HeldStructuredMessageOutcome> {
   if (!(dependencies.enabled ?? structuredHostsEnabled)()) return null;
   const registry = (dependencies.registry ?? agentRegistry)();
+  const progress = heldDrainProgress(progressPort(dependencies.progress), registry, request);
+  const outcome = await deliverHeldAttempt(request, dependencies, registry, progress);
+  if (typeof outcome === "object" && outcome) progress.wait(outcome.waitReason ?? "awaiting-host", outcome.cause);
+  return outcome;
+}
+
+async function deliverHeldAttempt(
+  request: HeldStructuredMessageRequest,
+  dependencies: HeldStructuredMessageDependencies,
+  registry: AgentRegistry,
+  progress: ReturnType<typeof heldDrainProgress>,
+): Promise<HeldStructuredMessageOutcome> {
   const client = (dependencies.client ?? runtimeHostClient)();
   if (!client) {
     return heldOutcomeDuringRuntimeSynchronization(request, registry, "runtime host client is unavailable");
@@ -849,9 +986,13 @@ export async function deliverHeldStructuredMessage(
           void (dependencies.kick ?? kickStructuredDeliveryQueue)();
         },
       });
+      if (recovered) progress.wait("recovering-host", "the conversation's host was reclaimed");
       return recovered ? "held" : heldForRetry(deliverabilityFailureMessage({ condition: "reclaimed" }));
     } catch (error) {
-      if (error instanceof StructuredRecoveryHeldForUpdateError) return "held";
+      if (error instanceof StructuredRecoveryHeldForUpdateError) {
+        progress.wait("update-handoff");
+        return "held";
+      }
       return heldForRetry(`${deliverabilityFailureMessage({ condition: "reclaimed" })}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -881,6 +1022,7 @@ export async function deliverHeldStructuredMessage(
       kind: "send" as const,
       policy: "interrupt-active" as const,
     };
+    progress.wait("dispatching");
     const result = await client.command({
       kind: command.kind,
       operationId: command.operationId,
@@ -898,6 +1040,7 @@ export async function deliverHeldStructuredMessage(
          migration hold — the drained message re-attributes exactly as admitted. */
       ...(command.origin ? { origin: command.origin } : {}),
     });
+    if (result.receipt.status === "queued" || result.receipt.status === "pending") progress.admitted();
     try {
       await (dependencies.kick ?? kickStructuredDeliveryQueue)();
     } catch {
@@ -939,6 +1082,7 @@ export async function enqueueStructuredMessage(
   if (durableOwner?.kind === "legacy") {
     return requiresStructuredCommand(request) ? legacyCommandUnavailable() : null;
   }
+  const progress = progressPort(dependencies.progress);
   const client = (dependencies.client ?? runtimeHostClient)();
   if (!client) {
     return holdDuringRuntimeSynchronization(
@@ -947,6 +1091,7 @@ export async function enqueueStructuredMessage(
       dependencies.requestMigrationTick ?? requestAccountMigrationTick,
       false,
       synchronizationImageAdmission(dependencies, rawImages),
+      { progress, reason: "evidence-unreadable", detail: "the runtime host is unreachable" },
     );
   }
   let session: RuntimeSession | null;
@@ -960,6 +1105,7 @@ export async function enqueueStructuredMessage(
       dependencies.requestMigrationTick ?? requestAccountMigrationTick,
       false,
       synchronizationImageAdmission(dependencies, rawImages),
+      { progress, reason: "evidence-unreadable", detail: `the runtime session could not be read: ${error instanceof Error ? error.message : String(error)}` },
     );
   }
   recordStructuredRuntimeRecovery(session, dependencies.startupRecovered ?? markStructuredRuntimeSessionRecovered);
@@ -977,6 +1123,7 @@ export async function enqueueStructuredMessage(
       dependencies.requestMigrationTick ?? requestAccountMigrationTick,
       false,
       synchronizationImageAdmission(dependencies, rawImages),
+      { progress, reason: "awaiting-host", detail: "no runtime session is registered for the conversation" },
     );
   }
   if (session.hostKind === "tmux-legacy") return requiresStructuredCommand(request) ? legacyCommandUnavailable() : null;
@@ -1350,6 +1497,7 @@ export async function enqueueStructuredMessage(
           operationId: reservation.command.operationId,
         };
       }
+      noteHeldWait(progress, registry, reservation, { reason: "switching-accounts" });
       (dependencies.requestMigrationTick ?? requestAccountMigrationTick)();
       return {
         ok: true,
@@ -1369,6 +1517,10 @@ export async function enqueueStructuredMessage(
       );
     }
     if (reservation.state === "assigned" && successorAwaitsItsHost) {
+      noteHeldWait(progress, registry, reservation, {
+        reason: "awaiting-host",
+        detail: "the account switch's successor has not published its host yet",
+      });
       (dependencies.requestMigrationTick ?? requestAccountMigrationTick)();
       return {
         ok: true,
@@ -1423,7 +1575,10 @@ export async function enqueueStructuredMessage(
     }, dependencies.actuationLease ?? null);
     if (!admitted) {
       /* A migration took the conversation, or an earlier admission still waits: the drain delivers this one in order. */
-      if (!claimDeferred) registry.requeueHeldDelivery(reservation.id);
+      const requeued = claimDeferred ? reservation : registry.requeueHeldDelivery(reservation.id);
+      noteHeldWait(progress, registry, requeued, claimDeferred
+        ? { reason: "checking", detail: "the writer claim waited past its lock deadline" }
+        : { reason: "conversation-busy", detail: "an earlier delivery on this conversation is still being claimed" });
       (dependencies.requestMigrationTick ?? requestAccountMigrationTick)();
       return {
         ok: true,
@@ -1459,7 +1614,7 @@ export async function enqueueStructuredMessage(
        queue that never reaches it still leaves a reason and a wake that the
        watchdog finds overdue (incident 2026-10-06). */
     if (receipt.status === "queued" || receipt.status === "pending") {
-      noteAdmitted(dependencies.progress === undefined ? ownedDeliveryProgressStore() : dependencies.progress, {
+      noteAdmitted(progress, {
         operationId: result.operationId,
         conversationId: assigned.runtimeConversationId,
         kind: assigned.command.kind,

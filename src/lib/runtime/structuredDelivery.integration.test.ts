@@ -11,13 +11,13 @@ import { RegisteredSuccessorProvider } from "@/lib/accounts/migration/provider";
 import { RuntimeJournal } from "@/runtime-host/journal";
 import { captureProcessIdentity, processIdentityStatus, sameRecordedProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
 
-import { RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
+import { RuntimeHostUnavailableError, UnixRuntimeHostClient, type RuntimeHostClient } from "./client";
 import type { EngineHost, HostState, QueueEntry, RuntimeEvent } from "./engineHost";
 import { StructuredSendRefusedError } from "./engineHost";
 import { FakeEngineHost, createFakeDeliveryLedger } from "./fixtures/fakeEngineHost";
 import { ownedHostProcess } from "./fixtures/ownedHostProcess";
 import { bindStructuredDeliveryQueue, hasStructuredDeliveryHost, publishStructuredDeliveryHost, releaseStructuredDeliveryHost, republishStructuredDeliveryHost } from "./structuredDeliveryController";
-import { resolveSendReceipt, sendReceiptFor } from "./sendSettlement";
+import { mirrorSettledReceipts, resolveSendReceipt, sendReceiptFor, settleDueSends } from "./sendSettlement";
 import { StructuredDeliveryQueue, type StructuredDeliveryQueuePort } from "./structuredDeliveryQueue";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { deliverHeldStructuredMessage, enqueueStructuredMessage } from "./structuredMessageDelivery";
@@ -4504,6 +4504,276 @@ test("a send admitted while the runtime is unavailable settles without the runti
     expect(delivered).toBe(0);
     expect(ledger.writes).toEqual([]);
     expect(sendReceiptFor(registry.readOnlySnapshot(), operationId)).toMatchObject({ state: "failed" });
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close();
+  }
+});
+
+/** An idle Codex conversation whose structured host the registry knows, and
+    whose runtime journal the test decides whether to offer. */
+function idleHostedConversation(name: string, sessionId: string) {
+  const directory = path.join(sandbox, name);
+  const artifactPath = path.join(directory, `${sessionId}.jsonl`);
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
+  const profile = emptyLaunchProfile({ cwd: directory });
+  registry.reconcileConversations([{
+    engine: "codex",
+    path: artifactPath,
+    accountId: `${name}-account`,
+    launchProfile: profile,
+    turn: { state: "idle", source: "empty", terminalAt: null },
+    observedAt: "2026-10-06T12:00:00.000Z",
+  }]);
+  const conversation = registry.conversationForPath(artifactPath)!;
+  const key = { engine: "codex" as const, sessionId };
+  registry.upsert({
+    key,
+    artifactPath,
+    cwd: directory,
+    accountId: `${name}-account`,
+    launchProfile: profile,
+    status: "idle",
+    host: null,
+    structuredHost: {
+      kind: "codex-app-server",
+      endpoint: `fake:${name}`,
+      process: null,
+      eventCursor: 0,
+      protocolVersion: "fake-v1",
+      writerClaimEpoch: 0,
+      activeTurnRef: null,
+      pendingAttention: [],
+      activeFlags: [],
+    },
+    claimEpoch: 0,
+    claimOwner: null,
+    pendingAction: null,
+  });
+  const openJournal = () => {
+    const journal = new RuntimeJournal(path.join(directory, "events.sqlite"), { structuredHosts: true });
+    journal.append({
+      scope: { type: "session", id: conversation.id },
+      kind: "session-status",
+      payload: {
+        conversationId: conversation.id,
+        sessionKey: key,
+        hostKind: "codex-app-server",
+        host: "hosted",
+        turn: "idle",
+        provenance: "structured",
+        artifactPath,
+        capabilities: { steer: true, structuredAttention: true },
+      },
+    });
+    return journal;
+  };
+  return { directory, artifactPath, registry, conversation, key, openJournal };
+}
+
+/** The account-migration drain's port, run the way the Viewer runs it. */
+function heldDrainPort(
+  conversationId: string,
+  dependencies: Parameters<typeof deliverHeldStructuredMessage>[1],
+): Parameters<typeof drainHeldDeliveries>[1] {
+  return {
+    async deliver({ delivery, path: deliveryPath, clientMessageId }) {
+      return await deliverHeldStructuredMessage({
+        conversationId, path: deliveryPath, deliveryId: delivery.id,
+        clientMessageId, text: delivery.text, command: delivery.command,
+      }, dependencies) ?? "delivery-uncertain";
+    },
+  };
+}
+
+test("a send held because the runtime socket is missing records why it waits from admission, shows its stall within ten seconds, and reaches the host once when the runtime returns", async () => {
+  /* Review of incident 2026-10-06: an accepted send held before the runtime
+     journal had a durable reservation and an operation id and no progress
+     record at all, so its wait had no reason, attempt, deadline or wake, and
+     the settlement that ended it had nothing to end. The client here is the
+     real one, aimed at a socket that does not exist. */
+  const fixture = idleHostedConversation("progress-missing-socket", "5eed0001-1111-\x34111-8111-111111111111");
+  const { registry, conversation, key } = fixture;
+  let clock = Date.now();
+  const progress = new DeliveryProgressStore(null, () => clock);
+  const missing = new UnixRuntimeHostClient(path.join(fixture.directory, "absent.sock"), 200);
+  let migrationTicks = 0;
+  const admitted = await enqueueStructuredMessage({
+    path: fixture.artifactPath,
+    conversationId: conversation.id,
+    clientMessageId: "missing-socket-key",
+    text: "ship it once the runtime is back",
+    policy: "queue",
+  }, {
+    enabled: () => true,
+    client: () => missing,
+    registry: () => registry,
+    requestMigrationTick: () => { migrationTicks += 1; },
+    progress,
+  });
+  expect(admitted).toMatchObject({ ok: true, outcome: "held" });
+  expect(migrationTicks).toBe(1);
+  const operationId = (admitted as { operationId: string }).operationId;
+  const [reservation] = registry.pendingDeliveries(conversation.id);
+  expect(reservation).toMatchObject({ state: "assigned", command: { operationId } });
+
+  const record = progress.get(operationId)!;
+  expect(record).toMatchObject({
+    conversationId: conversation.id,
+    originalKey: "missing-socket-key",
+    kind: "send",
+    waitReason: "evidence-unreadable",
+    attempt: 0,
+    admittedAt: reservation!.createdAt,
+    deadlinePolicy: "settlement-window",
+    stalledSince: null,
+    terminal: null,
+  });
+  expect(record.detail).toContain("the runtime session could not be read");
+  expect(Date.parse(record.deadlineAt!)).toBe(Date.parse(reservation!.createdAt) + 10 * 60_000);
+  expect(Date.parse(record.nextWakeAt!)).toBeGreaterThan(Date.parse(record.updatedAt));
+
+  /* The watchdog marks the stall once the stall bound passes, well inside ten
+     seconds, with no browser and no journal to list. */
+  const watchdog = new StructuredDeliveryQueue({
+    effects: async () => { throw new Error("runtime host is unavailable"); },
+    transition: async () => {},
+    progress,
+  }, () => null, undefined, undefined, undefined, undefined, undefined, undefined, { stallMs: 4_000, now: () => clock });
+  clock += 4_000;
+  await watchdog.tick();
+  expect(progress.get(operationId)!.stalledSince).not.toBeNull();
+  expect(Date.parse(progress.get(operationId)!.stalledSince!) - Date.parse(record.phaseSince)).toBeLessThanOrEqual(10_000);
+
+  /* The drain's retry against the same missing socket counts one attempt and
+     keeps the reason; nothing was handed to any host. */
+  await drainHeldDeliveries(conversation.id, heldDrainPort(conversation.id, {
+    enabled: () => true, client: () => missing, registry: () => registry, progress,
+  }), registry);
+  expect(progress.get(operationId)).toMatchObject({ waitReason: "evidence-unreadable", attempt: 1, terminal: null });
+  expect(registry.pendingDeliveries(conversation.id)).toMatchObject([{ state: "assigned" }]);
+
+  /* The runtime returns: one host input under the original operation, and the
+     record the admission opened is the one that ends delivered. */
+  const journal = fixture.openJournal();
+  const client = runtimeJournalClient(journal);
+  const ledger = createFakeDeliveryLedger();
+  try {
+    await bindStructuredDeliveryQueue([{ key, host: observableFakeHost(new FakeEngineHost(ledger)) }], {
+      registry, client, progress, watchdogIntervalMs: 0, settlementSweepMs: 0,
+    });
+    await drainHeldDeliveries(conversation.id, heldDrainPort(conversation.id, {
+      enabled: () => true, client: () => client, registry: () => registry, progress, kick: kickStructuredDeliveryQueue,
+    }), registry);
+    await kickStructuredDeliveryQueue();
+    await waitForCondition(() => progress.get(operationId)?.terminal?.state === "delivered", 5_000);
+    expect(ledger.writes.map((write) => write.id)).toEqual([operationId]);
+    expect(progress.get(operationId)).toMatchObject({ originalKey: "missing-socket-key", terminal: { state: "delivered" } });
+    expect(progress.get(operationId)!.attempt).toBeGreaterThanOrEqual(2);
+    /* Further drains find nothing to hand over. */
+    await drainHeldDeliveries(conversation.id, heldDrainPort(conversation.id, {
+      enabled: () => true, client: () => client, registry: () => registry, progress, kick: kickStructuredDeliveryQueue,
+    }), registry);
+    await kickStructuredDeliveryQueue();
+    expect(ledger.writes).toHaveLength(1);
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close();
+  }
+});
+
+test("a send held through a runtime outage is ended by the background settlement, and its record keeps the ending", async () => {
+  const fixture = idleHostedConversation("progress-outage-settles", "5eed0002-2222-\x34222-8222-222222222222");
+  const { registry, conversation } = fixture;
+  const progress = new DeliveryProgressStore(null);
+  const missing = new UnixRuntimeHostClient(path.join(fixture.directory, "absent.sock"), 200);
+  const admitted = await enqueueStructuredMessage({
+    path: fixture.artifactPath,
+    conversationId: conversation.id,
+    clientMessageId: "outage-settles-key",
+    text: "hold the cutover until I say go",
+    policy: "queue",
+  }, { enabled: () => true, client: () => missing, registry: () => registry, requestMigrationTick: () => {}, progress });
+  expect(admitted).toMatchObject({ ok: true, outcome: "held" });
+  const operationId = (admitted as { operationId: string }).operationId;
+  expect(progress.get(operationId)).toMatchObject({ waitReason: "evidence-unreadable", terminal: null });
+
+  const swept = await settleDueSends({ registry, client: missing, progress, readMs: 500, now: () => Date.now() + 11 * 60_000 });
+  expect(swept.settled).toMatchObject([{ operationId, state: "failed", duplicateRisk: true }]);
+  const ended = progress.get(operationId)!;
+  expect(ended).toMatchObject({ originalKey: "outage-settles-key", terminal: { state: "uncertain" }, nextWakeAt: null });
+  expect(ended.terminal!.reason).toContain("could not give it a terminal answer");
+});
+
+test("a send ended by the delivery record alone closes its progress record on the next sweep", async () => {
+  /* The account-migration drain fails an unactuated reservation in the
+     registry, with no journal answer for the queue to mirror. */
+  const fixture = idleHostedConversation("progress-registry-ending", "5eed0003-3333-\x34333-8333-333333333333");
+  const { registry, conversation } = fixture;
+  const progress = new DeliveryProgressStore(null);
+  const admitted = await enqueueStructuredMessage({
+    path: fixture.artifactPath,
+    conversationId: conversation.id,
+    clientMessageId: "registry-ending-key",
+    text: "this one is never handed over",
+    policy: "queue",
+  }, { enabled: () => true, client: () => null, registry: () => registry, requestMigrationTick: () => {}, progress });
+  const operationId = (admitted as { operationId: string }).operationId;
+  expect(progress.get(operationId)).toMatchObject({ waitReason: "evidence-unreadable", terminal: null });
+  const [reservation] = registry.pendingDeliveries(conversation.id);
+  registry.recordDeliveryOutcome(reservation!.id, "failed", "not delivered in 10 min: runtime owner is unavailable", "lost");
+  mirrorSettledReceipts(registry, progress);
+  expect(progress.get(operationId)).toMatchObject({ terminal: { state: "failed" } });
+  expect(progress.open()).toEqual([]);
+});
+
+test("a send whose writer claim waits past its lock deadline records that wait and reaches the host once through the drain", async () => {
+  const fixture = idleHostedConversation("progress-deferred-claim", "5eed0004-4444-\x34444-8444-444444444444");
+  const { registry, conversation, key } = fixture;
+  const journal = fixture.openJournal();
+  const client = runtimeJournalClient(journal);
+  const ledger = createFakeDeliveryLedger();
+  const progress = new DeliveryProgressStore(null);
+  /* Another writer keeps the registry lock past the claim's deadline. */
+  const contended = new Proxy(registry, {
+    get(target, property) {
+      if (property === "beginDeliveryAttemptOffLoop") return async () => ({ acquired: false as const });
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  try {
+    await bindStructuredDeliveryQueue([{ key, host: observableFakeHost(new FakeEngineHost(ledger)) }], {
+      registry, client, progress, watchdogIntervalMs: 0, settlementSweepMs: 0,
+    });
+    const admitted = await enqueueStructuredMessage({
+      path: fixture.artifactPath,
+      conversationId: conversation.id,
+      clientMessageId: "deferred-claim-key",
+      text: "deliver after the lock frees",
+      policy: "queue",
+    }, { enabled: () => true, client: () => client, registry: () => contended, requestMigrationTick: () => {}, progress });
+    expect(admitted).toMatchObject({ ok: true, outcome: "held" });
+    const operationId = (admitted as { operationId: string }).operationId;
+    const record = progress.get(operationId)!;
+    expect(record).toMatchObject({
+      originalKey: "deferred-claim-key",
+      waitReason: "checking",
+      attempt: 0,
+      deadlinePolicy: "settlement-window",
+      terminal: null,
+    });
+    expect(record.detail).toContain("writer claim");
+    expect(record.nextWakeAt).not.toBeNull();
+    expect(record.deadlineAt).not.toBeNull();
+    expect(ledger.writes).toEqual([]);
+
+    await drainHeldDeliveries(conversation.id, heldDrainPort(conversation.id, {
+      enabled: () => true, client: () => client, registry: () => registry, progress, kick: kickStructuredDeliveryQueue,
+    }), registry);
+    await kickStructuredDeliveryQueue();
+    await waitForCondition(() => progress.get(operationId)?.terminal?.state === "delivered", 5_000);
+    expect(ledger.writes.map((write) => write.id)).toEqual([operationId]);
   } finally {
     await bindStructuredDeliveryQueue([], { registry, client: null });
     journal.close();

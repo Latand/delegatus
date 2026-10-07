@@ -713,6 +713,15 @@ export function sendSettlementDue(operationId: string, ports: SendSettlementPort
   return subject !== null && pastSettlementDeadline(registry, file, subject, ports);
 }
 
+/** The settlement deadline of one accepted send, read off its durable record,
+    or null for one nothing settles. */
+export function sendSettlementDeadline(operationId: string, ports: SendSettlementPorts = {}): SettlementDeadline | null {
+  const registry = ports.registry ?? agentRegistry();
+  const file = registry.readOnlySnapshot();
+  const subject = settlementSubject(retryAttemptOwner(file, operationId), deliveryForOperation(file, operationId));
+  return subject ? settlementDeadline(registry, file, subject, ports) : null;
+}
+
 /**
  * What became of one accepted send, settled if it is past its deadline.
  *
@@ -760,21 +769,30 @@ export function mirrorReceiptProgress(receipt: SendReceipt, progress: Pick<Deliv
 const LATE_ACKNOWLEDGEMENT_MIRROR_MS = 24 * 60 * 60_000;
 
 /**
- * Carries a late acknowledgement read in another process (the MCP receipt
- * tool, which never writes the progress records) into the record that ended
- * `uncertain`. Reads the delivery record only; the background settlement runs
- * it on every sweep.
+ * Carries every ending the delivery record holds into the progress record that
+ * has not heard of it, reading the delivery record only; the background
+ * settlement runs it on every sweep.
+ *
+ * Two kinds of ending reach a record no other way. A send ended before the
+ * runtime journal ever held it (a reservation the account-migration drain
+ * failed, a discard, a cancelled switch) has no journal answer for the queue
+ * to mirror. A late acknowledgement read in another process (the MCP receipt
+ * tool, which never writes the progress records) turns a record that ended
+ * `uncertain` into `delivered`.
  */
-export function mirrorLateAcknowledgements(
+export function mirrorSettledReceipts(
   registry: AgentRegistry,
-  progress: Pick<DeliveryProgressSink, "settle"> & { uncertain(): DeliveryProgressRecord[] },
+  progress: Pick<DeliveryProgressSink, "settle" | "open"> & { uncertain(): DeliveryProgressRecord[] },
   now = Date.now(),
 ): void {
   const file = registry.readOnlySnapshot();
-  for (const record of progress.uncertain()) {
-    if (Date.parse(record.updatedAt) < now - LATE_ACKNOWLEDGEMENT_MIRROR_MS) continue;
+  const records = [
+    ...progress.open(),
+    ...progress.uncertain().filter((record) => Date.parse(record.updatedAt) >= now - LATE_ACKNOWLEDGEMENT_MIRROR_MS),
+  ];
+  for (const record of records) {
     const receipt = sendReceiptFor(file, record.operationId);
-    if (receipt?.state === "delivered") mirrorReceiptProgress(receipt, progress);
+    if (receipt && receipt.state !== "in-flight") mirrorReceiptProgress(receipt, progress);
   }
 }
 

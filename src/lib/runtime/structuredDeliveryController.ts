@@ -10,7 +10,7 @@ import { statePath } from "@/lib/configDir";
 import { activeRestartGate } from "@/lib/selfUpdate/restartGate";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 
-import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
+import { ACCOUNT_MIGRATION_PASS_INTERVAL_MS, requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { agentRegistry, REGISTRY_WRITER_BUSY, resolveConversationAlias, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile } from "@/lib/agent/registry";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
@@ -40,7 +40,7 @@ import {
 import { structuredHostKillRefFromRegistry, terminateStructuredHostTree } from "./structuredHostControl";
 import { publishFilesRevision } from "./filesRevision";
 import { setStructuredDeliveryKick } from "./structuredDeliverySignal";
-import { deliveryRouteOf, journalVerdict, mirrorLateAcknowledgements, sendIsSettled, settleDueSends } from "./sendSettlement";
+import { deliveryRouteOf, journalVerdict, mirrorSettledReceipts, sendIsSettled, settleDueSends } from "./sendSettlement";
 import { runtimeImageCapability } from "./runtimeImageStore";
 import { noteVoiceWorkBoundary } from "./voiceViewBinding";
 import { STRUCTURED_IMAGE_CAPABILITY } from "./structuredContent";
@@ -833,6 +833,19 @@ export async function bindStructuredDeliveryQueue(
   const queue = new StructuredDeliveryQueue(
     {
       progress,
+      /* A send held before the journal is the account-migration drain's: a
+         wake of its that passed with nothing looking is lost, and that drain
+         is asked for a pass now. */
+      unlistedWakeDue: (records) => {
+        for (const record of records) {
+          progressStore.note(record.operationId, record.conversationId, {
+            waitReason: "wake-lost",
+            detail: "no delivery pass reached it when due",
+            nextWakeMs: ACCOUNT_MIGRATION_PASS_INTERVAL_MS,
+          });
+        }
+        requestAccountMigrationTick();
+      },
       /* Original-key reconciliation reads the host's own evidence: the Claude
          delivery ledger and transcript, the Codex thread. It never writes input. */
       confirmedDelivery: (operationId) => confirmedSend(registry.readOnlySnapshot(), operationId, true),
@@ -1888,7 +1901,7 @@ export async function bindStructuredDeliveryQueue(
     const settling = new Set<string>();
     settlementSweepTimer = setInterval(() => {
       if (stopped || state.activeQueue !== queue) return;
-      mirrorLateAcknowledgements(registry, progressStore);
+      mirrorSettledReceipts(registry, progressStore);
       void settleDueSends({
         registry,
         client,

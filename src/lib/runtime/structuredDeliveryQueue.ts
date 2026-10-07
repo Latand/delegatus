@@ -18,7 +18,7 @@ import {
 } from "./structuredContent";
 import { StructuredRecoveryContendedError } from "./structuredRecoveryContention";
 import { StructuredRecoveryHeldForUpdateError, type StructuredRecoveryRequest } from "./structuredRecovery";
-import type { DeliveryProgressNote, DeliveryProgressSink } from "./deliveryProgress";
+import type { DeliveryProgressNote, DeliveryProgressRecord, DeliveryProgressSink } from "./deliveryProgress";
 import { ACTIVE_DELIVERY_PHASES, type DeliveryWaitReason } from "./deliveryWaitReason";
 
 export interface StructuredDeliveryEffect {
@@ -114,6 +114,10 @@ export interface StructuredDeliveryQueuePort {
   /** Where each held message's wait reason, attempt, progress and next wake are
       recorded (incident 2026-10-06). Absent records nothing. */
   progress?: DeliveryProgressSink;
+  /** Open records whose wake is overdue for a message the journal does not
+      hold yet: an accepted send still held before it, which another drain
+      delivers. Absent leaves them to that drain's own schedule. */
+  unlistedWakeDue?(records: readonly DeliveryProgressRecord[]): void;
   /** The host's own evidence that this operation's message reached the
       recipient, read by original key and never written by it: the Claude
       delivery ledger and transcript, the Codex thread. False when nothing
@@ -1315,9 +1319,21 @@ export class StructuredDeliveryQueue {
     }
     if (this.lastListed) this.settleUnlistedProgress(this.lastListed);
     let wake = now - this.lastPassStartedAt >= this.timing.safetyPassMs;
+    const unlistedDue: DeliveryProgressRecord[] = [];
     for (const record of progress?.open() ?? []) {
       if (this.lanes.has(record.conversationId) || !record.nextWakeAt) continue;
-      if (Date.parse(record.nextWakeAt) + WAKE_GRACE_MS <= now) wake = true;
+      if (Date.parse(record.nextWakeAt) + WAKE_GRACE_MS > now) continue;
+      /* A record the last listing did not hold, and that has not moved
+         since, is a message the journal does not have yet: a pass of this
+         queue cannot reach it, and its wake belongs to the drain that holds it. */
+      const movedAt = Math.max(Date.parse(record.phaseSince), Date.parse(record.lastProgressAt));
+      if (this.lastListed && !this.lastListed.has(record.operationId)
+        && movedAt < this.lastPassStartedAt) unlistedDue.push(record);
+      else wake = true;
+    }
+    if (unlistedDue.length > 0) {
+      try { this.port.unlistedWakeDue?.(unlistedDue); }
+      catch (error) { console.error("[structured delivery] unlisted wake failed", { error: failureReason(error) }); }
     }
     if (wake && !this.activeDrain) await this.drain({ safety: true }).catch(() => undefined);
   }
