@@ -47,7 +47,7 @@ export function MemorySetting({ project }: { project: string }) {
     <p className="text-[13px] leading-relaxed text-muted">{t("memory.explanation")}</p>
     {error && <p role="alert" className="mt-2 text-[13px] leading-relaxed">{t(error === "save" ? "memory.save.failed" : "memory.status.failed")}</p>}
     {error !== "read" && view?.project === project && <>
-      <p role="status" data-memory-status className="mt-2 text-[13px] leading-relaxed">{view.status !== "unavailable" && view.reasons ? (view.reasons.length ? view.reasons.map(reason => t(`memory.status.${reason === "noKey" && view.staging ? "noKeyStaging" : reason}`)).join(" ") : t("memory.status.ready")) : t("memory.status.failed")}</p>
+      <p role="status" data-memory-status className="mt-2 text-[13px] leading-relaxed">{view.status !== "unavailable" && view.reasons ? (view.reasons.length ? view.reasons.map(reason => t(`memory.status.${reason === "noKey" && view.staging ? "noKeyStaging" : reason}`)).join(" ") : t("memory.status.ready")) : t("memory.status.failed")}{view.lastTurn && <span data-memory-last-turn> {t(`memory.last.${view.lastTurn}`)}</span>}</p>
       {view.counts && view.month && <p data-memory-counts className="mt-2 text-[13px] leading-relaxed text-muted">{t("memory.counts", { month: view.month, ...view.counts })}</p>}
       {view.spentUsd !== undefined && view.capUsd !== undefined && <p className="mt-2 text-[13px] text-muted">{t("memory.spend", { spent: view.spentUsd.toFixed(3), cap: view.capUsd.toFixed(2) })}</p>}</>}
   </div>;
