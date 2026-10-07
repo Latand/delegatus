@@ -400,6 +400,12 @@ const searchVer1 = add(conversation("search-ver-1", "Results empty for 40 s afte
 const searchVer2 = add(conversation("search-ver-2", "Re-running the rebuild with traffic", working({ plan: { current: "Re-running the rebuild with traffic" } })));
 
 if (FEED_FAILURES) { searchVer2.engine = "codex"; searchVer2.fmt = "codex"; }
+/* `&stage-switch`: the running verify conversation carries its stage membership, as a launched stage does,
+   so its runtime pill moves the attempt through the pipeline. */
+if (new URLSearchParams(location.search).has("stage-switch")) {
+  searchVer2.durableLineage = { kind: "spawn", role: "verifier", parentConversationId: null, reviewsConversationId: null,
+    memberships: [{ kind: "pipeline", containerId: "p-search", role: "verifier", slot: "verify", stageId: "verify", stageOrder: 2, round: null, parentConversationId: null }] };
+}
 /** The runtime snapshot `&runtime=structured` answers: the verify conversation on a structured host, mid-turn. */
 let snapshotReads = 0;
 function structuredSnapshot() {
@@ -2417,6 +2423,29 @@ const evidence = {
   storedPipeline(id: string) {
     return pipelines.find((entry) => entry.id === id) ?? null;
   },
+  setRuntimeSwitchPhase(pipelineId: string, stageId: string, phase: "requested" | "committed" | "rolled-back" | "failed" | "switching", outcome?: string) {
+    const record = pipelines.find(entry => entry.id === pipelineId);
+    const live = record?.runs.find(entry => entry.stageId === stageId)?.attempts.at(-1);
+    const change = live?.runtimeSwitches?.at(-1);
+    if (!live || !change) return;
+    change.phase = phase;
+    change.outcome = outcome ?? (phase === "rolled-back" ? "runtime switch failed; continued on previous runtime" : undefined);
+    if (phase === "switching" && outcome) {
+      live.state = "needs_decision";
+      record!.state = "needs_decision";
+      record!.stateDetail = outcome;
+    } else if (live.state === "needs_decision") {
+      live.state = "running";
+      if (record!.state === "needs_decision") record!.state = "running";
+      record!.stateDetail = null;
+    }
+    const seat = phase === "committed" ? change.to : change.from;
+    live.effectiveRole = { ...live.effectiveRole, engine: seat.engine, model: seat.model, effort: seat.effort, serviceTier: seat.serviceTier ?? undefined };
+    /* The conversation runs on what the attempt settled on, and the scan says so. */
+    const agent = files.find(entry => entry.conversationId === live.conversationId);
+    if (agent && seat.model) Object.assign(agent, { model: seat.model, effort: seat.effort ?? agent.effort });
+    window.dispatchEvent(new Event("llv:pipelines-changed"));
+  },
   /* K6: conversation account switches the board sent, in order. */
   accountRequests: [] as Array<Record<string, unknown>>,
   /* Reconfigures the runtime pill sent (#1846). */
@@ -3258,9 +3287,17 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         if (ended) return json({ error: "pipeline is closed or completed" }, 409);
         const target = record.stages.find((entry) => entry.id === body.stageId);
         if (!target) return json({ error: "stage not found" }, 404);
-        if ((record.runs.find((entry) => entry.stageId === target.id)?.attempts.length ?? 0) > 0) return json({ error: "stage has already started" }, 409);
+        if (body.applyNow !== true && (record.runs.find((entry) => entry.stageId === target.id)?.attempts.length ?? 0) > 0) return json({ error: "stage has already started" }, 409);
         if (body.expectedStageDigest !== undefined && fixtureStageDigest(target) !== body.expectedStageDigest) return stageChanged("expectedStageDigest", "the stage changed since it was read; read it again before overriding it");
         if (typeof body.prompt === "string") target.prompt = body.prompt;
+        if (body.applyNow === true) {
+          const live = record.runs.find(entry => entry.stageId === target.id)?.attempts.at(-1);
+          if (!live || live.state !== "running" || record.state !== "running") return json({ error: "apply now requires a running stage" }, 409);
+          const from = { engine: live.effectiveRole.engine, model: live.effectiveRole.model, effort: live.effectiveRole.effort, serviceTier: live.effectiveRole.serviceTier ?? null, accountId: live.accountId ?? "default", conversationId: live.conversationId ?? "conversation_fixture", launchId: live.launchId, sessionId: live.sessionId, agentPath: live.agentPath };
+          const to = { ...from, engine: (body.engine ?? from.engine) as "claude" | "codex", model: typeof body.model === "string" ? body.model : from.model, effort: typeof body.effort === "string" ? body.effort : from.effort, serviceTier: typeof body.serviceTier === "string" ? body.serviceTier : from.serviceTier, accountId: typeof body.account === "string" ? body.account : from.accountId, accountPinned: typeof body.account === "string" };
+          live.runtimeSwitches = [{ id: `${id}:${target.id}:${live.n}:1`, seq: 1, requestedAt: new Date().toISOString(), actor: { kind: "operator" }, mode: to.engine === from.engine ? "fork" : "handoff", from, to, phase: "requested" }];
+          target.effectiveRole = { ...target.effectiveRole, engine: to.engine, model: to.model, effort: to.effort, serviceTier: to.serviceTier ?? undefined };
+        }
         /* #1279: a stage may name only an account the project allows; null clears the pin. */
         if (body.account !== undefined) {
           const requested = typeof body.account === "string" ? body.account.trim() : "";
