@@ -3,7 +3,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+
+import { openHostTempRoots } from "@/lib/state/hostTempViews";
 
 import { globalCache } from "@/lib/scanner/caches";
 import { projectForCwd, recordWorktreeResolution } from "@/lib/scanner/describe";
@@ -432,6 +434,15 @@ test("an unreadable forge keeps every linked worktree, and a failed map write re
   const unrecorded = await sweepMergedWorktrees(ports({ pipelines, prs: [merged(61, "pipeline/eeee", tip)], recordResolution: () => false }));
   expect(unrecorded.kept.map((kept) => kept.reason)).toEqual(["map-write-failed"]);
   expect(fs.existsSync(dir)).toBe(true);
+});
+
+test.each([false, true])("the sweep releases its borrowed root when input throws %s", async throws => {
+  let closed = 0;
+  const options = { ...ports({}), close: async () => { closed += 1; } };
+  if (throws) options.scan = () => { throw new Error("fixture scan failed"); };
+  if (throws) await expect(sweepMergedWorktrees(options)).rejects.toThrow("fixture scan failed");
+  else expect((await sweepMergedWorktrees(options)).removed).toEqual([]);
+  expect(closed).toBe(1);
 });
 
 test("the sweep writes its report, and LLV_WORKTREE_SWEEP turns it off", async () => {
@@ -1872,7 +1883,7 @@ test("a handmade checkout inside a temp root never gains role ownership", async 
   expect(fs.existsSync(dir)).toBe(true);
 });
 
-test.skipIf(process.platform !== "linux")("host temp role checkouts use namespace Git, persist their canonical grouping and keep local work", async () => {
+for (const idle of [false, true]) test.skipIf(process.platform !== "linux")(`host temp role checkouts with idle host ${idle} use namespace Git and preserve local work`, async () => {
   const root = repository(); remoteRepository(root);
   const proc = path.join(caseDir, "proc/42");
   const namespace = "mnt:[fixture-host]";
@@ -1882,43 +1893,65 @@ test.skipIf(process.platform !== "linux")("host temp role checkouts use namespac
   const canonical = path.join(canonicalRoot, "llv-host-role/checkout");
   const actual = path.join(proc, "root", canonical);
   git(["worktree", "add", "-q", "--detach", actual, "main"], root);
-  const calls: string[][] = [];
-  const access = hostTempWorktreeAccess([{ path: canonicalRoot, via: path.join(proc, "root"), anchor: { pid: 42, namespace } }], async (command, args) => {
-    expect(command).toBe("nsenter");
-    expect(args.slice(0, 5)).toEqual(["-t", "42", "-m", "-p", "--"]);
-    const sh = args.indexOf("sh");
-    const cwd = args[sh + 1]!;
-    const gitArgs = args.slice(sh + 2);
-    calls.push(gitArgs);
-    // Stand in for entering the fixture namespace; use real sandbox Git.
-    return realGit(gitArgs.map(value => value === canonical ? actual : value), cwd === canonical ? actual : cwd);
-  });
-  const ordinary = ports({ repositories: [root], tempRoots: [canonicalRoot], now: () => RETAIN_NOW });
-  const hostPorts: WorktreeSweepPorts = { ...ordinary, ...access,
-    git: async (args, cwd) => {
-      if (cwd === canonical || args[0] === "worktree" && args[1] === "remove") return access.git(args, cwd);
-      const answer = args[0] === "worktree" && args[1] === "list" ? await access.git(args, cwd) : await ordinary.git(args, cwd);
-      if (args[0] === "worktree" && args[1] === "list") return { ...answer, stdout: answer.stdout.replaceAll(actual, canonical) };
-      return answer;
-    },
-    recordResolution: cwd => recordWorktreeResolution(cwd, access.accessiblePath(cwd)) !== null,
-  };
-  const first = await sweepMergedWorktrees(hostPorts);
-  expect(first.kept[0]!.reason).toBe("retention");
-  const settled = { ...hostPorts, previous: first, now: () => RETAIN_NOW + FINISHED_WORKTREE_RETENTION_MS };
-  git(["commit", "--allow-empty", "-q", "-m", "private role work"], actual);
-  const local = await sweepMergedWorktrees(settled);
-  expect(local.kept[0]!.reason).toBe("local-only-commits");
-  expect(fs.existsSync(actual)).toBe(true);
-  git(["push", "-q", "origin", "HEAD:refs/heads/role-work"], actual);
-  const removed = await sweepMergedWorktrees(settled);
-  expect(removed.removed).toEqual([expect.objectContaining({ path: canonical, preservation: "remote-ref" })]);
-  expect(calls.some(args => args[0] === "worktree" && args[1] === "remove" && !args.includes("--force"))).toBe(true);
-  expect(calls.some(args => args[0] === "worktree" && args[1] === "list")).toBe(true);
-  expect(fs.existsSync(actual)).toBe(false);
-  const map = JSON.parse(fs.readFileSync(path.join(process.env.LLV_STATE_DIR!, "worktree-map.json"), "utf8"));
-  expect(map[canonical].repo).toBe(root);
-  expect(map[canonical].worktree).toBe("checkout");
+  const patches: { mockRestore(): void }[] = [];
+  if (idle) {
+    const readlink = fs.readlinkSync;
+    patches.push(spyOn(fs, "readlinkSync").mockImplementation(((file: fs.PathLike, ...args: unknown[]) =>
+      String(file) === "/proc/1/ns/mnt" ? namespace : Reflect.apply(readlink, fs, [file, ...args])) as typeof readlink));
+    const map = (file: fs.PathLike) => typeof file === "string" && (file === "/proc/1/root" || file.startsWith("/proc/1/root/"))
+      ? path.join(proc, "root") + file.slice("/proc/1/root".length) : file;
+    for (const method of ["statSync", "lstatSync", "realpathSync", "readdirSync", "readFileSync", "existsSync"] as const) {
+      const original = fs[method];
+      patches.push(spyOn(fs, method).mockImplementation(((file: fs.PathLike, ...args: unknown[]) =>
+        Reflect.apply(original, fs, [map(file), ...args])) as typeof original));
+    }
+    for (const method of ["readdir", "lstat"] as const) {
+      const original = fs.promises[method];
+      patches.push(spyOn(fs.promises, method).mockImplementation(((file: fs.PathLike, ...args: unknown[]) =>
+        Reflect.apply(original, fs.promises, [map(file), ...args])) as typeof original));
+    }
+  }
+  const view = await openHostTempRoots(idle ? [{ path: canonicalRoot, via: "" }]
+    : [{ path: canonicalRoot, via: path.join(proc, "root"), anchor: { pid: 42, namespace } }], { LLV_DOCKER_NSENTER_SHIMS: idle ? "1" : "0" });
+  try {
+    const calls: string[][] = [];
+    const access = hostTempWorktreeAccess(view.roots, async (command, args) => {
+      expect(command).toBe("nsenter");
+      expect(args.slice(0, 5)).toEqual(["-t", idle ? "1" : "42", "-m", "-p", "--"]);
+      const sh = args.indexOf("sh");
+      const cwd = args[sh + 1]!;
+      const gitArgs = args.slice(sh + 2);
+      calls.push(gitArgs);
+      // Stand in for entering the fixture namespace; use real sandbox Git.
+      return realGit(gitArgs.map(value => value === canonical ? actual : value), cwd === canonical ? actual : cwd);
+    });
+    const ordinary = ports({ repositories: [root], tempRoots: [canonicalRoot], now: () => RETAIN_NOW });
+    const hostPorts: WorktreeSweepPorts = { ...ordinary, ...access,
+      git: async (args, cwd) => {
+        if (cwd === canonical || args[0] === "worktree" && args[1] === "remove") return access.git(args, cwd);
+        const answer = args[0] === "worktree" && args[1] === "list" ? await access.git(args, cwd) : await ordinary.git(args, cwd);
+        if (args[0] === "worktree" && args[1] === "list") return { ...answer, stdout: answer.stdout.replaceAll(actual, canonical) };
+        return answer;
+      },
+      recordResolution: cwd => recordWorktreeResolution(cwd, access.accessiblePath(cwd)) !== null,
+    };
+    const first = await sweepMergedWorktrees(hostPorts);
+    expect(first.kept[0]!.reason).toBe("retention");
+    const settled = { ...hostPorts, previous: first, now: () => RETAIN_NOW + FINISHED_WORKTREE_RETENTION_MS };
+    git(["commit", "--allow-empty", "-q", "-m", "private role work"], actual);
+    const local = await sweepMergedWorktrees(settled);
+    expect(local.kept[0]!.reason).toBe("local-only-commits");
+    expect(fs.existsSync(actual)).toBe(true);
+    git(["push", "-q", "origin", "HEAD:refs/heads/role-work"], actual);
+    const removed = await sweepMergedWorktrees(settled);
+    expect(removed.removed).toEqual([expect.objectContaining({ path: canonical, preservation: "remote-ref" })]);
+    expect(calls.some(args => args[0] === "worktree" && args[1] === "remove" && !args.includes("--force"))).toBe(true);
+    expect(calls.some(args => args[0] === "worktree" && args[1] === "list")).toBe(true);
+    expect(fs.existsSync(actual)).toBe(false);
+    const map = JSON.parse(fs.readFileSync(path.join(process.env.LLV_STATE_DIR!, "worktree-map.json"), "utf8"));
+    expect(map[canonical].repo).toBe(root);
+    expect(map[canonical].worktree).toBe("checkout");
+  } finally { await view.close(); for (const patch of patches.reverse()) patch.mockRestore(); }
 });
 
 test.skipIf(process.platform !== "linux")("a recycled host namespace anchor cannot redirect Git or filesystem access", async () => {

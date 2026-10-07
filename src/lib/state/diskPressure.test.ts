@@ -340,6 +340,131 @@ test.skipIf(process.platform !== "linux")(`an idle host probe rejects ${failure}
   finally { enter.mockRestore(); hostStat.mockRestore(); hostLink.mockRestore(); }
 });
 
+test.skipIf(process.platform !== "linux")("idle host consumers are discovered without agents and count aliases and hard links once", async () => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pressure-idle-consumers-"));
+  const previous = { TMPDIR: process.env.TMPDIR, LLV_STATE_DIR: process.env.LLV_STATE_DIR, LLV_DOCKER_NSENTER_SHIMS: process.env.LLV_DOCKER_NSENTER_SHIMS };
+  const temp = path.join(fixture, "temp"), host = path.join(fixture, "host");
+  const owned = path.join(host, temp, "llv-spawn-sandbox/config");
+  fs.mkdirSync(temp, { recursive: true }); fs.mkdirSync(owned, { recursive: true });
+  fs.writeFileSync(path.join(owned, "bulk"), Buffer.alloc(1024 * 1024, 1));
+  fs.linkSync(path.join(owned, "bulk"), path.join(owned, "alias"));
+  const worktree = path.join(temp, "llv-review-role/checkout"), reached = host + worktree;
+  fs.mkdirSync(reached, { recursive: true });
+  fs.writeFileSync(path.join(reached, "source"), Buffer.alloc(128 * 1024, 1));
+  fs.writeFileSync(path.join(path.dirname(reached), "role-log"), Buffer.alloc(64 * 1024, 1));
+  process.env.TMPDIR = temp; process.env.LLV_STATE_DIR = path.join(fixture, "state"); process.env.LLV_DOCKER_NSENTER_SHIMS = "1";
+  const map = (file: fs.PathLike) => typeof file === "string" && file.startsWith("/proc/1/root/") ? host + file.slice("/proc/1/root".length) : file;
+  const readlink = fs.readlinkSync;
+  const patches: { mockRestore(): void }[] = [spyOn(fs, "readlinkSync").mockImplementation(((file: fs.PathLike, options?: unknown) =>
+    String(file) === "/proc/1/ns/mnt" ? "mnt:[12345]" : readlink(file, options as undefined)) as typeof fs.readlinkSync)];
+  for (const method of ["statSync", "lstatSync", "realpathSync", "readdirSync"] as const) {
+    const original = fs[method];
+    patches.push(spyOn(fs, method).mockImplementation(((file: fs.PathLike, ...args: unknown[]) =>
+      Reflect.apply(original, fs, [map(file), ...args])) as typeof original));
+  }
+  for (const method of ["readdir", "lstat"] as const) {
+    const original = fs.promises[method];
+    patches.push(spyOn(fs.promises, method).mockImplementation(((file: fs.PathLike, ...args: unknown[]) =>
+      Reflect.apply(original, fs.promises, [map(file), ...args])) as typeof original));
+  }
+  const caches = new Map();
+  const visited: string[] = [];
+  const stale = { path: temp, via: path.join(fixture, "proc/42/root"), anchor: { pid: 42, namespace: "mnt:[67890]" } };
+  const options = { caches, worktrees: [worktree], tempRoots: [{ path: temp, via: "" }, stale, { path: temp, via: "" }],
+    now: () => Date.parse("2026-10-07T00:00:00Z"), probe: (directory: string) => {
+      visited.push(directory);
+      return { volume: directory.startsWith("/proc/1/root") ? "host-temp" : "container",
+        freeBytes: directory.startsWith("/proc/1/root") ? GiB : 500 * GiB, totalBytes: 1000 * GiB };
+    } };
+  try {
+    expect((await readDiskPressure(options)).episode).not.toBeNull();
+    await Promise.all([...caches.values()].map(row => row.measuring));
+    const measured = await readDiskPressure(options);
+    const bytes = measured.consumers.find(row => row.kind === "temp")!.bytes;
+    expect(bytes).toBeGreaterThanOrEqual(1024 * 1024 + 64 * 1024);
+    expect(bytes).toBeLessThan(1024 * 1024 + 128 * 1024);
+    const worktreeBytes = measured.consumers.find(row => row.kind === "worktrees")!.bytes;
+    expect(worktreeBytes).toBeGreaterThanOrEqual(128 * 1024);
+    expect(worktreeBytes).toBeLessThan(256 * 1024);
+    expect(visited).toContain("/proc/1/root" + worktree);
+    expect(visited).not.toContain(worktree);
+    expect(fs.existsSync(path.join(owned, "bulk"))).toBe(true);
+  } finally {
+    await Promise.all([...caches.values()].map(row => row.measuring));
+    for (const patch of patches.reverse()) patch.mockRestore();
+    for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+for (const phase of ["healthy", "failed", "malformed", "stalled", "wrong-namespace", "expired"] as const)
+test.skipIf(process.platform !== "linux")(`an idle host consumer reader with denied procfs ${phase} is bounded and reaped`, async () => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pressure-reader-"));
+  const previous = { TMPDIR: process.env.TMPDIR, LLV_STATE_DIR: process.env.LLV_STATE_DIR, LLV_DOCKER_NSENTER_SHIMS: process.env.LLV_DOCKER_NSENTER_SHIMS };
+  const temp = path.join(fixture, "temp"), host = path.join(fixture, "host"), state = path.join(fixture, "state");
+  const owned = path.join(host, temp, "llv-spawn-sandbox/config");
+  fs.mkdirSync(temp, { recursive: true }); fs.mkdirSync(owned, { recursive: true });
+  fs.writeFileSync(path.join(owned, "bulk"), Buffer.alloc(1024 * 1024, 1));
+  fs.linkSync(path.join(owned, "bulk"), path.join(owned, "alias"));
+  process.env.TMPDIR = temp; process.env.LLV_STATE_DIR = state; process.env.LLV_DOCKER_NSENTER_SHIMS = "1";
+  const namespace = phase === "wrong-namespace" ? "mnt:[12345]" : fs.readlinkSync("/proc/self/ns/mnt");
+  let reader: ReturnType<typeof childProcess.spawn> | undefined, exited: Promise<unknown> | undefined;
+  const spawn = childProcess.spawn;
+  const launch = spyOn(childProcess, "spawn").mockImplementation(((command: string, args: string[], options: object) => {
+    expect(command).toBe("nsenter");
+    expect(args).toEqual(expect.arrayContaining(["-t", "1", "-m", "-p", "/usr/bin/setpriv", `--reuid=${process.getuid!()}`, `--regid=${process.getgid!()}`]));
+    const program = phase === "failed" ? "process.exit(1)" : phase === "malformed" || phase === "stalled"
+      ? `${phase === "malformed" ? 'console.log("malformed");' : ""} process.stdin.resume(); process.stdin.on("end", () => process.exit(0));`
+      : args.at(-1)!;
+    reader = spawn(process.execPath, ["-e", program], options);
+    exited = new Promise(resolve => reader!.once("close", resolve));
+    return reader;
+  }) as typeof childProcess.spawn);
+  const map = (file: fs.PathLike) => {
+    const value = String(file);
+    if (value.startsWith("/proc/1/root")) throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+    const via = `/proc/${reader?.pid}/root`;
+    return typeof file === "string" && value.startsWith(via + "/") ? host + value.slice(via.length) : file;
+  };
+  const readlink = fs.readlinkSync;
+  const patches: { mockRestore(): void }[] = [spyOn(fs, "readlinkSync").mockImplementation(((file: fs.PathLike, options?: unknown) =>
+    String(file) === "/proc/1/ns/mnt" ? namespace : readlink(file, options as undefined)) as typeof fs.readlinkSync)];
+  for (const method of ["statSync", "lstatSync", "realpathSync", "readdirSync"] as const) {
+    const original = fs[method];
+    patches.push(spyOn(fs, method).mockImplementation(((file: fs.PathLike, ...args: unknown[]) =>
+      Reflect.apply(original, fs, [map(file), ...args])) as typeof original));
+  }
+  for (const method of ["readdir", "lstat"] as const) {
+    const original = fs.promises[method];
+    patches.push(spyOn(fs.promises, method).mockImplementation((async (file: fs.PathLike, ...args: unknown[]) => {
+      if (phase === "expired" && String(file) === state && reader) { reader.stdin!.end(); await exited; }
+      return Reflect.apply(original, fs.promises, [map(file), ...args]);
+    }) as typeof original));
+  }
+  const caches = new Map();
+  const options = { caches, worktrees: [], tempRoots: [{ path: temp, via: "" }, { path: temp, via: "" }],
+    now: () => Date.parse("2026-10-07T00:00:00Z"), probe: (directory: string) => ({ volume: directory.startsWith("/proc/1/root") ? "host-temp" : "container",
+      freeBytes: directory.startsWith("/proc/1/root") ? GiB : 500 * GiB, totalBytes: 1000 * GiB }) };
+  try {
+    const low = await readDiskPressure(options);
+    await Promise.all([...caches.values()].map(row => row.measuring));
+    const measured = await readDiskPressure(options);
+    const bytes = measured.consumers.find(row => row.kind === "temp")!.bytes;
+    expect(measured.episode).toBe(low.episode);
+    if (phase === "healthy") { expect(bytes).toBeGreaterThanOrEqual(1024 * 1024); expect(bytes).toBeLessThan(2 * 1024 * 1024); }
+    else expect(bytes).toBe(0);
+    if (phase === "stalled") expect(reader?.exitCode === 0 || reader?.signalCode === "SIGTERM").toBe(true);
+    else expect(reader?.exitCode).toBe(phase === "failed" ? 1 : 0);
+    expect(fs.existsSync(path.join(owned, "bulk"))).toBe(true);
+  } finally {
+    await Promise.all([...caches.values()].map(row => row.measuring));
+    reader?.stdin?.end(); await exited;
+    for (const patch of patches.reverse()) patch.mockRestore(); launch.mockRestore();
+    for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
 test.skipIf(process.platform === "win32")("shared agent sandboxes and tmux state count once across temp-root aliases and remain protected", async () => {
   const previous = process.env.LLV_STATE_DIR;
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pressure-shared-consumers-"));

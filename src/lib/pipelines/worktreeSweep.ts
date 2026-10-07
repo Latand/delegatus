@@ -8,6 +8,7 @@ import type { ForgeCacheFile } from "@/lib/forge/cache";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { githubRunner, type GithubRunner } from "@/lib/monitor/githubEvidence";
 import { writeJsonDurably } from "@/lib/state/durableJson";
+import { hostCommandArgs, openHostTempRoots } from "@/lib/state/hostTempViews";
 import { isOwnedTempName, ownTempRoots, resolvePhysicalPath, scanProcesses, sweepRoots, type ProcessScan, type TempSweepRoot } from "@/lib/tempSweep";
 import type { ExecResult } from "@/lib/workflows/provision";
 
@@ -195,6 +196,8 @@ export type SweptPipeline = Pick<Pipeline, "id" | "state" | "repoDir" | "worktre
 
 export type WorktreeSweepPorts = {
   mode: WorktreeSweepMode;
+  /** Release a borrowed host filesystem view after the sweep, even on failure. */
+  close?: () => Promise<void>;
   git: GitRun;
   /** Every merged pull request of a GitHub repository (`owner/name`), or null
       when the forge could not be read completely. */
@@ -686,6 +689,11 @@ function freshIgnored(worktree: string, tracked: string): string[] {
 
 /** One sweep. Never throws for one worktree; its failure is kept with a reason. */
 export async function sweepMergedWorktrees(ports: WorktreeSweepPorts): Promise<WorktreeSweepReport> {
+  try { return await sweepMergedWorktreesWithRoots(ports); }
+  finally { await ports.close?.(); }
+}
+
+async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise<WorktreeSweepReport> {
   const now = ports.now ?? Date.now;
   const accessible = ports.accessiblePath ?? ((directory: string) => directory);
   const measure = ports.measure ?? ((directory: string) => exclusiveBytes(accessible(directory)));
@@ -1212,10 +1220,8 @@ export function hostTempWorktreeAccess(roots: readonly TempSweepRoot[], run = ru
       const root = rootFor(target) ?? (args[0] === "worktree" && args[1] === "list" ? foreign[0] : undefined);
       if (!root) return realGit(args, cwd);
       if (!valid(root)) return Promise.resolve({ code: 1, stdout: "", stderr: "host temp namespace is unavailable" });
-      return run("nsenter", ["-t", String(root.anchor!.pid), "-m", "-p", "--", "/usr/bin/setpriv",
-        `--reuid=${process.getuid?.() ?? 0}`, `--regid=${process.getgid?.() ?? 0}`,
-        `--groups=${(process.getgroups?.() ?? []).join(",")}`, "--", "/bin/sh", "-c",
-        'cd "$1" || exit; shift; exec git "$@"', "sh", cwd, ...args], os.tmpdir());
+      return run("nsenter", hostCommandArgs(root.anchor!.pid, "/bin/sh", ["-c",
+        'cd "$1" || exit; shift; exec git "$@"', "sh", cwd, ...args]), os.tmpdir());
     }) satisfies GitRun,
   };
 }
@@ -1310,10 +1316,14 @@ export async function productionWorktreeSweepPorts(
     import("@/lib/scanner/describe"),
     import("@/lib/forge/cache"),
   ]);
-  const temp = sweepRoots(scanProcesses(), [...ownTempRoots(), statePath("scratch")]);
+  const pipelines = withArchived(loadPipelinesForList(), loadArchivedPipelines());
+  const repositories = projectCurationSnapshot().manualProjects.map((project) => project.root);
+  const view = await openHostTempRoots(sweepRoots(scanProcesses(), [...ownTempRoots(), statePath("scratch")]));
+  const temp = view.roots;
   const access = hostTempWorktreeAccess(temp);
   return {
     mode,
+    close: view.close,
     previous: readWorktreeSweepReport(),
     ...access,
     mergedPullRequests: productionMergedPullRequests({
@@ -1322,9 +1332,9 @@ export async function productionWorktreeSweepPorts(
     }),
     /* Settled lanes move to the archive after a while; their delivered PR
        numbers are what find a PR whose head is not the lane branch. */
-    pipelines: withArchived(loadPipelinesForList(), loadArchivedPipelines()),
+    pipelines,
     currentPipelines: () => loadPipelinesForList(),
-    repositories: projectCurationSnapshot().manualProjects.map((project) => project.root),
+    repositories,
     conversationCwds: () => liveOrWaitingConversationCwds(agentRegistry().readOnlySnapshot()),
     scan: () => scanProcesses(),
     recordResolution: (worktree) => recordWorktreeResolution(worktree, access.accessiblePath(worktree)) !== null,

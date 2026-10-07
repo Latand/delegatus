@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { openHostTempRoots } from "@/lib/state/hostTempViews";
 import os from "node:os";
 import path from "node:path";
 
@@ -627,9 +628,14 @@ export async function runTempSweep(env: NodeJS.ProcessEnv = process.env, ports: 
     return null;
   }
   const scratch = realDirectory(statePath("scratch"));
-  const roots = ports.roots ?? sweepRoots(scanProcesses(), writableRoots([...ownTempRoots(env), ...(scratch ? [scratch] : [])]));
+  const candidates = ports.roots ?? sweepRoots(scanProcesses(), [...ownTempRoots(env), ...(scratch ? [scratch] : [])]);
+  const writable = new Set(writableRoots(candidates.filter(root => !root.via).map(root => root.path)));
+  const view = await openHostTempRoots(candidates, env);
+  const roots = view.roots.filter(root => root.via || writable.has(root.path));
   // Root discovery is one snapshot; deletion gets its own fresh process scan.
-  const report = await sweepStaleTempDirs({ maxAgeMs, ...ports, roots, ...checkouts });
+  let report: TempSweepReport;
+  try { report = await sweepStaleTempDirs({ maxAgeMs, ...ports, roots, ...checkouts }); }
+  finally { await view.close(); }
   recordTempSweep(report);
   const { young, inUse, worktree, deferred } = report.kept;
   console.log(

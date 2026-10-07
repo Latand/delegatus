@@ -478,6 +478,57 @@ test.skipIf(process.platform !== "linux").each(["cwd", "file"])("production temp
   } finally { read.mockRestore(); }
 });
 
+for (const recycled of [false, true]) test.skipIf(process.platform !== "linux")(`production temp cleanup discovers an idle host and holds a recycled view ${recycled}`, async () => {
+  const root = tempRoot(), canonical = path.join(root, "container"), host = path.join(root, "host");
+  fs.mkdirSync(canonical);
+  const actualRoot = host + canonical;
+  fs.mkdirSync(actualRoot, { recursive: true });
+  const stale = aged(actualRoot, "llv-idle-output", 3 * DAY);
+  const checkout = aged(actualRoot, "llv-idle-export", 3 * DAY);
+  fs.mkdirSync(path.join(checkout, ".git"));
+  fs.writeFileSync(path.join(checkout, ".git/HEAD"), "ref: refs/heads/main\n");
+  const shared = path.join(actualRoot, "llv-spawn-sandbox");
+  fs.mkdirSync(shared); fs.writeFileSync(path.join(shared, "config"), "shared state");
+  const old = new Date(Date.now() - 3 * DAY);
+  for (const entry of [path.join(checkout, ".git/HEAD"), path.join(checkout, ".git"), checkout, path.join(shared, "config"), shared]) fs.utimesSync(entry, old, old);
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(root, "state");
+  let namespace = "mnt:[12345]", changed = false;
+  const readlink = fs.readlinkSync;
+  const patches: { mockRestore(): void }[] = [spyOn(fs, "readlinkSync").mockImplementation(((file: fs.PathLike, ...args: unknown[]) =>
+    String(file) === "/proc/1/ns/mnt" ? namespace : Reflect.apply(readlink, fs, [file, ...args])) as typeof readlink)];
+  const map = (file: fs.PathLike) => typeof file === "string" && (file === "/proc/1/root" || file.startsWith("/proc/1/root/"))
+    ? host + file.slice("/proc/1/root".length) : file;
+  for (const method of ["statSync", "lstatSync", "realpathSync", "readdirSync", "readFileSync", "existsSync", "rmSync"] as const) {
+    const original = fs[method];
+    patches.push(spyOn(fs, method).mockImplementation(((file: fs.PathLike, ...args: unknown[]) =>
+      Reflect.apply(original, fs, [map(file), ...args])) as typeof original));
+  }
+  for (const method of ["stat", "readdir", "lstat", "rm"] as const) {
+    const original = fs.promises[method];
+    patches.push(spyOn(fs.promises, method).mockImplementation((async (file: fs.PathLike, ...args: unknown[]) => {
+      const result = await Reflect.apply(original, fs.promises, [map(file), ...args]);
+      if (recycled && method === "readdir" && String(map(file)) === stale && !changed) { changed = true; namespace = "mnt:[67890]"; }
+      return result;
+    }) as typeof original));
+  }
+  try {
+    const report = (await runTempSweep({ NODE_ENV: "test", LLV_DOCKER_NSENTER_SHIMS: "1", LLV_TEMP_SWEEP_MAX_AGE_HOURS: "24" },
+      { roots: [{ path: canonical, via: "" }], scan: { ownNamespace: "mnt:[container]", processes: [] } }))!;
+    expect(fs.existsSync(stale)).toBe(recycled);
+    if (recycled) { expect(changed).toBe(true); expect(report.removed).toEqual([]); }
+    else {
+      expect(report.removed).toHaveLength(1);
+      expect(report.held).toContainEqual(expect.objectContaining({ reason: "git-checkout" }));
+    }
+    expect(fs.readFileSync(path.join(checkout, "file.txt"), "utf8")).toBe("export");
+    expect(fs.readFileSync(path.join(shared, "config"), "utf8")).toBe("shared state");
+  } finally {
+    for (const patch of patches.reverse()) patch.mockRestore();
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+  }
+});
+
 test("an unreadable temp tree stays with an explicit inspection hold", async () => {
   const root = tempRoot();
   const directory = aged(root, "llv-unreadable", 3 * DAY);

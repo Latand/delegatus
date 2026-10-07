@@ -2,7 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import childProcess from "node:child_process";
 
 import { stateDir, statePath } from "@/lib/configDir";
 import { isOwnedTempConsumerName, ownTempRoots, scanProcesses, sweepRoots, type TempSweepRoot } from "@/lib/tempSweep";
@@ -10,6 +9,7 @@ import { writeJsonDurably } from "@/lib/state/durableJson";
 import { withFileTransactionSync } from "@/lib/state/fileTransaction";
 import { agentConfigSandboxRoot } from "@/lib/runtime/agentConfigSandbox";
 import { systemBootEpoch } from "@/lib/processIdentity";
+import { enterStageHost, includeIdleHostViews, openHostTempRoots, stageHostNamespace, tempViewAvailable } from "@/lib/state/hostTempViews";
 
 /**
  * Free space on the volumes Delegatus writes to: its state directory, the
@@ -70,37 +70,6 @@ export const probeDisk: DiskProbe = (directory) => {
   }
 };
 
-function tempViewAvailable(root: TempSweepRoot): boolean {
-  if (!root.via) return true;
-  if (!root.anchor) return false;
-  if (root.via === "/proc/1/root" && root.anchor.pid === 1)
-    return stageHostNamespace() === root.anchor.namespace;
-  try { return fs.readlinkSync(path.join(path.dirname(root.via), "ns/mnt")) === root.anchor.namespace; }
-  catch { return false; }
-}
-
-/** Docker's CLI shims target PID 1. An unrelated agent namespace cannot
-    establish a required stage write volume. The image's setuid nsenter can
-    read that namespace when direct proc access is denied, as the shims do. */
-function stageHostNamespace(): string | null {
-  try { return fs.readlinkSync("/proc/1/ns/mnt"); }
-  catch { /* PID 1 can belong to another user. */ }
-  try {
-    const result = enterStageHost("/bin/readlink", ["/proc/self/ns/mnt"]);
-    const namespace = result.stdout?.trim();
-    return result.status === 0 && /^mnt:\[\d+\]$/.test(namespace) ? namespace : null;
-  } catch { return null; }
-}
-
-function enterStageHost(command: string, args: string[]): childProcess.SpawnSyncReturns<string> {
-  const gid = process.getgid?.() ?? 0;
-  const groups = [...new Set([gid, ...(process.getgroups?.() ?? [])])].sort((a, b) => a - b);
-  return childProcess.spawnSync("nsenter", ["-t", "1", "-m", "-p", "--", "/usr/bin/setpriv",
-    `--reuid=${process.getuid?.() ?? 0}`, `--regid=${gid}`,
-    `--groups=${groups.join(",")}`, "--", command, ...args],
-  { encoding: "utf8", timeout: 2_000 });
-}
-
 /** An idle host still has PID 1. If procfs refuses its root to this user,
     read the same filesystem through the image's credential-restoring shim. */
 function probeStageHost(directory: string): ReturnType<DiskProbe> {
@@ -129,6 +98,12 @@ function probeStageHost(directory: string): ReturnType<DiskProbe> {
       || !Number.isFinite(observed.totalBytes) || observed.totalBytes! <= 0) return null;
     return { volume: observed.volume, freeBytes: observed.freeBytes, totalBytes: observed.totalBytes };
   } catch { return null; }
+}
+
+function tempViewFor(directory: string, roots: readonly TempSweepRoot[]): TempSweepRoot | undefined {
+  const matches = roots.filter(root => root.via && root.anchor
+    && (directory === root.path || directory.startsWith(root.path + path.sep)));
+  return matches.find(tempViewAvailable) ?? matches[0];
 }
 
 /** One row per volume; available bytes are those this user can allocate. */
@@ -284,17 +259,16 @@ export async function readDiskPressure(ports: {
   if (now() - cached.observedAt < OBSERVATION_TTL_MS) return structuredClone(cached.pressure);
   cached.observedAt = now();
   /* Loaded here: the pipeline engine imports this module for its admission check. */
-  const [{ loadPipelinesForList }, { allocatedBytes, readWorktreeSweepReport, hostTempWorktreeAccess }] = await Promise.all([
+  const [{ loadPipelinesForList }, { allocatedBytes, readWorktreeSweepReport }] = await Promise.all([
     import("@/lib/pipelines/store"),
     import("@/lib/pipelines/worktreeSweep"),
   ]);
   const pipelines = ports.roots || ports.worktrees ? [] : loadPipelinesForList();
   const sweep = ports.roots || ports.worktrees ? null : readWorktreeSweepReport();
   const worktrees = ports.worktrees ?? [...new Set([...pipelines.map(row => row.worktreeDir), ...(sweep?.kept ?? []).map(row => row.path)].filter(Boolean))];
-  const tempRoots = ports.tempRoots ?? (ports.roots ? [] : sweepRoots(scanProcesses(), [...ownTempRoots(), statePath("scratch")]));
-  const accessible = hostTempWorktreeAccess(tempRoots).accessiblePath;
-  const worktreeView = (directory: string) => tempRoots.find(root => root.via && root.anchor
-    && (directory === root.path || directory.startsWith(root.path + path.sep)));
+  const tempRoots = includeIdleHostViews(ports.tempRoots ?? (ports.roots ? [] : sweepRoots(scanProcesses(), [...ownTempRoots(), statePath("scratch")])));
+  const worktreeView = (directory: string) => tempViewFor(directory, tempRoots);
+  const accessible = (directory: string) => (worktreeView(directory)?.via ?? "") + directory;
   const usesClaude = pipelines.some(pipeline => pipeline.stages.some(stage => stage.effectiveRole.engine === "claude"));
   const roots: DiskRoot[] = ports.roots ?? [{ role: "state", directory }, ...stageDiskRoots(process.env, tempRoots, usesClaude),
     ...worktrees.map(directory => ({ role: "worktrees", directory: accessible(directory), view: worktreeView(directory) })),
@@ -308,44 +282,50 @@ export async function readDiskPressure(ports: {
     const target = cached;
     const episode = cached.pressure.episode;
     target.measuring = (async () => {
-      const measuredAt = new Date(now()).toISOString();
-      const worktreePaths = worktrees.map(accessible);
-      const seenAllocations = new Set<string>();
-      const stateBytes = await allocatedBytes(directory, worktreePaths, seenAllocations);
-      let worktreeBytes = 0;
-      // Nested linked checkouts must be measured once, through the outer one.
-      for (const worktree of worktrees.filter(candidate => !worktrees.some(other => other !== candidate && candidate.startsWith(other + path.sep)))) {
-        const view = worktreeView(worktree);
-        if (view && !tempViewAvailable(view)) continue;
-        const bytes = await allocatedBytes(accessible(worktree), [directory], seenAllocations);
-        if (!view || tempViewAvailable(view)) worktreeBytes += bytes;
-      }
-      let tempBytes = 0;
-      for (const root of tempRoots) {
-        if (!tempViewAvailable(root)) continue;
-        const base = root.via + root.path;
-        try {
-          for (const entry of fs.readdirSync(base, { withFileTypes: true })) {
-            if (!entry.isDirectory() || !isOwnedTempConsumerName(entry.name)) continue;
-            const child = path.join(base, entry.name);
-            const canonicalChild = path.join(root.path, entry.name);
-            // Scratch is part of state. Other owned roots can contain both a
-            // checkout and independent role files; exclude only the checkout.
-            if (canonicalChild === directory || canonicalChild.startsWith(directory + path.sep)) continue;
-            if (!tempViewAvailable(root)) break;
-            const bytes = await allocatedBytes(child, [directory, ...worktreePaths], seenAllocations);
-            if (tempViewAvailable(root)) tempBytes += bytes;
-          }
-        } catch { /* An inaccessible root has no attributable consumer count. */ }
-      }
-      if (target.pressure.episode !== episode) return;
-      target.pressure.consumers = [{ kind: "state", bytes: stateBytes, measuredAt }, { kind: "worktrees", bytes: worktreeBytes, measuredAt }, { kind: "temp", bytes: tempBytes, measuredAt }];
-      target.consumersAt = now();
-      withFileTransactionSync(file, "disk pressure report is busy", () => {
-        const latest = readReport(file);
-        if (latest?.episode !== episode) return;
-        writeJsonDurably(file, { ...latest, consumers: target.pressure.consumers });
-      });
+      const reader = await openHostTempRoots(tempRoots);
+      const consumerRoots = reader.roots;
+      const consumerView = (directory: string) => tempViewFor(directory, consumerRoots);
+      const consumerPath = (directory: string) => (consumerView(directory)?.via ?? "") + directory;
+      try {
+        const measuredAt = new Date(now()).toISOString();
+        const worktreePaths = worktrees.map(consumerPath);
+        const seenAllocations = new Set<string>();
+        const stateBytes = await allocatedBytes(directory, worktreePaths, seenAllocations);
+        let worktreeBytes = 0;
+        // Nested linked checkouts must be measured once, through the outer one.
+        for (const worktree of worktrees.filter(candidate => !worktrees.some(other => other !== candidate && candidate.startsWith(other + path.sep)))) {
+          const view = consumerView(worktree);
+          if (view && !tempViewAvailable(view)) continue;
+          const bytes = await allocatedBytes(consumerPath(worktree), [directory], seenAllocations);
+          if (!view || tempViewAvailable(view)) worktreeBytes += bytes;
+        }
+        let tempBytes = 0;
+        for (const root of consumerRoots) {
+          if (!tempViewAvailable(root)) continue;
+          const base = root.via + root.path;
+          try {
+            for (const entry of fs.readdirSync(base, { withFileTypes: true })) {
+              if (!entry.isDirectory() || !isOwnedTempConsumerName(entry.name)) continue;
+              const child = path.join(base, entry.name);
+              const canonicalChild = path.join(root.path, entry.name);
+              // Scratch is part of state. Other owned roots can contain both a
+              // checkout and independent role files; exclude only the checkout.
+              if (canonicalChild === directory || canonicalChild.startsWith(directory + path.sep)) continue;
+              if (!tempViewAvailable(root)) break;
+              const bytes = await allocatedBytes(child, [directory, ...worktreePaths], seenAllocations);
+              if (tempViewAvailable(root)) tempBytes += bytes;
+            }
+          } catch { /* An inaccessible root has no attributable consumer count. */ }
+        }
+        if (target.pressure.episode !== episode) return;
+        target.pressure.consumers = [{ kind: "state", bytes: stateBytes, measuredAt }, { kind: "worktrees", bytes: worktreeBytes, measuredAt }, { kind: "temp", bytes: tempBytes, measuredAt }];
+        target.consumersAt = now();
+        withFileTransactionSync(file, "disk pressure report is busy", () => {
+          const latest = readReport(file);
+          if (latest?.episode !== episode) return;
+          writeJsonDurably(file, { ...latest, consumers: target.pressure.consumers });
+        });
+      } finally { await reader.close(); }
     })().catch((error) => console.warn("[disk pressure] consumer measurement failed", error instanceof Error ? error.message : String(error)))
       .finally(() => { delete target.measuring; });
   }
