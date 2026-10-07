@@ -47,6 +47,7 @@ import { holdRestartCutRow, setRestartCutHeldRows } from "./restartCutHold";
 import { markStructuredHostStartupProgress, type StructuredHostStartupPhase } from "./startupStatus";
 import { startupDiagnostic } from "../startupDiagnostics";
 import { launchServiceTier } from "./codexTurnProfile";
+import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH } from "./telegramConnectorEnv";
 import {
   interruptionContinuationText,
   interruptionObligationDirectory,
@@ -1432,6 +1433,20 @@ export interface StructuredStartupDependencies {
   resolveClaudeOwner?: (entry: AgentRegistryEntry) => ClaudeStartupOwner | null;
 }
 
+/**
+ * The grant a boot re-host replays, read again when the host is about to
+ * receive the connector token. Bringing the connection back can take the
+ * launch's whole wait, and a grant withdrawn inside that wait refuses the
+ * start the way it does on every other launch.
+ */
+export function startupTelegramGrantCheck(registry: Pick<AgentRegistry, "readOnlySnapshot">, entry: AgentRegistryEntry): (() => void) | undefined {
+  if (!entry.launchProfile?.mcpServers.includes("telegram")) return undefined;
+  return () => {
+    const current = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
+    if (!current?.launchProfile?.mcpServers.includes("telegram")) throw new Error(TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH);
+  };
+}
+
 /** The account a boot re-host resumes one Claude row under. */
 export type ClaudeStartupOwner = {
   home: string;
@@ -1792,6 +1807,7 @@ async function adoptStructuredHostsPass(
           approvalPolicy: entry.launchProfile?.permissionMode ?? undefined,
           allowSubagents: entry.launchProfile?.allowSubagents ?? false,
           mcpServers: entry.launchProfile?.mcpServers ?? ["viewer"],
+          validateTelegramGrant: startupTelegramGrantCheck(registry, entry),
           /* Re-adoption replays the durable grant (issue #687) — a session never
              gains or loses Computer Use by being picked up again at startup. */
           plugins: entry.launchProfile?.plugins ?? [],
@@ -1816,12 +1832,15 @@ async function adoptStructuredHostsPass(
     const claude = resumeDeferred && claudeCandidateCount === 0 ? [] : await (dependencies.adoptClaude ?? adoptClaudeRegistryHosts)(
       registry,
       (entry) => {
-        const options = claudeStartupHostOptions(
-          entry,
-          resolveClaudeOwner(entry),
-          registry.rotateSpawnCapabilityForPath(entry.artifactPath),
-          startupEnvironment,
-        );
+        const options = {
+          ...claudeStartupHostOptions(
+            entry,
+            resolveClaudeOwner(entry),
+            registry.rotateSpawnCapabilityForPath(entry.artifactPath),
+            startupEnvironment,
+          ),
+          validateTelegramGrant: startupTelegramGrantCheck(registry, entry),
+        };
         /* A transcript no live account answers for — a retired account's rows,
            say — gets no config dir, so no `--mcp-config` is written and the
            grant it carries is dropped. Inventing a home would be worse than

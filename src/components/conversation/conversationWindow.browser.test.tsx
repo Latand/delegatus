@@ -520,6 +520,222 @@ describe("composer stays usable with a dead host", () => {
   }, 240_000);
 });
 
+/** The refusals a Telegram launch can leave on a message, by the fixture's
+    `?cause=`, with the lines each one renders. */
+const TELEGRAM_REFUSALS = ["off", "withdrawn", "conflict"] as const;
+const TELEGRAM_REFUSAL_KEYS = {
+  off: { outbox: "outbox.failure.telegramOff", cause: "receipt.cause.telegramOff", remedy: "receipt.remedy.telegramOff" },
+  withdrawn: { outbox: "outbox.failure.telegramWithdrawn", cause: "receipt.cause.telegramWithdrawn", remedy: "receipt.remedy.telegramWithdrawn" },
+  conflict: { outbox: "outbox.failure.telegramNameTaken", cause: "receipt.cause.telegramNameTaken", remedy: "receipt.remedy.telegramNameTaken" },
+} as const;
+
+describe("a restart refused for Telegram reads as one line with what to do", () => {
+  /*
+   * A conversation that holds the Telegram tool used to refuse every message
+   * while Telegram was disconnected, and the operator read the runtime's
+   * sentence about it twice inside a Ukrainian interface. The restart is no
+   * longer refused for that; journals still carry the sentence, and a
+   * withdrawn grant still refuses, so the row has to say it well.
+   *
+   *   LLV_CONVERSATION_BROWSER_TEST=1 CHROME_BIN=google-chrome-stable \
+   *     bun test src/components/conversation/conversationWindow.browser.test.tsx -t "refused for Telegram"
+   *
+   * The failed row over `?case=dead-host-telegram-refused`, for the three
+   * refusals (Telegram disconnected, the grant withdrawn, the account's own
+   * entry in the way), at 390 and 1440 px in en and uk: the reason is one
+   * sentence in the interface language with its action, it appears once, and
+   * the disclosure behind it prints no raw sentence. Readings go to `evidence/telegram-refusal/outbox.json`; frames to
+   * `.artifacts/telegram-refusal/`, which is not committed.
+   */
+  const OUT = path.resolve(".artifacts/telegram-refusal");
+  const EVIDENCE = path.resolve("evidence/telegram-refusal");
+  const VIEWPORTS = [
+    { name: "phone-390", width: 390, height: 844 },
+    { name: "desktop-1440", width: 1440, height: 900 },
+  ] as const;
+
+  browserTest("at 390 and 1440 px in en and uk, said once in the interface language", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    let browser: Browser | null = null;
+    const readings: Record<string, unknown> = {};
+    try {
+      browser = await chromium.launch(LAUNCH);
+      for (const refusal of TELEGRAM_REFUSALS) for (const viewport of VIEWPORTS) {
+        for (const lang of ["en", "uk"] as const) {
+          const sentence = translate(lang, TELEGRAM_REFUSAL_KEYS[refusal].outbox);
+          const { context, page, pageErrors } = await openFixture(
+            browser,
+            `${served.base}?case=dead-host-telegram-refused&cause=${refusal}&lang=${lang}`,
+            { width: viewport.width, height: viewport.height },
+            "dark",
+            lang,
+          );
+          try {
+            await page.waitForSelector('[data-evidence-case="dead-host-telegram-refused"]');
+            await page.waitForSelector("[data-outbox-reason]");
+            const read = () => page.evaluate((sentence: string) => {
+              const failure = document.querySelector("[data-outbox-failure]");
+              const reason = document.querySelector<HTMLElement>("[data-outbox-reason]");
+              const box = reason?.getBoundingClientRect();
+              const text = document.body.innerText;
+              return {
+                statusLabel: document.querySelector("[data-outbox-status]")?.textContent?.trim() ?? null,
+                timesSaid: text.split(sentence).length - 1,
+                runtimeWords: /MCP|connector|structured host|reclaimed/i.test(text),
+                rawLines: document.querySelectorAll("[data-outbox-raw], [data-outbox-transport]").length,
+                actions: [...(failure?.querySelectorAll("button") ?? [])].filter((button) => !button.hasAttribute("data-outbox-reason")).length,
+                reasonInsideViewport: box ? box.left >= 0 && box.right <= window.innerWidth : false,
+                reasonWidth: box ? Math.round(box.width) : 0,
+                reasonHeight: box ? Math.round(box.height) : 0,
+                overflowX: Math.max(0, document.documentElement.scrollWidth - window.innerWidth),
+                viewportWidth: window.innerWidth,
+              };
+            }, sentence);
+            const closed = await read();
+            await page.screenshot({ path: path.join(OUT, `${refusal}-${viewport.name}-${lang}.png`), fullPage: true });
+            await page.locator("[data-outbox-reason]").first().click();
+            await page.waitForSelector("[data-outbox-detail]");
+            const open = await read();
+            await page.screenshot({ path: path.join(OUT, `${refusal}-${viewport.name}-${lang}-open.png`), fullPage: true });
+            readings[`${refusal}-${viewport.name}-${lang}`] = { closed, open };
+            expect(pageErrors).toEqual([]);
+            for (const reading of [closed, open]) {
+              expect(reading.statusLabel).toBe(sentence);
+              expect(reading.timesSaid).toBe(1);
+              expect(reading.runtimeWords).toBe(false);
+              expect(reading.rawLines).toBe(0);
+              expect(reading.actions).toBe(1);
+              expect(reading.reasonInsideViewport).toBe(true);
+              expect(reading.overflowX).toBe(0);
+            }
+          } finally {
+            await context.close();
+          }
+        }
+      }
+      fs.writeFileSync(path.join(EVIDENCE, "outbox.json"), `${JSON.stringify(readings, null, 2)}\n`);
+    } finally {
+      await browser?.close();
+      served.stop();
+    }
+  }, 240_000);
+});
+
+describe("the composer's notice for a Telegram refusal fits a phone and says what to do", () => {
+  /*
+   * The composer's own notice for the same refusal is one clipping line, and
+   * its chip is another. With the whole sentence in both, a 390 px phone cut
+   * the line before the action, said "send again" twice, and kept the rest in
+   * a hover title a phone never shows.
+   *
+   *   LLV_CONVERSATION_BROWSER_TEST=1 CHROME_BIN=google-chrome-stable \
+   *     bun test src/components/conversation/conversationWindow.browser.test.tsx -t "composer's notice for a Telegram refusal"
+   *
+   * `?case=telegram-refused-composer` — one message that failed twice — for
+   * the three refusals (Telegram disconnected, the grant withdrawn, the
+   * account's own entry in the way), at 390 and
+   * 1440 px in en and uk, at rest and expanded: the line and the chip carry the
+   * short cause unclipped, the action is a wrapped sentence in the expanded
+   * detail, and no line of the notice repeats another. Readings go to
+   * `evidence/telegram-refusal/composer-notice.json`; frames to
+   * `.artifacts/telegram-refusal/`, which is not committed.
+   */
+  const OUT = path.resolve(".artifacts/telegram-refusal");
+  const EVIDENCE = path.resolve("evidence/telegram-refusal");
+  const VIEWPORTS = [
+    { name: "phone-390", width: 390, height: 844 },
+    { name: "desktop-1440", width: 1440, height: 900 },
+  ] as const;
+
+  browserTest("at 390 and 1440 px in en and uk, unclipped, with the action in the expanded detail", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    let browser: Browser | null = null;
+    const readings: Record<string, unknown> = {};
+    try {
+      browser = await chromium.launch(LAUNCH);
+      for (const refusal of TELEGRAM_REFUSALS) for (const viewport of VIEWPORTS) {
+        for (const lang of ["en", "uk"] as const) {
+          const { context, page, pageErrors } = await openFixture(
+            browser,
+            `${served.base}?case=telegram-refused-composer&cause=${refusal}&lang=${lang}`,
+            { width: viewport.width, height: viewport.height },
+            "dark",
+            lang,
+          );
+          try {
+            await page.waitForSelector('[data-evidence-case="telegram-refused-composer"]');
+            await page.waitForSelector("[data-delivery-notice-cause]");
+            const read = () => page.evaluate(() => {
+              const clipped = (element: HTMLElement | null) => element ? Math.max(0, element.scrollWidth - element.clientWidth) : null;
+              const inside = (element: Element | null) => {
+                const box = element?.getBoundingClientRect();
+                return box ? box.width > 0 && box.left >= 0 && box.right <= window.innerWidth : false;
+              };
+              const line = document.querySelector<HTMLElement>("[data-delivery-notice-cause]");
+              const detail = document.querySelector<HTMLElement>("[data-delivery-notice-sentence]");
+              const open = document.querySelector<HTMLDetailsElement>("[data-delivery-notice]")?.open ?? false;
+              const chip = document.querySelector<HTMLElement>("[data-receipt-status] .truncate");
+              return {
+                line: line?.textContent ?? null,
+                lineClippedPx: clipped(line),
+                lineWidth: line ? Math.round(line.getBoundingClientRect().width) : 0,
+                attempts: document.querySelector("[data-delivery-notice-count] [aria-hidden]")?.textContent ?? null,
+                detail: open ? detail?.textContent ?? null : null,
+                detailInsideViewport: open ? inside(detail) : false,
+                detailLines: open && detail ? Math.round(detail.getBoundingClientRect().height / parseFloat(getComputedStyle(detail).lineHeight)) : 0,
+                chip: open ? chip?.textContent ?? null : null,
+                chipClippedPx: open ? clipped(chip) : null,
+                chipInsideViewport: open ? inside(chip) : false,
+                runtimeWords: /MCP|connector|structured host|reclaimed/i.test(document.body.innerText),
+                overflowX: Math.max(0, document.documentElement.scrollWidth - window.innerWidth),
+                viewportWidth: window.innerWidth,
+              };
+            });
+            const closed = await read();
+            await page.screenshot({ path: path.join(OUT, `composer-${refusal}-${viewport.name}-${lang}.png`), fullPage: true });
+            await page.locator("[data-delivery-notice] > summary").click({ position: { x: 8, y: 20 } });
+            await page.waitForSelector("[data-delivery-notice-sentence]", { state: "visible" });
+            const open = await read();
+            await page.screenshot({ path: path.join(OUT, `composer-${refusal}-${viewport.name}-${lang}-open.png`), fullPage: true });
+            readings[`${refusal}-${viewport.name}-${lang}`] = { closed, open };
+            expect(pageErrors).toEqual([]);
+            const cause = translate(lang, TELEGRAM_REFUSAL_KEYS[refusal].cause);
+            const remedy = translate(lang, TELEGRAM_REFUSAL_KEYS[refusal].remedy);
+            for (const reading of [closed, open]) {
+              /* One line for two failed attempts, with the short cause whole. */
+              expect(reading.line).toBe(`${translate(lang, "composer.deliveryFailed")} — ${cause}`);
+              expect(reading.lineClippedPx).toBe(0);
+              expect(reading.attempts).toBe("×2");
+              expect(reading.runtimeWords).toBe(false);
+              expect(reading.overflowX).toBe(0);
+            }
+            /* What to do is read without hover: a wrapped sentence on the page. */
+            expect(open.detail).toBe(remedy);
+            expect(open.detailInsideViewport).toBe(true);
+            expect(open.chip).toBe(translate(lang, "receipt.human.verbatim", { reason: cause }));
+            expect(open.chipClippedPx).toBe(0);
+            expect(open.chipInsideViewport).toBe(true);
+            /* No line of the notice is a copy of another. */
+            expect(new Set([open.line, open.detail, open.chip]).size).toBe(3);
+            expect(open.line).not.toContain(remedy);
+            expect(open.chip).not.toContain(remedy);
+          } finally {
+            await context.close();
+          }
+        }
+      }
+      fs.writeFileSync(path.join(EVIDENCE, "composer-notice.json"), `${JSON.stringify(readings, null, 2)}\n`);
+    } finally {
+      await browser?.close();
+      served.stop();
+    }
+  }, 240_000);
+});
+
 describe("send latency slice 3: one message, one row", () => {
   /*
    * Rendered evidence for the operator's complaint that a sent message passes
@@ -1929,12 +2145,16 @@ describe("delivery outcome settlement", () => {
         try {
           const line = page.locator("[data-delivery-notice-cause]");
           await line.waitFor();
-          expect(await line.textContent()).toBe(translate(lang, "composer.deliveryChecking"));
+          /* The notice line speaks for a send that has ended, so an unknown
+             outcome there is a check that is over: since #2545 it reads
+             "Delivery unconfirmed", and "Checking delivery…" belongs to a
+             delivery still in flight, which the card case below draws. */
+          expect(await line.textContent()).toBe(translate(lang, "composer.deliveryCheckEnded"));
           expect(await page.locator("[data-delivery-notice-retry]").getAttribute("aria-label"))
             .toBe(translate(lang, "composer.payloadRecheck"));
           await page.locator("[data-delivery-notice-retry]").click();
           expect(await page.locator("[data-fixture-sends]").textContent()).toBe("0");
-          await page.screenshot({ path: path.join(out, `checking-${key}.png`), fullPage: true });
+          await page.screenshot({ path: path.join(out, `unconfirmed-${key}.png`), fullPage: true });
           await page.locator("[data-confirm-delivery]").click();
           await page.waitForFunction(() => !document.querySelector("[data-runtime-receipt-stack]"));
           await page.screenshot({ path: path.join(out, `delivered-${key}.png`), fullPage: true });
@@ -1959,6 +2179,146 @@ describe("delivery outcome settlement", () => {
       fs.writeFileSync("evidence/delivery-outcome/receipts.json", JSON.stringify(evidence, null, 2) + "\n");
     } finally { await browser.close(); served.stop(); }
   }, 120_000);
+});
+
+describe("delivery check card", () => {
+  /*
+   * The card for a delivery whose fate is unconfirmed, above the production
+   * composer: an English handoff relayed by another project's orchestrator.
+   * Three states and widths, both languages, both schemes. `LLV_DELIVERY_CARD_SIDE=before`
+   * runs the same case over a checkout that still draws the earlier card and
+   * records its geometry under `before`; the default records `after` and gates
+   * it. Geometry goes to `evidence/delivery-check-card/card.json`; frames to
+   * `.artifacts/delivery-check-card/`, which is not committed.
+   */
+  const side = process.env.LLV_DELIVERY_CARD_SIDE === "before" ? "before" : "after";
+  const VIEWPORTS = [
+    { name: "desktop-1440", width: 1440, height: 900, touch: false },
+    { name: "pane-1000", width: 1000, height: 800, touch: false },
+    { name: "phone-390", width: 390, height: 844, touch: true },
+  ] as const;
+
+  browserTest("the card is compact, says its status once and stays clear of the composer", async () => {
+    const out = path.resolve(".artifacts/delivery-check-card");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    const browserServer = await chromium.launchServer(LAUNCH);
+    const browserProcess = browserServer.process();
+    const browserPid = browserProcess.pid;
+    const browser = await chromium.connect(browserServer.wsEndpoint());
+    const readings: Record<string, unknown> = {};
+    try {
+      for (const state of ["failed", "uncertain", "delivering"] as const) for (const viewport of VIEWPORTS) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser,
+          `${served.base}?case=delivery-check-card&lang=${lang}&state=${state}`, { width: viewport.width, height: viewport.height },
+          scheme, lang, "reduce", viewport.touch);
+        const key = state === "failed" ? `${viewport.name}-${lang}-${scheme}` : `${state}-${viewport.name}-${lang}-${scheme}`;
+        try {
+          const status = translate(lang, side === "before" || state !== "failed" ? "composer.deliveryChecking" : "composer.deliveryCheckEnded");
+          await page.locator("[data-runtime-receipt-stack] > summary").click();
+          await page.locator("[data-receipt-discard]").waitFor();
+          const read = () => page.evaluate((statusText) => {
+            const box = (element: Element) => { const r = element.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, height: r.height, width: r.width }; };
+            const stack = document.querySelector("[data-runtime-receipt-stack]")!;
+            const details = document.querySelector("[data-runtime-receipt-details]")!;
+            const card = details.firstElementChild as HTMLElement;
+            const message = card.querySelector("[data-receipt-message]") as HTMLElement;
+            const messageStyle = getComputedStyle(message);
+            const buttons = [...card.querySelectorAll("[data-receipt-uncertain-retry], [data-receipt-discard]")].map(box);
+            const detail = card.querySelector("[data-receipt-uncertain-why]") as HTMLElement;
+            const detailStyle = getComputedStyle(detail);
+            const field = document.querySelector("textarea")!;
+            /* Elements whose own text is the status and that take up room. */
+            const statusShown = [...stack.querySelectorAll("*")].filter((node) =>
+              node.children.length === 0 && node.textContent?.trim() === statusText
+              && (node as HTMLElement).getBoundingClientRect().width > 1).length;
+            const cardStyle = getComputedStyle(card);
+            const children = [...card.children].filter((child) => getComputedStyle(child).position !== "absolute");
+            const used = children.reduce((sum, child) => sum + child.getBoundingClientRect().height, 0)
+              + parseFloat(cardStyle.rowGap || "0") * Math.max(0, children.length - 1)
+              + parseFloat(cardStyle.paddingTop) + parseFloat(cardStyle.paddingBottom);
+            return {
+              stack: box(stack), card: box(card), field: box(field),
+              messageAlign: messageStyle.textAlign,
+              messageWidth: Math.round(message.getBoundingClientRect().width),
+              messageLines: Math.round(message.getBoundingClientRect().height / parseFloat(messageStyle.lineHeight)),
+              buttonHeights: buttons.map((button) => Math.round(button.height)),
+              statusShown,
+              detailText: detail.textContent?.trim(),
+              detailLines: Math.round(detail.getBoundingClientRect().height / parseFloat(detailStyle.lineHeight)),
+              detailFullyVisible: detail.scrollHeight <= detail.clientHeight + 1 && detail.scrollWidth <= detail.clientWidth + 1,
+              discardDisabled: (card.querySelector("[data-receipt-discard]") as HTMLButtonElement).disabled,
+              boilerplateShown: card.textContent!.includes("carries no operator authority"),
+              /* Column cards only: room the card holds beyond its own rows. */
+              cardSlack: cardStyle.flexDirection === "column" ? Math.round(card.getBoundingClientRect().height - used) : null,
+              detailsScrolls: details.scrollHeight > details.clientHeight + 1,
+              /* Both controls are inside the part of the list that is drawn. */
+              controlsInView: buttons.every((button) => button.bottom <= details.getBoundingClientRect().bottom + 0.5
+                && button.top >= details.getBoundingClientRect().top - 0.5),
+              overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+            };
+          }, status);
+          const reading = await read();
+          readings[key] = reading;
+          await page.screenshot({ path: path.join(out, `${side}-${key}.png`), fullPage: true });
+          expect(pageErrors).toEqual([]);
+          expect(reading.overflowX).toBe(0);
+          if (side === "after") {
+            expect(reading.statusShown).toBe(1);
+            expect(["left", "start"]).toContain(reading.messageAlign);
+            expect(reading.messageLines).toBeLessThanOrEqual(2);
+            expect(reading.boilerplateShown).toBe(false);
+            expect(reading.cardSlack).toBeLessThanOrEqual(1);
+            expect(reading.detailsScrolls).toBe(false);
+            expect(reading.controlsInView).toBe(true);
+            expect(reading.discardDisabled).toBe(state === "delivering");
+            expect(reading.detailFullyVisible).toBe(true);
+            expect(reading.detailText).toBe(translate(lang, state === "delivering"
+              ? "composer.deliveryDiscardHandover" : state === "failed"
+                ? "composer.deliveryCheckEndedDetail" : "composer.deliveryCheckingDetail"));
+            if (viewport.touch) {
+              if (state === "failed") expect(reading.card.height).toBeLessThanOrEqual(144);
+              expect(reading.detailLines).toBeLessThanOrEqual(2);
+            }
+            /* The settled chips' size: a caption-height pill with a mouse, the
+               44px touch target on a phone. */
+            for (const height of reading.buttonHeights) {
+              if (viewport.touch) expect(height).toBe(44);
+              else expect(height).toBe(23);
+            }
+            /* Nothing of the card reaches the field under it. */
+            expect(reading.stack.bottom).toBeLessThanOrEqual(reading.field.top);
+            expect(await page.locator("[data-receipt-relay-label]").textContent())
+              .toBe(translate(lang, "composer.relayLabel", { project: "Atlas" }));
+            /* Expanding shows the whole handoff and still clears the field. */
+            await page.locator("[data-receipt-message-toggle]").click();
+            const expanded = await read();
+            expect(expanded.messageLines).toBeGreaterThan(2);
+            expect(expanded.controlsInView).toBe(true);
+            expect(expanded.stack.bottom).toBeLessThanOrEqual(expanded.field.top);
+            expect(expanded.overflowX).toBe(0);
+            await page.screenshot({ path: path.join(out, `${side}-${key}-expanded.png`), fullPage: true });
+            await page.locator("[data-receipt-message-toggle]").click();
+            await page.locator("[data-receipt-uncertain-retry]").click();
+            expect(await page.locator("[data-fixture-retries]").textContent()).toBe("1");
+            if (state !== "delivering") {
+              await page.locator("[data-receipt-discard]").click();
+              await page.waitForFunction(() => !document.querySelector("[data-runtime-receipt-stack]"));
+            }
+          }
+        } finally { await context.close(); }
+      }
+      const file = "evidence/delivery-check-card/card.json";
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      const recorded = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown> : {};
+      fs.writeFileSync(file, JSON.stringify({ ...recorded, [side]: readings }, null, 2) + "\n");
+    } finally {
+      await browser.close();
+      await browserServer.close();
+      console.error(`delivery check card: closed owned browser PID ${browserPid}`);
+      served.stop();
+    }
+  }, 300_000);
 });
 
 describe("own-message step row", () => {
@@ -3372,4 +3732,246 @@ describe("image viewers: pinch, pan and the right click", () => {
       expect(alive).toBe(false);
     }
   }, 600_000);
+});
+
+describe("a control's hint never outlives its click", () => {
+  /*
+   * Operator report: after a click on Compact its hint stayed on screen, and
+   * it was still there after switching to another orchestrator.
+   *
+   * The production strip in the orchestrator conversation, under a real
+   * mouse and a real keyboard. Chromium drops a button's focus the moment
+   * React writes `disabled` onto it, inside the commit, and React delivers no
+   * blur from there: a Hint that opened on the click's focus never heard that
+   * the focus was gone. The strip is mounted unkeyed, so that Hint was carried
+   * into the next conversation.
+   *
+   * Compact and Stop both disable themselves while their request is out; the
+   * request is held here so each is read while busy.
+   */
+
+  type Page = Awaited<ReturnType<typeof openFixture>>["page"];
+  const HINT_SHOWN_MS = 400;
+  const URL_QUERY = "?case=own-message-steps&surface=orchestrator&lang=en";
+  const compact = `button[aria-label^="${translate("en", "composer.compactAria")}"]`;
+  const stop = `button[aria-label^="${translate("en", "composer.interruptAria")}"]`;
+  const sendButton = `button[aria-label="${translate("en", "composer.sendToAgent")}"]`;
+  const HOLD = `window.heldControls = [];
+    const send = window.fetch;
+    window.fetch = async (input, init) => {
+      const url = String(input);
+      if (url === "/api/tmux" || url.startsWith("/api/conversation-host")) {
+        await new Promise((resolve) => window.heldControls.push(resolve));
+        return Response.json({ ok: true });
+      }
+      return send(input, init);
+    };`;
+
+  const hints = (page: Page) => page.evaluate(() => [...document.querySelectorAll('[role="tooltip"]')].map((node) => node.textContent));
+  const disabled = (page: Page, selector: string) => page.evaluate((query) => document.querySelector<HTMLButtonElement>(query)!.disabled, selector);
+  const release = (page: Page) => page.evaluate(() => {
+    for (const answer of (window as unknown as { heldControls: (() => void)[] }).heldControls.splice(0)) answer();
+  });
+  const switchConversation = (page: Page) => page.evaluate(() => {
+    (window as unknown as { ownSteps: { open: (conversation: string) => void } }).ownSteps.open("another-orchestrator");
+  });
+  async function rest(page: Page, selector: string): Promise<void> {
+    const box = (await page.locator(selector).first().boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.waitForTimeout(HINT_SHOWN_MS);
+  }
+  async function press(page: Page): Promise<void> {
+    await page.mouse.down();
+    await page.mouse.up();
+    await page.waitForTimeout(HINT_SHOWN_MS);
+  }
+  async function leave(page: Page): Promise<void> {
+    await page.mouse.move(40, 40, { steps: 4 });
+    await page.waitForTimeout(HINT_SHOWN_MS);
+  }
+
+  browserTest("Compact, Stop, Send and a keyboard-focus hint in Chromium", async () => {
+    const out = path.resolve(".artifacts/control-hints");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    let browser: Browser | null = null;
+    try {
+      browser = await chromium.launch(LAUNCH);
+
+      /* Compact: hover, arm, confirm, leave, answer, switch. */
+      {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}${URL_QUERY}`, { width: 1280, height: 900 }, "dark", "en");
+        try {
+          await page.waitForSelector(compact, { timeout: 20_000 });
+          await page.evaluate(HOLD);
+          await rest(page, compact);
+          expect(await hints(page)).toEqual([translate("en", "composer.compactTitle")]);
+          await press(page);
+          expect(await hints(page)).toEqual([]);
+          await press(page);
+          expect(await disabled(page, compact)).toBe(true);
+          expect(await hints(page)).toEqual([]);
+          await leave(page);
+          expect(await hints(page)).toEqual([]);
+          await release(page);
+          await page.waitForFunction((query) => !document.querySelector<HTMLButtonElement>(query)!.disabled, compact);
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([]);
+          await switchConversation(page);
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([]);
+          await page.screenshot({ path: path.join(out, "compact-after-switch.png") });
+          /* A pointer that arrives anew is still told what the control does. */
+          await rest(page, compact);
+          expect(await hints(page)).toEqual([translate("en", "composer.compactTitle")]);
+          await leave(page);
+          expect(await hints(page)).toEqual([]);
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+      }
+
+      /* Stop: one click disables it; the conversation is switched while it is busy. */
+      {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}${URL_QUERY}`, { width: 1280, height: 900 }, "dark", "en");
+        try {
+          await page.waitForSelector(stop, { timeout: 20_000 });
+          await page.evaluate(HOLD);
+          await rest(page, stop);
+          expect(await hints(page)).toEqual([translate("en", "composer.interruptTitle")]);
+          await press(page);
+          expect(await disabled(page, stop)).toBe(true);
+          expect(await hints(page)).toEqual([]);
+          await leave(page);
+          await switchConversation(page);
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([]);
+          await release(page);
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([]);
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+      }
+
+      /* Send with an empty field keeps its menu, so it stays enabled, says it
+         cannot send, and stops its own click from propagating. */
+      {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}${URL_QUERY}`, { width: 1280, height: 900 }, "dark", "en");
+        try {
+          await page.waitForSelector(sendButton, { timeout: 20_000 });
+          expect(await page.evaluate((query) => document.querySelector(query)!.getAttribute("aria-disabled"), sendButton)).toBe("true");
+          await rest(page, sendButton);
+          expect(await hints(page)).toEqual([translate("en", "composer.sendToAgent")]);
+          await press(page);
+          expect(await disabled(page, sendButton)).toBe(false);
+          expect(await hints(page)).toEqual([]);
+          await leave(page);
+          await rest(page, sendButton);
+          expect(await hints(page)).toEqual([translate("en", "composer.sendToAgent")]);
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+      }
+
+      /* Keyboard: Tab onto a control shows its hint, activating it closes the
+         hint, and so does a key pressed with the focus still on the control. */
+      {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}${URL_QUERY}`, { width: 1280, height: 900 }, "dark", "en");
+        try {
+          await page.waitForSelector(compact, { timeout: 20_000 });
+          await page.evaluate(HOLD);
+          await page.locator(stop).first().focus();
+          await page.keyboard.press("Tab");
+          await page.keyboard.press("Tab");
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await page.evaluate((query) => document.activeElement === document.querySelector(query), compact)).toBe(true);
+          expect(await hints(page)).toEqual([translate("en", "composer.compactTitle")]);
+          await page.screenshot({ path: path.join(out, "keyboard-focus.png") });
+          await page.keyboard.press("Escape");
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([]);
+          await page.keyboard.press("Shift+Tab");
+          await page.keyboard.press("Tab");
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([translate("en", "composer.compactTitle")]);
+          await page.keyboard.press("Enter");
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([]);
+          await page.keyboard.press("Enter");
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await disabled(page, compact)).toBe(true);
+          expect(await hints(page)).toEqual([]);
+          await release(page);
+          await switchConversation(page);
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([]);
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+      }
+
+      /* A hint already open when the dock is handed another conversation, with
+         no input in between: by keyboard focus on Compact, then by a pointer
+         resting on Stop. */
+      {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}${URL_QUERY}`, { width: 1280, height: 900 }, "dark", "en");
+        try {
+          await page.waitForSelector(compact, { timeout: 20_000 });
+          await page.locator(stop).first().focus();
+          await page.keyboard.press("Tab");
+          await page.keyboard.press("Tab");
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([translate("en", "composer.compactTitle")]);
+          await switchConversation(page);
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await page.evaluate(() => document.querySelector("[data-link-path]")!.getAttribute("data-link-path"))).toBe("/another-orchestrator.jsonl");
+          expect(await page.evaluate((query) => document.activeElement === document.querySelector(query), compact)).toBe(true);
+          expect(await hints(page)).toEqual([]);
+          await page.screenshot({ path: path.join(out, "open-hint-after-handoff.png") });
+          await rest(page, stop);
+          expect(await hints(page)).toEqual([translate("en", "composer.interruptTitle")]);
+          await page.evaluate(() => {
+            (window as unknown as { ownSteps: { open: (conversation: string) => void } }).ownSteps.open("third-orchestrator");
+          });
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([]);
+          /* The pointer leaves and arrives anew: the hint is back. */
+          await leave(page);
+          await rest(page, stop);
+          expect(await hints(page)).toEqual([translate("en", "composer.interruptTitle")]);
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+      }
+
+      /* Touch: a held finger still opens the hint, and lifting it closes it. */
+      {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}${URL_QUERY}`, { width: 1280, height: 900 }, "dark", "en");
+        try {
+          await page.waitForSelector(compact, { timeout: 20_000 });
+          const box = (await page.locator(compact).first().boundingBox())!;
+          const point = { x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2) };
+          const cdp = await context.newCDPSession(page);
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point] });
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([translate("en", "composer.compactTitle")]);
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([]);
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser?.close();
+      served.stop();
+    }
+  }, 240_000);
 });

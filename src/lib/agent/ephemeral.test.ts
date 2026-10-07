@@ -263,3 +263,20 @@ process.stdout.write(result.subarray(cut));
   expect(result.answer).toMatchObject({ text: "Привіт" });
   expect(notes).toEqual(["Привіт"]);
 });
+test("the native web search is the one tool the relay profile can add", () => {
+  const codex = buildEphemeralCommand({ ...fixture("codex"), webSearch: true }).args;
+  expect(codex).toContain("web_search=live");
+  expect(codex).not.toContain("web_search=disabled");
+  for (const feature of ["shell_tool", "unified_exec", "apps", "plugins", "browser_use", "computer_use"])
+    expect(codex[codex.indexOf(feature) - 1]).toBe("--disable");
+  const claude = buildEphemeralCommand({ ...fixture("claude"), webSearch: true }).args;
+  expect(claude[claude.indexOf("--tools") + 1]).toBe("WebSearch");
+  expect(claude[claude.indexOf("--allowedTools") + 1]).toBe("WebSearch");
+  for (const flag of ["--restricted", "--safe-mode", "--strict-mcp-config", "--no-session-persistence"])
+    expect(claude).toContain(flag);
+  expect(claude).not.toContain("--mcp-config");
+  // Off unless asked for.
+  const closed = buildEphemeralCommand(fixture("claude")).args;
+  expect(closed[closed.indexOf("--tools") + 1]).toBe("");
+  expect(closed).not.toContain("--allowedTools");
+});

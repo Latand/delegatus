@@ -16,6 +16,7 @@ import { ChevronRight } from "@/components/icons";
 import { Z } from "@/components/layers";
 import { KANBAN_STATUSES, type KanbanCard as KanbanCardModel } from "@/components/kanban/kanbanModel";
 import { subjectOf } from "@/components/kanban/cardDismissal";
+import { SeatActionWires } from "@/components/kanban/SeatActionWires";
 import { TaskMotionLine } from "@/components/kanban/TaskMotionLine";
 import { TaskStepsLine } from "@/components/kanban/TaskStepsLine";
 import { statusLabel, TASK_COLOR_HEX } from "@/components/kanban/KanbanCard";
@@ -864,6 +865,7 @@ export function MobileKanban(props: MobileKanbanProps) {
 
   /* ── The pager ──────────────────────────────────────────────────────── */
   const pager = useRef<HTMLDivElement>(null);
+  const boardRoot = useRef<HTMLDivElement>(null);
   const pages = useRef(new Map<TaskStatus, HTMLElement>());
   /* A tab tap steers the pager; the columns it passes on the way are not
      choices, so the tabs wait for it to arrive. */
@@ -1142,7 +1144,8 @@ export function MobileKanban(props: MobileKanbanProps) {
   );
 
   return (
-    <div data-phone-kanban="" data-phone-kanban-active={active} className="flex min-h-0 min-w-0 flex-1 flex-col">
+    <div ref={boardRoot} data-phone-kanban="" data-phone-kanban-active={active} className="flex min-h-0 min-w-0 flex-1 flex-col">
+      {props.projectLabel ? null : <SeatActionWires rootRef={boardRoot} phone seatRefs={props.seatRefs ?? null} tasks={storedTasks} pipelines={props.pipelines} files={props.files} />}
       {props.seat ? <div className="shrink-0 pb-1 pt-1.5">{props.seat}</div> : null}
       <div
         role="tablist"

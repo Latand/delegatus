@@ -8,6 +8,7 @@
 import { normalizeClaudeLaunchModel } from "@/lib/agent/models";
 
 import { modelSizeClass } from "./costHints";
+import { roleEngineRefusal } from "./locks";
 import type { RoleId, RoleParamValues, RoleVariantId } from "./types";
 
 /** Who wrote the brief a launch runs on. The operator's own launches are the
@@ -142,9 +143,11 @@ export function launchSizingRefusal(input: {
   return null;
 }
 
-/** R1 alone, for a mapping row: a row is a standing default agents then launch.
-    The `trivial` variant of a role is the size=trivial row. */
+/** R1 and the role's engine lock, for a mapping row: a row is a standing
+    default agents then launch. The `trivial` variant of a role is the size=trivial row. */
 export function mappingRowRefusal(roleId: RoleId, runtime: LaunchRuntime, variant?: RoleVariantId | null): string | null {
+  const engine = roleEngineRefusal(roleId, runtime.engine);
+  if (engine) return engine;
   const refusal = lightRoleRefusal(roleId, variant === "trivial" ? { size: "trivial" } : undefined, runtime);
   return refusal ? `${roleId}: ${refusal}` : null;
 }

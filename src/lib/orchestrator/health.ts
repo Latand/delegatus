@@ -341,6 +341,10 @@ export interface RotationRecommendation {
   /** {@link STRONGLY_RECOMMEND_ROTATION} at strongly_recommend, else null. */
   advisory: typeof STRONGLY_RECOMMEND_ROTATION | null;
   reasons: string[];
+  /** The same reasons as data, one per reason and in the same order. The
+      sentences above are written for an agent and name its tools; a surface the
+      operator reads words each cause itself, in the interface language. */
+  causes: RotationCause[];
   /** The policy that was applied, spelled out, or null when none is
       configured for this model. */
   threshold: { windowTokens: number; thresholdTokens: number; fraction: number; policy: string } | null;
@@ -348,6 +352,12 @@ export interface RotationRecommendation {
       stated plainly instead of inventing a window. */
   thresholdUnknown: boolean;
 }
+
+export type RotationCause =
+  | { kind: "context"; tokens: number; estimated: boolean; thresholdTokens: number; windowTokens: number }
+  | { kind: "compactions"; count: number; threshold: number }
+  | { kind: "transcript"; megabytes: number; thresholdMegabytes: number }
+  | { kind: "host_gone" };
 
 const ROTATION_TRANSCRIPT_BYTES = 8 * 1024 * 1024;
 const ROTATION_COMPACTIONS = 2;
@@ -370,21 +380,36 @@ export function rotationRecommendation(input: {
   policy: ContextWindowPolicy | null;
 }): RotationRecommendation {
   const reasons: string[] = [];
+  const causes: RotationCause[] = [];
   let level: RotationRecommendation["level"] = "none";
 
   if (input.policy && input.context.tokens !== null && input.context.tokens >= input.policy.rotationThresholdTokens) {
     if (!input.context.estimated) level = "strongly_recommend";
+    causes.push({
+      kind: "context",
+      tokens: input.context.tokens,
+      estimated: input.context.estimated,
+      thresholdTokens: input.policy.rotationThresholdTokens,
+      windowTokens: input.policy.windowTokens,
+    });
     reasons.push(
       `context usage ${input.context.tokens.toLocaleString("en-US")} tokens${input.context.estimated ? " (estimate)" : ""} has reached the rotation threshold of ${input.policy.rotationThresholdTokens.toLocaleString("en-US")} tokens (${input.policy.policy}: ${Math.round(ROTATION_THRESHOLD_FRACTION * 100)}% of a ${input.policy.windowTokens.toLocaleString("en-US")}-token window)`,
     );
   }
   if (input.facts.compactionCount !== null && input.facts.compactionCount >= ROTATION_COMPACTIONS) {
+    causes.push({ kind: "compactions", count: input.facts.compactionCount, threshold: ROTATION_COMPACTIONS });
     reasons.push(`${input.facts.compactionCount} compaction(s) recorded in the transcript, threshold ${ROTATION_COMPACTIONS}`);
   }
   if (input.facts.transcriptBytes !== null && input.facts.transcriptBytes >= ROTATION_TRANSCRIPT_BYTES) {
+    causes.push({
+      kind: "transcript",
+      megabytes: Number((input.facts.transcriptBytes / (1024 * 1024)).toFixed(1)),
+      thresholdMegabytes: ROTATION_TRANSCRIPT_BYTES / (1024 * 1024),
+    });
     reasons.push(`transcript is ${(input.facts.transcriptBytes / (1024 * 1024)).toFixed(1)} MB, threshold ${ROTATION_TRANSCRIPT_BYTES / (1024 * 1024)} MB`);
   }
   if (input.activity === "dead") {
+    causes.push({ kind: "host_gone" });
     reasons.push("the designated conversation's host is gone; rotate, or resume it with send_message_to_orchestrator");
   }
   if (level === "none" && reasons.length > 0) level = "recommend";
@@ -394,6 +419,7 @@ export function rotationRecommendation(input: {
     level,
     advisory: level === "strongly_recommend" ? STRONGLY_RECOMMEND_ROTATION : null,
     reasons: reasons.slice(0, MAX_REASONS),
+    causes: causes.slice(0, MAX_REASONS),
     threshold: input.policy
       ? {
         windowTokens: input.policy.windowTokens,

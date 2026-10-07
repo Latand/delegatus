@@ -143,3 +143,27 @@ test("a confirmed delivery replayed next month counts in its emission month", ()
   expect(index.injectionActivity(now).delivered).toBe(0);
   expect(index.injectionActivity(new Date("2026-09-30")).delivered).toBe(1);
 });
+
+test("last-turn reason is project-scoped, survives reload, aliases and late confirmations", () => {
+  const index = memoryIndex();
+  index.recordLastTurn("fixture-project", "fixture-conversation", "first-turn", 1, "prepared");
+  index.recordLastTurn("foreign-project", "foreign-conversation", "foreign-turn", 2, "failed");
+  expect(memorySettingView("fixture-project").lastTurn).toBe("prepared");
+  index.recordLastTurn("fixture-project", "fixture-conversation", "second-turn", 3, "noMatches");
+  index.recordLastTurn("fixture-project", "fixture-conversation", "first-turn", 1, "failed");
+  index.recordInjection([{ id: "fixture-memory", title: "Synthetic title", score: .9 }], "first-turn", "fixture-conversation");
+  expect(index.lastTurn("fixture-project")).toBe("noMatches");
+  index.close();
+  expect(memoryIndex().lastTurn("fixture-project")).toBe("noMatches");
+  index.recordLastTurn("fixture-project", "fixture-conversation", "third-turn", 4, "prepared");
+  index.recordInjection([{ id: "fixture-memory", title: "Synthetic title", score: .9 }], "third-turn", "fixture-conversation");
+  expect(index.lastTurn("fixture-project")).toBe("delivered");
+  const payload = memorySettingView("fixture-project");
+  expect(JSON.stringify(payload)).not.toContain("fixture-conversation");
+  expect(JSON.stringify(payload)).not.toContain("third-turn");
+});
+
+test("an expired unconfirmed offer explains the last turn without claiming delivery", () => {
+  memoryIndex().recordLastTurn("fixture-project", "fixture-conversation", "fixture-turn", 1, "prepared", Date.now() - 31000);
+  expect(memorySettingView("fixture-project").lastTurn).toBe("unconfirmed");
+});
