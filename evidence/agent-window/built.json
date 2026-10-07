@@ -1,0 +1,6350 @@
+{
+  "fixture": "issue1695Evidence.fixture.tsx?scenario=stages",
+  "readings": {
+    "1440-en-light": {
+      "steps": {
+        "01-board": {
+          "window": null,
+          "list": null,
+          "reader": null,
+          "shown": null,
+          "rows": [],
+          "head": null,
+          "steps": [],
+          "pill": null,
+          "readerRing": null,
+          "focus": "BODY",
+          "search": {
+            "x": 544,
+            "y": 8,
+            "width": 161,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          }
+        },
+        "02-one-stage": {
+          "window": {
+            "x": 256,
+            "y": 56,
+            "width": 1176,
+            "height": 836
+          },
+          "list": {
+            "x": 256,
+            "y": 56,
+            "width": 248,
+            "height": 836
+          },
+          "reader": {
+            "x": 504,
+            "y": 56,
+            "width": 928,
+            "height": 836
+          },
+          "shown": "conversation_rounds-build",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": true,
+              "name": "Build",
+              "close": {
+                "x": 469,
+                "y": 104,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "1 agent open",
+          "steps": [],
+          "pill": {
+            "text": "1 agent1",
+            "box": {
+              "x": 408,
+              "y": 10,
+              "width": 81,
+              "height": 28
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_rounds-build",
+          "search": {
+            "x": 544,
+            "y": 8,
+            "width": 161,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          }
+        },
+        "03-board-behind": {
+          "window": null,
+          "list": null,
+          "reader": null,
+          "shown": null,
+          "rows": [],
+          "head": null,
+          "steps": [],
+          "pill": {
+            "text": "1 agent1",
+            "box": {
+              "x": 408,
+              "y": 10,
+              "width": 81,
+              "height": 28
+            },
+            "focused": true,
+            "ring": true,
+            "outline": "solid"
+          },
+          "readerRing": null,
+          "focus": "BUTTON",
+          "search": {
+            "x": 544,
+            "y": 8,
+            "width": 161,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          }
+        },
+        "03-closed-by-mouse": {
+          "window": null,
+          "list": null,
+          "reader": null,
+          "shown": null,
+          "rows": [],
+          "head": null,
+          "steps": [],
+          "pill": {
+            "text": "2 agents2",
+            "box": {
+              "x": 408,
+              "y": 10,
+              "width": 88,
+              "height": 28
+            },
+            "focused": true,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": null,
+          "focus": "BUTTON",
+          "search": {
+            "x": 544,
+            "y": 8,
+            "width": 161,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          }
+        },
+        "04-three-review": {
+          "window": {
+            "x": 256,
+            "y": 56,
+            "width": 1176,
+            "height": 836
+          },
+          "list": {
+            "x": 256,
+            "y": 56,
+            "width": 248,
+            "height": 836
+          },
+          "reader": {
+            "x": 504,
+            "y": 56,
+            "width": 928,
+            "height": 836
+          },
+          "shown": "conversation_rounds-review",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": false,
+              "name": "Build",
+              "close": {
+                "x": 469,
+                "y": 104,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_export-impl",
+              "current": false,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 469,
+                "y": 147,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": true,
+              "name": "Review",
+              "close": {
+                "x": 469,
+                "y": 191,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "3 agents open",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "3 agents3",
+            "box": {
+              "x": 408,
+              "y": 10,
+              "width": 88,
+              "height": 28
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_rounds-review",
+          "search": {
+            "x": 544,
+            "y": 8,
+            "width": 161,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          },
+          "margins": {
+            "right": 1.06629952045515,
+            "bottom": 1.6982676951449767,
+            "left": 1.0661337187403817
+          }
+        },
+        "05-row": {
+          "window": {
+            "x": 256,
+            "y": 56,
+            "width": 1176,
+            "height": 836
+          },
+          "list": {
+            "x": 256,
+            "y": 56,
+            "width": 248,
+            "height": 836
+          },
+          "reader": {
+            "x": 504,
+            "y": 56,
+            "width": 928,
+            "height": 836
+          },
+          "shown": "conversation_export-impl",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": false,
+              "name": "Build",
+              "close": {
+                "x": 469,
+                "y": 104,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_export-impl",
+              "current": true,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 469,
+                "y": 147,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": false,
+              "name": "Review",
+              "close": {
+                "x": 469,
+                "y": 191,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "3 agents open",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "3 agents3",
+            "box": {
+              "x": 408,
+              "y": 10,
+              "width": 88,
+              "height": 28
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_export-impl",
+          "search": {
+            "x": 544,
+            "y": 8,
+            "width": 161,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          }
+        },
+        "06-next": {
+          "window": {
+            "x": 256,
+            "y": 56,
+            "width": 1176,
+            "height": 836
+          },
+          "list": {
+            "x": 256,
+            "y": 56,
+            "width": 248,
+            "height": 836
+          },
+          "reader": {
+            "x": 504,
+            "y": 56,
+            "width": 928,
+            "height": 836
+          },
+          "shown": "conversation_rounds-review",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": false,
+              "name": "Build",
+              "close": {
+                "x": 469,
+                "y": 104,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_export-impl",
+              "current": false,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 469,
+                "y": 147,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": true,
+              "name": "Review",
+              "close": {
+                "x": 469,
+                "y": 191,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "3 agents open",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "3 agents3",
+            "box": {
+              "x": 408,
+              "y": 10,
+              "width": 88,
+              "height": 28
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_rounds-review",
+          "search": {
+            "x": 544,
+            "y": 8,
+            "width": 161,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          }
+        },
+        "06-alt-j": {
+          "window": {
+            "x": 256,
+            "y": 56,
+            "width": 1176,
+            "height": 836
+          },
+          "list": {
+            "x": 256,
+            "y": 56,
+            "width": 248,
+            "height": 836
+          },
+          "reader": {
+            "x": 504,
+            "y": 56,
+            "width": 928,
+            "height": 836
+          },
+          "shown": "conversation_rounds-build",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": true,
+              "name": "Build",
+              "close": {
+                "x": 469,
+                "y": 104,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_export-impl",
+              "current": false,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 469,
+                "y": 147,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": false,
+              "name": "Review",
+              "close": {
+                "x": 469,
+                "y": 191,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "3 agents open",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "3 agents3",
+            "box": {
+              "x": 408,
+              "y": 10,
+              "width": 88,
+              "height": 28
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_rounds-build",
+          "search": {
+            "x": 544,
+            "y": 8,
+            "width": 161,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          }
+        },
+        "07-closed-one": {
+          "window": {
+            "x": 256,
+            "y": 56,
+            "width": 1176,
+            "height": 836
+          },
+          "list": {
+            "x": 256,
+            "y": 56,
+            "width": 248,
+            "height": 836
+          },
+          "reader": {
+            "x": 504,
+            "y": 56,
+            "width": 928,
+            "height": 836
+          },
+          "shown": "conversation_export-impl",
+          "rows": [
+            {
+              "key": "conversation_export-impl",
+              "current": true,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 469,
+                "y": 104,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": false,
+              "name": "Review",
+              "close": {
+                "x": 469,
+                "y": 147,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "2 agents open",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "2 agents2",
+            "box": {
+              "x": 408,
+              "y": 10,
+              "width": 88,
+              "height": 28
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_export-impl",
+          "search": {
+            "x": 544,
+            "y": 8,
+            "width": 161,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          }
+        },
+        "08-closed-all": {
+          "window": null,
+          "list": null,
+          "reader": null,
+          "shown": null,
+          "rows": [],
+          "head": null,
+          "steps": [],
+          "pill": null,
+          "readerRing": null,
+          "focus": "DIV",
+          "search": {
+            "x": 544,
+            "y": 8,
+            "width": 161,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          }
+        }
+      },
+      "transitions": {
+        "open-build": {
+          "frames": 35,
+          "incoming": "conversation_rounds-build",
+          "layouts": 1,
+          "bareFrames": 8,
+          "emptyFrames": 0
+        },
+        "open-export": {
+          "frames": 32,
+          "incoming": "conversation_export-impl",
+          "layouts": 1,
+          "bareFrames": 8,
+          "emptyFrames": 0
+        },
+        "open-review": {
+          "frames": 37,
+          "incoming": "conversation_rounds-review",
+          "layouts": 1,
+          "bareFrames": 7,
+          "emptyFrames": 0
+        },
+        "switch-row": {
+          "frames": 31,
+          "incoming": "conversation_export-impl",
+          "layouts": 1,
+          "bareFrames": 0,
+          "emptyFrames": 0
+        },
+        "switch-next": {
+          "frames": 31,
+          "incoming": "conversation_rounds-review",
+          "layouts": 1,
+          "bareFrames": 0,
+          "emptyFrames": 0
+        },
+        "switch-alt-j": {
+          "frames": 31,
+          "incoming": "conversation_rounds-build",
+          "layouts": 1,
+          "bareFrames": 0,
+          "emptyFrames": 0
+        },
+        "close-one": {
+          "frames": 30,
+          "incoming": "conversation_export-impl",
+          "layouts": 1,
+          "bareFrames": 0,
+          "emptyFrames": 0
+        },
+        "close-all": {
+          "frames": 32,
+          "incoming": null,
+          "layouts": 0,
+          "bareFrames": 29,
+          "emptyFrames": 0
+        }
+      },
+      "frames": 321,
+      "pageErrors": []
+    },
+    "1000-en-light": {
+      "steps": {
+        "01-board": {
+          "window": null,
+          "list": null,
+          "reader": null,
+          "shown": null,
+          "rows": [],
+          "head": null,
+          "steps": [],
+          "pill": null,
+          "readerRing": null,
+          "focus": "BODY",
+          "search": {
+            "x": 472,
+            "y": 8,
+            "width": 292,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          }
+        },
+        "02-one-stage": {
+          "window": {
+            "x": 8,
+            "y": 8,
+            "width": 984,
+            "height": 784
+          },
+          "list": {
+            "x": 8,
+            "y": 8,
+            "width": 220,
+            "height": 784
+          },
+          "reader": {
+            "x": 228,
+            "y": 8,
+            "width": 764,
+            "height": 784
+          },
+          "shown": "conversation_rounds-build",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": true,
+              "name": "Build",
+              "close": {
+                "x": 193,
+                "y": 56,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "1 agent open",
+          "steps": [],
+          "pill": {
+            "text": "1 agent1",
+            "box": {
+              "x": 404,
+              "y": 14,
+              "width": 41,
+              "height": 20
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_rounds-build",
+          "search": {
+            "x": 472,
+            "y": 8,
+            "width": 292,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          }
+        },
+        "03-board-behind": {
+          "window": null,
+          "list": null,
+          "reader": null,
+          "shown": null,
+          "rows": [],
+          "head": null,
+          "steps": [],
+          "pill": {
+            "text": "1 agent1",
+            "box": {
+              "x": 404,
+              "y": 14,
+              "width": 41,
+              "height": 20
+            },
+            "focused": true,
+            "ring": true,
+            "outline": "solid"
+          },
+          "readerRing": null,
+          "focus": "BUTTON",
+          "search": {
+            "x": 472,
+            "y": 8,
+            "width": 292,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          }
+        },
+        "03-closed-by-mouse": {
+          "window": null,
+          "list": null,
+          "reader": null,
+          "shown": null,
+          "rows": [],
+          "head": null,
+          "steps": [],
+          "pill": {
+            "text": "2 agents2",
+            "box": {
+              "x": 404,
+              "y": 14,
+              "width": 41,
+              "height": 20
+            },
+            "focused": true,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": null,
+          "focus": "BUTTON",
+          "search": {
+            "x": 472,
+            "y": 8,
+            "width": 292,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          }
+        },
+        "04-three-review": {
+          "window": {
+            "x": 8,
+            "y": 8,
+            "width": 984,
+            "height": 784
+          },
+          "list": {
+            "x": 8,
+            "y": 8,
+            "width": 220,
+            "height": 784
+          },
+          "reader": {
+            "x": 228,
+            "y": 8,
+            "width": 764,
+            "height": 784
+          },
+          "shown": "conversation_rounds-review",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": false,
+              "name": "Build",
+              "close": {
+                "x": 193,
+                "y": 56,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_export-impl",
+              "current": false,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 193,
+                "y": 99,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": true,
+              "name": "Review",
+              "close": {
+                "x": 193,
+                "y": 143,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "3 agents open",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "3 agents3",
+            "box": {
+              "x": 404,
+              "y": 14,
+              "width": 41,
+              "height": 20
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_rounds-review",
+          "search": {
+            "x": 472,
+            "y": 8,
+            "width": 292,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          },
+          "margins": {
+            "right": 1.0727066350508265,
+            "bottom": 1.7205388387772205,
+            "left": 1.0725323965621738
+          }
+        },
+        "05-row": {
+          "window": {
+            "x": 8,
+            "y": 8,
+            "width": 984,
+            "height": 784
+          },
+          "list": {
+            "x": 8,
+            "y": 8,
+            "width": 220,
+            "height": 784
+          },
+          "reader": {
+            "x": 228,
+            "y": 8,
+            "width": 764,
+            "height": 784
+          },
+          "shown": "conversation_export-impl",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": false,
+              "name": "Build",
+              "close": {
+                "x": 193,
+                "y": 56,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_export-impl",
+              "current": true,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 193,
+                "y": 99,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": false,
+              "name": "Review",
+              "close": {
+                "x": 193,
+                "y": 143,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "3 agents open",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "3 agents3",
+            "box": {
+              "x": 404,
+              "y": 14,
+              "width": 41,
+              "height": 20
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_export-impl",
+          "search": {
+            "x": 472,
+            "y": 8,
+            "width": 292,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          }
+        },
+        "06-next": {
+          "window": {
+            "x": 8,
+            "y": 8,
+            "width": 984,
+            "height": 784
+          },
+          "list": {
+            "x": 8,
+            "y": 8,
+            "width": 220,
+            "height": 784
+          },
+          "reader": {
+            "x": 228,
+            "y": 8,
+            "width": 764,
+            "height": 784
+          },
+          "shown": "conversation_rounds-review",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": false,
+              "name": "Build",
+              "close": {
+                "x": 193,
+                "y": 56,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_export-impl",
+              "current": false,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 193,
+                "y": 99,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": true,
+              "name": "Review",
+              "close": {
+                "x": 193,
+                "y": 143,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "3 agents open",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "3 agents3",
+            "box": {
+              "x": 404,
+              "y": 14,
+              "width": 41,
+              "height": 20
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_rounds-review",
+          "search": {
+            "x": 472,
+            "y": 8,
+            "width": 292,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          }
+        },
+        "06-alt-j": {
+          "window": {
+            "x": 8,
+            "y": 8,
+            "width": 984,
+            "height": 784
+          },
+          "list": {
+            "x": 8,
+            "y": 8,
+            "width": 220,
+            "height": 784
+          },
+          "reader": {
+            "x": 228,
+            "y": 8,
+            "width": 764,
+            "height": 784
+          },
+          "shown": "conversation_rounds-build",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": true,
+              "name": "Build",
+              "close": {
+                "x": 193,
+                "y": 56,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_export-impl",
+              "current": false,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 193,
+                "y": 99,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": false,
+              "name": "Review",
+              "close": {
+                "x": 193,
+                "y": 143,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "3 agents open",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "3 agents3",
+            "box": {
+              "x": 404,
+              "y": 14,
+              "width": 41,
+              "height": 20
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_rounds-build",
+          "search": {
+            "x": 472,
+            "y": 8,
+            "width": 292,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          }
+        },
+        "07-closed-one": {
+          "window": {
+            "x": 8,
+            "y": 8,
+            "width": 984,
+            "height": 784
+          },
+          "list": {
+            "x": 8,
+            "y": 8,
+            "width": 220,
+            "height": 784
+          },
+          "reader": {
+            "x": 228,
+            "y": 8,
+            "width": 764,
+            "height": 784
+          },
+          "shown": "conversation_export-impl",
+          "rows": [
+            {
+              "key": "conversation_export-impl",
+              "current": true,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 193,
+                "y": 56,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": false,
+              "name": "Review",
+              "close": {
+                "x": 193,
+                "y": 99,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "2 agents open",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "2 agents2",
+            "box": {
+              "x": 404,
+              "y": 14,
+              "width": 41,
+              "height": 20
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_export-impl",
+          "search": {
+            "x": 472,
+            "y": 8,
+            "width": 292,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          }
+        },
+        "08-closed-all": {
+          "window": null,
+          "list": null,
+          "reader": null,
+          "shown": null,
+          "rows": [],
+          "head": null,
+          "steps": [],
+          "pill": null,
+          "readerRing": null,
+          "focus": "DIV",
+          "search": {
+            "x": 472,
+            "y": 8,
+            "width": 292,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          }
+        }
+      },
+      "transitions": {
+        "open-build": {
+          "frames": 34,
+          "incoming": "conversation_rounds-build",
+          "layouts": 1,
+          "bareFrames": 7,
+          "emptyFrames": 0
+        },
+        "open-export": {
+          "frames": 31,
+          "incoming": "conversation_export-impl",
+          "layouts": 1,
+          "bareFrames": 7,
+          "emptyFrames": 0
+        },
+        "open-review": {
+          "frames": 35,
+          "incoming": "conversation_rounds-review",
+          "layouts": 1,
+          "bareFrames": 6,
+          "emptyFrames": 0
+        },
+        "switch-row": {
+          "frames": 29,
+          "incoming": "conversation_export-impl",
+          "layouts": 1,
+          "bareFrames": 0,
+          "emptyFrames": 0
+        },
+        "switch-next": {
+          "frames": 28,
+          "incoming": "conversation_rounds-review",
+          "layouts": 1,
+          "bareFrames": 0,
+          "emptyFrames": 0
+        },
+        "switch-alt-j": {
+          "frames": 27,
+          "incoming": "conversation_rounds-build",
+          "layouts": 1,
+          "bareFrames": 0,
+          "emptyFrames": 0
+        },
+        "close-one": {
+          "frames": 30,
+          "incoming": "conversation_export-impl",
+          "layouts": 1,
+          "bareFrames": 0,
+          "emptyFrames": 0
+        },
+        "close-all": {
+          "frames": 29,
+          "incoming": null,
+          "layouts": 0,
+          "bareFrames": 27,
+          "emptyFrames": 0
+        }
+      },
+      "frames": 301,
+      "pageErrors": []
+    },
+    "1440-uk-light": {
+      "steps": {
+        "01-board": {
+          "window": null,
+          "list": null,
+          "reader": null,
+          "shown": null,
+          "rows": [],
+          "head": null,
+          "steps": [],
+          "pill": null,
+          "readerRing": null,
+          "focus": "BODY",
+          "search": {
+            "x": 559,
+            "y": 8,
+            "width": 144,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          }
+        },
+        "02-one-stage": {
+          "window": {
+            "x": 256,
+            "y": 56,
+            "width": 1176,
+            "height": 836
+          },
+          "list": {
+            "x": 256,
+            "y": 56,
+            "width": 248,
+            "height": 836
+          },
+          "reader": {
+            "x": 504,
+            "y": 56,
+            "width": 928,
+            "height": 836
+          },
+          "shown": "conversation_rounds-build",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": true,
+              "name": "Build",
+              "close": {
+                "x": 469,
+                "y": 104,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "1 агент відкритий",
+          "steps": [],
+          "pill": {
+            "text": "1 агент1",
+            "box": {
+              "x": 423,
+              "y": 10,
+              "width": 80,
+              "height": 28
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_rounds-build",
+          "search": {
+            "x": 559,
+            "y": 8,
+            "width": 144,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          }
+        },
+        "03-board-behind": {
+          "window": null,
+          "list": null,
+          "reader": null,
+          "shown": null,
+          "rows": [],
+          "head": null,
+          "steps": [],
+          "pill": {
+            "text": "1 агент1",
+            "box": {
+              "x": 423,
+              "y": 10,
+              "width": 80,
+              "height": 28
+            },
+            "focused": true,
+            "ring": true,
+            "outline": "solid"
+          },
+          "readerRing": null,
+          "focus": "BUTTON",
+          "search": {
+            "x": 559,
+            "y": 8,
+            "width": 144,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          }
+        },
+        "03-closed-by-mouse": {
+          "window": null,
+          "list": null,
+          "reader": null,
+          "shown": null,
+          "rows": [],
+          "head": null,
+          "steps": [],
+          "pill": {
+            "text": "2 агенти2",
+            "box": {
+              "x": 423,
+              "y": 10,
+              "width": 88,
+              "height": 28
+            },
+            "focused": true,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": null,
+          "focus": "BUTTON",
+          "search": {
+            "x": 559,
+            "y": 8,
+            "width": 144,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          }
+        },
+        "04-three-review": {
+          "window": {
+            "x": 256,
+            "y": 56,
+            "width": 1176,
+            "height": 836
+          },
+          "list": {
+            "x": 256,
+            "y": 56,
+            "width": 248,
+            "height": 836
+          },
+          "reader": {
+            "x": 504,
+            "y": 56,
+            "width": 928,
+            "height": 836
+          },
+          "shown": "conversation_rounds-review",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": false,
+              "name": "Build",
+              "close": {
+                "x": 469,
+                "y": 104,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_export-impl",
+              "current": false,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 469,
+                "y": 147,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": true,
+              "name": "Review",
+              "close": {
+                "x": 469,
+                "y": 191,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "3 агенти відкриті",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "3 агенти3",
+            "box": {
+              "x": 423,
+              "y": 10,
+              "width": 88,
+              "height": 28
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_rounds-review",
+          "search": {
+            "x": 559,
+            "y": 8,
+            "width": 144,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          },
+          "margins": {
+            "right": 1.06629952045515,
+            "bottom": 1.6982676951449767,
+            "left": 1.0661337187403817
+          }
+        },
+        "05-row": {
+          "window": {
+            "x": 256,
+            "y": 56,
+            "width": 1176,
+            "height": 836
+          },
+          "list": {
+            "x": 256,
+            "y": 56,
+            "width": 248,
+            "height": 836
+          },
+          "reader": {
+            "x": 504,
+            "y": 56,
+            "width": 928,
+            "height": 836
+          },
+          "shown": "conversation_export-impl",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": false,
+              "name": "Build",
+              "close": {
+                "x": 469,
+                "y": 104,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_export-impl",
+              "current": true,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 469,
+                "y": 147,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": false,
+              "name": "Review",
+              "close": {
+                "x": 469,
+                "y": 191,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "3 агенти відкриті",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "3 агенти3",
+            "box": {
+              "x": 423,
+              "y": 10,
+              "width": 88,
+              "height": 28
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_export-impl",
+          "search": {
+            "x": 559,
+            "y": 8,
+            "width": 144,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          }
+        },
+        "06-next": {
+          "window": {
+            "x": 256,
+            "y": 56,
+            "width": 1176,
+            "height": 836
+          },
+          "list": {
+            "x": 256,
+            "y": 56,
+            "width": 248,
+            "height": 836
+          },
+          "reader": {
+            "x": 504,
+            "y": 56,
+            "width": 928,
+            "height": 836
+          },
+          "shown": "conversation_rounds-review",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": false,
+              "name": "Build",
+              "close": {
+                "x": 469,
+                "y": 104,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_export-impl",
+              "current": false,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 469,
+                "y": 147,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": true,
+              "name": "Review",
+              "close": {
+                "x": 469,
+                "y": 191,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "3 агенти відкриті",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "3 агенти3",
+            "box": {
+              "x": 423,
+              "y": 10,
+              "width": 88,
+              "height": 28
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_rounds-review",
+          "search": {
+            "x": 559,
+            "y": 8,
+            "width": 144,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          }
+        },
+        "06-alt-j": {
+          "window": {
+            "x": 256,
+            "y": 56,
+            "width": 1176,
+            "height": 836
+          },
+          "list": {
+            "x": 256,
+            "y": 56,
+            "width": 248,
+            "height": 836
+          },
+          "reader": {
+            "x": 504,
+            "y": 56,
+            "width": 928,
+            "height": 836
+          },
+          "shown": "conversation_rounds-build",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": true,
+              "name": "Build",
+              "close": {
+                "x": 469,
+                "y": 104,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_export-impl",
+              "current": false,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 469,
+                "y": 147,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": false,
+              "name": "Review",
+              "close": {
+                "x": 469,
+                "y": 191,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "3 агенти відкриті",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "3 агенти3",
+            "box": {
+              "x": 423,
+              "y": 10,
+              "width": 88,
+              "height": 28
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_rounds-build",
+          "search": {
+            "x": 559,
+            "y": 8,
+            "width": 144,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          }
+        },
+        "07-closed-one": {
+          "window": {
+            "x": 256,
+            "y": 56,
+            "width": 1176,
+            "height": 836
+          },
+          "list": {
+            "x": 256,
+            "y": 56,
+            "width": 248,
+            "height": 836
+          },
+          "reader": {
+            "x": 504,
+            "y": 56,
+            "width": 928,
+            "height": 836
+          },
+          "shown": "conversation_export-impl",
+          "rows": [
+            {
+              "key": "conversation_export-impl",
+              "current": true,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 469,
+                "y": 104,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": false,
+              "name": "Review",
+              "close": {
+                "x": 469,
+                "y": 147,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "2 агенти відкриті",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "2 агенти2",
+            "box": {
+              "x": 423,
+              "y": 10,
+              "width": 88,
+              "height": 28
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_export-impl",
+          "search": {
+            "x": 559,
+            "y": 8,
+            "width": 144,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          }
+        },
+        "08-closed-all": {
+          "window": null,
+          "list": null,
+          "reader": null,
+          "shown": null,
+          "rows": [],
+          "head": null,
+          "steps": [],
+          "pill": null,
+          "readerRing": null,
+          "focus": "DIV",
+          "search": {
+            "x": 559,
+            "y": 8,
+            "width": 144,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          }
+        }
+      },
+      "transitions": {
+        "open-build": {
+          "frames": 36,
+          "incoming": "conversation_rounds-build",
+          "layouts": 1,
+          "bareFrames": 8,
+          "emptyFrames": 0
+        },
+        "open-export": {
+          "frames": 30,
+          "incoming": "conversation_export-impl",
+          "layouts": 1,
+          "bareFrames": 6,
+          "emptyFrames": 0
+        },
+        "open-review": {
+          "frames": 38,
+          "incoming": "conversation_rounds-review",
+          "layouts": 1,
+          "bareFrames": 8,
+          "emptyFrames": 0
+        },
+        "switch-row": {
+          "frames": 31,
+          "incoming": "conversation_export-impl",
+          "layouts": 1,
+          "bareFrames": 0,
+          "emptyFrames": 0
+        },
+        "switch-next": {
+          "frames": 30,
+          "incoming": "conversation_rounds-review",
+          "layouts": 1,
+          "bareFrames": 0,
+          "emptyFrames": 0
+        },
+        "switch-alt-j": {
+          "frames": 27,
+          "incoming": "conversation_rounds-build",
+          "layouts": 1,
+          "bareFrames": 0,
+          "emptyFrames": 0
+        },
+        "close-one": {
+          "frames": 29,
+          "incoming": "conversation_export-impl",
+          "layouts": 1,
+          "bareFrames": 0,
+          "emptyFrames": 0
+        },
+        "close-all": {
+          "frames": 30,
+          "incoming": null,
+          "layouts": 0,
+          "bareFrames": 28,
+          "emptyFrames": 0
+        }
+      },
+      "frames": 312,
+      "pageErrors": []
+    },
+    "1000-uk-light": {
+      "steps": {
+        "01-board": {
+          "window": null,
+          "list": null,
+          "reader": null,
+          "shown": null,
+          "rows": [],
+          "head": null,
+          "steps": [],
+          "pill": null,
+          "readerRing": null,
+          "focus": "BODY",
+          "search": {
+            "x": 487,
+            "y": 8,
+            "width": 277,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          }
+        },
+        "02-one-stage": {
+          "window": {
+            "x": 8,
+            "y": 8,
+            "width": 984,
+            "height": 784
+          },
+          "list": {
+            "x": 8,
+            "y": 8,
+            "width": 220,
+            "height": 784
+          },
+          "reader": {
+            "x": 228,
+            "y": 8,
+            "width": 764,
+            "height": 784
+          },
+          "shown": "conversation_rounds-build",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": true,
+              "name": "Build",
+              "close": {
+                "x": 193,
+                "y": 56,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "1 агент відкритий",
+          "steps": [],
+          "pill": {
+            "text": "1 агент1",
+            "box": {
+              "x": 419,
+              "y": 14,
+              "width": 41,
+              "height": 20
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_rounds-build",
+          "search": {
+            "x": 487,
+            "y": 8,
+            "width": 277,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          }
+        },
+        "03-board-behind": {
+          "window": null,
+          "list": null,
+          "reader": null,
+          "shown": null,
+          "rows": [],
+          "head": null,
+          "steps": [],
+          "pill": {
+            "text": "1 агент1",
+            "box": {
+              "x": 419,
+              "y": 14,
+              "width": 41,
+              "height": 20
+            },
+            "focused": true,
+            "ring": true,
+            "outline": "solid"
+          },
+          "readerRing": null,
+          "focus": "BUTTON",
+          "search": {
+            "x": 487,
+            "y": 8,
+            "width": 277,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          }
+        },
+        "03-closed-by-mouse": {
+          "window": null,
+          "list": null,
+          "reader": null,
+          "shown": null,
+          "rows": [],
+          "head": null,
+          "steps": [],
+          "pill": {
+            "text": "2 агенти2",
+            "box": {
+              "x": 419,
+              "y": 14,
+              "width": 41,
+              "height": 20
+            },
+            "focused": true,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": null,
+          "focus": "BUTTON",
+          "search": {
+            "x": 487,
+            "y": 8,
+            "width": 277,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          }
+        },
+        "04-three-review": {
+          "window": {
+            "x": 8,
+            "y": 8,
+            "width": 984,
+            "height": 784
+          },
+          "list": {
+            "x": 8,
+            "y": 8,
+            "width": 220,
+            "height": 784
+          },
+          "reader": {
+            "x": 228,
+            "y": 8,
+            "width": 764,
+            "height": 784
+          },
+          "shown": "conversation_rounds-review",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": false,
+              "name": "Build",
+              "close": {
+                "x": 193,
+                "y": 56,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_export-impl",
+              "current": false,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 193,
+                "y": 99,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": true,
+              "name": "Review",
+              "close": {
+                "x": 193,
+                "y": 143,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "3 агенти відкриті",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "3 агенти3",
+            "box": {
+              "x": 419,
+              "y": 14,
+              "width": 41,
+              "height": 20
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_rounds-review",
+          "search": {
+            "x": 487,
+            "y": 8,
+            "width": 277,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          },
+          "margins": {
+            "right": 1.0727066350508265,
+            "bottom": 1.7205388387772205,
+            "left": 1.0725323965621738
+          }
+        },
+        "05-row": {
+          "window": {
+            "x": 8,
+            "y": 8,
+            "width": 984,
+            "height": 784
+          },
+          "list": {
+            "x": 8,
+            "y": 8,
+            "width": 220,
+            "height": 784
+          },
+          "reader": {
+            "x": 228,
+            "y": 8,
+            "width": 764,
+            "height": 784
+          },
+          "shown": "conversation_export-impl",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": false,
+              "name": "Build",
+              "close": {
+                "x": 193,
+                "y": 56,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_export-impl",
+              "current": true,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 193,
+                "y": 99,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": false,
+              "name": "Review",
+              "close": {
+                "x": 193,
+                "y": 143,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "3 агенти відкриті",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "3 агенти3",
+            "box": {
+              "x": 419,
+              "y": 14,
+              "width": 41,
+              "height": 20
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_export-impl",
+          "search": {
+            "x": 487,
+            "y": 8,
+            "width": 277,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          }
+        },
+        "06-next": {
+          "window": {
+            "x": 8,
+            "y": 8,
+            "width": 984,
+            "height": 784
+          },
+          "list": {
+            "x": 8,
+            "y": 8,
+            "width": 220,
+            "height": 784
+          },
+          "reader": {
+            "x": 228,
+            "y": 8,
+            "width": 764,
+            "height": 784
+          },
+          "shown": "conversation_rounds-review",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": false,
+              "name": "Build",
+              "close": {
+                "x": 193,
+                "y": 56,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_export-impl",
+              "current": false,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 193,
+                "y": 99,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": true,
+              "name": "Review",
+              "close": {
+                "x": 193,
+                "y": 143,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "3 агенти відкриті",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "3 агенти3",
+            "box": {
+              "x": 419,
+              "y": 14,
+              "width": 41,
+              "height": 20
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_rounds-review",
+          "search": {
+            "x": 487,
+            "y": 8,
+            "width": 277,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          }
+        },
+        "06-alt-j": {
+          "window": {
+            "x": 8,
+            "y": 8,
+            "width": 984,
+            "height": 784
+          },
+          "list": {
+            "x": 8,
+            "y": 8,
+            "width": 220,
+            "height": 784
+          },
+          "reader": {
+            "x": 228,
+            "y": 8,
+            "width": 764,
+            "height": 784
+          },
+          "shown": "conversation_rounds-build",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": true,
+              "name": "Build",
+              "close": {
+                "x": 193,
+                "y": 56,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_export-impl",
+              "current": false,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 193,
+                "y": 99,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": false,
+              "name": "Review",
+              "close": {
+                "x": 193,
+                "y": 143,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "3 агенти відкриті",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "3 агенти3",
+            "box": {
+              "x": 419,
+              "y": 14,
+              "width": 41,
+              "height": 20
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_rounds-build",
+          "search": {
+            "x": 487,
+            "y": 8,
+            "width": 277,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          }
+        },
+        "07-closed-one": {
+          "window": {
+            "x": 8,
+            "y": 8,
+            "width": 984,
+            "height": 784
+          },
+          "list": {
+            "x": 8,
+            "y": 8,
+            "width": 220,
+            "height": 784
+          },
+          "reader": {
+            "x": 228,
+            "y": 8,
+            "width": 764,
+            "height": 784
+          },
+          "shown": "conversation_export-impl",
+          "rows": [
+            {
+              "key": "conversation_export-impl",
+              "current": true,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 193,
+                "y": 56,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": false,
+              "name": "Review",
+              "close": {
+                "x": 193,
+                "y": 99,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "2 агенти відкриті",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "2 агенти2",
+            "box": {
+              "x": 419,
+              "y": 14,
+              "width": 41,
+              "height": 20
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_export-impl",
+          "search": {
+            "x": 487,
+            "y": 8,
+            "width": 277,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          }
+        },
+        "08-closed-all": {
+          "window": null,
+          "list": null,
+          "reader": null,
+          "shown": null,
+          "rows": [],
+          "head": null,
+          "steps": [],
+          "pill": null,
+          "readerRing": null,
+          "focus": "DIV",
+          "search": {
+            "x": 487,
+            "y": 8,
+            "width": 277,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          }
+        }
+      },
+      "transitions": {
+        "open-build": {
+          "frames": 35,
+          "incoming": "conversation_rounds-build",
+          "layouts": 1,
+          "bareFrames": 8,
+          "emptyFrames": 0
+        },
+        "open-export": {
+          "frames": 31,
+          "incoming": "conversation_export-impl",
+          "layouts": 1,
+          "bareFrames": 7,
+          "emptyFrames": 0
+        },
+        "open-review": {
+          "frames": 36,
+          "incoming": "conversation_rounds-review",
+          "layouts": 1,
+          "bareFrames": 7,
+          "emptyFrames": 0
+        },
+        "switch-row": {
+          "frames": 29,
+          "incoming": "conversation_export-impl",
+          "layouts": 1,
+          "bareFrames": 0,
+          "emptyFrames": 0
+        },
+        "switch-next": {
+          "frames": 30,
+          "incoming": "conversation_rounds-review",
+          "layouts": 1,
+          "bareFrames": 0,
+          "emptyFrames": 0
+        },
+        "switch-alt-j": {
+          "frames": 26,
+          "incoming": "conversation_rounds-build",
+          "layouts": 1,
+          "bareFrames": 0,
+          "emptyFrames": 0
+        },
+        "close-one": {
+          "frames": 30,
+          "incoming": "conversation_export-impl",
+          "layouts": 1,
+          "bareFrames": 0,
+          "emptyFrames": 0
+        },
+        "close-all": {
+          "frames": 29,
+          "incoming": null,
+          "layouts": 0,
+          "bareFrames": 27,
+          "emptyFrames": 0
+        }
+      },
+      "frames": 303,
+      "pageErrors": []
+    },
+    "1440-en-dark": {
+      "steps": {
+        "01-board": {
+          "window": null,
+          "list": null,
+          "reader": null,
+          "shown": null,
+          "rows": [],
+          "head": null,
+          "steps": [],
+          "pill": null,
+          "readerRing": null,
+          "focus": "BODY",
+          "search": {
+            "x": 544,
+            "y": 8,
+            "width": 161,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          }
+        },
+        "02-one-stage": {
+          "window": {
+            "x": 256,
+            "y": 56,
+            "width": 1176,
+            "height": 836
+          },
+          "list": {
+            "x": 256,
+            "y": 56,
+            "width": 248,
+            "height": 836
+          },
+          "reader": {
+            "x": 504,
+            "y": 56,
+            "width": 928,
+            "height": 836
+          },
+          "shown": "conversation_rounds-build",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": true,
+              "name": "Build",
+              "close": {
+                "x": 469,
+                "y": 104,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "1 agent open",
+          "steps": [],
+          "pill": {
+            "text": "1 agent1",
+            "box": {
+              "x": 408,
+              "y": 10,
+              "width": 81,
+              "height": 28
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_rounds-build",
+          "search": {
+            "x": 544,
+            "y": 8,
+            "width": 161,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          }
+        },
+        "03-board-behind": {
+          "window": null,
+          "list": null,
+          "reader": null,
+          "shown": null,
+          "rows": [],
+          "head": null,
+          "steps": [],
+          "pill": {
+            "text": "1 agent1",
+            "box": {
+              "x": 408,
+              "y": 10,
+              "width": 81,
+              "height": 28
+            },
+            "focused": true,
+            "ring": true,
+            "outline": "solid"
+          },
+          "readerRing": null,
+          "focus": "BUTTON",
+          "search": {
+            "x": 544,
+            "y": 8,
+            "width": 161,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          }
+        },
+        "03-closed-by-mouse": {
+          "window": null,
+          "list": null,
+          "reader": null,
+          "shown": null,
+          "rows": [],
+          "head": null,
+          "steps": [],
+          "pill": {
+            "text": "2 agents2",
+            "box": {
+              "x": 408,
+              "y": 10,
+              "width": 88,
+              "height": 28
+            },
+            "focused": true,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": null,
+          "focus": "BUTTON",
+          "search": {
+            "x": 544,
+            "y": 8,
+            "width": 161,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          }
+        },
+        "04-three-review": {
+          "window": {
+            "x": 256,
+            "y": 56,
+            "width": 1176,
+            "height": 836
+          },
+          "list": {
+            "x": 256,
+            "y": 56,
+            "width": 248,
+            "height": 836
+          },
+          "reader": {
+            "x": 504,
+            "y": 56,
+            "width": 928,
+            "height": 836
+          },
+          "shown": "conversation_rounds-review",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": false,
+              "name": "Build",
+              "close": {
+                "x": 469,
+                "y": 104,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_export-impl",
+              "current": false,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 469,
+                "y": 147,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": true,
+              "name": "Review",
+              "close": {
+                "x": 469,
+                "y": 191,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "3 agents open",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "3 agents3",
+            "box": {
+              "x": 408,
+              "y": 10,
+              "width": 88,
+              "height": 28
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_rounds-review",
+          "search": {
+            "x": 544,
+            "y": 8,
+            "width": 161,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          },
+          "margins": {
+            "right": 0.776535800866571,
+            "bottom": 1.3032656625729973,
+            "left": 0.776535800866571
+          }
+        },
+        "05-row": {
+          "window": {
+            "x": 256,
+            "y": 56,
+            "width": 1176,
+            "height": 836
+          },
+          "list": {
+            "x": 256,
+            "y": 56,
+            "width": 248,
+            "height": 836
+          },
+          "reader": {
+            "x": 504,
+            "y": 56,
+            "width": 928,
+            "height": 836
+          },
+          "shown": "conversation_export-impl",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": false,
+              "name": "Build",
+              "close": {
+                "x": 469,
+                "y": 104,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_export-impl",
+              "current": true,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 469,
+                "y": 147,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": false,
+              "name": "Review",
+              "close": {
+                "x": 469,
+                "y": 191,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "3 agents open",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "3 agents3",
+            "box": {
+              "x": 408,
+              "y": 10,
+              "width": 88,
+              "height": 28
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_export-impl",
+          "search": {
+            "x": 544,
+            "y": 8,
+            "width": 161,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          }
+        },
+        "06-next": {
+          "window": {
+            "x": 256,
+            "y": 56,
+            "width": 1176,
+            "height": 836
+          },
+          "list": {
+            "x": 256,
+            "y": 56,
+            "width": 248,
+            "height": 836
+          },
+          "reader": {
+            "x": 504,
+            "y": 56,
+            "width": 928,
+            "height": 836
+          },
+          "shown": "conversation_rounds-review",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": false,
+              "name": "Build",
+              "close": {
+                "x": 469,
+                "y": 104,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_export-impl",
+              "current": false,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 469,
+                "y": 147,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": true,
+              "name": "Review",
+              "close": {
+                "x": 469,
+                "y": 191,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "3 agents open",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "3 agents3",
+            "box": {
+              "x": 408,
+              "y": 10,
+              "width": 88,
+              "height": 28
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_rounds-review",
+          "search": {
+            "x": 544,
+            "y": 8,
+            "width": 161,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          }
+        },
+        "06-alt-j": {
+          "window": {
+            "x": 256,
+            "y": 56,
+            "width": 1176,
+            "height": 836
+          },
+          "list": {
+            "x": 256,
+            "y": 56,
+            "width": 248,
+            "height": 836
+          },
+          "reader": {
+            "x": 504,
+            "y": 56,
+            "width": 928,
+            "height": 836
+          },
+          "shown": "conversation_rounds-build",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": true,
+              "name": "Build",
+              "close": {
+                "x": 469,
+                "y": 104,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_export-impl",
+              "current": false,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 469,
+                "y": 147,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": false,
+              "name": "Review",
+              "close": {
+                "x": 469,
+                "y": 191,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "3 agents open",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "3 agents3",
+            "box": {
+              "x": 408,
+              "y": 10,
+              "width": 88,
+              "height": 28
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_rounds-build",
+          "search": {
+            "x": 544,
+            "y": 8,
+            "width": 161,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          }
+        },
+        "07-closed-one": {
+          "window": {
+            "x": 256,
+            "y": 56,
+            "width": 1176,
+            "height": 836
+          },
+          "list": {
+            "x": 256,
+            "y": 56,
+            "width": 248,
+            "height": 836
+          },
+          "reader": {
+            "x": 504,
+            "y": 56,
+            "width": 928,
+            "height": 836
+          },
+          "shown": "conversation_export-impl",
+          "rows": [
+            {
+              "key": "conversation_export-impl",
+              "current": true,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 469,
+                "y": 104,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": false,
+              "name": "Review",
+              "close": {
+                "x": 469,
+                "y": 147,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "2 agents open",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "2 agents2",
+            "box": {
+              "x": 408,
+              "y": 10,
+              "width": 88,
+              "height": 28
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_export-impl",
+          "search": {
+            "x": 544,
+            "y": 8,
+            "width": 161,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          }
+        },
+        "08-closed-all": {
+          "window": null,
+          "list": null,
+          "reader": null,
+          "shown": null,
+          "rows": [],
+          "head": null,
+          "steps": [],
+          "pill": null,
+          "readerRing": null,
+          "focus": "DIV",
+          "search": {
+            "x": 544,
+            "y": 8,
+            "width": 161,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          }
+        }
+      },
+      "transitions": {
+        "open-build": {
+          "frames": 35,
+          "incoming": "conversation_rounds-build",
+          "layouts": 1,
+          "bareFrames": 8,
+          "emptyFrames": 0
+        },
+        "open-export": {
+          "frames": 31,
+          "incoming": "conversation_export-impl",
+          "layouts": 1,
+          "bareFrames": 7,
+          "emptyFrames": 0
+        },
+        "open-review": {
+          "frames": 39,
+          "incoming": "conversation_rounds-review",
+          "layouts": 1,
+          "bareFrames": 7,
+          "emptyFrames": 0
+        },
+        "switch-row": {
+          "frames": 29,
+          "incoming": "conversation_export-impl",
+          "layouts": 1,
+          "bareFrames": 0,
+          "emptyFrames": 0
+        },
+        "switch-next": {
+          "frames": 30,
+          "incoming": "conversation_rounds-review",
+          "layouts": 1,
+          "bareFrames": 0,
+          "emptyFrames": 0
+        },
+        "switch-alt-j": {
+          "frames": 28,
+          "incoming": "conversation_rounds-build",
+          "layouts": 1,
+          "bareFrames": 0,
+          "emptyFrames": 0
+        },
+        "close-one": {
+          "frames": 30,
+          "incoming": "conversation_export-impl",
+          "layouts": 1,
+          "bareFrames": 0,
+          "emptyFrames": 0
+        },
+        "close-all": {
+          "frames": 32,
+          "incoming": null,
+          "layouts": 0,
+          "bareFrames": 30,
+          "emptyFrames": 0
+        }
+      },
+      "frames": 316,
+      "pageErrors": []
+    },
+    "1000-en-dark": {
+      "steps": {
+        "01-board": {
+          "window": null,
+          "list": null,
+          "reader": null,
+          "shown": null,
+          "rows": [],
+          "head": null,
+          "steps": [],
+          "pill": null,
+          "readerRing": null,
+          "focus": "BODY",
+          "search": {
+            "x": 472,
+            "y": 8,
+            "width": 292,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          }
+        },
+        "02-one-stage": {
+          "window": {
+            "x": 8,
+            "y": 8,
+            "width": 984,
+            "height": 784
+          },
+          "list": {
+            "x": 8,
+            "y": 8,
+            "width": 220,
+            "height": 784
+          },
+          "reader": {
+            "x": 228,
+            "y": 8,
+            "width": 764,
+            "height": 784
+          },
+          "shown": "conversation_rounds-build",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": true,
+              "name": "Build",
+              "close": {
+                "x": 193,
+                "y": 56,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "1 agent open",
+          "steps": [],
+          "pill": {
+            "text": "1 agent1",
+            "box": {
+              "x": 404,
+              "y": 14,
+              "width": 41,
+              "height": 20
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_rounds-build",
+          "search": {
+            "x": 472,
+            "y": 8,
+            "width": 292,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          }
+        },
+        "03-board-behind": {
+          "window": null,
+          "list": null,
+          "reader": null,
+          "shown": null,
+          "rows": [],
+          "head": null,
+          "steps": [],
+          "pill": {
+            "text": "1 agent1",
+            "box": {
+              "x": 404,
+              "y": 14,
+              "width": 41,
+              "height": 20
+            },
+            "focused": true,
+            "ring": true,
+            "outline": "solid"
+          },
+          "readerRing": null,
+          "focus": "BUTTON",
+          "search": {
+            "x": 472,
+            "y": 8,
+            "width": 292,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          }
+        },
+        "03-closed-by-mouse": {
+          "window": null,
+          "list": null,
+          "reader": null,
+          "shown": null,
+          "rows": [],
+          "head": null,
+          "steps": [],
+          "pill": {
+            "text": "2 agents2",
+            "box": {
+              "x": 404,
+              "y": 14,
+              "width": 41,
+              "height": 20
+            },
+            "focused": true,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": null,
+          "focus": "BUTTON",
+          "search": {
+            "x": 472,
+            "y": 8,
+            "width": 292,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          }
+        },
+        "04-three-review": {
+          "window": {
+            "x": 8,
+            "y": 8,
+            "width": 984,
+            "height": 784
+          },
+          "list": {
+            "x": 8,
+            "y": 8,
+            "width": 220,
+            "height": 784
+          },
+          "reader": {
+            "x": 228,
+            "y": 8,
+            "width": 764,
+            "height": 784
+          },
+          "shown": "conversation_rounds-review",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": false,
+              "name": "Build",
+              "close": {
+                "x": 193,
+                "y": 56,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_export-impl",
+              "current": false,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 193,
+                "y": 99,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": true,
+              "name": "Review",
+              "close": {
+                "x": 193,
+                "y": 143,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "3 agents open",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "3 agents3",
+            "box": {
+              "x": 404,
+              "y": 14,
+              "width": 41,
+              "height": 20
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_rounds-review",
+          "search": {
+            "x": 472,
+            "y": 8,
+            "width": 292,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          },
+          "margins": {
+            "right": 0.7772482012112828,
+            "bottom": 1.311439857001527,
+            "left": 0.7772482012112828
+          }
+        },
+        "05-row": {
+          "window": {
+            "x": 8,
+            "y": 8,
+            "width": 984,
+            "height": 784
+          },
+          "list": {
+            "x": 8,
+            "y": 8,
+            "width": 220,
+            "height": 784
+          },
+          "reader": {
+            "x": 228,
+            "y": 8,
+            "width": 764,
+            "height": 784
+          },
+          "shown": "conversation_export-impl",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": false,
+              "name": "Build",
+              "close": {
+                "x": 193,
+                "y": 56,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_export-impl",
+              "current": true,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 193,
+                "y": 99,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": false,
+              "name": "Review",
+              "close": {
+                "x": 193,
+                "y": 143,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "3 agents open",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "3 agents3",
+            "box": {
+              "x": 404,
+              "y": 14,
+              "width": 41,
+              "height": 20
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_export-impl",
+          "search": {
+            "x": 472,
+            "y": 8,
+            "width": 292,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          }
+        },
+        "06-next": {
+          "window": {
+            "x": 8,
+            "y": 8,
+            "width": 984,
+            "height": 784
+          },
+          "list": {
+            "x": 8,
+            "y": 8,
+            "width": 220,
+            "height": 784
+          },
+          "reader": {
+            "x": 228,
+            "y": 8,
+            "width": 764,
+            "height": 784
+          },
+          "shown": "conversation_rounds-review",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": false,
+              "name": "Build",
+              "close": {
+                "x": 193,
+                "y": 56,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_export-impl",
+              "current": false,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 193,
+                "y": 99,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": true,
+              "name": "Review",
+              "close": {
+                "x": 193,
+                "y": 143,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "3 agents open",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "3 agents3",
+            "box": {
+              "x": 404,
+              "y": 14,
+              "width": 41,
+              "height": 20
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_rounds-review",
+          "search": {
+            "x": 472,
+            "y": 8,
+            "width": 292,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          }
+        },
+        "06-alt-j": {
+          "window": {
+            "x": 8,
+            "y": 8,
+            "width": 984,
+            "height": 784
+          },
+          "list": {
+            "x": 8,
+            "y": 8,
+            "width": 220,
+            "height": 784
+          },
+          "reader": {
+            "x": 228,
+            "y": 8,
+            "width": 764,
+            "height": 784
+          },
+          "shown": "conversation_rounds-build",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": true,
+              "name": "Build",
+              "close": {
+                "x": 193,
+                "y": 56,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_export-impl",
+              "current": false,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 193,
+                "y": 99,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": false,
+              "name": "Review",
+              "close": {
+                "x": 193,
+                "y": 143,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "3 agents open",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "3 agents3",
+            "box": {
+              "x": 404,
+              "y": 14,
+              "width": 41,
+              "height": 20
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_rounds-build",
+          "search": {
+            "x": 472,
+            "y": 8,
+            "width": 292,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          }
+        },
+        "07-closed-one": {
+          "window": {
+            "x": 8,
+            "y": 8,
+            "width": 984,
+            "height": 784
+          },
+          "list": {
+            "x": 8,
+            "y": 8,
+            "width": 220,
+            "height": 784
+          },
+          "reader": {
+            "x": 228,
+            "y": 8,
+            "width": 764,
+            "height": 784
+          },
+          "shown": "conversation_export-impl",
+          "rows": [
+            {
+              "key": "conversation_export-impl",
+              "current": true,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 193,
+                "y": 56,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": false,
+              "name": "Review",
+              "close": {
+                "x": 193,
+                "y": 99,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "2 agents open",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "2 agents2",
+            "box": {
+              "x": 404,
+              "y": 14,
+              "width": 41,
+              "height": 20
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_export-impl",
+          "search": {
+            "x": 472,
+            "y": 8,
+            "width": 292,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          }
+        },
+        "08-closed-all": {
+          "window": null,
+          "list": null,
+          "reader": null,
+          "shown": null,
+          "rows": [],
+          "head": null,
+          "steps": [],
+          "pill": null,
+          "readerRing": null,
+          "focus": "DIV",
+          "search": {
+            "x": 472,
+            "y": 8,
+            "width": 292,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          }
+        }
+      },
+      "transitions": {
+        "open-build": {
+          "frames": 33,
+          "incoming": "conversation_rounds-build",
+          "layouts": 1,
+          "bareFrames": 6,
+          "emptyFrames": 0
+        },
+        "open-export": {
+          "frames": 31,
+          "incoming": "conversation_export-impl",
+          "layouts": 1,
+          "bareFrames": 7,
+          "emptyFrames": 0
+        },
+        "open-review": {
+          "frames": 35,
+          "incoming": "conversation_rounds-review",
+          "layouts": 1,
+          "bareFrames": 6,
+          "emptyFrames": 0
+        },
+        "switch-row": {
+          "frames": 29,
+          "incoming": "conversation_export-impl",
+          "layouts": 1,
+          "bareFrames": 0,
+          "emptyFrames": 0
+        },
+        "switch-next": {
+          "frames": 28,
+          "incoming": "conversation_rounds-review",
+          "layouts": 1,
+          "bareFrames": 0,
+          "emptyFrames": 0
+        },
+        "switch-alt-j": {
+          "frames": 28,
+          "incoming": "conversation_rounds-build",
+          "layouts": 1,
+          "bareFrames": 0,
+          "emptyFrames": 0
+        },
+        "close-one": {
+          "frames": 29,
+          "incoming": "conversation_export-impl",
+          "layouts": 1,
+          "bareFrames": 0,
+          "emptyFrames": 0
+        },
+        "close-all": {
+          "frames": 30,
+          "incoming": null,
+          "layouts": 0,
+          "bareFrames": 28,
+          "emptyFrames": 0
+        }
+      },
+      "frames": 300,
+      "pageErrors": []
+    },
+    "1440-uk-dark": {
+      "steps": {
+        "01-board": {
+          "window": null,
+          "list": null,
+          "reader": null,
+          "shown": null,
+          "rows": [],
+          "head": null,
+          "steps": [],
+          "pill": null,
+          "readerRing": null,
+          "focus": "BODY",
+          "search": {
+            "x": 559,
+            "y": 8,
+            "width": 144,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          }
+        },
+        "02-one-stage": {
+          "window": {
+            "x": 256,
+            "y": 56,
+            "width": 1176,
+            "height": 836
+          },
+          "list": {
+            "x": 256,
+            "y": 56,
+            "width": 248,
+            "height": 836
+          },
+          "reader": {
+            "x": 504,
+            "y": 56,
+            "width": 928,
+            "height": 836
+          },
+          "shown": "conversation_rounds-build",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": true,
+              "name": "Build",
+              "close": {
+                "x": 469,
+                "y": 104,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "1 агент відкритий",
+          "steps": [],
+          "pill": {
+            "text": "1 агент1",
+            "box": {
+              "x": 423,
+              "y": 10,
+              "width": 80,
+              "height": 28
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_rounds-build",
+          "search": {
+            "x": 559,
+            "y": 8,
+            "width": 144,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          }
+        },
+        "03-board-behind": {
+          "window": null,
+          "list": null,
+          "reader": null,
+          "shown": null,
+          "rows": [],
+          "head": null,
+          "steps": [],
+          "pill": {
+            "text": "1 агент1",
+            "box": {
+              "x": 423,
+              "y": 10,
+              "width": 80,
+              "height": 28
+            },
+            "focused": true,
+            "ring": true,
+            "outline": "solid"
+          },
+          "readerRing": null,
+          "focus": "BUTTON",
+          "search": {
+            "x": 559,
+            "y": 8,
+            "width": 144,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          }
+        },
+        "03-closed-by-mouse": {
+          "window": null,
+          "list": null,
+          "reader": null,
+          "shown": null,
+          "rows": [],
+          "head": null,
+          "steps": [],
+          "pill": {
+            "text": "2 агенти2",
+            "box": {
+              "x": 423,
+              "y": 10,
+              "width": 88,
+              "height": 28
+            },
+            "focused": true,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": null,
+          "focus": "BUTTON",
+          "search": {
+            "x": 559,
+            "y": 8,
+            "width": 144,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          }
+        },
+        "04-three-review": {
+          "window": {
+            "x": 256,
+            "y": 56,
+            "width": 1176,
+            "height": 836
+          },
+          "list": {
+            "x": 256,
+            "y": 56,
+            "width": 248,
+            "height": 836
+          },
+          "reader": {
+            "x": 504,
+            "y": 56,
+            "width": 928,
+            "height": 836
+          },
+          "shown": "conversation_rounds-review",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": false,
+              "name": "Build",
+              "close": {
+                "x": 469,
+                "y": 104,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_export-impl",
+              "current": false,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 469,
+                "y": 147,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": true,
+              "name": "Review",
+              "close": {
+                "x": 469,
+                "y": 191,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "3 агенти відкриті",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "3 агенти3",
+            "box": {
+              "x": 423,
+              "y": 10,
+              "width": 88,
+              "height": 28
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_rounds-review",
+          "search": {
+            "x": 559,
+            "y": 8,
+            "width": 144,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          },
+          "margins": {
+            "right": 0.776535800866571,
+            "bottom": 1.3032656625729973,
+            "left": 0.776535800866571
+          }
+        },
+        "05-row": {
+          "window": {
+            "x": 256,
+            "y": 56,
+            "width": 1176,
+            "height": 836
+          },
+          "list": {
+            "x": 256,
+            "y": 56,
+            "width": 248,
+            "height": 836
+          },
+          "reader": {
+            "x": 504,
+            "y": 56,
+            "width": 928,
+            "height": 836
+          },
+          "shown": "conversation_export-impl",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": false,
+              "name": "Build",
+              "close": {
+                "x": 469,
+                "y": 104,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_export-impl",
+              "current": true,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 469,
+                "y": 147,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": false,
+              "name": "Review",
+              "close": {
+                "x": 469,
+                "y": 191,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "3 агенти відкриті",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "3 агенти3",
+            "box": {
+              "x": 423,
+              "y": 10,
+              "width": 88,
+              "height": 28
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_export-impl",
+          "search": {
+            "x": 559,
+            "y": 8,
+            "width": 144,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          }
+        },
+        "06-next": {
+          "window": {
+            "x": 256,
+            "y": 56,
+            "width": 1176,
+            "height": 836
+          },
+          "list": {
+            "x": 256,
+            "y": 56,
+            "width": 248,
+            "height": 836
+          },
+          "reader": {
+            "x": 504,
+            "y": 56,
+            "width": 928,
+            "height": 836
+          },
+          "shown": "conversation_rounds-review",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": false,
+              "name": "Build",
+              "close": {
+                "x": 469,
+                "y": 104,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_export-impl",
+              "current": false,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 469,
+                "y": 147,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": true,
+              "name": "Review",
+              "close": {
+                "x": 469,
+                "y": 191,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "3 агенти відкриті",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "3 агенти3",
+            "box": {
+              "x": 423,
+              "y": 10,
+              "width": 88,
+              "height": 28
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_rounds-review",
+          "search": {
+            "x": 559,
+            "y": 8,
+            "width": 144,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          }
+        },
+        "06-alt-j": {
+          "window": {
+            "x": 256,
+            "y": 56,
+            "width": 1176,
+            "height": 836
+          },
+          "list": {
+            "x": 256,
+            "y": 56,
+            "width": 248,
+            "height": 836
+          },
+          "reader": {
+            "x": 504,
+            "y": 56,
+            "width": 928,
+            "height": 836
+          },
+          "shown": "conversation_rounds-build",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": true,
+              "name": "Build",
+              "close": {
+                "x": 469,
+                "y": 104,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_export-impl",
+              "current": false,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 469,
+                "y": 147,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": false,
+              "name": "Review",
+              "close": {
+                "x": 469,
+                "y": 191,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "3 агенти відкриті",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "3 агенти3",
+            "box": {
+              "x": 423,
+              "y": 10,
+              "width": 88,
+              "height": 28
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_rounds-build",
+          "search": {
+            "x": 559,
+            "y": 8,
+            "width": 144,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          }
+        },
+        "07-closed-one": {
+          "window": {
+            "x": 256,
+            "y": 56,
+            "width": 1176,
+            "height": 836
+          },
+          "list": {
+            "x": 256,
+            "y": 56,
+            "width": 248,
+            "height": 836
+          },
+          "reader": {
+            "x": 504,
+            "y": 56,
+            "width": 928,
+            "height": 836
+          },
+          "shown": "conversation_export-impl",
+          "rows": [
+            {
+              "key": "conversation_export-impl",
+              "current": true,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 469,
+                "y": 104,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": false,
+              "name": "Review",
+              "close": {
+                "x": 469,
+                "y": 147,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "2 агенти відкриті",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "2 агенти2",
+            "box": {
+              "x": 423,
+              "y": 10,
+              "width": 88,
+              "height": 28
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_export-impl",
+          "search": {
+            "x": 559,
+            "y": 8,
+            "width": 144,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          }
+        },
+        "08-closed-all": {
+          "window": null,
+          "list": null,
+          "reader": null,
+          "shown": null,
+          "rows": [],
+          "head": null,
+          "steps": [],
+          "pill": null,
+          "readerRing": null,
+          "focus": "DIV",
+          "search": {
+            "x": 559,
+            "y": 8,
+            "width": 144,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 569,
+              "y": 412,
+              "width": 454,
+              "height": 207
+            },
+            "t-export": {
+              "x": 569,
+              "y": 154,
+              "width": 454,
+              "height": 246
+            }
+          }
+        }
+      },
+      "transitions": {
+        "open-build": {
+          "frames": 34,
+          "incoming": "conversation_rounds-build",
+          "layouts": 1,
+          "bareFrames": 7,
+          "emptyFrames": 0
+        },
+        "open-export": {
+          "frames": 31,
+          "incoming": "conversation_export-impl",
+          "layouts": 1,
+          "bareFrames": 7,
+          "emptyFrames": 0
+        },
+        "open-review": {
+          "frames": 38,
+          "incoming": "conversation_rounds-review",
+          "layouts": 1,
+          "bareFrames": 8,
+          "emptyFrames": 0
+        },
+        "switch-row": {
+          "frames": 30,
+          "incoming": "conversation_export-impl",
+          "layouts": 1,
+          "bareFrames": 0,
+          "emptyFrames": 0
+        },
+        "switch-next": {
+          "frames": 28,
+          "incoming": "conversation_rounds-review",
+          "layouts": 1,
+          "bareFrames": 0,
+          "emptyFrames": 0
+        },
+        "switch-alt-j": {
+          "frames": 28,
+          "incoming": "conversation_rounds-build",
+          "layouts": 1,
+          "bareFrames": 0,
+          "emptyFrames": 0
+        },
+        "close-one": {
+          "frames": 30,
+          "incoming": "conversation_export-impl",
+          "layouts": 1,
+          "bareFrames": 0,
+          "emptyFrames": 0
+        },
+        "close-all": {
+          "frames": 30,
+          "incoming": null,
+          "layouts": 0,
+          "bareFrames": 28,
+          "emptyFrames": 0
+        }
+      },
+      "frames": 311,
+      "pageErrors": []
+    },
+    "1000-uk-dark": {
+      "steps": {
+        "01-board": {
+          "window": null,
+          "list": null,
+          "reader": null,
+          "shown": null,
+          "rows": [],
+          "head": null,
+          "steps": [],
+          "pill": null,
+          "readerRing": null,
+          "focus": "BODY",
+          "search": {
+            "x": 487,
+            "y": 8,
+            "width": 277,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          }
+        },
+        "02-one-stage": {
+          "window": {
+            "x": 8,
+            "y": 8,
+            "width": 984,
+            "height": 784
+          },
+          "list": {
+            "x": 8,
+            "y": 8,
+            "width": 220,
+            "height": 784
+          },
+          "reader": {
+            "x": 228,
+            "y": 8,
+            "width": 764,
+            "height": 784
+          },
+          "shown": "conversation_rounds-build",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": true,
+              "name": "Build",
+              "close": {
+                "x": 193,
+                "y": 56,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "1 агент відкритий",
+          "steps": [],
+          "pill": {
+            "text": "1 агент1",
+            "box": {
+              "x": 419,
+              "y": 14,
+              "width": 41,
+              "height": 20
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_rounds-build",
+          "search": {
+            "x": 487,
+            "y": 8,
+            "width": 277,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          }
+        },
+        "03-board-behind": {
+          "window": null,
+          "list": null,
+          "reader": null,
+          "shown": null,
+          "rows": [],
+          "head": null,
+          "steps": [],
+          "pill": {
+            "text": "1 агент1",
+            "box": {
+              "x": 419,
+              "y": 14,
+              "width": 41,
+              "height": 20
+            },
+            "focused": true,
+            "ring": true,
+            "outline": "solid"
+          },
+          "readerRing": null,
+          "focus": "BUTTON",
+          "search": {
+            "x": 487,
+            "y": 8,
+            "width": 277,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          }
+        },
+        "03-closed-by-mouse": {
+          "window": null,
+          "list": null,
+          "reader": null,
+          "shown": null,
+          "rows": [],
+          "head": null,
+          "steps": [],
+          "pill": {
+            "text": "2 агенти2",
+            "box": {
+              "x": 419,
+              "y": 14,
+              "width": 41,
+              "height": 20
+            },
+            "focused": true,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": null,
+          "focus": "BUTTON",
+          "search": {
+            "x": 487,
+            "y": 8,
+            "width": 277,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          }
+        },
+        "04-three-review": {
+          "window": {
+            "x": 8,
+            "y": 8,
+            "width": 984,
+            "height": 784
+          },
+          "list": {
+            "x": 8,
+            "y": 8,
+            "width": 220,
+            "height": 784
+          },
+          "reader": {
+            "x": 228,
+            "y": 8,
+            "width": 764,
+            "height": 784
+          },
+          "shown": "conversation_rounds-review",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": false,
+              "name": "Build",
+              "close": {
+                "x": 193,
+                "y": 56,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_export-impl",
+              "current": false,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 193,
+                "y": 99,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": true,
+              "name": "Review",
+              "close": {
+                "x": 193,
+                "y": 143,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "3 агенти відкриті",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "3 агенти3",
+            "box": {
+              "x": 419,
+              "y": 14,
+              "width": 41,
+              "height": 20
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_rounds-review",
+          "search": {
+            "x": 487,
+            "y": 8,
+            "width": 277,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          },
+          "margins": {
+            "right": 0.7772482012112828,
+            "bottom": 1.311439857001527,
+            "left": 0.7772482012112828
+          }
+        },
+        "05-row": {
+          "window": {
+            "x": 8,
+            "y": 8,
+            "width": 984,
+            "height": 784
+          },
+          "list": {
+            "x": 8,
+            "y": 8,
+            "width": 220,
+            "height": 784
+          },
+          "reader": {
+            "x": 228,
+            "y": 8,
+            "width": 764,
+            "height": 784
+          },
+          "shown": "conversation_export-impl",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": false,
+              "name": "Build",
+              "close": {
+                "x": 193,
+                "y": 56,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_export-impl",
+              "current": true,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 193,
+                "y": 99,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": false,
+              "name": "Review",
+              "close": {
+                "x": 193,
+                "y": 143,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "3 агенти відкриті",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "3 агенти3",
+            "box": {
+              "x": 419,
+              "y": 14,
+              "width": 41,
+              "height": 20
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_export-impl",
+          "search": {
+            "x": 487,
+            "y": 8,
+            "width": 277,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          }
+        },
+        "06-next": {
+          "window": {
+            "x": 8,
+            "y": 8,
+            "width": 984,
+            "height": 784
+          },
+          "list": {
+            "x": 8,
+            "y": 8,
+            "width": 220,
+            "height": 784
+          },
+          "reader": {
+            "x": 228,
+            "y": 8,
+            "width": 764,
+            "height": 784
+          },
+          "shown": "conversation_rounds-review",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": false,
+              "name": "Build",
+              "close": {
+                "x": 193,
+                "y": 56,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_export-impl",
+              "current": false,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 193,
+                "y": 99,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": true,
+              "name": "Review",
+              "close": {
+                "x": 193,
+                "y": 143,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "3 агенти відкриті",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "3 агенти3",
+            "box": {
+              "x": 419,
+              "y": 14,
+              "width": 41,
+              "height": 20
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_rounds-review",
+          "search": {
+            "x": 487,
+            "y": 8,
+            "width": 277,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          }
+        },
+        "06-alt-j": {
+          "window": {
+            "x": 8,
+            "y": 8,
+            "width": 984,
+            "height": 784
+          },
+          "list": {
+            "x": 8,
+            "y": 8,
+            "width": 220,
+            "height": 784
+          },
+          "reader": {
+            "x": 228,
+            "y": 8,
+            "width": 764,
+            "height": 784
+          },
+          "shown": "conversation_rounds-build",
+          "rows": [
+            {
+              "key": "conversation_rounds-build",
+              "current": true,
+              "name": "Build",
+              "close": {
+                "x": 193,
+                "y": 56,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_export-impl",
+              "current": false,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 193,
+                "y": 99,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": false,
+              "name": "Review",
+              "close": {
+                "x": 193,
+                "y": 143,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "3 агенти відкриті",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "3 агенти3",
+            "box": {
+              "x": 419,
+              "y": 14,
+              "width": 41,
+              "height": 20
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_rounds-build",
+          "search": {
+            "x": 487,
+            "y": 8,
+            "width": 277,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          }
+        },
+        "07-closed-one": {
+          "window": {
+            "x": 8,
+            "y": 8,
+            "width": 984,
+            "height": 784
+          },
+          "list": {
+            "x": 8,
+            "y": 8,
+            "width": 220,
+            "height": 784
+          },
+          "reader": {
+            "x": 228,
+            "y": 8,
+            "width": 764,
+            "height": 784
+          },
+          "shown": "conversation_export-impl",
+          "rows": [
+            {
+              "key": "conversation_export-impl",
+              "current": true,
+              "name": "Implementer: simplify the export settings",
+              "close": {
+                "x": 193,
+                "y": 56,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "key": "conversation_rounds-review",
+              "current": false,
+              "name": "Review",
+              "close": {
+                "x": 193,
+                "y": 99,
+                "width": 28,
+                "height": 28
+              }
+            }
+          ],
+          "head": "2 агенти відкриті",
+          "steps": [
+            {
+              "step": "previous",
+              "fromRight": 36,
+              "fromTop": 6
+            },
+            {
+              "step": "next",
+              "fromRight": 6,
+              "fromTop": 6
+            }
+          ],
+          "pill": {
+            "text": "2 агенти2",
+            "box": {
+              "x": 419,
+              "y": 14,
+              "width": 41,
+              "height": 20
+            },
+            "focused": false,
+            "ring": false,
+            "outline": "none"
+          },
+          "readerRing": false,
+          "focus": "conversation_export-impl",
+          "search": {
+            "x": 487,
+            "y": 8,
+            "width": 277,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          }
+        },
+        "08-closed-all": {
+          "window": null,
+          "list": null,
+          "reader": null,
+          "shown": null,
+          "rows": [],
+          "head": null,
+          "steps": [],
+          "pill": null,
+          "readerRing": null,
+          "focus": "DIV",
+          "search": {
+            "x": 487,
+            "y": 8,
+            "width": 277,
+            "height": 32
+          },
+          "cards": {
+            "t-rounds": {
+              "x": 273,
+              "y": 406,
+              "width": 702,
+              "height": 207
+            },
+            "t-export": {
+              "x": 273,
+              "y": 160,
+              "width": 702,
+              "height": 234
+            }
+          }
+        }
+      },
+      "transitions": {
+        "open-build": {
+          "frames": 33,
+          "incoming": "conversation_rounds-build",
+          "layouts": 1,
+          "bareFrames": 6,
+          "emptyFrames": 0
+        },
+        "open-export": {
+          "frames": 31,
+          "incoming": "conversation_export-impl",
+          "layouts": 1,
+          "bareFrames": 7,
+          "emptyFrames": 0
+        },
+        "open-review": {
+          "frames": 38,
+          "incoming": "conversation_rounds-review",
+          "layouts": 1,
+          "bareFrames": 8,
+          "emptyFrames": 0
+        },
+        "switch-row": {
+          "frames": 29,
+          "incoming": "conversation_export-impl",
+          "layouts": 1,
+          "bareFrames": 0,
+          "emptyFrames": 0
+        },
+        "switch-next": {
+          "frames": 30,
+          "incoming": "conversation_rounds-review",
+          "layouts": 1,
+          "bareFrames": 0,
+          "emptyFrames": 0
+        },
+        "switch-alt-j": {
+          "frames": 27,
+          "incoming": "conversation_rounds-build",
+          "layouts": 1,
+          "bareFrames": 0,
+          "emptyFrames": 0
+        },
+        "close-one": {
+          "frames": 30,
+          "incoming": "conversation_export-impl",
+          "layouts": 1,
+          "bareFrames": 0,
+          "emptyFrames": 0
+        },
+        "close-all": {
+          "frames": 30,
+          "incoming": null,
+          "layouts": 0,
+          "bareFrames": 28,
+          "emptyFrames": 0
+        }
+      },
+      "frames": 305,
+      "pageErrors": []
+    }
+  },
+  "failures": []
+}

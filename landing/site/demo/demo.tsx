@@ -627,7 +627,8 @@ async function navigateView(view: string) {
   }
   if (view === "conversation") {
     location.hash = `#c=${encodeURIComponent(`conversation_${step >= 3 ? "refunds-builder" : "webhook-retries"}`)}`;
-    await press(() => byLabel(label("kanban.readerFull")));
+    /* The link opens the conversation in the agent window. */
+    await waitFor(() => document.querySelector("[data-agent-window] [data-kanban-reader]"));
     /* Unfold the builder's tool calls, so the edit reads as a diff and the test run shows its output. */
     await waitFor(() => document.querySelector("[data-tool-row]"));
     for (const details of document.querySelectorAll<HTMLDetailsElement>("details:not([open])")) {

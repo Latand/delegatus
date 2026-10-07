@@ -704,7 +704,7 @@ body {
    whatever its specificity — which is why the mark reads on a card and on a
    reader pane alike. With the blink refused there is no animation to do that,
    and a surface that dresses itself more specifically than an attribute
-   (`.kb .reader-full .reader.conv` carries four classes) simply kept its own
+   (`.kb .agent-window .reader.conv` carries four classes) simply kept its own
    shadow: the operator was handed to a pane with nothing lit on it. Weight is
    the whole of the problem, so it is settled here rather than by counting
    attribute repetitions until the next surface out-dresses them — and it

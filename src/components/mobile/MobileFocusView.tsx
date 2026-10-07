@@ -18,6 +18,7 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import { useLocale } from "@/lib/i18n";
 import { conversationFrameRole } from "@/lib/roleFrames";
 import type { BoardTask } from "@/lib/tasks/types";
+import { firstLineTitle } from "@/lib/tasks/helpers";
 import type { FileEntry } from "@/lib/types";
 
 import { BranchPane } from "@/components/BranchPane";
@@ -81,6 +82,8 @@ const SWIPE_MIN_X = 56;
 export const SWIPE_ZONE = "[data-mobile2-bar], [data-mobile2-dock]";
 /** How long the title cell's end-of-list bump runs (§5). */
 export const BUMP_MS = 200;
+/** How long the bar names the other task a swipe landed in. */
+export const TASK_CHANGE_MS = 3000;
 const EMPTY_PATHS: ReadonlySet<string> = new Set();
 const EMPTY_TASKS: readonly FileEntry[] = [];
 
@@ -365,6 +368,33 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
     [onOpenTask, activeFile, relatedTasksByPath],
   );
   const backgroundTasks = activeNode?.tasks ?? EMPTY_TASKS;
+  /* The task the conversation works for: its pipeline's task, else the task it
+     is assigned to. A swipe walks every agent of the project, so one that lands
+     on another task's agent says so in the bar for a moment, in the meta line's
+     place (docs/design/agent-window.md, Phone). */
+  const activeTask = useMemo(() => {
+    const board = sheetTasks ?? tasks;
+    const id = stage?.pipeline.taskIds?.[0];
+    const task = (id ? board.find((entry) => entry.id === id) : undefined) ?? (activeFile ? relatedTasksByPath.get(activeFile.path)?.[0]?.task : undefined);
+    if (task) return { id: task.id, title: firstLineTitle(task.text) };
+    return stage?.pipeline.task ? { id: `pipeline:${stage.pipeline.id}`, title: firstLineTitle(stage.pipeline.task) } : null;
+  }, [stage, sheetTasks, tasks, activeFile, relatedTasksByPath]);
+  const swiped = useRef(false);
+  const lastTask = useRef<string | null>(null);
+  const [taskChange, setTaskChange] = useState<{ key: string; title: string } | null>(null);
+  useEffect(() => {
+    const was = lastTask.current;
+    lastTask.current = activeTask?.id ?? null;
+    if (!swiped.current) return;
+    swiped.current = false;
+    /* eslint-disable-next-line react-hooks/set-state-in-effect -- the swipe landed on another task's agent */
+    if (activeTask && resolvedKey && was !== activeTask.id) setTaskChange({ key: resolvedKey, title: activeTask.title });
+  }, [activeTask, resolvedKey]);
+  useEffect(() => {
+    if (!taskChange) return;
+    const timer = window.setTimeout(() => setTaskChange(null), TASK_CHANGE_MS);
+    return () => window.clearTimeout(timer);
+  }, [taskChange]);
   /* A sheet whose contents are gone — the last task finished, the pinned task
      was closed, the swipe moved to a conversation with neither — leaves with them. */
   const orphanSheet = (navState.sheet === "pinned" && pinnedRelations.length === 0) || (navState.sheet === "background" && backgroundTasks.length === 0);
@@ -511,6 +541,7 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
     /* A step that lands ends whatever bump the last one at the edge started. */
     nav.clearBump();
     setBumpPulse(null);
+    swiped.current = true;
     switchTo(target, false);
   }, [switchEntries, resolvedKey, nav, switchTo]);
 
@@ -559,6 +590,7 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
         stage={stage}
         bump={bumpPulse?.side ?? null}
         renamed={renamed && renamed.path === activeFile.path ? renamed.title : null}
+        taskChange={taskChange && taskChange.key === resolvedKey ? taskChange.title : null}
       />
     </>
   ) : activeEntry ? (
@@ -893,7 +925,7 @@ function ChatAccountTag({ file }: { file: FileEntry }) {
  * operator must not read as a running one because its own word ran out of room
  * (2026-08 audit findings 3 and 4).
  */
-export function ChatBarTitle({ file, offline, stage, bump, renamed = null }: { file: FileEntry; offline: boolean; stage: StagePosition | null; bump: "left" | "right" | null; renamed?: string | null }) {
+export function ChatBarTitle({ file, offline, stage, bump, renamed = null, taskChange = null }: { file: FileEntry; offline: boolean; stage: StagePosition | null; bump: "left" | "right" | null; renamed?: string | null; taskChange?: string | null }) {
   const { t } = useLocale();
   const bits = chatStateBits(t, file, { offline });
   /* While the server is being reconnected (#2071 D7) the quiet reconnecting
@@ -913,7 +945,11 @@ export function ChatBarTitle({ file, offline, stage, bump, renamed = null }: { f
         </span>
         <ChatAccountTag file={file} />
       </span>
-      {reach.kind === "reconnecting" ? <ReachLine reach={reach} /> : (
+      {reach.kind === "reconnecting" ? <ReachLine reach={reach} /> : taskChange ? (
+        <span data-mobile2-chat-task-change="" className="min-w-0 truncate text-label font-medium leading-tight text-secondary">
+          {t("mobile2.chat.otherTask", { title: taskChange })}
+        </span>
+      ) : (
       <span className="flex min-w-0 items-center gap-1 overflow-hidden text-label font-medium leading-tight text-secondary">
         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${CHAT_TONE_DOT[bits.tone]} ${bits.key === "working" ? "animate-pulse motion-reduce:animate-none" : ""}`} aria-hidden />
         <span data-mobile2-chat-state className={`shrink-0 whitespace-nowrap ${CHAT_TONE_TEXT[bits.tone]}`}>{bits.phrase}</span>

@@ -306,6 +306,52 @@ content. Frames and videos are under
 `evidence/agent-window/`. The frames are in the light theme only; the
 specification names no dark theme.
 
+## Built: Variant 1
+
+The operator chose Variant 1, «Список ліворуч у вікні», on 2026-10-07 around
+22:00 Kyiv, with no comment. What was built differs from the prototype text
+above where the critique of the prototypes (lane 23485fd0, attempt 2) asked:
+
+- **The header's pill has a slot of its own.** The slot keeps one width and
+  height (104 × 28 px) whether or not anything is open, so the first open and
+  the last close move nothing in the header, on one row or wrapped at 1000 px.
+  The search field does not give up width. The pill never reads «0»: it is
+  drawn only with an agent open. While the window is open the pill stays in
+  its slot under the dimmed header, pressed (`aria-expanded`).
+- **A first open waits for the conversation.** The agent coming in reads in
+  a slot of its own inside the window, laid out on screen and not drawn
+  (`visibility: hidden`, so the pane's IntersectionObserver lets its feed
+  load). A first open lays the whole window out the same way and draws it
+  once the feed has rows (or its empty or error state) on two frames running,
+  or after 1.2 s whatever it holds. A switch keeps the agent on screen until
+  the next one is ready. There is no fade. The slots are keyed by agent, so
+  the incoming slot becomes the shown one without moving the conversation.
+- **Closing one agent never takes the window off the screen.** The window's
+  agent and the reader's agent change in the same commit, and the neighbour
+  was already laid out in the park, so no frame shows the board.
+- **‹ › only with two or more agents,** at the right end of the list's head at
+  every width.
+- **The margins hold no board text.** The board region under the window is a
+  flat field in the canvas colour, and the scrim over the whole page dims it,
+  the header and the sidebar the same.
+- **The focus ring is the keyboard's.** The reader takes focus with
+  `:focus-visible` only, and closing the window with the mouse leaves the pill
+  focused without a ring.
+- **Opening a stage from the Stages sheet, a `#c=` link, a handoff `open`, a
+  launched draft and a conversation no card holds** all open the window. A
+  handoff `show`, a pipeline link and anything else that goes to a card close
+  it. A project switch leaves the window behind.
+- **The phone names the other task.** The phone's swipe still walks every
+  agent of the project. A swipe that lands on another task's agent shows
+  «Інша задача: …» («Another task: …») in the bar's meta line for three
+  seconds, the way the reconnecting line takes that place.
+
+Rendered evidence: the kanban driver's «the agent window» block
+(`evidence/agent-window/built.json`, `edges.json`) and the phone driver's
+«agent window on the phone» case (`evidence/agent-window/phone.json`), with
+frames and a frame-by-frame video per face under
+`~/Pictures/delegatus-review/agent-window/variant-1-built/`.
+
 ## Deferred: not currently justified
 
 - **Variant 3, the carousel with neighbours.** Dropped after review: its

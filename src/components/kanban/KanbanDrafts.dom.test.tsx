@@ -249,8 +249,8 @@ test("a draft is drawn inside the card that holds it, is never sent to Conversat
   expect(columnOf(alone)).toBe("assigned");
   /* A shelf column holding a draft widens to reading width. */
   expect(host.querySelector(".column[data-status=inbox]")?.classList.contains("reading")).toBe(true);
-  /* The open-agents rail already stands beside the columns, with the draft in it, so the launch does not insert it. */
-  expect(host.querySelector('.open-rail [data-open-agent^="draft::"]')).not.toBeNull();
+  /* A draft is not an open agent until it launches: no pill for it in the header. */
+  expect(host.querySelector("[data-open-agents-pill]")).toBeNull();
 
   click(onA!.querySelector(`button[aria-label="${translate("en", "draft.dismiss")}"]`));
   expect(closed).toEqual(["draft-on-a"]);
@@ -263,8 +263,8 @@ test("crossing a width breakpoint keeps a card's draft pane mounted", async () =
   expect(pane).not.toBeNull();
   expect(host.querySelector("[data-kanban-board]")?.getAttribute("data-mode")).toBe("wide");
 
-  /* The rail a draft opens takes its strip out of the width, so 1440 reads as narrow while it stands. */
-  for (const [width, mode] of [[1280, "narrow"], [900, "scroll"], [700, "tabs"], [1440, "narrow"]] as const) {
+  /* Nothing beside the columns takes their width: 1440 reads as wide with a draft open. */
+  for (const [width, mode] of [[1280, "narrow"], [900, "scroll"], [700, "tabs"], [1440, "wide"]] as const) {
     boardWidth = width;
     flushSync(() => { for (const callback of resizeCallbacks) callback(); });
     expect(host.querySelector("[data-kanban-board]")?.getAttribute("data-mode")).toBe(mode);
