@@ -132,9 +132,15 @@ export function KanbanSeat({ project, projectName, projectCwd, files, tasks, boa
     });
     observer.observe(section, { subtree: true, childList: true, attributes: true, attributeFilter: ["style"] });
     window.addEventListener("resize", measure);
+    /* The seat eases its height, so the commit that sets a new height is
+       measured against the old one: what the form lacks at the grip's lower
+       stop is known once the height has arrived. */
+    const arrived = (event: TransitionEvent) => { if (event.target === section && event.propertyName === "height") measure(); };
+    section.addEventListener("transitionend", arrived);
     return () => {
       observer.disconnect();
       window.removeEventListener("resize", measure);
+      section.removeEventListener("transitionend", arrived);
       section.style.removeProperty("--seat-grow");
     };
   }, [side, seat.collapsed, height, topWidth]);

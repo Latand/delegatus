@@ -1154,6 +1154,10 @@ describe("#1695 K3 conversations inside cards", () => {
       dock: Boolean(document.querySelector("[data-orchestrator-dock]")),
       conversations: document.querySelectorAll("[data-orchestrator-conversation]").length,
       composerHeight: Math.round(seat?.querySelector("[data-orchestrator-conversation] form")?.getBoundingClientRect().height ?? 0),
+      /* The height the grip set, the transcript that yields to its floor, and what the form cannot show of itself (#2533). */
+      setHeight: parseFloat(seat?.style.getPropertyValue("--seat-h") ?? "") || null,
+      transcriptHeight: Math.round(seat?.querySelector("[data-orchestrator-conversation] [data-composer-yields]")?.getBoundingClientRect().height ?? 0),
+      formCut: (() => { const form = seat?.querySelector<HTMLElement>("[data-orchestrator-conversation] form"); return form ? form.scrollHeight - form.clientHeight : 0; })(),
       /* Transcript rows the seat actually shows: at least 12 px of each inside its scroller. */
       transcriptRows: (() => {
         const scroller = seat?.querySelector<HTMLElement>("[data-orchestrator-conversation] [data-log-feed-scroller]");
@@ -1412,6 +1416,13 @@ describe("#1695 K3 conversations inside cards", () => {
         };
         await page.evaluate(() => { document.querySelector<HTMLElement>(".kb-page")!.scrollTop = 0; });
         await dismissToast();
+        /* The seat eases its height, during a drag as well: a reading waits for
+           the seat's own transition to end, which a loaded machine stretches
+           past any fixed pause. */
+        const settledSeat = async (target: Page) => {
+          await target.waitForFunction(() => !(document.querySelector("[data-kanban-seat]")?.getAnimations() ?? []).some((animation) => animation instanceof CSSTransition), undefined, { timeout: 10_000 });
+          return seatGeometry(target);
+        };
         const before = await seatGeometry(page);
         const grip = await page.locator('[data-seat-grip=""]').boundingBox();
         if (!grip) throw new Error("seat grip not rendered");
@@ -1423,22 +1434,22 @@ describe("#1695 K3 conversations inside cards", () => {
         await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2 - 100, { steps: 4 });
         await page.mouse.up();
         await page.waitForTimeout(200);
-        const dragged = await seatGeometry(page);
+        const dragged = await settledSeat(page);
         await page.reload();
         await boardReady(page);
-        const afterReload = await seatGeometry(page);
+        const afterReload = await settledSeat(page);
         await dismissToast();
         await page.focus('[data-seat-grip=""]');
         await page.keyboard.press("ArrowUp");
         await page.waitForTimeout(200);
-        const keyed = await seatGeometry(page);
+        const keyed = await settledSeat(page);
         await page.click("[data-seat-collapse]");
         await page.waitForTimeout(200);
-        const collapsed = await seatGeometry(page);
+        const collapsed = await settledSeat(page);
         await page.screenshot({ path: path.join(OUT, "flow-seat-collapsed.png") });
         await page.click("[data-orchestrator-toggle]");
         await page.waitForTimeout(200);
-        const expanded = await seatGeometry(page);
+        const expanded = await settledSeat(page);
         const shrinkGrip = await page.locator('[data-seat-grip=""]').boundingBox();
         if (!shrinkGrip) throw new Error("seat grip not rendered after expanding");
         await page.mouse.move(shrinkGrip.x + shrinkGrip.width / 2, shrinkGrip.y + shrinkGrip.height / 2);
@@ -1447,10 +1458,15 @@ describe("#1695 K3 conversations inside cards", () => {
         await page.mouse.move(shrinkGrip.x + shrinkGrip.width / 2, shrinkGrip.y - 600, { steps: 6 });
         await page.mouse.up();
         await page.waitForTimeout(200);
-        const floor = await seatGeometry(page);
+        const floor = await settledSeat(page);
         await page.screenshot({ path: path.join(OUT, "flow-seat-floor.png") });
-        const seatFlow = { before: before.height, dragged: dragged.height, afterReload: afterReload.height, keyed: keyed.height, collapsed: { height: collapsed.height, flag: collapsed.collapsed, conversations: collapsed.conversations }, expanded: { flag: expanded.collapsed, dock: expanded.dock }, floor: { height: floor.height, composer: floor.composerHeight } };
-        if (Math.abs(floor.height - 160) > 1) failures.push(`seat: dragged all the way up it is ${floor.height}px, floor 160`);
+        const seatFlow = { before: before.height, dragged: dragged.height, afterReload: afterReload.height, keyed: keyed.height, collapsed: { height: collapsed.height, flag: collapsed.collapsed, conversations: collapsed.conversations }, expanded: { flag: expanded.collapsed, dock: expanded.dock }, floor: { height: floor.height, set: floor.setHeight, transcript: floor.transcriptHeight, formCut: floor.formCut, composer: floor.composerHeight } };
+        /* The grip's lower stop sets 160 px; since #2533 the seat adds what
+           the transcript's 72 px floor and the whole form need above that,
+           so the form is never drawn cut there. */
+        if (Math.abs((floor.setHeight ?? 0) - 160) > 1) failures.push(`seat: dragged all the way up it is set to ${floor.setHeight}px, floor 160`);
+        if (Math.abs(floor.transcriptHeight - 72) > 1) failures.push(`seat: at the floor the transcript is ${floor.transcriptHeight}px, its floor 72`);
+        if (floor.formCut > 1) failures.push(`seat: at the floor the form hides ${floor.formCut}px of itself (seat ${floor.height}px)`);
         if (Math.abs(before.height - dragged.height - 100) > 3) failures.push(`seat: dragging the grip 100px up changed the height by ${dragged.height - before.height}px`);
         if (Math.abs(afterReload.height - dragged.height) > 1) failures.push(`seat: height after reload ${afterReload.height}, dragged to ${dragged.height}`);
         if (Math.abs(afterReload.height - keyed.height - 40) > 1) failures.push(`seat: ArrowUp changed the height by ${afterReload.height - keyed.height}px`);
