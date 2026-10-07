@@ -233,6 +233,41 @@ test.skipIf(!userManager)("a stopped step's own work scope goes with it, helpers
     await neighbour.exited;
   }
 }, 40_000);
+test("a root that refuses the stop is reported within the cleanup allowance, and the hook exits without waiting for it", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "gate-refused-")); roots.push(dir);
+  const harness = path.join(dir, "harness.ts"), output = path.join(dir, "stderr"), rootPid = path.join(dir, "root.pid");
+  // The hook's own ending, with SIGKILL refused for the step's root alone: the
+  // stand-in for a child stuck in uninterruptible I/O.
+  writeFileSync(harness, `import { readFileSync } from "node:fs";
+import { endHook, runSteps } from ${JSON.stringify(path.join(root, "scripts/local-gate.ts"))};
+const kill = process.kill.bind(process);
+process.kill = ((pid: number, signal?: string | number) => {
+  if (signal === "SIGKILL" && String(pid) === readFileSync(${JSON.stringify(rootPid)}, "utf8").trim()) throw Object.assign(new Error("refused"), { code: "EPERM" });
+  return kill(pid, signal);
+}) as typeof process.kill;
+const startedAt = Date.now();
+await runSteps("pre-push", [{ name: "touched tests", command: [] }], { root: ${JSON.stringify(dir)}, deadline: { at: startedAt + 300, startedAt }, logDir: ${JSON.stringify(dir)}, say: () => {},
+  prepare: () => ({ command: ["bash", "-c", "echo $$ > ${rootPid}; exec sleep 9"], env: process.env }) }).catch((error: unknown) => endHook("pre-push", error));
+`);
+  const started = performance.now();
+  const hook = Bun.spawn({ cmd: [process.execPath, harness], cwd: dir, stdio: ["ignore", "ignore", Bun.file(output)] });
+  const code = await hook.exited;
+  const elapsed = performance.now() - started;
+  const pid = Number(readFileSync(rootPid, "utf8"));
+  try {
+    // The deadline, the three-second cleanup allowance and Bun's start-up; never the child's own nine seconds.
+    expect(elapsed).toBeLessThan(5_500);
+    expect(code).toBe(1);
+    const said = readFileSync(output, "utf8");
+    expect(said).toContain(`pre-push: "touched tests" was stopped at the push deadline, but 1 of its processes (${pid}) are still running; stop them before pushing again; gate failed`);
+    // A refusal, never a hook the budget stopped: the publication must not retry beside the survivor.
+    const { hookBudgetStop } = await import("../src/lib/pipelines/git");
+    expect(hookBudgetStop(said)).toBeNull();
+    expect(alive(pid), "the survivor really was left running").toBeTrue();
+  } finally {
+    try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+  }
+}, 30_000);
 test("a native Codex group names its unfinished or failed version, never a member that passed", async () => {
   const { hookBudgetStop, publicationFailureCause, publicationInterruptionCause } = await import("../src/lib/pipelines/git");
   const dir = mkdtempSync(path.join(tmpdir(), "hook-group-")); roots.push(dir);

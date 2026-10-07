@@ -318,30 +318,57 @@ function cgroupOf(pid: number | "self"): string | null {
   try { return readFileSync(`/proc/${pid}/cgroup`, "utf8").split("\n").find(line => line.startsWith("0::"))?.slice(3) ?? null; }
   catch { return null; }
 }
+/** Only ESRCH proves a process gone. /proc, where there is one, also tells a
+    zombie (exited, waiting to be reaped) from a running process; unreadable
+    metadata proves nothing, so the process counts as running. */
 function live(pid: number): boolean {
-  try { return !/^\d+ \(.*\) Z/.test(readFileSync(`/proc/${pid}/stat`, "utf8")); } catch { return false; }
+  try { process.kill(pid, 0); } catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
+  try { return !/^\d+ \(.*\) Z/.test(readFileSync(`/proc/${pid}/stat`, "utf8")); } catch { return true; }
 }
-/** Every process that inherited this step's token, wherever it was reparented. */
-function holders(token: string): number[] {
+function procEntries(): number[] | null {
+  try { return readdirSync("/proc").filter(name => /^\d+$/.test(name)).map(Number); } catch { return null; }
+}
+/** `ps` where there is no /proc (macOS); null when it cannot be read either. */
+function ps(columns: string[], environment = false): string[] | null {
+  const args = ["-A", "-ww", ...columns.flatMap(column => ["-o", `${column}=`])];
+  // BSD ps appends the environment with -E, procps with the BSD-style `e`.
+  if (environment) args.push(process.platform === "linux" ? "e" : "-E");
+  const result = spawnSync("ps", args, { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
+  return result.status === 0 ? result.stdout.split("\n").filter(line => line.trim()) : null;
+}
+/** Every process that inherited this step's token, wherever it was reparented;
+    null when no process table could be read. */
+function holders(token: string): number[] | null {
+  const entries = procEntries();
+  if (!entries) {
+    const mark = ` ${STEP_TOKEN}=${token}`;
+    return ps(["pid", "command"], true)?.flatMap(line => {
+      const at = line.indexOf(mark), end = line.charAt(at + mark.length);
+      return at >= 0 && (end === "" || end === " ") ? [Number(line.trim().split(/\s+/)[0])] : [];
+    }) ?? null;
+  }
   const mark = `\0${STEP_TOKEN}=${token}\0`;
-  let entries: string[] = [];
-  try { entries = readdirSync("/proc").filter(name => /^\d+$/.test(name)); } catch { return []; }
-  return entries.map(Number).filter(pid => {
+  return entries.filter(pid => {
     try { return `\0${readFileSync(`/proc/${pid}/environ`, "latin1")}`.includes(mark); } catch { return false; }
   });
 }
 function scopeMembers(scope: string): number[] {
   try { return readFileSync(path.join("/sys/fs/cgroup", scope, "cgroup.procs"), "utf8").split("\n").filter(Boolean).map(Number); } catch { return []; }
 }
-function descendants(root: number): number[] {
+/** The tree under `root`; null when no process table could be read. */
+function descendants(root: number): number[] | null {
   const children = new Map<number, number[]>();
-  let entries: string[] = [];
-  try { entries = readdirSync("/proc").filter(name => /^\d+$/.test(name)); } catch { return []; }
-  for (const name of entries) {
+  const adopt = (pid: number, parent: number) => children.set(parent, [...(children.get(parent) ?? []), pid]);
+  const entries = procEntries();
+  if (!entries) {
+    const table = ps(["pid", "ppid"]);
+    if (!table) return null;
+    for (const line of table) { const [pid, parent] = line.trim().split(/\s+/).map(Number); adopt(pid!, parent!); }
+  }
+  for (const pid of entries ?? []) {
     try {
-      const stat = readFileSync(`/proc/${name}/stat`, "utf8");
-      const parent = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]);
-      children.set(parent, [...(children.get(parent) ?? []), Number(name)]);
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      adopt(pid, Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]));
     } catch { /* exited while listed */ }
   }
   const found: number[] = [];
@@ -354,30 +381,41 @@ const STEP_TOKEN = "LLV_GATE_STEP";
     inherited its token, and every transient scope those run in. The work can
     run in a run-*.scope the step's first PID is not in (gate-slot under a
     wrapper or nested in the step), so scopes are read from every member, and
-    this hook's own cgroup is never one of them. Resolves with what survived,
-    or null once nothing did. */
+    this hook's own cgroup is never one of them. Resolves within three
+    seconds with what survived, or null once nothing did. A process counts as
+    gone only when that is proven: when no process table can be read, the
+    step's helpers cannot be found, and that is what it resolves with. */
 async function stopStep(pid: number, token: string): Promise<string | null> {
   const own = cgroupOf("self");
-  const scopes = new Set<string>();
+  const scopes = new Set<string>(), signalled = new Set<number>([pid]);
+  let blind = false;
   const sweep = () => {
-    const members = [...new Set([pid, ...descendants(pid), ...holders(token)])].filter(live);
+    const tree = descendants(pid), inherited = holders(token);
+    if (!tree || !inherited) blind = true;
+    const members = [...new Set([pid, ...tree ?? [], ...inherited ?? []])].filter(live);
     for (const member of members) {
+      signalled.add(member);
       const scope = cgroupOf(member);
       if (scope && scope !== own && scope.endsWith(".scope")) scopes.add(scope);
     }
-    for (const member of members) { try { process.kill(member, "SIGKILL"); } catch { /* already gone */ } }
+    for (const member of members) { try { process.kill(member, "SIGKILL"); } catch { /* already gone, or refused: still counted below */ } }
     // Reaches helpers that left the tree and dropped the token as well.
     for (const scope of scopes) { try { writeFileSync(path.join("/sys/fs/cgroup", scope, "cgroup.kill"), "1"); } catch { /* gone, or no cgroup.kill */ } }
   };
   sweep();
-  const left = () => [...new Set([pid, ...holders(token), ...[...scopes].flatMap(scopeMembers)])].filter(live);
-  for (let attempt = 1; attempt <= 60; attempt++) {
+  const left = () => {
+    const inherited = holders(token);
+    if (!inherited) blind = true;
+    return [...new Set([...signalled, ...inherited ?? [], ...[...scopes].flatMap(scopeMembers)])].filter(live);
+  };
+  let survivors = left();
+  for (let attempt = 1; attempt <= 60 && survivors.length; attempt++) {
     await Bun.sleep(50);
-    if (!left().length) return null;
-    if (attempt % 10 === 0) sweep();
+    survivors = left();
+    if (attempt % 10 === 0 && survivors.length) sweep();
   }
-  const survivors = left();
-  return survivors.length ? `${survivors.length} of its processes (${survivors.slice(0, 8).join(", ")}) are still running${scopes.size ? ` in ${[...scopes].join(", ")}` : ""}` : null;
+  if (survivors.length) return `${survivors.length} of its processes (${survivors.slice(0, 8).join(", ")}) are still running${scopes.size ? ` in ${[...scopes].join(", ")}` : ""}`;
+  return blind ? "the processes it started could not be listed (no /proc, and ps failed), so they may still be running" : null;
 }
 
 interface Outcome { code: number | null; stopped: boolean; ranMs: number | null; preparing?: boolean; leaked?: string }
@@ -387,15 +425,24 @@ async function execute(command: string[], root: string, env: NodeJS.ProcessEnv, 
   const started = Date.now();
   const fd = log ? openSync(log, "w") : undefined;
   const token = `${process.pid}-${started}-${Math.random().toString(36).slice(2)}`;
-  let stopping: Promise<string | null> | undefined, timer: ReturnType<typeof setTimeout> | undefined;
+  let stopping = false, timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const output = fd ?? (log === null ? "ignore" : "inherit");
     const child = Bun.spawn({ cmd: command, cwd: root, env: { ...env, [STEP_TOKEN]: token }, stdio: [fd === undefined && log !== null ? "inherit" : "ignore", output, output] });
+    let stopped!: (leaked: string | null) => void;
+    const stop = new Promise<string | null>(resolve => { stopped = resolve; });
     // A child that already exited keeps nothing to stop, and its PID may be reused.
-    if (Number.isFinite(until)) timer = setTimeout(() => { if (child.exitCode === null && !child.signalCode) stopping = stopStep(child.pid, token); }, Math.max(0, until - Date.now()));
-    const code = await child.exited;
+    if (Number.isFinite(until)) timer = setTimeout(() => {
+      if (child.exitCode === null && !child.signalCode) { stopping = true; void stopStep(child.pid, token).then(stopped); }
+    }, Math.max(0, until - Date.now()));
+    // The stop's own answer is bounded; the child's exit is not when it refuses
+    // the signal, so whichever comes first ends the wait.
+    const code = await Promise.race([child.exited, stop.then(() => null)]);
     if (!stopping) return { code, stopped: false, ranMs: Date.now() - started };
-    const leaked = await stopping;
+    const leaked = await stop;
+    // A survivor must not hold this hook open: the push ends with its report.
+    if (leaked) child.unref();
+    else await child.exited;
     return { code: null, stopped: true, ranMs: Date.now() - started, ...(leaked ? { leaked } : {}) };
   } finally {
     if (timer) clearTimeout(timer);
@@ -484,6 +531,13 @@ export function endingOf(mode: Mode, error: unknown): { line: string; code: numb
   return { line: `${mode}: ${error instanceof Error ? error.message : error}; gate failed`, code: 1 };
 }
 
+/** Exits at once: a stopped step's survivor must not hold the push open. */
+export function endHook(mode: Mode, error: unknown): never {
+  const { line, code } = endingOf(mode, error);
+  console.error(line);
+  process.exit(code);
+}
+
 async function main(mode: Mode): Promise<void> {
   if (process.env.LLV_SKIP_HOOKS === "1") return;
   const deadline = pushDeadline(process.env, Date.now());
@@ -560,9 +614,5 @@ async function main(mode: Mode): Promise<void> {
 if (import.meta.main) {
   const mode = process.argv[2];
   if (mode !== "pre-commit" && mode !== "pre-push") throw new Error("usage: local-gate.ts pre-commit|pre-push");
-  try { await main(mode); } catch (error) {
-    const { line, code } = endingOf(mode, error);
-    console.error(line);
-    process.exitCode = code;
-  }
+  try { await main(mode); } catch (error) { endHook(mode, error); }
 }
