@@ -126,14 +126,14 @@ a card or the seat; the two defects measured are marked in bold.
 | 5 | 1920×1080, wide | on top, open | several at once | 2 / 420; 4 / 786; 4 / 1322 | 2 / 420; 1 / 103; 1 / 103 | side exit; drop; drop |
 | 6 | 1920×1080, wide | on top, open | In progress, card below the scroller | 4 / 894 ↓ +1 | 1 / 211 ↓ +1 | drop |
 | 7 | 1920×1080, wide | on top, open | In progress, card scrolled above | 4 / 777 ↑ +1 | 1 / 94 ↑ +1 | drop |
-| 8 | 1920×1080, wide | on top, folded strip | Inbox, first card | 2 / 124 | 2 / 124 | side exit |
-| 9 | 1920×1080, wide | on top, folded strip | In progress, first card | 4 / 490 | 1 / 103 | drop |
-| 10 | 1920×1080, wide | on top, folded strip | In progress, lowest visible card | 4 / 772 | 1 / 385 | drop |
-| 11 | 1920×1080, wide | on top, folded strip | Waiting, first card | 4 / 1026 | 1 / 103 | drop |
-| 12 | 1920×1080, wide | on top, folded strip | several at once | 2 / 124; 4 / 490; 4 / 812; 4 / 1026 | 2 / 124; 1 / 103; 1 / 425; 1 / 103 | side exit; drop; drop; drop |
-| 13 | 1920×1080, wide | on top, folded strip | In progress, card below the scroller (the action lifted it into view) | 4 / 772 | 1 / 385 | drop |
-| 14 | 1920×1080, wide | on top, folded strip | In progress, card scrolled above | 4 / 481 ↑ +1 | 1 / 94 ↑ +1 | drop |
-| 15 | 1920×1080, wide | on top, folded strip | In progress, deep card, column scrolled | 4 / 772 | 1 / 385 | drop |
+| 8 | 1920×1080, wide | on top, folded strip | Inbox, first card | 2 / 124 | 2 / 132 | side exit from the avatar |
+| 9 | 1920×1080, wide | on top, folded strip | In progress, first card | 4 / 490 | 2 / 301 | side exit past the title |
+| 10 | 1920×1080, wide | on top, folded strip | In progress, lowest visible card | 4 / 772 | 2 / 583 | side exit past the title |
+| 11 | 1920×1080, wide | on top, folded strip | Waiting, first card | 4 / 1026 | 2 / 837 | side exit past the title |
+| 12 | 1920×1080, wide | on top, folded strip | several at once | 2 / 124; 4 / 490; 4 / 812; 4 / 1026 | 2 / 132; 2 / 301; 2 / 623; 2 / 837 | side exit from the avatar; side exit past the title; side exit past the title; side exit past the title |
+| 13 | 1920×1080, wide | on top, folded strip | In progress, card below the scroller (the action lifted it into view) | 4 / 772 | 2 / 583 | side exit past the title |
+| 14 | 1920×1080, wide | on top, folded strip | In progress, card scrolled above | 4 / 481 ↑ +1 | 2 / 291 ↑ +1 | side exit past the title |
+| 15 | 1920×1080, wide | on top, folded strip | In progress, deep card, column scrolled | 4 / 772 | 2 / 583 | side exit past the title |
 | 16 | 1920×1080, wide | own column at the side | Inbox, first card | 4 / 141 | 0 / 30 | straight |
 | 17 | 1920×1080, wide | own column at the side | In progress, first card | 4 / 435 | 2 / 421 | bus |
 | 18 | 1920×1080, wide | own column at the side | In progress, lowest visible card | 4 / 717 | 2 / 703 | bus |
@@ -149,14 +149,14 @@ a card or the seat; the two defects measured are marked in bold.
 | 28 | 1440×900, scroll | on top, open | several at once | 2 / 224; 4 / 511; 4 / 1003 | 2 / 224; 3 / 178; 1 / 143 | side exit; round the link row; drop |
 | 29 | 1440×900, scroll | on top, open | In progress, card below the scroller | 4 / 534 ↓ +1 | 3 / 227 ↓ +1 | round the link row |
 | 30 | 1440×900, scroll | on top, open | In progress, card scrolled above | 4 / 502 ↑ +1 | 3 / 195 ↑ +1 | round the link row |
-| 31 | 1440×900, scroll | on top, folded strip | Inbox, first card | 2 / 164 | 2 / 164 | side exit |
-| 32 | 1440×900, scroll | on top, folded strip | In progress, first card | 4 / 451 | 3 / 178 | round the link row |
-| 33 | 1440×900, scroll | on top, folded strip | In progress, lowest visible card | 4 / 733 | 3 / 460 | round the link row |
-| 34 | 1440×900, scroll | on top, folded strip | Waiting, first card | 4 / 943 | 1 / 143 | drop |
-| 35 | 1440×900, scroll | on top, folded strip | several at once | 2 / 164; 4 / 451; 4 / 773; 4 / 943 | 2 / 164; 3 / 178; 3 / 500; 1 / 143 | side exit; round the link row; round the link row; drop |
-| 36 | 1440×900, scroll | on top, folded strip | In progress, card below the scroller (the action lifted it into view) | 4 / 733 | 3 / 487 | round the link row |
-| 37 | 1440×900, scroll | on top, folded strip | In progress, card scrolled above | 4 / 442 ↑ +1 | 3 / 195 ↑ +1 | round the link row |
-| 38 | 1440×900, scroll | on top, folded strip | In progress, deep card, column scrolled | 4 / 733 | 3 / 487 | round the link row |
+| 31 | 1440×900, scroll | on top, folded strip | Inbox, first card | 2 / 164 | 2 / 172 | side exit from the avatar |
+| 32 | 1440×900, scroll | on top, folded strip | In progress, first card | 4 / 451 | 4 / 336 | past the title, round the row's end |
+| 33 | 1440×900, scroll | on top, folded strip | In progress, lowest visible card | 4 / 733 | 4 / 618 | past the title, round the row's end |
+| 34 | 1440×900, scroll | on top, folded strip | Waiting, first card | 4 / 943 | 2 / 754 | side exit past the title |
+| 35 | 1440×900, scroll | on top, folded strip | several at once | 2 / 164; 4 / 451; 4 / 773; 4 / 943 | 2 / 172; 4 / 336; 4 / 658; 2 / 754 | side exit from the avatar; past the title, round the row's end; past the title, round the row's end; side exit past the title |
+| 36 | 1440×900, scroll | on top, folded strip | In progress, card below the scroller (the action lifted it into view) | 4 / 733 | 4 / 672 | past the title, round the row's end |
+| 37 | 1440×900, scroll | on top, folded strip | In progress, card scrolled above | 4 / 442 ↑ +1 | 4 / 380 ↑ +1 | past the title, round the row's end |
+| 38 | 1440×900, scroll | on top, folded strip | In progress, deep card, column scrolled | 4 / 733 | 4 / 672 | past the title, round the row's end |
 | 39 | 1440×900, scroll | own column at the side | Inbox, first card | 2 / 105 | 0 / 26 | straight |
 | 40 | 1440×900, scroll | own column at the side | In progress, first card | 2 / 397 | 2 / 397 | bus |
 | 41 | 1440×900, scroll | own column at the side | In progress, lowest visible card | 2 / 679 | 2 / 679 | bus |
@@ -167,14 +167,14 @@ a card or the seat; the two defects measured are marked in bold.
 | 46 | 1440×900, scroll | own column at the side | In progress, deep card, column scrolled | 2 / 679 | 2 / 679 | bus |
 | 47 | 1280×800, scroll | on top, open | In progress, card below the scroller | 4 / 414 **text 8px** ↓ +1 | nothing drawn | — |
 | 48 | 1280×800, scroll | on top, open | In progress, card scrolled above | 4 / 442 ↑ +1 | nothing drawn | — |
-| 49 | 1280×800, scroll | on top, folded strip | Inbox, first card | 2 / 164 | 2 / 164 | side exit |
-| 50 | 1280×800, scroll | on top, folded strip | In progress, first card | 4 / 451 | 3 / 178 | round the link row |
-| 51 | 1280×800, scroll | on top, folded strip | In progress, lowest visible card | 4 / 733 | 3 / 460 | round the link row |
-| 52 | 1280×800, scroll | on top, folded strip | Waiting, first card | 4 / 943 | 1 / 143 | drop |
-| 53 | 1280×800, scroll | on top, folded strip | several at once | 2 / 164; 4 / 451; 4 / 943 | 2 / 164; 3 / 178; 1 / 143 | side exit; round the link row; drop |
-| 54 | 1280×800, scroll | on top, folded strip | In progress, card below the scroller (the action lifted it into view) | 4 / 733 | 3 / 487 | round the link row |
-| 55 | 1280×800, scroll | on top, folded strip | In progress, card scrolled above | 4 / 442 ↑ +1 | 3 / 195 ↑ +1 | round the link row |
-| 56 | 1280×800, scroll | on top, folded strip | In progress, deep card, column scrolled | 4 / 733 | 3 / 487 | round the link row |
+| 49 | 1280×800, scroll | on top, folded strip | Inbox, first card | 2 / 164 | 2 / 172 | side exit from the avatar |
+| 50 | 1280×800, scroll | on top, folded strip | In progress, first card | 4 / 451 | 4 / 336 | past the title, round the row's end |
+| 51 | 1280×800, scroll | on top, folded strip | In progress, lowest visible card | 4 / 733 | 4 / 618 | past the title, round the row's end |
+| 52 | 1280×800, scroll | on top, folded strip | Waiting, first card | 4 / 943 | 2 / 754 | side exit past the title |
+| 53 | 1280×800, scroll | on top, folded strip | several at once | 2 / 164; 4 / 451; 4 / 943 | 2 / 172; 4 / 336; 2 / 754 | side exit from the avatar; past the title, round the row's end; side exit past the title |
+| 54 | 1280×800, scroll | on top, folded strip | In progress, card below the scroller (the action lifted it into view) | 4 / 733 | 4 / 672 | past the title, round the row's end |
+| 55 | 1280×800, scroll | on top, folded strip | In progress, card scrolled above | 4 / 442 ↑ +1 | 4 / 380 ↑ +1 | past the title, round the row's end |
+| 56 | 1280×800, scroll | on top, folded strip | In progress, deep card, column scrolled | 4 / 733 | 4 / 672 | past the title, round the row's end |
 | 57 | 1280×800, scroll | own column at the side | Inbox, first card | 2 / 105 | 0 / 26 | straight |
 | 58 | 1280×800, scroll | own column at the side | In progress, first card | 2 / 397 | 2 / 397 | bus |
 | 59 | 1280×800, scroll | own column at the side | In progress, lowest visible card | 2 / 679 | 2 / 679 | bus |
@@ -183,18 +183,18 @@ a card or the seat; the two defects measured are marked in bold.
 | 62 | 1280×800, scroll | own column at the side | In progress, card below the scroller (the action lifted it into view) | 2 / 679 | 2 / 679 | bus |
 | 63 | 1280×800, scroll | own column at the side | In progress, card scrolled above | 2 / 387 ↑ +1 | 2 / 387 ↑ +1 | bus |
 | 64 | 1280×800, scroll | own column at the side | In progress, deep card, column scrolled | 2 / 679 | 2 / 679 | bus |
-| 65 | 1000×700, tabs | on top, open | In progress, first card | 2 / 172 | 2 / 172 | margin (tabs row) |
-| 66 | 1000×700, tabs | on top, open | In progress, lowest visible card | 2 / 430 | 2 / 430 | margin (tabs row) |
-| 67 | 1000×700, tabs | on top, open | several at once | 2 / 172 | 2 / 172 | margin (tabs row) |
-| 68 | 1000×700, tabs | on top, open | In progress, card below the scroller (the action lifted it into view) | 2 / 430 | 2 / 430 | margin (tabs row) |
-| 69 | 1000×700, tabs | on top, open | In progress, card scrolled above | 2 / 162 ↑ +1 | 2 / 162 ↑ +1 | margin (tabs row) |
-| 70 | 1000×700, tabs | on top, open | In progress, deep card, column scrolled | 2 / 430 | 2 / 430 | margin (tabs row) |
-| 71 | 1000×700, tabs | on top, folded strip | In progress, first card | 2 / 172 | 2 / 172 | margin (tabs row) |
-| 72 | 1000×700, tabs | on top, folded strip | In progress, lowest visible card | 2 / 430 | 2 / 430 | margin (tabs row) |
-| 73 | 1000×700, tabs | on top, folded strip | several at once | 2 / 172 | 2 / 172 | margin (tabs row) |
-| 74 | 1000×700, tabs | on top, folded strip | In progress, card below the scroller (the action lifted it into view) | 2 / 430 | 2 / 430 | margin (tabs row) |
-| 75 | 1000×700, tabs | on top, folded strip | In progress, card scrolled above | 2 / 162 ↑ +1 | 2 / 162 ↑ +1 | margin (tabs row) |
-| 76 | 1000×700, tabs | on top, folded strip | In progress, deep card, column scrolled | 2 / 430 | 2 / 430 | margin (tabs row) |
+| 65 | 1000×700, tabs | on top, open | In progress, first card | 2 / 172 | 2 / 180 | margin (tabs row) |
+| 66 | 1000×700, tabs | on top, open | In progress, lowest visible card | 2 / 430 | 2 / 438 | margin (tabs row) |
+| 67 | 1000×700, tabs | on top, open | several at once | 2 / 172 | 2 / 180 | margin (tabs row) |
+| 68 | 1000×700, tabs | on top, open | In progress, card below the scroller (the action lifted it into view) | 2 / 430 | 2 / 438 | margin (tabs row) |
+| 69 | 1000×700, tabs | on top, open | In progress, card scrolled above | 2 / 162 ↑ +1 | 2 / 170 ↑ +1 | margin (tabs row) |
+| 70 | 1000×700, tabs | on top, open | In progress, deep card, column scrolled | 2 / 430 | 2 / 438 | margin (tabs row) |
+| 71 | 1000×700, tabs | on top, folded strip | In progress, first card | 2 / 172 | 2 / 180 | margin (tabs row) |
+| 72 | 1000×700, tabs | on top, folded strip | In progress, lowest visible card | 2 / 430 | 2 / 438 | margin (tabs row) |
+| 73 | 1000×700, tabs | on top, folded strip | several at once | 2 / 172 | 2 / 180 | margin (tabs row) |
+| 74 | 1000×700, tabs | on top, folded strip | In progress, card below the scroller (the action lifted it into view) | 2 / 430 | 2 / 438 | margin (tabs row) |
+| 75 | 1000×700, tabs | on top, folded strip | In progress, card scrolled above | 2 / 162 ↑ +1 | 2 / 170 ↑ +1 | margin (tabs row) |
+| 76 | 1000×700, tabs | on top, folded strip | In progress, deep card, column scrolled | 2 / 430 | 2 / 438 | margin (tabs row) |
 | 77 | 1000×700, scroll | own column at the side | Inbox, first card | 2 / 105 | 0 / 26 | straight |
 | 78 | 1000×700, scroll | own column at the side | In progress, first card | 2 / 397 | 2 / 397 | bus |
 | 79 | 1000×700, scroll | own column at the side | In progress, lowest visible card | 2 / 679 | 2 / 679 | bus |
@@ -215,16 +215,20 @@ a card or the seat; the two defects measured are marked in bold.
 | 94 | 390×844, phone | card above the tabs | card in another tab | nothing drawn | nothing drawn | — |
 
 **Totals over all 212 readings.** Now: 240 wires, 708 bends, 134 720 px. The
-rule: 236 wires (cases 47–48, in both languages, draw nothing), 428
-bends, 82 102 px. On the seat on top at 1920 the mean wire falls from 3.5 bends
-and 795 px to 1.3 bends and 228 px; at 1440 from 3.6 bends and 578 px to 2.4
-bends and 241 px. Nothing in either build runs through a card or the seat; the
+rule: 236 wires (cases 47–48, in both languages, draw nothing), 480
+bends, 97 384 px. On the seat on top at 1920 the mean wire falls from 3.5 bends
+and 795 px to 1.65 bends and 342 px; at 1440 from 3.6 bends and 578 px to 2.85
+bends and 362 px. The folded strip's rows (8–15, 31–38, 49–56, 65–76; the
+1000 × 700 board folds the seat by itself, so 65–70 are the strip too) are the
+built layer's readings after the fix of §5, "The folded strip"; before it they
+read 1 bend for each drop and 3 round the link row, from ports on the strip's
+empty foot (428 bends, 82 102 px in all). Nothing in either build runs through a card or the seat; the
 rule's paths run through no text and overlap nowhere outside a shared trunk.
 
 ## 5. The routing rule
 
 > **A wire takes the route with the fewest bends, and of those the shortest,
-> that leaves the seat from its edge, enters the card's port from its column's
+> that leaves the seat, as the operator sees it, from its edge, enters the card's port from its column's
 > gutter, and crosses no column but its own, nothing of the seat panel, and no
 > line of text. Wires that leave the seat at the same point share their run
 > from it as one trunk, each until it turns down its own column's gutter, and
@@ -237,7 +241,12 @@ at any time, and a wire across a column reads as pointing into it. The card's
 port, the 22 px port height, the 9 px gutter and bus offsets, the 6 px rounded
 corner and the counts at the scroller's edge are unchanged.
 
-On this board the rule resolves to one of five shapes, tried in this order; the
+The seat as the operator sees it is the seat panel, open or folded, on top or
+at the side, with one exception: folded on top with nothing for the operator,
+the strip has no fill and no frame, and the seat is its avatar and title (see
+"The folded strip" below).
+
+On this board the rule resolves to one of six shapes, tried in this order; the
 first that is clear is drawn. Each shape leaves the seat at the point of its
 edge nearest the gutter, so each is the shortest of its bend count.
 
@@ -247,6 +256,7 @@ edge nearest the gutter, so each is the shortest of its bend count.
 | Drop | 1 | the seat on top spans the column's gutter, and no column link stands between its bottom edge and the port | down from the seat's bottom edge at the gutter, into the port |
 | Side exit | 2 | the seat on top: the gutter lies beyond one of its sides. The seat at the side: any farther column | seat on top: out of the facing side at the seat's foot (14 px above its bottom), across to the gutter, down, into the port. Seat at the side: out of the right edge at the bus, along the bus, down the gutter, into the port |
 | Round the link row | 3 | the seat on top over the gutter, with a column link below it | down from the seat's bottom at the nearest point clear of the links, along the bus under them, down the gutter, into the port |
+| Round the link row from the side | 4 | nothing above is clear, the seat's bottom cannot reach the bus past the links (a folded strip whose row of links starts under its avatar), and the route is shorter than the margin one | out of the facing side at the seat's foot, 12 px past the end of the row of links, down to the bus under them, back along it to the gutter, down, into the port |
 | Margin | 2 to 4 | nothing above is clear: the tabs board, whose row of tabs spans the whole width | today's route: out of the foot of the seat's left edge, down the board's left margin, along the bus when the column is not the first, down the gutter |
 
 The phone's seat card sits above a row of tabs as wide as the screen, so every
@@ -286,15 +296,23 @@ it has, drawn and faded as the one seat port is today.
 
 **The folded strip.** Folded on top and at rest, the seat's strip has no
 background and no border: the avatar and the title at its left, two buttons at
-its right, and nothing between. Its box is still the seat's, and a drop leaves
-its bottom edge at the gutter, so in the strip's middle the port dot sits under
-empty space on the strip's line. Leaving from the title instead would cost the
-wide board one bend and up to about 720 px a wire. On the scrolling board the
-row of column links starts under the avatar, so every column whose gutter lies
-under that row would fall back to the margin route (four bends, as today).
-The rule keeps the strip's box; the frames
-`…/rule/1920-top-folded-*-several.png` and `…/rule/1440-top-folded-*-several.png`
-show it.
+its right, and nothing between. A route that left the strip's box would start
+in that empty space: the first build dropped from the strip's invisible bottom
+edge at each gutter, and its port dots hung on the background with nothing to
+say where the wire came from (the review of `023dba9d`, frames
+`<width>-top-folded-<lang>-*` at 1920, 1440 and 1280). So for this strip the
+seat is its avatar and title, and their ports are on what the operator sees: a
+wire to a column on the avatar's left leaves the avatar's left edge, and every
+other wire leaves 8 px past the title's last letter, level with the avatar's
+middle, so the dot covers no letter. The two buttons at the strip's right are
+text in a route's way, as the column links are. On the wide board that costs
+the drops one bend (2 for 1); on the scrolling board the row of column links
+starts under the avatar, so a column whose gutter lies under the row goes out
+past the title and round the row's end in four bends, which is about 115 px
+shorter than the margin route out of the avatar with as many. A strip that
+needs the operator, failed or holds an unread reply has its frame back, and its
+box is the seat as before. On the tabs board the strip's wires take the margin
+route as before, now out of the avatar's edge.
 
 ## 6. What the builder changes
 
@@ -302,7 +320,7 @@ All of it is in `src/components/kanban/orchestratorWires.ts`; the prototype diff
 (`evidence/orchestrator-wire-routing/draft/orchestratorWires.prototype.diff.txt`)
 is a working sketch of it that the readings above were taken from.
 
-- **`gutter()` becomes `route()`**, returning `{ d, exit }`: the five shapes of
+- **`gutter()` becomes `route()`**, returning `{ d, exit }`: the shapes of
   §5 in order, each checked against the row of links (`crosses()`, a box test
   on its straight runs with a 2 px margin). The margin shape is today's code.
   The last-corner radius is `min(6, into − trunk)`.
@@ -324,7 +342,10 @@ describes the margin route for a seat on top; the builder points it here.
 
 **Cost.** At rest nothing changes: no layer, no read. While a wire shows, a pass
 on a board with the seat on top reads up to four more boxes (the link row) and
-tries at most five shapes a wire; the side seat and the phone read nothing new.
+tries at most six shapes a wire; a folded strip with no frame reads its avatar,
+its title and the controls of its head instead of its own box (the folded frame
+of `orchestrator wires after a seat action` goes from 140 to 145 reads over
+its 15 passes); the side seat and the phone read nothing new.
 The builder re-runs the existing cost case (`evidence/orchestrator-wires/cost.json`)
 to show it.
 
@@ -359,9 +380,11 @@ block alone: they pass on the built rule and are red on main where marked.
 | seat on top narrowed, two target columns on its left: one exit, a shared run from it as their trunk, each down its own gutter | 88 | red (4 bends, three wires on one margin) |
 | seat at the side, several columns: every bus wire leaves the one exit and shares the bus as its trunk, nothing after its gutter | 43 | red (the Inbox wire: 2 bends, on the bus) |
 | a card scrolled out above its column: the count sits at the scroller's top, one elbow down from the seat's foot | 7 | red (4) |
-| a card scrolled out above its column in the other layouts: the count's wire takes the layout's own route | 14, 30, 37, 45, 69 | red (4 for 3 at 1440, 4 for 1 on the strip) |
-| the folded strip on the wide board: a drop from the strip's bottom edge, a side exit to the column left of it | 8–12 | red (4) |
-| the folded strip over the row of column links: round it from the strip's foot in three elbows, a drop where the links end | 31–35 | red (4) |
+| a card scrolled out above its column in the other layouts: the count's wire takes the layout's own route | 14, 30, 37, 45, 69 | red (4 for 3 at 1440, 4 for 2 on the strip) |
+| *changed in the fix stage, for the folded strip's ports (§5)* | | |
+| the folded strip on the wide board: out of its avatar to the column left of it, out past its title to the others, no port on empty space | 8–12 | red (4); red on `023dba9d` (ports on the strip's empty foot) |
+| the folded strip over the row of column links: out past its title, round the row's end in four elbows where the margin route is longer | 31–35 | red (4 for 4, 451 px); red on `023dba9d` (ports on the empty foot) |
+| a folded strip that needs the operator has its frame back: its box is the seat, and a drop leaves its bottom edge | 9 with the frame | green, pins it |
 
 The folded and side cases at 1280 × 800 and the side cases at 1000 × 700
 (49–64, 77–84) have the boxes of their 1440 × 900 counterparts moved as a
@@ -374,8 +397,9 @@ trunk only along the two wires' common start, and anywhere else it must be 0.
 `src/components/kanban/kanbanBoard.browser.test.tsx`: the draft in
 `evidence/orchestrator-wire-routing/draft/browser-block.tsx.txt`, which the
 builder turns from a reading into a gate: for every case, no length through a
-card, the seat or text, no overlap outside a trunk, and the bends this table
-gives. The expected bends are the `rule` readings in
+card, the seat or text, no overlap outside a trunk, the bends this table
+gives, and every seat port within 9 px of the seat as drawn (the folded strip
+with no frame: its avatar and title, its buttons counted as text). The expected bends are the `rule` readings in
 `evidence/orchestrator-wire-routing/routes.json`, which stays the study's
 record; a full run writes the built layer's readings to
 `evidence/orchestrator-wire-routing/rendered.json` and the frames to
@@ -416,7 +440,7 @@ that file.
 ## 8. Deferred — not currently justified
 
 - **A general orthogonal router** (a search over a grid or a visibility graph
-  of the board). Five shapes cover every layout the board produces, and each
+  of the board). Six shapes cover every layout the board produces, and each
   is the shortest of its bend count; a search would add code and a per-pass
   cost for no route it would draw differently.
 - **Separate lanes for wires that share a gutter** (each wire offset a few px).
@@ -426,8 +450,6 @@ that file.
   corner. The port on the card's left edge is part of the Variant 2 look the
   spec keeps.
 - **A one-bend phone wire** through the row of tabs: the tabs are text.
-- **Leaving a folded strip from its title** (§5, "The folded strip"): one more
-  bend on the wide board and no gain on the scrolling one.
 - **Hiding the row of column links while a wire shows**, which would let every
   drop on the scrolling board take one bend: that is a change to the board, out
   of this work's scope (route geometry only).
@@ -436,9 +458,11 @@ that file.
 
 - The operator chose Variant 1, «Fewest bends, then shortest», in the prototype
   review on 2026-10-07; that is the rule of §5.
-- The seat's box is the seat element's box in every placement, including the
-  transparent folded strip (§5). The alternative is recorded above with its
-  cost.
+- The seat's box is the seat element's box in every placement except the
+  folded strip with no frame, whose seat is its avatar and title (§5, "The
+  folded strip"). The first build kept the strip's box; its review found the
+  ports of the drops hanging on the empty background, and the fix stage
+  changed it.
 - A column that shows under 38 px of its scroller counts as out of view (§5).
 - Done gets no wire, as before; acting on a Done card was not measured.
 

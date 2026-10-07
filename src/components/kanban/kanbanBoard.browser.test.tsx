@@ -22128,10 +22128,13 @@ describe("orchestrator wire routing across the board's layouts", () => {
      bends, length, and whether it runs through a card, the seat or a line of
      text. Under the rule (the default label) every case is a gate: the bends the
      case study gives for it (`rule` in evidence/orchestrator-wire-routing/routes.json),
-     nothing through a card, the seat or text, and no run shared with another
-     wire outside a common start. WIRE_ROUTING_LABEL=current only reads, for the
-     frames of a build without the rule; WR_ONLY=<regex> limits the cases. */
+     nothing through a card, the seat or text, no run shared with another
+     wire outside a common start, and every seat port on the seat as drawn (a
+     folded strip with no frame is its avatar and title). WIRE_ROUTING_LABEL=current only reads, for the
+     frames of a build without the rule; WR_ONLY=<regex> limits the cases;
+     WIRE_ROUTING_SCHEME=dark takes the frames in the dark theme. */
   const label = process.env.WIRE_ROUTING_LABEL ?? "rule";
+  const scheme = process.env.WIRE_ROUTING_SCHEME === "dark" ? "dark" : "light";
   const out = path.resolve(process.env.WIRE_ROUTING_OUT ?? ".artifacts/orchestrator-wire-routing", label);
   type SeatAt = "top" | "top-folded" | "top-narrow" | "side";
   const seatInit = (seat: SeatAt, lang: "en" | "uk") => `try {
@@ -22158,9 +22161,15 @@ describe("orchestrator wire routing across the board's layouts", () => {
       const clip = scroller ? box(scroller) : own;
       return { id: node.dataset.id ?? node.dataset.phoneCard ?? "", l: Math.max(own.l, clip.l), t: Math.max(own.t, clip.t), r: Math.min(own.r, clip.r), b: Math.min(own.b, clip.b) };
     }).filter(shown);
-    const seatNode = document.querySelector("[data-kanban-seat], [data-mobile2-seat-card]");
-    const seat = seatNode ? box(seatNode) : null;
-    const text = [...document.querySelectorAll("[data-kanban-board] .col-head, [data-kanban-board] .tabs-nav button, [data-phone-kanban-tab], [data-orchestrator-wires] .oa-stub, [data-kanban-board] .open-rail")].map(box).filter(shown);
+    const seatNode = document.querySelector<HTMLElement>("[data-kanban-seat], [data-mobile2-seat-card]");
+    /* Folded on top with no frame, the seat the operator sees is its avatar and title; the strip's other controls are text. */
+    const avatar = seatNode?.querySelector(".seat-head .av")?.parentElement ?? null;
+    const title = seatNode?.querySelector(".seat-head .seat-title") ?? null;
+    const quiet = !!seatNode && seatNode.dataset.collapsed === "1" && seatNode.dataset.placement !== "side" && !!avatar && !!title
+      && getComputedStyle(seatNode.querySelector("[data-orchestrator-panel]") ?? seatNode).borderTopColor === "rgba(0, 0, 0, 0)";
+    const seat = !seatNode ? null : quiet ? (() => { const [a, t] = [box(avatar!), box(title!)]; return { l: Math.min(a.l, t.l), t: Math.min(a.t, t.t), r: Math.max(a.r, t.r), b: Math.max(a.b, t.b) }; })() : box(seatNode);
+    const stripControls = quiet ? [...seatNode!.querySelector(".seat-head")!.children].filter((child) => child !== avatar && child !== title && !child.classList.contains("grow")).map(box).filter(shown) : [];
+    const text = [...[...document.querySelectorAll("[data-kanban-board] .col-head, [data-kanban-board] .tabs-nav button, [data-phone-kanban-tab], [data-orchestrator-wires] .oa-stub, [data-kanban-board] .open-rail")].map(box).filter(shown), ...stripControls];
     const columns = [...document.querySelectorAll<HTMLElement>("[data-kanban-board] section.column[data-status], [data-phone-kanban-column]")].map((node) => ({ status: node.dataset.status ?? node.dataset.phoneKanbanColumn, ...box(node) })).filter(shown);
     const paths = [...document.querySelectorAll<SVGPathElement>("[data-orchestrator-wires] path.oa-wire")];
     const sample = (path: SVGPathElement) => { const points: { x: number; y: number }[] = []; for (let at = 0, length = path.getTotalLength(); at <= length; at += 2) { const p = path.getPointAtLength(at); points.push({ x: p.x, y: p.y }); } return points; };
@@ -22193,9 +22202,14 @@ describe("orchestrator wire routing across the board's layouts", () => {
     return {
       viewport: { width: innerWidth, height: innerHeight },
       mode: document.querySelector<HTMLElement>("[data-kanban-board] [data-board]")?.dataset.mode ?? (document.querySelector("[data-phone-kanban-column]") ? "phone" : null),
-      seat, columns, wires, text,
+      seat, quiet, columns, wires, text,
       stubs: [...document.querySelectorAll("[data-orchestrator-wires] .oa-stub")].map((chip) => chip.textContent),
-      seatPorts: [...document.querySelectorAll<SVGCircleElement>("[data-orchestrator-wires] .oa-port[data-seat]")].map((port) => ({ x: Number(port.getAttribute("cx")), y: Number(port.getAttribute("cy")) })),
+      seatPorts: [...document.querySelectorAll<SVGCircleElement>("[data-orchestrator-wires] .oa-port[data-seat]")].map((port) => {
+        const x = Number(port.getAttribute("cx")), y = Number(port.getAttribute("cy"));
+        /* How far the port stands from the seat the operator sees: on its edge, or past the title's last letter. */
+        const off = seat ? Math.round(Math.hypot(Math.max(seat.l - x, 0, x - seat.r), Math.max(seat.t - y, 0, y - seat.b))) : null;
+        return { x, y, off };
+      }),
     };
   });
 
@@ -22288,7 +22302,7 @@ describe("orchestrator wire routing across the board's layouts", () => {
       for (const entry of cases.filter((c) => !only || only.test(c.id))) {
         if (!browser.isConnected()) browser = await chromium.launch(LAUNCH);
         const { viewport, phone } = FORMS[entry.form];
-        const context = await browser.newContext({ viewport, colorScheme: "light", reducedMotion: "reduce", ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+        const context = await browser.newContext({ viewport, colorScheme: scheme, reducedMotion: "reduce", ...(phone ? { hasTouch: true, isMobile: true } : {}) });
         await context.addInitScript(seatInit(entry.seat, entry.lang));
         const page = await context.newPage();
         const errors: string[] = [];
@@ -22318,7 +22332,7 @@ describe("orchestrator wire routing across the board's layouts", () => {
     const study = new Map((JSON.parse(fs.readFileSync("evidence/orchestrator-wire-routing/routes.json", "utf8")) as { cases: Expected[] }).cases.map((entry) => [entry.id, entry]));
     type Wire = { taskId: string | null; stub: boolean; bends: number; length: number; cardHits: number; seatHits: number; textHits: number; sharedPrefix: boolean };
     const failures: string[] = [];
-    for (const result of results as { id: string; skipped?: string; wires?: Wire[]; errors?: string[] }[]) {
+    for (const result of results as { id: string; skipped?: string; wires?: Wire[]; errors?: string[]; seatPorts?: { x: number; y: number; off: number | null }[] }[]) {
       const expected = study.get(result.id);
       if (!expected) { failures.push(`${result.id}: not in the case study`); continue; }
       if (result.skipped || !expected.rule) { if (!!result.skipped !== !expected.rule) failures.push(`${result.id}: ${result.skipped ? "no target here" : "no target in the study"}`); continue; }
@@ -22330,9 +22344,11 @@ describe("orchestrator wire routing across the board's layouts", () => {
         if (wire.cardHits || wire.seatHits || wire.textHits) failures.push(`${name}: ${wire.cardHits} px through a card, ${wire.seatHits} px through the seat, ${wire.textHits} px through text`);
         if (!wire.sharedPrefix) failures.push(`${name}: runs on another wire outside a common start`);
       }
+      /* A port stands on the seat the operator sees: on its edge, or just past a folded strip's title. */
+      for (const port of result.seatPorts ?? []) if (port.off !== null && port.off > 9) failures.push(`${result.id}: a seat port at ${port.x},${port.y} stands ${port.off} px off the seat as drawn`);
       if (result.errors?.length) failures.push(`${result.id}: page errors ${result.errors.join(" | ")}`);
     }
-    if (!process.env.WR_ONLY) {
+    if (!process.env.WR_ONLY && scheme === "light") {
       const rendered = (results as { id: string; skipped?: string; wires?: (Wire & { d: string; nearPx: number })[]; seatPorts?: unknown[] }[]).map((result) => ({
         id: result.id, skipped: result.skipped ?? null, seatPorts: result.seatPorts ?? [],
         wires: (result.wires ?? []).map((wire) => ({ task: wire.taskId, stub: wire.stub, d: wire.d, bends: wire.bends, px: wire.length, cardPx: wire.cardHits, seatPx: wire.seatHits, textPx: wire.textHits, sharedOutsideTrunk: !wire.sharedPrefix, nearParallelPx: wire.nearPx })),

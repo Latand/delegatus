@@ -308,11 +308,15 @@ describe("route geometry across the board's layouts", () => {
   const box = ([left, top, right, bottom]: R) => ({ x: left, y: top, left, top, right, bottom, width: right - left, height: bottom - top, toJSON() {} }) as DOMRect;
 
   /* A desktop board: the seat, the columns (each with its scroller from 46 px under its top), the cards, and the row of column links. */
-  function layout(spec: { seat: R; placement: "top" | "side"; columns: Record<string, R>; cards: Record<string, [status: string, box: R]>; links?: R[] }) {
+  /* A seat folded on top: its head's avatar, title and the controls at its right, and the state the title shows. */
+  type Strip = { avatar: R; title: R; controls: R[]; state?: "working" | "needs" };
+  function layout(spec: { seat: R; placement: "top" | "side"; columns: Record<string, R>; cards: Record<string, [status: string, box: R]>; links?: R[]; strip?: Strip }) {
     const root = document.createElement("div");
     root.className = "kb";
     const links = (spec.links ?? []).map((_, index) => `<button data-link="${index}"></button>`).join("");
-    root.innerHTML = `<section data-kanban-seat="atlas" data-placement="${spec.placement}"></section>
+    const head = spec.strip ? `<div data-orchestrator-panel><header class="seat-head"><span class="relative"><span class="av"></span></span><span class="seat-title"><strong></strong><span class="state ${spec.strip.state ?? "working"}"></span></span><span class="grow"></span>${
+      spec.strip.controls.map((_, index) => `<button data-control="${index}"></button>`).join("")}</header></div>` : "";
+    root.innerHTML = `<section data-kanban-seat="atlas" data-placement="${spec.placement}" data-collapsed="${spec.strip ? 1 : 0}">${head}</section>
       ${links ? `<div class="tabs-nav jump">${links}</div>` : ""}
       ${Object.keys(spec.columns).map((status) => `<section class="column" data-status="${status}"><div class="col-body">${
         Object.entries(spec.cards).filter(([, [at]]) => at === status).map(([id]) => `<article class="card" data-id="task:${id}"></article>`).join("")
@@ -320,6 +324,11 @@ describe("route geometry across the board's layouts", () => {
     document.body.append(root);
     const place = (node: Element | null, at: R) => { if (node) (node as HTMLElement).getBoundingClientRect = () => box(at); };
     place(root.querySelector("[data-kanban-seat]"), spec.seat);
+    if (spec.strip) {
+      place(root.querySelector(".av")!.parentElement, spec.strip.avatar);
+      place(root.querySelector(".seat-title"), spec.strip.title);
+      spec.strip.controls.forEach((at, index) => place(root.querySelector(`[data-control="${index}"]`), at));
+    }
     spec.links?.forEach((at, index) => place(root.querySelector(`[data-link="${index}"]`), at));
     for (const [status, at] of Object.entries(spec.columns)) {
       place(root.querySelector(`.column[data-status="${status}"]`), at);
@@ -363,7 +372,16 @@ describe("route geometry across the board's layouts", () => {
     }
     return false;
   }
-  const obstacles = (spec: ReturnType<typeof layout>["spec"]) => [spec.seat, ...Object.values(spec.cards).map(([, at]) => at), ...(spec.links ?? [])];
+  /* A folded strip with no frame is its avatar, its title and its controls; anything else is its box. */
+  const obstacles = (spec: ReturnType<typeof layout>["spec"]) => [
+    ...(spec.strip ? [spec.strip.avatar, spec.strip.title, ...spec.strip.controls] : [spec.seat]), ...Object.values(spec.cards).map(([, at]) => at), ...(spec.links ?? []),
+  ];
+  /** How far a seat port stands from the avatar and title of a folded strip: 0 on their edge. */
+  const offStrip = (strip: Strip, port: string) => {
+    const [x, y] = port.slice(1).split(",").map(Number) as [number, number];
+    const [l, t, r, b] = [Math.min(strip.avatar[0], strip.title[0]), Math.min(strip.avatar[1], strip.title[1]), Math.max(strip.avatar[2], strip.title[2]), Math.max(strip.avatar[3], strip.title[3])];
+    return Math.hypot(Math.max(l - x, 0, x - r), Math.max(t - y, 0, y - b));
+  };
   /** How far two paths run within 2 px of each other: `trunk` along their common start, the stem of a
       tree, and `elsewhere`, where a shared run hides which wire goes where. */
   function shared(a: string, b: string): { trunk: number; elsewhere: number } {
@@ -577,20 +595,21 @@ describe("route geometry across the board's layouts", () => {
       expect(document.querySelector(".oa-stub")!.textContent).toBe("↑ +1");
       expect(points(d).at(-1)).toEqual({ x: column[0] + 10, y: column[1] + 46 + 16 });
       /* The card itself is out of sight, above the scroller: the seat and the links are what is in the way. */
-      expect(through(d, [spec.seat, ...(spec.links ?? [])])).toBe(false);
+      expect(through(d, obstacles({ ...spec, cards: {} }))).toBe(false);
+      if (spec.strip) expect(made.seatPorts().every((port) => offStrip(spec.strip!, port) <= 8)).toBe(true);
       document.body.replaceChildren();
       return d;
     };
     /* 1440-top-*-hidden-above: round the row of links. */
     expect(bends(above({ ...SCROLL, placement: "top", cards: {} }, "assigned"))).toBe(3);
-    /* 1440-top-folded-*-hidden-above: the same from the strip. */
+    /* 1440-top-folded-*-hidden-above: from the strip's title, round the end of the row of links. */
     const folded = above({ ...FOLDED_SCROLL, placement: "top", cards: {} }, "assigned");
-    expect(bends(folded)).toBe(3);
-    expect(folded.startsWith("M586,102 ")).toBe(true);
-    /* 1920-top-folded-*-hidden-above: a drop from the strip. */
+    expect(bends(folded)).toBe(4);
+    expect(folded.startsWith("M447,81 H580 Q586,81 586,87 V139 ")).toBe(true);
+    /* 1920-top-folded-*-hidden-above: out of the strip's title to the gutter. */
     const strip = above({ ...FOLDED_WIDE, placement: "top", cards: {} }, "assigned");
-    expect(bends(strip)).toBe(1);
-    expect(strip.startsWith("M630,102 ")).toBe(true);
+    expect(bends(strip)).toBe(2);
+    expect(strip.startsWith("M451,81 ")).toBe(true);
     /* 1440-side-*-hidden-above: along the bus. */
     const bus = above({ ...SIDE, placement: "side", cards: {} }, "assigned");
     expect(bends(bus)).toBe(2);
@@ -602,49 +621,66 @@ describe("route geometry across the board's layouts", () => {
     expect(tabs.startsWith("M260,163 ")).toBe(true);
   });
 
-  /* The seat on top folded to its strip: a transparent box 42 px tall across the board (…-top-folded-en-*). */
+  /* The seat on top folded to its strip: a transparent box 42 px tall across the board (…-top-folded-en-*).
+     With nothing for the operator it has no fill and no frame; what shows is the avatar and the title at
+     its left and two buttons at its right, read in the browser at the same layouts. */
   const FOLDED_WIDE = {
     seat: [268, 60, 1900, 102] as R,
+    strip: { avatar: [269, 68, 295, 94], title: [303, 72, 443, 90], controls: [[1782, 67, 1810, 95], [1818, 67, 1899, 95]] } as Strip,
     columns: { inbox: [268, 114, 623, 1080] as R, assigned: [639, 114, 1159, 1080] as R, blocked: [1175, 114, 1529, 1080] as R, done: [1545, 114, 1900, 1080] as R },
   };
   const FOLDED_SCROLL = {
     seat: [264, 60, 1424, 102] as R,
+    strip: { avatar: [265, 68, 291, 94], title: [299, 72, 439, 90], controls: [[1306, 67, 1334, 95], [1342, 67, 1423, 95]] } as Strip,
     columns: { inbox: [264, 154, 544, 938] as R, assigned: [556, 154, 1036, 938] as R, blocked: [1048, 154, 1328, 938] as R },
     links: [[264, 114, 330, 142], [332, 114, 429, 142], [431, 114, 507, 142], [509, 114, 574, 142]] as R[],
   };
 
-  test("the folded strip on the wide board: a drop from the strip's bottom edge, a side exit to the column left of it", () => {
+  test("the folded strip on the wide board: out of its avatar to the column left of it, out past its title to the others, no port on empty space", () => {
     const { act, wire, seatPorts, spec } = layout({ ...FOLDED_WIDE, placement: "top", cards: {
       i: ["inbox", [281, 167, 610, 420]], a: ["assigned", [652, 167, 1146, 440]], b: ["assigned", [652, 489, 1146, 700]], c: ["blocked", [1188, 167, 1517, 420]],
     } });
     act("i", "a", "b", "c");
     const [i, a, b, c] = ["i", "a", "b", "c"].map((id) => wire(id)!);
     for (const d of [i, a, b, c]) expect(through(d, obstacles(spec))).toBe(false);
-    expect([i, a, b, c].map(bends)).toEqual([2, 1, 1, 1]);
-    expect(i.startsWith("M268,88 ")).toBe(true);
-    expect(a.startsWith("M630,102 ")).toBe(true);
-    expect(b.startsWith("M630,102 ")).toBe(true);
-    expect(c.startsWith("M1166,102 ")).toBe(true);
-    expect([i, a, c].map(length).every((px) => px < 130)).toBe(true);
-    expect(seatPorts().sort()).toEqual(["M1166,102", "M268,88", "M630,102"]);
+    expect([i, a, b, c].map(bends)).toEqual([2, 2, 2, 2]);
+    expect(i.startsWith("M269,81 ")).toBe(true);
+    /* 8 px past the title's last letter, level with the avatar's middle. */
+    for (const d of [a, b, c]) expect(d.startsWith("M451,81 ")).toBe(true);
+    expect([i, a, c].map(length).every((px) => px < 860)).toBe(true);
+    expect(length(a)).toBeLessThan(310);
+    expect(seatPorts().sort()).toEqual(["M269,81", "M451,81"]);
+    for (const port of seatPorts()) expect(offStrip(spec.strip!, port)).toBeLessThanOrEqual(8);
     for (const [one, other] of [[i, a], [i, c], [a, c], [a, b], [b, c]]) expect(shared(one!, other!).elsewhere).toBe(0);
   });
 
-  test("the folded strip over the row of column links: round it from the strip's foot in three elbows, a drop where the links end", () => {
-    const { act, wire, spec } = layout({ ...FOLDED_SCROLL, placement: "top", cards: {
+  test("the folded strip over the row of column links: out past its title, round the row's end in four elbows where the margin route is longer", () => {
+    const { act, wire, seatPorts, spec } = layout({ ...FOLDED_SCROLL, placement: "top", cards: {
       i: ["inbox", [277, 207, 531, 460]], a: ["assigned", [569, 207, 1023, 500]], b: ["assigned", [569, 529, 1023, 700]], c: ["blocked", [1061, 207, 1315, 460]],
     } });
     act("i", "a", "b", "c");
     const [i, a, b, c] = ["i", "a", "b", "c"].map((id) => wire(id)!);
     for (const d of [i, a, b, c]) expect(through(d, obstacles(spec))).toBe(false);
-    expect([i, a, b, c].map(bends)).toEqual([2, 3, 3, 1]);
-    expect(i.startsWith("M264,88 ")).toBe(true);
-    /* 12 px past the last link, down to the bus under the row, back to the gutter. */
-    expect(a.startsWith("M586,102 V139 ")).toBe(true);
-    expect(b.startsWith("M586,102 V139 ")).toBe(true);
-    expect(c.startsWith("M1039,102 ")).toBe(true);
-    expect(length(a)).toBeLessThan(185);
+    expect([i, a, b, c].map(bends)).toEqual([2, 4, 4, 2]);
+    expect(i.startsWith("M265,81 ")).toBe(true);
+    /* Out past the title, down 12 px past the last link to the bus under the row, back to the gutter. */
+    expect(a.startsWith("M447,81 H580 Q586,81 586,87 V139 ")).toBe(true);
+    expect(b.startsWith("M447,81 H580 Q586,81 586,87 V139 ")).toBe(true);
+    expect(c.startsWith("M447,81 ")).toBe(true);
+    /* The margin route out of the avatar has as many bends and runs 451 px. */
+    expect(length(a)).toBeLessThan(340);
+    expect(seatPorts().sort()).toEqual(["M265,81", "M447,81"]);
+    for (const port of seatPorts()) expect(offStrip(spec.strip!, port)).toBeLessThanOrEqual(8);
     for (const [one, other] of [[i, a], [i, c], [a, c], [a, b], [b, c]]) expect(shared(one!, other!).elsewhere).toBe(0);
+  });
+
+  test("a folded strip that needs the operator has its frame back: its box is the seat, and a drop leaves its bottom edge", () => {
+    const { act, wire, seatPorts } = layout({ ...FOLDED_WIDE, strip: { ...FOLDED_WIDE.strip, state: "needs" }, placement: "top", cards: { a: ["assigned", [652, 167, 1146, 440]] } });
+    act("a");
+    const d = wire("a")!;
+    expect(bends(d)).toBe(1);
+    expect(d.startsWith("M630,102 ")).toBe(true);
+    expect(seatPorts()).toEqual(["M630,102"]);
   });
 
   test("a column whose scroller shows a few pixels under its header draws no count over the header", () => {

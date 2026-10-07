@@ -321,7 +321,9 @@ column beside a seat at the side, along the bus above the columns to a farther
 one; with the seat on top, down from its bottom edge when it spans the gutter,
 out of its facing side when it does not, round the row of column links along
 the bus when a link stands in the way, and down the board's left margin only
-under a row of tabs as wide as the board. The seat has a port where each route
+under a row of tabs as wide as the board. Folded on top with no frame, the seat
+is its avatar and title, so its wires leave the avatar's side or the space just
+past the title. The seat has a port where each route
 leaves it; wires that leave at the same port run together from it as one trunk
 until each turns down its own gutter, and share nothing after that. On the phone the left margin is the gutter of the open tab: a spine
 from the seat card into each acted-on card of that tab. A wire to a card with a running lane flows the way the card's own

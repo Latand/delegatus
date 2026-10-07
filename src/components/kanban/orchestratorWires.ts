@@ -19,6 +19,8 @@ const CARD_FLIGHT_MS = 450;
 const PORT_CLEARANCE = 6;
 /** A scroller shorter than this has no room for a count (26 px and its margins): the column is out of view. */
 const MIN_VIEW = 38;
+/** A port beside a folded strip's title stands this far past its last letter, so the dot covers none of it. */
+const PORT_GAP = 8;
 /** The rounded corner of every bend. */
 const CORNER = 6;
 const REDUCED_MOTION = "(prefers-reduced-motion: reduce)";
@@ -261,6 +263,22 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
     return { x: seat.left, y: seat.bottom - Math.min(14, seat.height / 2) };
   }
 
+  /** The seat folded on top and at rest, as the operator sees it: the strip has no fill and no frame
+      (kanbanBoard.css, #2148), so the seat is its avatar and title, the port clear of the title's last
+      letter, and the strip's other controls stand in a route's way as the column links do. A strip that
+      needs the operator, failed or holds an unread reply has its frame back, and its box is the seat. */
+  function quietStrip(node: HTMLElement): { seat: Box; blocks: Box[] } | null {
+    if (node.dataset.collapsed !== "1" || node.querySelector(".seat-title .state.needs, .seat-title .state.failed, .seat-unread")) return null;
+    const head = node.querySelector<HTMLElement>(".seat-head");
+    const avatar = head?.querySelector(".av")?.parentElement;
+    const title = head?.querySelector<HTMLElement>(".seat-title");
+    if (!head || !avatar || !title) return null;
+    const [a, t] = [rect(avatar), rect(title)];
+    const left = Math.min(a.left, t.left), top = Math.min(a.top, t.top), right = Math.max(a.right, t.right) + PORT_GAP, bottom = Math.max(a.bottom, t.bottom);
+    const blocks = [...head.children].filter((child) => child !== avatar && child !== title && !child.classList.contains("grow")).map(rect).filter((box) => box.width > 0 && box.height > 0);
+    return { seat: { left, top, right, bottom, width: right - left, height: bottom - top }, blocks };
+  }
+
   /** Whether the straight run from `a` to `b` touches one of `blocks`: the row of column links or tabs
       between a seat on top and the columns. */
   const crosses = (blocks: readonly Box[], a: Point, b: Point) => blocks.some((box) =>
@@ -270,7 +288,8 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
       (docs/design/orchestrator-wire-routing.md §5): straight out of a side seat into a card of the
       column beside it; one elbow down the gutter from the bottom of a seat on top that spans it; two out
       of the seat's side that faces the gutter, or along the bus from a side seat; three round the row of
-      column links along the bus; and the margin route when nothing else is clear. Every route but the
+      column links along the bus; four out of the side and round the row's end, or the margin route,
+      whichever is shorter, when nothing else is clear. Every route but the
       straight one ends down the column's gutter into the card's port. */
   function route(seat: Box, side: boolean, column: Box, y: number, into: number, leftGutter: number, blocks: readonly Box[]): { d: string; exit: Point } {
     const r = CORNER;
@@ -325,6 +344,23 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
     const start = `M${port.x},${port.y} H${spine + r} Q${spine},${port.y} ${spine},${port.y + r}`;
     if (Math.abs(trunk - spine) < 1) return { d: `${start} ${turn}`, exit: port };
     if (trunk - spine < 2 * r || bus - port.y < 2 * r) return drop;
+    /* Four: out of the seat's side, past the end of the row of links, down to the bus under them and
+       back along it to the gutter. A folded strip takes it when the row starts under its avatar; it has
+       the margin route's bends, so it is drawn only where it is the shorter. */
+    if (!phone && y - r > bus + r) {
+      const low = seat.bottom - Math.min(14, seat.height / 2);
+      const around = blocks.flatMap((box) => [box.right + 2 * r, box.left - 2 * r])
+        .filter((x) => (x >= seat.right + r || x <= seat.left - r) && Math.abs(x - trunk) >= 2 * r)
+        .map((x) => ({ x, facing: x > seat.right ? seat.right : seat.left }))
+        .filter(({ x, facing }) => !crosses(blocks, { x: facing, y: low }, { x, y: low }) && !crosses(blocks, { x, y: low }, { x, y: bus }) && !crosses(blocks, { x, y: bus }, { x: trunk, y: bus }))
+        .sort((a, b) => Math.abs(a.x - a.facing) + Math.abs(a.x - trunk) - Math.abs(b.x - b.facing) - Math.abs(b.x - trunk))[0];
+      if (around && Math.abs(around.x - around.facing) + Math.abs(around.x - trunk) < port.x - spine + trunk - spine) {
+        const { x, facing } = around;
+        const out = x > facing ? 1 : -1;
+        const back = trunk > x ? 1 : -1;
+        return { d: `M${facing},${low} H${x - out * r} Q${x},${low} ${x},${low + r} V${bus - r} Q${x},${bus} ${x + back * r},${bus} H${trunk - back * r} Q${trunk},${bus} ${trunk},${bus + r} ${turn}`, exit: { x: facing, y: low } };
+      }
+    }
     return { d: `${start} V${bus - r} Q${spine},${bus} ${spine + r},${bus} H${trunk - r} Q${trunk},${bus} ${trunk},${bus + r} ${turn}`, exit: port };
   }
 
@@ -341,10 +377,11 @@ export function createOrchestratorWires(host: WiresHost): OrchestratorWires {
     let drawn = 0;
     const seenStubs = new Set<string>();
     const counts = new Map<string, { column: Box; view: Box; above: Wire[]; below: Wire[] }>();
-    const seat = seatElement ? rect(seatElement) : null;
     const side = !phone && seatElement?.dataset.placement === "side";
-    /* The row of column links or tabs a seat on top stands above, read once a pass. */
-    const blocks: Box[] = side || phone ? [] : [...root.querySelectorAll<HTMLElement>(".tabs-nav button")].map(rect).filter((box) => box.width > 0);
+    const strip = seatElement && !side && !phone ? quietStrip(seatElement) : null;
+    const seat = strip?.seat ?? (seatElement ? rect(seatElement) : null);
+    /* The row of column links or tabs a seat on top stands above, read once a pass, and a quiet strip's controls. */
+    const blocks: Box[] = side || phone ? [] : [...[...root.querySelectorAll<HTMLElement>(".tabs-nav button")].map(rect).filter((box) => box.width > 0), ...(strip?.blocks ?? [])];
     /* Where the routes leave the seat: wires to one column leave at one point. */
     const exits = new Map<string, Point>();
     const routeTo = (column: Box, y: number, into: number) => {
