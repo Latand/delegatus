@@ -278,3 +278,14 @@ test("every stage a lane renders names no stack and teaches one verdict vocabula
   expect(fixPrompt.split("You are done when")).toHaveLength(2);
   expect(fixPrompt).toContain("You are done when every handed finding and every issue you notice within the pinned specification is fixed");
 });
+
+
+test("design and UI stages receive the task-bound prototype publishing contract", () => {
+  const stage: PipelineStage = { id: "design", kind: "run", prompt: "Design the layout", next: null,
+    effectiveRole: { roleId: "architect", engine: "codex", model: null, effort: null, access: "read-only", promptScaffold: null } };
+  const pipeline = buildPipeline({ id: "prototype", task: "Layout", project: "viewer", repoDir: "/repo", stages: [stage], srcPath: null, srcConversationId: null, now: "now" });
+  const prompt = renderStagePrompt(pipeline, stage, stage.effectiveRole, "");
+  expect(prompt).toContain("publish_prototype_review");
+  expect(prompt).toContain("pipeline's task");
+  for (const role of ["builder", "architect"]) expect(ROLE_DEFAULTS.find(r => r.id === role)!.promptScaffold).toContain("publish_prototype_review");
+});

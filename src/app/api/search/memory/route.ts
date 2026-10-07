@@ -23,7 +23,7 @@ export async function GET(request: Request): Promise<Response> {
   const parsedLimit = Number(params.get("limit"));
   const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.max(1, Math.min(20, Math.trunc(parsedLimit))) : 10;
   try {
-    return Response.json(memoryIndex().search({ query, project: project ? canonicalProject(project) : undefined, kind: kind as MemoryKind | undefined, limit, maxBytes: responseBudget }));
+    return Response.json(await memoryIndex().search({ query, project: project ? canonicalProject(project) : undefined, kind: kind as MemoryKind | undefined, limit, maxBytes: responseBudget }));
   } catch (error) {
     return searchUnavailable("memory", error);
   }
@@ -41,7 +41,7 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ error: "id and bounded requestId are required; project and conversationId must be bounded strings" }, { status: 400 });
   }
   try {
-    const item = memoryIndex().open(body.id, body.requestId, body.conversationId ?? null, body.project ? canonicalProject(body.project.trim()) : undefined, body.maxBytes ?? 16_000);
+    const item = await memoryIndex().open(body.id, body.requestId, body.conversationId ?? null, body.project ? canonicalProject(body.project.trim()) : undefined, body.maxBytes ?? 16_000);
     return item ? Response.json({ item }) : Response.json({ error: "memory entry not found" }, { status: 404 });
   } catch (error) {
     return searchUnavailable("memory", error);

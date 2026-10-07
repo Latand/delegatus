@@ -777,6 +777,36 @@ hours. A fatal stage OOM retries once after memory recovers, retaining its
 worktree. A second consecutive OOM, or a 30-minute wait without recovery, stops
 for a decision. See [the design](docs/design/agent-memory-isolation.md).
 
+### Agent CPU
+
+On Linux with a systemd user manager, hosts the operator talks to run in
+`delegatus-agents.slice` with `CPUWeight=1000`, tmux panes included. Pipeline
+and flow hosts, workflow stage and pane-reviewer tmux panes, headless reviews,
+gates from `scripts/gate-slot.sh` (the merger's included), workflow setup,
+pipeline publication and release installs and builds run in
+`delegatus-agents-work.slice`: `CPUWeight=100`, 300% of a CPU per scope and 75%
+of the logical CPUs for the whole slice. This placement is independent of the
+memory mode. Where it should work and cannot, work is refused with the reason,
+a release build included; operator hosts still run.
+
+A pipeline stage, workflow setup or stage, publication install, release install
+or build, or gate waits while CPU pressure (`some avg10`) is at or above 20%
+and starts once it has stayed below 10% for ten seconds; the wait shows in the
+pipeline's or workflow's detail line and in the update step's log. Operator
+messages never wait on it.
+
+| Variable | Effect |
+|---|---|
+| `DELEGATUS_AGENT_CPU` | `off` turns CPU placement off. |
+| `DELEGATUS_WORK_SCOPE_CPU_QUOTA`, `DELEGATUS_WORK_CPU_QUOTA` | Percent of one CPU per work scope (default `300`) and for the work slice (default 75% of the CPUs). |
+| `DELEGATUS_CPU_PRESSURE` | `off` turns the pressure wait off; `DELEGATUS_CPU_PRESSURE_HOLD` and `DELEGATUS_CPU_PRESSURE_RELEASE` set the thresholds (`20`, `10`). |
+
+To give the service itself `CPUWeight=1000` beside the agents, run
+`node bin/install-cpu-placement.mjs`. It writes three files under
+`$HOME/.config/systemd/user` and prints the reload and restart that apply them;
+restart at a quiet moment. Dedicated CPUs for production need root; see
+[the design](docs/design/cpu-placement.md).
+
 ## Platform support
 
 Delegatus is built for Linux and also runs on macOS and Windows.

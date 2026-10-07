@@ -542,6 +542,46 @@ test("Send options has a visible keyboard and pointer opener without submitting"
   flushSync(() => root.unmount());
 });
 
+test("Send with nothing to send swallows its click, and its hint still closes on it", async () => {
+  let reachedAbove = false;
+  function MenuHarness() {
+    const composer = useComposer({ initialText: () => "", persistText: () => {}, submit: () => { throw new Error("unexpected send"); } });
+    return <div onClick={() => { reachedAbove = true; }}>
+      <ComposerBar composer={composer} placeholder="Prompt" textareaAriaLabel="Prompt"
+        imageAriaLabel="Attach" leftSlot={null} sendLabelIdle="Send" sendLabelRecording="Stop"
+        sendIdleClassName="bg-accent" sendMenuLabel="Send options"
+        sendMenuActions={[{ id: "inject", label: "Add to context", onSelect: () => {} }]} />
+    </div>;
+  }
+  const hints = () => [...document.querySelectorAll('[role="tooltip"]')].map((node) => node.textContent);
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 200));
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  flushSync(() => root.render(<MenuHarness />));
+  const sendButton = container.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!;
+  /* The send menu keeps the control enabled; it only says it cannot send. */
+  expect(sendButton.disabled).toBe(false);
+  expect(sendButton.getAttribute("aria-disabled")).toBe("true");
+
+  for (const type of ["pointerover", "pointermove"]) sendButton.dispatchEvent(new dom.Event(type, { bubbles: true }) as unknown as Event);
+  await settle();
+  expect(hints()).toEqual(["Send"]);
+
+  /* The control stops the click's propagation; the pointer stays on it. */
+  flushSync(() => sendButton.click());
+  await settle();
+  expect(reachedAbove).toBe(false);
+  expect(hints()).toEqual([]);
+
+  /* Leaving and arriving anew shows it again. */
+  sendButton.dispatchEvent(new dom.Event("pointerout", { bubbles: true }) as unknown as Event);
+  for (const type of ["pointerover", "pointermove"]) sendButton.dispatchEvent(new dom.Event(type, { bubbles: true }) as unknown as Event);
+  await settle();
+  expect(hints()).toEqual(["Send"]);
+  flushSync(() => root.unmount());
+});
+
 test("a checked send-menu action is a checkbox that leaves the menu open, and a plain one still closes it", () => {
   let auto = true;
   let plain = 0;

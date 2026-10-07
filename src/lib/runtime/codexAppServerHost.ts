@@ -1,4 +1,4 @@
-import { memoryKillText } from "./agentMemoryState";
+import { memoryField, memoryKillText } from "./agentMemoryState";
 import type { AgentMemoryCell } from "./agentMemory";
 import { normalizeNativeQueueObservation } from "./nativeQueueContent";
 import { agentCodexPublicationPolicy } from "@/lib/git/agentPublicationIdentity";
@@ -2937,7 +2937,7 @@ export class CodexAppServerHost implements EngineHost {
       activeTurnRef: this.activeTurnId,
       pendingAttention: [...this.attentions.keys()],
       nativeQueueRevision: this.nativeQueueRevision,
-      ...(this.memoryCell ? { memory: this.memoryCell.snapshot() } : {}),
+      ...memoryField(this.memoryCell),
       activeFlags: [...this.activeFlags, ...(this.nativeQueue ? [NATIVE_QUEUE_CAPABILITY] : []), ...(this.injectCapability === "supported" ? [NATIVE_INJECT_CAPABILITY] : []), ...(this.supportsNativeHistory() && Array.isArray(record(this.modelCatalog)?.data) ? [NATIVE_TURN_PROFILE_CAPABILITY] : [])],
       account: this.account,
       diagnostics: { executable: this.selectedExecutable, version: this.protocolVersion, nativeQueue: !!this.nativeQueue, queueCapability: this.queueCapability, injectCapability: this.injectCapability, authRecovery: this.authRecovery },

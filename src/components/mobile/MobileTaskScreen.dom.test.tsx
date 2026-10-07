@@ -511,8 +511,12 @@ test("priority is set from the task sheet: the menu's Priority row opens three l
   flushSync(() => nav.openSheet("menu"));
   const row = q(body, '[data-phone-task-menu="priority"]')!;
   expect(row.textContent).toContain(en("kanban.priority"));
-  /* It sits with the task's own settings, before Colour. */
-  expect(qa(body, "[data-phone-task-menu]").map((entry) => entry.getAttribute("data-phone-task-menu")).slice(0, 3)).toEqual(["rename", "priority", "colour"]);
+  /* The frequent actions are a row of cells, with what Hide leaves running in words under them; Priority and Colour are the rows after it, and the board's own menu is on the board. */
+  expect(qa(body, "[data-phone-task-menu]").map((entry) => entry.getAttribute("data-phone-task-menu"))).toEqual(["rename", "details", "links", "hide", "priority", "colour"]);
+  expect(qa(body, "[data-phone-task-menu-cells] > button").map((entry) => [entry.getAttribute("data-phone-task-menu"), entry.getAttribute("aria-label")])).toEqual([
+    ["rename", en("kanban.rename")], ["details", en("kanban.details")], ["links", en("workLinks.attach")], ["hide", en("kanban.hideFromBoard")],
+  ]);
+  expect(q(body, '[data-phone-task-menu-note="hide"]')?.textContent).toBe(`${en("kanban.menu.cell.hide")}: ${en("kanban.hideNote")}`);
   click(row);
   const levels = () => qa(body, "[data-phone-task-priority]");
   expect(levels().map((entry) => [entry.getAttribute("data-phone-task-priority"), entry.textContent, entry.getAttribute("aria-checked")])).toEqual([

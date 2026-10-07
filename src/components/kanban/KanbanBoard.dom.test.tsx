@@ -181,9 +181,9 @@ test("choosing a status moves the card at once, writes it with the guard, and of
     changed: () => {},
   };
   const { host } = mount([task("a", "inbox", "Write the release notes")], ports);
-  /* The column names the status; the card's ⋯ opens with "Move to" first. */
+  /* The column names the status; the card's ⋯ opens with the columns to move to first. */
   click(host.querySelector('.card[data-id="task:a"] [data-menu]'));
-  expect(host.querySelector(".menu")?.textContent).toStartWith("Move to");
+  expect(host.querySelector(".menu [data-cm-shown]")?.firstElementChild?.querySelector("[data-cm-segments]")?.getAttribute("aria-label")).toBe("Move to");
   const done = [...host.querySelectorAll('.menu [role="menuitemradio"]')].find((item) => item.textContent?.includes("Done"));
   click(done);
   expect(columnOf(host, "a")).toBe("done");

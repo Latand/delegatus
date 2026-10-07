@@ -1296,6 +1296,81 @@ test("a stage branch is adopted onto an owned delivery branch when the lane ref 
   }
 });
 
+/** A successor lane created on an existing pull request branch: the branch is
+    the previous lane's own pipeline branch, the successor's delivery claim
+    (epoch 2) targets it, and the stage agent commits straight onto it. */
+async function successorOnPullRequestBranch(name: string, previousState: Pipeline["state"]) {
+  const fixture = await realWorktreeLane(name, [
+    { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, prompt: "Review", next: null },
+  ], "remote-branch");
+  const { git, repo, worktree } = fixture;
+  const lane = loadPipelines().find((item) => item.id === fixture.id)!;
+  const previous = structuredClone(lane);
+  previous.id = "previouslane";
+  previous.worktreeDir = path.join(path.dirname(repo), `${path.basename(repo)}-pipeline-${previous.id}`);
+  previous.branch = lane.branch.slice(0, -lane.id.length) + previous.id;
+  const prBranch = previous.branch;
+  (await git(worktree, "branch", "-m", prBranch));
+  lane.delivery!.target.branch = `refs/heads/${prBranch}`;
+  lane.delivery!.epoch = 2;
+  previous.state = previousState;
+  previous.cursor = previousState === "completed" || previousState === "closed" ? null : previous.cursor;
+  previous.closedAt = previousState === "closed" ? new Date().toISOString() : null;
+  previous.delivery = { ...structuredClone(lane.delivery!), ownerId: previous.id, epoch: 1,
+    active: false, publish: "disabled", releasedAt: new Date().toISOString() };
+  savePipelines([lane, previous]);
+  fs.writeFileSync(path.join(worktree, "build.txt"), "successor work\n");
+  (await git(worktree, "add", "build.txt"));
+  (await git(worktree, "commit", "-m", "successor stage work"));
+  return { ...fixture, lane, previous, prBranch, head: (await git(worktree, "rev-parse", "HEAD")) };
+}
+
+for (const previousState of ["completed", "closed"] as const) {
+  test(`a successor lane on a pull request branch settles its passed stage after a ${previousState} lane`, async () => {
+    const fixture = await successorOnPullRequestBranch(`stage-branch-successor-${previousState}`, previousState);
+    try {
+      const { git, h, id, origin, worktree, prBranch, head } = fixture;
+      await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+      const settled = loadPipelines().find((item) => item.id === id)!;
+      expect(settled.stateDetail ?? null).toBeNull();
+      expect(settled).toMatchObject({ state: "running", lastPassedCommit: head, cursor: { stageId: "review" } });
+      expect((await git(worktree, "branch", "--show-current"))).toBe(prBranch);
+      expect((await git(origin, "rev-parse", `refs/heads/${prBranch}`))).toBe(head);
+    } finally {
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const previousState of ["running", "needs_decision"] as const) {
+  test(`a successor lane is refused the pull request branch while the previous lane is ${previousState}`, async () => {
+    const fixture = await successorOnPullRequestBranch(`stage-branch-successor-${previousState}`, previousState);
+    try {
+      const { git, h, worktree, lane, previous, prBranch, head } = fixture;
+      const { commitAndAdoptStageBranch } = await import("./stageBranch");
+      const result = await commitAndAdoptStageBranch(lane, "build", h.ports.exec, () => [lane, previous], undefined, () => {}, null);
+      expect(result).toMatchObject({ ok: false, error: expect.stringContaining("another pipeline owns the stage branch") });
+      expect((await git(worktree, "rev-parse", `refs/heads/${prBranch}`))).toBe(head);
+    } finally {
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+}
+
+test("a terminal lane whose delivery claim is still active keeps owning its branch", async () => {
+  const fixture = await successorOnPullRequestBranch("stage-branch-successor-terminal-active", "completed");
+  try {
+    const { h, lane, previous } = fixture;
+    previous.delivery = { ...previous.delivery!, active: true, publish: "enabled" };
+    const { commitAndAdoptStageBranch } = await import("./stageBranch");
+    const result = await commitAndAdoptStageBranch(lane, "build", h.ports.exec, () => [lane, previous], undefined, () => {}, null);
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining("another pipeline owns the stage branch") });
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 for (const removeOwnerSeed of [false, true]) {
 test(`linked-worktree pipeline ownership refuses a foreign stage branch before committing (removed seed: ${removeOwnerSeed})`, async () => {
   const fixture = await realWorktreeLane(`stage-branch-linked-owner-${removeOwnerSeed}`, [
@@ -2277,6 +2352,57 @@ test("automatic-update hold keeps a pending attempt and releases exactly one lau
   await tickPipelines([], h.ports);
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.n).toBe(attempt.n);
   expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(1);
+});
+
+test("CPU pressure holds a fresh stage start with a visible reason and releases exactly one launch", async () => {
+  const h = harness();
+  const { CpuPressureGate, DEFAULT_CPU_PRESSURE_POLICY } = await import("@/lib/runtime/cpuPressure");
+  let pressure: number | null = 45;
+  let clock = Date.parse("2026-10-06T12:00:00Z");
+  const gate = new CpuPressureGate(DEFAULT_CPU_PRESSURE_POLICY, { sample: () => pressure, now: () => clock });
+  const wakes: number[] = [];
+  h.ports.cpuPressureHold = () => gate.check();
+  h.ports.scheduleTick = (delayMs) => { wakes.push(delayMs); };
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const held = loadPipelines()[0]!;
+  expect(held.cursor?.state).toBe("pending");
+  expect(held.runs[0]!.attempts[0]!.spawnCalls ?? 0).toBe(0);
+  expect(held.stateDetail).toBe("stage start held for CPU pressure since 2026-10-06T12:00:00.000Z (avg10 45% ≥ 20%)");
+  expect(wakes).toContain(5_000);
+  clock += 120_000;
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.stateDetail).toStartWith("stage start deferred by CPU pressure: held since 2026-10-06T12:00:00.000Z");
+  // Below the release threshold the hold lasts ten seconds more.
+  pressure = 4;
+  await tickPipelines([], h.ports);
+  clock += 9_000;
+  await tickPipelines([], h.ports);
+  expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(0);
+  clock += 1_000;
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const released = loadPipelines()[0]!;
+  expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(1);
+  expect(released.runs[0]!.attempts).toHaveLength(1);
+  expect(released.stateDetail ?? "").not.toContain("CPU pressure");
+  // A launched stage is never held again: pressure returns and nothing respawns.
+  pressure = 80;
+  await tickPipelines([], h.ports);
+  expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(1);
+});
+
+test("a failed CPU pressure sample admits the stage start", async () => {
+  const h = harness();
+  const { CpuPressureGate, DEFAULT_CPU_PRESSURE_POLICY } = await import("@/lib/runtime/cpuPressure");
+  const gate = new CpuPressureGate(DEFAULT_CPU_PRESSURE_POLICY, { sample: () => { throw new Error("EACCES"); }, now: Date.now });
+  h.ports.cpuPressureHold = () => gate.check();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(1);
+  expect(loadPipelines()[0]!.stateDetail ?? "").not.toContain("CPU pressure");
 });
 
 test("automatic drain holds a new embedded legacy review stage and releases once", async () => {
@@ -3850,6 +3976,49 @@ test("a merger stage resolves through production role lookup during pipeline nor
       promptScaffold: expect.stringContaining("scripts/merge-batch.ts"),
     },
   });
+});
+
+/* Every UI lane ends with a visual-critic stage: create_pipeline takes it, and
+   its agent launches read-only on the role's own Claude Opus row. */
+test("a visual-critic stage is accepted and launches read-only on the role's runtime", async () => {
+  const h = harness();
+  savePipelines([]);
+  const { pipelineRoleLookup } = await import("./roles");
+  h.ports.roleLookup = pipelineRoleLookup;
+  await create(h.ports, [{ id: "shots", kind: "run", role: { roleId: "visual-critic" }, prompt: "Judge the frames", next: null }] as never);
+  const expected = { roleId: "visual-critic", engine: "claude", model: "opus", effort: "high", access: "read-only" };
+  expect(loadPipelines()[0]!.stages[0]).toMatchObject({ role: { roleId: "visual-critic" }, effectiveRole: { ...expected, promptScaffold: expect.stringContaining("You are a Visual-critic.") } });
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(h.spawnInputs[0]).toMatchObject({ role: expected, runtimeProfile: { access: "read-only" } });
+});
+
+/* Visual judgement runs on Claude and the critic never writes, whoever asks:
+   creation refuses a Codex runtime and read-write access, and an override that
+   turns a writable builder stage into the critic launches it read-only. */
+test("a visual-critic stage refuses Codex and read-write on create and override", async () => {
+  const h = harness();
+  savePipelines([]);
+  const { pipelineRoleLookup } = await import("./roles");
+  h.ports.roleLookup = pipelineRoleLookup;
+  const critic = { id: "shots", kind: "run", role: { roleId: "visual-critic" }, prompt: "Judge the frames", next: null };
+  const refusal = async (stage: Record<string, unknown>) => JSON.stringify(await createPipelineFromRequest(
+    { task: "Ship pipelines", spec: "AC1", repoDir: "/repo", stages: [{ ...critic, ...stage }] as never, src: "/codex/creator.jsonl", publication: "internal" }, h.ports));
+  expect(await refusal({ engine: "codex", model: "gpt-6.1-sol", effort: "high" })).toContain("visual-critic runs on claude only");
+  expect(await refusal({ access: "read-write" })).toContain("role visual-critic is read-only; a stage cannot give it read-write access");
+  expect(loadPipelines()).toEqual([]);
+
+  const pipeline = await create(h.ports, [{ id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Build", next: null }] as never);
+  expect(pipeline.stages[0]!.effectiveRole.access).toBe("read-write");
+  const codex = await patchPipeline(pipeline.id, { action: "override-stage", stageId: "build", role: { roleId: "visual-critic" }, engine: "codex", model: "gpt-6.1-sol" }, h.ports);
+  expect(codex).toMatchObject({ status: 400, error: "visual-critic runs on claude only" });
+  const edited = await patchPipeline(pipeline.id, { action: "override-stage", stageId: "build", role: { roleId: "visual-critic" }, access: "read-write" }, h.ports);
+  expect(edited.error).toBeUndefined();
+  const expected = { roleId: "visual-critic", engine: "claude", model: "opus", effort: "high", access: "read-only" };
+  expect(loadPipelines()[0]!.stages[0]).toMatchObject({ access: "read-only", effectiveRole: expected });
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(h.spawnInputs[0]).toMatchObject({ role: expected, runtimeProfile: { access: "read-only" } });
 });
 
 test("review-loop onFail edges are rejected during creation and graph editing", async () => {
@@ -9624,6 +9793,8 @@ test("retry and skip recover a completed pane-hosted semantic contradiction", as
       state: "pending",
       input: action === "retry-stage" ? null : "Skipped by operator.",
       activatedBy: action === "retry-stage" ? null : { stageId: "plan", attempt: 1, edge: "pass" },
+      /* The hand that put the cursor there, for the attempt it launches. */
+      launchedBy: { actor: { kind: "operator" }, at: expect.any(String) },
     });
   }
 });
@@ -11077,7 +11248,6 @@ test("a failed Claude migration retries its original operation and held continua
     }, {
       enabled: () => true, client: () => null, registry: () => registry,
       requestMigrationTick: () => {}, kick: async () => {},
-      executeSwitch: async () => registry.conversation(conversation.id)!,
     }))?.ok === true;
 
     await tickPipelines([], h.ports);

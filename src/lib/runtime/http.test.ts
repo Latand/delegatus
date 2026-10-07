@@ -445,6 +445,37 @@ test("runtime command routes fail closed while activation is disabled", async ()
   expect(await response.json()).toEqual({ error: "runtime events are disabled", delivery: "refused" });
 });
 
+test("a send held behind an account switch answers with a receipt that names the wait", async () => {
+  const registry = new AgentRegistry(path.join(fs.mkdtempSync(path.join(os.tmpdir(), "llv-held-wait-")), "registry.json"));
+  registry.reconcileConversations([{
+    engine: "codex", path: "/sessions/held-wait.jsonl", accountId: "account-a",
+    launchProfile: emptyLaunchProfile({ cwd: "/repo", project: "repo" }),
+    turn: { state: "idle", source: "assistant", terminalAt: null }, observedAt: new Date().toISOString(),
+  }]);
+  const conversation = registry.conversationForPath("/sessions/held-wait.jsonl")!;
+  registry.requestConversationReseat(conversation.id, "account-b");
+  const response = await handleRuntimeCommand(
+    request({ conversationId: conversation.id, text: "after the switch", idempotencyKey: "held-wait-send" }),
+    "send",
+    {
+      enabled: () => true,
+      structuredEnabled: () => true,
+      client: () => null,
+      registry: () => registry,
+      enqueue: async () => {
+        const held = registry.holdDelivery(conversation.id, "after the switch", "held-wait-send");
+        return { ok: true, structured: true, target: conversation.id, outcome: "held", operationId: held.command.operationId };
+      },
+    },
+  );
+
+  expect(response.status).toBe(202);
+  const body = await response.json() as { held: boolean; operationId: string; receipt: { reason: string } };
+  expect(body).toMatchObject({ held: true, receipt: { operationId: body.operationId, idempotencyKey: "held-wait-send",
+    conversationId: conversation.id, status: "queued", reason: "switching-accounts" } });
+  expect(translate("en", humanReceiptReasonKey(body.receipt.reason)!)).toBe("Switching accounts — your message goes out right after");
+});
+
 test("direct runtime send reaches durable admission while the runtime socket synchronizes", async () => {
   const admissions: unknown[] = [];
   const response = await handleRuntimeCommand(

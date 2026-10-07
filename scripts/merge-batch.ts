@@ -313,6 +313,11 @@ function prepareCorpusPath(cwd: string, path: string, createdDirectories: string
   return current;
 }
 
+/* Every gate runs through this checkout's own gate: one of the shared machine
+   slots, CPU-pressure admission, and a scope in the CPU work slice
+   (docs/design/cpu-placement.md). The copy beside this script is used, so a
+   bisect subject or a trusted base checkout cannot swap it. */
+const GATE = join(import.meta.dir, "gate-slot.sh");
 const PR_FIELDS = "number,title,body,state,isDraft,baseRefName,headRefOid,headRefName,closingIssuesReferences,headRepository";
 const BATCH_FIELDS = "number,url,state,headRefOid,mergeStateStatus,statusCheckRollup,mergeCommit";
 
@@ -526,7 +531,7 @@ export class MergeBatch {
       const reportFile = join(stateDir, "tests.xml");
       if (gate.report) args = [...args, "--reporter=junit", "--reporter-outfile", reportFile];
       const env = gate.id === "tests" ? isolatedEnvironment(stateDir, process.env) : process.env;
-      const result = await this.run(cwd, ["/var/tmp/llv-gate", ...args], { ...env, LLV_STATE_DIR: stateDir });
+      const result = await this.run(cwd, [GATE, ...args], { ...env, LLV_STATE_DIR: stateDir });
       return gate.report ? { ...result, report: existsSync(reportFile) ? readFileSync(reportFile, "utf8") : result.report } : result;
     } finally {
       for (const [path, contents] of backups) {
@@ -735,7 +740,7 @@ export class MergeBatch {
       const modules = join(this.repo, "node_modules");
       if (existsSync(modules)) symlinkSync(modules, join(trustedWork, "node_modules"), "dir");
       const catalog = join(trustedWork, "scripts/privacy-known-value-fingerprints.json");
-      return await this.run(trustedWork, ["/var/tmp/llv-gate", "bun", "scripts/privacy-publication-gate.ts",
+      return await this.run(trustedWork, [GATE, "bun", "scripts/privacy-publication-gate.ts",
         "--repository", candidate, "--base", base, ...args], {
         ...process.env,
         LLV_STATE_DIR: stateDir,

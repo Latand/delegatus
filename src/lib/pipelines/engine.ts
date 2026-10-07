@@ -1,5 +1,6 @@
 import { isAccountMutationContention } from "@/lib/accounts/contentionMessage";
 import { agentMemoryHeadroom, memoryKillText, type AgentMemoryKill } from "@/lib/runtime/agentMemory";
+import { CPU_PRESSURE_DETAIL_PREFIXES, cpuPressureHoldDetail, machineCpuPressureGate, type CpuPressureHold } from "@/lib/runtime/cpuPressure";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -96,6 +97,7 @@ import { pipelineDeliveryGuidance, renderCutRetryInput, renderDecisionInput, ren
 import { composeStageInput } from "./stageInput";
 import { renderStagePrompt } from "./prompts";
 import { PIPELINE_ROLE_IDS, pipelineRoleLookup, resolvePipelineRole, stageRuntimeIsExplicit, validatePipelineRoleParams, type PipelineRoleLookup } from "./roles";
+import { isReadOnlyLockedRole } from "@/lib/roles/locks";
 import { launchSizingRefusal, reviewGateRefusal, type Briefer, type LaunchRuntime } from "@/lib/roles/sizing";
 import { conversationRuntime } from "@/lib/agent/conversationRuntime";
 import { normalizeStageOutputPath } from "./stageAccess";
@@ -251,6 +253,8 @@ export interface PipelinePorts {
   failStageLaunch?(launchId: string, conversationId: string, reason: string): boolean;
   claimSpawnRetry(launchId: string, claimId: string): "claimed" | "settled" | "conflict";
   drainHold?(): DrainLease | null;
+  /** A held stage start waits for CPU pressure to fall; null admits. */
+  cpuPressureHold?(): CpuPressureHold | null;
   /** Whether the ticking process can publish a structured host: `ready` now,
       `rebinding` between publications, `unbound` never at all (#1191). */
   structuredDeliveryPublication?(): "ready" | "rebinding" | "unbound";
@@ -1284,6 +1288,7 @@ export function defaultPipelinePorts(
        structured hosting switched off there is no publication to wait for and
        the spawn must fail in the open, as it always did. */
     drainHold: () => activeDrain(),
+    cpuPressureHold: () => machineCpuPressureGate()?.check() ?? null,
     structuredDeliveryPublication: () => structuredHostsEnabled()
       ? structuredDeliveryPublicationState()
       : "ready",
@@ -2192,9 +2197,16 @@ async function relaunchCutStage(pipeline: Pipeline, stage: PipelineStage, attemp
     through advance/fail-edge routing, which writes a fresh relay record. */
 function setCursorState(pipeline: Pipeline, stageId: string, state: NonNullable<Pipeline["cursor"]>["state"]): void {
   const keep = pipeline.cursor?.stageId === stageId
-    ? { input: pipeline.cursor.input, activatedBy: pipeline.cursor.activatedBy }
+    ? { input: pipeline.cursor.input, activatedBy: pipeline.cursor.activatedBy, ...(pipeline.cursor.launchedBy ? { launchedBy: pipeline.cursor.launchedBy } : {}) }
     : { input: null, activatedBy: null };
   pipeline.cursor = { stageId, state, ...keep };
+}
+
+/** The hand behind the activation the cursor now waits to launch: the next
+    attempt takes it (`newAttempt`), and a cursor moved anywhere else drops it. */
+function recordHandLaunch(pipeline: Pipeline, actor: PauseResumeActor | null, at: string): void {
+  if (!actor || pipeline.cursor?.state !== "pending") return;
+  pipeline.cursor.launchedBy = { actor: structuredClone(actor), at };
 }
 
 function normalizedOutput(pipeline: Pipeline): string {
@@ -2311,10 +2323,13 @@ function newAttempt(pipeline: Pipeline, stage: PipelineStage): PipelineStageAtte
        restarts and sibling-record evolution (#353 exactly-once). */
     input: cursorRelay?.input ?? null,
     activatedBy: cursorRelay?.activatedBy ? { ...cursorRelay.activatedBy } : null,
+    ...(cursorRelay?.launchedBy ? { launchedBy: cursorRelay.launchedBy } : {}),
     output: null,
     verdict: null,
     error: null,
   };
+  /* One hand launches one attempt; a relaunch the engine makes after it is the engine's. */
+  if (pipeline.cursor) delete pipeline.cursor.launchedBy;
   run.attempts.push(attempt);
   return attempt;
 }
@@ -4777,7 +4792,21 @@ function holdStageLaunch(pipeline: Pipeline, ports: PipelinePorts, persist: () =
     return true;
   }
   if (pipeline.stateDetail?.startsWith("held for the automatic update to ")) { pipeline.stateDetail = null; persist(); }
+  // Heavy work yields to production under CPU pressure. Only a fresh stage
+  // start asks; recovery and reconciliation of launched work never do.
+  const pressure = ports.cpuPressureHold?.();
+  if (pressure) {
+    const detail = cpuPressureHoldDetail(pressure);
+    if (pipeline.stateDetail !== detail) { pipeline.stateDetail = detail; persist(); }
+    ports.scheduleTick?.(5_000);
+    return true;
+  }
+  if (heldForCpuPressure(pipeline)) { pipeline.stateDetail = null; persist(); }
   return false;
+}
+
+function heldForCpuPressure(pipeline: Pipeline): boolean {
+  return CPU_PRESSURE_DETAIL_PREFIXES.some((prefix) => pipeline.stateDetail?.startsWith(prefix));
 }
 
 async function tickRunStage(
@@ -7073,6 +7102,7 @@ export async function settlePendingRemoteActions(ports: PipelinePorts = defaultP
         pipeline.state = "running";
         pipeline.pausedState = null;
         setCursorState(pipeline, stage.id, "pending");
+        recordHandLaunch(pipeline, action.actor, ports.now());
         if (publishesRemoteBranch(pipeline)) {
           const reserved = queuePipelinePublication(pipeline, ports.exec, { acceptedSha: result.sha, publishedSha: pipeline.publishedCommit ?? null });
           if (!reserved.ok) { pipeline.stateDetail = reserved.error; persist(); return; }
@@ -7082,6 +7112,7 @@ export async function settlePendingRemoteActions(ports: PipelinePorts = defaultP
       if (action.action === "skip-stage") {
         pipeline.stateDetail = null;
         applySkippedStage(pipeline, currentStage(pipeline)!, currentAttempt(pipeline, currentStage(pipeline)!.id)!, result.sha, ports);
+        recordHandLaunch(pipeline, action.actor, ports.now());
       }
       if (action.action === "retry-stage" || pipeline.stateDetail === "delivery takeover accepted; remote reconciliation pending") pipeline.stateDetail = null;
       persist();
@@ -7432,7 +7463,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     }
     const followUpAt = unixMs(ports.now());
     followUp = followUp || result.pipelines.some((pipeline) => pipeline.state === "running"
-      && ((pipeline.cursor?.state === "pending" && !ports.drainHold?.()) || (settledGitIds.has(pipeline.id)
+      && ((pipeline.cursor?.state === "pending" && !ports.drainHold?.() && !heldForCpuPressure(pipeline)) || (settledGitIds.has(pipeline.id)
         && (pipeline.cursor?.state === "committing" || pipeline.stateDetail === "approved review head verification pending")
         && unixMs(currentAttempt(pipeline, pipeline.cursor?.stageId ?? "")?.remoteHeadWait?.retryAfter ?? "") <= followUpAt))
       && !stageActivationIsWaiting(pipeline, followUpAt));
@@ -9042,6 +9073,7 @@ function resolveDecision(
   // Keep the settled attempt, its report and worktree untouched. A fresh identity owns the continuation.
   setCursorState(pipeline, stage.id, "pending");
   pipeline.cursor!.input = renderDecisionInput(attempt.input, decision);
+  recordHandLaunch(pipeline, actor, decision.at);
   const next = newAttempt(pipeline, stage)!;
   next.decisionAnswerId = decision.clientRequestId;
   pipeline.decisionAnswers = [...(pipeline.decisionAnswers ?? []), decision];
@@ -9153,6 +9185,7 @@ function continueReview(
       activatedBy: { stageId: pending.fixStageId, attempt: fix.n, edge: "pass" },
     };
   }
+  recordHandLaunch(pipeline, actor, grant.at);
   pipeline.state = "running";
   pipeline.pausedState = null;
   pipeline.stateDetail = null;
@@ -9218,6 +9251,7 @@ function acceptHead(
   pipeline.reviewAcceptances = [...(pipeline.reviewAcceptances ?? []), acceptance];
   delete pipeline.reviewPending;
   advancePipeline(pipeline, fixStage, ports, fix, true);
+  recordHandLaunch(pipeline, actor, acceptance.at);
   return { pipeline, reviewAcceptance: acceptance, replayed: false };
 }
 
@@ -9635,6 +9669,7 @@ export async function patchPipeline(
       if (!unresolved && pipeline.baseRefPinned === undefined) pipeline.baseRefPinned = true;
       pipeline.state = "provisioning";
       pipeline.stateDetail = unresolved ? PIPELINE_BASE_UNRESOLVED_DETAIL : null;
+      recordHandLaunch(pipeline, actor, ports.now());
     } else if (req.action === "update-draft") {
       if (pipeline.state !== "draft") return { error: "pipeline is not a draft", status: 409 };
       if (req.task === undefined && req.spec === undefined && req.repoDir === undefined) return { error: "update-draft needs at least one field to change", status: 400 };
@@ -10112,6 +10147,7 @@ export async function patchPipeline(
       /* Re-activate the cursor stage preserving its persisted relay record, so
          the retried attempt receives the identical {{prev.output}} (#353). */
       if (stage) setCursorState(pipeline, stage.id, awaitingPassedPublication(pipeline) ? "committing" : "pending");
+      recordHandLaunch(pipeline, actor, ports.now());
       pipeline.pausedState = null;
       pipeline.stateDetail = null;
     } else if (req.action === "skip-stage") {
@@ -10201,7 +10237,8 @@ export async function patchPipeline(
             model: req.model !== undefined ? req.model : resetRuntime ? undefined : target.model,
             effort: req.effort !== undefined ? req.effort : resetRuntime ? undefined : target.effort,
             serviceTier: req.serviceTier !== undefined ? req.serviceTier : resetRuntime ? undefined : target.serviceTier,
-            access: target.access,
+            /* A read-only-locked role takes no access from the stage it replaces. */
+            access: isReadOnlyLockedRole(roleRef?.roleId) ? undefined : target.access,
           },
           target.kind,
           ports.roleLookup,
