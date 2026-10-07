@@ -789,10 +789,11 @@ test("a task card with a prototype review carries the review button beside its f
   try { click(button); } finally { dom.removeEventListener("llv:open-prototype-review", listen as never); G.CustomEvent = held; }
   expect(asked).toEqual([{ kind: "prototype-review", taskId: "p", reviewId: "pr_round", from: "card" }]);
   expect(opened.tasks).toEqual([]);
-  /* Decided: the chosen numbers stay on the button. */
+  /* Decided: the button keeps its word and names the chosen variants to assistive tech. */
   render([{ ...row, prototypeReview: { ...review, waitingReviewId: null, decision: { chosen: [{ number: 2, name: "Two" }, { number: 3, name: "Three" }], comment: "", at: review.createdAt, delivery: "sent" } } } as BoardTask]);
   expect(q(host, '[data-phone-card-prototype-button="p"]')!.getAttribute("data-prototype-state")).toBe("decided");
-  expect(q(host, '[data-phone-card-prototype-button="p"]')!.textContent).toBe("2, 3");
+  expect(q(host, '[data-phone-card-prototype-button="p"]')!.textContent).toBe(en("proto.button.word"));
+  expect(q(host, '[data-phone-card-prototype-button="p"]')!.getAttribute("aria-label")).toContain("2 · Two, 3 · Three");
   /* A task with no review draws no button. */
   render([task("p", "assigned")]);
   expect(q(host, "[data-phone-card-prototype-button]")).toBeNull();

@@ -882,12 +882,18 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
           {/* The orchestrator's composer takes a reference to this task as a chip
               (never text in the input). Not on the Overview, where cards of
               several projects stand and no seat is on screen to take it. */}
-          {!props.projectNames ? <AskOrchestratorButton onAsked={props.onAsked} cardId={card.id} project={card.project} taskId={card.task.id} title={title} color={card.color} icon={card.icon} /> : null}
-          {remote ? <HostChip remote={remote} /> : props.onAddAgent ? (
-            <button type="button" className="add" data-add-agent={card.id} aria-label={t("kanban.addAgentAria", { title })} onClick={() => props.onAddAgent!(card)}>
-              <span className="plus" aria-hidden="true">+</span> {t("kanban.addAgent")}
-            </button>
+          {/* «Ask» and «+ Agent» wrap together: neither is left alone on a line. */}
+          {!props.projectNames || (!remote && props.onAddAgent) ? (
+            <span className="foot-acts">
+              {!props.projectNames ? <AskOrchestratorButton onAsked={props.onAsked} cardId={card.id} project={card.project} taskId={card.task.id} title={title} color={card.color} icon={card.icon} /> : null}
+              {!remote && props.onAddAgent ? (
+                <button type="button" className="add" data-add-agent={card.id} aria-label={t("kanban.addAgentAria", { title })} onClick={() => props.onAddAgent!(card)}>
+                  <span className="plus" aria-hidden="true">+</span> {t("kanban.addAgent")}
+                </button>
+              ) : null}
+            </span>
           ) : null}
+          {remote ? <HostChip remote={remote} /> : null}
         </div>
       ) : (
         <div className="foot">

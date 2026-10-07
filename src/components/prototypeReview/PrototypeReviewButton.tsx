@@ -1,6 +1,6 @@
 "use client";
 
-import { GalleryHorizontalEnd } from "lucide-react";
+import { GalleryHorizontalEnd, TriangleAlert } from "lucide-react";
 
 import { Check, ChevronRight } from "@/components/icons";
 import { openPrototypeReview, usePrototypeReviewSummary } from "@/hooks/usePrototypeReview";
@@ -9,11 +9,6 @@ import type { PrototypeReviewSummary } from "@/lib/prototypeReview/types";
 import type { BoardTask } from "@/lib/tasks/types";
 
 import { prototypeButtonState, usePrototypeReviewsSeen, type PrototypeButtonState } from "./prototypeReviewStore";
-
-/** The chosen variants as the card says them: their numbers, in order. */
-function chosenNumbers(summary: PrototypeReviewSummary): string {
-  return (summary.decision?.chosen ?? []).map((variant) => variant.number).join(", ");
-}
 
 function buttonAria(t: TFunction, state: PrototypeButtonState, summary: PrototypeReviewSummary, title: string): string {
   const chosen = (summary.decision?.chosen ?? []).map((variant) => `${variant.number} · ${variant.name}`).join(", ");
@@ -24,9 +19,18 @@ function target(task: BoardTask, summary: PrototypeReviewSummary) {
   return { kind: "prototype-review" as const, taskId: task.id, reviewId: summary.waitingReviewId ?? summary.latestReviewId, from: "card" as const };
 }
 
+/** The mark before the word: the review's while a round waits, a check once
+    the latest round is decided, a warning while its message is undelivered.
+    The chosen numbers are in the label; the button always says «Prototype». */
+function StateMark({ state, className = "" }: { state: PrototypeButtonState; className?: string }) {
+  if (state === "decided") return <Check className={`${className} text-success`} aria-hidden />;
+  if (state === "unsent") return <TriangleAlert className={`${className} text-warning`} aria-hidden />;
+  return <GalleryHorizontalEnd className={`${className} ${state === "ready" || state === "opened" ? "text-accent" : "text-muted"}`} aria-hidden />;
+}
+
 /** The review button in a desktop card's foot. Absent while the task has no
-    review; highlighted while a round waits unopened; the chosen numbers once
-    the latest round is decided. */
+    review; tinted while a round waits unopened; checked once the latest round
+    is decided. */
 export function CardPrototypeButton({ task, title }: { task: BoardTask; title: string }) {
   const { t } = useLocale();
   const summary = usePrototypeReviewSummary(task);
@@ -34,7 +38,6 @@ export function CardPrototypeButton({ task, title }: { task: BoardTask; title: s
   const state = prototypeButtonState(summary, seen);
   if (!summary || !state) return null;
   const label = buttonAria(t, state, summary, title);
-  const waiting = state === "ready" || state === "opened";
   return (
     <button
       type="button"
@@ -45,18 +48,8 @@ export function CardPrototypeButton({ task, title }: { task: BoardTask; title: s
       title={label}
       onClick={() => openPrototypeReview(target(task, summary))}
     >
-      <GalleryHorizontalEnd aria-hidden />
-      {waiting ? (
-        <>
-          {state === "ready" ? <span className="proto-dot" aria-hidden="true" /> : null}
-          <span className="proto-word">{t("proto.button.word")}</span>
-        </>
-      ) : (
-        <span className="proto-chosen num">
-          {state === "unsent" ? <span className="proto-dot warn" aria-hidden="true" /> : <Check aria-hidden />}
-          {chosenNumbers(summary)}
-        </span>
-      )}
+      <StateMark state={state} />
+      <span className="proto-word">{t("proto.button.word")}</span>
     </button>
   );
 }
@@ -71,8 +64,8 @@ export function usePrototypeButton(task: BoardTask | null): PrototypeButtonView 
 }
 
 /** The same button on a phone board's card, beside the card's own face: the
-    mark and the word while a round waits, the chosen numbers after it, in a
-    full touch target that opens the review over the board. */
+    state's mark and the word, in a full touch target that opens the review
+    over the board. */
 export function PhoneCardPrototypeButton({ task, title, review }: { task: BoardTask; title: string; review: PrototypeButtonView }) {
   const { t } = useLocale();
   const { summary, state } = review;
@@ -86,15 +79,9 @@ export function PhoneCardPrototypeButton({ task, title, review }: { task: BoardT
       className="flex h-11 min-w-11 shrink-0 items-center justify-center rounded-[12px] px-1 active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
       onClick={() => openPrototypeReview(target(task, summary))}
     >
-      <span className={`inline-flex h-8 items-center gap-1.5 rounded-control px-2.5 text-ui font-semibold tabular-nums ${state === "ready" ? "bg-accent-soft text-accent" : waiting ? "text-accent" : "text-secondary"}`}>
-        <GalleryHorizontalEnd className={`h-4 w-4 shrink-0 ${waiting ? "text-accent" : "text-muted"}`} aria-hidden />
-        {state === "ready" ? <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" /> : null}
-        {waiting ? t("proto.button.word") : (
-          <>
-            {state === "unsent" ? <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-warning" /> : <Check className="h-3.5 w-3.5 shrink-0 text-success" aria-hidden />}
-            {chosenNumbers(summary)}
-          </>
-        )}
+      <span className={`inline-flex h-8 items-center gap-1.5 rounded-control px-2.5 text-ui font-semibold ${state === "ready" ? "bg-accent-soft text-accent" : waiting ? "text-accent" : "text-secondary"}`}>
+        <StateMark state={state} className="h-4 w-4 shrink-0" />
+        {t("proto.button.word")}
       </span>
     </button>
   );
@@ -125,7 +112,7 @@ export function PhonePrototypeRow({ task, title, rowClass }: { task: BoardTask; 
       </span>
       <span className={`inline-flex shrink-0 items-center gap-1 text-label font-semibold tabular-nums ${state === "ready" ? "text-accent" : state === "unsent" ? "text-warning" : "text-muted"}`}>
         {state === "ready" ? <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-accent" /> : null}
-        {waiting ? t(`proto.row.${state}`) : t(state === "unsent" ? "proto.row.unsent" : "proto.row.decided", { chosen: chosenNumbers(summary) })}
+        {waiting ? t(`proto.row.${state}`) : t(state === "unsent" ? "proto.row.unsent" : "proto.row.decided", { chosen: (summary.decision?.chosen ?? []).map((variant) => variant.number).join(", ") })}
       </span>
       <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden />
     </button>

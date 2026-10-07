@@ -8,17 +8,17 @@
         "text": "Prototype",
         "aria": "A prototype of «Restore search results after the index rebuild» is ready: Search results layout. Open the review",
         "word": true,
-        "dot": true,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgb(236, 235, 251)",
         "color": "rgb(90, 81, 224)",
         "size": [
-          95,
+          85,
           28
         ],
         "insideCard": true,
         "overlaps": 0,
-        "footLines": 2
+        "footLines": 1
       },
       {
         "task": "t-upload",
@@ -26,7 +26,7 @@
         "text": "Prototype",
         "aria": "The prototype of «Redesign attachment upload for large files» still waits for your choice: Upload progress sheet. Open the review",
         "word": true,
-        "dot": false,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(90, 81, 224)",
@@ -44,12 +44,12 @@
         "text": "Prototype",
         "aria": "A prototype of «Repair old links in the release notes» is ready: Release notes links, smaller arrows. Open the review",
         "word": true,
-        "dot": true,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgb(236, 235, 251)",
         "color": "rgb(90, 81, 224)",
         "size": [
-          95,
+          85,
           28
         ],
         "insideCard": true,
@@ -59,15 +59,15 @@
       {
         "task": "t-export",
         "state": "decided",
-        "text": "2, 3",
+        "text": "Prototype",
         "aria": "Prototype of «Simplify the export settings sheet»: chosen 2 · Segmented control, 3 · Advanced drawer. Open the review",
-        "word": false,
-        "dot": false,
+        "word": true,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(85, 85, 95)",
         "size": [
-          67,
+          85,
           28
         ],
         "insideCard": true,
@@ -77,15 +77,15 @@
       {
         "task": "t-disk",
         "state": "unsent",
-        "text": "2",
+        "text": "Prototype",
         "aria": "Prototype of «Disk space: find what Docker, worktrees and temp storage hold»: chosen 2 · Sorted bars, the orchestrator has not received it. Open the review",
-        "word": false,
-        "dot": true,
+        "word": true,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(85, 85, 95)",
         "size": [
-          49,
+          85,
           28
         ],
         "insideCard": true,
@@ -96,9 +96,9 @@
     "desktop-1440-en-light-card-cutouts": {
       "ready": {
         "button": [
-          852,
-          841,
-          95,
+          795,
+          865,
+          85,
           28
         ],
         "inCard": true,
@@ -107,7 +107,7 @@
       "opened": {
         "button": [
           795,
-          700,
+          676,
           85,
           28
         ],
@@ -116,9 +116,9 @@
       },
       "decided": {
         "button": [
-          813,
+          795,
           604,
-          67,
+          85,
           28
         ],
         "inCard": true,
@@ -126,9 +126,9 @@
       },
       "unsent": {
         "button": [
-          831,
+          795,
           764,
-          49,
+          85,
           28
         ],
         "inCard": true,
@@ -138,7 +138,7 @@
         "button": [
           582,
           615,
-          95,
+          85,
           28
         ],
         "inCard": true,
@@ -305,6 +305,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -378,6 +379,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -396,11 +398,11 @@
       ],
       "media": [
         [
-          950,
+          696,
           435
         ],
         [
-          950,
+          696,
           435
         ]
       ],
@@ -430,7 +432,7 @@
           {
             "side": "original",
             "box": [
-              377,
+              504,
               172,
               50.9,
               15
@@ -441,7 +443,7 @@
           {
             "side": "changed",
             "box": [
-              1274.7,
+              1147.7,
               172,
               52.3,
               15
@@ -449,7 +451,12 @@
             "inside": true,
             "overPicture": false
           }
-        ]
+        ],
+        "track": [
+          504,
+          1200
+        ],
+        "fitted": true
       }
     },
     "desktop-1440-en-light-pair-slider-geometry": {
@@ -492,6 +499,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -567,6 +575,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -641,11 +650,12 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
     "desktop-1440-en-light-viewer": {
-      "position": "1 / 50",
+      "position": "1 / 3",
       "caption": "1 · Compact list — results, desktop· Search results layout"
     },
     "desktop-1440-en-light-dictating-geometry": {
@@ -688,6 +698,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -760,6 +771,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -799,7 +811,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/7/2026, 2:00:28 AM",
+      "time": "7 Oct, 03:00",
       "posts": [
         {
           "taskId": "t-search",
@@ -852,6 +864,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -932,6 +945,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -985,8 +999,8 @@
       "caption": {
         "text": "resumed after a drop: the bar keeps what was already sent, the label names the retry, the speed returns once two samples exist, and the stop button stays where the pointer left it, so nothing jumps.",
         "left": 381,
-        "right": 1083.3,
-        "lines": 3,
+        "right": 1132,
+        "lines": 2,
         "inside": true
       },
       "reachable": {
@@ -1013,13 +1027,13 @@
           365,
           112,
           974,
-          72
+          54
         ],
         "canvas": [
           365,
-          184,
+          166,
           974,
-          486
+          504
         ],
         "strip": [
           365,
@@ -1035,6 +1049,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -1085,6 +1100,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -1157,6 +1173,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -1194,6 +1211,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -1259,6 +1277,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -1312,6 +1331,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -1383,6 +1403,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -1465,6 +1486,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -1514,17 +1536,17 @@
         "text": "Prototype",
         "aria": "A prototype of «Restore search results after the index rebuild» is ready: Search results layout. Open the review",
         "word": true,
-        "dot": true,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgb(38, 35, 71)",
         "color": "rgb(143, 136, 255)",
         "size": [
-          95,
+          85,
           28
         ],
         "insideCard": true,
         "overlaps": 0,
-        "footLines": 2
+        "footLines": 1
       },
       {
         "task": "t-upload",
@@ -1532,7 +1554,7 @@
         "text": "Prototype",
         "aria": "The prototype of «Redesign attachment upload for large files» still waits for your choice: Upload progress sheet. Open the review",
         "word": true,
-        "dot": false,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(143, 136, 255)",
@@ -1550,12 +1572,12 @@
         "text": "Prototype",
         "aria": "A prototype of «Repair old links in the release notes» is ready: Release notes links, smaller arrows. Open the review",
         "word": true,
-        "dot": true,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgb(38, 35, 71)",
         "color": "rgb(143, 136, 255)",
         "size": [
-          95,
+          85,
           28
         ],
         "insideCard": true,
@@ -1565,15 +1587,15 @@
       {
         "task": "t-export",
         "state": "decided",
-        "text": "2, 3",
+        "text": "Prototype",
         "aria": "Prototype of «Simplify the export settings sheet»: chosen 2 · Segmented control, 3 · Advanced drawer. Open the review",
-        "word": false,
-        "dot": false,
+        "word": true,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(162, 162, 174)",
         "size": [
-          67,
+          85,
           28
         ],
         "insideCard": true,
@@ -1583,15 +1605,15 @@
       {
         "task": "t-disk",
         "state": "unsent",
-        "text": "2",
+        "text": "Prototype",
         "aria": "Prototype of «Disk space: find what Docker, worktrees and temp storage hold»: chosen 2 · Sorted bars, the orchestrator has not received it. Open the review",
-        "word": false,
-        "dot": true,
+        "word": true,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(162, 162, 174)",
         "size": [
-          49,
+          85,
           28
         ],
         "insideCard": true,
@@ -1602,9 +1624,9 @@
     "desktop-1440-en-dark-card-cutouts": {
       "ready": {
         "button": [
-          852,
-          841,
-          95,
+          795,
+          865,
+          85,
           28
         ],
         "inCard": true,
@@ -1613,7 +1635,7 @@
       "opened": {
         "button": [
           795,
-          700,
+          676,
           85,
           28
         ],
@@ -1622,9 +1644,9 @@
       },
       "decided": {
         "button": [
-          813,
+          795,
           604,
-          67,
+          85,
           28
         ],
         "inCard": true,
@@ -1632,9 +1654,9 @@
       },
       "unsent": {
         "button": [
-          831,
+          795,
           764,
-          49,
+          85,
           28
         ],
         "inCard": true,
@@ -1644,7 +1666,7 @@
         "button": [
           582,
           615,
-          95,
+          85,
           28
         ],
         "inCard": true,
@@ -1811,6 +1833,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -1884,6 +1907,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -1902,11 +1926,11 @@
       ],
       "media": [
         [
-          950,
+          696,
           435
         ],
         [
-          950,
+          696,
           435
         ]
       ],
@@ -1936,7 +1960,7 @@
           {
             "side": "original",
             "box": [
-              377,
+              504,
               172,
               50.9,
               15
@@ -1947,7 +1971,7 @@
           {
             "side": "changed",
             "box": [
-              1274.7,
+              1147.7,
               172,
               52.3,
               15
@@ -1955,7 +1979,12 @@
             "inside": true,
             "overPicture": false
           }
-        ]
+        ],
+        "track": [
+          504,
+          1200
+        ],
+        "fitted": true
       }
     },
     "desktop-1440-en-dark-pair-slider-geometry": {
@@ -1998,6 +2027,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -2073,6 +2103,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -2147,11 +2178,12 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
     "desktop-1440-en-dark-viewer": {
-      "position": "1 / 50",
+      "position": "1 / 3",
       "caption": "1 · Compact list — results, desktop· Search results layout"
     },
     "desktop-1440-en-dark-dictating-geometry": {
@@ -2194,6 +2226,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -2266,6 +2299,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -2305,7 +2339,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/7/2026, 2:00:52 AM",
+      "time": "7 Oct, 03:01",
       "posts": [
         {
           "taskId": "t-search",
@@ -2358,6 +2392,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -2438,6 +2473,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -2491,8 +2527,8 @@
       "caption": {
         "text": "resumed after a drop: the bar keeps what was already sent, the label names the retry, the speed returns once two samples exist, and the stop button stays where the pointer left it, so nothing jumps.",
         "left": 381,
-        "right": 1083.3,
-        "lines": 3,
+        "right": 1132,
+        "lines": 2,
         "inside": true
       },
       "reachable": {
@@ -2519,13 +2555,13 @@
           365,
           112,
           974,
-          72
+          54
         ],
         "canvas": [
           365,
-          184,
+          166,
           974,
-          486
+          504
         ],
         "strip": [
           365,
@@ -2541,6 +2577,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -2591,6 +2628,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -2663,6 +2701,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -2700,6 +2739,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -2765,6 +2805,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -2818,6 +2859,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -2889,6 +2931,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -2971,6 +3014,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -3020,17 +3064,17 @@
         "text": "Прототип",
         "aria": "Прототип «Restore search results after the index rebuild» готовий: Макет результатів пошуку. Відкрити огляд",
         "word": true,
-        "dot": true,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgb(236, 235, 251)",
         "color": "rgb(90, 81, 224)",
         "size": [
-          96,
+          86,
           28
         ],
         "insideCard": true,
         "overlaps": 0,
-        "footLines": 2
+        "footLines": 1
       },
       {
         "task": "t-upload",
@@ -3038,7 +3082,7 @@
         "text": "Прототип",
         "aria": "Прототип «Redesign attachment upload for large files» ще чекає на ваш вибір: Панель перебігу завантаження. Відкрити огляд",
         "word": true,
-        "dot": false,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(90, 81, 224)",
@@ -3056,12 +3100,12 @@
         "text": "Прототип",
         "aria": "Прототип «Repair old links in the release notes» готовий: Посилання в нотатках релізу, менші стрілки. Відкрити огляд",
         "word": true,
-        "dot": true,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgb(236, 235, 251)",
         "color": "rgb(90, 81, 224)",
         "size": [
-          96,
+          86,
           28
         ],
         "insideCard": true,
@@ -3071,15 +3115,15 @@
       {
         "task": "t-export",
         "state": "decided",
-        "text": "2, 3",
+        "text": "Прототип",
         "aria": "Прототип «Simplify the export settings sheet»: обрано 2 · Сегментований перемикач, 3 · Шухляда розширених. Відкрити огляд",
-        "word": false,
-        "dot": false,
+        "word": true,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(85, 85, 95)",
         "size": [
-          67,
+          86,
           28
         ],
         "insideCard": true,
@@ -3089,15 +3133,15 @@
       {
         "task": "t-disk",
         "state": "unsent",
-        "text": "2",
+        "text": "Прототип",
         "aria": "Прототип «Disk space: find what Docker, worktrees and temp storage hold»: обрано 2 · Впорядковані смуги, оркестратор цього ще не отримав. Відкрити огляд",
-        "word": false,
-        "dot": true,
+        "word": true,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(85, 85, 95)",
         "size": [
-          49,
+          86,
           28
         ],
         "insideCard": true,
@@ -3108,9 +3152,9 @@
     "desktop-1440-uk-light-card-cutouts": {
       "ready": {
         "button": [
-          827,
-          841,
-          96,
+          771,
+          865,
+          86,
           28
         ],
         "inCard": true,
@@ -3118,8 +3162,8 @@
       },
       "opened": {
         "button": [
-          837,
-          700,
+          924,
+          676,
           86,
           28
         ],
@@ -3128,9 +3172,9 @@
       },
       "decided": {
         "button": [
-          789,
+          771,
           604,
-          67,
+          86,
           28
         ],
         "inCard": true,
@@ -3138,9 +3182,9 @@
       },
       "unsent": {
         "button": [
-          807,
+          771,
           764,
-          49,
+          86,
           28
         ],
         "inCard": true,
@@ -3150,7 +3194,7 @@
         "button": [
           582,
           615,
-          96,
+          86,
           28
         ],
         "inCard": true,
@@ -3317,6 +3361,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -3390,6 +3435,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -3408,11 +3454,11 @@
       ],
       "media": [
         [
-          950,
+          696,
           435
         ],
         [
-          950,
+          696,
           435
         ]
       ],
@@ -3442,7 +3488,7 @@
           {
             "side": "original",
             "box": [
-              377,
+              504,
               172,
               53.7,
               15
@@ -3453,7 +3499,7 @@
           {
             "side": "changed",
             "box": [
-              1279,
+              1152,
               172,
               48,
               15
@@ -3461,7 +3507,12 @@
             "inside": true,
             "overPicture": false
           }
-        ]
+        ],
+        "track": [
+          504,
+          1200
+        ],
+        "fitted": true
       }
     },
     "desktop-1440-uk-light-pair-slider-geometry": {
@@ -3504,6 +3555,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -3579,6 +3631,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -3653,11 +3706,12 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
     "desktop-1440-uk-light-viewer": {
-      "position": "1 / 50",
+      "position": "1 / 3",
       "caption": "1 · Компактний список — результати, десктоп· Макет результатів пошуку"
     },
     "desktop-1440-uk-light-dictating-geometry": {
@@ -3700,6 +3754,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -3772,6 +3827,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -3811,7 +3867,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "07.10.2026, 02:01:14",
+      "time": "7 жовт., 03:01",
       "posts": [
         {
           "taskId": "t-search",
@@ -3864,6 +3920,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -3944,6 +4001,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -3997,7 +4055,7 @@
       "caption": {
         "text": "відновлено після обриву: смуга зберігає вже надіслане, підпис називає повтор, швидкість повертається після двох замірів, а кнопка зупинки лишається там, де її залишив вказівник, тож ніщо не стрибає.",
         "left": 381,
-        "right": 1081.6,
+        "right": 1146.1,
         "lines": 3,
         "inside": true
       },
@@ -4047,6 +4105,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -4097,6 +4156,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -4169,6 +4229,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -4206,6 +4267,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -4271,6 +4333,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -4324,6 +4387,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -4395,6 +4459,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -4477,6 +4542,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -4526,17 +4592,17 @@
         "text": "Прототип",
         "aria": "Прототип «Restore search results after the index rebuild» готовий: Макет результатів пошуку. Відкрити огляд",
         "word": true,
-        "dot": true,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgb(38, 35, 71)",
         "color": "rgb(143, 136, 255)",
         "size": [
-          96,
+          86,
           28
         ],
         "insideCard": true,
         "overlaps": 0,
-        "footLines": 2
+        "footLines": 1
       },
       {
         "task": "t-upload",
@@ -4544,7 +4610,7 @@
         "text": "Прототип",
         "aria": "Прототип «Redesign attachment upload for large files» ще чекає на ваш вибір: Панель перебігу завантаження. Відкрити огляд",
         "word": true,
-        "dot": false,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(143, 136, 255)",
@@ -4562,12 +4628,12 @@
         "text": "Прототип",
         "aria": "Прототип «Repair old links in the release notes» готовий: Посилання в нотатках релізу, менші стрілки. Відкрити огляд",
         "word": true,
-        "dot": true,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgb(38, 35, 71)",
         "color": "rgb(143, 136, 255)",
         "size": [
-          96,
+          86,
           28
         ],
         "insideCard": true,
@@ -4577,15 +4643,15 @@
       {
         "task": "t-export",
         "state": "decided",
-        "text": "2, 3",
+        "text": "Прототип",
         "aria": "Прототип «Simplify the export settings sheet»: обрано 2 · Сегментований перемикач, 3 · Шухляда розширених. Відкрити огляд",
-        "word": false,
-        "dot": false,
+        "word": true,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(162, 162, 174)",
         "size": [
-          67,
+          86,
           28
         ],
         "insideCard": true,
@@ -4595,15 +4661,15 @@
       {
         "task": "t-disk",
         "state": "unsent",
-        "text": "2",
+        "text": "Прототип",
         "aria": "Прототип «Disk space: find what Docker, worktrees and temp storage hold»: обрано 2 · Впорядковані смуги, оркестратор цього ще не отримав. Відкрити огляд",
-        "word": false,
-        "dot": true,
+        "word": true,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(162, 162, 174)",
         "size": [
-          49,
+          86,
           28
         ],
         "insideCard": true,
@@ -4614,9 +4680,9 @@
     "desktop-1440-uk-dark-card-cutouts": {
       "ready": {
         "button": [
-          827,
-          841,
-          96,
+          771,
+          865,
+          86,
           28
         ],
         "inCard": true,
@@ -4624,8 +4690,8 @@
       },
       "opened": {
         "button": [
-          837,
-          700,
+          924,
+          676,
           86,
           28
         ],
@@ -4634,9 +4700,9 @@
       },
       "decided": {
         "button": [
-          789,
+          771,
           604,
-          67,
+          86,
           28
         ],
         "inCard": true,
@@ -4644,9 +4710,9 @@
       },
       "unsent": {
         "button": [
-          807,
+          771,
           764,
-          49,
+          86,
           28
         ],
         "inCard": true,
@@ -4656,7 +4722,7 @@
         "button": [
           582,
           615,
-          96,
+          86,
           28
         ],
         "inCard": true,
@@ -4823,6 +4889,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -4896,6 +4963,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -4914,11 +4982,11 @@
       ],
       "media": [
         [
-          950,
+          696,
           435
         ],
         [
-          950,
+          696,
           435
         ]
       ],
@@ -4948,7 +5016,7 @@
           {
             "side": "original",
             "box": [
-              377,
+              504,
               172,
               53.7,
               15
@@ -4959,7 +5027,7 @@
           {
             "side": "changed",
             "box": [
-              1279,
+              1152,
               172,
               48,
               15
@@ -4967,7 +5035,12 @@
             "inside": true,
             "overPicture": false
           }
-        ]
+        ],
+        "track": [
+          504,
+          1200
+        ],
+        "fitted": true
       }
     },
     "desktop-1440-uk-dark-pair-slider-geometry": {
@@ -5010,6 +5083,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -5085,6 +5159,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -5159,11 +5234,12 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
     "desktop-1440-uk-dark-viewer": {
-      "position": "1 / 50",
+      "position": "1 / 3",
       "caption": "1 · Компактний список — результати, десктоп· Макет результатів пошуку"
     },
     "desktop-1440-uk-dark-dictating-geometry": {
@@ -5206,6 +5282,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -5278,6 +5355,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -5317,7 +5395,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "07.10.2026, 02:01:37",
+      "time": "7 жовт., 03:02",
       "posts": [
         {
           "taskId": "t-search",
@@ -5370,6 +5448,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -5450,6 +5529,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -5503,7 +5583,7 @@
       "caption": {
         "text": "відновлено після обриву: смуга зберігає вже надіслане, підпис називає повтор, швидкість повертається після двох замірів, а кнопка зупинки лишається там, де її залишив вказівник, тож ніщо не стрибає.",
         "left": 381,
-        "right": 1081.6,
+        "right": 1146.1,
         "lines": 3,
         "inside": true
       },
@@ -5553,6 +5633,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -5603,6 +5684,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -5675,6 +5757,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -5712,6 +5795,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -5777,6 +5861,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -5830,6 +5915,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -5901,6 +5987,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -5983,6 +6070,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -6032,12 +6120,12 @@
         "text": "Prototype",
         "aria": "A prototype of «Restore search results after the index rebuild» is ready: Search results layout. Open the review",
         "word": true,
-        "dot": true,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgb(236, 235, 251)",
         "color": "rgb(90, 81, 224)",
         "size": [
-          95,
+          85,
           28
         ],
         "insideCard": true,
@@ -6050,7 +6138,7 @@
         "text": "Prototype",
         "aria": "The prototype of «Redesign attachment upload for large files» still waits for your choice: Upload progress sheet. Open the review",
         "word": true,
-        "dot": false,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(90, 81, 224)",
@@ -6068,12 +6156,12 @@
         "text": "Prototype",
         "aria": "A prototype of «Repair old links in the release notes» is ready: Release notes links, smaller arrows. Open the review",
         "word": true,
-        "dot": true,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgb(236, 235, 251)",
         "color": "rgb(90, 81, 224)",
         "size": [
-          95,
+          85,
           28
         ],
         "insideCard": true,
@@ -6083,15 +6171,15 @@
       {
         "task": "t-export",
         "state": "decided",
-        "text": "2, 3",
+        "text": "Prototype",
         "aria": "Prototype of «Simplify the export settings sheet»: chosen 2 · Segmented control, 3 · Advanced drawer. Open the review",
-        "word": false,
-        "dot": false,
+        "word": true,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(85, 85, 95)",
         "size": [
-          67,
+          85,
           28
         ],
         "insideCard": true,
@@ -6101,15 +6189,15 @@
       {
         "task": "t-disk",
         "state": "unsent",
-        "text": "2",
+        "text": "Prototype",
         "aria": "Prototype of «Disk space: find what Docker, worktrees and temp storage hold»: chosen 2 · Sorted bars, the orchestrator has not received it. Open the review",
-        "word": false,
-        "dot": true,
+        "word": true,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(85, 85, 95)",
         "size": [
-          49,
+          85,
           28
         ],
         "insideCard": true,
@@ -6120,9 +6208,9 @@
     "pane-1000-en-light-card-cutouts": {
       "ready": {
         "button": [
-          737,
+          747,
           500,
-          95,
+          85,
           28
         ],
         "inCard": true,
@@ -6140,9 +6228,9 @@
       },
       "decided": {
         "button": [
-          765,
+          747,
           555,
-          67,
+          85,
           28
         ],
         "inCard": true,
@@ -6150,9 +6238,9 @@
       },
       "unsent": {
         "button": [
-          783,
+          747,
           581,
-          49,
+          85,
           28
         ],
         "inCard": true,
@@ -6160,9 +6248,9 @@
       },
       "newer-round": {
         "button": [
-          737,
+          747,
           554,
-          95,
+          85,
           28
         ],
         "inCard": true,
@@ -6371,6 +6459,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -6444,6 +6533,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -6462,11 +6552,11 @@
       ],
       "media": [
         [
-          662,
+          414,
           259
         ],
         [
-          662,
+          414,
           259
         ]
       ],
@@ -6480,23 +6570,23 @@
       "labels": {
         "drawn": [
           [
-            424.8,
-            179,
-            414.4,
-            259
+            425,
+            179.1,
+            414,
+            258.8
           ],
           [
-            424.8,
-            179,
-            414.4,
-            259
+            425,
+            179.1,
+            414,
+            258.8
           ]
         ],
         "labels": [
           {
             "side": "original",
             "box": [
-              301,
+              425,
               160,
               50.9,
               15
@@ -6507,7 +6597,7 @@
           {
             "side": "changed",
             "box": [
-              910.7,
+              786.7,
               160,
               52.3,
               15
@@ -6515,7 +6605,12 @@
             "inside": true,
             "overPicture": false
           }
-        ]
+        ],
+        "track": [
+          425,
+          839
+        ],
+        "fitted": true
       }
     },
     "pane-1000-en-light-pair-slider-geometry": {
@@ -6558,6 +6653,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -6633,6 +6729,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -6707,11 +6804,12 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
     "pane-1000-en-light-viewer": {
-      "position": "1 / 50",
+      "position": "1 / 3",
       "caption": "1 · Compact list — results, desktop· Search results layout"
     },
     "pane-1000-en-light-dictating-geometry": {
@@ -6754,6 +6852,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -6826,6 +6925,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -6865,7 +6965,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/7/2026, 2:02:00 AM",
+      "time": "7 Oct, 03:02",
       "posts": [
         {
           "taskId": "t-search",
@@ -6918,6 +7018,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -6976,13 +7077,13 @@
           289,
           100,
           686,
-          54
+          48
         ],
         "canvas": [
           289,
-          154,
+          148,
           686,
-          328
+          334
         ],
         "strip": [
           289,
@@ -6998,6 +7099,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -7012,12 +7114,12 @@
       "position": "1 / 2",
       "canvas": [
         686,
-        328
+        334
       ],
       "media": [
         [
-          486,
-          304
+          496,
+          310
         ]
       ],
       "mediaInside": true,
@@ -7051,8 +7153,8 @@
       "caption": {
         "text": "resumed after a drop: the bar keeps what was already sent, the label names the retry, the speed returns once two samples exist, and the stop button stays where the pointer left it, so nothing jumps.",
         "left": 305,
-        "right": 716.3,
-        "lines": 3,
+        "right": 775.1,
+        "lines": 4,
         "inside": true
       },
       "reachable": {
@@ -7101,6 +7203,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -7129,13 +7232,13 @@
           289,
           100,
           686,
-          54
+          48
         ],
         "canvas": [
           289,
-          154,
+          148,
           686,
-          317.5
+          323.5
         ],
         "strip": [
           289,
@@ -7151,6 +7254,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -7223,6 +7327,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -7260,6 +7365,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -7325,6 +7431,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -7378,6 +7485,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -7449,6 +7557,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -7531,6 +7640,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -7580,12 +7690,12 @@
         "text": "Prototype",
         "aria": "A prototype of «Restore search results after the index rebuild» is ready: Search results layout. Open the review",
         "word": true,
-        "dot": true,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgb(38, 35, 71)",
         "color": "rgb(143, 136, 255)",
         "size": [
-          95,
+          85,
           28
         ],
         "insideCard": true,
@@ -7598,7 +7708,7 @@
         "text": "Prototype",
         "aria": "The prototype of «Redesign attachment upload for large files» still waits for your choice: Upload progress sheet. Open the review",
         "word": true,
-        "dot": false,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(143, 136, 255)",
@@ -7616,12 +7726,12 @@
         "text": "Prototype",
         "aria": "A prototype of «Repair old links in the release notes» is ready: Release notes links, smaller arrows. Open the review",
         "word": true,
-        "dot": true,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgb(38, 35, 71)",
         "color": "rgb(143, 136, 255)",
         "size": [
-          95,
+          85,
           28
         ],
         "insideCard": true,
@@ -7631,15 +7741,15 @@
       {
         "task": "t-export",
         "state": "decided",
-        "text": "2, 3",
+        "text": "Prototype",
         "aria": "Prototype of «Simplify the export settings sheet»: chosen 2 · Segmented control, 3 · Advanced drawer. Open the review",
-        "word": false,
-        "dot": false,
+        "word": true,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(162, 162, 174)",
         "size": [
-          67,
+          85,
           28
         ],
         "insideCard": true,
@@ -7649,15 +7759,15 @@
       {
         "task": "t-disk",
         "state": "unsent",
-        "text": "2",
+        "text": "Prototype",
         "aria": "Prototype of «Disk space: find what Docker, worktrees and temp storage hold»: chosen 2 · Sorted bars, the orchestrator has not received it. Open the review",
-        "word": false,
-        "dot": true,
+        "word": true,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(162, 162, 174)",
         "size": [
-          49,
+          85,
           28
         ],
         "insideCard": true,
@@ -7668,9 +7778,9 @@
     "pane-1000-en-dark-card-cutouts": {
       "ready": {
         "button": [
-          737,
+          747,
           500,
-          95,
+          85,
           28
         ],
         "inCard": true,
@@ -7688,9 +7798,9 @@
       },
       "decided": {
         "button": [
-          765,
+          747,
           555,
-          67,
+          85,
           28
         ],
         "inCard": true,
@@ -7698,9 +7808,9 @@
       },
       "unsent": {
         "button": [
-          783,
+          747,
           581,
-          49,
+          85,
           28
         ],
         "inCard": true,
@@ -7708,9 +7818,9 @@
       },
       "newer-round": {
         "button": [
-          737,
+          747,
           554,
-          95,
+          85,
           28
         ],
         "inCard": true,
@@ -7919,6 +8029,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -7992,6 +8103,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -8010,11 +8122,11 @@
       ],
       "media": [
         [
-          662,
+          414,
           259
         ],
         [
-          662,
+          414,
           259
         ]
       ],
@@ -8028,23 +8140,23 @@
       "labels": {
         "drawn": [
           [
-            424.8,
-            179,
-            414.4,
-            259
+            425,
+            179.1,
+            414,
+            258.8
           ],
           [
-            424.8,
-            179,
-            414.4,
-            259
+            425,
+            179.1,
+            414,
+            258.8
           ]
         ],
         "labels": [
           {
             "side": "original",
             "box": [
-              301,
+              425,
               160,
               50.9,
               15
@@ -8055,7 +8167,7 @@
           {
             "side": "changed",
             "box": [
-              910.7,
+              786.7,
               160,
               52.3,
               15
@@ -8063,7 +8175,12 @@
             "inside": true,
             "overPicture": false
           }
-        ]
+        ],
+        "track": [
+          425,
+          839
+        ],
+        "fitted": true
       }
     },
     "pane-1000-en-dark-pair-slider-geometry": {
@@ -8106,6 +8223,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -8181,6 +8299,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -8255,11 +8374,12 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
     "pane-1000-en-dark-viewer": {
-      "position": "1 / 50",
+      "position": "1 / 3",
       "caption": "1 · Compact list — results, desktop· Search results layout"
     },
     "pane-1000-en-dark-dictating-geometry": {
@@ -8302,6 +8422,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -8374,6 +8495,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -8413,7 +8535,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/7/2026, 2:02:22 AM",
+      "time": "7 Oct, 03:02",
       "posts": [
         {
           "taskId": "t-search",
@@ -8466,6 +8588,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -8524,13 +8647,13 @@
           289,
           100,
           686,
-          54
+          48
         ],
         "canvas": [
           289,
-          154,
+          148,
           686,
-          328
+          334
         ],
         "strip": [
           289,
@@ -8546,6 +8669,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -8560,12 +8684,12 @@
       "position": "1 / 2",
       "canvas": [
         686,
-        328
+        334
       ],
       "media": [
         [
-          486,
-          304
+          496,
+          310
         ]
       ],
       "mediaInside": true,
@@ -8599,8 +8723,8 @@
       "caption": {
         "text": "resumed after a drop: the bar keeps what was already sent, the label names the retry, the speed returns once two samples exist, and the stop button stays where the pointer left it, so nothing jumps.",
         "left": 305,
-        "right": 716.3,
-        "lines": 3,
+        "right": 775.1,
+        "lines": 4,
         "inside": true
       },
       "reachable": {
@@ -8649,6 +8773,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -8677,13 +8802,13 @@
           289,
           100,
           686,
-          54
+          48
         ],
         "canvas": [
           289,
-          154,
+          148,
           686,
-          317.5
+          323.5
         ],
         "strip": [
           289,
@@ -8699,6 +8824,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -8771,6 +8897,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -8808,6 +8935,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -8873,6 +9001,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -8926,6 +9055,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -8997,6 +9127,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -9079,6 +9210,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -9128,12 +9260,12 @@
         "text": "Прототип",
         "aria": "Прототип «Restore search results after the index rebuild» готовий: Макет результатів пошуку. Відкрити огляд",
         "word": true,
-        "dot": true,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgb(236, 235, 251)",
         "color": "rgb(90, 81, 224)",
         "size": [
-          96,
+          86,
           28
         ],
         "insideCard": true,
@@ -9146,7 +9278,7 @@
         "text": "Прототип",
         "aria": "Прототип «Redesign attachment upload for large files» ще чекає на ваш вибір: Панель перебігу завантаження. Відкрити огляд",
         "word": true,
-        "dot": false,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(90, 81, 224)",
@@ -9164,12 +9296,12 @@
         "text": "Прототип",
         "aria": "Прототип «Repair old links in the release notes» готовий: Посилання в нотатках релізу, менші стрілки. Відкрити огляд",
         "word": true,
-        "dot": true,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgb(236, 235, 251)",
         "color": "rgb(90, 81, 224)",
         "size": [
-          96,
+          86,
           28
         ],
         "insideCard": true,
@@ -9179,15 +9311,15 @@
       {
         "task": "t-export",
         "state": "decided",
-        "text": "2, 3",
+        "text": "Прототип",
         "aria": "Прототип «Simplify the export settings sheet»: обрано 2 · Сегментований перемикач, 3 · Шухляда розширених. Відкрити огляд",
-        "word": false,
-        "dot": false,
+        "word": true,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(85, 85, 95)",
         "size": [
-          67,
+          86,
           28
         ],
         "insideCard": true,
@@ -9197,15 +9329,15 @@
       {
         "task": "t-disk",
         "state": "unsent",
-        "text": "2",
+        "text": "Прототип",
         "aria": "Прототип «Disk space: find what Docker, worktrees and temp storage hold»: обрано 2 · Впорядковані смуги, оркестратор цього ще не отримав. Відкрити огляд",
-        "word": false,
-        "dot": true,
+        "word": true,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(85, 85, 95)",
         "size": [
-          49,
+          86,
           28
         ],
         "insideCard": true,
@@ -9216,9 +9348,9 @@
     "pane-1000-uk-light-card-cutouts": {
       "ready": {
         "button": [
-          713,
+          723,
           500,
-          96,
+          86,
           28
         ],
         "inCard": true,
@@ -9236,9 +9368,9 @@
       },
       "decided": {
         "button": [
-          741,
+          723,
           555,
-          67,
+          86,
           28
         ],
         "inCard": true,
@@ -9246,9 +9378,9 @@
       },
       "unsent": {
         "button": [
-          759,
+          723,
           581,
-          49,
+          86,
           28
         ],
         "inCard": true,
@@ -9256,9 +9388,9 @@
       },
       "newer-round": {
         "button": [
-          713,
+          723,
           554,
-          96,
+          86,
           28
         ],
         "inCard": true,
@@ -9467,6 +9599,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -9540,6 +9673,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -9558,11 +9692,11 @@
       ],
       "media": [
         [
-          662,
+          414,
           259
         ],
         [
-          662,
+          414,
           259
         ]
       ],
@@ -9576,23 +9710,23 @@
       "labels": {
         "drawn": [
           [
-            424.8,
-            179,
-            414.4,
-            259
+            425,
+            179.1,
+            414,
+            258.8
           ],
           [
-            424.8,
-            179,
-            414.4,
-            259
+            425,
+            179.1,
+            414,
+            258.8
           ]
         ],
         "labels": [
           {
             "side": "original",
             "box": [
-              301,
+              425,
               160,
               53.7,
               15
@@ -9603,7 +9737,7 @@
           {
             "side": "changed",
             "box": [
-              915,
+              791,
               160,
               48,
               15
@@ -9611,7 +9745,12 @@
             "inside": true,
             "overPicture": false
           }
-        ]
+        ],
+        "track": [
+          425,
+          839
+        ],
+        "fitted": true
       }
     },
     "pane-1000-uk-light-pair-slider-geometry": {
@@ -9654,6 +9793,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -9729,6 +9869,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -9803,11 +9944,12 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
     "pane-1000-uk-light-viewer": {
-      "position": "1 / 50",
+      "position": "1 / 3",
       "caption": "1 · Компактний список — результати, десктоп· Макет результатів пошуку"
     },
     "pane-1000-uk-light-dictating-geometry": {
@@ -9850,6 +9992,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -9922,6 +10065,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -9961,7 +10105,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "07.10.2026, 02:02:45",
+      "time": "7 жовт., 03:03",
       "posts": [
         {
           "taskId": "t-search",
@@ -10014,6 +10158,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -10094,6 +10239,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -10147,7 +10293,7 @@
       "caption": {
         "text": "відновлено після обриву: смуга зберігає вже надіслане, підпис називає повтор, швидкість повертається після двох замірів, а кнопка зупинки лишається там, де її залишив вказівник, тож ніщо не стрибає.",
         "left": 305,
-        "right": 716.7,
+        "right": 759.9,
         "lines": 3,
         "inside": true
       },
@@ -10197,6 +10343,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -10247,6 +10394,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -10319,6 +10467,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -10356,6 +10505,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -10421,6 +10571,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -10474,6 +10625,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -10545,6 +10697,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -10627,6 +10780,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -10676,12 +10830,12 @@
         "text": "Прототип",
         "aria": "Прототип «Restore search results after the index rebuild» готовий: Макет результатів пошуку. Відкрити огляд",
         "word": true,
-        "dot": true,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgb(38, 35, 71)",
         "color": "rgb(143, 136, 255)",
         "size": [
-          96,
+          86,
           28
         ],
         "insideCard": true,
@@ -10694,7 +10848,7 @@
         "text": "Прототип",
         "aria": "Прототип «Redesign attachment upload for large files» ще чекає на ваш вибір: Панель перебігу завантаження. Відкрити огляд",
         "word": true,
-        "dot": false,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(143, 136, 255)",
@@ -10712,12 +10866,12 @@
         "text": "Прототип",
         "aria": "Прототип «Repair old links in the release notes» готовий: Посилання в нотатках релізу, менші стрілки. Відкрити огляд",
         "word": true,
-        "dot": true,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgb(38, 35, 71)",
         "color": "rgb(143, 136, 255)",
         "size": [
-          96,
+          86,
           28
         ],
         "insideCard": true,
@@ -10727,15 +10881,15 @@
       {
         "task": "t-export",
         "state": "decided",
-        "text": "2, 3",
+        "text": "Прототип",
         "aria": "Прототип «Simplify the export settings sheet»: обрано 2 · Сегментований перемикач, 3 · Шухляда розширених. Відкрити огляд",
-        "word": false,
-        "dot": false,
+        "word": true,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(162, 162, 174)",
         "size": [
-          67,
+          86,
           28
         ],
         "insideCard": true,
@@ -10745,15 +10899,15 @@
       {
         "task": "t-disk",
         "state": "unsent",
-        "text": "2",
+        "text": "Прототип",
         "aria": "Прототип «Disk space: find what Docker, worktrees and temp storage hold»: обрано 2 · Впорядковані смуги, оркестратор цього ще не отримав. Відкрити огляд",
-        "word": false,
-        "dot": true,
+        "word": true,
+        "actionsTogether": true,
         "reason": null,
         "background": "rgba(0, 0, 0, 0)",
         "color": "rgb(162, 162, 174)",
         "size": [
-          49,
+          86,
           28
         ],
         "insideCard": true,
@@ -10764,9 +10918,9 @@
     "pane-1000-uk-dark-card-cutouts": {
       "ready": {
         "button": [
-          713,
+          723,
           500,
-          96,
+          86,
           28
         ],
         "inCard": true,
@@ -10784,9 +10938,9 @@
       },
       "decided": {
         "button": [
-          741,
+          723,
           555,
-          67,
+          86,
           28
         ],
         "inCard": true,
@@ -10794,9 +10948,9 @@
       },
       "unsent": {
         "button": [
-          759,
+          723,
           581,
-          49,
+          86,
           28
         ],
         "inCard": true,
@@ -10804,9 +10958,9 @@
       },
       "newer-round": {
         "button": [
-          713,
+          723,
           554,
-          96,
+          86,
           28
         ],
         "inCard": true,
@@ -11015,6 +11169,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -11088,6 +11243,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -11106,11 +11262,11 @@
       ],
       "media": [
         [
-          662,
+          414,
           259
         ],
         [
-          662,
+          414,
           259
         ]
       ],
@@ -11124,23 +11280,23 @@
       "labels": {
         "drawn": [
           [
-            424.8,
-            179,
-            414.4,
-            259
+            425,
+            179.1,
+            414,
+            258.8
           ],
           [
-            424.8,
-            179,
-            414.4,
-            259
+            425,
+            179.1,
+            414,
+            258.8
           ]
         ],
         "labels": [
           {
             "side": "original",
             "box": [
-              301,
+              425,
               160,
               53.7,
               15
@@ -11151,7 +11307,7 @@
           {
             "side": "changed",
             "box": [
-              915,
+              791,
               160,
               48,
               15
@@ -11159,7 +11315,12 @@
             "inside": true,
             "overPicture": false
           }
-        ]
+        ],
+        "track": [
+          425,
+          839
+        ],
+        "fitted": true
       }
     },
     "pane-1000-uk-dark-pair-slider-geometry": {
@@ -11202,6 +11363,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -11277,6 +11439,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -11351,11 +11514,12 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
     "pane-1000-uk-dark-viewer": {
-      "position": "1 / 50",
+      "position": "1 / 3",
       "caption": "1 · Компактний список — результати, десктоп· Макет результатів пошуку"
     },
     "pane-1000-uk-dark-dictating-geometry": {
@@ -11398,6 +11562,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -11470,6 +11635,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -11509,7 +11675,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "07.10.2026, 02:03:07",
+      "time": "7 жовт., 03:03",
       "posts": [
         {
           "taskId": "t-search",
@@ -11562,6 +11728,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -11642,6 +11809,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -11695,7 +11863,7 @@
       "caption": {
         "text": "відновлено після обриву: смуга зберігає вже надіслане, підпис називає повтор, швидкість повертається після двох замірів, а кнопка зупинки лишається там, де її залишив вказівник, тож ніщо не стрибає.",
         "left": 305,
-        "right": 716.7,
+        "right": 759.9,
         "lines": 3,
         "inside": true
       },
@@ -11745,6 +11913,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -11795,6 +11964,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -11867,6 +12037,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -11904,6 +12075,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -11969,6 +12141,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -12022,6 +12195,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -12093,6 +12267,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -12175,6 +12350,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -12253,7 +12429,7 @@
           "state": "ready",
           "text": "Prototype",
           "size": [
-            118,
+            106,
             44
           ],
           "insideFace": false,
@@ -12275,7 +12451,7 @@
           "state": "ready",
           "text": "Prototype",
           "size": [
-            118,
+            106,
             44
           ],
           "insideFace": false,
@@ -12313,16 +12489,16 @@
         "line": false,
         "button": {
           "state": "decided",
-          "text": "2, 3",
+          "text": "Prototype",
           "size": [
-            90,
+            106,
             44
           ],
           "insideFace": false,
           "clipped": false
         },
         "reasons": [
-          "2, 3"
+          "Prototype"
         ],
         "overlaps": [],
         "outside": []
@@ -12351,16 +12527,16 @@
         "line": false,
         "button": {
           "state": "unsent",
-          "text": "2",
+          "text": "Prototype",
           "size": [
-            69,
+            106,
             44
           ],
           "insideFace": false,
           "clipped": false
         },
         "reasons": [
-          "2"
+          "Prototype"
         ],
         "overlaps": [],
         "outside": []
@@ -12434,17 +12610,17 @@
       "prototypes": [
         {
           "task": "t-upload",
-          "height": 47,
+          "height": 67,
           "dismiss": false
         },
         {
           "task": "t-links",
-          "height": 47,
+          "height": 67,
           "dismiss": false
         },
         {
           "task": "t-search",
-          "height": 47,
+          "height": 67,
           "dismiss": false
         }
       ],
@@ -12454,15 +12630,47 @@
     "phone-390-en-light-needs-you-text": [
       {
         "task": "t-upload",
-        "text": "Redesign attachment upload for large filesPrototype ready·9m ago"
+        "text": "Prototype readyRedesign attachment upload for large files9m ago"
       },
       {
         "task": "t-links",
-        "text": "Repair old links in the release notesPrototype ready·6m ago"
+        "text": "Prototype readyRepair old links in the release notes6m ago"
       },
       {
         "task": "t-search",
-        "text": "Restore search results after the index rebuildPrototype ready·3m ago"
+        "text": "Prototype readyRestore search results after the index rebuild3m ago"
+      }
+    ],
+    "phone-390-en-light-needs-you-columns": [
+      {
+        "row": "p-links",
+        "title": 16,
+        "chevron": 290
+      },
+      {
+        "row": "p-limits",
+        "title": 16,
+        "chevron": 290
+      },
+      {
+        "row": "/repo/links-impl.jsonl:waiting:1791330407",
+        "title": 16,
+        "chevron": 290
+      },
+      {
+        "row": "prototype:r-upload",
+        "title": 16,
+        "chevron": 290
+      },
+      {
+        "row": "prototype:r-links-2",
+        "title": 16,
+        "chevron": 290
+      },
+      {
+        "row": "prototype:r-search",
+        "title": 16,
+        "chevron": 290
       }
     ],
     "phone-390-en-light-needs-you-jump": {
@@ -12565,6 +12773,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -12583,11 +12792,11 @@
       ],
       "media": [
         [
-          366,
+          280,
           175
         ],
         [
-          366,
+          280,
           175
         ]
       ],
@@ -12601,24 +12810,24 @@
       "labels": {
         "drawn": [
           [
-            54.9,
-            414.8,
-            280.1,
-            175.1
+            55,
+            412.8,
+            280,
+            175
           ],
           [
-            54.9,
-            414.8,
-            280.1,
-            175.1
+            55,
+            412.8,
+            280,
+            175
           ]
         ],
         "labels": [
           {
             "side": "original",
             "box": [
-              12,
-              395.8,
+              55,
+              393.8,
               50.9,
               15
             ],
@@ -12628,15 +12837,20 @@
           {
             "side": "changed",
             "box": [
-              325.7,
-              395.8,
+              282.7,
+              393.8,
               52.3,
               15
             ],
             "inside": true,
             "overPicture": false
           }
-        ]
+        ],
+        "track": [
+          55,
+          335
+        ],
+        "fitted": true
       }
     },
     "phone-390-en-light-pair-slider-geometry": {
@@ -12661,6 +12875,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -12718,6 +12933,9 @@
         ]
       },
       "overlaps": [],
+      "underHead": [
+        "chips#4 × choose"
+      ],
       "outside": [],
       "sideways": 0
     },
@@ -12774,11 +12992,14 @@
         ]
       },
       "overlaps": [],
+      "underHead": [
+        "chips#4 × choose"
+      ],
       "outside": [],
       "sideways": 0
     },
     "phone-390-en-light-viewer": {
-      "position": "1 / 50",
+      "position": "1 / 3",
       "caption": "1 · Compact list — results, desktop· Search results layout"
     },
     "phone-390-en-light-dictating-geometry": {
@@ -12803,6 +13024,10 @@
         ]
       },
       "overlaps": [],
+      "underHead": [
+        "chips#3 × choose",
+        "chips#4 × choose"
+      ],
       "outside": [],
       "sideways": 0
     },
@@ -12810,11 +13035,16 @@
       "headerBottom": 163.3,
       "line": [
         163.3,
-        187.8
+        237.8
       ],
-      "scrolled": 19,
+      "scrolled": 17,
       "whole": true,
-      "hidden": false
+      "hidden": false,
+      "chips": {
+        "top": 189.8,
+        "under": true,
+        "cut": 0
+      }
     },
     "phone-390-en-light-combination": {
       "slide": "3:f0",
@@ -12867,6 +13097,10 @@
         ]
       },
       "overlaps": [],
+      "underHead": [
+        "chips#3 × choose",
+        "chips#4 × choose"
+      ],
       "outside": [],
       "sideways": 0
     },
@@ -12874,21 +13108,31 @@
       "headerBottom": 163.3,
       "line": [
         163.3,
-        187.8
+        237.8
       ],
-      "scrolled": 19,
+      "scrolled": 17,
       "whole": true,
-      "hidden": false
+      "hidden": false,
+      "chips": {
+        "top": 189.8,
+        "under": true,
+        "cut": 0
+      }
     },
     "phone-390-en-light-unsaved-guard-context": {
       "headerBottom": 163.3,
       "line": [
         163.3,
-        187.8
+        237.8
       ],
-      "scrolled": 19,
+      "scrolled": 17,
       "whole": true,
-      "hidden": false
+      "hidden": false,
+      "chips": {
+        "top": 189.8,
+        "under": true,
+        "cut": 0
+      }
     },
     "phone-390-en-light-guard": {
       "missing": [],
@@ -12926,7 +13170,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/7/2026, 2:03:29 AM",
+      "time": "7 Oct, 03:03",
       "posts": [
         {
           "taskId": "t-search",
@@ -12939,19 +13183,34 @@
         }
       ]
     },
+    "phone-390-en-light-decided-context": {
+      "headerBottom": 179.4,
+      "line": [
+        179.4,
+        253.9
+      ],
+      "scrolled": 0,
+      "whole": true,
+      "hidden": false,
+      "chips": {
+        "top": 205.9,
+        "under": true,
+        "cut": 0
+      }
+    },
     "phone-390-en-light-decided-geometry": {
       "regions": {
         "header": [
           0,
-          129.4,
+          131.4,
           390,
           48
         ],
         "body": [
           0,
-          177.4,
+          179.4,
           390,
-          551.6
+          549.6
         ],
         "footer": [
           0,
@@ -12961,6 +13220,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -13028,16 +13288,16 @@
         "line": false,
         "button": {
           "state": "decided",
-          "text": "2, 3",
+          "text": "Prototype",
           "size": [
-            90,
+            106,
             44
           ],
           "insideFace": false,
           "clipped": false
         },
         "reasons": [
-          "2, 3"
+          "Prototype"
         ],
         "overlaps": [],
         "outside": []
@@ -13065,6 +13325,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -13150,8 +13411,24 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
+    },
+    "phone-390-en-light-transcribing-guard-context": {
+      "headerBottom": 163.3,
+      "line": [
+        163.3,
+        237.8
+      ],
+      "scrolled": 0,
+      "whole": true,
+      "hidden": false,
+      "chips": {
+        "top": 189.8,
+        "under": true,
+        "cut": 0
+      }
     },
     "phone-390-en-light-transcribing-guard": {
       "field": "",
@@ -13182,6 +13459,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -13242,6 +13520,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -13249,15 +13528,15 @@
       "regions": {
         "header": [
           0,
-          185.9,
+          187.9,
           390,
           48
         ],
         "body": [
           0,
-          233.9,
+          235.9,
           390,
-          513.1
+          511.1
         ],
         "footer": [
           0,
@@ -13267,6 +13546,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -13320,6 +13600,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -13343,15 +13624,15 @@
       "regions": {
         "header": [
           0,
-          130.9,
+          132.9,
           390,
           48
         ],
         "body": [
           0,
-          178.9,
+          180.9,
           390,
-          529.1
+          527.1
         ],
         "footer": [
           0,
@@ -13361,6 +13642,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -13402,15 +13684,15 @@
       "regions": {
         "header": [
           0,
-          163.4,
+          165.4,
           390,
           48
         ],
         "body": [
           0,
-          211.4,
+          213.4,
           390,
-          487.6
+          485.6
         ],
         "footer": [
           0,
@@ -13420,6 +13702,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -13472,15 +13755,15 @@
       "regions": {
         "header": [
           0,
-          163.4,
+          165.4,
           390,
           48
         ],
         "body": [
           0,
-          211.4,
+          213.4,
           390,
-          487.6
+          485.6
         ],
         "footer": [
           0,
@@ -13490,6 +13773,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -13568,7 +13852,7 @@
           "state": "ready",
           "text": "Prototype",
           "size": [
-            118,
+            106,
             44
           ],
           "insideFace": false,
@@ -13590,7 +13874,7 @@
           "state": "ready",
           "text": "Prototype",
           "size": [
-            118,
+            106,
             44
           ],
           "insideFace": false,
@@ -13628,16 +13912,16 @@
         "line": false,
         "button": {
           "state": "decided",
-          "text": "2, 3",
+          "text": "Prototype",
           "size": [
-            90,
+            106,
             44
           ],
           "insideFace": false,
           "clipped": false
         },
         "reasons": [
-          "2, 3"
+          "Prototype"
         ],
         "overlaps": [],
         "outside": []
@@ -13666,16 +13950,16 @@
         "line": false,
         "button": {
           "state": "unsent",
-          "text": "2",
+          "text": "Prototype",
           "size": [
-            69,
+            106,
             44
           ],
           "insideFace": false,
           "clipped": false
         },
         "reasons": [
-          "2"
+          "Prototype"
         ],
         "overlaps": [],
         "outside": []
@@ -13749,17 +14033,17 @@
       "prototypes": [
         {
           "task": "t-upload",
-          "height": 47,
+          "height": 67,
           "dismiss": false
         },
         {
           "task": "t-links",
-          "height": 47,
+          "height": 67,
           "dismiss": false
         },
         {
           "task": "t-search",
-          "height": 47,
+          "height": 67,
           "dismiss": false
         }
       ],
@@ -13769,15 +14053,47 @@
     "phone-390-en-dark-needs-you-text": [
       {
         "task": "t-upload",
-        "text": "Redesign attachment upload for large filesPrototype ready·9m ago"
+        "text": "Prototype readyRedesign attachment upload for large files9m ago"
       },
       {
         "task": "t-links",
-        "text": "Repair old links in the release notesPrototype ready·6m ago"
+        "text": "Prototype readyRepair old links in the release notes6m ago"
       },
       {
         "task": "t-search",
-        "text": "Restore search results after the index rebuildPrototype ready·3m ago"
+        "text": "Prototype readyRestore search results after the index rebuild3m ago"
+      }
+    ],
+    "phone-390-en-dark-needs-you-columns": [
+      {
+        "row": "p-links",
+        "title": 16,
+        "chevron": 290
+      },
+      {
+        "row": "p-limits",
+        "title": 16,
+        "chevron": 290
+      },
+      {
+        "row": "/repo/links-impl.jsonl:waiting:1791330431",
+        "title": 16,
+        "chevron": 290
+      },
+      {
+        "row": "prototype:r-upload",
+        "title": 16,
+        "chevron": 290
+      },
+      {
+        "row": "prototype:r-links-2",
+        "title": 16,
+        "chevron": 290
+      },
+      {
+        "row": "prototype:r-search",
+        "title": 16,
+        "chevron": 290
       }
     ],
     "phone-390-en-dark-needs-you-jump": {
@@ -13880,6 +14196,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -13898,11 +14215,11 @@
       ],
       "media": [
         [
-          366,
+          280,
           175
         ],
         [
-          366,
+          280,
           175
         ]
       ],
@@ -13916,24 +14233,24 @@
       "labels": {
         "drawn": [
           [
-            54.9,
-            414.8,
-            280.1,
-            175.1
+            55,
+            412.8,
+            280,
+            175
           ],
           [
-            54.9,
-            414.8,
-            280.1,
-            175.1
+            55,
+            412.8,
+            280,
+            175
           ]
         ],
         "labels": [
           {
             "side": "original",
             "box": [
-              12,
-              395.8,
+              55,
+              393.8,
               50.9,
               15
             ],
@@ -13943,15 +14260,20 @@
           {
             "side": "changed",
             "box": [
-              325.7,
-              395.8,
+              282.7,
+              393.8,
               52.3,
               15
             ],
             "inside": true,
             "overPicture": false
           }
-        ]
+        ],
+        "track": [
+          55,
+          335
+        ],
+        "fitted": true
       }
     },
     "phone-390-en-dark-pair-slider-geometry": {
@@ -13976,6 +14298,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -14033,6 +14356,9 @@
         ]
       },
       "overlaps": [],
+      "underHead": [
+        "chips#4 × choose"
+      ],
       "outside": [],
       "sideways": 0
     },
@@ -14089,11 +14415,14 @@
         ]
       },
       "overlaps": [],
+      "underHead": [
+        "chips#4 × choose"
+      ],
       "outside": [],
       "sideways": 0
     },
     "phone-390-en-dark-viewer": {
-      "position": "1 / 50",
+      "position": "1 / 3",
       "caption": "1 · Compact list — results, desktop· Search results layout"
     },
     "phone-390-en-dark-dictating-geometry": {
@@ -14118,6 +14447,10 @@
         ]
       },
       "overlaps": [],
+      "underHead": [
+        "chips#3 × choose",
+        "chips#4 × choose"
+      ],
       "outside": [],
       "sideways": 0
     },
@@ -14125,11 +14458,16 @@
       "headerBottom": 163.3,
       "line": [
         163.3,
-        187.8
+        237.8
       ],
-      "scrolled": 19,
+      "scrolled": 17,
       "whole": true,
-      "hidden": false
+      "hidden": false,
+      "chips": {
+        "top": 189.8,
+        "under": true,
+        "cut": 0
+      }
     },
     "phone-390-en-dark-combination": {
       "slide": "3:f0",
@@ -14182,6 +14520,10 @@
         ]
       },
       "overlaps": [],
+      "underHead": [
+        "chips#3 × choose",
+        "chips#4 × choose"
+      ],
       "outside": [],
       "sideways": 0
     },
@@ -14189,21 +14531,31 @@
       "headerBottom": 163.3,
       "line": [
         163.3,
-        187.8
+        237.8
       ],
-      "scrolled": 19,
+      "scrolled": 17,
       "whole": true,
-      "hidden": false
+      "hidden": false,
+      "chips": {
+        "top": 189.8,
+        "under": true,
+        "cut": 0
+      }
     },
     "phone-390-en-dark-unsaved-guard-context": {
       "headerBottom": 163.3,
       "line": [
         163.3,
-        187.8
+        237.8
       ],
-      "scrolled": 19,
+      "scrolled": 17,
       "whole": true,
-      "hidden": false
+      "hidden": false,
+      "chips": {
+        "top": 189.8,
+        "under": true,
+        "cut": 0
+      }
     },
     "phone-390-en-dark-guard": {
       "missing": [],
@@ -14241,7 +14593,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "10/7/2026, 2:03:51 AM",
+      "time": "7 Oct, 03:04",
       "posts": [
         {
           "taskId": "t-search",
@@ -14254,19 +14606,34 @@
         }
       ]
     },
+    "phone-390-en-dark-decided-context": {
+      "headerBottom": 179.4,
+      "line": [
+        179.4,
+        253.9
+      ],
+      "scrolled": 0,
+      "whole": true,
+      "hidden": false,
+      "chips": {
+        "top": 205.9,
+        "under": true,
+        "cut": 0
+      }
+    },
     "phone-390-en-dark-decided-geometry": {
       "regions": {
         "header": [
           0,
-          129.4,
+          131.4,
           390,
           48
         ],
         "body": [
           0,
-          177.4,
+          179.4,
           390,
-          551.6
+          549.6
         ],
         "footer": [
           0,
@@ -14276,6 +14643,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -14343,16 +14711,16 @@
         "line": false,
         "button": {
           "state": "decided",
-          "text": "2, 3",
+          "text": "Prototype",
           "size": [
-            90,
+            106,
             44
           ],
           "insideFace": false,
           "clipped": false
         },
         "reasons": [
-          "2, 3"
+          "Prototype"
         ],
         "overlaps": [],
         "outside": []
@@ -14380,6 +14748,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -14465,8 +14834,24 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
+    },
+    "phone-390-en-dark-transcribing-guard-context": {
+      "headerBottom": 163.3,
+      "line": [
+        163.3,
+        237.8
+      ],
+      "scrolled": 0,
+      "whole": true,
+      "hidden": false,
+      "chips": {
+        "top": 189.8,
+        "under": true,
+        "cut": 0
+      }
     },
     "phone-390-en-dark-transcribing-guard": {
       "field": "",
@@ -14497,6 +14882,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -14557,6 +14943,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -14564,15 +14951,15 @@
       "regions": {
         "header": [
           0,
-          185.9,
+          187.9,
           390,
           48
         ],
         "body": [
           0,
-          233.9,
+          235.9,
           390,
-          513.1
+          511.1
         ],
         "footer": [
           0,
@@ -14582,6 +14969,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -14635,6 +15023,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -14658,15 +15047,15 @@
       "regions": {
         "header": [
           0,
-          130.9,
+          132.9,
           390,
           48
         ],
         "body": [
           0,
-          178.9,
+          180.9,
           390,
-          529.1
+          527.1
         ],
         "footer": [
           0,
@@ -14676,6 +15065,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -14717,15 +15107,15 @@
       "regions": {
         "header": [
           0,
-          163.4,
+          165.4,
           390,
           48
         ],
         "body": [
           0,
-          211.4,
+          213.4,
           390,
-          487.6
+          485.6
         ],
         "footer": [
           0,
@@ -14735,6 +15125,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -14787,15 +15178,15 @@
       "regions": {
         "header": [
           0,
-          163.4,
+          165.4,
           390,
           48
         ],
         "body": [
           0,
-          211.4,
+          213.4,
           390,
-          487.6
+          485.6
         ],
         "footer": [
           0,
@@ -14805,6 +15196,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -14883,7 +15275,7 @@
           "state": "ready",
           "text": "Прототип",
           "size": [
-            118,
+            106,
             44
           ],
           "insideFace": false,
@@ -14905,7 +15297,7 @@
           "state": "ready",
           "text": "Прототип",
           "size": [
-            118,
+            106,
             44
           ],
           "insideFace": false,
@@ -14943,16 +15335,16 @@
         "line": false,
         "button": {
           "state": "decided",
-          "text": "2, 3",
+          "text": "Прототип",
           "size": [
-            90,
+            106,
             44
           ],
           "insideFace": false,
           "clipped": false
         },
         "reasons": [
-          "2, 3"
+          "Прототип"
         ],
         "overlaps": [],
         "outside": []
@@ -14981,16 +15373,16 @@
         "line": false,
         "button": {
           "state": "unsent",
-          "text": "2",
+          "text": "Прототип",
           "size": [
-            69,
+            106,
             44
           ],
           "insideFace": false,
           "clipped": false
         },
         "reasons": [
-          "2"
+          "Прототип"
         ],
         "overlaps": [],
         "outside": []
@@ -15064,17 +15456,17 @@
       "prototypes": [
         {
           "task": "t-upload",
-          "height": 47,
+          "height": 67,
           "dismiss": false
         },
         {
           "task": "t-links",
-          "height": 47,
+          "height": 67,
           "dismiss": false
         },
         {
           "task": "t-search",
-          "height": 47,
+          "height": 67,
           "dismiss": false
         }
       ],
@@ -15084,15 +15476,47 @@
     "phone-390-uk-light-needs-you-text": [
       {
         "task": "t-upload",
-        "text": "Redesign attachment upload for large filesПрототип готовий·9 хв тому"
+        "text": "Прототип готовийRedesign attachment upload for large files9 хв тому"
       },
       {
         "task": "t-links",
-        "text": "Repair old links in the release notesПрототип готовий·6 хв тому"
+        "text": "Прототип готовийRepair old links in the release notes6 хв тому"
       },
       {
         "task": "t-search",
-        "text": "Restore search results after the index rebuildПрототип готовий·3 хв тому"
+        "text": "Прототип готовийRestore search results after the index rebuild3 хв тому"
+      }
+    ],
+    "phone-390-uk-light-needs-you-columns": [
+      {
+        "row": "p-links",
+        "title": 16,
+        "chevron": 300
+      },
+      {
+        "row": "p-limits",
+        "title": 16,
+        "chevron": 300
+      },
+      {
+        "row": "/repo/links-impl.jsonl:waiting:1791330454",
+        "title": 16,
+        "chevron": 300
+      },
+      {
+        "row": "prototype:r-upload",
+        "title": 16,
+        "chevron": 300
+      },
+      {
+        "row": "prototype:r-links-2",
+        "title": 16,
+        "chevron": 300
+      },
+      {
+        "row": "prototype:r-search",
+        "title": 16,
+        "chevron": 300
       }
     ],
     "phone-390-uk-light-needs-you-jump": {
@@ -15195,6 +15619,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -15213,11 +15638,11 @@
       ],
       "media": [
         [
-          366,
+          280,
           175
         ],
         [
-          366,
+          280,
           175
         ]
       ],
@@ -15231,24 +15656,24 @@
       "labels": {
         "drawn": [
           [
-            54.9,
-            431.3,
-            280.1,
-            175.1
+            55,
+            429.3,
+            280,
+            175
           ],
           [
-            54.9,
-            431.3,
-            280.1,
-            175.1
+            55,
+            429.3,
+            280,
+            175
           ]
         ],
         "labels": [
           {
             "side": "original",
             "box": [
-              12,
-              412.3,
+              55,
+              410.3,
               53.7,
               15
             ],
@@ -15258,15 +15683,20 @@
           {
             "side": "changed",
             "box": [
-              330,
-              412.3,
+              287,
+              410.3,
               48,
               15
             ],
             "inside": true,
             "overPicture": false
           }
-        ]
+        ],
+        "track": [
+          55,
+          335
+        ],
+        "fitted": true
       }
     },
     "phone-390-uk-light-pair-slider-geometry": {
@@ -15291,6 +15721,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -15348,6 +15779,9 @@
         ]
       },
       "overlaps": [],
+      "underHead": [
+        "chips#4 × choose"
+      ],
       "outside": [],
       "sideways": 0
     },
@@ -15404,11 +15838,14 @@
         ]
       },
       "overlaps": [],
+      "underHead": [
+        "chips#4 × choose"
+      ],
       "outside": [],
       "sideways": 0
     },
     "phone-390-uk-light-viewer": {
-      "position": "1 / 50",
+      "position": "1 / 3",
       "caption": "1 · Компактний список — результати, десктоп· Макет результатів пошуку"
     },
     "phone-390-uk-light-dictating-geometry": {
@@ -15433,6 +15870,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -15440,11 +15878,16 @@
       "headerBottom": 163.3,
       "line": [
         163.3,
-        204.3
+        254.3
       ],
       "scrolled": 0,
       "whole": true,
-      "hidden": false
+      "hidden": false,
+      "chips": {
+        "top": 206.3,
+        "under": true,
+        "cut": 0
+      }
     },
     "phone-390-uk-light-combination": {
       "slide": "3:f0",
@@ -15497,6 +15940,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -15504,21 +15948,31 @@
       "headerBottom": 163.3,
       "line": [
         163.3,
-        204.3
+        254.3
       ],
       "scrolled": 0,
       "whole": true,
-      "hidden": false
+      "hidden": false,
+      "chips": {
+        "top": 206.3,
+        "under": true,
+        "cut": 0
+      }
     },
     "phone-390-uk-light-unsaved-guard-context": {
       "headerBottom": 163.3,
       "line": [
         163.3,
-        204.3
+        254.3
       ],
       "scrolled": 0,
       "whole": true,
-      "hidden": false
+      "hidden": false,
+      "chips": {
+        "top": 206.3,
+        "under": true,
+        "cut": 0
+      }
     },
     "phone-390-uk-light-guard": {
       "missing": [],
@@ -15556,7 +16010,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "07.10.2026, 02:04:14",
+      "time": "7 жовт., 03:04",
       "posts": [
         {
           "taskId": "t-search",
@@ -15568,6 +16022,21 @@
           "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці."
         }
       ]
+    },
+    "phone-390-uk-light-decided-context": {
+      "headerBottom": 163.3,
+      "line": [
+        163.3,
+        254.3
+      ],
+      "scrolled": 0,
+      "whole": true,
+      "hidden": false,
+      "chips": {
+        "top": 206.3,
+        "under": true,
+        "cut": 0
+      }
     },
     "phone-390-uk-light-decided-geometry": {
       "regions": {
@@ -15581,16 +16050,17 @@
           0,
           163.3,
           390,
-          544.7
+          565.7
         ],
         "footer": [
           0,
-          708,
+          729,
           390,
-          130
+          109
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -15658,16 +16128,16 @@
         "line": false,
         "button": {
           "state": "decided",
-          "text": "2, 3",
+          "text": "Прототип",
           "size": [
-            90,
+            106,
             44
           ],
           "insideFace": false,
           "clipped": false
         },
         "reasons": [
-          "2, 3"
+          "Прототип"
         ],
         "overlaps": [],
         "outside": []
@@ -15695,6 +16165,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -15780,8 +16251,24 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
+    },
+    "phone-390-uk-light-transcribing-guard-context": {
+      "headerBottom": 163.3,
+      "line": [
+        163.3,
+        254.3
+      ],
+      "scrolled": 0,
+      "whole": true,
+      "hidden": false,
+      "chips": {
+        "top": 206.3,
+        "under": true,
+        "cut": 0
+      }
     },
     "phone-390-uk-light-transcribing-guard": {
       "field": "",
@@ -15812,6 +16299,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -15872,6 +16360,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -15879,15 +16368,15 @@
       "regions": {
         "header": [
           0,
-          185.9,
+          187.9,
           390,
           48
         ],
         "body": [
           0,
-          233.9,
+          235.9,
           390,
-          513.1
+          511.1
         ],
         "footer": [
           0,
@@ -15897,6 +16386,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -15950,6 +16440,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -15973,15 +16464,15 @@
       "regions": {
         "header": [
           0,
-          125.4,
+          127.4,
           390,
           48
         ],
         "body": [
           0,
-          173.4,
+          175.4,
           390,
-          529.1
+          527.1
         ],
         "footer": [
           0,
@@ -15991,6 +16482,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -16032,15 +16524,15 @@
       "regions": {
         "header": [
           0,
-          163.4,
+          165.4,
           390,
           48
         ],
         "body": [
           0,
-          211.4,
+          213.4,
           390,
-          487.6
+          485.6
         ],
         "footer": [
           0,
@@ -16050,6 +16542,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -16102,15 +16595,15 @@
       "regions": {
         "header": [
           0,
-          163.4,
+          165.4,
           390,
           48
         ],
         "body": [
           0,
-          211.4,
+          213.4,
           390,
-          487.6
+          485.6
         ],
         "footer": [
           0,
@@ -16120,6 +16613,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -16198,7 +16692,7 @@
           "state": "ready",
           "text": "Прототип",
           "size": [
-            118,
+            106,
             44
           ],
           "insideFace": false,
@@ -16220,7 +16714,7 @@
           "state": "ready",
           "text": "Прототип",
           "size": [
-            118,
+            106,
             44
           ],
           "insideFace": false,
@@ -16258,16 +16752,16 @@
         "line": false,
         "button": {
           "state": "decided",
-          "text": "2, 3",
+          "text": "Прототип",
           "size": [
-            90,
+            106,
             44
           ],
           "insideFace": false,
           "clipped": false
         },
         "reasons": [
-          "2, 3"
+          "Прототип"
         ],
         "overlaps": [],
         "outside": []
@@ -16296,16 +16790,16 @@
         "line": false,
         "button": {
           "state": "unsent",
-          "text": "2",
+          "text": "Прототип",
           "size": [
-            69,
+            106,
             44
           ],
           "insideFace": false,
           "clipped": false
         },
         "reasons": [
-          "2"
+          "Прототип"
         ],
         "overlaps": [],
         "outside": []
@@ -16379,17 +16873,17 @@
       "prototypes": [
         {
           "task": "t-upload",
-          "height": 47,
+          "height": 67,
           "dismiss": false
         },
         {
           "task": "t-links",
-          "height": 47,
+          "height": 67,
           "dismiss": false
         },
         {
           "task": "t-search",
-          "height": 47,
+          "height": 67,
           "dismiss": false
         }
       ],
@@ -16399,15 +16893,47 @@
     "phone-390-uk-dark-needs-you-text": [
       {
         "task": "t-upload",
-        "text": "Redesign attachment upload for large filesПрототип готовий·9 хв тому"
+        "text": "Прототип готовийRedesign attachment upload for large files9 хв тому"
       },
       {
         "task": "t-links",
-        "text": "Repair old links in the release notesПрототип готовий·6 хв тому"
+        "text": "Прототип готовийRepair old links in the release notes6 хв тому"
       },
       {
         "task": "t-search",
-        "text": "Restore search results after the index rebuildПрототип готовий·3 хв тому"
+        "text": "Прототип готовийRestore search results after the index rebuild3 хв тому"
+      }
+    ],
+    "phone-390-uk-dark-needs-you-columns": [
+      {
+        "row": "p-links",
+        "title": 16,
+        "chevron": 300
+      },
+      {
+        "row": "p-limits",
+        "title": 16,
+        "chevron": 300
+      },
+      {
+        "row": "/repo/links-impl.jsonl:waiting:1791330477",
+        "title": 16,
+        "chevron": 300
+      },
+      {
+        "row": "prototype:r-upload",
+        "title": 16,
+        "chevron": 300
+      },
+      {
+        "row": "prototype:r-links-2",
+        "title": 16,
+        "chevron": 300
+      },
+      {
+        "row": "prototype:r-search",
+        "title": 16,
+        "chevron": 300
       }
     ],
     "phone-390-uk-dark-needs-you-jump": {
@@ -16510,6 +17036,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -16528,11 +17055,11 @@
       ],
       "media": [
         [
-          366,
+          280,
           175
         ],
         [
-          366,
+          280,
           175
         ]
       ],
@@ -16546,24 +17073,24 @@
       "labels": {
         "drawn": [
           [
-            54.9,
-            431.3,
-            280.1,
-            175.1
+            55,
+            429.3,
+            280,
+            175
           ],
           [
-            54.9,
-            431.3,
-            280.1,
-            175.1
+            55,
+            429.3,
+            280,
+            175
           ]
         ],
         "labels": [
           {
             "side": "original",
             "box": [
-              12,
-              412.3,
+              55,
+              410.3,
               53.7,
               15
             ],
@@ -16573,15 +17100,20 @@
           {
             "side": "changed",
             "box": [
-              330,
-              412.3,
+              287,
+              410.3,
               48,
               15
             ],
             "inside": true,
             "overPicture": false
           }
-        ]
+        ],
+        "track": [
+          55,
+          335
+        ],
+        "fitted": true
       }
     },
     "phone-390-uk-dark-pair-slider-geometry": {
@@ -16606,6 +17138,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -16663,6 +17196,9 @@
         ]
       },
       "overlaps": [],
+      "underHead": [
+        "chips#4 × choose"
+      ],
       "outside": [],
       "sideways": 0
     },
@@ -16719,11 +17255,14 @@
         ]
       },
       "overlaps": [],
+      "underHead": [
+        "chips#4 × choose"
+      ],
       "outside": [],
       "sideways": 0
     },
     "phone-390-uk-dark-viewer": {
-      "position": "1 / 50",
+      "position": "1 / 3",
       "caption": "1 · Компактний список — результати, десктоп· Макет результатів пошуку"
     },
     "phone-390-uk-dark-dictating-geometry": {
@@ -16748,6 +17287,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -16755,11 +17295,16 @@
       "headerBottom": 163.3,
       "line": [
         163.3,
-        204.3
+        254.3
       ],
       "scrolled": 0,
       "whole": true,
-      "hidden": false
+      "hidden": false,
+      "chips": {
+        "top": 206.3,
+        "under": true,
+        "cut": 0
+      }
     },
     "phone-390-uk-dark-combination": {
       "slide": "3:f0",
@@ -16812,6 +17357,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -16819,21 +17365,31 @@
       "headerBottom": 163.3,
       "line": [
         163.3,
-        204.3
+        254.3
       ],
       "scrolled": 0,
       "whole": true,
-      "hidden": false
+      "hidden": false,
+      "chips": {
+        "top": 206.3,
+        "under": true,
+        "cut": 0
+      }
     },
     "phone-390-uk-dark-unsaved-guard-context": {
       "headerBottom": 163.3,
       "line": [
         163.3,
-        204.3
+        254.3
       ],
       "scrolled": 0,
       "whole": true,
-      "hidden": false
+      "hidden": false,
+      "chips": {
+        "top": 206.3,
+        "under": true,
+        "cut": 0
+      }
     },
     "phone-390-uk-dark-guard": {
       "missing": [],
@@ -16871,7 +17427,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "07.10.2026, 02:04:37",
+      "time": "7 жовт., 03:05",
       "posts": [
         {
           "taskId": "t-search",
@@ -16883,6 +17439,21 @@
           "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці."
         }
       ]
+    },
+    "phone-390-uk-dark-decided-context": {
+      "headerBottom": 163.3,
+      "line": [
+        163.3,
+        254.3
+      ],
+      "scrolled": 0,
+      "whole": true,
+      "hidden": false,
+      "chips": {
+        "top": 206.3,
+        "under": true,
+        "cut": 0
+      }
     },
     "phone-390-uk-dark-decided-geometry": {
       "regions": {
@@ -16896,16 +17467,17 @@
           0,
           163.3,
           390,
-          544.7
+          565.7
         ],
         "footer": [
           0,
-          708,
+          729,
           390,
-          130
+          109
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -16973,16 +17545,16 @@
         "line": false,
         "button": {
           "state": "decided",
-          "text": "2, 3",
+          "text": "Прототип",
           "size": [
-            90,
+            106,
             44
           ],
           "insideFace": false,
           "clipped": false
         },
         "reasons": [
-          "2, 3"
+          "Прототип"
         ],
         "overlaps": [],
         "outside": []
@@ -17010,6 +17582,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -17095,8 +17668,24 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
+    },
+    "phone-390-uk-dark-transcribing-guard-context": {
+      "headerBottom": 163.3,
+      "line": [
+        163.3,
+        254.3
+      ],
+      "scrolled": 0,
+      "whole": true,
+      "hidden": false,
+      "chips": {
+        "top": 206.3,
+        "under": true,
+        "cut": 0
+      }
     },
     "phone-390-uk-dark-transcribing-guard": {
       "field": "",
@@ -17127,6 +17716,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -17187,6 +17777,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -17194,15 +17785,15 @@
       "regions": {
         "header": [
           0,
-          185.9,
+          187.9,
           390,
           48
         ],
         "body": [
           0,
-          233.9,
+          235.9,
           390,
-          513.1
+          511.1
         ],
         "footer": [
           0,
@@ -17212,6 +17803,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -17265,6 +17857,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -17288,15 +17881,15 @@
       "regions": {
         "header": [
           0,
-          125.4,
+          127.4,
           390,
           48
         ],
         "body": [
           0,
-          173.4,
+          175.4,
           390,
-          529.1
+          527.1
         ],
         "footer": [
           0,
@@ -17306,6 +17899,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -17347,15 +17941,15 @@
       "regions": {
         "header": [
           0,
-          163.4,
+          165.4,
           390,
           48
         ],
         "body": [
           0,
-          211.4,
+          213.4,
           390,
-          487.6
+          485.6
         ],
         "footer": [
           0,
@@ -17365,6 +17959,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },
@@ -17417,15 +18012,15 @@
       "regions": {
         "header": [
           0,
-          163.4,
+          165.4,
           390,
           48
         ],
         "body": [
           0,
-          211.4,
+          213.4,
           390,
-          487.6
+          485.6
         ],
         "footer": [
           0,
@@ -17435,6 +18030,7 @@
         ]
       },
       "overlaps": [],
+      "underHead": [],
       "outside": [],
       "sideways": 0
     },

@@ -18937,8 +18937,16 @@ describe("prototype review on a task: the card's button, the review and the orch
           /* Chips and thumbnails are rows that scroll on purpose: what leaves the frame there is off screen, not on top of anything. */
           const scrolled = (entry: string) => /^(chips|variant|tools)/.test(entry) && size.phone;
           const outside = [...regions.outside, ...parts.outside.filter((entry) => !scrolled(entry))];
-          record(`${name}-geometry`, { regions: regions.boxes, overlaps: [...regions.overlaps, ...parts.overlaps], outside, sideways });
-          if (regions.overlaps.length || parts.overlaps.length) failures.push(`${label} ${name}: overlapping ${[...regions.overlaps, ...parts.overlaps].join(", ")}`);
+          /* The phone's chips stand in the sheet's sticky head: a part of the body scrolled up under that head is covered by it, not on top of it. */
+          const headBottom = size.phone ? await page.evaluate(() => document.querySelector<HTMLElement>("[data-prototype-context]")?.getBoundingClientRect().bottom ?? 0) : 0;
+          const underHead = (pair: string) => {
+            const [a, b] = pair.split(" × ") as [string, string];
+            const other = /^chips/.test(a) ? b : /^chips/.test(b) ? a : null;
+            return Boolean(size.phone && other && (parts.boxes[other]?.[1] ?? Infinity) < headBottom - 0.5);
+          };
+          const partOverlaps = parts.overlaps.filter((pair) => !underHead(pair));
+          record(`${name}-geometry`, { regions: regions.boxes, overlaps: [...regions.overlaps, ...partOverlaps], underHead: parts.overlaps.filter(underHead), outside, sideways });
+          if (regions.overlaps.length || partOverlaps.length) failures.push(`${label} ${name}: overlapping ${[...regions.overlaps, ...partOverlaps].join(", ")}`);
           if (outside.length) failures.push(`${label} ${name}: outside the review's frame: ${outside.join(", ")}`);
           if (sideways > 0) failures.push(`${label} ${name}: the review scrolls sideways by ${sideways}px`);
         };
@@ -19065,10 +19073,15 @@ describe("prototype review on a task: the card's button, the review and the orch
             const header = document.querySelector<HTMLElement>("[data-mobile2-sheet=prototype-review] [data-mobile2-sheet-header]")!.getBoundingClientRect();
             const line = document.querySelector<HTMLElement>("[data-prototype-context]")!.getBoundingClientRect();
             const body = document.querySelector<HTMLElement>("[data-mobile2-sheet=prototype-review] [data-mobile2-sheet-body]")!;
-            return { headerBottom: Math.round(header.bottom * 10) / 10, line: [Math.round(line.top * 10) / 10, Math.round(line.bottom * 10) / 10], scrolled: body.scrollTop, whole: line.top >= header.bottom - 0.5, hidden: line.bottom <= header.bottom + 0.5 };
+            /* The variants' chips stand whole under the round's line, and none is cut through its words on the left. */
+            const words = document.querySelector<HTMLElement>("[data-prototype-context-line]")!.getBoundingClientRect();
+            const row = document.querySelector<HTMLElement>("[data-prototype-chips]")!.getBoundingClientRect();
+            const cut = [...document.querySelectorAll<HTMLElement>("[data-prototype-chips] > button")].map((chip) => chip.getBoundingClientRect()).filter((chip) => chip.left < row.left - 0.5 && chip.right - row.left > 12).length;
+            return { headerBottom: Math.round(header.bottom * 10) / 10, line: [Math.round(line.top * 10) / 10, Math.round(line.bottom * 10) / 10], scrolled: body.scrollTop, whole: line.top >= header.bottom - 0.5, hidden: line.bottom <= header.bottom + 0.5, chips: { top: Math.round(row.top * 10) / 10, under: row.top >= words.bottom - 0.5, cut } };
           });
           record(`${name}-context`, reading);
           if (!reading.whole && !reading.hidden) failures.push(`${label} ${name}: the sheet's round line is cut by its header: ${JSON.stringify(reading)}`);
+          if (!reading.chips.under || reading.chips.cut) failures.push(`${label} ${name}: the variants' chips are cut: ${JSON.stringify(reading.chips)}`);
         };
         const closeReview = async () => {
           await page.keyboard.press("Escape");
@@ -19143,7 +19156,12 @@ describe("prototype review on a task: the card's button, the review and the orch
               const style = getComputedStyle(button);
               return {
                 task: button.dataset.prototypeButton, state: button.dataset.prototypeState, text: button.textContent?.trim() ?? "", aria: button.getAttribute("aria-label"),
-                word: Boolean(button.querySelector<HTMLElement>(".proto-word")?.getBoundingClientRect().width), dot: Boolean(button.querySelector(".proto-dot")),
+                word: Boolean(button.querySelector<HTMLElement>(".proto-word")?.getBoundingClientRect().width),
+                /* «Ask» and «+ Agent» share one line: neither is left alone below the other. */
+                actionsTogether: (() => {
+                  const ask = foot.querySelector<HTMLElement>("[data-ask-orchestrator]"), agent = foot.querySelector<HTMLElement>("[data-add-agent]");
+                  return !ask || !agent || Math.abs((box(ask).top + box(ask).bottom) / 2 - (box(agent).top + box(agent).bottom) / 2) < 2;
+                })(),
                 /* Any drawn line in the foot that says only that a prototype is ready: there must be none. */
                 reason: [...foot.querySelectorAll<HTMLElement>(".foot-meta")].filter((line) => box(line).width > 0 && /prototype|прототип/i.test(line.textContent ?? "")).map((line) => line.textContent?.trim() ?? "")[0] ?? null,
                 background: style.backgroundColor, color: style.color, size: [Math.round(own.width), Math.round(own.height)],
@@ -19162,6 +19180,9 @@ describe("prototype review on a task: the card's button, the review and the orch
             for (const entry of cards) {
               if (!entry.insideCard || entry.overlaps) failures.push(`${label}: the button of ${entry.task} leaves its card or overlaps the foot: ${JSON.stringify(entry)}`);
               if (entry.footLines > (footBefore[entry.task ?? ""] ?? 2)) failures.push(`${label}: the foot of ${entry.task} wraps onto ${entry.footLines} lines, ${footBefore[entry.task ?? ""]} before`);
+              if (!entry.actionsTogether) failures.push(`${label}: «Ask» and «+ Agent» of ${entry.task} stand on different lines`);
+              /* Every state says the word: a number alone reads as a count. */
+              if (!entry.word || entry.text !== tr("proto.button.word")) failures.push(`${label}: the ${entry.state} button of ${entry.task} says ${JSON.stringify(entry.text)}`);
             }
             /* A waiting button names itself to assistive tech at every width; its word is drawn where the foot has room. */
             const byTask = Object.fromEntries(cards.map((entry) => [entry.task, entry]));
@@ -19172,7 +19193,7 @@ describe("prototype review on a task: the card's button, the review and the orch
               if (!entry || !entry.word || entry.text !== tr("proto.button.word") || entry.reason !== null) failures.push(`${label}: the waiting card of ${task} draws the word ${entry?.word} (${JSON.stringify(entry?.text)}) and the line ${JSON.stringify(entry?.reason)}`);
             }
             if (cards.some((entry) => entry.reason !== null)) failures.push(`${label}: a card's foot says a prototype is ready beside its button`);
-            if (byTask["t-export"]?.text !== "2, 3" || byTask["t-disk"]?.text !== "2") failures.push(`${label}: the buttons say ${JSON.stringify(cards.map((entry) => entry.text))}`);
+            if (!byTask["t-export"]?.aria?.includes("2 · ") || !byTask["t-disk"]?.aria?.includes("2 · ")) failures.push(`${label}: the decided buttons do not name the chosen variants: ${JSON.stringify(cards.map((entry) => entry.aria))}`);
             if (byTask["t-search"]?.background === byTask["t-upload"]?.background) failures.push(`${label}: a waiting unopened review is not highlighted against an opened one`);
             await page.locator(card("t-search")).scrollIntoViewIfNeeded();
             await shot("cards");
@@ -19226,6 +19247,17 @@ describe("prototype review on a task: the card's button, the review and the orch
             if (rows.length !== waitingBefore || (!size.phone && await tabCount() !== waitingBefore)) failures.push(`${label}: the needs-you control counts ${waitingBefore}, the tab ${await tabCount()} and the list holds ${rows.length} rows`);
             if (geometry.overlaps.length || prototypes.some((row) => row.dismiss || !row.text?.includes(tr("proto.notice.ready")) || (size.phone && row.height < 44))) failures.push(`${label}: a waiting review's needs-you row is broken: ${JSON.stringify({ prototypes, overlaps: geometry.overlaps })}`);
             record("needs-you-text", prototypes.map((row) => ({ task: row.prototype, text: rows.find((entry) => entry.prototype === row.prototype)?.text ?? null })));
+            /* On the phone a prototype's row is built as its neighbours: titles start and chevrons stand in one column. */
+            if (size.phone) {
+              const columns = await page.evaluate((list) => [...document.querySelectorAll<HTMLElement>(`${list} [data-attention-row]`)].map((row) => ({
+                row: row.dataset.attentionRow,
+                title: Math.round(row.querySelector<HTMLElement>(":scope > span > span.text-body")?.getBoundingClientRect().left ?? -1),
+                chevron: Math.round(row.querySelector<SVGElement>(":scope > svg:last-child")?.getBoundingClientRect().left ?? -1),
+              })), LIST);
+              record("needs-you-columns", columns);
+              const spread = (values: number[]) => Math.max(...values) - Math.min(...values);
+              if (spread(columns.map((entry) => entry.title)) > 2 || spread(columns.map((entry) => entry.chevron)) > 2) failures.push(`${label}: the needs-you rows do not line up: ${JSON.stringify(columns)}`);
+            }
             for (const row of rows.filter((entry) => entry.prototype)) if (!row.text?.includes(TASK_TITLES[row.prototype!]!)) failures.push(`${label}: the needs-you row of ${row.prototype} does not name its task: «${row.text}»`);
             await page.locator(`${LIST} [data-attention-prototype="t-links"]`).click();
             await page.waitForSelector(`${REVIEW} [data-prototype-variant]`, { timeout: 10_000 });
@@ -19372,7 +19404,12 @@ describe("prototype review on a task: the card's button, the review and the orch
                 overPicture: drawn.some((picture) => box.left < picture.right - 0.5 && picture.left < box.right - 0.5 && box.top < picture.bottom - 0.5 && picture.top < box.bottom - 0.5),
               };
             });
-            return { drawn: drawn.map((picture) => [round(picture.left), round(picture.top), round(picture.right - picture.left), round(picture.bottom - picture.top)]), labels };
+            /* The track and the two names end where the changed picture's drawn edges are. */
+            const track = document.querySelector<HTMLElement>("[data-prototype-split]")!.getBoundingClientRect();
+            const changed = drawn[0]!;
+            const names = labels.map((entry) => [entry.box[0]!, entry.box[0]! + entry.box[2]!]);
+            const fitted = Math.abs(track.left - changed.left) <= 2 && Math.abs(track.right - changed.right) <= 2 && Math.abs(names[0]![0]! - changed.left) <= 2 && Math.abs(names[1]![1]! - changed.right) <= 2;
+            return { drawn: drawn.map((picture) => [round(picture.left), round(picture.top), round(picture.right - picture.left), round(picture.bottom - picture.top)]), labels, track: [round(track.left), round(track.right)], fitted };
           });
           record("pair-slider", { ...slider, clip, labels: sliderLabels });
           captionParted("pair-slider", slider);
@@ -19380,6 +19417,7 @@ describe("prototype review on a task: the card's button, the review and the orch
           await shot("pair-slider");
           await frameCheck("pair-slider");
           if (slider.pair !== "slider" || slider.media.length !== 2 || !slider.mediaInside || !clip.includes("65%")) failures.push(`${label}: the pair slider reads ${JSON.stringify({ slider, clip })}`);
+          if (!sliderLabels.fitted) failures.push(`${label}: the slider's track and names do not end at the picture's edges: ${JSON.stringify(sliderLabels)}`);
 
           /* 5. Forty pictures in one variant. */
           await showVariant(3);
@@ -19421,7 +19459,7 @@ describe("prototype review on a task: the card's button, the review and the orch
           const viewer = await page.evaluate(() => ({ position: document.querySelector("[data-lightbox-position]")?.textContent ?? null, caption: document.querySelector("[data-lightbox-caption]")?.textContent ?? null }));
           record("viewer", viewer);
           await shot("full-size");
-          if (!viewer.caption?.includes(lang === "en" ? "1 · Compact list — results, desktop" : "1 · Компактний список — результати, десктоп") || !/^1 \/ \d+$/.test(viewer.position?.trim() ?? "")) failures.push(`${label}: the full-size viewer reads ${JSON.stringify(viewer)}`);
+          if (!viewer.caption?.includes(lang === "en" ? "1 · Compact list — results, desktop" : "1 · Компактний список — результати, десктоп") || viewer.position?.trim() !== "1 / 3") failures.push(`${label}: the full-size viewer does not count as the review does: ${JSON.stringify(viewer)}`);
           await page.keyboard.press("Escape");
           await page.waitForSelector("[data-lightbox-position]", { state: "detached" });
           if (!await page.locator(REVIEW).count()) failures.push(`${label}: Escape in the viewer closed the review too`);
@@ -19475,6 +19513,7 @@ describe("prototype review on a task: the card's button, the review and the orch
           const sent = (await posts()).filter((post) => post.taskId === "t-search");
           record("decided", { ...decided, posts: sent });
           await shot("decided");
+          await contextCheck("decided");
           await frameCheck("decided");
           await accentCheck("decided", false);
           if (decided.comment !== spoken || decided.delivery !== "sent" || decided.chosen.length !== 2 || !decided.time || sent.length !== 1) failures.push(`${label}: the saved decision reads ${JSON.stringify({ decided, sent })}`);
@@ -19482,7 +19521,7 @@ describe("prototype review on a task: the card's button, the review and the orch
           if (!size.phone) {
             await page.waitForFunction(() => document.querySelector<HTMLElement>('[data-prototype-button="t-search"]')?.dataset.prototypeState === "decided", undefined, { timeout: 10_000 });
             const after = await page.locator('[data-prototype-button="t-search"]').textContent();
-            if (after?.trim() !== "2, 3") failures.push(`${label}: the card says ${after} after the choice`);
+            if (after?.trim() !== tr("proto.button.word")) failures.push(`${label}: the card says ${after} after the choice`);
             await page.locator(card("t-search")).scrollIntoViewIfNeeded();
             await page.locator(card("t-search")).screenshot({ path: path.join(pngDir, `${label}-card-after-choice.png`) });
             if (await page.locator('[data-orchestrator-conversation] [data-prototype-notice="t-search"]').count()) failures.push(`${label}: the notice of a decided review stays in the orchestrator's pane`);
@@ -19491,12 +19530,12 @@ describe("prototype review on a task: the card's button, the review and the orch
             await shot("task-row-decided");
             await page.goBack();
             await page.waitForTimeout(400);
-            /* The choice turns the card's button to the chosen numbers; the card that still waits keeps its word. */
+            /* The choice checks the card's button, which keeps its word; the card that still waits keeps its own. */
             const after = await phoneCards();
             record("cards-after-choice", after.filter((entry) => entry.task === "t-search" || entry.task === "t-upload"));
             const searchAfter = after.find((entry) => entry.task === "t-search")?.button;
             const uploadAfter = after.find((entry) => entry.task === "t-upload")?.button;
-            if (searchAfter?.state !== "decided" || searchAfter.text !== "2, 3" || uploadAfter?.state !== "opened" || uploadAfter.text !== tr("proto.button.word")) failures.push(`${label}: after the choice the phone cards read ${JSON.stringify(after.map((entry) => [entry.task, entry.button]))}`);
+            if (searchAfter?.state !== "decided" || searchAfter.text !== tr("proto.button.word") || uploadAfter?.state !== "opened" || uploadAfter.text !== tr("proto.button.word")) failures.push(`${label}: after the choice the phone cards read ${JSON.stringify(after.map((entry) => [entry.task, entry.button]))}`);
             const shell = page.locator('[data-phone-card-frame="task:t-search"]');
             await shell.scrollIntoViewIfNeeded();
             await shell.screenshot({ path: path.join(pngDir, `${label}-card-after-choice.png`) });
@@ -19570,6 +19609,7 @@ describe("prototype review on a task: the card's button, the review and the orch
           await page.waitForTimeout(300);
           const asked = { field: emptyWhileTranscribed, review: await page.locator(REVIEW).count(), guard: await page.locator("[data-prototype-guard]").count() };
           await shot("transcribing-guard").catch(() => {});
+          await contextCheck("transcribing-guard");
           const late = lang === "en" ? "Take the header from the two columns and keep the dense rows of the table." : "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.";
           const arrived = asked.review === 1 && await page.waitForFunction((text) => document.querySelector<HTMLTextAreaElement>("[data-prototype-comment-field]")?.value === text, late, { timeout: 10_000 }).then(() => true, () => false);
           const stillAsking = await page.locator("[data-prototype-guard]").count();

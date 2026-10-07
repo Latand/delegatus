@@ -38,6 +38,9 @@ interface Slide {
 interface Draft { chosen: number[]; comment: string }
 const EMPTY_DRAFT: Draft = { chosen: [], comment: "" };
 
+/** A moment as the product writes one: day, month and a 24-hour clock, no seconds. */
+const when = (at: string, locale: string) => new Intl.DateTimeFormat(locale === "uk" ? "uk-UA" : "en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(new Date(at));
+
 const variantLabel = (variant: Variant) => `${variant.number} · ${variant.name}`;
 const slideLabel = (slide: Slide) => (slide.caption ? `${variantLabel(slide.variant)} — ${slide.caption}` : variantLabel(slide.variant));
 
@@ -63,7 +66,7 @@ function galleryOf(t: TFunction, round: PrototypeRoundView, slides: readonly Sli
     const one = (media: PrototypeMediaView | undefined, side?: "original" | "changed"): GalleryImage[] => {
       if (!shown(media, broken)) return [];
       const caption = side ? `${label} · ${t(`proto.pair.${side}`)}` : label;
-      return [{ src: media.url, alt: caption, caption, detail: round.title }];
+      return [{ src: media.url, alt: caption, caption, detail: round.title, place: `${slide.at + 1} / ${slide.of}` }];
     };
     return slide.frame.original ? [...one(slide.frame.original, "original"), ...one(slide.frame.image, "changed")] : one(slide.frame.image);
   });
@@ -84,6 +87,71 @@ const PRIMARY = "inline-flex h-8 shrink-0 items-center justify-center gap-1.5 ro
 function DialogLayer({ containerRef, onClose }: { containerRef: RefObject<HTMLElement | null>; onClose: () => void }) {
   useModalLayer({ containerRef, onClose });
   return null;
+}
+
+interface PairPicture { url: string; alt: string; onError: () => void }
+
+/** An original over its change, cut by a slider. The frame, the two names and
+    the slider's track are as wide as the changed picture is drawn, so the
+    track's ends are the picture's edges: at one end the original covers the
+    whole change, at the other none of it. */
+function SliderPair({ original, changed, labels, tagClass, split, onSplit }: {
+  original: PairPicture;
+  changed: PairPicture;
+  labels: { original: string; changed: string; slider: string };
+  tagClass: string;
+  split: number;
+  onSplit: (value: number) => void;
+}) {
+  const room = useRef<HTMLDivElement>(null);
+  const names = useRef<HTMLDivElement>(null);
+  const track = useRef<HTMLInputElement>(null);
+  const [space, setSpace] = useState<{ width: number; height: number } | null>(null);
+  const [natural, setNatural] = useState<{ width: number; height: number } | null>(null);
+  useEffect(() => {
+    const element = room.current;
+    if (!element) return;
+    /* The picture gets what the stage leaves after the names, the track and the two gaps between them. */
+    const measure = () => setSpace({
+      width: element.clientWidth,
+      height: Math.max(0, element.clientHeight - (names.current?.offsetHeight ?? 0) - (track.current?.offsetHeight ?? 0) - 12),
+    });
+    measure();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(element);
+    return () => observer?.disconnect();
+  }, []);
+  const scale = space && natural ? Math.min(space.width / natural.width, space.height / natural.height) : 0;
+  const size = space && natural ? { width: Math.round(natural.width * scale), height: Math.round(natural.height * scale) } : space;
+  return (
+    <div data-prototype-pair="slider" className="absolute inset-0 p-3">
+      <div ref={room} className="flex h-full w-full flex-col items-center justify-center">
+        <div ref={names} className="flex shrink-0 items-center justify-between gap-2" style={{ width: size?.width }}>
+          <span data-prototype-pair-label="original" className={tagClass}>{labels.original}</span>
+          <span data-prototype-pair-label="changed" className={tagClass}>{labels.changed}</span>
+        </div>
+        <div data-prototype-pair-frame="" className="relative mt-1 shrink-0 overflow-hidden" style={size ? { width: size.width, height: size.height } : undefined}>
+          {/* eslint-disable-next-line @next/next/no-img-element -- a fenced local copy */}
+          <img src={changed.url} alt={changed.alt} draggable={false} className="absolute inset-0 h-full w-full object-contain" onLoad={(event) => setNatural({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })} onError={changed.onError} />
+          {/* eslint-disable-next-line @next/next/no-img-element -- a fenced local copy */}
+          <img src={original.url} alt={original.alt} draggable={false} className="absolute inset-0 h-full w-full bg-sunken object-contain" style={{ clipPath: `inset(0 ${100 - split}% 0 0)` }} onError={original.onError} />
+          <span aria-hidden className="absolute bottom-0 top-0 w-0.5 -translate-x-1/2 bg-accent" style={{ left: `${split}%` }} />
+        </div>
+        <input
+          ref={track}
+          type="range"
+          min={0}
+          max={100}
+          value={split}
+          data-prototype-split=""
+          aria-label={labels.slider}
+          className="mt-2 h-6 shrink-0 accent-[var(--color-accent)] [@media(pointer:coarse)]:h-11"
+          style={{ width: size?.width }}
+          onChange={(event) => onSplit(Number(event.target.value))}
+        />
+      </div>
+    </div>
+  );
 }
 
 export interface PrototypeReviewProps {
@@ -230,6 +298,25 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
     else if (box.right > own.right - 16) row.scrollLeft += box.right - (own.right - 16);
   }, [slide?.key]);
 
+  /* On the phone the shown variant's chip is brought into its row at a chip's
+     start, 16 px in from the edge, so the row never shows a chip cut through
+     its words on the left: the furthest such start that keeps the chip whole
+     on the left, the nearest one that shows it whole on the right. */
+  const chipRow = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const row = chipRow.current;
+    const chip = row?.querySelector<HTMLElement>("[aria-pressed='true']");
+    if (!row || !chip) return;
+    const inset = 16;
+    const own = row.getBoundingClientRect();
+    const place = (element: Element) => row.scrollLeft + element.getBoundingClientRect().left - own.left;
+    const left = place(chip);
+    const right = left + chip.getBoundingClientRect().width;
+    const limit = Math.min(row.scrollWidth - row.clientWidth, left - inset);
+    const starts = [...row.children].map((element) => Math.max(0, place(element) - inset)).filter((start) => start <= limit).sort((a, b) => a - b);
+    row.scrollLeft = starts.find((start) => right - start <= row.clientWidth - inset) ?? starts.at(-1) ?? 0;
+  }, [variant?.number, roundId]);
+
   const gallery = useMemo(() => (round ? galleryOf(t, round, slides, broken) : []), [t, round, slides, broken]);
   const galleryRef = useRef(gallery);
   useEffect(() => { galleryRef.current = gallery; }, [gallery]);
@@ -288,7 +375,7 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
           data-prototype-round={entry.id}
           aria-pressed={entry.id === roundId}
           disabled={speaking && entry.id !== roundId}
-          title={speaking && entry.id !== roundId ? t("proto.round.speaking") : `${entry.title} · ${new Date(entry.createdAt).toLocaleString(locale)}`}
+          title={speaking && entry.id !== roundId ? t("proto.round.speaking") : `${entry.title} · ${when(entry.createdAt, locale)}`}
           className="inline-flex h-7 shrink-0 items-center gap-1 rounded-full border border-border bg-canvas px-2.5 text-label font-semibold text-secondary enabled:hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50 aria-pressed:border-accent/50 aria-pressed:bg-accent-soft aria-pressed:text-accent [@media(pointer:coarse)]:h-9"
           onClick={() => { if (!speaking) setPicked(entry.id); }}
         >
@@ -305,7 +392,6 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
   const variantRow = (entry: Variant) => {
     const chosen = round?.decision ? round.decision.chosen.includes(entry.number) : draft.chosen.includes(entry.number);
     const current = entry === variant;
-    const count = entry.frames.length + entry.videos.length;
     return (
       <li key={entry.number} data-prototype-variant={entry.number} data-chosen={chosen ? "1" : "0"} className={`flex min-w-0 items-start gap-2 rounded-control border p-1.5 ${chosen ? `bg-accent-soft ${current ? "border-accent/60" : "border-accent/25"}` : current ? "border-strong bg-sunken" : "border-transparent hover:bg-sunken"}`}>
         <button
@@ -328,10 +414,7 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
           className="flex min-w-0 flex-1 flex-col items-start gap-0.5 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
           onClick={() => show(firstOf(entry))}
         >
-          <span className="flex w-full min-w-0 items-baseline gap-1.5">
-            <span className="min-w-0 flex-1 break-words text-ui font-semibold text-primary">{chosen ? `${entry.number} · ${entry.name}` : entry.name}</span>
-            <span className="shrink-0 text-caption tabular-nums text-muted">{count}</span>
-          </span>
+          <span className="w-full min-w-0 break-words text-ui font-semibold text-primary">{chosen ? `${entry.number} · ${entry.name}` : entry.name}</span>
           {entry.description ? <span className="w-full whitespace-pre-line break-words text-label text-secondary">{entry.description}</span> : null}
         </button>
       </li>
@@ -340,47 +423,46 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
 
   /* The phone has no room for the list beside the stage: the variants are a
      row of chips, and the shown one's words and its choice stand under it.
-     As in the list, a chosen chip is tinted and the shown one only framed. */
+     As in the list, a chosen chip is tinted and the shown one only framed.
+     The row keeps its 16 px inset when it scrolls a chip into view. */
   const variantChips = round ? (
-    <div className="flex flex-col gap-2 px-4">
-      <div role="group" aria-label={t("proto.variants")} className="-mx-4 flex gap-1.5 overflow-x-auto px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        {round.variants.map((entry) => {
-          const chosen = round.decision ? round.decision.chosen.includes(entry.number) : draft.chosen.includes(entry.number);
-          return (
-            <button
-              key={entry.number}
-              type="button"
-              data-prototype-variant={entry.number}
-              data-chosen={chosen ? "1" : "0"}
-              aria-pressed={entry === variant}
-              className={`inline-flex h-11 max-w-[70vw] shrink-0 items-center gap-1.5 rounded-control border px-2.5 text-ui font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${chosen ? `bg-accent-soft text-accent ${entry === variant ? "border-accent/60" : "border-accent/25"}` : entry === variant ? "border-strong bg-sunken text-primary" : "border-border bg-card text-secondary"}`}
-              onClick={() => show(firstOf(entry))}
-            >
-              <span className={`grid h-5 min-w-5 place-items-center rounded-sm px-1 text-caption font-bold tabular-nums ${chosen ? "bg-accent text-white" : "bg-sunken text-secondary"}`}>
-                {chosen ? <Check className="h-3 w-3" aria-hidden /> : entry.number}
-              </span>
-              <span className="truncate">{chosen ? `${entry.number} · ${entry.name}` : entry.name}</span>
-            </button>
-          );
-        })}
-      </div>
-      {variant ? (
-        <div className="flex items-start gap-2">
-          <p className="m-0 min-w-0 flex-1 whitespace-pre-line break-words text-label text-secondary">{variant.description}</p>
-          {open ? (
-            <button
-              type="button"
-              role="checkbox"
-              aria-checked={draft.chosen.includes(variant.number)}
-              data-prototype-choose={variant.number}
-              className={`inline-flex h-11 shrink-0 items-center gap-1.5 rounded-control border px-3 text-ui font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${draft.chosen.includes(variant.number) ? "border-accent bg-accent text-white" : "border-border bg-card text-primary"}`}
-              onClick={() => toggle(variant.number)}
-            >
-              {draft.chosen.includes(variant.number) ? <Check className="h-3.5 w-3.5" aria-hidden /> : null}
-              {t(draft.chosen.includes(variant.number) ? "proto.chosenOne" : "proto.chooseOne")}
-            </button>
-          ) : null}
-        </div>
+    <div ref={chipRow} role="group" aria-label={t("proto.variants")} data-prototype-chips="" className="-mx-4 flex scroll-px-4 gap-1.5 overflow-x-auto px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      {round.variants.map((entry) => {
+        const chosen = round.decision ? round.decision.chosen.includes(entry.number) : draft.chosen.includes(entry.number);
+        return (
+          <button
+            key={entry.number}
+            type="button"
+            data-prototype-variant={entry.number}
+            data-chosen={chosen ? "1" : "0"}
+            aria-pressed={entry === variant}
+            className={`inline-flex h-11 max-w-[70vw] shrink-0 items-center gap-1.5 rounded-control border px-2.5 text-ui font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${chosen ? `bg-accent-soft text-accent ${entry === variant ? "border-accent/60" : "border-accent/25"}` : entry === variant ? "border-strong bg-sunken text-primary" : "border-border bg-card text-secondary"}`}
+            onClick={() => show(firstOf(entry))}
+          >
+            <span className={`grid h-5 min-w-5 place-items-center rounded-sm px-1 text-caption font-bold tabular-nums ${chosen ? "bg-accent text-white" : "bg-sunken text-secondary"}`}>
+              {chosen ? <Check className="h-3 w-3" aria-hidden /> : entry.number}
+            </span>
+            <span className="truncate">{chosen ? `${entry.number} · ${entry.name}` : entry.name}</span>
+          </button>
+        );
+      })}
+    </div>
+  ) : null;
+  const variantWords = variant ? (
+    <div className="flex items-start gap-2 px-4">
+      <p className="m-0 min-w-0 flex-1 whitespace-pre-line break-words text-label text-secondary">{variant.description}</p>
+      {open ? (
+        <button
+          type="button"
+          role="checkbox"
+          aria-checked={draft.chosen.includes(variant.number)}
+          data-prototype-choose={variant.number}
+          className={`inline-flex h-11 shrink-0 items-center gap-1.5 rounded-control border px-3 text-ui font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${draft.chosen.includes(variant.number) ? "border-accent bg-accent text-white" : "border-border bg-card text-primary"}`}
+          onClick={() => toggle(variant.number)}
+        >
+          {draft.chosen.includes(variant.number) ? <Check className="h-3.5 w-3.5" aria-hidden /> : null}
+          {t(draft.chosen.includes(variant.number) ? "proto.chosenOne" : "proto.chooseOne")}
+        </button>
       ) : null}
     </div>
   ) : null;
@@ -414,30 +496,15 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
       </div>
     ) : <div className="absolute inset-0">{gone}</div>
   ) : slide.frame?.original && mode === "slider" && shown(slide.frame.original, broken) && shown(slide.frame.image, broken) ? (
-    <div data-prototype-pair="slider" className="absolute inset-0 flex flex-col gap-2 p-3">
-      {/* The two names stand over the frame, as they do side by side: a picture as wide as the frame keeps its corners. */}
-      <div className="-mb-1 flex shrink-0 items-center justify-between gap-2">
-        <span data-prototype-pair-label="original" className={pairTag}>{t("proto.pair.original")}</span>
-        <span data-prototype-pair-label="changed" className={pairTag}>{t("proto.pair.changed")}</span>
-      </div>
-      <div className="relative min-h-0 flex-1 overflow-hidden">
-        {/* eslint-disable-next-line @next/next/no-img-element -- a fenced local copy */}
-        <img src={slide.frame.image.url} alt={`${slideLabel(slide)} · ${t("proto.pair.changed")}`} draggable={false} className="absolute inset-0 h-full w-full object-contain" onError={() => markBroken(slide.frame!.image.id)} />
-        {/* eslint-disable-next-line @next/next/no-img-element -- a fenced local copy */}
-        <img src={slide.frame.original.url} alt={`${slideLabel(slide)} · ${t("proto.pair.original")}`} draggable={false} className="absolute inset-0 h-full w-full bg-sunken object-contain" style={{ clipPath: `inset(0 ${100 - split}% 0 0)` }} onError={() => markBroken(slide.frame!.original!.id)} />
-        <span aria-hidden className="absolute bottom-0 top-0 w-0.5 -translate-x-1/2 bg-accent" style={{ left: `${split}%` }} />
-      </div>
-      <input
-        type="range"
-        min={0}
-        max={100}
-        value={split}
-        data-prototype-split=""
-        aria-label={t("proto.pair.sliderAria")}
-        className="h-6 w-full shrink-0 accent-[var(--color-accent)] [@media(pointer:coarse)]:h-11"
-        onChange={(event) => setSplit(Number(event.target.value))}
-      />
-    </div>
+    <SliderPair
+      key={slide.key}
+      original={{ url: slide.frame.original.url, alt: `${slideLabel(slide)} · ${t("proto.pair.original")}`, onError: () => markBroken(slide.frame!.original!.id) }}
+      changed={{ url: slide.frame.image.url, alt: `${slideLabel(slide)} · ${t("proto.pair.changed")}`, onError: () => markBroken(slide.frame!.image.id) }}
+      labels={{ original: t("proto.pair.original"), changed: t("proto.pair.changed"), slider: t("proto.pair.sliderAria") }}
+      tagClass={pairTag}
+      split={split}
+      onSplit={setSplit}
+    />
   ) : slide.frame?.original ? (
     <div data-prototype-pair="side" className="absolute inset-0 grid grid-cols-2 gap-2 p-3">
       {(["original", "changed"] as const).map((side) => (
@@ -466,9 +533,6 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
           </p>
         ) : <span className="flex-1" />}
         <span className="ml-auto flex shrink-0 items-center gap-1.5">
-          {slide?.frame?.width || slide?.frame?.lang ? (
-            <span className="text-caption tabular-nums text-muted">{[slide.frame.width ? `${slide.frame.width} px` : null, slide.frame.lang].filter(Boolean).join(" · ")}</span>
-          ) : null}
           {slide?.frame?.original ? (
             <span role="group" aria-label={t("proto.pair.mode")} className="flex items-center gap-1">
               <button type="button" className={TOOL} data-prototype-pair-mode="side" aria-pressed={mode === "side"} aria-label={t("proto.pair.side")} title={t("proto.pair.side")} onClick={() => setPairMode("side")}>
@@ -560,7 +624,7 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
       <div className="flex flex-wrap items-center gap-1.5">
         <span className="text-label font-semibold text-secondary">{t("proto.chosen")}</span>
         {chosenChips(round.decision.chosen)}
-        <time dateTime={round.decision.at} className="ml-auto shrink-0 text-caption tabular-nums text-muted">{new Date(round.decision.at).toLocaleString(locale)}</time>
+        <time dateTime={round.decision.at} className="ml-auto shrink-0 text-caption tabular-nums text-muted">{when(round.decision.at, locale)}</time>
       </div>
       {round.decision.comment ? (
         <p data-prototype-comment="" className="m-0 max-h-24 overflow-y-auto whitespace-pre-wrap break-words rounded-control border border-border bg-canvas px-2.5 py-1.5 text-ui text-primary">{round.decision.comment}</p>
@@ -642,15 +706,17 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
         <MobileSheet name="prototype-review" title={title} onClose={requestClose} footer={footer}>
           <div data-prototype-review={taskId} data-prototype-round-shown={roundId ?? ""} className="relative flex flex-col gap-2 pb-1">
             {banners}
-            {/* The round and its task stay whole at the top while the body
-                scrolls under them, so a choice or the field never leaves them cut. */}
+            {/* The round, its task and the variants' chips stay whole at the top
+                while the body scrolls under them, so a choice or the field never
+                leaves them cut. */}
             <div data-prototype-context="" className="sticky top-0 z-[2] flex flex-col gap-1.5 bg-raised px-4 py-1">
-              <p className="m-0 text-label text-muted"><span className="font-semibold text-secondary">{round?.title ?? ""}</span>{round ? " · " : ""}{taskTitle}</p>
+              <p data-prototype-context-line="" className="m-0 text-label text-muted"><span className="font-semibold text-secondary">{round?.title ?? ""}</span>{round ? " · " : ""}{taskTitle}</p>
               {roundTabs}
+              {waitingBody ? null : variantChips}
             </div>
             {waitingBody ?? (
               <>
-                {variantChips}
+                {variantWords}
                 {stage}
               </>
             )}

@@ -155,7 +155,14 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
     // The card keeps the sheet's content gutter; a bare card ran edge to edge.
     if (entry.kind === "update") return <div key={entry.id} className="px-4 py-1"><AutoDrainDecision key={entry.decision.id} decision={entry.decision} /></div>;
     /* A prototype review leaves the list by its choice, so the row has no «Dismiss». */
-    if (entry.kind === "prototype") return <PrototypeRow key={entry.id} notice={entry.notice} age={laneAge(entry)} onOpen={onOpenPrototype ? () => open(entry) : undefined} />;
+    /* Its chevron stands in the same column as theirs: an unseen «Dismiss»
+       holds the place the others give to the real one. */
+    if (entry.kind === "prototype") return (
+      <div key={entry.id} className="flex min-w-0 items-start">
+        <div className="min-w-0 flex-1"><PrototypeRow notice={entry.notice} age={laneAge(entry)} onOpen={onOpenPrototype ? () => open(entry) : undefined} /></div>
+        <span aria-hidden className="invisible inline-flex min-h-11 shrink-0 items-center px-3 text-label font-semibold">{t("needs.dismiss")}</span>
+      </div>
+    );
     const role = needsYouEntryRole(entry, pipelines);
     const body = entry.kind === "conversation" ? (
       <ConversationRow item={entry.item} now={now} role={role} current={here.kind === "chat" && here.id === entry.item.file.path} onOpen={() => open(entry)} />
@@ -387,18 +394,20 @@ function PrototypeRow({ notice, age, onOpen }: { notice: PrototypeReviewNotice; 
       data-attention-prototype={notice.taskId}
       className={ROW}
     >
-      <GalleryHorizontalEnd className="h-[18px] w-[18px] shrink-0 text-accent" aria-hidden />
+      {/* Built as a role row: the mark and its word over the title. */}
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="min-w-0 truncate text-body font-semibold leading-[1.25] text-primary">{notice.title}</span>
-        <span className={META}>
-          <span data-attention-decision className="min-w-0 truncate">{t("proto.notice.ready")}</span>
-          {age === null ? null : (
-            <>
-              {SEP}
-              <span data-attention-age className="shrink-0">{fmtAgeSeconds(age)}</span>
-            </>
-          )}
+        <span data-attention-decision className="inline-flex min-w-0 items-center gap-[5px] whitespace-nowrap text-caption font-bold uppercase leading-none tracking-[0.06em] text-accent">
+          <span aria-hidden className="inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[5px] bg-accent text-white">
+            <GalleryHorizontalEnd className="h-[11px] w-[11px]" />
+          </span>
+          <span className="min-w-0 truncate">{t("proto.notice.ready")}</span>
         </span>
+        <span className="min-w-0 truncate text-body font-semibold leading-[1.25] text-primary">{notice.title}</span>
+        {age === null ? null : (
+          <span className={META}>
+            <span data-attention-age className="shrink-0">{fmtAgeSeconds(age)}</span>
+          </span>
+        )}
       </span>
       {onOpen ? <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden /> : null}
     </Tag>
