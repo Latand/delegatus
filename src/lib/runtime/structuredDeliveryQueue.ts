@@ -227,7 +227,7 @@ export interface StructuredReconfigureEffect {
 export interface StructuredReconfigureOwnership {
   isCurrent(): Promise<boolean>;
   /** The conversation's sends this switch holds back that no host was ever
-      handed: the switch carries them instead of waiting for them. */
+      handed: the switch carries them to the successor. */
   carriedSends?: readonly string[];
 }
 
@@ -1075,8 +1075,8 @@ export class StructuredDeliveryQueue {
           && durableStatuses.get(effect.operationId)?.status !== "applying") continue;
         /* Every later message of this conversation waits behind the switch, so
            a send already claimed on the predecessor that was never dispatched
-           can only go out after it. The switch carries those instead of
-           waiting for them (2026-10-07, run 3: ten minutes of neither moving). */
+           can only go out after it. The switch carries those to the successor
+           (2026-10-07, run 3: ten minutes of neither moving). */
         const carriedSends = effect.accountId
           ? effects.filter((later) => (later.kind === "send" || later.kind === "steer")
             && neverDispatched(durableStatuses.get(later.operationId))).map((later) => later.operationId)

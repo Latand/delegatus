@@ -1167,7 +1167,7 @@ export class SqliteAgentRegistryStore {
       if (changed) {
         this.secureFiles();
         /* A delivery commit patches the cached reader view like any other
-           narrow commit. Dropping it instead cost the next whole-registry
+           narrow commit. Dropping it cost the next whole-registry
            reader a full reload, 0.28 to 0.40 s on a copy of the production
            registry (3,052 conversations, 3,254 deliveries) where the patch
            costs nothing measurable, and an account switch interleaves dozens

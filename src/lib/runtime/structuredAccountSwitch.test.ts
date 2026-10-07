@@ -606,7 +606,7 @@ function sendClaimedBehindPick() {
   return { registry, conversation, successorPath, reconfigure };
 }
 
-test("a send claimed on the old account behind the pick moves with the switch instead of holding it", async () => {
+test("a send claimed on the old account behind the pick moves with the switch and goes out on the new account", async () => {
   const { registry, conversation, successorPath, reconfigure } = sendClaimedBehindPick();
 
   expect(await reconfigure(["send-behind-pick"])).toBe("applied");
