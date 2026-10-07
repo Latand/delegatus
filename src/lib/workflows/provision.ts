@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { pidAlive } from "@/lib/scanner/process";
+import { CpuContainmentUnavailable, wrapWorkCommand, type CpuPorts } from "@/lib/runtime/cpuPlacement";
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
 import { engineForgeWriteEnv } from "@/lib/git/agentForgeCredentials";
 
@@ -121,21 +122,29 @@ export async function provisionWorktree(wf: Workflow, exec: ExecPort): Promise<P
  * Launches the template's setup command detached in the worktree. Stdout and
  * stderr stream to artifact files; the exit code lands in its own file via a
  * shell trailer, so setupStatus stays answerable after a viewer restart when
- * only the persisted pid and the artifacts remain.
+ * only the persisted pid and the artifacts remain. Setup is heavy work
+ * (`bun install`, a build): its whole tree runs in a CPU work scope, and a
+ * missing CPU mechanism refuses the launch with its reason.
  */
-export function startSetup(wf: Workflow): { pid: number | null; error?: string } {
+export function startSetup(wf: Workflow, cpu: { env?: Readonly<Record<string, string | undefined>>; ports?: CpuPorts } = {}): { pid: number | null; error?: string } {
   const setup = wf.template.setup;
   if (!setup) return { pid: null, error: "workflow has no setup command" };
+  /* The command runs in a nested shell fed through the environment: its own
+     `exit` cannot skip the trailer that records the code, and the command
+     text never gets interpolated into the wrapper script. */
+  let launch: { command: string; args: string[] };
+  try { launch = wrapWorkCommand("sh", ["-c", `sh -c "$LLV_SETUP_CMD"; printf '%s' "$?" > "$LLV_SETUP_EXIT"`], { label: "workflow-setup", ...cpu }); }
+  catch (error) {
+    if (error instanceof CpuContainmentUnavailable) return { pid: null, error: error.message };
+    throw error;
+  }
   const exitPath = setupExitPath(wf.id);
   fs.mkdirSync(path.dirname(exitPath), { recursive: true });
   fs.rmSync(exitPath, { force: true });
   const stdoutFd = fs.openSync(setupStdoutPath(wf.id), "w");
   const stderrFd = fs.openSync(setupStderrPath(wf.id), "w");
   try {
-    /* The command runs in a nested shell fed through the environment: its own
-       `exit` cannot skip the trailer that records the code, and the command
-       text never gets interpolated into the wrapper script. */
-    const child = spawn("sh", ["-c", `sh -c "$LLV_SETUP_CMD"; printf '%s' "$?" > "$LLV_SETUP_EXIT"`], {
+    const child = spawn(launch.command, launch.args, {
       cwd: wf.worktreeDir,
       env: { ...withoutUnsupportedApiCredentials(process.env), LLV_SETUP_CMD: setup, LLV_SETUP_EXIT: exitPath },
       detached: true,

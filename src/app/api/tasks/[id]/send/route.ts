@@ -7,6 +7,7 @@ import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
 import { agentMessageOrigin, delegatusMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import type { MessageOrigin } from "@/lib/runtime/messageOrigin";
 import { recordTeamEvent, refuseAnonymous, teamActor } from "@/lib/team";
+import { taskForResponse } from "@/lib/prototypeReview/read";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { listFiles } from "@/lib/scanner";
 import { attachmentPath } from "@/lib/tasks/attachments";
@@ -159,7 +160,7 @@ async function postTaskSend(
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status });
   return NextResponse.json({
     ok: true,
-    task: result.task,
+    task: taskForResponse(req, result.task),
     results: assembled.results,
     delivered: assembled.delivered,
     failed: assembled.failed,

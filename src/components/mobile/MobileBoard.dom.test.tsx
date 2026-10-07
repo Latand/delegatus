@@ -602,6 +602,7 @@ for (const kind of ["root", "manual"] as const) {
     click(rowFor(root, target.path));
     expect(await waitFor(() => q(root, '[data-testid="mobile-chat-shell"]') !== null)).toBe(true);
     click(q(root, '[data-mobile2-open="menu"]'));
+    click(q(page(), '[data-mobile2-menu-section="end"]'));
     click(q(page(), '[data-mobile2-menu-row="close"]'));
     expect(await waitFor(() => mutations.some((mutation) => mutation.kind === "close" && mutation.path === target.path))).toBe(true);
     expect(boardPrefs.hidden).toContain(target.path);

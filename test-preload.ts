@@ -47,3 +47,15 @@ afterAll(() => run.release());
 if (!process.env.LLV_STATE_DIR) {
   process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(run.root, "llv-test-state-"));
 }
+
+/*
+ * CPU placement and CPU-pressure admission act on the live user manager and
+ * read the machine's pressure. A test that exercises them passes its own env
+ * and slices; no test process configures a live slice or waits on load. The
+ * folded `LLV_` names are the ones every entry point leaves behind
+ * (bin/envAlias.mjs), so a fold later in the run cannot turn this back on.
+ */
+for (const name of ["AGENT_CPU", "CPU_PRESSURE"]) {
+  delete process.env[`DELEGATUS_${name}`];
+  process.env[`LLV_${name}`] = "off";
+}

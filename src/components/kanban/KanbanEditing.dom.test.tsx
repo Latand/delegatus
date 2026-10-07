@@ -189,7 +189,7 @@ const type = (field: HTMLInputElement | HTMLTextAreaElement, value: string) => {
   });
 };
 const editor = (host: HTMLElement, id: string) => cardEl(host, id)?.querySelector<HTMLInputElement & HTMLTextAreaElement>("[data-card-editor]") ?? null;
-const menuItem = (host: HTMLElement, label: string) => [...host.querySelectorAll<HTMLElement>('.menu [role^="menuitem"]')].find((item) => item.querySelector(".lbl")?.firstChild?.textContent === label || item.getAttribute("aria-label") === label) ?? null;
+const menuItem = (host: HTMLElement, label: string) => [...host.querySelectorAll<HTMLElement>('.menu [role^="menuitem"]')].find((item) => item.querySelector(".lbl")?.firstChild?.textContent === label || item.querySelector(".cm-cap")?.textContent === label || item.getAttribute("aria-label") === label) ?? null;
 
 test("a title is renamed in place: Enter saves the whole text with the guard, the card shows it at once, and focus stays on the card", async () => {
   const view = mount([task("a", "assigned", "Repair old links\nKeep the anchors stable")]);
@@ -359,7 +359,8 @@ test("the group holding the seat has a lock instead of ×, H explains, and a sto
   click(card.querySelector("[data-menu]"));
   const hide = menuItem(view.host, "Hide from board");
   expect(hide?.getAttribute("aria-disabled")).toBe("true");
-  expect(hide?.querySelector(".why")?.textContent).toBe("Holds the orchestrator's conversation, so it stays on the board");
+  /* The cell says why in words under the row of cells. */
+  expect(view.host.querySelector('.menu [data-cm-note="hide"]')?.textContent).toBe("Hide: Holds the orchestrator's conversation, so it stays on the board");
   await tick();
   expect(view.server.patches).toHaveLength(0);
 });
@@ -501,6 +502,10 @@ test("an Undo of Hide finished tasks that fails for several groups counts them, 
 test("colour comes from the card menu or C, shows at once, and is written on its own", async () => {
   const view = mount([task("a", "inbox", "Write the release notes")]);
   click(cardEl(view.host, "a")?.querySelector("[data-menu]"));
+  /* The colours are behind Appearance, which names the one chosen and opens in place. */
+  const appearance = view.host.querySelector<HTMLElement>('.menu [data-cm-section="appearance"]');
+  expect([appearance?.querySelector(".cm-val")?.textContent, appearance?.getAttribute("aria-expanded")]).toEqual(["No colour", "false"]);
+  click(appearance);
   const swatches = [...view.host.querySelectorAll<HTMLElement>(".menu .swatch")];
   expect(swatches.map((swatch) => swatch.getAttribute("aria-label"))).toEqual(["No colour", "Coral", "Amber", "Lime", "Teal", "Sky", "Violet", "Pink", "Slate"]);
   expect(swatches[0]!.getAttribute("aria-checked")).toBe("true");
@@ -553,6 +558,7 @@ test("an icon leads the title and comes from the card's own icon, the card menu 
 
   /* The card menu names it beside the colour. */
   click(cardEl(view.host, "a")?.querySelector("[data-menu]"));
+  click(view.host.querySelector('.menu [data-cm-section="appearance"]'));
   click(menuItem(view.host, "Icon…"));
   await tick();
   expect(view.host.querySelector(".icon-popover [data-icon-choice=\"rocket\"]")?.getAttribute("aria-pressed")).toBe("true");
@@ -754,13 +760,14 @@ test("priority comes from the card menu: three levels with the current one check
   ]);
   expect(inboxOrder(view.host)).toEqual(["a", "b"]);
   click(cardEl(view.host, "b")?.querySelector("[data-menu]"));
-  const heads = [...view.host.querySelectorAll(".menu .head")].map((head) => head.textContent);
-  expect(heads.slice(0, 3)).toEqual(["Move to", "Priority", "Colour"]);
+  /* The columns and the priorities are two rows of choices, and the priority row says what its ends do. */
+  expect([...view.host.querySelectorAll(".menu [data-cm-segments]")].map((group) => group.getAttribute("aria-label"))).toEqual(["Move to", "Priority"]);
+  expect([...view.host.querySelectorAll('.menu [data-cm-ends="priority"] span')].map((end) => end.textContent)).toEqual(["Top of the Inbox", "Bottom of the Inbox"]);
   const levels = ["High", "Normal", "Low"].map((label) => menuItem(view.host, label));
   expect(levels.map((item) => [item?.getAttribute("role"), item?.getAttribute("aria-checked")])).toEqual([
     ["menuitemradio", "false"], ["menuitemradio", "true"], ["menuitemradio", "false"],
   ]);
-  expect(levels[0]?.textContent).toContain("Top of the Inbox");
+  expect(levels[0]?.getAttribute("title")).toBe("Top of the Inbox");
   click(levels[0]);
   expect(inboxOrder(view.host)).toEqual(["b", "a"]);
   expect(prioMark(view.host, "b")?.dataset.priority).toBe("high");
@@ -789,9 +796,31 @@ test("stopped work and waiting reasons are visible without expanding a card", ()
 });
 
 
+test("a worker slot wait has its own wording and a resource hold shows its note, in both locales", () => {
+  for (const locale of ["en", "uk"] as const) {
+    setLocale(locale);
+    const since = "2026-09-14T10:00:00.000Z";
+    const slot = task("slot-wait", "blocked", "Queued lane", { hold: { kind: "worker", note: "", since, by: "agent" } });
+    const short = task("memory-wait", "blocked", "Heavy build", { hold: { kind: "resource", note: "4 GB of memory available, 8 GB needed", since, by: "agent" } });
+    const bare = task("bare-resource", "blocked", "Old resource hold", { hold: { kind: "resource", note: "", since, by: "agent" } });
+    const { host } = mount([slot, short, bare]);
+    const line = (id: string) => host.querySelector(`[data-id="task:${id}"] [data-motion="waiting"]`);
+    expect(line("slot-wait")?.firstElementChild?.textContent).toBe(translate(locale, "kanban.hold.worker"));
+    expect(line("slot-wait")?.textContent).not.toContain(translate(locale, "kanban.hold.resource"));
+    expect(line("memory-wait")?.textContent).toContain(`${translate(locale, "kanban.hold.resource")} · 4 GB of memory available, 8 GB needed`);
+    expect(line("bare-resource")?.firstElementChild?.textContent).toBe(translate(locale, "kanban.hold.resource"));
+    expect(line("bare-resource")?.children[1]?.className).toBe("motion-age");
+    for (const root of roots.splice(0)) flushSync(() => root.unmount());
+    document.body.replaceChildren();
+  }
+  expect(translate("en", "kanban.hold.worker")).toBe("Queued: waiting for a free worker");
+  expect(translate("uk", "kanban.hold.worker")).toBe("У черзі: очікує на вільного агента");
+});
+
 test("the status menu opens an inline reason editor and saves a Waiting hold", async () => {
   const view = mount([task("hold-edit", "assigned", "Wait for a worker")]);
   click(cardEl(view.host, "hold-edit")?.querySelector("[data-menu]"));
+  click(view.host.querySelector('.menu [data-cm-section="more"]'));
   click([...view.host.querySelectorAll('[role="menuitem"]')].find(node => node.textContent === "Set waiting reason"));
   const form = view.host.querySelector("[data-hold-editor]")!;
   expect(form).toBeTruthy();

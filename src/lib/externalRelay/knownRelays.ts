@@ -65,7 +65,7 @@ export function ownOriginIcon(origin: string, icon: unknown): string | null {
 /** A list entry with what its descriptor said; a descriptor that could not be read leaves the entry as listed. */
 export function knownRelayInfo(
   relay: KnownRelay,
-  descriptor: { description?: string; icon_url?: string } | null,
+  descriptor: { description?: string; icon_url?: string | null } | null,
 ): KnownRelayInfo {
   return {
     ...relay,

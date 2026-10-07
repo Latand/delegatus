@@ -12,6 +12,12 @@
           "nudge": false
         },
         {
+          "id": "visual-critic",
+          "effort": "high",
+          "cost": "heavy",
+          "nudge": false
+        },
+        {
           "id": "architect",
           "effort": "xhigh",
           "cost": "very-heavy",
@@ -47,6 +53,12 @@
           "id": "reviewer",
           "effort": "xhigh",
           "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "visual-critic",
+          "effort": "high",
+          "cost": "heavy",
           "nudge": false
         },
         {
@@ -88,6 +100,12 @@
           "nudge": false
         },
         {
+          "id": "visual-critic",
+          "effort": "high",
+          "cost": "heavy",
+          "nudge": false
+        },
+        {
           "id": "architect",
           "effort": "xhigh",
           "cost": "very-heavy",
@@ -123,6 +141,12 @@
           "id": "reviewer",
           "effort": "xhigh",
           "cost": "very-heavy",
+          "nudge": false
+        },
+        {
+          "id": "visual-critic",
+          "effort": "high",
+          "cost": "heavy",
           "nudge": false
         },
         {

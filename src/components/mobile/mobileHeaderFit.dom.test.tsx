@@ -345,7 +345,7 @@ const openMore = async (host: HTMLElement) => {
   await settle();
 };
 
-test("«Keep screen awake» is one tap inside the «⋯» menu and holds a real sentinel (#712)", async () => {
+test("«Keep screen awake» is on the «⋯» menu's Settings page and holds a real sentinel (#712)", async () => {
   const scene = wakeLockScene();
   const host = mount((dashboard) => <KeepAwakeProvider environment={scene.factory}>{dashboard}</KeepAwakeProvider>);
   expect(await waitFor(() => shelfReady(host))).toBe(true);
@@ -354,6 +354,9 @@ test("«Keep screen awake» is one tap inside the «⋯» menu and holds a real 
   expect(header(host).querySelector('[data-testid="keep-awake-row"]')).toBeNull();
 
   await openMore(host);
+  /* The header menu's mix (docs/design/header-menu.md): the device rows live on Settings. */
+  flushSync(() => (header(host).querySelector('[data-mobile2-menu-row="settings"]') as unknown as HTMLButtonElement).click());
+  await settle();
   const row = header(host).querySelector('[data-testid="keep-awake-row"]') as unknown as HTMLElement;
   expect(row).not.toBeNull();
   expect(row.textContent).toContain(translate("en", "keepAwake.label"));

@@ -146,6 +146,10 @@ test("a mapping row is refused for orchestrator, architect and the reviewer base
   expect(mappingRowRefusal("reviewer", { engine: "claude", model: "haiku" }, "trivial")).toContain("reviewer:");
   expect(mappingRowRefusal("builder", { engine: "claude", model: "sonnet" })).toBeNull();
   expect(mappingRowRefusal("reviewer", { engine: "codex", model: "gpt-6-luna" })).toBeNull();
+  /* Visual judgement runs on Claude, never Codex: its row refuses any Codex model and keeps every Claude one. */
+  expect(mappingRowRefusal("visual-critic", { engine: "codex", model: "gpt-6.1-sol" })).toBe("visual-critic runs on claude only");
+  expect(mappingRowRefusal("visual-critic", { engine: "claude", model: "fable" })).toBeNull();
+  expect(mappingRowRefusal("visual-critic", { engine: "claude", model: "claude-sonnet-5-5" })).toBeNull();
 });
 
 test("a role-less spawn that names its own light model is judged as a hand-set builder", () => {
