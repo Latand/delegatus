@@ -3733,3 +3733,387 @@ describe("image viewers: pinch, pan and the right click", () => {
     }
   }, 600_000);
 });
+
+describe("a control's hint never outlives its click", () => {
+  /*
+   * Operator report: after a click on Compact its hint stayed on screen, and
+   * it was still there after switching to another orchestrator.
+   *
+   * The production strip in the orchestrator conversation, under a real
+   * mouse and a real keyboard. Chromium drops a button's focus the moment
+   * React writes `disabled` onto it, inside the commit, and React delivers no
+   * blur from there: a Hint that opened on the click's focus never heard that
+   * the focus was gone. The strip is mounted unkeyed, so that Hint was carried
+   * into the next conversation.
+   *
+   * Compact and Stop both disable themselves while their request is out; the
+   * request is held here so each is read while busy.
+   */
+
+  type Page = Awaited<ReturnType<typeof openFixture>>["page"];
+  const HINT_SHOWN_MS = 400;
+  const URL_QUERY = "?case=own-message-steps&surface=orchestrator&lang=en";
+  const compact = `button[aria-label^="${translate("en", "composer.compactAria")}"]`;
+  const stop = `button[aria-label^="${translate("en", "composer.interruptAria")}"]`;
+  const sendButton = `button[aria-label="${translate("en", "composer.sendToAgent")}"]`;
+  const HOLD = `window.heldControls = [];
+    const send = window.fetch;
+    window.fetch = async (input, init) => {
+      const url = String(input);
+      if (url === "/api/tmux" || url.startsWith("/api/conversation-host")) {
+        await new Promise((resolve) => window.heldControls.push(resolve));
+        return Response.json({ ok: true });
+      }
+      return send(input, init);
+    };`;
+
+  const hints = (page: Page) => page.evaluate(() => [...document.querySelectorAll('[role="tooltip"]')].map((node) => node.textContent));
+  const disabled = (page: Page, selector: string) => page.evaluate((query) => document.querySelector<HTMLButtonElement>(query)!.disabled, selector);
+  const release = (page: Page) => page.evaluate(() => {
+    for (const answer of (window as unknown as { heldControls: (() => void)[] }).heldControls.splice(0)) answer();
+  });
+  const switchConversation = (page: Page) => page.evaluate(() => {
+    (window as unknown as { ownSteps: { open: (conversation: string) => void } }).ownSteps.open("another-orchestrator");
+  });
+  async function rest(page: Page, selector: string): Promise<void> {
+    const box = (await page.locator(selector).first().boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.waitForTimeout(HINT_SHOWN_MS);
+  }
+  async function press(page: Page): Promise<void> {
+    await page.mouse.down();
+    await page.mouse.up();
+    await page.waitForTimeout(HINT_SHOWN_MS);
+  }
+  async function leave(page: Page): Promise<void> {
+    await page.mouse.move(40, 40, { steps: 4 });
+    await page.waitForTimeout(HINT_SHOWN_MS);
+  }
+
+  browserTest("Compact, Stop, Send and a keyboard-focus hint in Chromium", async () => {
+    const out = path.resolve(".artifacts/control-hints");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    let browser: Browser | null = null;
+    try {
+      browser = await chromium.launch(LAUNCH);
+
+      /* Compact: hover, arm, confirm, leave, answer, switch. */
+      {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}${URL_QUERY}`, { width: 1280, height: 900 }, "dark", "en");
+        try {
+          await page.waitForSelector(compact, { timeout: 20_000 });
+          await page.evaluate(HOLD);
+          await rest(page, compact);
+          expect(await hints(page)).toEqual([translate("en", "composer.compactTitle")]);
+          await press(page);
+          expect(await hints(page)).toEqual([]);
+          await press(page);
+          expect(await disabled(page, compact)).toBe(true);
+          expect(await hints(page)).toEqual([]);
+          await leave(page);
+          expect(await hints(page)).toEqual([]);
+          await release(page);
+          await page.waitForFunction((query) => !document.querySelector<HTMLButtonElement>(query)!.disabled, compact);
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([]);
+          await switchConversation(page);
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([]);
+          await page.screenshot({ path: path.join(out, "compact-after-switch.png") });
+          /* A pointer that arrives anew is still told what the control does. */
+          await rest(page, compact);
+          expect(await hints(page)).toEqual([translate("en", "composer.compactTitle")]);
+          await leave(page);
+          expect(await hints(page)).toEqual([]);
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+      }
+
+      /* Stop: one click disables it; the conversation is switched while it is busy. */
+      {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}${URL_QUERY}`, { width: 1280, height: 900 }, "dark", "en");
+        try {
+          await page.waitForSelector(stop, { timeout: 20_000 });
+          await page.evaluate(HOLD);
+          await rest(page, stop);
+          expect(await hints(page)).toEqual([translate("en", "composer.interruptTitle")]);
+          await press(page);
+          expect(await disabled(page, stop)).toBe(true);
+          expect(await hints(page)).toEqual([]);
+          await leave(page);
+          await switchConversation(page);
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([]);
+          await release(page);
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([]);
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+      }
+
+      /* Send with an empty field keeps its menu, so it stays enabled, says it
+         cannot send, and stops its own click from propagating. */
+      {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}${URL_QUERY}`, { width: 1280, height: 900 }, "dark", "en");
+        try {
+          await page.waitForSelector(sendButton, { timeout: 20_000 });
+          expect(await page.evaluate((query) => document.querySelector(query)!.getAttribute("aria-disabled"), sendButton)).toBe("true");
+          await rest(page, sendButton);
+          expect(await hints(page)).toEqual([translate("en", "composer.sendToAgent")]);
+          await press(page);
+          expect(await disabled(page, sendButton)).toBe(false);
+          expect(await hints(page)).toEqual([]);
+          await leave(page);
+          await rest(page, sendButton);
+          expect(await hints(page)).toEqual([translate("en", "composer.sendToAgent")]);
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+      }
+
+      /* Keyboard: Tab onto a control shows its hint, activating it closes the
+         hint, and so does a key pressed with the focus still on the control. */
+      {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}${URL_QUERY}`, { width: 1280, height: 900 }, "dark", "en");
+        try {
+          await page.waitForSelector(compact, { timeout: 20_000 });
+          await page.evaluate(HOLD);
+          await page.locator(stop).first().focus();
+          await page.keyboard.press("Tab");
+          await page.keyboard.press("Tab");
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await page.evaluate((query) => document.activeElement === document.querySelector(query), compact)).toBe(true);
+          expect(await hints(page)).toEqual([translate("en", "composer.compactTitle")]);
+          await page.screenshot({ path: path.join(out, "keyboard-focus.png") });
+          await page.keyboard.press("Escape");
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([]);
+          await page.keyboard.press("Shift+Tab");
+          await page.keyboard.press("Tab");
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([translate("en", "composer.compactTitle")]);
+          await page.keyboard.press("Enter");
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([]);
+          await page.keyboard.press("Enter");
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await disabled(page, compact)).toBe(true);
+          expect(await hints(page)).toEqual([]);
+          await release(page);
+          await switchConversation(page);
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([]);
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+      }
+
+      /* A hint already open when the dock is handed another conversation, with
+         no input in between: by keyboard focus on Compact, then by a pointer
+         resting on Stop. */
+      {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}${URL_QUERY}`, { width: 1280, height: 900 }, "dark", "en");
+        try {
+          await page.waitForSelector(compact, { timeout: 20_000 });
+          await page.locator(stop).first().focus();
+          await page.keyboard.press("Tab");
+          await page.keyboard.press("Tab");
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([translate("en", "composer.compactTitle")]);
+          await switchConversation(page);
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await page.evaluate(() => document.querySelector("[data-link-path]")!.getAttribute("data-link-path"))).toBe("/another-orchestrator.jsonl");
+          expect(await page.evaluate((query) => document.activeElement === document.querySelector(query), compact)).toBe(true);
+          expect(await hints(page)).toEqual([]);
+          await page.screenshot({ path: path.join(out, "open-hint-after-handoff.png") });
+          await rest(page, stop);
+          expect(await hints(page)).toEqual([translate("en", "composer.interruptTitle")]);
+          await page.evaluate(() => {
+            (window as unknown as { ownSteps: { open: (conversation: string) => void } }).ownSteps.open("third-orchestrator");
+          });
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([]);
+          /* The pointer leaves and arrives anew: the hint is back. */
+          await leave(page);
+          await rest(page, stop);
+          expect(await hints(page)).toEqual([translate("en", "composer.interruptTitle")]);
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+      }
+
+      /* Touch: a held finger still opens the hint, and lifting it closes it. */
+      {
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}${URL_QUERY}`, { width: 1280, height: 900 }, "dark", "en");
+        try {
+          await page.waitForSelector(compact, { timeout: 20_000 });
+          const box = (await page.locator(compact).first().boundingBox())!;
+          const point = { x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2) };
+          const cdp = await context.newCDPSession(page);
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point] });
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([translate("en", "composer.compactTitle")]);
+          await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+          await page.waitForTimeout(HINT_SHOWN_MS);
+          expect(await hints(page)).toEqual([]);
+          expect(pageErrors).toEqual([]);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser?.close();
+      served.stop();
+    }
+  }, 240_000);
+});
+
+describe("prototype review: the orchestrator's open composer says a prototype is ready", () => {
+  /*
+   * The phone's half of the orchestrator's notice. With the composer put away
+   * the seat's card carries one chip, which the kanban driver measures; with
+   * the orchestrator's conversation open the notice stands above the message
+   * field. This block opens that composer at 390 with three tasks waiting, in
+   * English and Ukrainian, light and dark, and reads: the one line the phone
+   * shows and the count folded behind it, the 44 px action, that the line and
+   * the field do not overlap and nothing leaves the screen, the unfolded list,
+   * and that «Go to prototype» opens the waiting round of the task it names.
+   *
+   *   LLV_CONVERSATION_BROWSER_TEST=1 bun test src/components/conversation/conversationWindow.browser.test.tsx -t "prototype review"
+   *
+   * Readings go to `evidence/prototype-review/composer-notice.json`; frames to
+   * PROTOTYPE_REVIEW_PNG_DIR (default `.artifacts/prototype-review/`), which
+   * is not committed.
+   */
+  const OUT = path.resolve(".artifacts/prototype-review");
+  const EVIDENCE = path.resolve("evidence/prototype-review");
+  const VIEWPORT = { width: 390, height: 844 };
+
+  browserTest("prototype review: the notice above the phone's open composer, its count and its jump", async () => {
+    const pngDir = process.env.PROTOTYPE_REVIEW_PNG_DIR ?? OUT;
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(pngDir, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const served = await serveEvidenceFixture(OUT, FIXTURE);
+    let browser: Browser | null = null;
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      browser = await chromium.launch(LAUNCH);
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const label = `phone-390-${lang}-${scheme}`;
+        const tr = (key: Parameters<typeof translate>[1], vars?: Record<string, string | number>) => translate(lang, key, vars);
+        /* Each line names the task its jump lands on, the fixture's task text. */
+        const taskTitles: Record<string, string> = lang === "uk"
+          ? { "t-search": "Повернути результати пошуку після перебудови індексу", "t-links": "Полагодити старі посилання в нотатках до випуску", "t-upload": "Переробити завантаження великих вкладень" }
+          : { "t-search": "Restore search results after the index rebuild", "t-links": "Repair old links in the release notes", "t-upload": "Redesign attachment upload for large files" };
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?case=prototype-notice&lang=${lang}`, VIEWPORT, scheme, lang, "reduce", true);
+        const shot = (name: string) => page.screenshot({ path: path.join(pngDir, `${label}-composer-${name}.png`) });
+        /* The notice, the message field and the screen: what the line says,
+           where it stands and whether anything overlaps or leaves the frame. */
+        const read = () => page.evaluate(() => {
+          const box = (element: Element) => { const rect = element.getBoundingClientRect(); return [Math.round(rect.left * 10) / 10, Math.round(rect.top * 10) / 10, Math.round(rect.width * 10) / 10, Math.round(rect.height * 10) / 10]; };
+          const crosses = (a: number[], b: number[]) => a[0]! < b[0]! + b[2]! - 0.5 && b[0]! < a[0]! + a[2]! - 0.5 && a[1]! < b[1]! + b[3]! - 0.5 && b[1]! < a[1]! + a[3]! - 0.5;
+          const list = document.querySelector<HTMLElement>("[data-evidence-composer] [data-prototype-notices]");
+          const field = document.querySelector<HTMLTextAreaElement>("[data-evidence-composer] textarea");
+          const rows = [...document.querySelectorAll<HTMLElement>("[data-evidence-composer] [data-prototype-notice]")];
+          const more = document.querySelector<HTMLElement>("[data-evidence-composer] [data-prototype-notice-more]");
+          const parts = [...rows.map(box), ...(more ? [box(more)] : []), ...(field ? [box(field)] : [])];
+          const overlaps: string[] = [];
+          for (let i = 0; i < parts.length; i += 1) for (let j = i + 1; j < parts.length; j += 1) if (crosses(parts[i]!, parts[j]!)) overlaps.push(`${i} × ${j}`);
+          return {
+            waiting: list?.dataset.prototypeNotices ?? null,
+            rows: rows.map((row) => {
+              const action = row.querySelector<HTMLElement>("[data-prototype-notice-open]")!;
+              const title = row.querySelector<HTMLElement>("span.truncate")!;
+              return {
+                task: row.dataset.prototypeNotice, text: row.textContent, box: box(row), action: box(action), actionLabel: action.getAttribute("aria-label"),
+                titleClear: title.getBoundingClientRect().right <= action.getBoundingClientRect().left + 0.5,
+                titleCut: title.scrollWidth > title.clientWidth,
+              };
+            }),
+            more: more ? { folded: more.dataset.prototypeNoticeMore, text: more.textContent, expanded: more.getAttribute("aria-expanded"), box: box(more) } : null,
+            field: field ? box(field) : null,
+            fieldEnabled: field ? !field.disabled : null,
+            overlaps,
+            outside: parts.filter((part) => part[0]! < -0.5 || part[0]! + part[2]! > window.innerWidth + 0.5 || part[1]! < -0.5 || part[1]! + part[3]! > window.innerHeight + 0.5).length,
+            overflowX: document.documentElement.scrollWidth - window.innerWidth,
+            viewport: [window.innerWidth, window.innerHeight],
+          };
+        });
+        try {
+          await page.waitForSelector('[data-evidence-case="prototype-notice"] [data-prototype-notice]', { timeout: 20_000 });
+          await page.waitForTimeout(400);
+          const folded = await read();
+          readings[`${label}-notice`] = folded;
+          await shot("notice");
+          const first = folded.rows[0];
+          /* Three tasks wait: the phone shows one line and folds two behind the count. */
+          if (folded.waiting !== "3" || folded.rows.length !== 1 || folded.more?.folded !== "2" || !folded.more.text?.includes("2")) failures.push(`${label}: the composer's notice reads ${JSON.stringify({ waiting: folded.waiting, rows: folded.rows.length, more: folded.more })}`);
+          if (!first || first.task !== "t-search" || !first.text?.includes(tr("proto.notice.ready")) || !first.text.includes(tr("proto.notice.open")) || !first.titleClear) failures.push(`${label}: the notice line reads ${JSON.stringify(first)}`);
+          if (first && (!first.text?.includes(taskTitles[first.task!]!) || !first.actionLabel?.includes(taskTitles[first.task!]!))) failures.push(`${label}: the notice line does not name its task: «${first.text}», «${first.actionLabel}»`);
+          if (first && (first.action[3]! < 44 || first.action[2]! < 44)) failures.push(`${label}: «${tr("proto.notice.open")}» is ${first.action[2]}×${first.action[3]}, under a 44 px touch target`);
+          if (folded.more && folded.more.box[3]! < 44) failures.push(`${label}: the count behind the notice is ${folded.more.box[3]} px tall`);
+          if (!folded.field || !folded.fieldEnabled || (first && first.box[1]! + first.box[3]! > folded.field[1]! + 0.5)) failures.push(`${label}: the notice does not stand above a usable message field: ${JSON.stringify({ row: first?.box, field: folded.field })}`);
+          if (folded.overlaps.length || folded.outside || folded.overflowX > 0) failures.push(`${label}: the notice overlaps ${folded.overlaps.join(", ")}, leaves the screen (${folded.outside}) or scrolls the page sideways by ${folded.overflowX}px`);
+
+          /* Unfolded: every waiting task has its line, the long title is cut before the action and the field stays on screen. */
+          await page.locator("[data-evidence-composer] [data-prototype-notice-more]").click();
+          await page.waitForFunction(() => document.querySelectorAll("[data-evidence-composer] [data-prototype-notice]").length === 3);
+          await page.waitForTimeout(200);
+          const all = await read();
+          readings[`${label}-notice-all`] = all;
+          await shot("notice-all");
+          if (all.rows.length !== 3 || all.more?.expanded !== "true" || all.rows.some((row) => !row.titleClear || row.action[3]! < 44)) failures.push(`${label}: the unfolded notice reads ${JSON.stringify(all.rows.map((row) => ({ task: row.task, clear: row.titleClear, action: row.action })))}`);
+          for (const row of all.rows) if (!row.text?.includes(taskTitles[row.task!]!)) failures.push(`${label}: the unfolded notice of ${row.task} does not name its task: «${row.text}»`);
+          if (!all.rows.some((row) => row.titleCut)) failures.push(`${label}: the long title was expected to be cut and was not`);
+          if (all.overlaps.length || all.outside || all.overflowX > 0) failures.push(`${label}: unfolded, the notice overlaps ${all.overlaps.join(", ")}, leaves the screen (${all.outside}) or scrolls sideways by ${all.overflowX}px`);
+          await page.locator("[data-evidence-composer] [data-prototype-notice-more]").click();
+          await page.waitForFunction(() => document.querySelectorAll("[data-evidence-composer] [data-prototype-notice]").length === 1);
+
+          /* The jump: the review of the task the line names, on its waiting round. */
+          await page.locator('[data-evidence-composer] [data-prototype-notice-open="t-search"]').click();
+          await page.waitForSelector('[data-mobile2-sheet="prototype-review"] [data-prototype-variant]', { timeout: 10_000 });
+          await page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>("[data-prototype-canvas] img")].every((image) => image.complete && image.naturalWidth > 0));
+          await page.waitForTimeout(400);
+          const jump = await page.evaluate(() => {
+            const review = document.querySelector<HTMLElement>("[data-prototype-review]");
+            const sheet = document.querySelector<HTMLElement>('[data-mobile2-sheet="prototype-review"]')!.getBoundingClientRect();
+            return {
+              review: review?.dataset.prototypeReview ?? null, round: review?.dataset.prototypeRoundShown ?? null,
+              variants: document.querySelectorAll("[data-prototype-review] button[data-prototype-variant]").length,
+              sheet: [Math.round(sheet.left), Math.round(sheet.top), Math.round(sheet.width), Math.round(sheet.height)],
+              sheetInside: sheet.left >= -0.5 && sheet.right <= window.innerWidth + 0.5 && sheet.bottom <= window.innerHeight + 0.5,
+              overflowX: document.documentElement.scrollWidth - window.innerWidth,
+            };
+          });
+          readings[`${label}-jump`] = jump;
+          await shot("jump");
+          if (jump.review !== "t-search" || jump.round !== "r-search" || jump.variants !== 2 || !jump.sheetInside || jump.overflowX > 0) failures.push(`${label}: «${tr("proto.notice.open")}» opened ${JSON.stringify(jump)}`);
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("[data-prototype-review]", { state: "detached", timeout: 5_000 });
+          if (!await page.locator("[data-evidence-composer] [data-prototype-notice]").count()) failures.push(`${label}: the notice of an undecided review left the composer after the review was closed`);
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}${pageErrors.length ? ` (page errors: ${pageErrors.join(" | ")})` : ""}`);
+          await shot("failed-here").catch(() => {});
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser?.close();
+      served.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "composer-notice.json"), `${JSON.stringify({ driver: "src/components/conversation/conversationWindow.browser.test.tsx", readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 600_000);
+});

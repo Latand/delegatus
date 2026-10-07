@@ -12,6 +12,7 @@ import { refreshRuntime } from "@/hooks/useRuntime";
 import type { SelectedContextPreview } from "@/lib/selection/selectedContext";
 
 import { DELIVERY_WAIT_TICK_MS } from "@/components/runtime/deliveryWait";
+import { humanReceiptReasonKey } from "@/components/runtime/runtimeModel";
 import { type TFunction, useLocale } from "@/lib/i18n";
 
 import { appendComposerDraft, restoreOutboxDraft } from "@/components/TmuxComposer";
@@ -275,7 +276,7 @@ export function ConversationMessageRow({
       {row.failure?.detail ? (
         <span data-outbox-raw data-runtime-receipt-status className="min-w-0 whitespace-normal break-words text-right text-muted">{row.failure.detail}</span>
       ) : null}
-      {entry.deliveryReceipt?.reason && !row.failure?.selfExplaining
+      {entry.deliveryReceipt?.reason && !humanReceiptReasonKey(entry.deliveryReceipt.reason) && !row.failure?.selfExplaining
         && !evidenceRepeats(entry.deliveryReceipt.reason, row.failure?.detail)
         && !evidenceRepeats(entry.deliveryReceipt.reason, row.transport) ? (
         <span className="min-w-0 whitespace-normal break-words text-right text-muted">{entry.deliveryReceipt.reason}</span>

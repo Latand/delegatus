@@ -81,10 +81,11 @@ describe("shared memory settings", () => {
           expect(await offer.locator("button[data-memory-title]").count()).toBe(0);
           expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
           await page.screenshot({ path: path.join(out, `offer-open-${locale}-${width}.png`) });
-          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-settings")));
-          const setting = page.locator("[data-memory-setting]"); await setting.waitFor();
-          const control = setting.getByRole("switch"); await page.waitForFunction(() => (document.querySelector("[data-memory-setting] input") as HTMLInputElement)?.checked === true); await expect(control.isChecked()).resolves.toBe(true);
-          await control.click(); await page.waitForFunction(() => !(document.querySelector("[data-memory-setting] input") as HTMLInputElement)?.checked);
+          const setting = page.locator("[data-memory-fixture-page]"); await setting.waitFor();
+          const control = setting.locator("[data-memory-switch]");
+          await page.waitForFunction(() => document.querySelector("[data-memory-switch]")?.getAttribute("aria-checked") === "true");
+          expect(await setting.textContent()).toContain(translate(locale, "memoryPage.explains"));
+          await control.click(); await page.waitForFunction(() => document.querySelector("[data-memory-switch]")?.getAttribute("aria-checked") === "false");
           const geometry = await setting.evaluate(el => ({ width: el.getBoundingClientRect().width, scroll: el.scrollWidth, client: el.clientWidth, text: el.textContent }));
           expect(geometry.scroll).toBeLessThanOrEqual(geometry.client + 1);
           expect(pageErrors).toEqual([]);
@@ -100,7 +101,126 @@ describe("shared memory settings", () => {
     }
   }, 90000);
 
-  browserTest("status, shared key and ledger stay readable in en and uk at 1440 and 390", async () => {
+  browserTest("confirmed Claude seat memories and last-turn reasons render in en and uk", async () => {
+    const { NextRequest } = await import("next/server");
+    const { GET } = await import("@/app/api/memory/settings/route");
+    const { offerForHook } = await import("@/lib/memory/controller");
+    const { FileClaudeDeliveryLedger } = await import("@/lib/runtime/claudeStreamBrokerHost");
+    const { memoryIndex } = await import("@/lib/memory/service");
+    const { setSharedMemoryEnabled } = await import("@/lib/memory/settings");
+    const { offeredMemoryForTranscript } = await import("@/lib/memory/offers");
+    const { encodeCodexStructuredUserText } = await import("@/lib/runtime/codexStructuredUserText.server");
+    const { messageTextDigest } = await import("@/lib/runtime/messageTextDigest");
+    const crypto = await import("node:crypto");
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-seat-browser-")), previous = { ...process.env }, originalFetch = globalThis.fetch;
+    process.env.LLV_STATE_DIR = path.join(root, "state"); process.env.OPENROUTER_API_KEY = "fixture"; delete process.env.PORT;
+    const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" }); setAgentRegistryForTests(registry);
+    const project = (await import("@/lib/scanner/describe")).projectInfoFromCwd(root)!.project;
+    const reservation = registry.beginSpawnRequest({ engine: "claude", cwd: root, explicitProject: project,
+      role: "orchestrator", origin: { kind: "operator" }, transport: "structured",
+      launchProfile: emptyLaunchProfile({ cwd: root, title: "Synthetic seat conversation" }) });
+    if (reservation.kind === "conflict") throw Error("fixture seat conflict");
+    const receipt = reservation.receipt;
+    const capability = registry.rotateSpawnCapabilityForReceipt(receipt.launchId);
+    const session = crypto.randomUUID(), transcript = path.join(root, session + ".jsonl");
+    const line = (uuid: string, text: string) => JSON.stringify({ type: "user", uuid, promptSource: "sdk", timestamp: "2026-10-06T12:00:00Z", message: { role: "user", content: text } });
+    const prompt = "Update widget parser", lines = [line("fixture-opening", "Review widget parser"), line("fixture-relay", "Machine wake: widget parser work is ready")];
+    fs.writeFileSync(transcript, lines.join("\n") + "\n");
+    registry.settleSpawn(receipt.launchId, { key: { engine: "claude", sessionId: session }, artifactPath: transcript, cwd: root,
+      accountId: null, status: "live", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
+    // The project's route reads the same isolated ledger the hook writes.
+    setSharedMemoryEnabled("fixture-project", true);
+    setSharedMemoryEnabled(project, true);
+    const source = path.join(root, "widget.md");
+    fs.writeFileSync(source, "---\nname: Widget parser rule\ndescription: Widget parser needs escaped delimiters.\ntype: project\n---\nUse escaped delimiters.\n");
+    await memoryIndex().refresh([{ path: source, engine: "claude", sourceKind: "claude_memory", project }]);
+    const ledger = new FileClaudeDeliveryLedger();
+    ledger.recordQueued(session, { id: "fixture-relay", text: "Machine wake: widget parser work is ready", origin: { kind: "agent" } }, "queued-next-turn");
+    ledger.confirmDelivered(session, "fixture-relay", "fixture-relay");
+    ledger.recordQueued(session, { id: "fixture-operator", text: prompt, origin: { kind: "operator" } }, "queued-next-turn");
+    const endpoint = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(request) {
+      const body = await request.json(); return Response.json({ answers: Object.fromEntries(Object.keys(body.questions).map(id => [id, { noul: .9 }])), usage: { cost: .0001 } });
+    } });
+    globalThis.fetch = ((url, init) => originalFetch(String(url).includes("openrouter.ai") ? `http://127.0.0.1:${endpoint.port}` : url, init)) as typeof fetch;
+    const headers = { "x-llv-spawn-capability": capability, "x-llv-memory-hook": crypto.randomUUID(), "x-llv-memory-deadline": String(Date.now() + 1500) };
+    const out = path.resolve(".artifacts/shared-memory-seat"); fs.mkdirSync(out, { recursive: true });
+    let server: Awaited<ReturnType<typeof serveEvidenceFixture>> | undefined;
+    let launched: Awaited<ReturnType<typeof chromium.launchServer>> | undefined;
+    let browser: Awaited<ReturnType<typeof chromium.connect>> | undefined;
+    let browserPid: number | undefined;
+    const measurements: unknown[] = [];
+    try {
+      expect(await offerForHook(new Request("http://localhost/api/memory/inject", { headers }), { hook_event_name: "UserPromptSubmit", session_id: session, cwd: root, prompt, delegatus_delivery_id: "fixture-operator" })).toContain("Widget parser rule");
+      await offerForHook(new Request("http://localhost/api/memory/inject", { headers }), { delegatus_confirm: true, delegatus_emitted_at: Date.now() });
+      lines.push(line("fixture-current", prompt)); fs.appendFileSync(transcript, lines.at(-1)! + "\n"); ledger.confirmDelivered(session, "fixture-operator", "fixture-current");
+      const stagePrompt = "You are a fresh-context Reviewer. Review widget parser.";
+      const stage = registry.beginSpawnRequest({ engine: "codex", cwd: root, explicitProject: project,
+        role: "reviewer", reviewsConversationId: receipt.conversationId, origin: { kind: "operator" }, transport: "structured",
+        launcher: { conversationId: receipt.conversationId, notify: true },
+        launchDisplay: { prompt: stagePrompt, echo: stagePrompt, images: 0 },
+        launchProfile: emptyLaunchProfile({ cwd: root, title: "Synthetic stage conversation" }) });
+      if (stage.kind === "conflict") throw Error("fixture stage conflict");
+      const stageSession = crypto.randomUUID();
+      registry.settleSpawn(stage.receipt.launchId, { key: { engine: "codex", sessionId: stageSession }, artifactPath: path.join(root, stageSession + ".jsonl"), cwd: root,
+        accountId: null, status: "live", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
+      const stageHeaders = { ...headers, "x-llv-spawn-capability": registry.rotateSpawnCapabilityForReceipt(stage.receipt.launchId), "x-llv-memory-hook": crypto.randomUUID() };
+      const activity = memoryIndex().injectionActivity();
+      const stageText = encodeCodexStructuredUserText(stagePrompt, undefined, null, { kind: "operator" }, messageTextDigest("synthetic-stage-start"));
+      expect(await offerForHook(new Request("http://localhost/api/memory/inject", { headers: stageHeaders }),
+        { hook_event_name: "UserPromptSubmit", session_id: stageSession, cwd: root, prompt: stageText })).toBe("");
+      expect(memoryIndex().lastTurn(project)).toBe("delivered");
+      expect(memoryIndex().injectionActivity()).toEqual(activity);
+      const memoryOffers = offeredMemoryForTranscript(transcript);
+      expect(memoryOffers["fixture-current"]).toEqual(["Widget parser rule"]);
+      server = await serveEvidenceFixture(out, "src/components/memory/memoryEvidence.fixture.tsx", {
+        "/api/fixture/memory-turn": { lines, memoryOffers, messages: { "fixture-opening": { origin: "operator" }, "fixture-relay": { origin: "agent" }, "fixture-current": { origin: "operator" } } },
+        "/api/memory/settings": () => GET(new NextRequest(`http://localhost/api/memory/settings?project=${project}`)),
+        "/api/asks-you/key": { present: true, source: "env" },
+        "/api/telemetry": { enabled: false, locked: false, noticeDismissed: true },
+      });
+      launched = await chromium.launchServer({ executablePath: process.env.CHROME_BIN, headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+      browserPid = launched.process().pid; fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid: browserPid, closed: false }));
+      browser = await chromium.connect(launched.wsEndpoint());
+      for (const lang of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        // Render the real seam's status after the intervening Codex stage.
+        if (measurements.length) memoryIndex().recordLastTurn(project, receipt.conversationId, "fixture-operator", Date.now(), "delivered");
+        const { page, context, pageErrors } = await openFixture(browser, server.base + "?seat-memory", { width, height: 900 }, "light", lang, "reduce", width === 390);
+        try {
+          const offer = page.locator("[data-memory-offer]"); await offer.waitFor();
+          expect(await offer.count()).toBe(1); expect(await offer.textContent()).toContain("Widget parser rule");
+          expect(await offer.locator("..").textContent()).toContain(prompt);
+          await page.screenshot({ path: path.join(out, `${lang}-${width}-offer.png`) });
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-settings")));
+          for (const reason of ["delivered", "noCandidates", "noMatches", "candidateTimeout", "timeout", "failed", "prepared", "capped", "unprovenOrigin", "ledgerPending", "unconfirmed"] as const) {
+            memoryIndex().recordLastTurn(project, receipt.conversationId, "fixture-operator", Date.now(), reason);
+            await page.evaluate(() => window.dispatchEvent(new Event("delegatus:provider-key-changed")));
+            const last = page.locator("[data-memory-last-turn]");
+            await page.waitForFunction(text => document.querySelector("[data-memory-last-turn]")?.textContent?.trim() === text, translate(lang, `memory.last.${reason}`));
+            await last.scrollIntoViewIfNeeded();
+            const box = await last.evaluate(el => {
+              const row = el.closest("[data-memory-setting]")!; const r = el.getBoundingClientRect();
+              return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, overflow: row.scrollWidth - row.clientWidth, text: el.textContent?.trim() };
+            });
+            expect(box.top).toBeGreaterThanOrEqual(0); expect(box.bottom).toBeLessThanOrEqual(900);
+            expect(box.left).toBeGreaterThanOrEqual(0); expect(box.right).toBeLessThanOrEqual(width); expect(box.overflow).toBeLessThanOrEqual(1);
+            measurements.push({ lang, width, reason, ...box, pageErrors });
+            await page.screenshot({ path: path.join(out, `${lang}-${width}-${reason}.png`) });
+          }
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/shared-memory", { recursive: true });
+      fs.writeFileSync("evidence/shared-memory/seat-turn.json", JSON.stringify(measurements, null, 2) + "\n");
+    } finally {
+      await browser?.close(); await launched?.close(); server?.stop(); endpoint.stop(true);
+      fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid: browserPid, closed: true }));
+      memoryIndex().close(); setAgentRegistryForTests(null); globalThis.fetch = originalFetch;
+      for (const key of ["LLV_STATE_DIR", "OPENROUTER_API_KEY", "PORT"]) { if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key]; }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }, 90000);
+
+  browserTest("the header menu's memory and key pages stay readable in en and uk at 1440 and 390", async () => {
     const { NextRequest } = await import("next/server");
     const memory = await import("@/app/api/memory/settings/route");
     const keyRoute = await import("@/app/api/asks-you/key/route");
@@ -145,124 +265,125 @@ describe("shared memory settings", () => {
         fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "viewer-release.json"), JSON.stringify({ endpoint: "http://127.0.0.1:9875" }));
         const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-settings`, { width, height: 900 }, "light", lang, "reduce", width === 390);
         try {
-          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-settings")));
-          const dialog = page.locator("[data-telemetry-settings]");
-          await dialog.waitFor();
-          await page.locator("[data-memory-status]").waitFor();
-          await page.locator("[data-provider-key] input").waitFor();
+          /* Shared memory and the key are pages of the header menu (docs/design/header-menu.md):
+             the rail's ⋯ on the desktop, the board menu's sheet on the phone, Settings, then the row. */
+          const phone = width === 390;
+          const container = phone ? "[data-mobile2-sheet='menu']" : "[data-rail-menu-panel]";
+          const openPage = async (row: "memory" | "key") => {
+            if (!(await page.locator(container).count())) await page.locator(phone ? '[data-mobile2-open="menu"]' : "[data-rail-menu]").first().click();
+            if (await page.locator(phone ? '[data-mobile2-menu-row="back"]' : "[data-rail-menu-back]").count()) {
+              await page.locator(phone ? '[data-mobile2-menu-row="back"]' : "[data-rail-menu-back]").click();
+            }
+            if (await page.locator(phone ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]").count()) {
+              await page.locator(phone ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]").click();
+            }
+            await page.locator(phone ? `[data-mobile2-menu-row="${row}"]` : `[data-rail-menu-${row}]`).click();
+            await page.locator(row === "memory" ? "[data-memory-page]" : "[data-key-page]").waitFor();
+          };
+          const reasonIs = (key: Parameters<typeof translate>[1]) =>
+            page.waitForFunction(text => document.querySelector("[data-memory-reason]")?.textContent?.startsWith(text), translate(lang, key));
+          const switchState = () => page.locator("[data-memory-switch]").getAttribute("aria-checked");
           const measure = async (state: string) => {
-            await dialog.evaluate(node => { node.scrollTop = 0; });
-            const geometry = await dialog.evaluate(node => {
+            const geometry = await page.locator(container).evaluate((node, desktop) => {
               const box = node.getBoundingClientRect();
-              const rows = [...node.querySelectorAll<HTMLElement>("[data-memory-setting], [data-provider-key]")].map(row => {
-                const r = row.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, height: r.height, overflow: row.scrollWidth - row.clientWidth };
-              });
               const controls = [...node.querySelectorAll<HTMLElement>("input, button")].map(control => {
-                const r = control.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+                const r = control.getBoundingClientRect(); return { left: r.left, right: r.right };
               });
-              const elements = [...node.querySelectorAll<HTMLElement>("[data-memory-setting] p, [data-memory-setting] label, [data-memory-setting] input, [data-provider-key] p, [data-provider-key] label, [data-provider-key] input, [data-provider-key] button")];
+              const elements = [...node.querySelectorAll<HTMLElement>("[data-memory-page] > *, [data-memory-reason] > *, [data-key-page] > *, [data-provider-key] input, [data-provider-key] button")];
               const overlaps = elements.flatMap((a, i) => elements.slice(i + 1).filter(b => {
                 if (a.contains(b) || b.contains(a)) return false;
                 const ar = a.getBoundingClientRect(), br = b.getBoundingClientRect();
-                return Math.min(ar.right, br.right) - Math.max(ar.left, br.left) > 1
-                  && Math.min(ar.bottom, br.bottom) - Math.max(ar.top, br.top) > 1;
+                return Math.min(ar.right, br.right) - Math.max(ar.left, br.left) > 1 && Math.min(ar.bottom, br.bottom) - Math.max(ar.top, br.top) > 1;
               }).map(b => ({ first: a.tagName, second: b.tagName })));
-              const memoryError = node.querySelector<HTMLElement>("[data-memory-setting] [role=alert]");
-              const errorStyle = memoryError ? getComputedStyle(memoryError) : null;
-              return { left: box.left, right: box.right, top: box.top, bottom: box.bottom,
-                overflow: node.scrollWidth - node.clientWidth, scrollHeight: node.scrollHeight, height: node.clientHeight, rows, controls,
-                status: node.querySelector("[data-memory-status]")?.textContent,
-                counts: node.querySelector("[data-memory-counts]")?.textContent,
-                overlaps,
-                memoryError: memoryError ? { text: memoryError.textContent, fontSize: errorStyle!.fontSize, lineHeight: errorStyle!.lineHeight,
-                  gap: memoryError.getBoundingClientRect().top - memoryError.previousElementSibling!.getBoundingClientRect().bottom } : null,
-                keyError: node.querySelector("[data-provider-key] [role=alert]")?.textContent };
-            });
+              const page = node.querySelector<HTMLElement>("[data-memory-page], [data-key-page]");
+              return { left: box.left, right: box.right, top: box.top, bottom: box.bottom, height: box.height, desktop,
+                overflow: (page?.scrollWidth ?? 0) - (page?.clientWidth ?? 0), controls, overlaps,
+                reason: node.querySelector("[data-memory-reason]")?.textContent ?? null,
+                numbers: node.querySelector("[data-memory-numbers]")?.textContent ?? null,
+                keyError: node.querySelector("[data-provider-key] [role=alert], [data-key-page] [role=alert]")?.textContent ?? null };
+            }, !phone);
             expect(geometry.left).toBeGreaterThanOrEqual(0); expect(geometry.right).toBeLessThanOrEqual(width);
             expect(geometry.top).toBeGreaterThanOrEqual(0); expect(geometry.bottom).toBeLessThanOrEqual(900);
+            if (!phone) expect(geometry.height).toBeLessThanOrEqual(360);
             expect(geometry.overflow).toBeLessThanOrEqual(1);
-            expect(geometry.rows[0].bottom).toBeLessThanOrEqual(geometry.rows[1].top);
-            expect(geometry.rows.every(row => row.overflow <= 1)).toBe(true);
             expect(geometry.controls.every(control => control.left >= geometry.left && control.right <= geometry.right)).toBe(true);
             expect(geometry.overlaps).toEqual([]);
-            if (geometry.memoryError) {
-              expect(geometry.memoryError.fontSize).toBe("13px");
-              expect(geometry.memoryError.gap).toBe(8);
-            }
             cases.push({ lang, width, state, ...geometry, pageErrors });
             await page.screenshot({ path: path.join(out, `${lang}-${width}-${state}.png`) });
-            await page.locator("[data-provider-key]").scrollIntoViewIfNeeded();
-            await page.screenshot({ path: path.join(out, `${lang}-${width}-${state}-key.png`) });
           };
-          expect(await page.locator("[data-memory-status]").textContent()).toContain(translate(lang, "memory.status.notOwner"));
-          expect(await page.locator("[data-memory-status]").textContent()).toContain(translate(lang, "memory.status.noKey"));
+          await openPage("memory");
+          /* Without a key and on a release that does not serve traffic, the key comes first: it is the one a person can lift. */
+          await reasonIs("memoryPage.reason.noKey");
           await measure("missing-key");
+          await page.locator("[data-memory-enter-key]").click();
+          const field = page.locator("[data-memory-reason] [data-provider-key] input");
           const invalid = "fixture\u200Bkey";
-          await page.locator("[data-provider-key] input").fill(invalid);
-          await page.locator("[data-provider-key] button").click();
+          await field.fill(invalid);
+          await page.locator("[data-memory-reason] [data-provider-key] button").click();
           await page.getByText(translate(lang, "providerKey.invalid"), { exact: true }).waitFor();
-          expect(await page.locator("[data-provider-key] input").inputValue()).toBe("");
-          expect(await dialog.textContent()).not.toContain(invalid);
+          expect(await field.inputValue()).toBe("");
+          expect(await page.locator(container).textContent()).not.toContain(invalid);
           await measure("invalid-key");
           failKeyWrite = true;
-          await page.locator("[data-provider-key] input").fill("fixture-browser-key");
-          await page.locator("[data-provider-key] button").click();
+          await field.fill("fixture-browser-key");
+          await page.locator("[data-memory-reason] [data-provider-key] button").click();
           await page.getByText(translate(lang, "providerKey.failed"), { exact: true }).waitFor();
-          expect(await page.locator("[data-provider-key] input").inputValue()).toBe("");
-          expect(await dialog.textContent()).not.toContain("fixture-browser-key");
+          expect(await field.inputValue()).toBe("");
+          expect(await page.locator(container).textContent()).not.toContain("fixture-browser-key");
           await measure("write-failed");
           failKeyWrite = false;
           // No file key is seeded; the only secret sent is this fake fixture.
-          await page.locator("[data-provider-key] input").fill("fixture-browser-key");
-          await page.locator("[data-provider-key] button").click();
-          await page.getByText(translate(lang, "providerKey.saved"), { exact: true }).waitFor();
-          expect(await page.locator("[data-provider-key] input").inputValue()).toBe("");
+          await field.fill("fixture-browser-key");
+          await page.locator("[data-memory-reason] [data-provider-key] button").click();
+          await reasonIs("memoryPage.reason.notOwner");
           await measure("inactive");
           delete process.env.PORT;
           memoryIndex().recordInjectionActivity("decisions");
           memoryIndex().recordInjectionActivity("noMatches");
           await page.evaluate(() => window.dispatchEvent(new Event("delegatus:provider-key-changed")));
-          await page.waitForFunction(text => document.querySelector("[data-memory-status]")?.textContent === text, translate(lang, "memory.status.ready"));
+          await page.waitForFunction(() => !document.querySelector("[data-memory-reason]") && document.querySelector("[data-memory-numbers]"));
+          /* The ledger is the installation's and grows across the languages and widths of this run. */
+          const [added, checked, spent] = await page.locator("[data-memory-numbers] b").allTextContents();
+          expect([added, spent]).toEqual(["0", "$0"]);
+          expect(Number(checked)).toBeGreaterThan(0);
           await measure("ready");
           mutateOperatorAsks(file => { file.spend.usd = 1; });
           await page.evaluate(() => window.dispatchEvent(new Event("delegatus:provider-key-changed")));
-          await page.waitForFunction(text => document.querySelector("[data-memory-status]")?.textContent === text, translate(lang, "memory.status.capped"));
+          await page.waitForFunction(() => document.querySelector("[data-memory-reason]")?.getAttribute("data-memory-reason") === "capped");
+          expect(await page.locator("[data-memory-reason]").textContent()).toContain("$1");
           await measure("capped");
-          await page.locator("[data-memory-setting] [role=switch]").click();
-          await page.waitForFunction(text => document.querySelector("[data-memory-status]")?.textContent?.includes(text), translate(lang, "memory.status.projectOff"));
+          await page.locator("[data-memory-switch]").click();
+          await page.waitForFunction(() => document.querySelector("[data-memory-switch]")?.getAttribute("aria-checked") === "false");
           await measure("off");
           process.env.OPENROUTER_API_KEY = "test-env";
           await page.reload();
-          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-settings")));
-          await page.getByText(translate(lang, "providerKey.env"), { exact: true }).waitFor();
-          expect(await page.locator("[data-provider-key] input").count()).toBe(0);
-          expect(await page.locator("[data-provider-key]").textContent()).not.toContain(translate(lang, "providerKey.shared"));
+          await openPage("key");
+          await page.getByText(translate(lang, "keyPage.env"), { exact: true }).waitFor();
+          expect(await page.locator("[data-key-page] input").count()).toBe(0);
+          expect(await page.locator("[data-key-replace]").count()).toBe(0);
           await measure("environment");
           process.env.LLV_STAGING = "1";
           for (const source of ["env", "file"] as const) {
             if (source === "file") delete process.env.OPENROUTER_API_KEY;
             await page.reload();
-            await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-settings")));
+            await openPage("key");
             await page.getByText(translate(lang, "providerKey.staging"), { exact: true }).waitFor();
-            expect(await page.locator("[data-provider-key] form").count()).toBe(0);
-            expect(await page.locator("[data-provider-key] input").count()).toBe(0);
-            expect(await page.locator("[data-provider-key]").textContent()).not.toContain(translate(lang, "providerKey.shared"));
+            expect(await page.locator("[data-key-page] form").count()).toBe(0);
+            expect(await page.locator("[data-key-page] input").count()).toBe(0);
             await measure(`staging-${source}`);
           }
           const { openRouterKeyPath } = await import("@/lib/asks/settings");
           fs.rmSync(openRouterKeyPath(), { force: true });
           await page.reload();
-          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-settings")));
-          await page.getByText(translate(lang, "providerKey.staging"), { exact: true }).waitFor();
-          await page.waitForFunction(text => document.querySelector("[data-memory-status]")?.textContent?.includes(text), translate(lang, "memory.status.noKeyStaging"));
-          expect(await page.locator("[data-memory-status]").textContent()).not.toContain(translate(lang, "memory.status.noKey"));
-          expect(await page.locator("[data-provider-key] input").count()).toBe(0);
-          expect(await page.locator("[data-provider-key]").textContent()).not.toContain(translate(lang, "providerKey.shared"));
+          await openPage("memory");
+          await reasonIs("memoryPage.reason.noKeyStaging");
+          expect(await page.locator("[data-memory-enter-key]").count()).toBe(0);
+          expect(await page.locator("[data-provider-key]").count()).toBe(0);
           await measure("staging-missing-key");
           delete process.env.LLV_STAGING;
           await page.reload();
-          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-settings")));
-          await page.locator("[data-provider-key] input").waitFor();
+          await openPage("memory");
+          await reasonIs("memoryPage.reason.noKey");
           const stateRoot = process.env.LLV_STATE_DIR!;
           const spendFile = path.join(stateRoot, "operator-asks.json");
           const spendBefore = fs.readFileSync(spendFile, "utf8");
@@ -274,18 +395,17 @@ describe("shared memory settings", () => {
               fs.writeFileSync(path.join(pendingDirectory, "a".repeat(64) + ".json"), "{}");
             }
             await page.evaluate(() => window.dispatchEvent(new Event("delegatus:provider-key-changed")));
-            await page.waitForFunction(text => document.querySelector("[data-memory-status]")?.textContent === text, translate(lang, "memory.status.failed"));
-            const control = page.locator("[data-memory-setting] [role=switch]");
+            await reasonIs("memoryPage.reason.unknown");
+            const control = page.locator("[data-memory-switch]");
             expect(await control.isEnabled()).toBe(true);
-            const wasEnabled = await control.isChecked();
+            const wasEnabled = await switchState();
             await control.click();
-            await page.waitForFunction(enabled => {
-              const input = document.querySelector<HTMLInputElement>("[data-memory-setting] input");
-              return input && !input.disabled && input.checked === enabled;
-            }, !wasEnabled);
-            expect(await control.isChecked()).toBe(!wasEnabled);
-            expect(await page.locator("[data-memory-counts]").count()).toBe(0);
-            expect(await page.locator("[data-memory-setting]").textContent()).not.toContain("$");
+            await page.waitForFunction(was => {
+              const button = document.querySelector<HTMLButtonElement>("[data-memory-switch]");
+              return button && !button.disabled && button.getAttribute("aria-checked") !== was;
+            }, wasEnabled);
+            expect(await page.locator("[data-memory-numbers]").count()).toBe(0);
+            expect(await page.locator("[data-memory-page]").textContent()).not.toContain("$");
             await measure(`unavailable-${broken}`);
             if (broken === "spend") fs.writeFileSync(spendFile, spendBefore);
             else fs.rmSync(pendingDirectory, { recursive: true });
@@ -293,18 +413,20 @@ describe("shared memory settings", () => {
           const settingFile = path.join(stateRoot, "shared-memory-settings.json");
           const settingBefore = fs.readFileSync(settingFile, "utf8");
           // Refresh the restored ledger before exercising a failed setting write.
+          process.env.OPENROUTER_API_KEY = "test-env";
           await page.evaluate(() => window.dispatchEvent(new Event("delegatus:provider-key-changed")));
-          await page.locator("[data-memory-counts]").waitFor();
-          const statusBefore = await page.locator("[data-memory-status]").textContent();
-          const countsBefore = await page.locator("[data-memory-counts]").textContent();
+          await page.locator("[data-memory-numbers]").waitFor();
+          const numbersBefore = await page.locator("[data-memory-numbers]").textContent();
+          const stateBefore = await switchState();
           fs.writeFileSync(settingFile, "broken");
-          await page.locator("[data-memory-setting] [role=switch]").click();
+          await page.locator("[data-memory-switch]").click();
           await page.getByText(translate(lang, "memory.save.failed"), { exact: true }).waitFor();
-          expect(await page.locator("[data-memory-setting] [role=switch]").isEnabled()).toBe(true);
-          expect(await page.locator("[data-memory-status]").textContent()).toBe(statusBefore);
-          expect(await page.locator("[data-memory-counts]").textContent()).toBe(countsBefore);
+          expect(await page.locator("[data-memory-switch]").isEnabled()).toBe(true);
+          expect(await switchState()).toBe(stateBefore);
+          expect(await page.locator("[data-memory-numbers]").textContent()).toBe(numbersBefore);
           await measure("memory-write-failed");
           fs.writeFileSync(settingFile, settingBefore);
+          delete process.env.OPENROUTER_API_KEY;
           expect(pageErrors).toEqual([]);
         } finally { await context.close(); }
         // The next language/viewport starts with no file key.
@@ -737,6 +859,8 @@ browserTest("external relay: settings and the setup guide's step at 390 and desk
           /* The entry row itself: the phone's menu sheet, the desktop rail's ⋯ menu. */
           if (phone) await page.locator('[data-mobile2-open="menu"]').click();
           else await page.locator("[data-rail-menu]").click();
+          /* «Chat relay» is on the header menu's Settings page. */
+          await page.locator(phone ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]").click();
           const entry = page.locator(phone ? '[data-mobile2-menu-row="external-relay"]' : "[data-rail-menu-external-relay]");
           await entry.waitFor();
           const row = await entry.evaluate((element) => {
@@ -4513,6 +4637,8 @@ browserTest("#2187: a completed lane says where its merge stands on the phone at
           await page.waitForSelector('[data-mobile2-open="menu"]', { timeout: 20_000 });
           await pause(page, 600);
           await page.locator('[data-mobile2-open="menu"]').first().click();
+          /* The project's switches are on the board menu's «Project rules» page. */
+          await page.locator('[data-mobile2-menu-row="rules"]').click();
           await page.waitForSelector('[data-mobile2-sheet="menu"] [data-merge-on-review]', { timeout: 10_000 });
           await page.waitForFunction(() => !document.querySelector("[data-merge-on-review-switch]")?.hasAttribute("disabled"), undefined, { timeout: 10_000 });
           const row = page.locator("[data-merge-on-review]");
@@ -5020,6 +5146,7 @@ browserTest("#2166 slice 3: the phone's interface walk at 390", async () => {
     if (await page.locator("[data-walk-popover]").count()) failures.push("the walk started again after a reload");
     await page.screenshot({ path: path.join(out, "walk-before-390.png") });
     await page.locator('[data-mobile2-open="menu"]').first().click();
+    await page.locator('[data-mobile2-menu-row="help"]').click();
     await page.waitForSelector('[data-testid="menu-interface-walk"]', { state: "visible", timeout: 5_000 });
     /* The sheet opens at its top, below the fold of the onboarding rows; the render shows the new row. */
     await page.locator('[data-testid="menu-interface-walk"]').evaluate((row) => row.scrollIntoView({ block: "center" }));
@@ -5166,6 +5293,7 @@ browserTest("#2146: the seat's report log is one tap from its conversation on th
 
           /* The ⋯ sheet: Bridge reports on, then off by its own switch. */
           await page.locator('[data-mobile2-open="menu"]').first().click();
+          await page.locator('[data-mobile2-menu-row="rules"]').click();
           await page.waitForSelector('[data-mobile2-sheet="menu"] [data-bridge-reports]', { timeout: 10_000 });
           await page.waitForFunction(() => [...document.querySelectorAll('[data-mobile2-sheet="menu"] [role=switch]')].every((toggle) => !toggle.hasAttribute("disabled")), undefined, { timeout: 10_000 });
           await page.locator('[data-mobile2-sheet="menu"] [data-bridge-reports]').scrollIntoViewIfNeeded();
@@ -5496,6 +5624,7 @@ browserTest("Asks you: the card, the report-log line and the ⋯ switch on the p
 
         /* The ⋯ sheet: the Asks you switch, on, with the month's spend. */
         await page.locator('[data-mobile2-open="menu"]').first().click();
+        await page.locator('[data-mobile2-menu-row="rules"]').click();
         await page.waitForSelector('[data-mobile2-sheet="menu"] [data-asks-you]', { timeout: 10_000 });
         await page.locator('[data-mobile2-sheet="menu"] [data-asks-you]').scrollIntoViewIfNeeded();
         await pause(page, 500);
@@ -8179,4 +8308,53 @@ describe("long conversation scroll", () => {
       fs.writeFileSync(path.join(out, "zoom.json"), `${JSON.stringify({ readings }, null, 2)}\n`);
     }
   }, 120_000);
+});
+
+
+describe("account-switch message receipts", () => {
+  browserTest("switch explanations wrap at phone and desktop widths in both languages", async () => {
+    const out = path.resolve(".artifacts/account-switch-receipts"); fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/mobile/issue1671Evidence.fixture.tsx");
+    const launched = await chromium.launchServer({ executablePath: process.env.CHROME_BIN, headless: true,
+      args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    const pid = launched.process().pid;
+    fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid, closed: false }));
+    const browser = await chromium.connect(launched.wsEndpoint());
+    const evidence = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [390, 1280]) {
+        const { page, context, pageErrors } = await openFixture(browser, server.base + "?switch-receipts=1",
+          { width, height: 844 }, "light", locale, "reduce", width === 390);
+        try {
+          await page.locator("[data-receipt-switch-reason]").first().waitFor();
+          const rows = page.locator("[data-switch-receipt-row]");
+          expect(await rows.count()).toBe(6);
+          const geometry = [];
+          for (let n = 0; n < 6; n++) {
+            const row = rows.nth(n);
+            const reason = await row.getAttribute("data-switch-receipt-row");
+            const key = reason === "switch-after-turn" ? "receipt.human.switchAfterTurn"
+              : reason === "switch-failed" ? "receipt.human.switchFailed" : "receipt.human.switchingAccounts";
+            expect(await row.locator("[data-receipt-switch-reason]").innerText()).toBe(translate(locale, key));
+            expect(await row.locator("[data-receipt-status]").innerText()).toBe(translate(locale, "runtime.receipt.queued"));
+            expect(await row.locator("[data-receipt-uncertain-retry]").count()).toBe(0);
+            const box = await row.evaluate(el => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth,
+              panelWidth: el.getAttribute("data-panel-width"), reason: el.getAttribute("data-switch-receipt-row") }));
+            expect(box.scrollWidth).toBe(box.clientWidth);
+            geometry.push(box);
+          }
+          const pageWidth = await page.evaluate(() => document.documentElement.scrollWidth);
+          expect(pageWidth).toBe(width);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, locale + "-" + width + ".png") });
+          evidence.push({ locale, width, pageWidth, rows: geometry, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/account-switch-receipts", { recursive: true });
+      fs.writeFileSync("evidence/account-switch-receipts/geometry.json", JSON.stringify(evidence, null, 2) + "\n");
+    } finally {
+      await browser.close(); await launched.close(); server.stop();
+      fs.writeFileSync(path.join(out, "browser-process.json"), JSON.stringify({ pid, closed: true }));
+    }
+  }, 90000);
 });

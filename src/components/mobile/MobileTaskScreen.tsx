@@ -23,6 +23,7 @@ import { addTaskChip } from "@/components/orchestrator/taskChips";
 import { designatedManagerConversationId } from "@/components/voice/managerIdentity";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
 import { PhoneAlbumRow } from "@/components/taskAlbum/AlbumButton";
+import { PhonePrototypeRow } from "@/components/prototypeReview/PrototypeReviewButton";
 import { finishesTaskOffer, toggleFinishesTask } from "@/components/pipelines/finishesTask";
 import { taskFinishWaitCount } from "@/lib/pipelines/taskFinish";
 import { blockAgeSeconds, laneMergeUnsettled, pipelineEnded, pipelineNeedsYou, screenCurrentStageId } from "@/components/pipelines/pipelineBlockModel";
@@ -1221,6 +1222,9 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
                     <ChevronRight className="h-[18px] w-[18px] shrink-0 text-muted" aria-hidden />
                   </button>
                 ) : null}
+
+                {/* The task's prototype review: highlighted while a round waits. */}
+                {task ? <PhonePrototypeRow task={task} title={title} rowClass={`${ROW} shrink-0 min-h-12`} /> : null}
 
                 {/* The task's album: every picture its agents made or looked at. */}
                 <PhoneAlbumRow taskId={taskId} title={title} pipelines={lanes.map((summary) => summary.pipeline)} files={files} rowClass={`${ROW} shrink-0 min-h-12`} />

@@ -9,7 +9,7 @@
         "rail": {
           "present": true,
           "width": 248,
-          "headerText": "Agent logsLanguage: EnglishENOpen on phone (QR)Notifications: off",
+          "headerText": "Delegatus",
           "headerButtons": [
             "Hide the project sidebar (B)",
             "More"
@@ -18,9 +18,12 @@
         "menu": {
           "open": true,
           "rows": [
-            "Language: EnglishEN",
-            "Open on phone (QR)",
-            "Notifications: off"
+            "Activity",
+            "Team",
+            "Updates",
+            "Open on phone",
+            "Settingsmemory: unknown9",
+            "Help and learning2"
           ]
         },
         "restore": null,
@@ -34,113 +37,113 @@
           {
             "label": "main control 1",
             "box": {
-              "x": 1225,
-              "y": 49,
-              "w": 109,
-              "h": 26
+              "x": 713,
+              "y": 15,
+              "w": 62,
+              "h": 18
             }
           },
           {
             "label": "main control 2",
             "box": {
-              "x": 1335,
-              "y": 49,
-              "w": 57,
-              "h": 26
+              "x": 779,
+              "y": 15,
+              "w": 60,
+              "h": 18
             }
           },
           {
             "label": "main control 3",
             "box": {
-              "x": 1393,
-              "y": 49,
-              "w": 30,
-              "h": 26
+              "x": 855,
+              "y": 8,
+              "w": 54,
+              "h": 32
             }
           },
           {
             "label": "main control 4",
             "box": {
-              "x": 1150,
-              "y": 97,
-              "w": 225,
-              "h": 36
+              "x": 918,
+              "y": 9,
+              "w": 32,
+              "h": 30
             }
           },
           {
             "label": "main control 5",
             "box": {
-              "x": 1383,
-              "y": 99,
-              "w": 24,
-              "h": 24
+              "x": 950,
+              "y": 9,
+              "w": 32,
+              "h": 30
             }
           },
           {
             "label": "main control 6",
             "box": {
-              "x": 454,
-              "y": 7,
-              "w": 26,
-              "h": 26
+              "x": 999,
+              "y": 8,
+              "w": 32,
+              "h": 32
             }
           },
           {
             "label": "main control 7",
             "box": {
-              "x": 484,
-              "y": 7,
-              "w": 26,
-              "h": 26
+              "x": 1047,
+              "y": 8,
+              "w": 41,
+              "h": 32
             }
           },
           {
             "label": "main control 8",
             "box": {
-              "x": 1172,
-              "y": 6,
-              "w": 28,
-              "h": 28
+              "x": 1096,
+              "y": 8,
+              "w": 60,
+              "h": 32
             }
           },
           {
             "label": "main control 9",
             "box": {
-              "x": 1210,
-              "y": 6,
-              "w": 108,
-              "h": 27
+              "x": 1172,
+              "y": 8,
+              "w": 32,
+              "h": 32
             }
           },
           {
             "label": "main control 10",
             "box": {
-              "x": 1328,
-              "y": 6,
-              "w": 96,
-              "h": 27
+              "x": 1272,
+              "y": 8,
+              "w": 112,
+              "h": 32
             }
           },
           {
             "label": "main control 11",
             "box": {
-              "x": 425,
-              "y": 79,
-              "w": 99,
+              "x": 1392,
+              "y": 8,
+              "w": 32,
               "h": 32
             }
           },
           {
             "label": "main control 12",
             "box": {
-              "x": 267,
-              "y": 86,
-              "w": 50,
-              "h": 19
+              "x": 1137,
+              "y": 69,
+              "w": 238,
+              "h": 36
             }
           }
         ],
-        "shellText": "Agent logsLanguage: EnglishENOpen on phone (QR)Notifications: offOverviewatlasNaNd ago8⏸ 321SystemClaudeAccountsno data yetCodexAccountsLoading account limits…TelegramNot connectedNeeds you 1Nextpermission promptWhich of the two anchors should win?atlas5 branches running · 9 trees Orchestrator Tasks125 agents working·2 need you·17 tasks on the boardHidden 1boardconversations+ Task+ AgentSkip to the boardOrchestratoratlasliveStays on the boardClaudeopus—RotateStop hostFold live tailKeep the search fix moving. When the passkey domain is settled, set up a pipeline for the fallback.09:05:10Search: the verifier failed once (results were empty for 40 s after the swap). The fail edge sent it back to Implement; attempt 2 passed review and Verify is running again.MCP · viewerListing pipelines: atlas2s09:06:10{ \"arguments\": { \"project\": \"atlas\" }, \"result\": null }09:10:10The release-notes implementer is waiting on you: two anchors match and it needs to know which one wins.working…·6m 40slivesend Escape to the agent paneRe-check the runtime hostsend /compact — the agent condenses its context; a band appears in the feed when doneAttach in your terminalLaunch the agentOpus 5 · LightAdd files or imagesInbox3Assigned7Blocked2Done5Inbox3You are the reviewer in an implement-review loop. Working directory is the lane worktree. Read the diff against the merge base, run the touched tests by path, and answer with one verdict block; do not change product source in this stage.No agent on itInbox 3h ago+ AgentWrite the first-run walkthroughThree screens, one action each. No tour bubbles.No agent on itInbox 2d ago+ AgentUntitled taskName pending · the agent's first action names it1 conversationWorker waiting for a seatidle6m agoInbox 6m ago+ AgentNot on a task · 1Orchestrator for atlas1 working·1 conversationOrchestrator for atlasworkingWatching the search fix31s agoConversation without a taskjust nowAssigned73 working1 needs youDisk space: find what Docker, worktrees and temp storage holdAdd a descriptionNo agent on itAssigned 2d ago+ AgentSimplify the export settings sheetFold the eleven toggles into three sensible presets and one advanced disclosure.1 working·2 conversationsImplementer: simplify the export settingsworkingWriting the preset model31s agoExplorer: list every export toggleidle2h agoAssigned 9m ago+ AgentRepair old links in the release notesAdd a descriptionneeds you·1 conversation·1 stage waitingRepair old links in the release notesneeds a decisionImplement needs youStagesImplement→ReviewAssigned 17m ago+ AgentMerge the approved queue adapter release · mergeAdd a descriptionNo agent on itAssigned 26h ago+ AgentRestore search results after the index rebuildResults vanish for ten minutes after a rebuild. Keep the old index live until the new one answers.1 working·5 conversations·1 stage waitingRestore search results after the index rebuildstages runningVerify running · attempt 2StagesImplement→Review2→Verify→Merge1Verify fails → Implement1 of 2 usedPast attempts · 4last: Implement · attempt 1 · passed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Implement · attempt 1passed60m agoOpen conversationImplement · attempt 2passed60m agoOpen conversationReview · attempt 1passed60m agoOpen conversationVerify · attempt 1failed60m agoOpen conversationAssigned 4m ago+ AgentRedesign attachment upload for large filesResumable uploads for files over 100 MB: chunked API, a progress UI that survives a reload, and docs.1 working·4 conversations·4 stages waitingRedesign attachment upload for large filesstages runningBuild ui runningStagesPlan→Build api→Review api2→Build ui→Review ui→Verify→Docs→Merge↺Verify fails → Build ui0 of 2 usedPast attempts · 3last: Build api · attempt 1 · passed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Build api · attempt 1passed60m agoOpen conversationPlan · attempt 1passed60m agoOpen conversationReview api · attempt 1passed60m agoOpen conversationAssigned 2m ago+ AgentIdle · 1Hide idleVerify delivery recovery across transcript boundaries · verifyAdd a descriptionNo agent on itAssigned 30h ago+ AgentBlocked21 needs youPasskey sign-in for the shared boardWaiting on the domain decision before the relying-party id can be fixed.2 conversationsImplementer: passkey sign-inidle20h ago1 more conversation · All conversationsBlocked 20h ago+ AgentShow the account limit reset time on the cardneeds you·2 conversations·1 stage waitingShow the account limit reset time on the cardneeds a decisionDiagnose needs youStagesBuild→Review1Build fails → Diagnose1 of 1 usednone leftbranch: DiagnosePast attempts · 1last: Build · attempt 1 · failed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Build · attempt 1failed60m agoOpen conversationBlocked 3d ago+ AgentDone51 workingFinish responsive native attachment delivery1 working·2 conversationsFinish responsive native attachment deliverystages runningVerify runningStagesBuild→VerifyPast attempts · 1last: Build · attempt 1 · passed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Build · attempt 1passed60m agoOpen conversationDone 12h ago+ AgentCompact board stages and separate history from live work3 conversationsCompact board stages and separate history from live workcompletedcompletedStagesBuild→Review1→VerifyPast attempts · 3last: Build · attempt 1 · passed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Build · attempt 1passed60m agoOpen conversationReview · attempt 1passed60m agoOpen conversationVerify · attempt 1passed60m agoOpen conversation1 more conversation · All conversationsDone 2d ago+ AgentUniversal interrupt and stop for every engineNo agent on itDone 8h ago+ AgentPreserve native queue recovery through journal compactionNo agent on itDone 4d ago+ AgentKeep the orchestrator role when voice is enabledNo agent on itDone 3d ago+ Agent"
+        "shellText": "DelegatusActivityTeamUpdatesOpen on phoneSettingsmemory: unknown9Help and learning2Overview38Projects13830satlasSystemAll windowsAccountsno data yetAccounts…TelegramNot connectedatlas4 workingNeeds youNo reason212Needs you3permission promptWhich of the two anchors should win?Skip to the boardOrchestratorOrchestratoratlasworkingClaudeOpus 5.5Reports·Log—RotateStop hostFold live tailKeep the search fix moving. When the passkey domain is settled, set up a pipeline for the fallback.00:17:00Search: the verifier failed once (results were empty for 40 s after the swap). The fail edge sent it back to Implement; attempt 2 passed review and Verify is running again.MCP · viewerListing pipelines: atlas2s·~100:18:00{ \"arguments\": { \"project\": \"atlas\" }, \"result\": null }00:22:00The release-notes implementer is waiting on you: two anchors match and it needs to know which one wins.working…·6m 40sliveOpus 5.5 · LightReports00:20statusWhere the release stands: search is merged and deployed (#2149), upload is in review round 2 with one P2 left (the progress bar does not reach 100% on a slow link), favicon waits behind the builder cap, and the passkey fallback is parked on your answer about the domain. Production runs 91be3d07 and answers 200 on every route. Nothing else is waiting on you; I check the upload lane again when its reviewer settles and report only if it fails or needs a decision.Oct 6 23:59blockedThe upload lane cannot finish until the storage question is settled: the builder measured 38 MB for a five-minute recording, which is over the 25 MB attachment limit, and the reviewer refuses a silent truncation. Either raise the limit for recordings to 100 MB (one config line and a migration note), or keep 25 MB and have the composer refuse longer recordings with a clear message. I keep p-upload parked and the other two lanes running until you pick one.Oct 6 23:38completedDeployed main 7c41e09a to production: the report log beside the orchestrator chat (#2146) and the Bridge reports switch. Health 200, both routes answer, the seat reads bridgeReports:true.Oct 6 23:17review verdictReview round 2 on #2151: APPROVE. The fix for the stuck composer holds on the phone at 390; one P3 left as issue #2160 (a hint line that wraps on uk).Oct 6 22:56questionThe upload card t-upload wants a size limit before it can ship. 25 MB like the attachments, or 100 MB for recordings? I keep the lane parked until you answer.Oct 6 22:35blockedLane p-upload cannot push: the pre-push gate flags a fixture path under $HOME. I need you to approve rewriting the fixture or to allow LLV_SKIP_HOOKS for this one push.Oct 6 22:14failedBuild of 3f0d2c71 failed on tsc: src/lib/forge/autoMerge.ts(684,5) Property 'setting' is missing. The lane is back with its builder; no deploy until it is green.Oct 6 21:53statusThree lanes running: search (review round 1), upload (build), favicon (queued behind the builder cap).Oct 6 21:32completedMerged #2149 (search results keep their scroll position) after green checks; the task t-search moved to Done.Oct 6 21:11completedЗвіти оркестратора тепер видно поруч із чатом. Перевірив на телефоні й на десктопі, обидві мови, світла і темна теми.Oct 6 20:50review verdictReview round 1 on #2152: REQUEST_CHANGES, two findings. The empty state repeats the title, and the older-entries control is under 44 px on the phone. Sent back to the builder.Oct 6 20:29statusQueue is quiet: nothing waiting on you, one lane in review.Oct 6 20:08failedDeploy of 91be3d07 stopped at verify-candidate: the runtime host did not take the fence within 60 s. Production still serves 7c41e09a. Retrying once after the host restart.Oct 6 19:47questionShould the nightly digest skip weekends? It ran on Saturday with nothing to say.Oct 6 19:26completedDeployed 91be3d07 after the retry. The fence moved in 4 s this time; the earlier timeout was the old host holding its lease through a slow shutdown, filed as #2163.Oct 6 19:05blockedThe GitHub token for acme/atlas expired at 09:00; pushes and PR reads fail with 401. Renew it and I resume the three lanes where they stopped.Oct 5 23:00statusToken renewed, all three lanes resumed from their last stage.Oct 5 21:25completedLane p-search finished: PR #2149 open with green checks, review passed. Waiting for the merge setting, which is off for this project.Oct 5 19:50review verdictRound 3 on acme/atlas#88: APPROVE with a note. The migration is reversible and the backup restores; the only open item is a log line that prints a full path, fixed in the same PR.Oct 5 18:15failedThe favicon lane's builder crashed twice on an out-of-memory kill while four builds ran at once. I cut the builder cap to three and restarted it.Oct 5 16:40completedFavicon lane done, PR #2147. The new icon renders at 16, 32 and 180 px in both schemes.Oct 5 15:05questionTwo tasks describe the same bug (t-search and an older card). Merge them into t-search, or keep both?Oct 5 13:30statusWhere the release stands: search is merged and deployed (#2149), upload is in review round 2 with one P2 left (the progress bar does not reach 100% on a slow link), favicon waits behind the builder cap, and the passkey fallback is parked on your answer about the domain. Production runs 91be3d07 and answers 200 on every route. Nothing else is waiting on you; I check the upload lane again when its reviewer settles and report only if it fails or needs a decision.Oct 5 11:55blockedThe upload lane cannot finish until the storage question is settled: the builder measured 38 MB for a five-minute recording, which is over the 25 MB attachment limit, and the reviewer refuses a silent truncation. Either raise the limit for recordings to 100 MB (one config line and a migration note), or keep 25 MB and have the composer refuse longer recordings with a clear message. I keep p-upload parked and the other two lanes running until you pick one.Oct 5 10:20completedDeployed main 7c41e09a to production: the report log beside the orchestrator chat (#2146) and the Bridge reports switch. Health 200, both routes answer, the seat reads bridgeReports:true.Oct 5 08:45review verdictReview round 2 on #2151: APPROVE. The fix for the stuck composer holds on the phone at 390; one P3 left as issue #2160 (a hint line that wraps on uk).Oct 5 07:10questionThe upload card t-upload wants a size limit before it can ship. 25 MB like the attachments, or 100 MB for recordings? I keep the lane parked until you answer.Oct 5 05:35blockedLane p-upload cannot push: the pre-push gate flags a fixture path under $HOME. I need you to approve rewriting the fixture or to allow LLV_SKIP_HOOKS for this one push.Oct 5 04:00failedBuild of 3f0d2c71 failed on tsc: src/lib/forge/autoMerge.ts(684,5) Property 'setting' is missing. The lane is back with its builder; no deploy until it is green.Oct 5 02:25statusThree lanes running: search (review round 1), upload (build), favicon (queued behind the builder cap).Show olderInbox3In progress7Waiting2Done4Inbox3Worker waiting for a seatWorker waiting for a seatidle6m ago6m ago1 conversation Ask+ AgentYou are the reviewer in an implement-review loop. Working directory is the lane worktree. Read the diff against the merge base, run the touched tests by path, and answer with one verdict block; do not change product source in this stage.3h agoNo agent on it Ask+ AgentWrite the first-run walkthroughThree screens, one action each. No tour bubbles.2d agoNo agent on it Ask+ AgentIn progress73 working1 needs you3 stoppedRepair old links in the release notesNeeds youAdd a descriptionImplement→Reviewneeds a decision·60m agoImplement needs a decisionSkip ImplementRetry Implement17m agoneeds a decision · implement +11 conversation Ask+ AgentSimplify the export settings sheetWorking · 1Fold the eleven toggles into three sensible presets and one advanced disclosure.Implementer: simplify the export settingsworkingWriting the preset model31s agoExplorer: list every export toggleidle2h ago9m ago2 conversations Ask+ AgentRestore search results after the index rebuildWorking · 1Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers.DetailsImplement→Review2→Verify↺1/2→Merge60m agoPast attempts · 4last: Implement · 1 · passed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Implement · 1passed60m agoOpen conversationImplement · 2passed60m agoOpen conversationReviewpassed60m agoOpen conversationVerify · 1failed60m agoOpen conversation4m ago5 conversations Ask+ AgentRedesign attachment upload for large filesWorking · 1Resumable uploads for files over 100 MB: chunked API, a progress UI that survives a reload, and docs.Plan→Build api→Review api2→Build ui→Review ui→Verify→Docs→Merge60m agoPast attempts · 3last: Build api · passed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Build apipassed60m agoOpen conversationPlanpassed60m agoOpen conversationReview apipassed60m agoOpen conversation2m ago4 conversations Ask+ AgentStopped · 3Hide idleMerge the approved queue adapter release · mergeStopped, no reason givenAdd a description26h agoNo agent on it Ask+ AgentVerify delivery recovery across transcript boundaries · verifyStopped, no reason givenAdd a description30h agoNo agent on it Ask+ AgentDisk space: find what Docker, worktrees and temp storage holdStopped, no reason givenAdd a description2d agoNo agent on it Ask+ AgentWaiting21 needs you1 no reasonShow the account limit reset time on the cardNeeds youBuild↺1/1→Reviewbranch: Diagnoseneeds a decision·60m agoDiagnose needs a decisionSkip DiagnoseRetry DiagnosePast attempts · 1last: Build · failed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Buildfailed60m agoOpen conversation3d agoneeds a decision · diagnose2 conversations Ask+ AgentPasskey sign-in for the shared boardStopped, no reason givenWaiting on the domain decision before the relying-party id can be fixed.Implementer: passkey sign-inidle20h agoConversations outside this board · 1+1 conversation outside this board · Open list20h ago2 conversations Ask+ AgentDone41 workingFinish responsive native attachment deliveryWorking · 1Build→Verify60m agoPast attempts · 1last: Build · passed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Buildpassed60m agoOpen conversation12h ago2 conversations Ask+ AgentUniversal interrupt and stop for every engine8h agoNo agent on it Ask+ AgentCompact board stages and separate history from live workBuild→Review1→Verifycompleted·60m agoPast attempts · 3last: Build · passed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Buildpassed60m agoOpen conversationReviewpassed60m agoOpen conversationVerifypassed60m agoOpen conversation2d ago3 conversations Ask+ AgentKeep the orchestrator role when voice is enabled3d agoNo agent on it Ask+ Agent"
       },
       "hidden": {
         "rail": null,
@@ -161,119 +164,119 @@
           {
             "label": "main control 1",
             "box": {
-              "x": 1225,
-              "y": 49,
-              "w": 109,
-              "h": 26
+              "x": 713,
+              "y": 15,
+              "w": 62,
+              "h": 18
             }
           },
           {
             "label": "main control 2",
             "box": {
-              "x": 1335,
-              "y": 49,
-              "w": 57,
-              "h": 26
+              "x": 779,
+              "y": 15,
+              "w": 60,
+              "h": 18
             }
           },
           {
             "label": "main control 3",
             "box": {
-              "x": 1393,
-              "y": 49,
-              "w": 30,
-              "h": 26
+              "x": 855,
+              "y": 8,
+              "w": 54,
+              "h": 32
             }
           },
           {
             "label": "main control 4",
             "box": {
-              "x": 1150,
-              "y": 97,
-              "w": 225,
-              "h": 36
+              "x": 918,
+              "y": 9,
+              "w": 32,
+              "h": 30
             }
           },
           {
             "label": "main control 5",
             "box": {
-              "x": 1383,
-              "y": 99,
-              "w": 24,
-              "h": 24
+              "x": 950,
+              "y": 9,
+              "w": 32,
+              "h": 30
             }
           },
           {
             "label": "main control 6",
             "box": {
-              "x": 240,
-              "y": 7,
-              "w": 26,
-              "h": 26
+              "x": 999,
+              "y": 8,
+              "w": 32,
+              "h": 32
             }
           },
           {
             "label": "main control 7",
             "box": {
-              "x": 270,
-              "y": 7,
-              "w": 26,
-              "h": 26
+              "x": 1047,
+              "y": 8,
+              "w": 41,
+              "h": 32
             }
           },
           {
             "label": "main control 8",
             "box": {
-              "x": 1172,
-              "y": 6,
-              "w": 28,
-              "h": 28
+              "x": 1096,
+              "y": 8,
+              "w": 60,
+              "h": 32
             }
           },
           {
             "label": "main control 9",
             "box": {
-              "x": 1210,
-              "y": 6,
-              "w": 108,
-              "h": 27
+              "x": 1172,
+              "y": 8,
+              "w": 32,
+              "h": 32
             }
           },
           {
             "label": "main control 10",
             "box": {
-              "x": 1328,
-              "y": 6,
-              "w": 96,
-              "h": 27
+              "x": 1272,
+              "y": 8,
+              "w": 112,
+              "h": 32
             }
           },
           {
             "label": "main control 11",
             "box": {
-              "x": 784,
-              "y": 50,
-              "w": 99,
+              "x": 1392,
+              "y": 8,
+              "w": 32,
               "h": 32
             }
           },
           {
             "label": "main control 12",
             "box": {
-              "x": 895,
-              "y": 57,
-              "w": 50,
-              "h": 19
+              "x": 1137,
+              "y": 69,
+              "w": 238,
+              "h": 36
             }
           }
         ],
-        "shellText": "Needs you 1Nextpermission promptWhich of the two anchors should win?atlas5 branches running · 9 trees Orchestrator Tasks125 agents working·2 need you·17 tasks on the boardHidden 1boardconversations+ Task+ AgentSkip to the boardOrchestratoratlasliveStays on the boardClaudeopus—RotateStop hostFold live tailKeep the search fix moving. When the passkey domain is settled, set up a pipeline for the fallback.09:05:10Search: the verifier failed once (results were empty for 40 s after the swap). The fail edge sent it back to Implement; attempt 2 passed review and Verify is running again.MCP · viewerListing pipelines: atlas2s09:06:10{ \"arguments\": { \"project\": \"atlas\" }, \"result\": null }09:10:10The release-notes implementer is waiting on you: two anchors match and it needs to know which one wins.working…·6m 40slivesend Escape to the agent paneRe-check the runtime hostsend /compact — the agent condenses its context; a band appears in the feed when doneAttach in your terminalLaunch the agentOpus 5 · LightAdd files or imagesInbox3You are the reviewer in an implement-review loop. Working directory is the lane worktree. Read the diff against the merge base, run the touched tests by path, and answer with one verdict block; do not change product source in this stage.No agent on itInbox 3h ago+ AgentWrite the first-run walkthroughThree screens, one action each. No tour bubbles.No agent on itInbox 2d ago+ AgentUntitled taskName pending · the agent's first action names it1 conversationWorker waiting for a seatidle6m agoInbox 6m ago+ AgentNot on a task · 1Orchestrator for atlas1 working·1 conversationOrchestrator for atlasworkingWatching the search fix31s agoConversation without a taskjust nowAssigned73 working1 needs youDisk space: find what Docker, worktrees and temp storage holdAdd a descriptionNo agent on itAssigned 2d ago+ AgentSimplify the export settings sheetFold the eleven toggles into three sensible presets and one advanced disclosure.1 working·2 conversationsImplementer: simplify the export settingsworkingWriting the preset model31s agoExplorer: list every export toggleidle2h agoAssigned 9m ago+ AgentRepair old links in the release notesAdd a descriptionneeds you·1 conversation·1 stage waitingRepair old links in the release notesneeds a decisionImplement needs youStagesImplement→ReviewAssigned 17m ago+ AgentMerge the approved queue adapter release · mergeAdd a descriptionNo agent on itAssigned 26h ago+ AgentRestore search results after the index rebuildResults vanish for ten minutes after a rebuild. Keep the old index live until the new one answers.1 working·5 conversations·1 stage waitingRestore search results after the index rebuildstages runningVerify running · attempt 2StagesImplement→Review2→Verify→Merge1Verify fails → Implement1 of 2 usedPast attempts · 4last: Implement · attempt 1 · passed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Implement · attempt 1passed60m agoOpen conversationImplement · attempt 2passed60m agoOpen conversationReview · attempt 1passed60m agoOpen conversationVerify · attempt 1failed60m agoOpen conversationAssigned 4m ago+ AgentRedesign attachment upload for large filesResumable uploads for files over 100 MB: chunked API, a progress UI that survives a reload, and docs.1 working·4 conversations·4 stages waitingRedesign attachment upload for large filesstages runningBuild ui runningStagesPlan→Build api→Review api2→Build ui→Review ui→Verify→Docs→Merge↺Verify fails → Build ui0 of 2 usedPast attempts · 3last: Build api · attempt 1 · passed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Build api · attempt 1passed60m agoOpen conversationPlan · attempt 1passed60m agoOpen conversationReview api · attempt 1passed60m agoOpen conversationAssigned 2m ago+ AgentIdle · 1Hide idleVerify delivery recovery across transcript boundaries · verifyAdd a descriptionNo agent on itAssigned 30h ago+ AgentBlocked21 needs youPasskey sign-in for the shared boardWaiting on the domain decision before the relying-party id can be fixed.2 conversationsImplementer: passkey sign-inidle20h ago1 more conversation · All conversationsBlocked 20h ago+ AgentShow the account limit reset time on the cardneeds you·2 conversations·1 stage waitingShow the account limit reset time on the cardneeds a decisionDiagnose needs youStagesBuild→Review1Build fails → Diagnose1 of 1 usednone leftbranch: DiagnosePast attempts · 1last: Build · attempt 1 · failed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Build · attempt 1failed60m agoOpen conversationBlocked 3d ago+ AgentDone51 workingFinish responsive native attachment delivery1 working·2 conversationsFinish responsive native attachment deliverystages runningVerify runningStagesBuild→VerifyPast attempts · 1last: Build · attempt 1 · passed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Build · attempt 1passed60m agoOpen conversationDone 12h ago+ AgentCompact board stages and separate history from live work3 conversationsCompact board stages and separate history from live workcompletedcompletedStagesBuild→Review1→VerifyPast attempts · 3last: Build · attempt 1 · passed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Build · attempt 1passed60m agoOpen conversationReview · attempt 1passed60m agoOpen conversationVerify · attempt 1passed60m agoOpen conversation1 more conversation · All conversationsDone 2d ago+ AgentUniversal interrupt and stop for every engineNo agent on itDone 8h ago+ AgentPreserve native queue recovery through journal compactionNo agent on itDone 4d ago+ AgentKeep the orchestrator role when voice is enabledNo agent on itDone 3d ago+ Agent"
+        "shellText": "atlas4 workingNeeds youNo reason212Needs you3permission promptWhich of the two anchors should win?Skip to the boardOrchestratorOrchestratoratlasworkingClaudeOpus 5.5Reports·Log—RotateStop hostFold live tailKeep the search fix moving. When the passkey domain is settled, set up a pipeline for the fallback.00:17:00Search: the verifier failed once (results were empty for 40 s after the swap). The fail edge sent it back to Implement; attempt 2 passed review and Verify is running again.MCP · viewerListing pipelines: atlas2s·~100:18:00{ \"arguments\": { \"project\": \"atlas\" }, \"result\": null }00:22:00The release-notes implementer is waiting on you: two anchors match and it needs to know which one wins.working…·6m 42sliveOpus 5.5 · LightReports00:20statusWhere the release stands: search is merged and deployed (#2149), upload is in review round 2 with one P2 left (the progress bar does not reach 100% on a slow link), favicon waits behind the builder cap, and the passkey fallback is parked on your answer about the domain. Production runs 91be3d07 and answers 200 on every route. Nothing else is waiting on you; I check the upload lane again when its reviewer settles and report only if it fails or needs a decision.Oct 6 23:59blockedThe upload lane cannot finish until the storage question is settled: the builder measured 38 MB for a five-minute recording, which is over the 25 MB attachment limit, and the reviewer refuses a silent truncation. Either raise the limit for recordings to 100 MB (one config line and a migration note), or keep 25 MB and have the composer refuse longer recordings with a clear message. I keep p-upload parked and the other two lanes running until you pick one.Oct 6 23:38completedDeployed main 7c41e09a to production: the report log beside the orchestrator chat (#2146) and the Bridge reports switch. Health 200, both routes answer, the seat reads bridgeReports:true.Oct 6 23:17review verdictReview round 2 on #2151: APPROVE. The fix for the stuck composer holds on the phone at 390; one P3 left as issue #2160 (a hint line that wraps on uk).Oct 6 22:56questionThe upload card t-upload wants a size limit before it can ship. 25 MB like the attachments, or 100 MB for recordings? I keep the lane parked until you answer.Oct 6 22:35blockedLane p-upload cannot push: the pre-push gate flags a fixture path under $HOME. I need you to approve rewriting the fixture or to allow LLV_SKIP_HOOKS for this one push.Oct 6 22:14failedBuild of 3f0d2c71 failed on tsc: src/lib/forge/autoMerge.ts(684,5) Property 'setting' is missing. The lane is back with its builder; no deploy until it is green.Oct 6 21:53statusThree lanes running: search (review round 1), upload (build), favicon (queued behind the builder cap).Oct 6 21:32completedMerged #2149 (search results keep their scroll position) after green checks; the task t-search moved to Done.Oct 6 21:11completedЗвіти оркестратора тепер видно поруч із чатом. Перевірив на телефоні й на десктопі, обидві мови, світла і темна теми.Oct 6 20:50review verdictReview round 1 on #2152: REQUEST_CHANGES, two findings. The empty state repeats the title, and the older-entries control is under 44 px on the phone. Sent back to the builder.Oct 6 20:29statusQueue is quiet: nothing waiting on you, one lane in review.Oct 6 20:08failedDeploy of 91be3d07 stopped at verify-candidate: the runtime host did not take the fence within 60 s. Production still serves 7c41e09a. Retrying once after the host restart.Oct 6 19:47questionShould the nightly digest skip weekends? It ran on Saturday with nothing to say.Oct 6 19:26completedDeployed 91be3d07 after the retry. The fence moved in 4 s this time; the earlier timeout was the old host holding its lease through a slow shutdown, filed as #2163.Oct 6 19:05blockedThe GitHub token for acme/atlas expired at 09:00; pushes and PR reads fail with 401. Renew it and I resume the three lanes where they stopped.Oct 5 23:00statusToken renewed, all three lanes resumed from their last stage.Oct 5 21:25completedLane p-search finished: PR #2149 open with green checks, review passed. Waiting for the merge setting, which is off for this project.Oct 5 19:50review verdictRound 3 on acme/atlas#88: APPROVE with a note. The migration is reversible and the backup restores; the only open item is a log line that prints a full path, fixed in the same PR.Oct 5 18:15failedThe favicon lane's builder crashed twice on an out-of-memory kill while four builds ran at once. I cut the builder cap to three and restarted it.Oct 5 16:40completedFavicon lane done, PR #2147. The new icon renders at 16, 32 and 180 px in both schemes.Oct 5 15:05questionTwo tasks describe the same bug (t-search and an older card). Merge them into t-search, or keep both?Oct 5 13:30statusWhere the release stands: search is merged and deployed (#2149), upload is in review round 2 with one P2 left (the progress bar does not reach 100% on a slow link), favicon waits behind the builder cap, and the passkey fallback is parked on your answer about the domain. Production runs 91be3d07 and answers 200 on every route. Nothing else is waiting on you; I check the upload lane again when its reviewer settles and report only if it fails or needs a decision.Oct 5 11:55blockedThe upload lane cannot finish until the storage question is settled: the builder measured 38 MB for a five-minute recording, which is over the 25 MB attachment limit, and the reviewer refuses a silent truncation. Either raise the limit for recordings to 100 MB (one config line and a migration note), or keep 25 MB and have the composer refuse longer recordings with a clear message. I keep p-upload parked and the other two lanes running until you pick one.Oct 5 10:20completedDeployed main 7c41e09a to production: the report log beside the orchestrator chat (#2146) and the Bridge reports switch. Health 200, both routes answer, the seat reads bridgeReports:true.Oct 5 08:45review verdictReview round 2 on #2151: APPROVE. The fix for the stuck composer holds on the phone at 390; one P3 left as issue #2160 (a hint line that wraps on uk).Oct 5 07:10questionThe upload card t-upload wants a size limit before it can ship. 25 MB like the attachments, or 100 MB for recordings? I keep the lane parked until you answer.Oct 5 05:35blockedLane p-upload cannot push: the pre-push gate flags a fixture path under $HOME. I need you to approve rewriting the fixture or to allow LLV_SKIP_HOOKS for this one push.Oct 5 04:00failedBuild of 3f0d2c71 failed on tsc: src/lib/forge/autoMerge.ts(684,5) Property 'setting' is missing. The lane is back with its builder; no deploy until it is green.Oct 5 02:25statusThree lanes running: search (review round 1), upload (build), favicon (queued behind the builder cap).Show olderInbox3Worker waiting for a seatWorker waiting for a seatidle6m ago6m ago1 conversation Ask+ AgentYou are the reviewer in an implement-review loop. Working directory is the lane worktree. Read the diff against the merge base, run the touched tests by path, and answer with one verdict block; do not change product source in this stage.3h agoNo agent on it Ask+ AgentWrite the first-run walkthroughThree screens, one action each. No tour bubbles.2d agoNo agent on it Ask+ AgentIn progress73 working1 needs you3 stoppedRepair old links in the release notesNeeds youAdd a descriptionImplement→Reviewneeds a decision·60m agoImplement needs a decisionSkip ImplementRetry Implement17m agoneeds a decision · implement +11 conversation Ask+ AgentSimplify the export settings sheetWorking · 1Fold the eleven toggles into three sensible presets and one advanced disclosure.Implementer: simplify the export settingsworkingWriting the preset model31s agoExplorer: list every export toggleidle2h ago9m ago2 conversations Ask+ AgentRestore search results after the index rebuildWorking · 1Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers.DetailsImplement→Review2→Verify↺1/2→Merge60m agoPast attempts · 4last: Implement · 1 · passed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Implement · 1passed60m agoOpen conversationImplement · 2passed60m agoOpen conversationReviewpassed60m agoOpen conversationVerify · 1failed60m agoOpen conversation4m ago5 conversations Ask+ AgentRedesign attachment upload for large filesWorking · 1Resumable uploads for files over 100 MB: chunked API, a progress UI that survives a reload, and docs.Plan→Build api→Review api2→Build ui→Review ui→Verify→Docs→Merge60m agoPast attempts · 3last: Build api · passed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Build apipassed60m agoOpen conversationPlanpassed60m agoOpen conversationReview apipassed60m agoOpen conversation2m ago4 conversations Ask+ AgentStopped · 3Hide idleMerge the approved queue adapter release · mergeStopped, no reason givenAdd a description26h agoNo agent on it Ask+ AgentVerify delivery recovery across transcript boundaries · verifyStopped, no reason givenAdd a description30h agoNo agent on it Ask+ AgentDisk space: find what Docker, worktrees and temp storage holdStopped, no reason givenAdd a description2d agoNo agent on it Ask+ AgentWaiting21 needs you1 no reasonShow the account limit reset time on the cardNeeds youBuild↺1/1→Reviewbranch: Diagnoseneeds a decision·60m agoDiagnose needs a decisionSkip DiagnoseRetry DiagnosePast attempts · 1last: Build · failed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Buildfailed60m agoOpen conversation3d agoneeds a decision · diagnose2 conversations Ask+ AgentPasskey sign-in for the shared boardStopped, no reason givenWaiting on the domain decision before the relying-party id can be fixed.Implementer: passkey sign-inidle20h agoConversations outside this board · 1+1 conversation outside this board · Open list20h ago2 conversations Ask+ AgentDone41 workingFinish responsive native attachment deliveryWorking · 1Build→Verify60m agoPast attempts · 1last: Build · passed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Buildpassed60m agoOpen conversation12h ago2 conversations Ask+ AgentUniversal interrupt and stop for every engine8h agoNo agent on it Ask+ AgentCompact board stages and separate history from live workBuild→Review1→Verifycompleted·60m agoPast attempts · 3last: Build · passed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Buildpassed60m agoOpen conversationReviewpassed60m agoOpen conversationVerifypassed60m agoOpen conversation2d ago3 conversations Ask+ AgentKeep the orchestrator role when voice is enabled3d agoNo agent on it Ask+ Agent"
       },
       "back": {
         "rail": {
           "present": true,
           "width": 248,
-          "headerText": "Agent logs",
+          "headerText": "Delegatus",
           "headerButtons": [
             "Hide the project sidebar (B)",
             "More"
@@ -299,7 +302,7 @@
         "rail": {
           "present": true,
           "width": 248,
-          "headerText": "Agent logs",
+          "headerText": "Delegatus",
           "headerButtons": [
             "Hide the project sidebar (B)",
             "More"
@@ -312,7 +315,7 @@
         "rail": {
           "present": true,
           "width": 248,
-          "headerText": "Agent logsLanguage: EnglishENOpen on phone (QR)Notifications: off",
+          "headerText": "Delegatus",
           "headerButtons": [
             "Hide the project sidebar (B)",
             "More"
@@ -321,9 +324,12 @@
         "menu": {
           "open": true,
           "rows": [
-            "Language: EnglishEN",
-            "Open on phone (QR)",
-            "Notifications: off"
+            "Activity",
+            "Team",
+            "Updates",
+            "Open on phone",
+            "Settingsmemory: unknown9",
+            "Help and learning2"
           ]
         },
         "restore": null,
@@ -337,113 +343,113 @@
           {
             "label": "main control 1",
             "box": {
-              "x": 1225,
-              "y": 49,
-              "w": 109,
-              "h": 26
+              "x": 713,
+              "y": 15,
+              "w": 62,
+              "h": 18
             }
           },
           {
             "label": "main control 2",
             "box": {
-              "x": 1335,
-              "y": 49,
-              "w": 57,
-              "h": 26
+              "x": 779,
+              "y": 15,
+              "w": 60,
+              "h": 18
             }
           },
           {
             "label": "main control 3",
             "box": {
-              "x": 1393,
-              "y": 49,
-              "w": 30,
-              "h": 26
+              "x": 855,
+              "y": 8,
+              "w": 54,
+              "h": 32
             }
           },
           {
             "label": "main control 4",
             "box": {
-              "x": 1150,
-              "y": 97,
-              "w": 225,
-              "h": 36
+              "x": 918,
+              "y": 9,
+              "w": 32,
+              "h": 30
             }
           },
           {
             "label": "main control 5",
             "box": {
-              "x": 1383,
-              "y": 99,
-              "w": 24,
-              "h": 24
+              "x": 950,
+              "y": 9,
+              "w": 32,
+              "h": 30
             }
           },
           {
             "label": "main control 6",
             "box": {
-              "x": 454,
-              "y": 7,
-              "w": 26,
-              "h": 26
+              "x": 999,
+              "y": 8,
+              "w": 32,
+              "h": 32
             }
           },
           {
             "label": "main control 7",
             "box": {
-              "x": 484,
-              "y": 7,
-              "w": 26,
-              "h": 26
+              "x": 1047,
+              "y": 8,
+              "w": 41,
+              "h": 32
             }
           },
           {
             "label": "main control 8",
             "box": {
-              "x": 1172,
-              "y": 6,
-              "w": 28,
-              "h": 28
+              "x": 1096,
+              "y": 8,
+              "w": 60,
+              "h": 32
             }
           },
           {
             "label": "main control 9",
             "box": {
-              "x": 1210,
-              "y": 6,
-              "w": 108,
-              "h": 27
+              "x": 1172,
+              "y": 8,
+              "w": 32,
+              "h": 32
             }
           },
           {
             "label": "main control 10",
             "box": {
-              "x": 1328,
-              "y": 6,
-              "w": 96,
-              "h": 27
+              "x": 1272,
+              "y": 8,
+              "w": 112,
+              "h": 32
             }
           },
           {
             "label": "main control 11",
             "box": {
-              "x": 425,
-              "y": 79,
-              "w": 99,
+              "x": 1392,
+              "y": 8,
+              "w": 32,
               "h": 32
             }
           },
           {
             "label": "main control 12",
             "box": {
-              "x": 267,
-              "y": 86,
-              "w": 50,
-              "h": 19
+              "x": 1137,
+              "y": 69,
+              "w": 238,
+              "h": 36
             }
           }
         ],
-        "shellText": "Agent logsLanguage: EnglishENOpen on phone (QR)Notifications: offOverviewatlasNaNd ago8⏸ 321SystemClaudeAccountsno data yetCodexAccountsLoading account limits…TelegramNot connectedNeeds you 1Nextpermission promptWhich of the two anchors should win?atlas5 branches running · 9 trees Orchestrator Tasks125 agents working·2 need you·17 tasks on the boardHidden 1boardconversations+ Task+ AgentSkip to the boardOrchestratoratlasliveStays on the boardClaudeopus—RotateStop hostFold live tailKeep the search fix moving. When the passkey domain is settled, set up a pipeline for the fallback.09:05:13Search: the verifier failed once (results were empty for 40 s after the swap). The fail edge sent it back to Implement; attempt 2 passed review and Verify is running again.MCP · viewerListing pipelines: atlas2s09:06:13{ \"arguments\": { \"project\": \"atlas\" }, \"result\": null }09:10:13The release-notes implementer is waiting on you: two anchors match and it needs to know which one wins.working…·6m 40slivesend Escape to the agent paneRe-check the runtime hostsend /compact — the agent condenses its context; a band appears in the feed when doneAttach in your terminalLaunch the agentOpus 5 · LightAdd files or imagesInbox3Assigned7Blocked2Done5Inbox3You are the reviewer in an implement-review loop. Working directory is the lane worktree. Read the diff against the merge base, run the touched tests by path, and answer with one verdict block; do not change product source in this stage.No agent on itInbox 3h ago+ AgentWrite the first-run walkthroughThree screens, one action each. No tour bubbles.No agent on itInbox 2d ago+ AgentUntitled taskName pending · the agent's first action names it1 conversationWorker waiting for a seatidle6m agoInbox 6m ago+ AgentNot on a task · 1Orchestrator for atlas1 working·1 conversationOrchestrator for atlasworkingWatching the search fix31s agoConversation without a taskjust nowAssigned73 working1 needs youDisk space: find what Docker, worktrees and temp storage holdAdd a descriptionNo agent on itAssigned 2d ago+ AgentSimplify the export settings sheetFold the eleven toggles into three sensible presets and one advanced disclosure.1 working·2 conversationsImplementer: simplify the export settingsworkingWriting the preset model31s agoExplorer: list every export toggleidle2h agoAssigned 9m ago+ AgentRepair old links in the release notesAdd a descriptionneeds you·1 conversation·1 stage waitingRepair old links in the release notesneeds a decisionImplement needs youStagesImplement→ReviewAssigned 17m ago+ AgentMerge the approved queue adapter release · mergeAdd a descriptionNo agent on itAssigned 26h ago+ AgentRestore search results after the index rebuildResults vanish for ten minutes after a rebuild. Keep the old index live until the new one answers.1 working·5 conversations·1 stage waitingRestore search results after the index rebuildstages runningVerify running · attempt 2StagesImplement→Review2→Verify→Merge1Verify fails → Implement1 of 2 usedPast attempts · 4last: Implement · attempt 1 · passed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Implement · attempt 1passed60m agoOpen conversationImplement · attempt 2passed60m agoOpen conversationReview · attempt 1passed60m agoOpen conversationVerify · attempt 1failed60m agoOpen conversationAssigned 4m ago+ AgentRedesign attachment upload for large filesResumable uploads for files over 100 MB: chunked API, a progress UI that survives a reload, and docs.1 working·4 conversations·4 stages waitingRedesign attachment upload for large filesstages runningBuild ui runningStagesPlan→Build api→Review api2→Build ui→Review ui→Verify→Docs→Merge↺Verify fails → Build ui0 of 2 usedPast attempts · 3last: Build api · attempt 1 · passed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Build api · attempt 1passed60m agoOpen conversationPlan · attempt 1passed60m agoOpen conversationReview api · attempt 1passed60m agoOpen conversationAssigned 2m ago+ AgentIdle · 1Hide idleVerify delivery recovery across transcript boundaries · verifyAdd a descriptionNo agent on itAssigned 30h ago+ AgentBlocked21 needs youPasskey sign-in for the shared boardWaiting on the domain decision before the relying-party id can be fixed.2 conversationsImplementer: passkey sign-inidle20h ago1 more conversation · All conversationsBlocked 20h ago+ AgentShow the account limit reset time on the cardneeds you·2 conversations·1 stage waitingShow the account limit reset time on the cardneeds a decisionDiagnose needs youStagesBuild→Review1Build fails → Diagnose1 of 1 usednone leftbranch: DiagnosePast attempts · 1last: Build · attempt 1 · failed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Build · attempt 1failed60m agoOpen conversationBlocked 3d ago+ AgentDone51 workingFinish responsive native attachment delivery1 working·2 conversationsFinish responsive native attachment deliverystages runningVerify runningStagesBuild→VerifyPast attempts · 1last: Build · attempt 1 · passed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Build · attempt 1passed60m agoOpen conversationDone 12h ago+ AgentCompact board stages and separate history from live work3 conversationsCompact board stages and separate history from live workcompletedcompletedStagesBuild→Review1→VerifyPast attempts · 3last: Build · attempt 1 · passed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Build · attempt 1passed60m agoOpen conversationReview · attempt 1passed60m agoOpen conversationVerify · attempt 1passed60m agoOpen conversation1 more conversation · All conversationsDone 2d ago+ AgentUniversal interrupt and stop for every engineNo agent on itDone 8h ago+ AgentPreserve native queue recovery through journal compactionNo agent on itDone 4d ago+ AgentKeep the orchestrator role when voice is enabledNo agent on itDone 3d ago+ Agent"
+        "shellText": "DelegatusActivityTeamUpdatesOpen on phoneSettingsmemory: unknown9Help and learning2Overview38Projects13830satlasSystemAll windowsAccountsno data yetAccounts…TelegramNot connectedatlas4 workingNeeds youNo reason212Needs you3permission promptWhich of the two anchors should win?Skip to the boardOrchestratorOrchestratoratlasworkingClaudeOpus 5.5Reports·Log—RotateStop hostFold live tailKeep the search fix moving. When the passkey domain is settled, set up a pipeline for the fallback.00:17:05Search: the verifier failed once (results were empty for 40 s after the swap). The fail edge sent it back to Implement; attempt 2 passed review and Verify is running again.MCP · viewerListing pipelines: atlas2s·~100:18:05{ \"arguments\": { \"project\": \"atlas\" }, \"result\": null }00:22:05The release-notes implementer is waiting on you: two anchors match and it needs to know which one wins.working…·6m 41sliveOpus 5.5 · LightReports00:20statusWhere the release stands: search is merged and deployed (#2149), upload is in review round 2 with one P2 left (the progress bar does not reach 100% on a slow link), favicon waits behind the builder cap, and the passkey fallback is parked on your answer about the domain. Production runs 91be3d07 and answers 200 on every route. Nothing else is waiting on you; I check the upload lane again when its reviewer settles and report only if it fails or needs a decision.Oct 6 23:59blockedThe upload lane cannot finish until the storage question is settled: the builder measured 38 MB for a five-minute recording, which is over the 25 MB attachment limit, and the reviewer refuses a silent truncation. Either raise the limit for recordings to 100 MB (one config line and a migration note), or keep 25 MB and have the composer refuse longer recordings with a clear message. I keep p-upload parked and the other two lanes running until you pick one.Oct 6 23:38completedDeployed main 7c41e09a to production: the report log beside the orchestrator chat (#2146) and the Bridge reports switch. Health 200, both routes answer, the seat reads bridgeReports:true.Oct 6 23:17review verdictReview round 2 on #2151: APPROVE. The fix for the stuck composer holds on the phone at 390; one P3 left as issue #2160 (a hint line that wraps on uk).Oct 6 22:56questionThe upload card t-upload wants a size limit before it can ship. 25 MB like the attachments, or 100 MB for recordings? I keep the lane parked until you answer.Oct 6 22:35blockedLane p-upload cannot push: the pre-push gate flags a fixture path under $HOME. I need you to approve rewriting the fixture or to allow LLV_SKIP_HOOKS for this one push.Oct 6 22:14failedBuild of 3f0d2c71 failed on tsc: src/lib/forge/autoMerge.ts(684,5) Property 'setting' is missing. The lane is back with its builder; no deploy until it is green.Oct 6 21:53statusThree lanes running: search (review round 1), upload (build), favicon (queued behind the builder cap).Oct 6 21:32completedMerged #2149 (search results keep their scroll position) after green checks; the task t-search moved to Done.Oct 6 21:11completedЗвіти оркестратора тепер видно поруч із чатом. Перевірив на телефоні й на десктопі, обидві мови, світла і темна теми.Oct 6 20:50review verdictReview round 1 on #2152: REQUEST_CHANGES, two findings. The empty state repeats the title, and the older-entries control is under 44 px on the phone. Sent back to the builder.Oct 6 20:29statusQueue is quiet: nothing waiting on you, one lane in review.Oct 6 20:08failedDeploy of 91be3d07 stopped at verify-candidate: the runtime host did not take the fence within 60 s. Production still serves 7c41e09a. Retrying once after the host restart.Oct 6 19:47questionShould the nightly digest skip weekends? It ran on Saturday with nothing to say.Oct 6 19:26completedDeployed 91be3d07 after the retry. The fence moved in 4 s this time; the earlier timeout was the old host holding its lease through a slow shutdown, filed as #2163.Oct 6 19:05blockedThe GitHub token for acme/atlas expired at 09:00; pushes and PR reads fail with 401. Renew it and I resume the three lanes where they stopped.Oct 5 23:00statusToken renewed, all three lanes resumed from their last stage.Oct 5 21:25completedLane p-search finished: PR #2149 open with green checks, review passed. Waiting for the merge setting, which is off for this project.Oct 5 19:50review verdictRound 3 on acme/atlas#88: APPROVE with a note. The migration is reversible and the backup restores; the only open item is a log line that prints a full path, fixed in the same PR.Oct 5 18:15failedThe favicon lane's builder crashed twice on an out-of-memory kill while four builds ran at once. I cut the builder cap to three and restarted it.Oct 5 16:40completedFavicon lane done, PR #2147. The new icon renders at 16, 32 and 180 px in both schemes.Oct 5 15:05questionTwo tasks describe the same bug (t-search and an older card). Merge them into t-search, or keep both?Oct 5 13:30statusWhere the release stands: search is merged and deployed (#2149), upload is in review round 2 with one P2 left (the progress bar does not reach 100% on a slow link), favicon waits behind the builder cap, and the passkey fallback is parked on your answer about the domain. Production runs 91be3d07 and answers 200 on every route. Nothing else is waiting on you; I check the upload lane again when its reviewer settles and report only if it fails or needs a decision.Oct 5 11:55blockedThe upload lane cannot finish until the storage question is settled: the builder measured 38 MB for a five-minute recording, which is over the 25 MB attachment limit, and the reviewer refuses a silent truncation. Either raise the limit for recordings to 100 MB (one config line and a migration note), or keep 25 MB and have the composer refuse longer recordings with a clear message. I keep p-upload parked and the other two lanes running until you pick one.Oct 5 10:20completedDeployed main 7c41e09a to production: the report log beside the orchestrator chat (#2146) and the Bridge reports switch. Health 200, both routes answer, the seat reads bridgeReports:true.Oct 5 08:45review verdictReview round 2 on #2151: APPROVE. The fix for the stuck composer holds on the phone at 390; one P3 left as issue #2160 (a hint line that wraps on uk).Oct 5 07:10questionThe upload card t-upload wants a size limit before it can ship. 25 MB like the attachments, or 100 MB for recordings? I keep the lane parked until you answer.Oct 5 05:35blockedLane p-upload cannot push: the pre-push gate flags a fixture path under $HOME. I need you to approve rewriting the fixture or to allow LLV_SKIP_HOOKS for this one push.Oct 5 04:00failedBuild of 3f0d2c71 failed on tsc: src/lib/forge/autoMerge.ts(684,5) Property 'setting' is missing. The lane is back with its builder; no deploy until it is green.Oct 5 02:25statusThree lanes running: search (review round 1), upload (build), favicon (queued behind the builder cap).Show olderInbox3In progress7Waiting2Done4Inbox3Worker waiting for a seatWorker waiting for a seatidle6m ago6m ago1 conversation Ask+ AgentYou are the reviewer in an implement-review loop. Working directory is the lane worktree. Read the diff against the merge base, run the touched tests by path, and answer with one verdict block; do not change product source in this stage.3h agoNo agent on it Ask+ AgentWrite the first-run walkthroughThree screens, one action each. No tour bubbles.2d agoNo agent on it Ask+ AgentIn progress73 working1 needs you3 stoppedRepair old links in the release notesNeeds youAdd a descriptionImplement→Reviewneeds a decision·60m agoImplement needs a decisionSkip ImplementRetry Implement17m agoneeds a decision · implement +11 conversation Ask+ AgentSimplify the export settings sheetWorking · 1Fold the eleven toggles into three sensible presets and one advanced disclosure.Implementer: simplify the export settingsworkingWriting the preset model31s agoExplorer: list every export toggleidle2h ago9m ago2 conversations Ask+ AgentRestore search results after the index rebuildWorking · 1Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers.DetailsImplement→Review2→Verify↺1/2→Merge60m agoPast attempts · 4last: Implement · 1 · passed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Implement · 1passed60m agoOpen conversationImplement · 2passed60m agoOpen conversationReviewpassed60m agoOpen conversationVerify · 1failed60m agoOpen conversation4m ago5 conversations Ask+ AgentRedesign attachment upload for large filesWorking · 1Resumable uploads for files over 100 MB: chunked API, a progress UI that survives a reload, and docs.Plan→Build api→Review api2→Build ui→Review ui→Verify→Docs→Merge60m agoPast attempts · 3last: Build api · passed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Build apipassed60m agoOpen conversationPlanpassed60m agoOpen conversationReview apipassed60m agoOpen conversation2m ago4 conversations Ask+ AgentStopped · 3Hide idleMerge the approved queue adapter release · mergeStopped, no reason givenAdd a description26h agoNo agent on it Ask+ AgentVerify delivery recovery across transcript boundaries · verifyStopped, no reason givenAdd a description30h agoNo agent on it Ask+ AgentDisk space: find what Docker, worktrees and temp storage holdStopped, no reason givenAdd a description2d agoNo agent on it Ask+ AgentWaiting21 needs you1 no reasonShow the account limit reset time on the cardNeeds youBuild↺1/1→Reviewbranch: Diagnoseneeds a decision·60m agoDiagnose needs a decisionSkip DiagnoseRetry DiagnosePast attempts · 1last: Build · failed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Buildfailed60m agoOpen conversation3d agoneeds a decision · diagnose2 conversations Ask+ AgentPasskey sign-in for the shared boardStopped, no reason givenWaiting on the domain decision before the relying-party id can be fixed.Implementer: passkey sign-inidle20h agoConversations outside this board · 1+1 conversation outside this board · Open list20h ago2 conversations Ask+ AgentDone41 workingFinish responsive native attachment deliveryWorking · 1Build→Verify60m agoPast attempts · 1last: Build · passed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Buildpassed60m agoOpen conversation12h ago2 conversations Ask+ AgentUniversal interrupt and stop for every engine8h agoNo agent on it Ask+ AgentCompact board stages and separate history from live workBuild→Review1→Verifycompleted·60m agoPast attempts · 3last: Build · passed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Buildpassed60m agoOpen conversationReviewpassed60m agoOpen conversationVerifypassed60m agoOpen conversation2d ago3 conversations Ask+ AgentKeep the orchestrator role when voice is enabled3d agoNo agent on it Ask+ Agent"
       },
       "hidden": {
         "rail": null,
@@ -464,119 +470,119 @@
           {
             "label": "main control 1",
             "box": {
-              "x": 1225,
-              "y": 49,
-              "w": 109,
-              "h": 26
+              "x": 713,
+              "y": 15,
+              "w": 62,
+              "h": 18
             }
           },
           {
             "label": "main control 2",
             "box": {
-              "x": 1335,
-              "y": 49,
-              "w": 57,
-              "h": 26
+              "x": 779,
+              "y": 15,
+              "w": 60,
+              "h": 18
             }
           },
           {
             "label": "main control 3",
             "box": {
-              "x": 1393,
-              "y": 49,
-              "w": 30,
-              "h": 26
+              "x": 855,
+              "y": 8,
+              "w": 54,
+              "h": 32
             }
           },
           {
             "label": "main control 4",
             "box": {
-              "x": 1150,
-              "y": 97,
-              "w": 225,
-              "h": 36
+              "x": 918,
+              "y": 9,
+              "w": 32,
+              "h": 30
             }
           },
           {
             "label": "main control 5",
             "box": {
-              "x": 1383,
-              "y": 99,
-              "w": 24,
-              "h": 24
+              "x": 950,
+              "y": 9,
+              "w": 32,
+              "h": 30
             }
           },
           {
             "label": "main control 6",
             "box": {
-              "x": 240,
-              "y": 7,
-              "w": 26,
-              "h": 26
+              "x": 999,
+              "y": 8,
+              "w": 32,
+              "h": 32
             }
           },
           {
             "label": "main control 7",
             "box": {
-              "x": 270,
-              "y": 7,
-              "w": 26,
-              "h": 26
+              "x": 1047,
+              "y": 8,
+              "w": 41,
+              "h": 32
             }
           },
           {
             "label": "main control 8",
             "box": {
-              "x": 1172,
-              "y": 6,
-              "w": 28,
-              "h": 28
+              "x": 1096,
+              "y": 8,
+              "w": 60,
+              "h": 32
             }
           },
           {
             "label": "main control 9",
             "box": {
-              "x": 1210,
-              "y": 6,
-              "w": 108,
-              "h": 27
+              "x": 1172,
+              "y": 8,
+              "w": 32,
+              "h": 32
             }
           },
           {
             "label": "main control 10",
             "box": {
-              "x": 1328,
-              "y": 6,
-              "w": 96,
-              "h": 27
+              "x": 1272,
+              "y": 8,
+              "w": 112,
+              "h": 32
             }
           },
           {
             "label": "main control 11",
             "box": {
-              "x": 784,
-              "y": 50,
-              "w": 99,
+              "x": 1392,
+              "y": 8,
+              "w": 32,
               "h": 32
             }
           },
           {
             "label": "main control 12",
             "box": {
-              "x": 895,
-              "y": 57,
-              "w": 50,
-              "h": 19
+              "x": 1137,
+              "y": 69,
+              "w": 238,
+              "h": 36
             }
           }
         ],
-        "shellText": "Needs you 1Nextpermission promptWhich of the two anchors should win?atlas5 branches running · 9 trees Orchestrator Tasks125 agents working·2 need you·17 tasks on the boardHidden 1boardconversations+ Task+ AgentSkip to the boardOrchestratoratlasliveStays on the boardClaudeopus—RotateStop hostFold live tailKeep the search fix moving. When the passkey domain is settled, set up a pipeline for the fallback.09:05:13Search: the verifier failed once (results were empty for 40 s after the swap). The fail edge sent it back to Implement; attempt 2 passed review and Verify is running again.MCP · viewerListing pipelines: atlas2s09:06:13{ \"arguments\": { \"project\": \"atlas\" }, \"result\": null }09:10:13The release-notes implementer is waiting on you: two anchors match and it needs to know which one wins.working…·6m 40slivesend Escape to the agent paneRe-check the runtime hostsend /compact — the agent condenses its context; a band appears in the feed when doneAttach in your terminalLaunch the agentOpus 5 · LightAdd files or imagesInbox3You are the reviewer in an implement-review loop. Working directory is the lane worktree. Read the diff against the merge base, run the touched tests by path, and answer with one verdict block; do not change product source in this stage.No agent on itInbox 3h ago+ AgentWrite the first-run walkthroughThree screens, one action each. No tour bubbles.No agent on itInbox 2d ago+ AgentUntitled taskName pending · the agent's first action names it1 conversationWorker waiting for a seatidle6m agoInbox 6m ago+ AgentNot on a task · 1Orchestrator for atlas1 working·1 conversationOrchestrator for atlasworkingWatching the search fix31s agoConversation without a taskjust nowAssigned73 working1 needs youDisk space: find what Docker, worktrees and temp storage holdAdd a descriptionNo agent on itAssigned 2d ago+ AgentSimplify the export settings sheetFold the eleven toggles into three sensible presets and one advanced disclosure.1 working·2 conversationsImplementer: simplify the export settingsworkingWriting the preset model31s agoExplorer: list every export toggleidle2h agoAssigned 9m ago+ AgentRepair old links in the release notesAdd a descriptionneeds you·1 conversation·1 stage waitingRepair old links in the release notesneeds a decisionImplement needs youStagesImplement→ReviewAssigned 17m ago+ AgentMerge the approved queue adapter release · mergeAdd a descriptionNo agent on itAssigned 26h ago+ AgentRestore search results after the index rebuildResults vanish for ten minutes after a rebuild. Keep the old index live until the new one answers.1 working·5 conversations·1 stage waitingRestore search results after the index rebuildstages runningVerify running · attempt 2StagesImplement→Review2→Verify→Merge1Verify fails → Implement1 of 2 usedPast attempts · 4last: Implement · attempt 1 · passed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Implement · attempt 1passed60m agoOpen conversationImplement · attempt 2passed60m agoOpen conversationReview · attempt 1passed60m agoOpen conversationVerify · attempt 1failed60m agoOpen conversationAssigned 4m ago+ AgentRedesign attachment upload for large filesResumable uploads for files over 100 MB: chunked API, a progress UI that survives a reload, and docs.1 working·4 conversations·4 stages waitingRedesign attachment upload for large filesstages runningBuild ui runningStagesPlan→Build api→Review api2→Build ui→Review ui→Verify→Docs→Merge↺Verify fails → Build ui0 of 2 usedPast attempts · 3last: Build api · attempt 1 · passed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Build api · attempt 1passed60m agoOpen conversationPlan · attempt 1passed60m agoOpen conversationReview api · attempt 1passed60m agoOpen conversationAssigned 2m ago+ AgentIdle · 1Hide idleVerify delivery recovery across transcript boundaries · verifyAdd a descriptionNo agent on itAssigned 30h ago+ AgentBlocked21 needs youPasskey sign-in for the shared boardWaiting on the domain decision before the relying-party id can be fixed.2 conversationsImplementer: passkey sign-inidle20h ago1 more conversation · All conversationsBlocked 20h ago+ AgentShow the account limit reset time on the cardneeds you·2 conversations·1 stage waitingShow the account limit reset time on the cardneeds a decisionDiagnose needs youStagesBuild→Review1Build fails → Diagnose1 of 1 usednone leftbranch: DiagnosePast attempts · 1last: Build · attempt 1 · failed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Build · attempt 1failed60m agoOpen conversationBlocked 3d ago+ AgentDone51 workingFinish responsive native attachment delivery1 working·2 conversationsFinish responsive native attachment deliverystages runningVerify runningStagesBuild→VerifyPast attempts · 1last: Build · attempt 1 · passed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Build · attempt 1passed60m agoOpen conversationDone 12h ago+ AgentCompact board stages and separate history from live work3 conversationsCompact board stages and separate history from live workcompletedcompletedStagesBuild→Review1→VerifyPast attempts · 3last: Build · attempt 1 · passed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Build · attempt 1passed60m agoOpen conversationReview · attempt 1passed60m agoOpen conversationVerify · attempt 1passed60m agoOpen conversation1 more conversation · All conversationsDone 2d ago+ AgentUniversal interrupt and stop for every engineNo agent on itDone 8h ago+ AgentPreserve native queue recovery through journal compactionNo agent on itDone 4d ago+ AgentKeep the orchestrator role when voice is enabledNo agent on itDone 3d ago+ Agent"
+        "shellText": "atlas4 workingNeeds youNo reason212Needs you3permission promptWhich of the two anchors should win?Skip to the boardOrchestratorOrchestratoratlasworkingClaudeOpus 5.5Reports·Log—RotateStop hostFold live tailKeep the search fix moving. When the passkey domain is settled, set up a pipeline for the fallback.00:17:05Search: the verifier failed once (results were empty for 40 s after the swap). The fail edge sent it back to Implement; attempt 2 passed review and Verify is running again.MCP · viewerListing pipelines: atlas2s·~100:18:05{ \"arguments\": { \"project\": \"atlas\" }, \"result\": null }00:22:05The release-notes implementer is waiting on you: two anchors match and it needs to know which one wins.working…·6m 42sliveOpus 5.5 · LightReports00:20statusWhere the release stands: search is merged and deployed (#2149), upload is in review round 2 with one P2 left (the progress bar does not reach 100% on a slow link), favicon waits behind the builder cap, and the passkey fallback is parked on your answer about the domain. Production runs 91be3d07 and answers 200 on every route. Nothing else is waiting on you; I check the upload lane again when its reviewer settles and report only if it fails or needs a decision.Oct 6 23:59blockedThe upload lane cannot finish until the storage question is settled: the builder measured 38 MB for a five-minute recording, which is over the 25 MB attachment limit, and the reviewer refuses a silent truncation. Either raise the limit for recordings to 100 MB (one config line and a migration note), or keep 25 MB and have the composer refuse longer recordings with a clear message. I keep p-upload parked and the other two lanes running until you pick one.Oct 6 23:38completedDeployed main 7c41e09a to production: the report log beside the orchestrator chat (#2146) and the Bridge reports switch. Health 200, both routes answer, the seat reads bridgeReports:true.Oct 6 23:17review verdictReview round 2 on #2151: APPROVE. The fix for the stuck composer holds on the phone at 390; one P3 left as issue #2160 (a hint line that wraps on uk).Oct 6 22:56questionThe upload card t-upload wants a size limit before it can ship. 25 MB like the attachments, or 100 MB for recordings? I keep the lane parked until you answer.Oct 6 22:35blockedLane p-upload cannot push: the pre-push gate flags a fixture path under $HOME. I need you to approve rewriting the fixture or to allow LLV_SKIP_HOOKS for this one push.Oct 6 22:14failedBuild of 3f0d2c71 failed on tsc: src/lib/forge/autoMerge.ts(684,5) Property 'setting' is missing. The lane is back with its builder; no deploy until it is green.Oct 6 21:53statusThree lanes running: search (review round 1), upload (build), favicon (queued behind the builder cap).Oct 6 21:32completedMerged #2149 (search results keep their scroll position) after green checks; the task t-search moved to Done.Oct 6 21:11completedЗвіти оркестратора тепер видно поруч із чатом. Перевірив на телефоні й на десктопі, обидві мови, світла і темна теми.Oct 6 20:50review verdictReview round 1 on #2152: REQUEST_CHANGES, two findings. The empty state repeats the title, and the older-entries control is under 44 px on the phone. Sent back to the builder.Oct 6 20:29statusQueue is quiet: nothing waiting on you, one lane in review.Oct 6 20:08failedDeploy of 91be3d07 stopped at verify-candidate: the runtime host did not take the fence within 60 s. Production still serves 7c41e09a. Retrying once after the host restart.Oct 6 19:47questionShould the nightly digest skip weekends? It ran on Saturday with nothing to say.Oct 6 19:26completedDeployed 91be3d07 after the retry. The fence moved in 4 s this time; the earlier timeout was the old host holding its lease through a slow shutdown, filed as #2163.Oct 6 19:05blockedThe GitHub token for acme/atlas expired at 09:00; pushes and PR reads fail with 401. Renew it and I resume the three lanes where they stopped.Oct 5 23:00statusToken renewed, all three lanes resumed from their last stage.Oct 5 21:25completedLane p-search finished: PR #2149 open with green checks, review passed. Waiting for the merge setting, which is off for this project.Oct 5 19:50review verdictRound 3 on acme/atlas#88: APPROVE with a note. The migration is reversible and the backup restores; the only open item is a log line that prints a full path, fixed in the same PR.Oct 5 18:15failedThe favicon lane's builder crashed twice on an out-of-memory kill while four builds ran at once. I cut the builder cap to three and restarted it.Oct 5 16:40completedFavicon lane done, PR #2147. The new icon renders at 16, 32 and 180 px in both schemes.Oct 5 15:05questionTwo tasks describe the same bug (t-search and an older card). Merge them into t-search, or keep both?Oct 5 13:30statusWhere the release stands: search is merged and deployed (#2149), upload is in review round 2 with one P2 left (the progress bar does not reach 100% on a slow link), favicon waits behind the builder cap, and the passkey fallback is parked on your answer about the domain. Production runs 91be3d07 and answers 200 on every route. Nothing else is waiting on you; I check the upload lane again when its reviewer settles and report only if it fails or needs a decision.Oct 5 11:55blockedThe upload lane cannot finish until the storage question is settled: the builder measured 38 MB for a five-minute recording, which is over the 25 MB attachment limit, and the reviewer refuses a silent truncation. Either raise the limit for recordings to 100 MB (one config line and a migration note), or keep 25 MB and have the composer refuse longer recordings with a clear message. I keep p-upload parked and the other two lanes running until you pick one.Oct 5 10:20completedDeployed main 7c41e09a to production: the report log beside the orchestrator chat (#2146) and the Bridge reports switch. Health 200, both routes answer, the seat reads bridgeReports:true.Oct 5 08:45review verdictReview round 2 on #2151: APPROVE. The fix for the stuck composer holds on the phone at 390; one P3 left as issue #2160 (a hint line that wraps on uk).Oct 5 07:10questionThe upload card t-upload wants a size limit before it can ship. 25 MB like the attachments, or 100 MB for recordings? I keep the lane parked until you answer.Oct 5 05:35blockedLane p-upload cannot push: the pre-push gate flags a fixture path under $HOME. I need you to approve rewriting the fixture or to allow LLV_SKIP_HOOKS for this one push.Oct 5 04:00failedBuild of 3f0d2c71 failed on tsc: src/lib/forge/autoMerge.ts(684,5) Property 'setting' is missing. The lane is back with its builder; no deploy until it is green.Oct 5 02:25statusThree lanes running: search (review round 1), upload (build), favicon (queued behind the builder cap).Show olderInbox3Worker waiting for a seatWorker waiting for a seatidle6m ago6m ago1 conversation Ask+ AgentYou are the reviewer in an implement-review loop. Working directory is the lane worktree. Read the diff against the merge base, run the touched tests by path, and answer with one verdict block; do not change product source in this stage.3h agoNo agent on it Ask+ AgentWrite the first-run walkthroughThree screens, one action each. No tour bubbles.2d agoNo agent on it Ask+ AgentIn progress73 working1 needs you3 stoppedRepair old links in the release notesNeeds youAdd a descriptionImplement→Reviewneeds a decision·60m agoImplement needs a decisionSkip ImplementRetry Implement17m agoneeds a decision · implement +11 conversation Ask+ AgentSimplify the export settings sheetWorking · 1Fold the eleven toggles into three sensible presets and one advanced disclosure.Implementer: simplify the export settingsworkingWriting the preset model31s agoExplorer: list every export toggleidle2h ago9m ago2 conversations Ask+ AgentRestore search results after the index rebuildWorking · 1Results vanish for ten minutes after a rebuild. Keep the old index live until the new one answers.DetailsImplement→Review2→Verify↺1/2→Merge60m agoPast attempts · 4last: Implement · 1 · passed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Implement · 1passed60m agoOpen conversationImplement · 2passed60m agoOpen conversationReviewpassed60m agoOpen conversationVerify · 1failed60m agoOpen conversation4m ago5 conversations Ask+ AgentRedesign attachment upload for large filesWorking · 1Resumable uploads for files over 100 MB: chunked API, a progress UI that survives a reload, and docs.Plan→Build api→Review api2→Build ui→Review ui→Verify→Docs→Merge60m agoPast attempts · 3last: Build api · passed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Build apipassed60m agoOpen conversationPlanpassed60m agoOpen conversationReview apipassed60m agoOpen conversation2m ago4 conversations Ask+ AgentStopped · 3Hide idleMerge the approved queue adapter release · mergeStopped, no reason givenAdd a description26h agoNo agent on it Ask+ AgentVerify delivery recovery across transcript boundaries · verifyStopped, no reason givenAdd a description30h agoNo agent on it Ask+ AgentDisk space: find what Docker, worktrees and temp storage holdStopped, no reason givenAdd a description2d agoNo agent on it Ask+ AgentWaiting21 needs you1 no reasonShow the account limit reset time on the cardNeeds youBuild↺1/1→Reviewbranch: Diagnoseneeds a decision·60m agoDiagnose needs a decisionSkip DiagnoseRetry DiagnosePast attempts · 1last: Build · failed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Buildfailed60m agoOpen conversation3d agoneeds a decision · diagnose2 conversations Ask+ AgentPasskey sign-in for the shared boardStopped, no reason givenWaiting on the domain decision before the relying-party id can be fixed.Implementer: passkey sign-inidle20h agoConversations outside this board · 1+1 conversation outside this board · Open list20h ago2 conversations Ask+ AgentDone41 workingFinish responsive native attachment deliveryWorking · 1Build→Verify60m agoPast attempts · 1last: Build · passed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Buildpassed60m agoOpen conversation12h ago2 conversations Ask+ AgentUniversal interrupt and stop for every engine8h agoNo agent on it Ask+ AgentCompact board stages and separate history from live workBuild→Review1→Verifycompleted·60m agoPast attempts · 3last: Build · passed · 60m agoEarlier runs and review verdicts of this task. Open one to read its conversation; the current work is above.Buildpassed60m agoOpen conversationReviewpassed60m agoOpen conversationVerifypassed60m agoOpen conversation2d ago3 conversations Ask+ AgentKeep the orchestrator role when voice is enabled3d agoNo agent on it Ask+ Agent"
       },
       "back": {
         "rail": {
           "present": true,
           "width": 248,
-          "headerText": "Agent logs",
+          "headerText": "Delegatus",
           "headerButtons": [
             "Hide the project sidebar (B)",
             "More"
@@ -602,7 +608,7 @@
         "rail": {
           "present": true,
           "width": 248,
-          "headerText": "Agent logs",
+          "headerText": "Delegatus",
           "headerButtons": [
             "Hide the project sidebar (B)",
             "More"

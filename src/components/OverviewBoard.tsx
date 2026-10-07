@@ -16,19 +16,14 @@ import type { Workflow } from "@/lib/workflows/types";
 import { CatalogFailureNotice } from "./CatalogFailureNotice";
 import { KanbanSkeleton, PhoneKanbanSkeleton } from "./skeletons";
 import { FolderPlus, Search } from "./icons";
-import { KeepAwakeMenuRow } from "./KeepAwakeControl";
-import { MobileMenuSheet, type MobileMenuEntry } from "./mobile/MobileMenuSheet";
-import { activityMobileMenuEntry } from "./activity/menuEntry";
-import { teamMobileMenuEntry } from "./team/menuEntry";
-import { onboardingMobileMenuEntries } from "./onboarding/menuEntries";
-import { selfUpdateMobileMenuEntry } from "./selfUpdate/menuEntry";
+import { HeaderMenuSheet } from "./headerMenu/HeaderMenu";
+import type { MobileMenuEntry } from "./mobile/MobileMenuSheet";
 import { openOnboarding } from "./onboarding/useOnboarding";
 import { StartSchematic } from "./onboarding/TourSchematics";
 import { useSeatConversations } from "./orchestrator/useOrchestratorSeat";
 import { MobileAccountsScreen, MobileBarTitle, MobileShell, type MobileShellHost } from "./mobile/MobileShell";
 import { topScreen, useMobileNav, useMobileNavStore, type MobileSheetName } from "./mobile/mobileNav";
 import { OverviewKanban, type OverviewPhoneDoors } from "./OverviewKanban";
-import { SoundToggle } from "./SoundToggle";
 import { buildProjectSummaries } from "./projectModel";
 
 const noop = () => {};
@@ -250,7 +245,7 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
     /* The phone (mobile v2 lane 1): the shell's bar with «Overview» as the
        title cell (it opens the project switcher), the badge, search and ⋯; the
        menu holds the hidden tasks (#2098, as a project's does), the
-       device-local settings and Activity. */
+       header's entries (docs/design/header-menu.md). */
     const renderSheet = (name: MobileSheetName, close: () => void) => {
       if (name === "menu") {
         const entries: MobileMenuEntry[] = [
@@ -264,26 +259,10 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
               opens: "hidden" as const,
               onSelect: () => mobileNav.openSheet("hidden"),
             },
-            { kind: "divider" as const, key: "d-board" },
           ] : []),
-          {
-            kind: "custom",
-            key: "sound",
-            node: (
-              <div className="flex min-h-11 items-center gap-2 px-4">
-                <span className="min-w-0 flex-1 text-body font-semibold text-primary">{t("mobile2.menu.sound")}</span>
-                <SoundToggle />
-              </div>
-            ),
-          },
-          { kind: "custom", key: "awake", node: <div className="px-2.5"><KeepAwakeMenuRow /></div> },
-          { kind: "divider", key: "d-setup" },
-          activityMobileMenuEntry(t, mobileNav),
-          teamMobileMenuEntry(t, mobileNav),
-          ...onboardingMobileMenuEntries(t, close),
-          selfUpdateMobileMenuEntry(t, close),
         ];
-        return <MobileMenuSheet title={t("rail.overview")} entries={entries} onClose={close} />;
+        /* The header's entries follow the hidden tasks; the overview has no project, so Settings holds no memory row. */
+        return <HeaderMenuSheet title={t("rail.overview")} project={null} nav={mobileNav} board={entries} onClose={close} />;
       }
       return mobileShell?.renderSheet(name, close) ?? null;
     };

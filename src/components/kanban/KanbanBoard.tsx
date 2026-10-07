@@ -55,6 +55,7 @@ import { KanbanReceipts, useReceipts } from "./KanbanReceipts";
 import { cardDismissal } from "./cardDismissal";
 import { drawnTasks, useTaskMutations, type FieldEditOutcome, type StatusMoveOutcome, type TaskMutationPorts } from "./useTaskMutations";
 import { assignmentRefFor, browserAssignmentPorts, dismissUnstartedLaunch, dismissUnstartedLaunches, type AssignmentPorts } from "./kanbanAssignments";
+import { SeatActionWires } from "./SeatActionWires";
 import { allCards, cardAnchors, cardOnScreen, conversationOwners, cssEscape, kanbanFocusIndex, readerArrived } from "./kanbanFocus";
 import { closeReader, foldReader, followPaths, openReader, ReaderMemory, type OpenReader } from "./readerMemory";
 import { ReaderPlacement, ReaderPortals, ReaderSlot, StopHostConfirm, type ReaderOwner, type ReaderStop, type ReaderView } from "./KanbanReaders";
@@ -2759,6 +2760,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     <KanbanDraftContext.Provider value={draftActions}>
     <div ref={rootRef} className="kb" data-kanban-board="" data-mode={mode}>
       <CardFlights placements={placements} rootRef={rootRef} />
+      {props.overview ? null : <SeatActionWires rootRef={rootRef} phone={false} seatRefs={seatRefs} tasks={storedTasks} pipelines={pipelines} files={files} />}
       {/* The project board's one header bar (#1801, docs/design/board-header.md): where am I, what is
           happening, one spacer, find, view, create, panels, more. The two ends are the project's own
           (`barLead`, `barTrail`); the right reserve is the Viewer's attention island. */}

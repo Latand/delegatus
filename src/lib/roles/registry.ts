@@ -4,6 +4,7 @@ import { validateLaunchModel } from "@/lib/agent/models";
 import { ORCHESTRATOR_TASK_OWNERSHIP_HEADING } from "@/lib/orchestrator/prompt";
 
 import { BUILDER_FINISH_LINE, FIX_ROUND_FINISH_LINE, ORCHESTRATOR_WITHOUT_MANDATE_RULES } from "./defaults";
+import { roleEngineRefusal } from "./locks";
 import { configForVariant } from "./paramConfig";
 import { defaultRoleParameterValue } from "./parameters";
 import { loadRoleDefinitions } from "./store";
@@ -160,6 +161,8 @@ export function configForParams(definition: RoleDefinition, params: RoleParamVal
 function resolveConfig(definition: RoleDefinition, params: RoleParamValues, explicit: ExplicitRoleConfig): { ok: true; value: RoleConfig } | { ok: false; error: string } {
   const config = { ...configForParams(definition, params), ...explicit };
   if (config.engine !== "claude" && config.engine !== "codex") return { ok: false, error: "engine must be claude or codex" };
+  const locked = roleEngineRefusal(definition.id, config.engine);
+  if (locked) return { ok: false, error: locked };
   const model = validateLaunchModel(config.engine, config.model);
   if ("error" in model) return { ok: false, error: model.error };
   config.model = model.model;

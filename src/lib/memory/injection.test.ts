@@ -37,6 +37,24 @@ test("the deadline includes synchronous candidate work before Jev", async () => 
   expect(calls).toBe(0);
 });
 
+test("asynchronous candidate work shares the turn deadline and cannot reserve after cancellation or gate closure", async () => {
+  let reserves = 0, calls = 0, records = 0, reason = "";
+  const p = { ...ports(), reserve: () => { reserves++; return true; }, decide: async () => { calls++; return { scores: { m_fixture: .8 }, cost: .001 }; }, record: () => { records++; }, reason: (value: string) => { reason = value; } };
+  const start = performance.now();
+  expect(await injectMemory(input, { ...p, candidates: () => new Promise(() => {}) })).toBe("");
+  expect(performance.now() - start).toBeLessThan(100); expect(reason).toBe("timeout");
+  const cancel = new AbortController();
+  expect(await injectMemory(input, { ...p, signal: cancel.signal, candidates: async () => { cancel.abort(); return [entry]; } })).toBe("");
+  expect(reason).toBe("cancelled");
+  let enabled = true;
+  expect(await injectMemory(input, { ...p, enabled: () => enabled, candidates: async () => { enabled = false; return [entry]; } })).toBe("");
+  expect(reason).toBe("projectOff");
+  let owned = true;
+  expect(await injectMemory(input, { ...p, ownsTraffic: () => owned, candidates: async () => { owned = false; return [entry]; } })).toBe("");
+  expect(reason).toBe("notOwner");
+  expect([reserves, calls, records]).toEqual([0, 0, 0]);
+});
+
 for (const status of [401, 429, 503]) test(`HTTP ${status} releases the shared spending reservation`, async () => {
   const original = globalThis.fetch;
   const settled: number[] = [];
@@ -78,4 +96,25 @@ test("each empty injection outcome has a numeric activity counter", async () => 
   events.length = 0;
   expect(await injectMemory(input, p)).toContain("m_fixture");
   expect(events).toEqual(["decisions", "prepared"]);
+});
+
+test("last-turn reasons distinguish every stop without exposing errors", async () => {
+  const p = ports();
+  const cases = [
+    { ports: { ...p, enabled: () => false }, reason: "projectOff" },
+    { ports: { ...p, ownsTraffic: () => false }, reason: "notOwner" },
+    { ports: { ...p, deadline: 0 }, reason: "timeout" },
+    { ports: { ...p, reserve: () => false }, reason: "capped" },
+    { ports: { ...p, reserve: () => { throw Error("private failure"); } }, reason: "failed" },
+    { ports: { ...p, candidates: () => [] }, reason: "noCandidates" },
+    { ports: { ...p, decide: async () => ({ scores: { m_fixture: .1 }, cost: .001 }) }, reason: "noMatches" },
+    { ports: { ...p, decide: () => new Promise<never>(() => {}) }, reason: "timeout" },
+    { ports: { ...p, signal: AbortSignal.abort() }, reason: "cancelled" },
+  ];
+  for (const row of cases) {
+    let reason = "";
+    const start = performance.now();
+    expect(await injectMemory(input, { ...row.ports, reason: value => { reason = value; } })).toBe("");
+    expect(reason).toBe(row.reason); expect(performance.now() - start).toBeLessThan(250);
+  }
 });

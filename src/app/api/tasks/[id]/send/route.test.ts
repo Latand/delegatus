@@ -21,6 +21,9 @@ test("task dispatch attributes an admitted agent caller and keeps human dispatch
   const task = {
     id: "task-agent-dispatch", project: "project-fixture", status: "inbox", text: "Review the handoff",
     placement: "unplaced", assignments: [], createdAt: "2026-09-26T00:00:00.000Z", updatedAt: "2026-09-26T00:00:00.000Z",
+    prototypeReviews: [{ id: `pr_${"a".repeat(32)}`, taskId: "task-agent-dispatch", project: "project-fixture", title: "Layout", publicationKey: "operator:fixture", inputDigest: "0", source: { conversationId: null },
+      createdAt: "2026-09-26T00:00:00.000Z", variants: [{ number: 1, name: "Compact", description: "Compact layout.", frames: [], videos: [] }],
+      decision: { chosen: [1], comment: "Private review comment", at: "2026-09-26T00:00:00.000Z", delivery: { state: "no-orchestrator", conversationId: null, clientMessageId: "prototype-decision:fixture", text: "Private delivery text" } } }],
   } as BoardTask;
   const origins: unknown[] = [];
   const dependencies = {
@@ -38,8 +41,17 @@ test("task dispatch attributes an admitted agent caller and keeps human dispatch
     body: JSON.stringify({ paths: [path.join(state, "recipient.jsonl")] }),
   }), { params: Promise.resolve({ id: task.id }) }, dependencies);
   try {
-    expect((await send(true)).status).toBe(200);
-    expect((await send(false)).status).toBe(200);
+    const agent = await send(true);
+    expect(agent.status).toBe(200);
+    /* A task's review belongs to its project: the dispatch answer carries none of it to an agent. */
+    const agentBody = await agent.json();
+    for (const field of ["prototypeReviews", "prototypeReviewReplica", "prototypeReview"]) expect(agentBody.task).not.toHaveProperty(field);
+    expect(JSON.stringify(agentBody)).not.toContain("Private");
+    const operator = await send(false);
+    expect(operator.status).toBe(200);
+    const operatorBody = await operator.json();
+    expect(operatorBody.task.prototypeReview).toMatchObject({ rounds: 1 });
+    expect(JSON.stringify(operatorBody)).not.toContain("Private delivery text");
     expect(origins[0]).toMatchObject({ kind: "agent", conversationId: sender.id });
     expect(origins[1]).toEqual({ kind: "operator" });
   } finally {

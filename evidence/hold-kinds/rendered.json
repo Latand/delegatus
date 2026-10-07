@@ -1,0 +1,84 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "scenario": "hold-kinds",
+  "cases": [
+    {
+      "locale": "en",
+      "width": 1440,
+      "lines": {
+        "hold-slot": "Queued: waiting for a free worker · 30m ago",
+        "hold-slot-note": "Queued: waiting for a free worker · Three of three workers busy · 20m ago",
+        "hold-resource-note": "Queued: waiting for resources · 4 GB of memory available, 8 GB needed · 15m ago",
+        "hold-resource": "Queued: waiting for resources · 60m ago"
+      },
+      "clipped": false,
+      "overflow": false,
+      "editorKinds": [
+        "Your decision",
+        "Another task",
+        "Pull request",
+        "Issue",
+        "Free worker slot",
+        "Machine resources (memory, disk)",
+        "Usage limit",
+        "Postponed",
+        "Outside dependency",
+        "No reason given"
+      ],
+      "pageErrors": []
+    },
+    {
+      "locale": "en",
+      "width": 390,
+      "lines": {
+        "hold-slot": "Queued: waiting for a free worker · 30m ago",
+        "hold-slot-note": "Queued: waiting for a free worker · Three of three workers busy · 20m ago",
+        "hold-resource-note": "Queued: waiting for resources · 4 GB of memory available, 8 GB needed · 15m ago",
+        "hold-resource": "Queued: waiting for resources · 60m ago"
+      },
+      "clipped": false,
+      "overflow": false,
+      "editorKinds": null,
+      "pageErrors": []
+    },
+    {
+      "locale": "uk",
+      "width": 1440,
+      "lines": {
+        "hold-slot": "У черзі: очікує на вільного агента · 30 хв тому",
+        "hold-slot-note": "У черзі: очікує на вільного агента · Зайняті всі три агенти · 20 хв тому",
+        "hold-resource-note": "У черзі: очікує на ресурси · Доступно 4 ГБ памʼяті, потрібно 8 ГБ · 15 хв тому",
+        "hold-resource": "У черзі: очікує на ресурси · 60 хв тому"
+      },
+      "clipped": false,
+      "overflow": false,
+      "editorKinds": [
+        "Ваше рішення",
+        "Іншу задачу",
+        "Pull request",
+        "Issue",
+        "Вільне місце для агента",
+        "Ресурси машини (пам’ять, диск)",
+        "Ліміт використання",
+        "Відкладено",
+        "Зовнішню залежність",
+        "Причину не вказано"
+      ],
+      "pageErrors": []
+    },
+    {
+      "locale": "uk",
+      "width": 390,
+      "lines": {
+        "hold-slot": "У черзі: очікує на вільного агента · 30 хв тому",
+        "hold-slot-note": "У черзі: очікує на вільного агента · Зайняті всі три агенти · 20 хв тому",
+        "hold-resource-note": "У черзі: очікує на ресурси · Доступно 4 ГБ памʼяті, потрібно 8 ГБ · 15 хв тому",
+        "hold-resource": "У черзі: очікує на ресурси · 60 хв тому"
+      },
+      "clipped": false,
+      "overflow": false,
+      "editorKinds": null,
+      "pageErrors": []
+    }
+  ]
+}

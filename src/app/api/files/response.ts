@@ -1,5 +1,7 @@
 import { stateWriteHealth } from "@/lib/state/diskFull";
 import { filesReadSummary } from "@/lib/filesReadSummary";
+import { withPrototypeReviewSummaries, withoutPrototypeReviews, prototypeReviewNotices } from "@/lib/prototypeReview/read";
+import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -824,7 +826,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
   projected.flows = projected.flows.map((flow) => ({ ...flow, project: remapProject(flow.project) }));
   pipelines = pipelines.map((pipeline) => ({ ...pipeline, project: remapProject(pipeline.project) }));
   workflows = workflows.map((workflow) => ({ ...workflow, project: remapProject(workflow.project) }));
-  tasks.tasks = tasks.tasks.map((task) => ({ ...task, project: remapProject(task.project) }));
+  const boardTasks = tasks.tasks.map((task) => ({ ...task, project: remapProject(task.project) }));
   const projectNames = new Map(effectiveProjectCatalog.map((entry) => [entry.project, entry.displayName] as const));
   for (const file of projected.files) {
     file.projectName = projectNames.get(file.project) ?? file.projectName;
@@ -859,7 +861,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     ...projected.flows.map((flow) => flow.project),
     ...pipelines.map((pipeline) => pipeline.project),
     ...workflows.map((workflow) => workflow.project),
-    ...tasks.tasks.map((task) => task.project),
+    ...boardTasks.map((task) => task.project),
   ];
   /* Explicit project attribution can leave a foreign repository root on a
      catalog row. Keep roots the scanner resolves back into that project. */
@@ -918,6 +920,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
   )];
   const summary = new URL(request.url).searchParams.get("view") === "summary"
     ? filesReadSummary(projected.flows, pipelines) : null;
+  const agentRead = request.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER);
   const body = JSON.stringify({
     files: projected.files,
     ...(responsePinOverlayPaths.size ? { pinOverlayPaths: [...responsePinOverlayPaths] } : {}),
@@ -930,10 +933,15 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     pipelines: summary?.pipelines ?? pipelines,
     ...(summary ? { readProjection: "board-summary" as const } : {}),
     workflows,
-    tasks: tasks.tasks,
+    /* A review's choice and comment belong to its project. This read has no
+       project fence, so a caller that presents a capability gets the tasks
+       without them; the route keeps that answer in a scope of its own. */
+    ...(agentRead
+      ? { tasks: withoutPrototypeReviews(boardTasks) }
+      : { tasks: withPrototypeReviewSummaries(boardTasks), prototypeReviewNotices: prototypeReviewNotices(boardTasks) }),
     /* #2059: map lookups against the forge cache only; the sweep, not this
        request, talks to GitHub. */
-    workLinks: workLinksForBoard(pipelines, tasks.tasks),
+    workLinks: workLinksForBoard(pipelines, boardTasks),
     systemHealth: {
       tmux: routeDependencies.tmuxEndpointHealth(),
       registry: registryHealth,

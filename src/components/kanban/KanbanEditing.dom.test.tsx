@@ -796,6 +796,27 @@ test("stopped work and waiting reasons are visible without expanding a card", ()
 });
 
 
+test("a worker slot wait has its own wording and a resource hold shows its note, in both locales", () => {
+  for (const locale of ["en", "uk"] as const) {
+    setLocale(locale);
+    const since = "2026-09-14T10:00:00.000Z";
+    const slot = task("slot-wait", "blocked", "Queued lane", { hold: { kind: "worker", note: "", since, by: "agent" } });
+    const short = task("memory-wait", "blocked", "Heavy build", { hold: { kind: "resource", note: "4 GB of memory available, 8 GB needed", since, by: "agent" } });
+    const bare = task("bare-resource", "blocked", "Old resource hold", { hold: { kind: "resource", note: "", since, by: "agent" } });
+    const { host } = mount([slot, short, bare]);
+    const line = (id: string) => host.querySelector(`[data-id="task:${id}"] [data-motion="waiting"]`);
+    expect(line("slot-wait")?.firstElementChild?.textContent).toBe(translate(locale, "kanban.hold.worker"));
+    expect(line("slot-wait")?.textContent).not.toContain(translate(locale, "kanban.hold.resource"));
+    expect(line("memory-wait")?.textContent).toContain(`${translate(locale, "kanban.hold.resource")} · 4 GB of memory available, 8 GB needed`);
+    expect(line("bare-resource")?.firstElementChild?.textContent).toBe(translate(locale, "kanban.hold.resource"));
+    expect(line("bare-resource")?.children[1]?.className).toBe("motion-age");
+    for (const root of roots.splice(0)) flushSync(() => root.unmount());
+    document.body.replaceChildren();
+  }
+  expect(translate("en", "kanban.hold.worker")).toBe("Queued: waiting for a free worker");
+  expect(translate("uk", "kanban.hold.worker")).toBe("У черзі: очікує на вільного агента");
+});
+
 test("the status menu opens an inline reason editor and saves a Waiting hold", async () => {
   const view = mount([task("hold-edit", "assigned", "Wait for a worker")]);
   click(cardEl(view.host, "hold-edit")?.querySelector("[data-menu]"));

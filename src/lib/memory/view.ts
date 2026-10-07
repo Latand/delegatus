@@ -19,5 +19,5 @@ export function memorySettingView(project: string, now = new Date()): MemorySett
   if (spend.usd + .01 > capUsd) reasons.push("capped");
   if (!ownsTraffic) reasons.push("notOwner");
   return { enabled, reasons, keySource, ...(isStagingMode() ? { staging: true } : {}), capUsd, spentUsd: spend.usd, month: spend.month,
-    counts: memoryIndex().injectionActivity(now) };
+    counts: memoryIndex().injectionActivity(now), lastTurn: memoryIndex().lastTurn(project) };
 }
