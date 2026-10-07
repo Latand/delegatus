@@ -388,3 +388,11 @@ test("a recycled pane id is reported unknown and never signalled (#670)", async 
   expect(killed).toEqual([]);
   setAgentRegistryForTests(null);
 });
+
+test("runtime-switch handoff forwards its stable owned stop identity to the kill control", async () => {
+  const fixture = hostedConversation();
+  killResult = { status: 200, body: { ok: true, operationId: "switch-owned-stop", receipt: { status: "delivered" } } };
+  expect(await defaultPipelinePorts().stopStageAgent(target(fixture.conversationId), { operationId: "switch-owned-stop" })).toEqual({ outcome: "stopped" });
+  expect(killed[0]).toMatchObject({ operationId: "switch-owned-stop", conversationId: fixture.conversationId });
+  setAgentRegistryForTests(null);
+});

@@ -54,7 +54,7 @@ import {
   type ViewerConversationId,
 } from "./contracts";
 import { CodexForkOutcomeUnknownError, RegisteredSuccessorProvider, SuccessorPendingError } from "./provider";
-import { safeProviderDiagnostic, sanitizeProviderError } from "./safeHistoryCopy";
+import { MigrationTargetUnavailableError, safeProviderDiagnostic, sanitizeProviderError } from "./safeHistoryCopy";
 import { AUTO_BALANCE_COOLDOWN_MS } from "./quotaPolicy";
 import { MIGRATION_DELIVERY_CANCELLATION_PREFIX } from "./intentLiveness";
 
@@ -764,6 +764,12 @@ export interface MigrationCoordinatorOptions {
   /** The inventory worker reads the result without changing it. */
   readOnlySnapshot?: boolean;
   ownsOperation?: () => Promise<boolean>;
+  /** Asked right before the successor is created and at every ownership
+      check of its publication, the controller's registration included; a
+      throw fails the switch like any provider failure, and a successor
+      already created is discarded. A pipeline's runtime switch passes its
+      project's allowed accounts through here. */
+  authorizeTarget?: () => void | Promise<void>;
 }
 
 interface BoardRepairPlan {
@@ -865,6 +871,15 @@ async function repairCommittedBoardSuccessions(
     }
   });
   await offLoop(registry, "migration.board", converged[0]?.operationId ?? null, () => registry.markMigrationBoardProjects(converged));
+}
+
+/** The caller's account fence, as a target the switch can no longer use. */
+async function authorizeMigrationTarget(options: MigrationCoordinatorOptions): Promise<void> {
+  try {
+    await options.authorizeTarget?.();
+  } catch {
+    throw new MigrationTargetUnavailableError("not-allowed", "target account is no longer allowed for this conversation");
+  }
 }
 
 async function cleanupDiscardedSuccessor(
@@ -1045,6 +1060,7 @@ export async function advanceConversationMigration(
         ...source,
         launchProfile: migration.successorLaunchProfile!,
       };
+      await authorizeMigrationTarget(options);
       receipt = await successorProvider.create({
         engine,
         operationId: creationOwner.operationId,
@@ -1077,19 +1093,38 @@ export async function advanceConversationMigration(
     const publicationReceipt = receipt;
     const publicationRevision = migration.revision;
     const publicationOperationId = migration.operationId;
+    /* The provider hands this question to the native publisher and to the
+       delivery controller's registration, which await the host and the
+       journal between their own checks. So the target account is asked here
+       too, at every one of those boundaries: a refusal stays, and is raised
+       below into the recoverable failure, which discards the successor. */
+    let publicationRefusal: { error: unknown } | null = null;
     const ownsPublication = async (): Promise<boolean> => {
+      if (publicationRefusal) return false;
       if (options.ownsOperation && !await options.ownsOperation()) return false;
       const owner = registry.conversation(publicationConversationId);
       const ownerMigration = owner?.migration;
-      return Boolean(owner
+      if (!(owner
         && ownerMigration?.phase === "verifying"
         && ownerMigration.revision === publicationRevision
         && ownerMigration.operationId === publicationOperationId
         && ownerMigration.providerReceipt !== null
-        && sameProviderReceiptOutcome(ownerMigration.providerReceipt, publicationReceipt));
+        && sameProviderReceiptOutcome(ownerMigration.providerReceipt, publicationReceipt))) return false;
+      try {
+        await authorizeMigrationTarget(options);
+      } catch (error) {
+        publicationRefusal = { error };
+        return false;
+      }
+      return true;
+    };
+    const raisePublicationRefusal = (): void => {
+      const refused = publicationRefusal as { error: unknown } | null;
+      if (refused) throw refused.error;
     };
     let publishOwner = registry.conversation(publicationConversationId);
     if (!publishOwner || !await ownsPublication()) {
+      raisePublicationRefusal();
       if (publishOwner) {
         if (!sameTargetReconfigureCanReuseSuccessor(publishOwner, publicationReceipt)) {
           await cleanupDiscardedSuccessor(successorProvider, publicationReceipt, publishOwner, registry);
@@ -1110,8 +1145,10 @@ export async function advanceConversationMigration(
       launchProfile: successorProfile,
       ownsOperation: ownsPublication,
     });
+    raisePublicationRefusal();
     publishOwner = registry.conversation(publicationConversationId);
     if (!publishOwner || !await ownsPublication()) {
+      raisePublicationRefusal();
       if (publishOwner) {
         if (!sameTargetReconfigureCanReuseSuccessor(publishOwner, publicationReceipt)) {
           await cleanupDiscardedSuccessor(successorProvider, publicationReceipt, publishOwner, registry);

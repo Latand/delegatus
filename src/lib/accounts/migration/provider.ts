@@ -490,6 +490,12 @@ async function publishClaudeSuccessorHost(
       if (!cleanupConfirmed(cancelled)) throw new Error("successor Claude host transition is still pending");
       await forgetResumePaneIfMatches(input.receipt.path, tmuxHost);
     }
+    // Retirement awaits external cleanup. The operation and its account grant
+    // must still own this successor before any native process can start.
+    if (input.ownsOperation && !await input.ownsOperation()) {
+      input.registry.releaseStructuredHostClaim(key, claimed.claimOwner, claimed.claimEpoch);
+      return async () => {};
+    }
     identity = successorCapability(input);
     access = materializeStructuredHostAccess(
       structuredHostAccessPolicy(input.profile),

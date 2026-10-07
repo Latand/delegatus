@@ -6,7 +6,7 @@ import path from "node:path";
 
 import { AgentRegistry, REGISTRY_WRITER_BUSY } from "@/lib/agent/registry";
 import { reconcileMigrations } from "@/lib/accounts/migration/coordinator";
-import type { SuccessorProviderPort, ViewerConversationId } from "@/lib/accounts/migration/contracts";
+import type { LaunchProfile, SuccessorProviderPort, ViewerConversationId } from "@/lib/accounts/migration/contracts";
 
 import { applyStructuredReconfigure } from "./structuredReconfigure";
 import type { StructuredReconfigureEffect } from "./structuredDeliveryQueue";
@@ -21,8 +21,8 @@ afterEach(() => {
 });
 
 function fixture(
-  profile: Partial<{ model: string | null; effort: string | null; fast: boolean | null; serviceTier: string | null }> = {},
-  engine: "codex" | "copilot" = "codex",
+  profile: Partial<LaunchProfile> = {},
+  engine: "claude" | "codex" | "copilot" = "codex",
   storage: { sqliteWriterDeadlineMs?: number } | null = null,
 ) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-reconfigure-"));
@@ -38,7 +38,7 @@ function fixture(
     cwd: root,
     accountId: "source",
     transport: "structured",
-    launchProfile: { model: engine === "copilot" ? "gpt-5.4" : "gpt-5.5", effort: "medium", fast: false, ...profile },
+    launchProfile: { model: engine === "claude" ? "opus" : engine === "copilot" ? "gpt-5.4" : "gpt-5.5", effort: "medium", fast: false, ...profile },
   });
   if (begun.kind !== "created") throw new Error("fixture spawn was unavailable");
   const settled = registry.settleSpawn(begun.receipt.launchId, {
@@ -49,7 +49,7 @@ function fixture(
     status: "idle",
     host: null,
     structuredHost: {
-      kind: engine === "copilot" ? "copilot-acp" : "codex-app-server",
+      kind: engine === "claude" ? "claude-broker" : engine === "copilot" ? "copilot-acp" : "codex-app-server",
       endpoint: "test:host",
       process: { pid: process.pid, startIdentity: "test" },
       eventCursor: 1,
@@ -1351,3 +1351,161 @@ test("an effort edit from the pill keeps ultrafast after thread settings scroll 
   expect(recoveredTier).toBe("ultrafast");
   expect(registry.launchProfileForPath(transcript)).toMatchObject({ effort: "xhigh", fast: true, serviceTier: "ultrafast" });
 });
+
+for (const engine of ["claude", "codex"] as const) for (const sandbox of ["full", "restricted"] as const) {
+  test(`${engine}/${sandbox} runtime reconfigure preserves stage access and sandbox through account fork`, async () => {
+    const target = fixture({ readOnly: true, sandbox, permissionMode: "never", mcpServers: ["viewer"], plugins: [] }, engine);
+    const predecessor = target.registry.conversation(target.conversationId)!.generations.at(-1)!;
+    const successorPath = path.join(target.cwd, "successor.jsonl"); fs.writeFileSync(successorPath, "{}\n");
+    const released: string[] = [];
+    const request = effect({ conversationId: target.conversationId, accountId: "target", model: engine === "claude" ? "fable" : "gpt-6.1-sol", fast: engine === "codex" });
+    const outcome = await applyStructuredReconfigure(request, {
+      registry: target.registry, validateAccount: async () => {}, resolveAccount: () => ({ accountId: "target" }) as never,
+      releaseHost: async key => { released.push(key.sessionId); return true; },
+      migrate: async (conversationId, accountId, registry) => {
+        let migration = registry.conversation(conversationId)!.migration!;
+        if (migration.phase === "waiting-turn") migration = registry.transitionConversationMigration(conversationId, migration.revision, ["waiting-turn"], { phase: "requested" }).migration!;
+        migration = registry.transitionConversationMigration(conversationId, migration.revision, ["requested"], { phase: "preparing" }).migration!;
+        migration = registry.transitionConversationMigration(conversationId, migration.revision, ["preparing"], { phase: "successor-starting" }).migration!;
+        const receipt = { operationId: migration.operationId, nativeId: "native-successor", path: successorPath, continuityPaths: [successorPath], historyHash: "history", host: { kind: engine === "claude" ? "claude-fork" as const : "codex-app-server" as const, identity: "successor-host", epoch: 1, verifiedAt: "2026-10-02T10:00:00.000Z" } };
+        registry.persistMigrationProviderReceipt(conversationId, migration.revision, migration.operationId, receipt);
+        return registry.commitSuccessor(conversationId, { id: receipt.nativeId, path: receipt.path, accountId, historyHash: receipt.historyHash, host: receipt.host }, migration.revision, migration.operationId, receipt);
+      },
+    });
+    expect(outcome).toBe("applied"); expect(released).toEqual([predecessor.id]);
+    const conversation = target.registry.conversation(target.conversationId)!;
+    expect(conversation.generations).toHaveLength(2);
+    expect(conversation.generations.at(-1)).toMatchObject({ accountId: "target", launchProfile: { model: request.model, effort: "high", readOnly: true, sandbox, permissionMode: "never", mcpServers: ["viewer"], plugins: [] } });
+    expect(target.registry.snapshot().entries[`${engine}:${predecessor.id}`]?.structuredHost).toBeNull();
+    const replay = await applyStructuredReconfigure(request, { registry: target.registry, releaseHost: async () => { throw new Error("replay cannot release twice"); } });
+    expect(replay).toBe("applied"); expect(target.registry.conversation(target.conversationId)!.generations).toHaveLength(2);
+  });
+}
+
+/* A pipeline's runtime switch reaches this executor as an ordinary reconfigure.
+   The switch record it came from is what fences it: the project's allowed
+   accounts are asked again here, long after admission. */
+test("a pipeline switch whose project dropped the target account launches nothing and fails in words", async () => {
+  const target = fixture();
+  const sourceGeneration = target.registry.conversation(target.conversationId)!.generations.at(-1)!;
+  let allowed = true;
+  let releases = 0;
+  let migrations = 0;
+  const forwarded: Array<(() => void | Promise<void>) | undefined> = [];
+  const dependencies = {
+    registry: target.registry,
+    pipelineSwitch: () => ({ serviceTier: "priority", authorize: () => { if (!allowed) throw new Error("target account is no longer allowed on this project; the stage stays on its runtime"); } }),
+    validateAccount: async () => {},
+    resolveAccount: () => ({}) as never,
+    releaseHost: async () => { releases += 1; return true; },
+    migrate: async (conversationId: ViewerConversationId, _accountId: string, registry: AgentRegistry, _owns: () => Promise<boolean>, _operationId?: string, authorizeTarget?: () => void | Promise<void>) => {
+      migrations += 1;
+      forwarded.push(authorizeTarget);
+      return registry.conversation(conversationId)!;
+    },
+  };
+
+  allowed = false;
+  await expect(applyStructuredReconfigure(effect({ operationId: "pswitch-revoked", conversationId: target.conversationId, accountId: "target" }), dependencies))
+    .rejects.toThrow("target account is no longer allowed on this project");
+  expect(migrations).toBe(0);
+  expect(releases).toBe(0);
+  const refused = target.registry.conversation(target.conversationId)!;
+  expect(refused.reconfigure).toMatchObject({ status: "failed", error: expect.stringContaining("no longer allowed") });
+  expect(refused.migration ?? null).toBeNull();
+  expect(refused.generations).toHaveLength(1);
+  expect(refused.generations.at(-1)).toMatchObject({ id: sourceGeneration.id, accountId: "source" });
+  /* The same effect after a restart is still the failed one. */
+  await expect(applyStructuredReconfigure(effect({ operationId: "pswitch-revoked", conversationId: target.conversationId, accountId: "target" }), dependencies))
+    .rejects.toThrow("no longer allowed");
+  expect(migrations).toBe(0);
+
+  /* Allowed at the preflight: the migration is handed the same question for creation and publication. */
+  allowed = true;
+  await applyStructuredReconfigure(effect({ operationId: "pswitch-allowed", conversationId: target.conversationId, accountId: "target", eventSeq: 2 }), dependencies);
+  expect(migrations).toBe(1);
+  allowed = false;
+  expect(() => forwarded[0]!()).toThrow("no longer allowed");
+});
+
+for (const [name, before, tier, fast, after] of [
+  ["Standard to Priority", { fast: false, serviceTier: null }, "priority", true, { fast: true, serviceTier: "priority" }],
+  ["Ultrafast to Priority", { fast: true, serviceTier: "ultrafast" }, "priority", true, { fast: true, serviceTier: "priority" }],
+  ["Ultrafast to Standard", { fast: true, serviceTier: "ultrafast" }, null, false, { fast: false, serviceTier: null }],
+] as const) {
+  test(`a pipeline switch writes the exact speed it names: ${name}`, async () => {
+    const target = fixture({ ...before });
+    const request = effect({ operationId: "pswitch-tier", conversationId: target.conversationId, fast });
+    const dependencies = {
+      registry: target.registry,
+      pipelineSwitch: () => ({ serviceTier: tier, authorize: () => {} }),
+      releaseHost: async () => true,
+      recover: async () => ({ target: null, path: target.transcript, conversationId: target.conversationId, spawned: true }),
+    };
+    /* A profile keeps no tier key for the standard speed. */
+    const speed = () => { const profile = target.registry.launchProfileForPath(target.transcript)!; return { fast: profile.fast, serviceTier: profile.serviceTier ?? null }; };
+    expect(await applyStructuredReconfigure(request, dependencies)).toBe("applied");
+    expect(speed()).toEqual(after);
+    /* A replay of the settled operation changes nothing and starts nothing. */
+    expect(await applyStructuredReconfigure(request, { ...dependencies, releaseHost: async () => { throw new Error("a replay releases nothing"); } })).toBe("applied");
+    expect(speed()).toEqual(after);
+    expect(target.registry.conversation(target.conversationId)!.generations).toHaveLength(1);
+  });
+}
+
+test("a conversation's own reconfigure reads no pipeline record and keeps its tier rule", async () => {
+  const target = fixture({ fast: true, serviceTier: "ultrafast" });
+  expect(await applyStructuredReconfigure(effect({ conversationId: target.conversationId, fast: true }), {
+    registry: target.registry,
+    releaseHost: async () => true,
+    recover: async () => ({ target: null, path: target.transcript, conversationId: target.conversationId, spawned: true }),
+  })).toBe("applied");
+  expect(target.registry.launchProfileForPath(target.transcript)).toMatchObject({ fast: true, serviceTier: "ultrafast" });
+});
+
+/* A profile-only switch keeps its account, so nothing migrates and the host is
+   restarted through recovery, which resumes a recorded account by continuity
+   and asks no project pool. The pipeline is asked there too. */
+for (const engine of ["claude", "codex"] as const) {
+  test(`a ${engine} profile-only pipeline switch starts no host on an account the project dropped during release`, async () => {
+    const target = fixture({}, engine);
+    const generation = target.registry.conversation(target.conversationId)!.generations.at(-1)!;
+    let allowed = true;
+    let spawns = 0;
+    const asked: Array<string | null | undefined> = [];
+    const recover: typeof recoverDeadStructuredConversation = (request, dependencies) =>
+      recoverDeadStructuredConversation(request, {
+        ...dependencies,
+        client: {} as never,
+        transport: () => "structured",
+        resolveAccount: () => ({ engine, accountId: "source", kind: "managed", home: path.join(target.cwd, "account"), transcriptRoot: target.cwd, env: { NODE_ENV: "test" } }),
+        spawn: async (input) => {
+          spawns += 1;
+          return { ok: true, target: null, path: target.transcript, launchId: input.receipt.launchId, conversationId: target.conversationId,
+            launched: true, retrySafe: false, initialMessage: "delivered" as const, state: "settled" as const };
+        },
+      });
+    const request = effect({ operationId: "pswitch-profile-only", conversationId: target.conversationId, accountId: "source", model: engine === "claude" ? "sonnet" : "gpt-5.6-sol" });
+    const dependencies = {
+      registry: target.registry,
+      pipelineSwitch: () => ({ authorize: (accountId?: string | null) => {
+        asked.push(accountId);
+        if (!allowed) throw new Error("the conversation's account is no longer allowed on this project; no host starts on it");
+      } }),
+      releaseHost: async () => { allowed = false; return true; },
+      recover,
+    };
+
+    await expect(applyStructuredReconfigure(request, dependencies)).rejects.toThrow("no longer allowed on this project");
+    expect(spawns).toBe(0);
+    /* The preflight asked about the target; both recoveries, the one that applies and the one that restores, asked about the account itself. */
+    expect(asked).toEqual([undefined, "source", "source"]);
+    const refused = target.registry.conversation(target.conversationId)!;
+    expect(refused.reconfigure).toMatchObject({ status: "failed", error: expect.stringContaining("no longer allowed") });
+    expect(refused.generations).toHaveLength(1);
+    expect(target.registry.snapshot().entries[`${engine}:${generation.id}`]?.structuredHost).toBeNull();
+    /* The same effect after a restart is still the failed one and still starts nothing. */
+    await expect(applyStructuredReconfigure(request, dependencies)).rejects.toThrow("no longer allowed");
+    expect(spawns).toBe(0);
+  });
+}
