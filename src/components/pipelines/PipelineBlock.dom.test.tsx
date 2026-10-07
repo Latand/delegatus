@@ -99,6 +99,17 @@ const click = (element: Element | null | undefined) => {
 };
 const texts = (host: Element, selector: string) => [...host.querySelectorAll(selector)].map((node) => node.textContent);
 
+test.each(["card", "task", "screen"] as const)("%s lanes show their disk wait and clear it after recovery", density => {
+  const detail = "waiting for disk space: temp has 0.50 GiB free (needs 2.00 GiB); retries automatically";
+  for (const lang of ["en", "uk"] as const) {
+    setLocale(lang);
+    const waiting = mount(<PipelineBlock summary={summarizePipeline(searchPipeline({ state: "provisioning", stateDetail: detail }))} density={density} nowMs={NOW_MS} />);
+    expect(waiting.querySelector("[data-pipeline-reason]")?.textContent).toContain(detail);
+    const recovered = mount(<PipelineBlock summary={summarizePipeline(searchPipeline({ state: "running", stateDetail: null }))} density={density} nowMs={NOW_MS} />);
+    expect(recovered.querySelector("[data-pipeline-reason]")).toBeNull();
+  }
+});
+
 test("every density says what the desktop says: the stage names, the stage state words and the loop words (§5)", () => {
   const pipeline = searchPipeline();
   const summary = summarizePipeline(pipeline);
