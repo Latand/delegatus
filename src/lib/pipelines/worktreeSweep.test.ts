@@ -2313,7 +2313,7 @@ async function killedSweeper(root: string, dir: string, tip: string, phase: stri
   expect(signal).toBe("SIGKILL");
 }
 
-test.each(["prepared-head", "prepared-branch", "held"])("a sweeper killed at %s recovers its locks before the next sweep", async phase => {
+test.skipIf(process.platform === "win32").each(["prepared-head", "prepared-branch", "held"])("a sweeper killed at %s recovers its locks before the next sweep", async phase => {
   const root = repository();
   const { dir, tip } = lane(root, path.join(caseDir, "crash-lane"), "topic/crash");
   await killedSweeper(root, dir, tip, phase);
@@ -2336,7 +2336,7 @@ test.each(["prepared-head", "prepared-branch", "held"])("a sweeper killed at %s 
   expect(fs.readdirSync(path.join(process.env.LLV_STATE_DIR!, "worktree-sweep-locks"))).toEqual([]);
 });
 
-test("recovery preserves a foreign HEAD lock that replaced the recorded inode", async () => {
+test.skipIf(process.platform === "win32")("recovery preserves a foreign HEAD lock that replaced the recorded inode", async () => {
   const root = repository();
   const { dir, tip } = lane(root, path.join(caseDir, "crash-lane"), "topic/crash");
   await killedSweeper(root, dir, tip, "held");
@@ -2388,4 +2388,65 @@ test.skipIf(process.platform !== "linux")("an unavailable host view retains orph
   expect(recovered.removed.map(row => row.path)).toEqual([dir]);
   expect(fs.existsSync(headLock)).toBe(false);
   expect(fs.readdirSync(records)).toEqual([]);
+});
+
+
+test.skipIf(process.platform === "win32")("an incomplete recovery owner cannot authorize releasing HEAD locks", async () => {
+  const root = repository();
+  const { dir, tip } = lane(root, path.join(caseDir, "unverified-owner"), "topic/crash");
+  await killedSweeper(root, dir, tip, "held");
+  const records = path.join(process.env.LLV_STATE_DIR!, "worktree-sweep-locks");
+  const journal = path.join(records, fs.readdirSync(records)[0]!);
+  const record = JSON.parse(fs.readFileSync(journal, "utf8"));
+  record.owner = { pid: process.pid }; // Missing start evidence is not proof of death.
+  fs.writeFileSync(journal, JSON.stringify(record));
+  const report = await sweepMergedWorktrees(ports({ repositories: [root], prs: [merged(251, "topic/crash", tip)] }));
+  expect(report.errors).toContain("HEAD lock recovery: a record could not be released");
+  expect(report.removed).toEqual([]);
+  expect(report.kept[0]!.reason).toBe("locked");
+  expect(fs.existsSync(git(["rev-parse", "--git-path", "HEAD.lock"], dir))).toBe(true);
+  expect(fs.existsSync(journal)).toBe(true);
+});
+
+
+test.each(["checkout", "git-file", "bare", "damaged-bare"].flatMap(kind => ["initial", "measurement", "last-files"].map(phase => [kind, phase])))("a %s artifact parent created during %s keeps its fixture edits", async (kind, phase) => {
+  const { root, dir, owner } = cacheLane();
+  const foreign = path.join(dir, ".artifacts/cache");
+  const next = path.join(foreign, "bundle");
+  const relative = path.relative(dir, next);
+  const fixture = path.join(next, "cache.fixture.js");
+  let created = false;
+  const create = () => {
+    if (created) return;
+    created = true;
+    if (kind === "damaged-bare") {
+      fs.mkdirSync(path.join(foreign, "objects"));
+      fs.writeFileSync(path.join(foreign, "config"), "damaged repository metadata");
+    } else if (kind === "bare") {
+      git(["init", "-q", "--bare"], foreign);
+      git(["hash-object", "-w", fixture], foreign);
+    } else {
+      git(["init", "-q", ...(kind === "git-file" ? ["--separate-git-dir", path.join(caseDir, "foreign-metadata")] : [])], foreign);
+      git(["add", "bundle/cache.fixture.js"], foreign);
+      git(["commit", "-q", "-m", "independent fixture source"], foreign);
+    }
+    fs.writeFileSync(fixture, "unique uncommitted fixture edit");
+  };
+  if (phase === "initial") create();
+  let reads = 0;
+  const ordinary = ports({ pipelines: [owner] });
+  const report = await sweepMergedWorktrees({ ...ordinary,
+    measure: async directory => { if (phase === "measurement" && directory === next) create(); return 123; },
+    git: async (args, cwd) => {
+      const answer = await ordinary.git(args, cwd);
+      if (phase === "last-files" && args[0] === "ls-files" && args.at(-1) === relative && ++reads === 2) create();
+      return answer;
+    },
+  });
+  expect(created).toBe(true);
+  expect(report.errors).toEqual([]);
+  expect(report.removed).toEqual([]);
+  expect(report.trimmed).toEqual([]);
+  expect(fs.readFileSync(fixture, "utf8")).toBe("unique uncommitted fixture edit");
+  expect(fs.existsSync(path.join(foreign, kind === "bare" || kind === "damaged-bare" ? "objects" : ".git"))).toBe(true);
 });

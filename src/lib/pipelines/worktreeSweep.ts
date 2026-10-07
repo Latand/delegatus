@@ -338,6 +338,21 @@ function fixtureBundle(directory: string): boolean {
   }
 }
 
+/** A trim candidate can acquire a foreign repository in any enclosing
+    artifact directory while a Git or size read yields. The lane's own root
+    is the boundary; every directory beneath it must still be free of Git
+    metadata, including bare or damaged repository markers. */
+function hasEnclosingRepository(worktree: string, target: string, accessible: (directory: string) => string): boolean {
+  for (let current = target; current !== worktree; current = path.dirname(current)) {
+    if (!inside(current, worktree)) return true;
+    try {
+      const names = new Set(fs.readdirSync(accessible(current)));
+      if (names.has(".git") || names.has("objects") && ["HEAD", "refs", "config"].some(name => names.has(name))) return true;
+    } catch { return true; }
+  }
+  return false;
+}
+
 /** Self-update's release checkouts (`<cache>/self-update/<install>/releases/<sha12>`):
     `pruneReleaseWorktrees` removes them itself and keeps the release that
     serves and the one a rollback needs. */
@@ -671,7 +686,8 @@ function recoverCheckoutHeadLocks(accessible: (directory: string) => string, err
     const journal = path.join(HEAD_LOCK_RECORDS(), file);
     try {
       const record = JSON.parse(fs.readFileSync(journal, "utf8")) as SweepHeadLockRecord;
-      if (!record.owner || !Number.isSafeInteger(record.owner.pid) || record.owner.pid <= 0 || !Array.isArray(record.locks)
+      if (!record.owner || !Number.isSafeInteger(record.owner.pid) || record.owner.pid <= 0
+        || (record.owner.startIdentity !== null && typeof record.owner.startIdentity !== "string") || !Array.isArray(record.locks)
         || record.locks.some(lock => !path.isAbsolute(lock.file) || !path.isAbsolute(lock.prepared)
           || !lock.file.endsWith(".lock") || path.dirname(lock.file) !== path.dirname(lock.prepared)
           || !path.basename(lock.prepared).startsWith(".delegatus-sweep-") || !/^\d+$/.test(lock.dev) || !/^\d+$/.test(lock.ino)))
@@ -1180,6 +1196,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
             const realWorktree = fs.realpathSync(accessible(worktree));
             const realNext = fs.realpathSync(accessible(next));
             return realNext === path.join(realWorktree, path.relative(worktree, next))
+              && !hasEnclosingRepository(worktree, next, accessible)
               && !worktrees.some((other) => inside(resolve(other.path), next));
           } catch { return false; }
         };
