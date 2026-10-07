@@ -351,6 +351,193 @@ describe("self-update reload notice", () => {
   }, 30_000);
 });
 
+/* #2594: the Updates dialog answers with the installation first. The dialog's
+   own stream is played by the driver, one event at a time: before any state,
+   a snapshot that failed, the installation with its work still being read,
+   the same once the reading landed, and the installation after a deployment
+   that already serves the available target (no "commits behind" left). Each
+   state is framed on the desktop and at 390 px, in en and uk, with the
+   dialog's controls measured and the Update press's confirmation read.
+   The last state arrives while a "Check now" is held: its late answer, and
+   then a late refusal of a second check, both carry the old installation and
+   neither brings back the old revision, its badge or the Update button. */
+describe("Updates dialog first state", () => {
+  browserTest("pending, error and loaded states and their controls on desktop and phone in en and uk", async () => {
+    const out = path.resolve(".artifacts/updates-dialog-first-state");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const { MANAGED_STEPS, idleCheck, idleUpdate, stoppedProcess } = await import("@/lib/selfUpdate/types");
+    const OLD = "7fb7345".padEnd(40, "1");
+    const TARGET = "2fda8a4".padEnd(40, "e");
+    const at = "2026-10-07T09:00:00.000Z";
+    const rev = (sha: string, version: string) => ({ sha, short: sha.slice(0, 7), version, date: "2026-10-07T08:00:00.000Z" });
+    const proc = (pid: number, revision: string) => ({ ...stoppedProcess(), state: "healthy" as const, pid, startedAt: "2026-10-07T07:00:00.000Z", lastHealthAt: at, lastHealthOk: true, revision, tail: [] });
+    const snapshot = (installed: string, work: "pending" | "ready" | null) => ({
+      mode: "managed", unsupportedReason: null, installed: rev(installed, installed === TARGET ? "1.9.2" : "1.9.1"),
+      serving: { web: rev(installed, ""), runtimeHost: rev(installed, "") },
+      available: installed === TARGET ? null : rev(TARGET, "1.9.2"),
+      check: installed === TARGET
+        ? { ...idleCheck(), state: "up-to-date", at, nextPollAt: "2026-10-07T10:00:00.000Z", relation: "equal" }
+        : { ...idleCheck(), state: "update-available", at, nextPollAt: "2026-10-07T10:00:00.000Z", relation: "behind", behind: 17,
+          delta: { commits: [{ short: TARGET.slice(0, 7), subject: "Production gets CPU priority over tests and pipeline work (#2574)" }], summary: { commitCount: 17, entryCount: 0, counts: [], groups: [] } } },
+      update: idleUpdate(MANAGED_STEPS), busy: null,
+      processes: { web: { ...proc(4141, installed.slice(0, 7)), port: 8899 }, runtimeHost: proc(4242, installed.slice(0, 7)) },
+      meta: { branch: "main", remote: "https://github.com/example/delegatus", checkout: null, pollMinutes: 60, serverTime: at },
+      ...(work ? { workEvidence: work === "pending"
+        ? { state: "pending", since: at, at: null, error: null, phases: null }
+        : { state: "ready", since: null, at, error: null, phases: null } } : {}),
+      ...(work === "ready" ? { resumeWork: { turns: 2, stages: 1, turnList: [], stageList: [], unreadable: null } } : {}),
+    });
+    const readings: Record<string, unknown>[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const width of [1440, 390]) {
+        const phone = width === 390;
+        const context = await browser.newContext({ viewport: { width, height: phone ? 844 : 900 }, colorScheme: "light", reducedMotion: "reduce", ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        const confirms: string[] = [];
+        page.on("dialog", (dialog) => { confirms.push(dialog.message()); void dialog.dismiss(); });
+        try {
+          await context.addInitScript(({ lang }) => {
+            localStorage.setItem("llv_lang", lang);
+            /* The fixture installs its silent EventSource. The dialog's own
+               stream (no readOnly) becomes one the driver speaks through. */
+            const dialogStreams: { listeners: Record<string, ((event: { data: string }) => void)[]> }[] = [];
+            let installed = window.EventSource;
+            Object.defineProperty(window, "EventSource", { configurable: true,
+              get: () => installed,
+              set: (Source: typeof EventSource) => {
+                installed = class extends Source {
+                  constructor(url: string | URL) {
+                    super(url);
+                    if (String(url).startsWith("/api/self-update/events") && !String(url).includes("readOnly")) {
+                      const stream = { listeners: {} as Record<string, ((event: { data: string }) => void)[]> };
+                      dialogStreams.push(stream);
+                      Object.assign(this, { addEventListener: (type: string, listener: (event: { data: string }) => void) => { (stream.listeners[type] ??= []).push(listener); } });
+                    }
+                  }
+                } as typeof EventSource;
+              },
+            });
+            /* The fixture installs its own fetch too. A "Check now" it is
+               handed is held here until the driver answers it. */
+            const heldChecks: ((status: number, body: unknown) => void)[] = [];
+            let fetcher = window.fetch;
+            Object.defineProperty(window, "fetch", { configurable: true,
+              get: () => fetcher,
+              set: (next: typeof fetch) => {
+                fetcher = ((input: RequestInfo | URL, init?: RequestInit) => String(input).startsWith("/api/self-update/check")
+                  ? new Promise<Response>((resolve) => { heldChecks.push((status, body) => resolve(new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } }))); })
+                  : next(input, init)) as typeof fetch;
+              },
+            });
+            Object.assign(window, { selfUpdateEmit: (type: string, data: unknown) => {
+              for (const stream of dialogStreams) for (const listener of stream.listeners[type] ?? []) listener({ data: JSON.stringify(data) });
+              return dialogStreams.length;
+            }, selfUpdateHeldChecks: () => heldChecks.length,
+            selfUpdateAnswerCheck: (index: number, status: number, body: unknown) => heldChecks[index]!(status, body) });
+          }, { lang });
+          await page.goto(server.base);
+          await page.waitForSelector(phone ? "[data-phone-card], [data-mobile2-shell], [data-mobile-shell]" : "[data-kanban-board]", { timeout: 15_000 }).catch(() => {});
+          await page.evaluate(() => window.dispatchEvent(new Event("llv:open-self-update")));
+          const dialog = page.locator("[data-self-update-dialog]");
+          await dialog.waitFor();
+          const emit = (type: string, data: unknown) => page.evaluate(([type, data]) => (window as unknown as { selfUpdateEmit(type: string, data: unknown): number }).selfUpdateEmit(type as string, data), [type, data] as const);
+          const frame = async (state: string, ready: string) => {
+            await dialog.locator(ready).first().waitFor();
+            const reading = await dialog.evaluate((element, width) => {
+              const controls = [...element.querySelectorAll<HTMLButtonElement>("button")].filter((button) => button.getClientRects().length > 0).map((button) => {
+                const box = button.getBoundingClientRect();
+                return { action: button.dataset.action ?? button.getAttribute("aria-label"), label: (button.textContent ?? "").trim(), disabled: button.disabled,
+                  clipped: button.scrollWidth > button.clientWidth + 1, inside: box.left >= 0 && box.right <= width, height: Math.round(box.height) };
+              });
+              return {
+                status: element.querySelector("[data-status]")?.textContent?.trim() ?? null,
+                loading: element.querySelector("[data-section], [data-self-update-failure]") ? null : element.querySelector("p")?.textContent?.trim() ?? null,
+                failure: element.querySelector("[data-self-update-failure]")?.textContent?.trim() ?? null,
+                actionError: element.querySelector("[data-error='action']")?.textContent?.trim() ?? null,
+                work: element.querySelector("[data-work]")?.textContent?.trim() ?? null,
+                behindBadge: /17/.test(element.querySelector("[data-status]")?.textContent ?? ""),
+                controls,
+              };
+            }, width);
+            for (const control of reading.controls) {
+              expect(control.clipped).toBe(false);
+              expect(control.inside).toBe(true);
+            }
+            await dialog.screenshot({ path: path.join(out, `${lang}-${width}-${state}.png`) });
+            readings.push({ lang, width, state, ...reading });
+            return reading;
+          };
+
+          const pending = await frame("pending", "p");
+          expect(pending.loading).toBe(translate(lang, "selfUpdate.loading"));
+
+          expect(await emit("snapshot-error", { code: "snapshot-failed", error: "launcher record unreadable" })).toBe(1);
+          const failed = await frame("error", "[data-self-update-failure]");
+          /* The server's own words stay out of the operator's sentence. */
+          expect(failed.failure).toBe(translate(lang, "selfUpdate.loadFailed"));
+          expect(await dialog.textContent()).not.toContain("launcher record unreadable");
+
+          await emit("state", snapshot(OLD, "pending"));
+          const loaded = await frame("loaded-work-pending", "[data-work='pending']");
+          expect(loaded.work).toBe(translate(lang, "selfUpdate.work.pending"));
+          expect(loaded.controls.some((control) => control.action === "update" && !control.disabled)).toBe(true);
+          await dialog.locator("[data-action='update']").click();
+          await page.waitForTimeout(100);
+          expect(confirms.at(-1)).toContain(translate(lang, "selfUpdate.work.pendingConfirm"));
+          expect(confirms.at(-1)).not.toContain(translate(lang, "selfUpdate.auto.block.turns", { count: 0 }));
+
+          await emit("state", snapshot(OLD, "ready"));
+          const read = await frame("loaded-work-read", "[data-work='ready']");
+          expect(read.work).toContain(translate(lang, "selfUpdate.auto.block.turns", { count: 2 }));
+          await dialog.locator("[data-action='update']").click();
+          await page.waitForTimeout(100);
+          expect(confirms.at(-1)).toContain(translate(lang, "selfUpdate.auto.block.turns", { count: 2 }));
+
+          /* Each "Check now" is held until the driver answers it, after the
+             stream has moved on. */
+          type Driven = { selfUpdateHeldChecks(): number; selfUpdateAnswerCheck(index: number, status: number, body: unknown): void };
+          const heldChecks = () => page.evaluate(() => (window as unknown as Driven).selfUpdateHeldChecks());
+          const check = async () => {
+            const index = await heldChecks();
+            await dialog.locator("[data-action='check']").click();
+            for (let wait = 0; wait < 100 && await heldChecks() === index; wait++) await page.waitForTimeout(50);
+            expect(await heldChecks()).toBe(index + 1);
+            return (status: number, body: unknown) => page.evaluate(([index, status, body]) =>
+              (window as unknown as Driven).selfUpdateAnswerCheck(index as number, status as number, body), [index, status, body] as const);
+          };
+          const upToDate = translate(lang, "selfUpdate.status.upToDate", { time: "" }).split(",")[0]!;
+          const answerCheck = await check();
+          await emit("state", snapshot(TARGET, "ready"));
+          const serving = await frame("serving-target", "[data-section='update'][data-update='idle']");
+          expect(serving.behindBadge).toBe(false);
+          expect(serving.status).toContain(upToDate);
+          await answerCheck(202, snapshot(OLD, "ready"));
+          await dialog.locator("[data-action='check']:not([disabled])").waitFor();
+          const late = await frame("late-check-answer", "[data-section='update']");
+          expect(late.behindBadge).toBe(false);
+          expect(late.status).toContain(upToDate);
+          expect(late.controls.some((control) => control.action === "update" && !control.disabled)).toBe(false);
+
+          const refuseCheck = await check();
+          await emit("state", { ...snapshot(TARGET, "ready"), meta: { ...snapshot(TARGET, "ready").meta, serverTime: "2026-10-07T09:00:05.000Z" } });
+          await refuseCheck(409, { error: "An update is running.", code: "busy-update", snapshot: snapshot(OLD, "ready") });
+          const refused = await frame("late-refusal", "[data-error='action']");
+          expect(refused.actionError).toBe(translate(lang, "selfUpdate.refusal.busy-update"));
+          expect(refused.behindBadge).toBe(false);
+          expect(refused.status).toContain(upToDate);
+          expect(refused.controls.some((control) => control.action === "update" && !control.disabled)).toBe(false);
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
+});
+
 /* The loading leaf draws its own header bar until the Board mounts and draws
    the same bar itself, so a ⋯ menu opened before then is thrown away with the
    bar it opened in. Open the Board's own menu and wait until it is open. */
