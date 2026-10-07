@@ -60,7 +60,7 @@ export function MobileSheet({
   /** A header control beside the title (the queue's «Dismiss all», the switcher's «Board ›»). */
   extra?: ReactNode;
   footer?: ReactNode;
-  /** Fullscreen (the rotate / create draft): no handle, no rounded top. */
+  /** Fullscreen (the prototype review): no handle, no rounded top, the footer at the screen's foot. */
   full?: boolean;
   onClose: () => void;
   children: ReactNode;
@@ -146,7 +146,9 @@ export function MobileSheet({
             <X className="h-5 w-5" aria-hidden />
           </button>
         </div>
-        <div className="min-h-0 overflow-y-auto pb-1" data-mobile2-sheet-body>
+        {/* A full sheet's body takes the height the header and the footer leave,
+            so the footer stands at the foot of the screen whatever the body holds. */}
+        <div className={`min-h-0 overflow-y-auto pb-1 ${full ? "flex-1" : ""}`} data-mobile2-sheet-body>
           {children}
         </div>
         <MobileReceipt store={receiptStore} placement="sheet" />

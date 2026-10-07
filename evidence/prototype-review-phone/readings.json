@@ -349,6 +349,28 @@
       "chip": "4Cards with a preview",
       "onScreen": true
     },
+    "390-en-light-footer": {
+      "wide-frame": {
+        "saveTop": 794,
+        "footGap": 6
+      },
+      "tall-frame": {
+        "saveTop": 794,
+        "footGap": 6
+      },
+      "pair-wide": {
+        "saveTop": 794,
+        "footGap": 6
+      },
+      "video": {
+        "saveTop": 794,
+        "footGap": 6
+      },
+      "chosen": {
+        "saveTop": 794,
+        "footGap": 6
+      }
+    },
     "390-en-dark-wide-frame": {
       "slide": "1:f0",
       "position": "1 / 3",
@@ -696,6 +718,28 @@
     "390-en-dark-chosen": {
       "chip": "4Cards with a preview",
       "onScreen": true
+    },
+    "390-en-dark-footer": {
+      "wide-frame": {
+        "saveTop": 794,
+        "footGap": 6
+      },
+      "tall-frame": {
+        "saveTop": 794,
+        "footGap": 6
+      },
+      "pair-wide": {
+        "saveTop": 794,
+        "footGap": 6
+      },
+      "video": {
+        "saveTop": 794,
+        "footGap": 6
+      },
+      "chosen": {
+        "saveTop": 794,
+        "footGap": 6
+      }
     },
     "390-uk-light-wide-frame": {
       "slide": "1:f0",
@@ -1045,6 +1089,28 @@
       "chip": "4Картки з переглядом",
       "onScreen": true
     },
+    "390-uk-light-footer": {
+      "wide-frame": {
+        "saveTop": 794,
+        "footGap": 6
+      },
+      "tall-frame": {
+        "saveTop": 794,
+        "footGap": 6
+      },
+      "pair-wide": {
+        "saveTop": 794,
+        "footGap": 6
+      },
+      "video": {
+        "saveTop": 794,
+        "footGap": 6
+      },
+      "chosen": {
+        "saveTop": 794,
+        "footGap": 6
+      }
+    },
     "390-uk-dark-wide-frame": {
       "slide": "1:f0",
       "position": "1 / 3",
@@ -1392,6 +1458,28 @@
     "390-uk-dark-chosen": {
       "chip": "4Картки з переглядом",
       "onScreen": true
+    },
+    "390-uk-dark-footer": {
+      "wide-frame": {
+        "saveTop": 794,
+        "footGap": 6
+      },
+      "tall-frame": {
+        "saveTop": 794,
+        "footGap": 6
+      },
+      "pair-wide": {
+        "saveTop": 794,
+        "footGap": 6
+      },
+      "video": {
+        "saveTop": 794,
+        "footGap": 6
+      },
+      "chosen": {
+        "saveTop": 794,
+        "footGap": 6
+      }
     },
     "430-en-light-wide-frame": {
       "slide": "1:f0",
@@ -1741,6 +1829,28 @@
       "chip": "4Cards with a preview",
       "onScreen": true
     },
+    "430-en-light-footer": {
+      "wide-frame": {
+        "saveTop": 882,
+        "footGap": 6
+      },
+      "tall-frame": {
+        "saveTop": 882,
+        "footGap": 6
+      },
+      "pair-wide": {
+        "saveTop": 882,
+        "footGap": 6
+      },
+      "video": {
+        "saveTop": 882,
+        "footGap": 6
+      },
+      "chosen": {
+        "saveTop": 882,
+        "footGap": 6
+      }
+    },
     "430-en-dark-wide-frame": {
       "slide": "1:f0",
       "position": "1 / 3",
@@ -2088,6 +2198,28 @@
     "430-en-dark-chosen": {
       "chip": "4Cards with a preview",
       "onScreen": true
+    },
+    "430-en-dark-footer": {
+      "wide-frame": {
+        "saveTop": 882,
+        "footGap": 6
+      },
+      "tall-frame": {
+        "saveTop": 882,
+        "footGap": 6
+      },
+      "pair-wide": {
+        "saveTop": 882,
+        "footGap": 6
+      },
+      "video": {
+        "saveTop": 882,
+        "footGap": 6
+      },
+      "chosen": {
+        "saveTop": 882,
+        "footGap": 6
+      }
     },
     "430-uk-light-wide-frame": {
       "slide": "1:f0",
@@ -2437,6 +2569,28 @@
       "chip": "4Картки з переглядом",
       "onScreen": true
     },
+    "430-uk-light-footer": {
+      "wide-frame": {
+        "saveTop": 882,
+        "footGap": 6
+      },
+      "tall-frame": {
+        "saveTop": 882,
+        "footGap": 6
+      },
+      "pair-wide": {
+        "saveTop": 882,
+        "footGap": 6
+      },
+      "video": {
+        "saveTop": 882,
+        "footGap": 6
+      },
+      "chosen": {
+        "saveTop": 882,
+        "footGap": 6
+      }
+    },
     "430-uk-dark-wide-frame": {
       "slide": "1:f0",
       "position": "1 / 3",
@@ -2784,6 +2938,28 @@
     "430-uk-dark-chosen": {
       "chip": "4Картки з переглядом",
       "onScreen": true
+    },
+    "430-uk-dark-footer": {
+      "wide-frame": {
+        "saveTop": 882,
+        "footGap": 6
+      },
+      "tall-frame": {
+        "saveTop": 882,
+        "footGap": 6
+      },
+      "pair-wide": {
+        "saveTop": 882,
+        "footGap": 6
+      },
+      "video": {
+        "saveTop": 882,
+        "footGap": 6
+      },
+      "chosen": {
+        "saveTop": 882,
+        "footGap": 6
+      }
     }
   },
   "failures": []

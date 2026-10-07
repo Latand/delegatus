@@ -21233,6 +21233,12 @@ describe("prototype review on a task: the card's button, the review and the orch
           if (regions.overlaps.length || partOverlaps.length) failures.push(`${label} ${name}: overlapping ${[...regions.overlaps, ...partOverlaps].join(", ")}`);
           if (outside.length) failures.push(`${label} ${name}: outside the review's frame: ${outside.join(", ")}`);
           if (sideways > 0) failures.push(`${label} ${name}: the review scrolls sideways by ${sideways}px`);
+          /* The phone's sheet is the screen: its footer stands at the screen's foot, under the sheet's 6 px inset, whatever the stage holds. */
+          if (size.phone) {
+            const footGap = await page.evaluate(() => Math.round((innerHeight - document.querySelector<HTMLElement>("[data-mobile2-sheet=prototype-review] > :last-child")!.getBoundingClientRect().bottom) * 10) / 10);
+            record(`${name}-foot-gap`, footGap);
+            if (footGap > 6.5) failures.push(`${label} ${name}: an empty band of ${footGap}px under the sheet's footer`);
+          }
         };
         const stageState = () => page.evaluate(() => {
           const review = document.querySelector<HTMLElement>("[data-prototype-review]")!;

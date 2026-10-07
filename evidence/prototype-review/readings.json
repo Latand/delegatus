@@ -905,7 +905,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "7 Oct, 16:10",
+      "time": "7 Oct, 16:53",
       "posts": [
         {
           "taskId": "t-search",
@@ -2528,7 +2528,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "7 Oct, 16:10",
+      "time": "7 Oct, 16:54",
       "posts": [
         {
           "taskId": "t-search",
@@ -4151,7 +4151,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "7 жовт., 16:11",
+      "time": "7 жовт., 16:54",
       "posts": [
         {
           "taskId": "t-search",
@@ -5774,7 +5774,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "7 жовт., 16:11",
+      "time": "7 жовт., 16:54",
       "posts": [
         {
           "taskId": "t-search",
@@ -7439,7 +7439,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "7 Oct, 16:12",
+      "time": "7 Oct, 16:55",
       "posts": [
         {
           "taskId": "t-search",
@@ -9104,7 +9104,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "7 Oct, 16:12",
+      "time": "7 Oct, 16:55",
       "posts": [
         {
           "taskId": "t-search",
@@ -10769,7 +10769,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "7 жовт., 16:12",
+      "time": "7 жовт., 16:56",
       "posts": [
         {
           "taskId": "t-search",
@@ -12434,7 +12434,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "7 жовт., 16:13",
+      "time": "7 жовт., 16:56",
       "posts": [
         {
           "taskId": "t-search",
@@ -13413,7 +13413,7 @@
         "chevron": 290
       },
       {
-        "row": "/repo/links-impl.jsonl:waiting:1791377789",
+        "row": "/repo/links-impl.jsonl:waiting:1791380383",
         "title": 16,
         "chevron": 290
       },
@@ -13523,11 +13523,11 @@
           0,
           48,
           390,
-          534.3
+          642
         ],
         "footer": [
           0,
-          582.3,
+          690,
           390,
           148
         ]
@@ -13537,6 +13537,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-light-four-variants-foot-gap": 6,
     "phone-390-en-light-pair-slider": {
       "slide": "2:f0",
       "caption": "2Two columns — results page, before and after",
@@ -13625,11 +13626,11 @@
           0,
           48,
           390,
-          621.5
+          642
         ],
         "footer": [
           0,
-          669.5,
+          690,
           390,
           148
         ]
@@ -13639,6 +13640,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-light-pair-slider-foot-gap": 6,
     "phone-390-en-light-forty": {
       "slide": "3:f39",
       "caption": "3Dense table — table state 40",
@@ -13683,11 +13685,11 @@
           0,
           48,
           390,
-          534.3
+          642
         ],
         "footer": [
           0,
-          582.3,
+          690,
           390,
           148
         ]
@@ -13697,6 +13699,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-light-forty-pictures-foot-gap": 6,
     "phone-390-en-light-video": {
       "slide": "4:v0",
       "caption": "4Cards with a preview — hover and keyboard walk",
@@ -13740,11 +13743,11 @@
           0,
           48,
           390,
-          509.9
+          642
         ],
         "footer": [
           0,
-          557.9,
+          690,
           390,
           148
         ]
@@ -13754,6 +13757,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-light-video-foot-gap": 6,
     "phone-390-en-light-viewer": {
       "position": "1 / 3",
       "caption": "1 · Compact list — results, desktop· Search results layout"
@@ -13810,6 +13814,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-light-tall-frame-foot-gap": 6,
     "phone-390-en-light-viewer-pair": {
       "shown": [
         "before"
@@ -13842,11 +13847,11 @@
           0,
           48,
           390,
-          534.3
+          584
         ],
         "footer": [
           0,
-          582.3,
+          632,
           390,
           206
         ]
@@ -13856,6 +13861,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-light-dictating-foot-gap": 6,
     "phone-390-en-light-dictating-context": {
       "headerBottom": 48,
       "line": [
@@ -13912,11 +13918,11 @@
           0,
           48,
           390,
-          534.3
+          638
         ],
         "footer": [
           0,
-          582.3,
+          686,
           390,
           152
         ]
@@ -13926,6 +13932,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-light-combination-foot-gap": 6,
     "phone-390-en-light-combination-context": {
       "headerBottom": 48,
       "line": [
@@ -13992,7 +13999,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "7 Oct, 16:13",
+      "time": "7 Oct, 16:56",
       "posts": [
         {
           "taskId": "t-search",
@@ -14032,11 +14039,11 @@
           0,
           48,
           390,
-          523.3
+          681
         ],
         "footer": [
           0,
-          571.3,
+          729,
           390,
           109
         ]
@@ -14046,6 +14053,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-light-decided-foot-gap": 6,
     "phone-390-en-light-decided-accent": {
       "soft": "rgb(236, 235, 251)",
       "variants": [
@@ -14137,11 +14145,11 @@
           0,
           48,
           390,
-          552.3
+          642
         ],
         "footer": [
           0,
-          600.3,
+          690,
           390,
           148
         ]
@@ -14151,6 +14159,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-light-one-variant-foot-gap": 6,
     "phone-390-en-light-one-variant": {
       "slide": "1:f0",
       "caption": "1Progress under the attached file with speed, size and a stop — uploading",
@@ -14223,11 +14232,11 @@
           0,
           48,
           390,
-          606.3
+          642
         ],
         "footer": [
           0,
-          654.3,
+          690,
           390,
           148
         ]
@@ -14237,6 +14246,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-light-longest-name-and-caption-foot-gap": 6,
     "phone-390-en-light-transcribing-guard-context": {
       "headerBottom": 48,
       "line": [
@@ -14271,11 +14281,11 @@
           0,
           48,
           390,
-          541.3
+          589.5
         ],
         "footer": [
           0,
-          589.3,
+          637.5,
           390,
           200.5
         ]
@@ -14285,25 +14295,26 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-light-no-orchestrator-foot-gap": 6,
     "phone-390-en-light-no-orchestrator-delivery-row": {
       "state": "no-orchestrator",
       "lines": 1,
       "mark": [
         16,
-        726.5,
+        774.8,
         14,
         14
       ],
       "firstLine": [
         38,
-        727.3,
+        775.5,
         304.4,
         12
       ],
       "markOnFirstLine": true,
       "retry": [
         16,
-        745.8,
+        794,
         102.7,
         44
       ],
@@ -14332,11 +14343,11 @@
           0,
           48,
           390,
-          616
+          642
         ],
         "footer": [
           0,
-          664,
+          690,
           390,
           148
         ]
@@ -14346,6 +14357,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-light-newer-round-foot-gap": 6,
     "phone-390-en-light-earlier-round-geometry": {
       "regions": {
         "header": [
@@ -14358,11 +14370,11 @@
           0,
           48,
           390,
-          484.8
+          699
         ],
         "footer": [
           0,
-          532.8,
+          747,
           390,
           91
         ]
@@ -14372,6 +14384,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-light-earlier-round-foot-gap": 6,
     "phone-390-en-light-earlier-round-accent": {
       "soft": "rgb(236, 235, 251)",
       "variants": [
@@ -14426,6 +14439,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-light-dictating-round-pinned-foot-gap": 6,
     "phone-390-en-light-dictation-round-pinned": {
       "duringRecording": {
         "disabled": true,
@@ -14454,11 +14468,11 @@
           0,
           48,
           390,
-          527.1
+          660
         ],
         "footer": [
           0,
-          575.1,
+          708,
           390,
           130
         ]
@@ -14468,6 +14482,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-light-files-gone-foot-gap": 6,
     "phone-390-en-light-files-gone-accent": {
       "soft": "rgb(236, 235, 251)",
       "variants": [
@@ -14515,11 +14530,11 @@
           0,
           48,
           390,
-          459.3
+          651
         ],
         "footer": [
           0,
-          507.3,
+          699,
           390,
           139
         ]
@@ -14529,6 +14544,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-light-send-failed-foot-gap": 6,
     "phone-390-en-light-send-failed-accent": {
       "soft": "rgb(236, 235, 251)",
       "variants": [
@@ -14555,20 +14571,20 @@
       "lines": 1,
       "mark": [
         16,
-        583,
+        774.8,
         14,
         14
       ],
       "firstLine": [
         38,
-        583.8,
+        775.5,
         270.2,
         12
       ],
       "markOnFirstLine": true,
       "retry": [
         16,
-        602.3,
+        794,
         110,
         44
       ],
@@ -14586,11 +14602,11 @@
           0,
           48,
           390,
-          459.3
+          651
         ],
         "footer": [
           0,
-          507.3,
+          699,
           390,
           139
         ]
@@ -14600,25 +14616,26 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-light-send-uncertain-foot-gap": 6,
     "phone-390-en-light-send-uncertain-delivery-row": {
       "state": "uncertain",
       "lines": 1,
       "mark": [
         16,
-        583,
+        774.8,
         14,
         14
       ],
       "firstLine": [
         38,
-        583.8,
+        775.5,
         267.1,
         12
       ],
       "markOnFirstLine": true,
       "retry": [
         16,
-        602.3,
+        794,
         110,
         44
       ],
@@ -14899,7 +14916,7 @@
         "chevron": 290
       },
       {
-        "row": "/repo/links-impl.jsonl:waiting:1791377814",
+        "row": "/repo/links-impl.jsonl:waiting:1791380407",
         "title": 16,
         "chevron": 290
       },
@@ -15009,11 +15026,11 @@
           0,
           48,
           390,
-          534.3
+          642
         ],
         "footer": [
           0,
-          582.3,
+          690,
           390,
           148
         ]
@@ -15023,6 +15040,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-dark-four-variants-foot-gap": 6,
     "phone-390-en-dark-pair-slider": {
       "slide": "2:f0",
       "caption": "2Two columns — results page, before and after",
@@ -15111,11 +15129,11 @@
           0,
           48,
           390,
-          621.5
+          642
         ],
         "footer": [
           0,
-          669.5,
+          690,
           390,
           148
         ]
@@ -15125,6 +15143,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-dark-pair-slider-foot-gap": 6,
     "phone-390-en-dark-forty": {
       "slide": "3:f39",
       "caption": "3Dense table — table state 40",
@@ -15169,11 +15188,11 @@
           0,
           48,
           390,
-          534.3
+          642
         ],
         "footer": [
           0,
-          582.3,
+          690,
           390,
           148
         ]
@@ -15183,6 +15202,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-dark-forty-pictures-foot-gap": 6,
     "phone-390-en-dark-video": {
       "slide": "4:v0",
       "caption": "4Cards with a preview — hover and keyboard walk",
@@ -15226,11 +15246,11 @@
           0,
           48,
           390,
-          509.9
+          642
         ],
         "footer": [
           0,
-          557.9,
+          690,
           390,
           148
         ]
@@ -15240,6 +15260,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-dark-video-foot-gap": 6,
     "phone-390-en-dark-viewer": {
       "position": "1 / 3",
       "caption": "1 · Compact list — results, desktop· Search results layout"
@@ -15296,6 +15317,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-dark-tall-frame-foot-gap": 6,
     "phone-390-en-dark-viewer-pair": {
       "shown": [
         "before"
@@ -15328,11 +15350,11 @@
           0,
           48,
           390,
-          534.3
+          584
         ],
         "footer": [
           0,
-          582.3,
+          632,
           390,
           206
         ]
@@ -15342,6 +15364,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-dark-dictating-foot-gap": 6,
     "phone-390-en-dark-dictating-context": {
       "headerBottom": 48,
       "line": [
@@ -15398,11 +15421,11 @@
           0,
           48,
           390,
-          534.3
+          638
         ],
         "footer": [
           0,
-          582.3,
+          686,
           390,
           152
         ]
@@ -15412,6 +15435,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-dark-combination-foot-gap": 6,
     "phone-390-en-dark-combination-context": {
       "headerBottom": 48,
       "line": [
@@ -15478,7 +15502,7 @@
       "comment": "Take the header from the two columns and keep the dense rows of the table.",
       "delivery": "sent",
       "deliveryText": "Saved and sent to the orchestrator",
-      "time": "7 Oct, 16:14",
+      "time": "7 Oct, 16:57",
       "posts": [
         {
           "taskId": "t-search",
@@ -15518,11 +15542,11 @@
           0,
           48,
           390,
-          523.3
+          681
         ],
         "footer": [
           0,
-          571.3,
+          729,
           390,
           109
         ]
@@ -15532,6 +15556,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-dark-decided-foot-gap": 6,
     "phone-390-en-dark-decided-accent": {
       "soft": "rgb(38, 35, 71)",
       "variants": [
@@ -15623,11 +15648,11 @@
           0,
           48,
           390,
-          552.3
+          642
         ],
         "footer": [
           0,
-          600.3,
+          690,
           390,
           148
         ]
@@ -15637,6 +15662,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-dark-one-variant-foot-gap": 6,
     "phone-390-en-dark-one-variant": {
       "slide": "1:f0",
       "caption": "1Progress under the attached file with speed, size and a stop — uploading",
@@ -15709,11 +15735,11 @@
           0,
           48,
           390,
-          606.3
+          642
         ],
         "footer": [
           0,
-          654.3,
+          690,
           390,
           148
         ]
@@ -15723,6 +15749,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-dark-longest-name-and-caption-foot-gap": 6,
     "phone-390-en-dark-transcribing-guard-context": {
       "headerBottom": 48,
       "line": [
@@ -15757,11 +15784,11 @@
           0,
           48,
           390,
-          541.3
+          589.5
         ],
         "footer": [
           0,
-          589.3,
+          637.5,
           390,
           200.5
         ]
@@ -15771,25 +15798,26 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-dark-no-orchestrator-foot-gap": 6,
     "phone-390-en-dark-no-orchestrator-delivery-row": {
       "state": "no-orchestrator",
       "lines": 1,
       "mark": [
         16,
-        726.5,
+        774.8,
         14,
         14
       ],
       "firstLine": [
         38,
-        727.3,
+        775.5,
         304.4,
         12
       ],
       "markOnFirstLine": true,
       "retry": [
         16,
-        745.8,
+        794,
         102.7,
         44
       ],
@@ -15818,11 +15846,11 @@
           0,
           48,
           390,
-          616
+          642
         ],
         "footer": [
           0,
-          664,
+          690,
           390,
           148
         ]
@@ -15832,6 +15860,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-dark-newer-round-foot-gap": 6,
     "phone-390-en-dark-earlier-round-geometry": {
       "regions": {
         "header": [
@@ -15844,11 +15873,11 @@
           0,
           48,
           390,
-          484.8
+          699
         ],
         "footer": [
           0,
-          532.8,
+          747,
           390,
           91
         ]
@@ -15858,6 +15887,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-dark-earlier-round-foot-gap": 6,
     "phone-390-en-dark-earlier-round-accent": {
       "soft": "rgb(38, 35, 71)",
       "variants": [
@@ -15912,6 +15942,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-dark-dictating-round-pinned-foot-gap": 6,
     "phone-390-en-dark-dictation-round-pinned": {
       "duringRecording": {
         "disabled": true,
@@ -15940,11 +15971,11 @@
           0,
           48,
           390,
-          527.1
+          660
         ],
         "footer": [
           0,
-          575.1,
+          708,
           390,
           130
         ]
@@ -15954,6 +15985,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-dark-files-gone-foot-gap": 6,
     "phone-390-en-dark-files-gone-accent": {
       "soft": "rgb(38, 35, 71)",
       "variants": [
@@ -16001,11 +16033,11 @@
           0,
           48,
           390,
-          459.3
+          651
         ],
         "footer": [
           0,
-          507.3,
+          699,
           390,
           139
         ]
@@ -16015,6 +16047,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-dark-send-failed-foot-gap": 6,
     "phone-390-en-dark-send-failed-accent": {
       "soft": "rgb(38, 35, 71)",
       "variants": [
@@ -16041,20 +16074,20 @@
       "lines": 1,
       "mark": [
         16,
-        583,
+        774.8,
         14,
         14
       ],
       "firstLine": [
         38,
-        583.8,
+        775.5,
         270.2,
         12
       ],
       "markOnFirstLine": true,
       "retry": [
         16,
-        602.3,
+        794,
         110,
         44
       ],
@@ -16072,11 +16105,11 @@
           0,
           48,
           390,
-          459.3
+          651
         ],
         "footer": [
           0,
-          507.3,
+          699,
           390,
           139
         ]
@@ -16086,25 +16119,26 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-en-dark-send-uncertain-foot-gap": 6,
     "phone-390-en-dark-send-uncertain-delivery-row": {
       "state": "uncertain",
       "lines": 1,
       "mark": [
         16,
-        583,
+        774.8,
         14,
         14
       ],
       "firstLine": [
         38,
-        583.8,
+        775.5,
         267.1,
         12
       ],
       "markOnFirstLine": true,
       "retry": [
         16,
-        602.3,
+        794,
         110,
         44
       ],
@@ -16169,7 +16203,7 @@
         },
         "reasons": [
           "запит дозволу",
-          "gpt-5.6·16 хв",
+          "gpt-5.6·17 хв",
           "Прототип"
         ],
         "overlaps": [],
@@ -16385,7 +16419,7 @@
         "chevron": 300
       },
       {
-        "row": "/repo/links-impl.jsonl:waiting:1791377839",
+        "row": "/repo/links-impl.jsonl:waiting:1791380430",
         "title": 16,
         "chevron": 300
       },
@@ -16495,11 +16529,11 @@
           0,
           48,
           390,
-          556.3
+          642
         ],
         "footer": [
           0,
-          604.3,
+          690,
           390,
           148
         ]
@@ -16509,6 +16543,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-light-four-variants-foot-gap": 6,
     "phone-390-uk-light-pair-slider": {
       "slide": "2:f0",
       "caption": "2Дві колонки — сторінка результатів, до і після",
@@ -16597,11 +16632,11 @@
           0,
           48,
           390,
-          638
+          642
         ],
         "footer": [
           0,
-          686,
+          690,
           390,
           148
         ]
@@ -16611,6 +16646,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-light-pair-slider-foot-gap": 6,
     "phone-390-uk-light-forty": {
       "slide": "3:f39",
       "caption": "3Щільна таблиця — стан таблиці 40",
@@ -16655,11 +16691,11 @@
           0,
           48,
           390,
-          550.8
+          642
         ],
         "footer": [
           0,
-          598.8,
+          690,
           390,
           148
         ]
@@ -16669,6 +16705,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-light-forty-pictures-foot-gap": 6,
     "phone-390-uk-light-video": {
       "slide": "4:v0",
       "caption": "4Картки з переглядом — наведення і прохід клавіатурою",
@@ -16712,11 +16749,11 @@
           0,
           48,
           390,
-          526.4
+          642
         ],
         "footer": [
           0,
-          574.4,
+          690,
           390,
           148
         ]
@@ -16726,6 +16763,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-light-video-foot-gap": 6,
     "phone-390-uk-light-viewer": {
       "position": "1 / 3",
       "caption": "1 · Компактний список — результати, десктоп· Макет результатів пошуку"
@@ -16782,6 +16820,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-light-tall-frame-foot-gap": 6,
     "phone-390-uk-light-viewer-pair": {
       "shown": [
         "before"
@@ -16814,11 +16853,11 @@
           0,
           48,
           390,
-          550.8
+          584
         ],
         "footer": [
           0,
-          598.8,
+          632,
           390,
           206
         ]
@@ -16828,6 +16867,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-light-dictating-foot-gap": 6,
     "phone-390-uk-light-dictating-context": {
       "headerBottom": 48,
       "line": [
@@ -16884,11 +16924,11 @@
           0,
           48,
           390,
-          550.8
+          638
         ],
         "footer": [
           0,
-          598.8,
+          686,
           390,
           152
         ]
@@ -16898,6 +16938,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-light-combination-foot-gap": 6,
     "phone-390-uk-light-combination-context": {
       "headerBottom": 48,
       "line": [
@@ -16964,7 +17005,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "7 жовт., 16:14",
+      "time": "7 жовт., 16:57",
       "posts": [
         {
           "taskId": "t-search",
@@ -17004,11 +17045,11 @@
           0,
           48,
           390,
-          539.8
+          681
         ],
         "footer": [
           0,
-          587.8,
+          729,
           390,
           109
         ]
@@ -17018,6 +17059,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-light-decided-foot-gap": 6,
     "phone-390-uk-light-decided-accent": {
       "soft": "rgb(236, 235, 251)",
       "variants": [
@@ -17109,11 +17151,11 @@
           0,
           48,
           390,
-          568.8
+          642
         ],
         "footer": [
           0,
-          616.8,
+          690,
           390,
           148
         ]
@@ -17123,6 +17165,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-light-one-variant-foot-gap": 6,
     "phone-390-uk-light-one-variant": {
       "slide": "1:f0",
       "caption": "1Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп — завантажується",
@@ -17195,11 +17238,11 @@
           0,
           48,
           390,
-          622.8
+          642
         ],
         "footer": [
           0,
-          670.8,
+          690,
           390,
           148
         ]
@@ -17209,6 +17252,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-light-longest-name-and-caption-foot-gap": 6,
     "phone-390-uk-light-transcribing-guard-context": {
       "headerBottom": 48,
       "line": [
@@ -17243,11 +17287,11 @@
           0,
           48,
           390,
-          557.8
+          573
         ],
         "footer": [
           0,
-          605.8,
+          621,
           390,
           217
         ]
@@ -17257,25 +17301,26 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-light-no-orchestrator-foot-gap": 6,
     "phone-390-uk-light-no-orchestrator-delivery-row": {
       "state": "no-orchestrator",
       "lines": 2,
       "mark": [
         16,
-        743,
+        758.3,
         14,
         14
       ],
       "firstLine": [
         38,
-        743.8,
+        759,
         270.5,
         12
       ],
       "markOnFirstLine": true,
       "retry": [
         16,
-        778.8,
+        794,
         142.5,
         44
       ],
@@ -17304,11 +17349,11 @@
           0,
           48,
           390,
-          616
+          642
         ],
         "footer": [
           0,
-          664,
+          690,
           390,
           148
         ]
@@ -17318,6 +17363,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-light-newer-round-foot-gap": 6,
     "phone-390-uk-light-earlier-round-geometry": {
       "regions": {
         "header": [
@@ -17330,11 +17376,11 @@
           0,
           48,
           390,
-          484.8
+          699
         ],
         "footer": [
           0,
-          532.8,
+          747,
           390,
           91
         ]
@@ -17344,6 +17390,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-light-earlier-round-foot-gap": 6,
     "phone-390-uk-light-earlier-round-accent": {
       "soft": "rgb(236, 235, 251)",
       "variants": [
@@ -17398,6 +17445,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-light-dictating-round-pinned-foot-gap": 6,
     "phone-390-uk-light-dictation-round-pinned": {
       "duringRecording": {
         "disabled": true,
@@ -17426,11 +17474,11 @@
           0,
           48,
           390,
-          527.1
+          654.5
         ],
         "footer": [
           0,
-          575.1,
+          702.5,
           390,
           135.5
         ]
@@ -17440,6 +17488,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-light-files-gone-foot-gap": 6,
     "phone-390-uk-light-files-gone-accent": {
       "soft": "rgb(236, 235, 251)",
       "variants": [
@@ -17487,11 +17536,11 @@
           0,
           48,
           390,
-          459.3
+          651
         ],
         "footer": [
           0,
-          507.3,
+          699,
           390,
           139
         ]
@@ -17501,6 +17550,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-light-send-failed-foot-gap": 6,
     "phone-390-uk-light-send-failed-accent": {
       "soft": "rgb(236, 235, 251)",
       "variants": [
@@ -17527,20 +17577,20 @@
       "lines": 1,
       "mark": [
         16,
-        583,
+        774.8,
         14,
         14
       ],
       "firstLine": [
         38,
-        583.8,
+        775.5,
         299.9,
         12
       ],
       "markOnFirstLine": true,
       "retry": [
         16,
-        602.3,
+        794,
         150.1,
         44
       ],
@@ -17558,11 +17608,11 @@
           0,
           48,
           390,
-          459.3
+          651
         ],
         "footer": [
           0,
-          507.3,
+          699,
           390,
           139
         ]
@@ -17572,25 +17622,26 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-light-send-uncertain-foot-gap": 6,
     "phone-390-uk-light-send-uncertain-delivery-row": {
       "state": "uncertain",
       "lines": 1,
       "mark": [
         16,
-        583,
+        774.8,
         14,
         14
       ],
       "firstLine": [
         38,
-        583.8,
+        775.5,
         290.6,
         12
       ],
       "markOnFirstLine": true,
       "retry": [
         16,
-        602.3,
+        794,
         150.1,
         44
       ],
@@ -17655,7 +17706,7 @@
         },
         "reasons": [
           "запит дозволу",
-          "gpt-5.6·17 хв",
+          "gpt-5.6·16 хв",
           "Прототип"
         ],
         "overlaps": [],
@@ -17805,6 +17856,15 @@
         "reasons": [],
         "overlaps": [],
         "outside": []
+      },
+      {
+        "task": "t-voice",
+        "needs": false,
+        "line": false,
+        "button": null,
+        "reasons": [],
+        "overlaps": [],
+        "outside": []
       }
     ],
     "phone-390-uk-dark-card-tap": {
@@ -17862,7 +17922,7 @@
         "chevron": 300
       },
       {
-        "row": "/repo/links-impl.jsonl:waiting:1791377864",
+        "row": "/repo/links-impl.jsonl:waiting:1791380454",
         "title": 16,
         "chevron": 300
       },
@@ -17972,11 +18032,11 @@
           0,
           48,
           390,
-          556.3
+          642
         ],
         "footer": [
           0,
-          604.3,
+          690,
           390,
           148
         ]
@@ -17986,6 +18046,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-dark-four-variants-foot-gap": 6,
     "phone-390-uk-dark-pair-slider": {
       "slide": "2:f0",
       "caption": "2Дві колонки — сторінка результатів, до і після",
@@ -18074,11 +18135,11 @@
           0,
           48,
           390,
-          638
+          642
         ],
         "footer": [
           0,
-          686,
+          690,
           390,
           148
         ]
@@ -18088,6 +18149,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-dark-pair-slider-foot-gap": 6,
     "phone-390-uk-dark-forty": {
       "slide": "3:f39",
       "caption": "3Щільна таблиця — стан таблиці 40",
@@ -18132,11 +18194,11 @@
           0,
           48,
           390,
-          550.8
+          642
         ],
         "footer": [
           0,
-          598.8,
+          690,
           390,
           148
         ]
@@ -18146,6 +18208,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-dark-forty-pictures-foot-gap": 6,
     "phone-390-uk-dark-video": {
       "slide": "4:v0",
       "caption": "4Картки з переглядом — наведення і прохід клавіатурою",
@@ -18189,11 +18252,11 @@
           0,
           48,
           390,
-          526.4
+          642
         ],
         "footer": [
           0,
-          574.4,
+          690,
           390,
           148
         ]
@@ -18203,6 +18266,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-dark-video-foot-gap": 6,
     "phone-390-uk-dark-viewer": {
       "position": "1 / 3",
       "caption": "1 · Компактний список — результати, десктоп· Макет результатів пошуку"
@@ -18259,6 +18323,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-dark-tall-frame-foot-gap": 6,
     "phone-390-uk-dark-viewer-pair": {
       "shown": [
         "before"
@@ -18291,11 +18356,11 @@
           0,
           48,
           390,
-          550.8
+          584
         ],
         "footer": [
           0,
-          598.8,
+          632,
           390,
           206
         ]
@@ -18305,6 +18370,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-dark-dictating-foot-gap": 6,
     "phone-390-uk-dark-dictating-context": {
       "headerBottom": 48,
       "line": [
@@ -18361,11 +18427,11 @@
           0,
           48,
           390,
-          550.8
+          638
         ],
         "footer": [
           0,
-          598.8,
+          686,
           390,
           152
         ]
@@ -18375,6 +18441,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-dark-combination-foot-gap": 6,
     "phone-390-uk-dark-combination-context": {
       "headerBottom": 48,
       "line": [
@@ -18441,7 +18508,7 @@
       "comment": "Візьміть шапку з двох колонок і залиште щільні рядки таблиці.",
       "delivery": "sent",
       "deliveryText": "Збережено й надіслано оркестратору",
-      "time": "7 жовт., 16:14",
+      "time": "7 жовт., 16:58",
       "posts": [
         {
           "taskId": "t-search",
@@ -18481,11 +18548,11 @@
           0,
           48,
           390,
-          539.8
+          681
         ],
         "footer": [
           0,
-          587.8,
+          729,
           390,
           109
         ]
@@ -18495,6 +18562,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-dark-decided-foot-gap": 6,
     "phone-390-uk-dark-decided-accent": {
       "soft": "rgb(38, 35, 71)",
       "variants": [
@@ -18586,11 +18654,11 @@
           0,
           48,
           390,
-          568.8
+          642
         ],
         "footer": [
           0,
-          616.8,
+          690,
           390,
           148
         ]
@@ -18600,6 +18668,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-dark-one-variant-foot-gap": 6,
     "phone-390-uk-dark-one-variant": {
       "slide": "1:f0",
       "caption": "1Перебіг під прикріпленим файлом зі швидкістю та кнопкою стоп — завантажується",
@@ -18672,11 +18741,11 @@
           0,
           48,
           390,
-          622.8
+          642
         ],
         "footer": [
           0,
-          670.8,
+          690,
           390,
           148
         ]
@@ -18686,6 +18755,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-dark-longest-name-and-caption-foot-gap": 6,
     "phone-390-uk-dark-transcribing-guard-context": {
       "headerBottom": 48,
       "line": [
@@ -18720,11 +18790,11 @@
           0,
           48,
           390,
-          557.8
+          573
         ],
         "footer": [
           0,
-          605.8,
+          621,
           390,
           217
         ]
@@ -18734,25 +18804,26 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-dark-no-orchestrator-foot-gap": 6,
     "phone-390-uk-dark-no-orchestrator-delivery-row": {
       "state": "no-orchestrator",
       "lines": 2,
       "mark": [
         16,
-        743,
+        758.3,
         14,
         14
       ],
       "firstLine": [
         38,
-        743.8,
+        759,
         270.5,
         12
       ],
       "markOnFirstLine": true,
       "retry": [
         16,
-        778.8,
+        794,
         142.5,
         44
       ],
@@ -18781,11 +18852,11 @@
           0,
           48,
           390,
-          616
+          642
         ],
         "footer": [
           0,
-          664,
+          690,
           390,
           148
         ]
@@ -18795,6 +18866,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-dark-newer-round-foot-gap": 6,
     "phone-390-uk-dark-earlier-round-geometry": {
       "regions": {
         "header": [
@@ -18807,11 +18879,11 @@
           0,
           48,
           390,
-          484.8
+          699
         ],
         "footer": [
           0,
-          532.8,
+          747,
           390,
           91
         ]
@@ -18821,6 +18893,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-dark-earlier-round-foot-gap": 6,
     "phone-390-uk-dark-earlier-round-accent": {
       "soft": "rgb(38, 35, 71)",
       "variants": [
@@ -18875,6 +18948,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-dark-dictating-round-pinned-foot-gap": 6,
     "phone-390-uk-dark-dictation-round-pinned": {
       "duringRecording": {
         "disabled": true,
@@ -18903,11 +18977,11 @@
           0,
           48,
           390,
-          527.1
+          654.5
         ],
         "footer": [
           0,
-          575.1,
+          702.5,
           390,
           135.5
         ]
@@ -18917,6 +18991,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-dark-files-gone-foot-gap": 6,
     "phone-390-uk-dark-files-gone-accent": {
       "soft": "rgb(38, 35, 71)",
       "variants": [
@@ -18964,11 +19039,11 @@
           0,
           48,
           390,
-          459.3
+          651
         ],
         "footer": [
           0,
-          507.3,
+          699,
           390,
           139
         ]
@@ -18978,6 +19053,7 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-dark-send-failed-foot-gap": 6,
     "phone-390-uk-dark-send-failed-accent": {
       "soft": "rgb(38, 35, 71)",
       "variants": [
@@ -19004,20 +19080,20 @@
       "lines": 1,
       "mark": [
         16,
-        583,
+        774.8,
         14,
         14
       ],
       "firstLine": [
         38,
-        583.8,
+        775.5,
         299.9,
         12
       ],
       "markOnFirstLine": true,
       "retry": [
         16,
-        602.3,
+        794,
         150.1,
         44
       ],
@@ -19035,11 +19111,11 @@
           0,
           48,
           390,
-          459.3
+          651
         ],
         "footer": [
           0,
-          507.3,
+          699,
           390,
           139
         ]
@@ -19049,25 +19125,26 @@
       "outside": [],
       "sideways": 0
     },
+    "phone-390-uk-dark-send-uncertain-foot-gap": 6,
     "phone-390-uk-dark-send-uncertain-delivery-row": {
       "state": "uncertain",
       "lines": 1,
       "mark": [
         16,
-        583,
+        774.8,
         14,
         14
       ],
       "firstLine": [
         38,
-        583.8,
+        775.5,
         290.6,
         12
       ],
       "markOnFirstLine": true,
       "retry": [
         16,
-        602.3,
+        794,
         150.1,
         44
       ],

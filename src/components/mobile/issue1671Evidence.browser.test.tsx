@@ -8407,6 +8407,15 @@ describe("prototype review on the phone", () => {
         const record = (name: string, value: unknown) => { readings[`${label}-${name}`] = value; };
         const settle = () => pause(page, 250);
         const loaded = () => page.waitForFunction(() => [...document.querySelectorAll<HTMLImageElement>("[data-prototype-canvas] img")].every((image) => image.complete && image.naturalWidth > 0));
+        /* Where the footer stands: the top of «Save choice», and the band
+           between the footer and the screen's foot, which is the sheet's own
+           6 px inset and nothing more whatever frame the stage holds. */
+        const foot = () => page.evaluate(() => {
+          const save = document.querySelector<HTMLElement>("[data-prototype-save]")?.getBoundingClientRect() ?? null;
+          const footer = document.querySelector<HTMLElement>("[data-mobile2-sheet=prototype-review] > :last-child")!.getBoundingClientRect();
+          return { saveTop: save ? Math.round(save.top * 10) / 10 : null, footGap: Math.round((innerHeight - footer.bottom) * 10) / 10 };
+        });
+        const footings: Record<string, Awaited<ReturnType<typeof foot>>> = {};
         /* The stage against the screen: the drawn media, how much of the
            frame's own width it is drawn at, and the sheet's footer, which holds
            the choice and the comment, still on screen. */
@@ -8487,6 +8496,7 @@ describe("prototype review on the phone", () => {
 
           /* 1. A wide desktop frame: the stage's whole width. */
           const wide = await stage();
+          footings["wide-frame"] = await foot();
           record("wide-frame", wide);
           await shot("wide-frame");
           const full = (reading: Awaited<ReturnType<typeof stage>>) => reading.media.length > 0 && reading.media.every((entry) => Math.abs(entry.left) <= 0.5 && Math.abs(entry.width - viewport.width) <= 1);
@@ -8498,6 +8508,7 @@ describe("prototype review on the phone", () => {
           await loaded();
           await settle();
           const tall = await stage();
+          footings["tall-frame"] = await foot();
           record("tall-frame", tall);
           await shot("tall-frame");
           if (!full(tall) || (tall.media[0]?.drawnAt ?? 0) < 1 || tall.position?.trim() !== "3 / 3") failures.push(`${label}: the phone frame is not drawn at the screen's width, at its own scale: ${JSON.stringify(tall)}`);
@@ -8547,6 +8558,7 @@ describe("prototype review on the phone", () => {
           await loaded();
           await settle();
           const pairWide = await stage();
+          footings["pair-wide"] = await foot();
           record("pair-wide", pairWide);
           await shot("pair-wide");
           await page.locator(`${REVIEW} [data-prototype-step="next"]`).click();
@@ -8584,6 +8596,7 @@ describe("prototype review on the phone", () => {
           await page.waitForFunction(() => (document.querySelector<HTMLVideoElement>("[data-prototype-video]")?.readyState ?? 0) >= 2, undefined, { timeout: 15_000 });
           await settle();
           const clip = await stage();
+          footings.video = await foot();
           const controls = await page.evaluate(() => document.querySelector<HTMLVideoElement>("[data-prototype-video]")!.controls);
           record("video", { ...clip, controls });
           await shot("video");
@@ -8596,7 +8609,12 @@ describe("prototype review on the phone", () => {
             const chip = document.querySelector<HTMLElement>("[data-prototype-chosen]")?.getBoundingClientRect();
             return { chip: document.querySelector("[data-prototype-chosen]")?.textContent ?? null, onScreen: Boolean(chip && chip.top >= 0 && chip.bottom <= innerHeight) };
           });
+          footings.chosen = await foot();
           record("chosen", chosen);
+          /* The footer stands at the screen's foot on every frame: «Save choice» where the thumb left it, no empty band under it. */
+          record("footer", footings);
+          const tops = Object.values(footings).map((entry) => entry.saveTop ?? Number.NaN);
+          if (tops.some(Number.isNaN) || Math.max(...tops) - Math.min(...tops) > 1 || Object.values(footings).some((entry) => entry.footGap > 6.5)) failures.push(`${label}: the footer moves with the frame: ${JSON.stringify(footings)}`);
           await shot("chosen");
           if (!chosen.onScreen || !chosen.chip?.startsWith("4")) failures.push(`${label}: the choice is not seen in the footer: ${JSON.stringify(chosen)}`);
           if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
