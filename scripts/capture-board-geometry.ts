@@ -2611,7 +2611,9 @@ function readMenu() {
   const shown = (node: Element) => { const box = node.getBoundingClientRect(); return box.width > 0 && box.height > 0; };
   const rows = [...element.querySelectorAll("button")].filter(shown).map((button) => ({ label: (button.getAttribute("aria-label") || button.textContent || "").replace(/\s+/g, " ").trim(), h: button.getBoundingClientRect().height, disabled: (button as HTMLButtonElement).disabled }));
   const groups = [...element.querySelectorAll(":scope > [data-bar-menu-group]")].filter(shown).map((group) => ({ name: group.getAttribute("data-bar-menu-group"), ruled: parseFloat(getComputedStyle(group).borderTopWidth) > 0 }));
-  return { rect: { x: r.x, y: r.y, w: r.width, h: r.height }, rows, groups, text: element.textContent ?? "" };
+  /* What is not used daily sits behind named sections; one whose rows all stood down draws nothing. */
+  const sections = [...element.querySelectorAll("[data-bar-menu-section]")].filter(shown).map((section) => section.getAttribute("data-bar-menu-section"));
+  return { rect: { x: r.x, y: r.y, w: r.width, h: r.height }, rows, groups, sections, text: element.textContent ?? "" };
 }
 
 type MenuReading = ReturnType<typeof readMenu>;
@@ -2762,6 +2764,8 @@ async function headerMain(): Promise<void> {
         await page.click("[data-bar-more]");
         await page.waitForSelector("[data-bar-more-menu]");
         menu = await page.evaluate(readMenu);
+        /* Narrow, the accounts are a section of ⋯ that opens in place. */
+        await page.click('[data-bar-more-menu] [data-bar-menu-head="accounts"]');
         await page.click('[data-bar-more-menu] [data-account-switch-engine="claude"] > button');
       }
       await page.waitForTimeout(800);
@@ -2798,7 +2802,7 @@ async function headerMain(): Promise<void> {
       };
       checkMenu(tag, menu);
       must(menu.rows.length >= (wide ? 3 : 5), `${tag}: the ⋯ menu holds ${menu.rows.length} rows`);
-      must(wide ? !menu.groups.some((group) => group.name === "accounts") : menu.groups.some((group) => group.name === "accounts"), `${tag}: the accounts rows are ${wide ? "repeated in" : "missing from"} ⋯`);
+      must(wide ? !menu.sections.includes("accounts") : menu.sections.includes("accounts"), `${tag}: the accounts rows are ${wide ? "repeated in" : "missing from"} ⋯`);
       await page.keyboard.press("Escape");
       await page.mouse.click(width / 2, 600);
 
@@ -2878,8 +2882,8 @@ async function headerMain(): Promise<void> {
       const quietMenu = await quietPage.evaluate(readMenu);
       await quietPage.screenshot({ path: path.join(OUT_DIR, `header-${tag}-quiet-more.png`), clip: { x: Math.max(0, quietMenu.rect.x - 40), y: 0, width: Math.min(width - Math.max(0, quietMenu.rect.x - 40), quietMenu.rect.w + 80), height: quietMenu.rect.y + quietMenu.rect.h + 16 } });
       checkMenu(`${tag} quiet`, quietMenu);
-      /* Sound (two rows), Archive, Delete; this leaf's message search sits in the bar's find slot. */
-      must(quietMenu.groups.some((group) => group.name === "project") && quietMenu.rows.length >= 4, `${tag} quiet: ⋯ holds ${quietMenu.rows.length} rows without Archive and Delete`);
+      /* Sound (two rows) and the rows of the sections; Archive and Delete sit behind theirs. This leaf's message search sits in the bar's find slot. */
+      must(quietMenu.sections.includes("project") && quietMenu.rows.length >= 4, `${tag} quiet: ⋯ holds ${quietMenu.rows.length} rows without Archive and Delete`);
       report[`${tag}:quiet`] = { menu: quietMenu };
       await quiet.close();
     }
@@ -3063,6 +3067,7 @@ async function accountRemovalMain(): Promise<void> {
     const openPanel = async (page: Page) => {
       await page.click("[data-bar-more]");
       await page.waitForSelector("[data-bar-more-menu]");
+      await page.click('[data-bar-more-menu] [data-bar-menu-head="accounts"]');
       await page.click('[data-bar-more-menu] [data-account-switch-engine="claude"] > button');
       await page.waitForSelector('[role="dialog"] [data-account-row]');
       await page.waitForTimeout(400);

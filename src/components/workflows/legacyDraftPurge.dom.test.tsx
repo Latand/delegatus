@@ -161,6 +161,9 @@ const readerAction = async (path: string, label: string): Promise<boolean> => {
   if (!(await waitFor(() => dom.document.querySelector("[data-reader-menu]") !== null))) return false;
   (dom.document.querySelector("[data-reader-menu]") as unknown as HTMLElement).dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event);
   const item = () => [...dom.document.querySelectorAll('[role="menuitem"]')].find((node) => node.textContent?.includes(label)) as unknown as HTMLElement | undefined;
+  /* What is not an icon cell of the reader's menu is behind its More row. */
+  if (!(await waitFor(() => dom.document.querySelector(".menu") !== null))) return false;
+  if (!item()) (dom.document.querySelector('.menu [data-cm-section="more"]') as unknown as HTMLElement | null)?.dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event);
   if (!(await waitFor(() => item() !== undefined))) return false;
   item()!.dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event);
   return true;
