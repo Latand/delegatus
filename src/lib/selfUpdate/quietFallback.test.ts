@@ -156,12 +156,12 @@ for (const status of ["dead", "unhosted", "idle"] as const) {
   test(`snapshot cap keeps live ${status} owner after unresolved history expires`, async () => {
     journalRow();
     await fallback(status);
-    // These newer rows have no registry binding or readable transcript.
+    // These newer rows claim a turn and have no registry binding or readable transcript.
     for (let n = 0; n < 129; n++) {
       f.journal.append({ scope: { type: "session", id: `conversation_${randomUUID()}` }, kind: "session-status",
         producer: { kind: "fixture", eventKey: `unknown-${n}` }, payload: {
           sessionKey: { engine: "codex", sessionId: `unknown-${n}` }, hostKind: "unhosted", host: "unhosted",
-          turn: "unknown", activeTurnId: null, provenance: "derived" } });
+          turn: "running", activeTurnId: null, provenance: "derived" } });
     }
     snapshotSelection(true);
     const p = ports(f.journal), now = Date.now();
@@ -360,13 +360,18 @@ for (const host of ["hosted", "unhosted", "dead", "conflict"] satisfies RuntimeH
   }
 }
 
-test.each(["running", "unknown", "idle"] as const)("missing conversation with %s labels expires exactly at five minutes and stays diagnosed", async (turn) => {
+test.each(["running", "unknown", "idle"] as const)("missing conversation with %s labels expires exactly at five minutes and stays diagnosed while it claims a turn", async (turn) => {
   settleTranscript();
   const orphan = `conversation_${randomUUID()}`;
   f.journal.append({ scope: { type: "session", id: orphan }, kind: "session-status",
     producer: { kind: "fixture", eventKey: "orphan" }, payload: { sessionKey: { engine: "codex", sessionId: "orphan" },
       hostKind: "codex-app-server", host: "unhosted", turn, activeTurnId: null, provenance: "structured" } });
   const p = ports(f.journal), now = Date.now();
+  // R9: a row the registry knows nothing about is an unresolved claim only while it claims a turn.
+  if (turn !== "running") {
+    expect(await probeQuiet(snapshot, p, now, true)).toMatchObject({ quiet: true, blockers: { turns: 0, unresolved: 0, unresolvedBlocking: 0 } });
+    return;
+  }
   expect(await probeQuiet(snapshot, p, now, true)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolved: 1 } });
   expect(await probeQuiet(snapshot, p, now + 299_999, true)).toMatchObject({ quiet: false, blockers: { turns: 1 } });
   expect(await probeQuiet(snapshot, p, now + 300_000, true)).toMatchObject({ quiet: true, blockers: { turns: 0, unresolved: 1, unresolvedBlocking: 0 } });

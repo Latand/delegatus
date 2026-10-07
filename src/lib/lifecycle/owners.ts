@@ -261,11 +261,20 @@ export function registryOwners(
         pid: launched[0]!.pid, identities: launched });
     }
   }
+  /* A headless launch records its process on the flow round only, so the
+     hosted row it leaves with no process, at the round's own transcript or
+     under the round's own session id, is that round's process (R1). A row of
+     another generation of the same conversation is a launch of its own. */
+  const described = new Set<string>();
   for (const flow of flows) {
     if (flow.reviewerMode !== "headless") continue;
     for (const round of flow.rounds) {
       const pid = round.reviewerPid;
       if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) continue;
+      for (const record of ownerless) {
+        if (record.kind === "hosted-row" && ((!!round.reviewerPath && record.artifactPath === round.reviewerPath)
+          || (!!round.sessionId && record.sessionKey?.sessionId === round.sessionId))) described.add(record.id);
+      }
       const binding = round.reviewerConversationId ? canonical(registry, round.reviewerConversationId)
         : round.reviewerPath ? map.byPath.get(round.reviewerPath) ?? null : null;
       // An entry that records this process for the same transcript or
@@ -279,13 +288,7 @@ export function registryOwners(
         structuredHost: false, launchId: null, binding, engine: null, cwd: null });
     }
   }
-  /* A headless launch records its process on the flow round only, so the
-     hosted row it leaves with no process is that round's process (R1). */
-  const reviewers = owners.filter((owner) => owner.role === "reviewer");
-  const described = (record: OwnerlessRecord) => record.kind === "hosted-row" && reviewers.some((reviewer) =>
-    (reviewer.artifactPath !== null && reviewer.artifactPath === record.artifactPath)
-    || (reviewer.binding !== null && reviewer.binding === record.binding));
-  return { owners, ownerless: ownerless.filter((record) => !described(record)) };
+  return { owners, ownerless: ownerless.filter((record) => !described.has(record.id)) };
 }
 
 /** What a stage, a flow or a journal row names. */

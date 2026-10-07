@@ -171,34 +171,60 @@ export function ownerCensusReader(
     for (const conversation of Object.values(registry.conversations)) {
       for (const generation of conversation.generations) engines.set(generation.path, conversation.engine);
     }
+    /* A missing file or a torn tail reads as null, which R8 bounds. A read
+       that throws is no verdict: it reaches the probe as `unreadable`, and
+       the next probe reads again (R7). */
     const tail = (path: string | null, engine?: string | null): Promise<TailReading | null> => {
       if (!path) return Promise.resolve(null);
       if (!tails.has(path)) tails.set(path, (async () => {
-        try {
-          const kind = engine ?? engines.get(path) ?? (await liveness.describeTranscript(path))?.engine ?? null;
-          if (!kind) return null;
-          const evidence = await liveness.transcriptEvidence(kind as "claude" | "codex", path);
-          return evidence ? { turn: evidence.turn === "busy" ? "busy" : evidence.turn === "idle" ? "idle" : "unknown", lastRecordAt: evidence.lastRecordTs } : null;
-        } catch { return null; }
+        const kind = engine ?? engines.get(path) ?? (await liveness.describeTranscript(path))?.engine ?? null;
+        if (!kind) return null;
+        const evidence = await liveness.transcriptEvidence(kind as "claude" | "codex", path);
+        return evidence ? { turn: evidence.turn === "busy" ? "busy" : evidence.turn === "idle" ? "idle" : "unknown", lastRecordAt: evidence.lastRecordTs } : null;
       })());
       return tails.get(path)!;
     };
-    /* The journal rows of a conversation, from the snapshot, with one keyed
-       read when the snapshot omits it. */
-    const byConversation = new Map<string, RuntimeSession[]>();
+    /* The journal rows that can speak for an entry key: the rows whose status
+       mark names it, and the rows filed under it, which carry an
+       unattributed claim when they have no mark (R5). A row is found by the
+       key, never by the conversation it is filed under, so a display binding
+       or a copy of the registry cannot hide an owner's own statement. When
+       the snapshot holds none and omits the owner's conversation or its
+       artifact, a keyed read fetches the row the snapshot omits. */
+    const byKey = new Map<string, RuntimeSession[]>();
+    const file = (key: string, row: RuntimeSession) => {
+      const rows = byKey.get(key) ?? [];
+      if (!rows.includes(row)) byKey.set(key, [...rows, row]);
+    };
+    const listedIds = new Set<string>();
+    const listedPaths = new Set<string>();
     for (const row of sessions) {
-      const id = index.conversation({ conversationId: row.conversationId, artifactPath: row.artifactPath }) ?? row.conversationId;
-      byConversation.set(id, [...byConversation.get(id) ?? [], row]);
+      if (row.writerStatus?.sessionKey) file(rowKeyId(row.writerStatus.sessionKey), row);
+      if (row.sessionKey) file(rowKeyId(row.sessionKey), row);
+      listedIds.add(row.conversationId);
+      listedIds.add(index.conversation({ conversationId: row.conversationId }) ?? row.conversationId);
+      if (row.artifactPath) listedPaths.add(row.artifactPath);
     }
     const keyed = new Map<string, Promise<RuntimeSession[]>>();
+    const speaksFor = (key: string) => (row: RuntimeSession) =>
+      (!!row.writerStatus?.sessionKey && rowKeyId(row.writerStatus.sessionKey) === key) || (!!row.sessionKey && rowKeyId(row.sessionKey) === key);
     const rowsFor = (owner: RecordedOwner): Promise<RuntimeSession[]> => {
-      const id = owner.binding ?? owner.artifactPath ?? owner.id;
-      const listed = byConversation.get(id);
+      const key = owner.entryKey!;
+      const listed = byKey.get(key);
       if (listed) return Promise.resolve(listed);
-      if (!keyed.has(id)) keyed.set(id, readSession(owner.binding
-        ? { conversationId: owner.binding, ...(owner.artifactPath ? { artifactPath: owner.artifactPath } : {}) }
-        : { artifactPath: owner.artifactPath ?? undefined }).then((row) => row ? [row] : []));
-      return keyed.get(id)!;
+      if (!keyed.has(key)) keyed.set(key, (async () => {
+        const rows: RuntimeSession[] = [];
+        if (owner.binding && !listedIds.has(owner.binding)) {
+          const row = await readSession({ conversationId: owner.binding });
+          if (row) rows.push(row);
+        }
+        if (owner.artifactPath && !listedPaths.has(owner.artifactPath) && !rows.some(speaksFor(key))) {
+          const row = await readSession({ artifactPath: owner.artifactPath });
+          if (row && !rows.some((other) => other.conversationId === row.conversationId)) rows.push(row);
+        }
+        return rows.filter(speaksFor(key));
+      })());
+      return keyed.get(key)!;
     };
     const owners: OwnerReading[] = [];
     const place = (owner: RecordedOwner | OwnerlessRecord) => ({ id: owner.id, binding: owner.binding, artifactPath: owner.artifactPath,

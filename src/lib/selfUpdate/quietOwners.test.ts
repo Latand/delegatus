@@ -15,6 +15,7 @@ import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { sessionKeyId } from "@/lib/agent/sessionKey";
 import { productionLivenessSources } from "@/lib/lifecycle/liveness";
 import { captureProcessIdentity } from "@/lib/processIdentity";
+import type { Flow } from "@/lib/flows/types";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
 import type { RuntimeEventInput, RuntimeSession } from "@/lib/runtime/contracts";
 import { projectEngineHostEvent } from "@/lib/runtime/engineHostEvents";
@@ -846,5 +847,119 @@ describe("the reader's reading of a row (R5, source 3)", () => {
     expect(ownerVerdict({ ...live, handle: "idle", journal: "unattributed", tail: idleTail })).toEqual({ verdict: "released", reason: "turn-settled" });
     expect(ownerVerdict({ ...live, tail: { turn: "unknown", lastRecordAt: 0 } })).toEqual({ verdict: "unknown", reason: "turn-unread" });
     expect(ownerVerdict({ ...live, handle: "idle", tail: null })).toEqual({ verdict: "unknown", reason: "turn-unread" });
+  });
+});
+
+/* Each owner is judged and bounded on its own records: its unknown runs its
+   own five minutes, a round describes only the launch it names, its journal
+   statement is found by its mark's key and writer, and a read that fails is
+   no verdict. */
+describe("each owner on its own records", () => {
+  test("an owner's unknown runs its own bound: an earlier owner of the same conversation neither starts nor ends it (R8, R12)", async () => {
+    const path = transcript("settled");
+    const c = conversation(path);
+    const a = spawn();
+    const claimA = claimHost(c.key, path, a.identity, "idle");
+    rmSync(path);
+    const p = ports(), now = Date.now();
+    expect(await probe(p, now)).toMatchObject({ quiet: false, blockers: { turns: 1, turnList: [{ conversationId: c.id, reason: "turn-unread" }] } });
+    const b = spawn();
+    claimHost({ engine: "codex", sessionId: randomUUID() }, path, b.identity, "idle");
+    expect(await probe(p, now + FIVE_MINUTES)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolvedBlocking: 1,
+      turnList: [{ conversationId: c.id, reason: "turn-unread", unresolved: true }] } });
+    release(c.key, claimA);
+    await exit(a);
+    expect(await probe(p, now + 2 * FIVE_MINUTES - 1)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolvedBlocking: 1 } });
+    expect(await probe(p, now + 2 * FIVE_MINUTES)).toMatchObject({ quiet: true, blockers: { turns: 0, unresolvedBlocking: 0 } });
+  });
+
+  test("a finished headless round at an earlier artifact leaves a fresh successor's ownerless row its own launch hold (R1, R2, R8)", async () => {
+    const now = Date.now();
+    const pathA = transcript("settled");
+    const c = conversation(pathA);
+    const keyB = { engine: "codex" as const, sessionId: randomUUID() };
+    const pathB = transcript("unmarked", new Date(now).toISOString(), keyB.sessionId);
+    const begun = beginLegacySpawnFixture(f.registry, { engine: "codex", cwd: f.dir, transport: "structured", accountId: "fixture",
+      purpose: "resume-successor", conversationId: c.id as `conversation_${string}` });
+    if (begun.kind !== "created") throw new Error("successor receipt was not created");
+    expect(f.registry.settleSpawn(begun.receipt.launchId, { key: keyB, artifactPath: pathB, cwd: f.dir, accountId: "fixture",
+      status: "starting", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null, structuredHost: null }).kind).toBe("settled");
+    const reviewer = spawn();
+    await exit(reviewer);
+    const round = (path: string) => ({ n: 1, reviewerPid: reviewer.child.pid, reviewerIdentity: reviewer.identity.startIdentity,
+      reviewerPath: path, reviewerConversationId: c.id, verdict: "APPROVE" });
+    const withRound = (path: string | null) => ports({ owners: ownerCensusReader(() => ({ ...productionLivenessSources(),
+      flows: () => path ? [{ id: "flow_prior", reviewerMode: "headless", state: "completed", rounds: [round(path)] }] as unknown as Flow[] : [] }),
+    { readSession: (query) => f.client.readSession!(query) }) });
+    const held = { quiet: false, blockers: { turns: 1, turnList: [{ conversationId: c.id, reason: "launch-unproven", unresolved: true }] } };
+    expect(await probe(withRound(null), now)).toMatchObject(held);
+    const p = withRound(pathA);
+    expect(await probe(p, now)).toMatchObject(held);
+    expect(await probe(p, now + FIVE_MINUTES - 1)).toMatchObject(held);
+    // The same round at the successor's own artifact describes that launch, and its gone process releases it.
+    expect(await probe(withRound(pathB), now)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
+  });
+
+  test("an owner's own running mark under another conversation's row holds, past an idle copy of its entry (R3, R5)", async () => {
+    const pathA = transcript("settled");
+    const a = conversation(pathA);
+    const pathB = transcript("settled");
+    const b = conversation(pathB);
+    const host = spawn();
+    const claim = claimHost(a.key, pathA, host.identity, "idle");
+    await fallback();
+    expect(row(a.id)).toMatchObject({ writerClaim: null, turn: "idle" });
+    const entry = f.registry.readOnlySnapshot().entries[sessionKeyId(a.key)]!;
+    f.registry.upsert({ ...entry, artifactPath: pathB });
+    expect(f.registry.readOnlySnapshot().entries[sessionKeyId(a.key)]).toMatchObject({ artifactPath: pathB, structuredHost: { activeTurnRef: null } });
+    const active = heldHost(host.child.pid, { status: "active", activeTurnRef: "own-turn" });
+    await bindStructuredDeliveryQueue([{ key: a.key, host: active.host }], { registry: f.registry, client: f.client, hostlessSettleIntervalMs: 0 });
+    expect(row(b.id).writerStatus).toMatchObject({ sessionKey: a.key, writerClaim: claim.fence, turn: "running" });
+    const p = ports({ owners: ownerCensusReader(productionLivenessSources, { readSession: (query) => f.client.readSession!(query), heldHosts: () => new Map() }) });
+    expect(await probe(p)).toMatchObject({ quiet: false, blockers: { turns: 1, turnList: [{ reason: "turn-claimed" }] } });
+    expect(await probe(p, Date.now() + TWELVE_HOURS)).toMatchObject({ quiet: false, blockers: { turns: 1, turnList: [{ reason: "turn-claimed" }] } });
+    release(a.key, claim);
+    await exit(host);
+    expect(await probe(p)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
+  });
+
+  test("a journal row the registry knows nothing about holds only while it claims a turn (R9)", async () => {
+    const append = (host: string, turn: "idle" | "running", activeTurnId: string | null) => {
+      const id = `conversation_${randomUUID()}`;
+      f.journal.append({ scope: { type: "session", id }, kind: "session-status", producer: { kind: "codex-app-server", eventKey: randomUUID() },
+        payload: { conversationId: id, sessionKey: { engine: "codex", sessionId: randomUUID() }, hostKind: "codex-app-server", host, turn,
+          provenance: "structured", accountId: "fixture", writerClaim: null, parentConversationId: null, cwd: f.dir, artifactPath: null,
+          capabilities: { steer: true, structuredAttention: true }, activeTurnId } });
+      return id;
+    };
+    append("dead", "idle", null);
+    append("hosted", "idle", null);
+    expect(await probe()).toMatchObject({ quiet: true, blockers: { turns: 0, unresolved: 0, unresolvedBlocking: 0 } });
+    const claiming = append("hosted", "running", "unknown-turn");
+    const p = ports(), now = Date.now();
+    expect(await probe(p, now)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolved: 1, unresolvedBlocking: 1,
+      turnList: [{ conversationId: claiming, reason: "unresolved", unresolved: true }] } });
+    expect(await probe(p, now + FIVE_MINUTES)).toMatchObject({ quiet: true, blockers: { turns: 0, unresolved: 1, unresolvedBlocking: 0 } });
+  });
+
+  test("a transcript read that throws holds through unreadable on every probe until a read succeeds (R7)", async () => {
+    const path = transcript("settled");
+    const c = conversation(path);
+    const host = spawn();
+    claimHost(c.key, path, host.identity, "idle");
+    let failing = true;
+    const p = ports({ owners: ownerCensusReader(() => {
+      const sources = productionLivenessSources();
+      return { ...sources, transcriptEvidence: (async (...args: Parameters<typeof sources.transcriptEvidence>) => {
+        if (failing) throw new Error("independent transcript read failure");
+        return sources.transcriptEvidence(...args);
+      }) as typeof sources.transcriptEvidence };
+    }, { readSession: (query) => f.client.readSession!(query) }) });
+    const now = Date.now();
+    for (const at of [now, now + FIVE_MINUTES, now + TWELVE_HOURS]) {
+      expect(await probe(p, at)).toMatchObject({ quiet: false, blockers: { unreadable: "independent transcript read failure" } });
+    }
+    failing = false;
+    expect(await probe(p, now + TWELVE_HOURS)).toMatchObject({ quiet: true, blockers: { turns: 0, unreadable: null } });
   });
 });

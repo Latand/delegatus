@@ -284,33 +284,40 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
     const observed = new Set<string>();
     const memory = firstUnresolved.get(ports) ?? new Map<string, number>();
     firstUnresolved.set(ports, memory);
-    /* One bound for an id, whether a journal row, an owner or a stage names
-       it. It runs from the newest record of the transcript the item names
-       when one can be read, else from the first probe that saw the item (R8). */
-    const pastBound = (id: string, kind: "unresolved" | "settled" = "unresolved", recordedAt: number | null = null): boolean => {
-      const key = `${kind}:${id}`;
+    /* One bound per clock: a recorded owner and an ownerless record each have
+       their own, keyed by the record itself, and a reference a journal row
+       or a stage names has one by its id. It runs from the newest record of
+       the transcript the item names when one can be read, else from the first
+       probe that saw the item (R8). `shownAs` is the id the item is counted
+       under, which several owners can share (R11). */
+    const pastBound = (clock: string, kind: "unresolved" | "settled" = "unresolved", recordedAt: number | null = null, shownAs = clock): boolean => {
+      const key = `${kind}:${clock}`;
       observed.add(key);
-      (kind === "unresolved" ? unresolved : settled).add(id);
+      (kind === "unresolved" ? unresolved : settled).add(shownAs);
       const first = memory.get(key) ?? now;
       memory.set(key, first);
       if (now - (recordedAt ?? first) >= UNRESOLVED_TURN_GRACE_MS) return true;
-      if (kind === "unresolved") held.add(id);
+      if (kind === "unresolved") held.add(shownAs);
       return false;
     };
+    const ownerPastBound = (item: OwnerReading | OwnerlessReading): boolean =>
+      pastBound(`${isOwner(item) ? "owner" : "ownerless"}:${item.id}`, "unresolved", item.tail?.lastRecordAt ?? null, displayId(item));
     /* R8 clock 1: a hosted row with no process past its launch grace proves
        nothing owns it. */
     const expired = (record: OwnerlessReading): boolean => record.kind === "hosted-row"
       && record.updatedAt !== null && now - record.updatedAt >= UNRESOLVED_TURN_GRACE_MS;
     /* What a stage reference says, from the set of owners bound to it (R10). */
-    const judgeStageOwner = async (owner: StageOwner): Promise<{ verdict: "blocks" | "released" | "settled" | "unresolved"; since: number | null }> => {
+    const judgeStageOwner = async (owner: StageOwner): Promise<{ verdict: "blocks" | "released" | "pending" | "settled" | "unresolved"; since: number | null }> => {
       const reference = { conversationId: owner.conversationId, artifactPath: owner.artifactPath ?? journalPaths.get(owner.conversationId) ?? null };
       const bound = census.bound(reference);
       if (bound.some((item) => isOwner(item) && item.process === "alive")) return { verdict: "blocks", since: null };
       // A launch marker has no process of its own: proof that the reviewer
       // the round records is gone releases its stage.
       if (bound.some((item) => isOwner(item) && item.role === "reviewer")) return { verdict: "released", since: null };
+      // Each ownerless record keeps its own bound, so one seen earlier cannot
+      // age a record that has just appeared under the same reference.
       const pending = bound.filter((item): item is OwnerlessReading => !isOwner(item) && !expired(item));
-      if (pending.length) return { verdict: "unresolved", since: pending[0]!.tail?.lastRecordAt ?? null };
+      if (pending.length) return { verdict: pending.map(ownerPastBound).every(Boolean) ? "released" : "pending", since: null };
       const transcript = await census.tail(reference);
       if (!bound.length && !census.names(reference)) return { verdict: "unresolved", since: transcript?.lastRecordAt ?? null };
       return { verdict: transcript?.turn === "idle" ? "settled" : "released", since: null };
@@ -348,7 +355,7 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
         let released = !relayInFlight && !dispatching && (awaitingAdmission || owners.length > 0 || currentRoundGone);
         for (const owner of owners) {
           const { verdict, since } = await judgeStageOwner(owner);
-          if (verdict === "blocks" || (verdict !== "released" && !((awaitingAdmission || owner.historical) && verdict === "settled")
+          if (verdict === "blocks" || verdict === "pending" || (verdict !== "released" && !((awaitingAdmission || owner.historical) && verdict === "settled")
             && !pastBound(owner.conversationId, verdict, verdict === "unresolved" ? since : null))) released = false;
         }
         if (released) continue;
@@ -364,7 +371,7 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
         // Parked/finished flows have no verdict collection to wait for. Unknown
         // ownership keeps the same diagnostic bound as an active stage.
         const collecting = flow.state === "reviewing" && !owner.historical;
-        if (verdict === "blocks" || (verdict === "unresolved" && !pastBound(owner.conversationId, "unresolved", since))
+        if (verdict === "blocks" || verdict === "pending" || (verdict === "unresolved" && !pastBound(owner.conversationId, "unresolved", since))
           || (verdict === "settled" && collecting && !pastBound(owner.conversationId, "settled"))) blocks = true;
       }
       if (!blocks) continue;
@@ -386,11 +393,11 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
     for (const owner of census.owners) {
       const { verdict, reason } = ownerVerdict(owner);
       if (verdict === "released") continue;
-      if (verdict === "unknown" && pastBound(displayId(owner), "unresolved", owner.tail?.lastRecordAt ?? null)) continue;
+      if (verdict === "unknown" && ownerPastBound(owner)) continue;
       holding.set(owner.id, { item: owner, reason, unresolved: verdict === "unknown" });
     }
     for (const record of census.ownerless) {
-      if (expired(record) || pastBound(displayId(record), "unresolved", record.tail?.lastRecordAt ?? null)) continue;
+      if (expired(record) || ownerPastBound(record)) continue;
       holding.set(record.id, { item: record, reason: "launch-unproven", unresolved: true });
     }
     const seats = ports.seats?.() ?? [];
@@ -422,6 +429,7 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
       }
       if (holders.length) continue;
       if (!bound.length && !census.names(reference)) {
+        if (!sessionClaimsOpenTurn(session)) continue;
         const transcript = session.artifactPath ? await census.tail({ artifactPath: session.artifactPath }) : null;
         if (!pastBound(session.conversationId, "unresolved", transcript?.lastRecordAt ?? null)) {
           group(session.conversationId, session.sessionKey?.engine, session.cwd, "unresolved", true);
