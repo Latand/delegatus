@@ -30,6 +30,6 @@ export function acceptsGzip(request: Request): boolean {
 
 /** Compress on the zlib thread pool, so a large body never blocks the
     request thread while it compresses. */
-export async function gzipBody(body: string): Promise<Uint8Array> {
+export async function gzipBody(body: string | Uint8Array): Promise<Uint8Array> {
   return new Uint8Array(await gzipAsync(body, { level: 6 }));
 }

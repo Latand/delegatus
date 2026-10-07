@@ -20,7 +20,7 @@ const CLIENT_MODULE = path.join(import.meta.dir, "client.ts");
 /* The methods of `RuntimeHostClient` that take a caller-local deadline. `waitEvents`
    is absent on purpose: its number is the long-poll hold the host is asked for,
    and the client derives the deadline from it. */
-const DEADLINE_METHODS = new Set(["snapshot", "snapshotJson", "readSession"]);
+const DEADLINE_METHODS = new Set(["snapshot", "snapshotBytes", "readSession"]);
 
 function isNumber(node: ts.Expression): boolean {
   if (ts.isNumericLiteral(node)) return true;

@@ -80,7 +80,7 @@ test("the gzip body inflates to the same bytes", async () => {
   expect(gunzipSync(Buffer.from(await response.arrayBuffer())).toString("utf8")).toBe(reencoded(journal.snapshotJson()));
 });
 
-test("the request thread neither parses nor re-encodes the snapshot frame", async () => {
+test("the request thread never decodes, parses or re-encodes the snapshot frame", async () => {
   const hostJson = journal.snapshotJson();
   const parse = spyOn(JSON, "parse");
   const stringify = spyOn(JSON, "stringify");
@@ -125,13 +125,13 @@ test("a write is in the next answer, and nothing a reader does to one answer rea
 });
 
 test("a client without the encoded read still answers the same body", async () => {
-  const prototype = UnixRuntimeHostClient.prototype as { snapshotJson?: unknown };
-  const original = prototype.snapshotJson;
-  prototype.snapshotJson = undefined;
+  const prototype = UnixRuntimeHostClient.prototype as { snapshotBytes?: unknown };
+  const original = prototype.snapshotBytes;
+  prototype.snapshotBytes = undefined;
   try {
     expect(await (await GET(request())).text()).toBe(reencoded(journal.snapshotJson()));
   } finally {
-    prototype.snapshotJson = original;
+    prototype.snapshotBytes = original;
   }
 });
 
@@ -148,13 +148,17 @@ test("a refusal by the host is still a 503 with its message", async () => {
 
 test("members append to an object exactly as a re-encoding would write them", () => {
   const members = { structuredHostsEnabled: true, structuredStartup: { state: "ready", note: undefined } };
-  for (const objectJson of ['{"a":1,"b":[{"c":"}"}]}', "{}", JSON.stringify({ text: 'é " }\n' })]) {
-    expect(withJsonMembers(objectJson, members)).toBe(JSON.stringify({ ...JSON.parse(objectJson), ...members }));
+  const appended = (objectJson: string, extra: Record<string, unknown>) => {
+    const bytes = withJsonMembers(Buffer.from(objectJson), extra);
+    return bytes === null ? null : Buffer.from(bytes).toString("utf8");
+  };
+  for (const objectJson of ['{"a":1,"b":[{"c":"}"}]}', "{}", JSON.stringify({ text: 'é " }\n — 文' })]) {
+    expect(appended(objectJson, members)).toBe(JSON.stringify({ ...JSON.parse(objectJson), ...members }));
   }
-  expect(withJsonMembers('{"a":1}', {})).toBe('{"a":1}');
-  expect(withJsonMembers('{"a":1}', { dropped: undefined })).toBe('{"a":1}');
+  expect(appended('{"a":1}', {})).toBe('{"a":1}');
+  expect(appended('{"a":1}', { dropped: undefined })).toBe('{"a":1}');
   // Anything that is not one object goes back to the parsing path.
-  expect(withJsonMembers("[1]", members)).toBeNull();
-  expect(withJsonMembers("null", members)).toBeNull();
-  expect(withJsonMembers("", members)).toBeNull();
+  expect(appended("[1]", members)).toBeNull();
+  expect(appended("null", members)).toBeNull();
+  expect(appended("", members)).toBeNull();
 });
