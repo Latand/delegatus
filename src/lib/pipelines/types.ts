@@ -783,6 +783,8 @@ export type PipelinePublicationFailure = {
   /** The push budget at which the repository hook stopped a check that was
       still running, so the push carries no verdict. */
   hookBudgetMs?: number;
+  /** The check the hook named as stopped without a verdict. */
+  hookStoppedCheck?: string;
 };
 
 export type PipelinePublicationResult = (

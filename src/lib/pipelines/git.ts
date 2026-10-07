@@ -1179,10 +1179,19 @@ function publicationFailureDetail(failure: PipelinePublicationFailure): string {
   return redactPublicationText(`${failure.step}: ${status} (${failure.durationMs} ms)\n${failure.outputTail || "no output"}`);
 }
 
-/** The last phase the hook announced with its own `pre-push: <phase>` marker. */
+/** The hook's verdict for one member of a group it runs at once (a native
+    Codex version), `pre-push: <check>: failed (<code>) after <n> s`. */
+const HOOK_MEMBER_FAILED = /^pre-push: ([^;:]{1,60}): failed \(/;
+/** The last phase the hook announced with its own `pre-push: <phase>` marker,
+    or the group member it last named as failed after that. A member that
+    passed is never a phase. */
 export function publicationFailurePhase(failure: PipelinePublicationFailure): string | null {
-  return failure.outputTail.split("\n").map((line) => line.trim())
-    .filter((line) => /^pre-push: [^;:]{1,60}$/.test(line)).at(-1)?.slice("pre-push: ".length) ?? null;
+  for (const line of failure.outputTail.split("\n").map((line) => line.trim()).reverse()) {
+    const member = HOOK_MEMBER_FAILED.exec(line);
+    if (member) return member[1]!;
+    if (/^pre-push: [^;:]{1,60}$/.test(line)) return line.slice("pre-push: ".length);
+  }
+  return null;
 }
 
 /** What stopped a publication, in one line a person can act on. The hook's
@@ -1207,10 +1216,11 @@ const PUBLICATION_PACK_MARGIN_MS = 60_000;
 /** The hook's line for a decisive check its push budget stopped before a
     verdict (NO_VERDICT_PREFIX in scripts/local-gate.ts): the push was
     interrupted, it was not refused. */
-const HOOK_NO_VERDICT = /^pre-push: no verdict within the push budget of (\d+) s:/m;
-export function hookBudgetStopMs(output: string): number | null {
+const HOOK_NO_VERDICT = /^pre-push: no verdict within the push budget of (\d+) s: "([^"\n]{1,80})"/m;
+/** The budget and the check the hook stopped, from its own no-verdict line. */
+export function hookBudgetStop(output: string): { ms: number; check: string } | null {
   const match = HOOK_NO_VERDICT.exec(output);
-  return match ? Number(match[1]) * 1000 : null;
+  return match ? { ms: Number(match[1]) * 1000, check: match[2]! } : null;
 }
 
 /** A push that was stopped before it reached the remote, in one line: what
@@ -1219,7 +1229,10 @@ export function hookBudgetStopMs(output: string): number | null {
 export function publicationInterruptionCause(failure?: PipelinePublicationFailure): string {
   const phase = failure ? publicationFailurePhase(failure) : null;
   if (failure?.hookBudgetMs) {
-    return `the pre-push hook's ${Math.round(failure.hookBudgetMs / 60_000)}-minute budget ran out${phase ? ` while its "${phase}" phase was still running` : ""}; it stopped without a verdict and the push did not reach the remote`;
+    const budget = `the pre-push hook's ${Math.round(failure.hookBudgetMs / 60_000)}-minute budget ran out`;
+    // The check the hook named is exact; the last phase marker is a group at best.
+    if (failure.hookStoppedCheck) return `${budget} before its "${failure.hookStoppedCheck}" check reached a verdict, and the push did not reach the remote`;
+    return `${budget}${phase ? ` while its "${phase}" phase was still running` : ""}; it stopped without a verdict and the push did not reach the remote`;
   }
   const ended = failure?.timedOutMs ? `the push ran past its ${Math.round(failure.timedOutMs / 60_000)}-minute limit`
     : failure?.signal ? `the push was ended by ${failure.signal}` : "the push was interrupted";
@@ -1541,12 +1554,12 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
           .slice(-16).filter((line) => !tail.includes(line)).map((line) => line.slice(0, 160)).join("\n");
         // Long test diagnostics must not erase the hook's phase markers.
         const timedOut = executed.code === null ? /^command timed out after (\d+)ms/.exec(executed.stderr) : null;
-        const hookBudgetMs = preparingDependencies ? null : hookBudgetStopMs(output);
+        const hookStop = preparingDependencies ? null : hookBudgetStop(output);
         const outputTail = phases ? `${phases}\n…\n${output.slice(-(4000 - phases.length - 3))}` : tail;
         failureEvidence = { step: preparingDependencies ? "preparing publication dependencies" : "publishing the pipeline branch",
           code: executed.code, signal: executed.signal ?? null,
           durationMs: Math.max(0, Math.round(performance.now() - started)), outputTail,
-          ...(timedOut ? { timedOutMs: Number(timedOut[1]) } : {}), ...(hookBudgetMs ? { hookBudgetMs } : {}) };
+          ...(timedOut ? { timedOutMs: Number(timedOut[1]) } : {}), ...(hookStop ? { hookBudgetMs: hookStop.ms, hookStoppedCheck: hookStop.check } : {}) };
       }
       return executed;
     };

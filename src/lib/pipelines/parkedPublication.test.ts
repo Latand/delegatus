@@ -663,7 +663,7 @@ test("a hook that stopped at the deadline it was handed is retried as an interru
     trailingLane(h, 2, { "src/work.ts": "export const work = 1;\n" });
     const { NoVerdict } = await import("../../../scripts/local-gate");
     // The hook's own line, as scripts/local-gate.ts writes it.
-    const line = `pre-push: ${new NoVerdict({ name: "touched tests", command: [] }, { at: 840_000, startedAt: 0 }, 830_000).message}`;
+    const line = `pre-push: ${new NoVerdict({ name: "touched tests", command: [] }, { at: 840_000, startedAt: 0 }, { ranMs: 830_000 }).message}`;
     const handed = path.join(h.root, "deadline");
     fs.writeFileSync(h.hook, `#!/bin/sh\necho "$LLV_GATE_PUSH_DEADLINE" > '${handed}'\necho 'pre-push: privacy' >&2\necho 'pre-push: touched tests' >&2\necho '${line}' >&2\nexit 75\n`, { mode: 0o700 });
     let clock = Date.parse("2026-10-04T10:00:00.000Z");
@@ -675,11 +675,11 @@ test("a hook that stopped at the deadline it was handed is retried as an interru
     const deadline = Number(fs.readFileSync(handed, "utf8"));
     expect(deadline).toBeGreaterThanOrEqual(before + 14 * 60_000);
     expect(deadline).toBeLessThanOrEqual(Date.now() + 14 * 60_000);
-    const cause = "the pre-push hook's 14-minute budget ran out while its \"touched tests\" phase was still running; it stopped without a verdict and the push did not reach the remote";
+    const cause = "the pre-push hook's 14-minute budget ran out before its \"touched tests\" check reached a verdict, and the push did not reach the remote";
     expect(h.pushes()).toBe(1);
     expect(h.current().state).toBe("running");
     expect(h.current().stateDetail).toBe(`passed but unpublished: ${cause}; automatic retry 1 of 3 at 2026-10-04T10:01:00.000Z`);
-    expect(h.current().delivery!.operation!.result).toMatchObject({ ok: false, outcome: "not-landed", failure: { hookBudgetMs: 840_000, changedFiles: 1 } });
+    expect(h.current().delivery!.operation!.result).toMatchObject({ ok: false, outcome: "not-landed", failure: { hookBudgetMs: 840_000, hookStoppedCheck: "touched tests", changedFiles: 1 } });
     for (const wait of [60_000, 5 * 60_000, 15 * 60_000]) { clock += wait; for (let n = 0; n < 8; n++) await tickPipelines([], ports); }
     expect(h.pushes()).toBe(4);
     expect(h.current().state).toBe("needs_decision");

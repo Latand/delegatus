@@ -1,9 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { discover, gateTemporaryRoot, isolatedEnvironment, NATIVE_GROUP, NoVerdict, pinnedBunVersion, plan, pushDeadline, requiresMediaTools, runSteps, type PlanEnvironment, type PushDeadline, type Step } from "./local-gate";
+import { codexFixture, discover, endingOf, fetchMain, gateTemporaryRoot, isolatedEnvironment, NATIVE_GROUP, NoVerdict, pinnedBunVersion, plan, pushDeadline, requiresMediaTools, runSteps, type PlanEnvironment, type PushDeadline, type Step } from "./local-gate";
 import { nativeBatches } from "./verify-native-codex-runtime";
 import { changedSinceBase } from "./ci-platform-scope";
 const root = path.resolve(import.meta.dir, "..");
@@ -87,6 +87,18 @@ const soon = (ms: number): PushDeadline => ({ at: Date.now() + ms, startedAt: Da
 function alive(pid: number): boolean {
   try { return !/^\d+ \(.*\) Z/.test(readFileSync(`/proc/${pid}/stat`, "utf8")); } catch { return false; }
 }
+/** Live processes whose command line names `needle`; read-only. */
+function processesNaming(needle: string): number[] {
+  return readdirSync("/proc").filter(name => /^\d+$/.test(name)).map(Number).filter(pid => {
+    try { return readFileSync(`/proc/${pid}/cmdline`, "utf8").includes(needle) && alive(pid); } catch { return false; }
+  });
+}
+function ownCgroup(): string {
+  return readFileSync("/proc/self/cgroup", "utf8").split("\n").find(line => line.startsWith("0::"))!.slice(3);
+}
+function scopeProcesses(scope: string): string[] {
+  try { return readFileSync(path.join("/sys/fs/cgroup", scope, "cgroup.procs"), "utf8").split("\n").filter(Boolean); } catch { return []; }
+}
 
 test("a group's steps run at once and report each verdict", async () => {
   const runner = stepRunner(soon(60_000), () => ({ a: "sleep 1.5", b: "sleep 1.5", c: "sleep 1.5" }));
@@ -94,7 +106,7 @@ test("a group's steps run at once and report each verdict", async () => {
   expect(await runner.run([grouped("a"), grouped("b"), grouped("c", true)])).toBeNull();
   expect(performance.now() - started).toBeLessThan(4_000);
   expect(runner.lines[0]).toBe(`pre-push: ${NATIVE_GROUP}`);
-  for (const name of ["a", "b", "c"]) expect(runner.lines).toContainEqual(expect.stringMatching(new RegExp(`^pre-push: ${name} passed in \\d+ s$`)));
+  for (const name of ["a", "b", "c"]) expect(runner.lines).toContainEqual(expect.stringMatching(new RegExp(`^pre-push: ${name}: passed in \\d+ s$`)));
 }, 20_000);
 test("a caller's deadline leaves a deferrable check to the hosted job and says so; a decisive one that finished keeps its verdict", async () => {
   const runner = stepRunner(soon(2_500), () => ({ engine: "sleep 0.5", tail: "sleep 60" }));
@@ -102,16 +114,16 @@ test("a caller's deadline leaves a deferrable check to the hosted job and says s
   expect(await runner.run([grouped("engine"), grouped("tail", true)])).toBeNull();
   expect(performance.now() - started).toBeLessThan(15_000);
   expect(runner.lines).toContainEqual(expect.stringMatching(/^pre-push: left to the hosted job: "tail" was stopped after it had run \d+ s, when the push budget of \d+ s ran out; its verdict comes from the "Bun runtime pin" workflow/));
-  expect(runner.lines).toContainEqual(expect.stringMatching(/^pre-push: engine passed in \d+ s$/));
+  expect(runner.lines).toContainEqual(expect.stringMatching(/^pre-push: engine: passed in \d+ s$/));
   expect(runner.lines.at(-1)).toBe("pre-push: passed; left to the hosted job: tail");
-  // Neither line reads as a phase marker to the publication.
-  for (const line of runner.lines.slice(1)) if (line.includes("hosted job")) expect(line).not.toMatch(/^pre-push: [^;:]{1,60}$/);
+  // After the group's own marker, no verdict or deferral reads as a phase marker to the publication.
+  for (const line of runner.lines.slice(1)) expect(line).not.toMatch(/^pre-push: [^;:]{1,60}$/);
 }, 30_000);
 test("without a caller's deadline nothing is stopped: a person's push waits for every verdict", async () => {
   const runner = stepRunner(null, () => ({ engine: "sleep 1", tail: "sleep 1" }));
   expect(await runner.run([grouped("engine"), grouped("tail", true)])).toBeNull();
   expect(runner.lines.filter(line => line.includes("hosted job"))).toEqual([]);
-  expect(runner.lines).toContainEqual(expect.stringMatching(/^pre-push: tail passed in \d+ s$/));
+  expect(runner.lines).toContainEqual(expect.stringMatching(/^pre-push: tail: passed in \d+ s$/));
 }, 30_000);
 test("a caller's deadline stops a decisive step and everything it started, with no verdict", async () => {
   const runner = stepRunner(soon(1_500), dir => ({ "touched tests": `sleep 60 & echo $! > '${dir}/helper.pid'; wait` }));
@@ -134,7 +146,118 @@ test("a red verdict in a group fails the push with its log, even while the long 
   const error = await runner.run([grouped("native Codex 0.154.0"), grouped("tail", true)]);
   expect((error as Error).message).toBe("native Codex 0.154.0 failed");
   expect(runner.lines).toContain("(fail) installed Codex: adapter pagination [3.00ms]");
-  expect(runner.lines).toContainEqual(expect.stringMatching(/^pre-push: native Codex 0\.154\.0 failed \(1\) after \d+ s$/));
+  expect(runner.lines).toContainEqual(expect.stringMatching(/^pre-push: native Codex 0\.154\.0: failed \(1\) after \d+ s$/));
+}, 30_000);
+test("a deadline that passed before a step starts prepares nothing, alone or in a group", async () => {
+  const prepared: string[] = [];
+  const runner = stepRunner(soon(-1), () => ({}));
+  const prepare = (step: Step) => { prepared.push(step.name); return { command: ["true"], env: process.env }; };
+  for (const steps of [[{ name: "touched tests", command: [] }], [grouped("native Codex 0.154.0"), grouped("tail", true)]]) {
+    const error = await runSteps("pre-push", steps, { root: runner.dir, deadline: soon(-1), logDir: runner.dir, say: () => {}, prepare }).then(() => null, (caught: unknown) => caught);
+    expect(error).toBeInstanceOf(NoVerdict);
+    expect((error as Error).message).toContain(`"${steps[0]!.name}" could not start`);
+  }
+  expect(prepared).toEqual([]);
+});
+test("a cold fixture install held by machine admission ends at the deadline with a named missing verdict and no installer left", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "gate-cold-")); roots.push(dir);
+  writeFileSync(path.join(dir, "pressure"), "some avg10=99.00 avg60=99.00 avg300=99.00 total=1\n");
+  // The real installer path: gate-slot holds it for CPU pressure, so npm never starts.
+  const env = { ...process.env, LLV_GATE_PSI_FILE: path.join(dir, "pressure"), LLV_GATE_LOCK_DIR: dir, LLV_GATE_POLL_SECONDS: "0.2" };
+  const cache = path.join(dir, "cold-cache");
+  const lines: string[] = [];
+  const started = performance.now();
+  const error = await runSteps("pre-push", [grouped("native Codex 0.154.0"), grouped("native Codex shared contracts", true)], {
+    root, deadline: soon(1_500), logDir: dir, say: line => lines.push(line),
+    prepare: async (step, until) => ({ command: ["true", await codexFixture(root, cache, "0.154.0", until, env)], env: process.env }),
+  }).then(() => null, (caught: unknown) => caught);
+  expect(performance.now() - started).toBeLessThan(6_000);
+  expect(error).toBeInstanceOf(NoVerdict);
+  expect((error as Error).message).toMatch(/"native Codex 0\.154\.0" was stopped while it was being prepared after \d+ s; nothing was judged$/);
+  expect(lines).toContainEqual(expect.stringMatching(/^pre-push: left to the hosted job: "native Codex shared contracts" was stopped while it was being prepared/));
+  await Bun.sleep(200);
+  expect(processesNaming(cache)).toEqual([]);
+}, 30_000);
+test("the fetch before planning ends at the deadline", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "gate-fetch-")); roots.push(dir);
+  const remote = path.join(dir, "remote.git"), work = path.join(dir, "work");
+  const env = fixtureGitEnv();
+  execFileSync("git", ["init", "-q", "--bare", remote], { env });
+  execFileSync("git", ["init", "-q", work], { env });
+  // An upload-pack that never answers stands in for a remote that hangs.
+  const hang = path.join(dir, "hang.sh");
+  writeFileSync(hang, `#!/bin/sh\necho $$ > '${dir}/upload.pid'\nexec sleep 60\n`); chmodSync(hang, 0o755);
+  execFileSync("git", ["-C", work, "remote", "add", "origin", remote], { env });
+  execFileSync("git", ["-C", work, "config", "remote.origin.uploadpack", hang], { env });
+  const started = performance.now();
+  expect(await fetchMain(work, Date.now() + 1_000)).toBe("stopped");
+  expect(performance.now() - started).toBeLessThan(5_000);
+  const upload = Number(readFileSync(path.join(dir, "upload.pid"), "utf8"));
+  for (let wait = 0; wait < 40 && alive(upload); wait++) await Bun.sleep(50);
+  expect(alive(upload)).toBeFalse();
+  expect(await fetchMain(work, Date.now() - 1)).toBe("stopped");
+}, 20_000);
+const userManager = process.platform === "linux" && Bun.which("systemd-run") !== null
+  && spawnSync("systemctl", ["--user", "show-environment"], { stdio: "ignore" }).status === 0;
+test.skipIf(!userManager)("a stopped step's own work scope goes with it, helpers that left the tree included, and no other scope is touched", async () => {
+  // A neighbour scope this run must leave alone.
+  const neighbour = Bun.spawn({ cmd: ["systemd-run", "--user", "--scope", "-q", "--collect", "--", "sleep", "60"], stdio: ["ignore", "ignore", "ignore"] });
+  try {
+    // gate-slot as the step's own command, and gate-slot under a process that
+    // stays in this hook's cgroup while the work runs in a run-*.scope.
+    for (const wrapped of [false, true]) {
+      const dir = mkdtempSync(path.join(tmpdir(), "gate-scope-")); roots.push(dir);
+      writeFileSync(path.join(dir, "pressure"), "some avg10=0.00 avg60=0.00 avg300=0.00 total=1\n");
+      const env = { ...process.env, LLV_GATE_PSI_FILE: path.join(dir, "pressure"), LLV_GATE_LOCK_DIR: dir };
+      // One helper keeps the step's environment and one starts from an empty
+      // one; both are reparented away from the step's process tree.
+      const script = `cat /proc/$$/cgroup > '${dir}/scope'; ( sleep 60 & echo $! > '${dir}/kept.pid' ) ; ( env -i sleep 60 & echo $! > '${dir}/bare.pid' ) ; touch '${dir}/ready'; sleep 60`;
+      const slot = ["bash", path.join(root, "scripts/gate-slot.sh"), "bash", "-c", script];
+      const command = wrapped ? ["bash", "-c", `"$@"; exit $?`, "step", ...slot] : slot;
+      const started = performance.now();
+      const error = await runSteps("pre-push", [{ name: "touched tests", command: [] }], { root, deadline: soon(4_000), logDir: dir, say: () => {},
+        prepare: () => ({ command, env }) }).then(() => null, (caught: unknown) => caught);
+      expect(performance.now() - started).toBeLessThan(10_000);
+      expect(existsSync(path.join(dir, "ready")), "the work started before the deadline").toBeTrue();
+      expect(error).toBeInstanceOf(NoVerdict);
+      const scope = readFileSync(path.join(dir, "scope"), "utf8").split("\n").find(line => line.startsWith("0::"))!.slice(3);
+      // The work ran in a scope of its own, which is the case the cleanup must reach.
+      expect(scope).toMatch(/\.scope$/);
+      expect(scope).not.toBe(ownCgroup());
+      for (const helper of ["kept", "bare"]) expect(alive(Number(readFileSync(path.join(dir, `${helper}.pid`), "utf8"))), `${helper}, wrapped: ${wrapped}`).toBeFalse();
+      expect(scopeProcesses(scope)).toEqual([]);
+      expect(alive(neighbour.pid)).toBeTrue();
+    }
+  } finally {
+    neighbour.kill("SIGKILL");
+    await neighbour.exited;
+  }
+}, 40_000);
+test("a native Codex group names its unfinished or failed version, never a member that passed", async () => {
+  const { hookBudgetStop, publicationFailureCause, publicationInterruptionCause } = await import("../src/lib/pipelines/git");
+  const dir = mkdtempSync(path.join(tmpdir(), "hook-group-")); roots.push(dir);
+  const hook = async (scripts: Record<string, string>, budgetMs: number) => {
+    const lines: string[] = [];
+    const startedAt = Date.now();
+    const members = ["native Codex 0.154.0", "native Codex 0.159.0", "native Codex shared contracts"]
+      .map((name): Step => ({ name, command: [], group: NATIVE_GROUP, ...(name.endsWith("contracts") ? { deferrable: true } : {}) }));
+    await runSteps("pre-push", members, { root: dir, deadline: { at: startedAt + budgetMs, startedAt }, logDir: dir, say: (line) => lines.push(line),
+      prepare: (step) => ({ command: ["bash", "-c", scripts[step.name]!], env: process.env }) }).catch((error: unknown) => lines.push(endingOf("pre-push", error).line));
+    return lines.join("\n");
+  };
+  // 0.154.0 and the shared contracts finish; 0.159.0 is still running at the deadline.
+  const stopped = await hook({ "native Codex 0.154.0": "true", "native Codex 0.159.0": "sleep 60", "native Codex shared contracts": "true" }, 2_000);
+  const stop = hookBudgetStop(stopped)!;
+  expect(stop.check).toBe("native Codex 0.159.0");
+  const interrupted = { step: "publishing the pipeline branch", code: 75, signal: null, durationMs: 2_000, outputTail: stopped, hookBudgetMs: 840_000, hookStoppedCheck: stop.check };
+  expect(publicationInterruptionCause(interrupted)).toBe("the pre-push hook's 14-minute budget ran out before its \"native Codex 0.159.0\" check reached a verdict, and the push did not reach the remote");
+  // Without the retained check, the group is named, still never a member that passed.
+  expect(publicationInterruptionCause({ ...interrupted, hookStoppedCheck: undefined })).toContain(`"${NATIVE_GROUP}" phase`);
+  // 0.159.0 fails while the others pass.
+  const failed = await hook({ "native Codex 0.154.0": "true", "native Codex 0.159.0": "echo '(fail) installed Codex: adapter pagination [3.00ms]'; exit 1", "native Codex shared contracts": "true" }, 60_000);
+  expect(hookBudgetStop(failed)).toBeNull();
+  expect(publicationFailureCause({ step: "publishing the pipeline branch", code: 1, signal: null, durationMs: 1_000, outputTail: failed }))
+    .toBe("the repository's pre-push hook failed in its \"native Codex 0.159.0\" phase (exit 1, 1 failing test, first: installed Codex: adapter pagination)");
 }, 30_000);
 test("Viewer route and layout inputs select build and served-runtime verification", () => {
   for (const file of ["src/app/page.tsx", "src/app/layout.tsx", "src/components/Viewer.tsx"]) {
