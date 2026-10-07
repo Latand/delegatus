@@ -1,0 +1,5274 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "block": "orchestrator wire routing across the board's layouts",
+  "build": "the routing rule in src/components/kanban/orchestratorWires.ts",
+  "failures": [],
+  "cases": [
+    {
+      "id": "1920-top-en-inbox-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 564,
+          "y": 856
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M564,856 H265 Q259,856 259,862 V951 Q259,957 265,957 H277.5",
+          "bends": 2,
+          "px": 420,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-top-en-assigned-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 629.65625,
+          "y": 870
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M629.65625,870 V951 Q629.65625,957 635.65625,957 H648.15625",
+          "bends": 1,
+          "px": 103,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-top-en-assigned-deep",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 629.65625,
+          "y": 870
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M629.65625,870 V951 Q629.65625,957 635.65625,957 H648.15625",
+          "bends": 1,
+          "px": 103,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-top-en-blocked-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 1165.65625,
+          "y": 870
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M1165.65625,870 V951 Q1165.65625,957 1171.65625,957 H1184.15625",
+          "bends": 1,
+          "px": 103,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-top-en-several",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 564,
+          "y": 856
+        },
+        {
+          "x": 629.65625,
+          "y": 870
+        },
+        {
+          "x": 1165.65625,
+          "y": 870
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M564,856 H265 Q259,856 259,862 V951 Q259,957 265,957 H277.5",
+          "bends": 2,
+          "px": 420,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        },
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M629.65625,870 V951 Q629.65625,957 635.65625,957 H648.15625",
+          "bends": 1,
+          "px": 103,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        },
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M1165.65625,870 V951 Q1165.65625,957 1171.65625,957 H1184.15625",
+          "bends": 1,
+          "px": 103,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-top-en-hidden-below",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 629.65625,
+          "y": 870
+        }
+      ],
+      "wires": [
+        {
+          "task": null,
+          "stub": true,
+          "d": "M629.65625,870 V1058 Q629.65625,1064 635.65625,1064 H648.65625",
+          "bends": 1,
+          "px": 211,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-top-en-hidden-above",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 629.65625,
+          "y": 870
+        }
+      ],
+      "wires": [
+        {
+          "task": null,
+          "stub": true,
+          "d": "M629.65625,870 V941 Q629.65625,947 635.65625,947 H648.65625",
+          "bends": 1,
+          "px": 94,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-top-en-deep-scrolled",
+      "skipped": "no target in this layout",
+      "seatPorts": [],
+      "wires": []
+    },
+    {
+      "id": "1920-top-folded-en-inbox-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 268,
+          "y": 88
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M268,88 H265 Q259,88 259,94 V183 Q259,189 265,189 H277.5",
+          "bends": 2,
+          "px": 124,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-top-folded-en-assigned-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 629.65625,
+          "y": 102
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M629.65625,102 V183 Q629.65625,189 635.65625,189 H648.15625",
+          "bends": 1,
+          "px": 103,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-top-folded-en-assigned-deep",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 629.65625,
+          "y": 102
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-search",
+          "stub": false,
+          "d": "M629.65625,102 V464.875 Q629.65625,470.875 635.65625,470.875 H648.15625",
+          "bends": 1,
+          "px": 385,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-top-folded-en-blocked-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 1165.65625,
+          "y": 102
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M1165.65625,102 V183 Q1165.65625,189 1171.65625,189 H1184.15625",
+          "bends": 1,
+          "px": 103,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-top-folded-en-several",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 268,
+          "y": 88
+        },
+        {
+          "x": 629.65625,
+          "y": 102
+        },
+        {
+          "x": 1165.65625,
+          "y": 102
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M268,88 H265 Q259,88 259,94 V183 Q259,189 265,189 H277.5",
+          "bends": 2,
+          "px": 124,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        },
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M629.65625,102 V183 Q629.65625,189 635.65625,189 H648.15625",
+          "bends": 1,
+          "px": 103,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 4
+        },
+        {
+          "task": "t-rounds",
+          "stub": false,
+          "d": "M629.65625,102 V504.875 Q629.65625,510.875 635.65625,510.875 H648.15625",
+          "bends": 1,
+          "px": 425,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 4
+        },
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M1165.65625,102 V183 Q1165.65625,189 1171.65625,189 H1184.15625",
+          "bends": 1,
+          "px": 103,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-top-folded-en-hidden-below",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 629.65625,
+          "y": 102
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-upload",
+          "stub": false,
+          "d": "M629.65625,102 V464.875 Q629.65625,470.875 635.65625,470.875 H648.15625",
+          "bends": 1,
+          "px": 385,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-top-folded-en-hidden-above",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 629.65625,
+          "y": 102
+        }
+      ],
+      "wires": [
+        {
+          "task": null,
+          "stub": true,
+          "d": "M629.65625,102 V173 Q629.65625,179 635.65625,179 H648.65625",
+          "bends": 1,
+          "px": 94,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-top-folded-en-deep-scrolled",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 629.65625,
+          "y": 102
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-bulk-26",
+          "stub": false,
+          "d": "M629.65625,102 V464.875 Q629.65625,470.875 635.65625,470.875 H648.15625",
+          "bends": 1,
+          "px": 385,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-side-en-inbox-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 135
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M414,135 H443.5",
+          "bends": 0,
+          "px": 30,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-side-en-assigned-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 54
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M414,54 H734.328125 Q740.328125,54 740.328125,60 V129 Q740.328125,135 746.328125,135 H758.828125",
+          "bends": 2,
+          "px": 421,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-side-en-assigned-deep",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 54
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-search",
+          "stub": false,
+          "d": "M414,54 H734.328125 Q740.328125,54 740.328125,60 V410.875 Q740.328125,416.875 746.328125,416.875 H758.828125",
+          "bends": 2,
+          "px": 703,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-side-en-blocked-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 54
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M414,54 H1270.328125 Q1276.328125,54 1276.328125,60 V129 Q1276.328125,135 1282.328125,135 H1294.828125",
+          "bends": 2,
+          "px": 957,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-side-en-several",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 135
+        },
+        {
+          "x": 414,
+          "y": 54
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M414,135 H443.5",
+          "bends": 0,
+          "px": 30,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        },
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M414,54 H734.328125 Q740.328125,54 740.328125,60 V129 Q740.328125,135 746.328125,135 H758.828125",
+          "bends": 2,
+          "px": 421,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 4
+        },
+        {
+          "task": "t-rounds",
+          "stub": false,
+          "d": "M414,54 H734.328125 Q740.328125,54 740.328125,60 V450.875 Q740.328125,456.875 746.328125,456.875 H758.828125",
+          "bends": 2,
+          "px": 743,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 4
+        },
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M414,54 H1270.328125 Q1276.328125,54 1276.328125,60 V129 Q1276.328125,135 1282.328125,135 H1294.828125",
+          "bends": 2,
+          "px": 957,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 6
+        }
+      ]
+    },
+    {
+      "id": "1920-side-en-hidden-below",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 54
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-upload",
+          "stub": false,
+          "d": "M414,54 H734.328125 Q740.328125,54 740.328125,60 V410.875 Q740.328125,416.875 746.328125,416.875 H758.828125",
+          "bends": 2,
+          "px": 703,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-side-en-hidden-above",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 54
+        }
+      ],
+      "wires": [
+        {
+          "task": null,
+          "stub": true,
+          "d": "M414,54 H734.328125 Q740.328125,54 740.328125,60 V119 Q740.328125,125 746.328125,125 H759.328125",
+          "bends": 2,
+          "px": 412,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-side-en-deep-scrolled",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 54
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-bulk-29",
+          "stub": false,
+          "d": "M414,54 H734.328125 Q740.328125,54 740.328125,60 V410.875 Q740.328125,416.875 746.328125,416.875 H758.828125",
+          "bends": 2,
+          "px": 703,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-top-en-inbox-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 324,
+          "y": 721
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M324,721 H261 Q255,721 255,727 V856 Q255,862 261,862 H273.5",
+          "bends": 2,
+          "px": 224,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-top-en-assigned-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 586.40625,
+          "y": 735
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M586.40625,735 V772 Q586.40625,778 580.40625,778 H553 Q547,778 547,784 V856 Q547,862 553,862 H565.5",
+          "bends": 3,
+          "px": 178,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-top-en-assigned-deep",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 586.40625,
+          "y": 735
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M586.40625,735 V772 Q586.40625,778 580.40625,778 H553 Q547,778 547,784 V856 Q547,862 553,862 H565.5",
+          "bends": 3,
+          "px": 178,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-top-en-blocked-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 1039,
+          "y": 735
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M1039,735 V856 Q1039,862 1045,862 H1057.5",
+          "bends": 1,
+          "px": 143,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-top-en-several",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 324,
+          "y": 721
+        },
+        {
+          "x": 586.40625,
+          "y": 735
+        },
+        {
+          "x": 1039,
+          "y": 735
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M324,721 H261 Q255,721 255,727 V856 Q255,862 261,862 H273.5",
+          "bends": 2,
+          "px": 224,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        },
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M586.40625,735 V772 Q586.40625,778 580.40625,778 H553 Q547,778 547,784 V856 Q547,862 553,862 H565.5",
+          "bends": 3,
+          "px": 178,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        },
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M1039,735 V856 Q1039,862 1045,862 H1057.5",
+          "bends": 1,
+          "px": 143,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-top-en-hidden-below",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 613.09375,
+          "y": 735
+        }
+      ],
+      "wires": [
+        {
+          "task": null,
+          "stub": true,
+          "d": "M613.09375,735 V772 Q613.09375,778 607.09375,778 H553 Q547,778 547,784 V878 Q547,884 553,884 H566",
+          "bends": 3,
+          "px": 227,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-top-en-hidden-above",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 613.09375,
+          "y": 735
+        }
+      ],
+      "wires": [
+        {
+          "task": null,
+          "stub": true,
+          "d": "M613.09375,735 V772 Q613.09375,778 607.09375,778 H553 Q547,778 547,784 V846 Q547,852 553,852 H566",
+          "bends": 3,
+          "px": 195,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-top-en-deep-scrolled",
+      "skipped": "no target in this layout",
+      "seatPorts": [],
+      "wires": []
+    },
+    {
+      "id": "1440-top-folded-en-inbox-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 264,
+          "y": 88
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M264,88 H261 Q255,88 255,94 V223 Q255,229 261,229 H273.5",
+          "bends": 2,
+          "px": 164,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-top-folded-en-assigned-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 586.40625,
+          "y": 102
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M586.40625,102 V139 Q586.40625,145 580.40625,145 H553 Q547,145 547,151 V223 Q547,229 553,229 H565.5",
+          "bends": 3,
+          "px": 178,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-top-folded-en-assigned-deep",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 586.40625,
+          "y": 102
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-rounds",
+          "stub": false,
+          "d": "M586.40625,102 V139 Q586.40625,145 580.40625,145 H553 Q547,145 547,151 V504.875 Q547,510.875 553,510.875 H565.5",
+          "bends": 3,
+          "px": 460,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-top-folded-en-blocked-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 1039,
+          "y": 102
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M1039,102 V223 Q1039,229 1045,229 H1057.5",
+          "bends": 1,
+          "px": 143,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-top-folded-en-several",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 264,
+          "y": 88
+        },
+        {
+          "x": 586.40625,
+          "y": 102
+        },
+        {
+          "x": 1039,
+          "y": 102
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M264,88 H261 Q255,88 255,94 V223 Q255,229 261,229 H273.5",
+          "bends": 2,
+          "px": 164,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        },
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M586.40625,102 V139 Q586.40625,145 580.40625,145 H553 Q547,145 547,151 V223 Q547,229 553,229 H565.5",
+          "bends": 3,
+          "px": 178,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 4
+        },
+        {
+          "task": "t-rounds",
+          "stub": false,
+          "d": "M586.40625,102 V139 Q586.40625,145 580.40625,145 H553 Q547,145 547,151 V544.875 Q547,550.875 553,550.875 H565.5",
+          "bends": 3,
+          "px": 500,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 6
+        },
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M1039,102 V223 Q1039,229 1045,229 H1057.5",
+          "bends": 1,
+          "px": 143,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-top-folded-en-hidden-below",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 613.09375,
+          "y": 102
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-search",
+          "stub": false,
+          "d": "M613.09375,102 V139 Q613.09375,145 607.09375,145 H553 Q547,145 547,151 V504.875 Q547,510.875 553,510.875 H565.5",
+          "bends": 3,
+          "px": 487,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-top-folded-en-hidden-above",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 613.09375,
+          "y": 102
+        }
+      ],
+      "wires": [
+        {
+          "task": null,
+          "stub": true,
+          "d": "M613.09375,102 V139 Q613.09375,145 607.09375,145 H553 Q547,145 547,151 V213 Q547,219 553,219 H566",
+          "bends": 3,
+          "px": 195,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-top-folded-en-deep-scrolled",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 613.09375,
+          "y": 102
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-upload",
+          "stub": false,
+          "d": "M613.09375,102 V139 Q613.09375,145 607.09375,145 H553 Q547,145 547,151 V504.875 Q547,510.875 553,510.875 H565.5",
+          "bends": 3,
+          "px": 487,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-side-en-inbox-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 175
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M414,175 H439.5",
+          "bends": 0,
+          "px": 26,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-side-en-assigned-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 91
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M414,91 H707 Q713,91 713,97 V169 Q713,175 719,175 H731.5",
+          "bends": 2,
+          "px": 397,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-side-en-assigned-deep",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 91
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-rounds",
+          "stub": false,
+          "d": "M414,91 H707 Q713,91 713,97 V450.875 Q713,456.875 719,456.875 H731.5",
+          "bends": 2,
+          "px": 679,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-side-en-blocked-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 91
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M414,91 H1199 Q1205,91 1205,97 V169 Q1205,175 1211,175 H1223.5",
+          "bends": 2,
+          "px": 889,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-side-en-several",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 175
+        },
+        {
+          "x": 414,
+          "y": 91
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M414,175 H439.5",
+          "bends": 0,
+          "px": 26,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        },
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M414,91 H707 Q713,91 713,97 V169 Q713,175 719,175 H731.5",
+          "bends": 2,
+          "px": 397,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 4
+        },
+        {
+          "task": "t-rounds",
+          "stub": false,
+          "d": "M414,91 H707 Q713,91 713,97 V490.875 Q713,496.875 719,496.875 H731.5",
+          "bends": 2,
+          "px": 719,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 4
+        },
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M414,91 H1199 Q1205,91 1205,97 V169 Q1205,175 1211,175 H1223.5",
+          "bends": 2,
+          "px": 889,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 4
+        }
+      ]
+    },
+    {
+      "id": "1440-side-en-hidden-below",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 91
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-search",
+          "stub": false,
+          "d": "M414,91 H707 Q713,91 713,97 V450.875 Q713,456.875 719,456.875 H731.5",
+          "bends": 2,
+          "px": 679,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-side-en-hidden-above",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 91
+        }
+      ],
+      "wires": [
+        {
+          "task": null,
+          "stub": true,
+          "d": "M414,91 H707 Q713,91 713,97 V159 Q713,165 719,165 H732",
+          "bends": 2,
+          "px": 387,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-side-en-deep-scrolled",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 91
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-upload",
+          "stub": false,
+          "d": "M414,91 H707 Q713,91 713,97 V450.875 Q713,456.875 719,456.875 H731.5",
+          "bends": 2,
+          "px": 679,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1280-top-en-inbox-first",
+      "skipped": "no target in this layout",
+      "seatPorts": [],
+      "wires": []
+    },
+    {
+      "id": "1280-top-en-assigned-first",
+      "skipped": "no target in this layout",
+      "seatPorts": [],
+      "wires": []
+    },
+    {
+      "id": "1280-top-en-assigned-deep",
+      "skipped": "no target in this layout",
+      "seatPorts": [],
+      "wires": []
+    },
+    {
+      "id": "1280-top-en-blocked-first",
+      "skipped": "no target in this layout",
+      "seatPorts": [],
+      "wires": []
+    },
+    {
+      "id": "1280-top-en-several",
+      "skipped": "no target in this layout",
+      "seatPorts": [],
+      "wires": []
+    },
+    {
+      "id": "1280-top-en-hidden-below",
+      "skipped": null,
+      "seatPorts": [],
+      "wires": []
+    },
+    {
+      "id": "1280-top-en-hidden-above",
+      "skipped": null,
+      "seatPorts": [],
+      "wires": []
+    },
+    {
+      "id": "1280-top-en-deep-scrolled",
+      "skipped": "no target in this layout",
+      "seatPorts": [],
+      "wires": []
+    },
+    {
+      "id": "1280-top-folded-en-inbox-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 264,
+          "y": 123
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M264,123 H261 Q255,123 255,129 V258 Q255,264 261,264 H273.5",
+          "bends": 2,
+          "px": 164,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1280-top-folded-en-assigned-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 586.40625,
+          "y": 137
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M586.40625,137 V174 Q586.40625,180 580.40625,180 H553 Q547,180 547,186 V258 Q547,264 553,264 H565.5",
+          "bends": 3,
+          "px": 178,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1280-top-folded-en-assigned-deep",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 586.40625,
+          "y": 137
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-export",
+          "stub": false,
+          "d": "M586.40625,137 V174 Q586.40625,180 580.40625,180 H553 Q547,180 547,186 V539.875 Q547,545.875 553,545.875 H565.5",
+          "bends": 3,
+          "px": 460,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1280-top-folded-en-blocked-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 1039,
+          "y": 137
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M1039,137 V258 Q1039,264 1045,264 H1057.5",
+          "bends": 1,
+          "px": 143,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1280-top-folded-en-several",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 264,
+          "y": 123
+        },
+        {
+          "x": 586.40625,
+          "y": 137
+        },
+        {
+          "x": 1039,
+          "y": 137
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M264,123 H261 Q255,123 255,129 V258 Q255,264 261,264 H273.5",
+          "bends": 2,
+          "px": 164,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        },
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M586.40625,137 V174 Q586.40625,180 580.40625,180 H553 Q547,180 547,186 V258 Q547,264 553,264 H565.5",
+          "bends": 3,
+          "px": 178,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        },
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M1039,137 V258 Q1039,264 1045,264 H1057.5",
+          "bends": 1,
+          "px": 143,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1280-top-folded-en-hidden-below",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 613.09375,
+          "y": 137
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-rounds",
+          "stub": false,
+          "d": "M613.09375,137 V174 Q613.09375,180 607.09375,180 H553 Q547,180 547,186 V539.875 Q547,545.875 553,545.875 H565.5",
+          "bends": 3,
+          "px": 487,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1280-top-folded-en-hidden-above",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 613.09375,
+          "y": 137
+        }
+      ],
+      "wires": [
+        {
+          "task": null,
+          "stub": true,
+          "d": "M613.09375,137 V174 Q613.09375,180 607.09375,180 H553 Q547,180 547,186 V248 Q547,254 553,254 H566",
+          "bends": 3,
+          "px": 195,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1280-top-folded-en-deep-scrolled",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 613.09375,
+          "y": 137
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-upload",
+          "stub": false,
+          "d": "M613.09375,137 V174 Q613.09375,180 607.09375,180 H553 Q547,180 547,186 V539.875 Q547,545.875 553,545.875 H565.5",
+          "bends": 3,
+          "px": 487,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1280-side-en-inbox-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 175
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M414,175 H439.5",
+          "bends": 0,
+          "px": 26,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1280-side-en-assigned-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 91
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M414,91 H707 Q713,91 713,97 V169 Q713,175 719,175 H731.5",
+          "bends": 2,
+          "px": 397,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1280-side-en-assigned-deep",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 91
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-rounds",
+          "stub": false,
+          "d": "M414,91 H707 Q713,91 713,97 V450.875 Q713,456.875 719,456.875 H731.5",
+          "bends": 2,
+          "px": 679,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1280-side-en-blocked-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 91
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M414,91 H1199 Q1205,91 1205,97 V169 Q1205,175 1211,175 H1223.5",
+          "bends": 2,
+          "px": 889,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1280-side-en-several",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 175
+        },
+        {
+          "x": 414,
+          "y": 91
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M414,175 H439.5",
+          "bends": 0,
+          "px": 26,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        },
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M414,91 H707 Q713,91 713,97 V169 Q713,175 719,175 H731.5",
+          "bends": 2,
+          "px": 397,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 4
+        },
+        {
+          "task": "t-rounds",
+          "stub": false,
+          "d": "M414,91 H707 Q713,91 713,97 V490.875 Q713,496.875 719,496.875 H731.5",
+          "bends": 2,
+          "px": 719,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 4
+        },
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M414,91 H1199 Q1205,91 1205,97 V169 Q1205,175 1211,175 H1223.5",
+          "bends": 2,
+          "px": 889,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 4
+        }
+      ]
+    },
+    {
+      "id": "1280-side-en-hidden-below",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 91
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-search",
+          "stub": false,
+          "d": "M414,91 H707 Q713,91 713,97 V450.875 Q713,456.875 719,456.875 H731.5",
+          "bends": 2,
+          "px": 679,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1280-side-en-hidden-above",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 91
+        }
+      ],
+      "wires": [
+        {
+          "task": null,
+          "stub": true,
+          "d": "M414,91 H707 Q713,91 713,97 V159 Q713,165 719,165 H732",
+          "bends": 2,
+          "px": 387,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1280-side-en-deep-scrolled",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 91
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-upload",
+          "stub": false,
+          "d": "M414,91 H707 Q713,91 713,97 V450.875 Q713,456.875 719,456.875 H731.5",
+          "bends": 2,
+          "px": 679,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-top-en-inbox-first",
+      "skipped": "no target in this layout",
+      "seatPorts": [],
+      "wires": []
+    },
+    {
+      "id": "1000-top-en-assigned-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 260,
+          "y": 163
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M260,163 H257 Q251,163 251,169 V306 Q251,312 257,312 H269.5",
+          "bends": 2,
+          "px": 172,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-top-en-assigned-deep",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 260,
+          "y": 163
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-export",
+          "stub": false,
+          "d": "M260,163 H257 Q251,163 251,169 V563.875 Q251,569.875 257,569.875 H269.5",
+          "bends": 2,
+          "px": 430,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-top-en-blocked-first",
+      "skipped": "no target in this layout",
+      "seatPorts": [],
+      "wires": []
+    },
+    {
+      "id": "1000-top-en-several",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 260,
+          "y": 163
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M260,163 H257 Q251,163 251,169 V306 Q251,312 257,312 H269.5",
+          "bends": 2,
+          "px": 172,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-top-en-hidden-below",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 260,
+          "y": 163
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-rounds",
+          "stub": false,
+          "d": "M260,163 H257 Q251,163 251,169 V563.875 Q251,569.875 257,569.875 H269.5",
+          "bends": 2,
+          "px": 430,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-top-en-hidden-above",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 260,
+          "y": 163
+        }
+      ],
+      "wires": [
+        {
+          "task": null,
+          "stub": true,
+          "d": "M260,163 H257 Q251,163 251,169 V296 Q251,302 257,302 H270",
+          "bends": 2,
+          "px": 162,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-top-en-deep-scrolled",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 260,
+          "y": 163
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-upload",
+          "stub": false,
+          "d": "M260,163 H257 Q251,163 251,169 V563.875 Q251,569.875 257,569.875 H269.5",
+          "bends": 2,
+          "px": 430,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-top-folded-en-inbox-first",
+      "skipped": "no target in this layout",
+      "seatPorts": [],
+      "wires": []
+    },
+    {
+      "id": "1000-top-folded-en-assigned-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 260,
+          "y": 163
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M260,163 H257 Q251,163 251,169 V306 Q251,312 257,312 H269.5",
+          "bends": 2,
+          "px": 172,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-top-folded-en-assigned-deep",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 260,
+          "y": 163
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-export",
+          "stub": false,
+          "d": "M260,163 H257 Q251,163 251,169 V563.875 Q251,569.875 257,569.875 H269.5",
+          "bends": 2,
+          "px": 430,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-top-folded-en-blocked-first",
+      "skipped": "no target in this layout",
+      "seatPorts": [],
+      "wires": []
+    },
+    {
+      "id": "1000-top-folded-en-several",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 260,
+          "y": 163
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M260,163 H257 Q251,163 251,169 V306 Q251,312 257,312 H269.5",
+          "bends": 2,
+          "px": 172,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-top-folded-en-hidden-below",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 260,
+          "y": 163
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-rounds",
+          "stub": false,
+          "d": "M260,163 H257 Q251,163 251,169 V563.875 Q251,569.875 257,569.875 H269.5",
+          "bends": 2,
+          "px": 430,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-top-folded-en-hidden-above",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 260,
+          "y": 163
+        }
+      ],
+      "wires": [
+        {
+          "task": null,
+          "stub": true,
+          "d": "M260,163 H257 Q251,163 251,169 V296 Q251,302 257,302 H270",
+          "bends": 2,
+          "px": 162,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-top-folded-en-deep-scrolled",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 260,
+          "y": 163
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-upload",
+          "stub": false,
+          "d": "M260,163 H257 Q251,163 251,169 V563.875 Q251,569.875 257,569.875 H269.5",
+          "bends": 2,
+          "px": 430,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-side-en-inbox-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 78,
+          "y": 210
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M78,210 H103.5",
+          "bends": 0,
+          "px": 26,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-side-en-assigned-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 78,
+          "y": 126
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M78,126 H371 Q377,126 377,132 V204 Q377,210 383,210 H395.5",
+          "bends": 2,
+          "px": 397,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-side-en-assigned-deep",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 78,
+          "y": 126
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-export",
+          "stub": false,
+          "d": "M78,126 H371 Q377,126 377,132 V485.875 Q377,491.875 383,491.875 H395.5",
+          "bends": 2,
+          "px": 679,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-side-en-blocked-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 78,
+          "y": 126
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M78,126 H863 Q869,126 869,132 V204 Q869,210 875,210 H887.5",
+          "bends": 2,
+          "px": 889,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-side-en-several",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 78,
+          "y": 210
+        },
+        {
+          "x": 78,
+          "y": 126
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M78,210 H103.5",
+          "bends": 0,
+          "px": 26,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        },
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M78,126 H371 Q377,126 377,132 V204 Q377,210 383,210 H395.5",
+          "bends": 2,
+          "px": 397,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 4
+        },
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M78,126 H863 Q869,126 869,132 V204 Q869,210 875,210 H887.5",
+          "bends": 2,
+          "px": 889,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 4
+        }
+      ]
+    },
+    {
+      "id": "1000-side-en-hidden-below",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 78,
+          "y": 126
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-rounds",
+          "stub": false,
+          "d": "M78,126 H371 Q377,126 377,132 V485.875 Q377,491.875 383,491.875 H395.5",
+          "bends": 2,
+          "px": 679,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-side-en-hidden-above",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 78,
+          "y": 126
+        }
+      ],
+      "wires": [
+        {
+          "task": null,
+          "stub": true,
+          "d": "M78,126 H371 Q377,126 377,132 V194 Q377,200 383,200 H396",
+          "bends": 2,
+          "px": 387,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-side-en-deep-scrolled",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 78,
+          "y": 126
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-upload",
+          "stub": false,
+          "d": "M78,126 H371 Q377,126 377,132 V485.875 Q377,491.875 383,491.875 H395.5",
+          "bends": 2,
+          "px": 679,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-top-narrow-en-inbox-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 764,
+          "y": 856
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M764,856 H265 Q259,856 259,862 V951 Q259,957 265,957 H277.5",
+          "bends": 2,
+          "px": 620,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-top-narrow-en-assigned-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 764,
+          "y": 856
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M764,856 H635.65625 Q629.65625,856 629.65625,862 V951 Q629.65625,957 635.65625,957 H648.15625",
+          "bends": 2,
+          "px": 249,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-top-narrow-en-blocked-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 1165.65625,
+          "y": 870
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M1165.65625,870 V951 Q1165.65625,957 1171.65625,957 H1184.15625",
+          "bends": 1,
+          "px": 103,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-top-narrow-en-several",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 764,
+          "y": 856
+        },
+        {
+          "x": 1165.65625,
+          "y": 870
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M764,856 H265 Q259,856 259,862 V951 Q259,957 265,957 H277.5",
+          "bends": 2,
+          "px": 620,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 6
+        },
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M764,856 H635.65625 Q629.65625,856 629.65625,862 V951 Q629.65625,957 635.65625,957 H648.15625",
+          "bends": 2,
+          "px": 249,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 6
+        },
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M1165.65625,870 V951 Q1165.65625,957 1171.65625,957 H1184.15625",
+          "bends": 1,
+          "px": 103,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "390-phone-en-assigned-first",
+      "skipped": null,
+      "seatPorts": [],
+      "wires": [
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M12,101.75 H11 Q5,101.75 5,107.75 V193.25 Q5,196.75 8.5,196.75 H8.5",
+          "bends": 2,
+          "px": 102,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "390-phone-en-assigned-deep",
+      "skipped": null,
+      "seatPorts": [],
+      "wires": [
+        {
+          "task": "t-merge-a",
+          "stub": false,
+          "d": "M12,101.75 H11 Q5,101.75 5,107.75 V343.875 Q5,347.375 8.5,347.375 H8.5",
+          "bends": 2,
+          "px": 253,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "390-phone-en-inbox-first",
+      "skipped": null,
+      "seatPorts": [],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M12,101.75 H11 Q5,101.75 5,107.75 V193.25 Q5,196.75 8.5,196.75 H8.5",
+          "bends": 2,
+          "px": 102,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "390-phone-en-several",
+      "skipped": null,
+      "seatPorts": [],
+      "wires": [
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M12,101.75 H11 Q5,101.75 5,107.75 V193.25 Q5,196.75 8.5,196.75 H8.5",
+          "bends": 2,
+          "px": 102,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        },
+        {
+          "task": "t-export",
+          "stub": false,
+          "d": "M12,101.75 H11 Q5,101.75 5,107.75 V343.875 Q5,347.375 8.5,347.375 H8.5",
+          "bends": 2,
+          "px": 253,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 2
+        },
+        {
+          "task": "t-rounds",
+          "stub": false,
+          "d": "M12,101.75 H11 Q5,101.75 5,107.75 V459.75 Q5,463.25 8.5,463.25 H8.5",
+          "bends": 2,
+          "px": 368,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 4
+        }
+      ]
+    },
+    {
+      "id": "390-phone-en-hidden-below",
+      "skipped": null,
+      "seatPorts": [],
+      "wires": [
+        {
+          "task": "t-bulk-29",
+          "stub": false,
+          "d": "M12,101.75 H11 Q5,101.75 5,107.75 V343.875 Q5,347.375 8.5,347.375 H8.5",
+          "bends": 2,
+          "px": 253,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "390-phone-en-other-tab",
+      "skipped": null,
+      "seatPorts": [],
+      "wires": []
+    },
+    {
+      "id": "1920-top-uk-inbox-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 564,
+          "y": 856
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M564,856 H265 Q259,856 259,862 V951 Q259,957 265,957 H277.5",
+          "bends": 2,
+          "px": 420,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-top-uk-assigned-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 629.65625,
+          "y": 870
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M629.65625,870 V951 Q629.65625,957 635.65625,957 H648.15625",
+          "bends": 1,
+          "px": 103,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-top-uk-assigned-deep",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 629.65625,
+          "y": 870
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M629.65625,870 V951 Q629.65625,957 635.65625,957 H648.15625",
+          "bends": 1,
+          "px": 103,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-top-uk-blocked-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 1165.65625,
+          "y": 870
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M1165.65625,870 V951 Q1165.65625,957 1171.65625,957 H1184.15625",
+          "bends": 1,
+          "px": 103,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-top-uk-several",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 564,
+          "y": 856
+        },
+        {
+          "x": 629.65625,
+          "y": 870
+        },
+        {
+          "x": 1165.65625,
+          "y": 870
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M564,856 H265 Q259,856 259,862 V951 Q259,957 265,957 H277.5",
+          "bends": 2,
+          "px": 420,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        },
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M629.65625,870 V951 Q629.65625,957 635.65625,957 H648.15625",
+          "bends": 1,
+          "px": 103,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        },
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M1165.65625,870 V951 Q1165.65625,957 1171.65625,957 H1184.15625",
+          "bends": 1,
+          "px": 103,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-top-uk-hidden-below",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 629.65625,
+          "y": 870
+        }
+      ],
+      "wires": [
+        {
+          "task": null,
+          "stub": true,
+          "d": "M629.65625,870 V1058 Q629.65625,1064 635.65625,1064 H648.65625",
+          "bends": 1,
+          "px": 211,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-top-uk-hidden-above",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 629.65625,
+          "y": 870
+        }
+      ],
+      "wires": [
+        {
+          "task": null,
+          "stub": true,
+          "d": "M629.65625,870 V941 Q629.65625,947 635.65625,947 H648.65625",
+          "bends": 1,
+          "px": 94,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-top-uk-deep-scrolled",
+      "skipped": "no target in this layout",
+      "seatPorts": [],
+      "wires": []
+    },
+    {
+      "id": "1920-top-folded-uk-inbox-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 268,
+          "y": 88
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M268,88 H265 Q259,88 259,94 V183 Q259,189 265,189 H277.5",
+          "bends": 2,
+          "px": 124,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-top-folded-uk-assigned-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 629.65625,
+          "y": 102
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M629.65625,102 V183 Q629.65625,189 635.65625,189 H648.15625",
+          "bends": 1,
+          "px": 103,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-top-folded-uk-assigned-deep",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 629.65625,
+          "y": 102
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-search",
+          "stub": false,
+          "d": "M629.65625,102 V464.875 Q629.65625,470.875 635.65625,470.875 H648.15625",
+          "bends": 1,
+          "px": 385,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-top-folded-uk-blocked-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 1165.65625,
+          "y": 102
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M1165.65625,102 V183 Q1165.65625,189 1171.65625,189 H1184.15625",
+          "bends": 1,
+          "px": 103,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-top-folded-uk-several",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 268,
+          "y": 88
+        },
+        {
+          "x": 629.65625,
+          "y": 102
+        },
+        {
+          "x": 1165.65625,
+          "y": 102
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M268,88 H265 Q259,88 259,94 V183 Q259,189 265,189 H277.5",
+          "bends": 2,
+          "px": 124,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        },
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M629.65625,102 V183 Q629.65625,189 635.65625,189 H648.15625",
+          "bends": 1,
+          "px": 103,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 4
+        },
+        {
+          "task": "t-rounds",
+          "stub": false,
+          "d": "M629.65625,102 V504.875 Q629.65625,510.875 635.65625,510.875 H648.15625",
+          "bends": 1,
+          "px": 425,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 4
+        },
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M1165.65625,102 V183 Q1165.65625,189 1171.65625,189 H1184.15625",
+          "bends": 1,
+          "px": 103,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-top-folded-uk-hidden-below",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 629.65625,
+          "y": 102
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-upload",
+          "stub": false,
+          "d": "M629.65625,102 V464.875 Q629.65625,470.875 635.65625,470.875 H648.15625",
+          "bends": 1,
+          "px": 385,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-top-folded-uk-hidden-above",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 629.65625,
+          "y": 102
+        }
+      ],
+      "wires": [
+        {
+          "task": null,
+          "stub": true,
+          "d": "M629.65625,102 V173 Q629.65625,179 635.65625,179 H648.65625",
+          "bends": 1,
+          "px": 94,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-top-folded-uk-deep-scrolled",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 629.65625,
+          "y": 102
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-bulk-26",
+          "stub": false,
+          "d": "M629.65625,102 V464.875 Q629.65625,470.875 635.65625,470.875 H648.15625",
+          "bends": 1,
+          "px": 385,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-side-uk-inbox-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 135
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M414,135 H443.5",
+          "bends": 0,
+          "px": 30,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-side-uk-assigned-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 54
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M414,54 H734.328125 Q740.328125,54 740.328125,60 V129 Q740.328125,135 746.328125,135 H758.828125",
+          "bends": 2,
+          "px": 421,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-side-uk-assigned-deep",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 54
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-search",
+          "stub": false,
+          "d": "M414,54 H734.328125 Q740.328125,54 740.328125,60 V410.875 Q740.328125,416.875 746.328125,416.875 H758.828125",
+          "bends": 2,
+          "px": 703,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-side-uk-blocked-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 54
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M414,54 H1270.328125 Q1276.328125,54 1276.328125,60 V129 Q1276.328125,135 1282.328125,135 H1294.828125",
+          "bends": 2,
+          "px": 957,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-side-uk-several",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 135
+        },
+        {
+          "x": 414,
+          "y": 54
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M414,135 H443.5",
+          "bends": 0,
+          "px": 30,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        },
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M414,54 H734.328125 Q740.328125,54 740.328125,60 V129 Q740.328125,135 746.328125,135 H758.828125",
+          "bends": 2,
+          "px": 421,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 4
+        },
+        {
+          "task": "t-rounds",
+          "stub": false,
+          "d": "M414,54 H734.328125 Q740.328125,54 740.328125,60 V450.875 Q740.328125,456.875 746.328125,456.875 H758.828125",
+          "bends": 2,
+          "px": 743,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 4
+        },
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M414,54 H1270.328125 Q1276.328125,54 1276.328125,60 V129 Q1276.328125,135 1282.328125,135 H1294.828125",
+          "bends": 2,
+          "px": 957,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 6
+        }
+      ]
+    },
+    {
+      "id": "1920-side-uk-hidden-below",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 54
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-upload",
+          "stub": false,
+          "d": "M414,54 H734.328125 Q740.328125,54 740.328125,60 V410.875 Q740.328125,416.875 746.328125,416.875 H758.828125",
+          "bends": 2,
+          "px": 703,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-side-uk-hidden-above",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 54
+        }
+      ],
+      "wires": [
+        {
+          "task": null,
+          "stub": true,
+          "d": "M414,54 H734.328125 Q740.328125,54 740.328125,60 V119 Q740.328125,125 746.328125,125 H759.328125",
+          "bends": 2,
+          "px": 412,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-side-uk-deep-scrolled",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 54
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-bulk-29",
+          "stub": false,
+          "d": "M414,54 H734.328125 Q740.328125,54 740.328125,60 V410.875 Q740.328125,416.875 746.328125,416.875 H758.828125",
+          "bends": 2,
+          "px": 703,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-top-uk-inbox-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 324,
+          "y": 721
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M324,721 H261 Q255,721 255,727 V856 Q255,862 261,862 H273.5",
+          "bends": 2,
+          "px": 224,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-top-uk-assigned-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 590.65625,
+          "y": 735
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M590.65625,735 V772 Q590.65625,778 584.65625,778 H553 Q547,778 547,784 V856 Q547,862 553,862 H565.5",
+          "bends": 3,
+          "px": 182,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-top-uk-assigned-deep",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 590.65625,
+          "y": 735
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M590.65625,735 V772 Q590.65625,778 584.65625,778 H553 Q547,778 547,784 V856 Q547,862 553,862 H565.5",
+          "bends": 3,
+          "px": 182,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-top-uk-blocked-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 1039,
+          "y": 735
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M1039,735 V856 Q1039,862 1045,862 H1057.5",
+          "bends": 1,
+          "px": 143,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-top-uk-several",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 324,
+          "y": 721
+        },
+        {
+          "x": 590.65625,
+          "y": 735
+        },
+        {
+          "x": 1039,
+          "y": 735
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M324,721 H261 Q255,721 255,727 V856 Q255,862 261,862 H273.5",
+          "bends": 2,
+          "px": 224,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        },
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M590.65625,735 V772 Q590.65625,778 584.65625,778 H553 Q547,778 547,784 V856 Q547,862 553,862 H565.5",
+          "bends": 3,
+          "px": 182,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        },
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M1039,735 V856 Q1039,862 1045,862 H1057.5",
+          "bends": 1,
+          "px": 143,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-top-uk-hidden-below",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 617.34375,
+          "y": 735
+        }
+      ],
+      "wires": [
+        {
+          "task": null,
+          "stub": true,
+          "d": "M617.34375,735 V772 Q617.34375,778 611.34375,778 H553 Q547,778 547,784 V878 Q547,884 553,884 H566",
+          "bends": 3,
+          "px": 232,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-top-uk-hidden-above",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 617.34375,
+          "y": 735
+        }
+      ],
+      "wires": [
+        {
+          "task": null,
+          "stub": true,
+          "d": "M617.34375,735 V772 Q617.34375,778 611.34375,778 H553 Q547,778 547,784 V846 Q547,852 553,852 H566",
+          "bends": 3,
+          "px": 200,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-top-uk-deep-scrolled",
+      "skipped": "no target in this layout",
+      "seatPorts": [],
+      "wires": []
+    },
+    {
+      "id": "1440-top-folded-uk-inbox-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 264,
+          "y": 88
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M264,88 H261 Q255,88 255,94 V223 Q255,229 261,229 H273.5",
+          "bends": 2,
+          "px": 164,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-top-folded-uk-assigned-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 590.65625,
+          "y": 102
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M590.65625,102 V139 Q590.65625,145 584.65625,145 H553 Q547,145 547,151 V223 Q547,229 553,229 H565.5",
+          "bends": 3,
+          "px": 182,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-top-folded-uk-assigned-deep",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 590.65625,
+          "y": 102
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-rounds",
+          "stub": false,
+          "d": "M590.65625,102 V139 Q590.65625,145 584.65625,145 H553 Q547,145 547,151 V504.875 Q547,510.875 553,510.875 H565.5",
+          "bends": 3,
+          "px": 464,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-top-folded-uk-blocked-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 1039,
+          "y": 102
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M1039,102 V223 Q1039,229 1045,229 H1057.5",
+          "bends": 1,
+          "px": 143,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-top-folded-uk-several",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 264,
+          "y": 88
+        },
+        {
+          "x": 590.65625,
+          "y": 102
+        },
+        {
+          "x": 1039,
+          "y": 102
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M264,88 H261 Q255,88 255,94 V223 Q255,229 261,229 H273.5",
+          "bends": 2,
+          "px": 164,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        },
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M590.65625,102 V139 Q590.65625,145 584.65625,145 H553 Q547,145 547,151 V223 Q547,229 553,229 H565.5",
+          "bends": 3,
+          "px": 182,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 4
+        },
+        {
+          "task": "t-rounds",
+          "stub": false,
+          "d": "M590.65625,102 V139 Q590.65625,145 584.65625,145 H553 Q547,145 547,151 V544.875 Q547,550.875 553,550.875 H565.5",
+          "bends": 3,
+          "px": 504,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 6
+        },
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M1039,102 V223 Q1039,229 1045,229 H1057.5",
+          "bends": 1,
+          "px": 143,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-top-folded-uk-hidden-below",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 617.34375,
+          "y": 102
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-search",
+          "stub": false,
+          "d": "M617.34375,102 V139 Q617.34375,145 611.34375,145 H553 Q547,145 547,151 V504.875 Q547,510.875 553,510.875 H565.5",
+          "bends": 3,
+          "px": 491,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-top-folded-uk-hidden-above",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 617.34375,
+          "y": 102
+        }
+      ],
+      "wires": [
+        {
+          "task": null,
+          "stub": true,
+          "d": "M617.34375,102 V139 Q617.34375,145 611.34375,145 H553 Q547,145 547,151 V213 Q547,219 553,219 H566",
+          "bends": 3,
+          "px": 200,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-top-folded-uk-deep-scrolled",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 617.34375,
+          "y": 102
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-upload",
+          "stub": false,
+          "d": "M617.34375,102 V139 Q617.34375,145 611.34375,145 H553 Q547,145 547,151 V504.875 Q547,510.875 553,510.875 H565.5",
+          "bends": 3,
+          "px": 491,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-side-uk-inbox-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 175
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M414,175 H439.5",
+          "bends": 0,
+          "px": 26,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-side-uk-assigned-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 91
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M414,91 H707 Q713,91 713,97 V169 Q713,175 719,175 H731.5",
+          "bends": 2,
+          "px": 397,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-side-uk-assigned-deep",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 91
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-rounds",
+          "stub": false,
+          "d": "M414,91 H707 Q713,91 713,97 V450.875 Q713,456.875 719,456.875 H731.5",
+          "bends": 2,
+          "px": 679,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-side-uk-blocked-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 91
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M414,91 H1199 Q1205,91 1205,97 V169 Q1205,175 1211,175 H1223.5",
+          "bends": 2,
+          "px": 889,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-side-uk-several",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 175
+        },
+        {
+          "x": 414,
+          "y": 91
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M414,175 H439.5",
+          "bends": 0,
+          "px": 26,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        },
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M414,91 H707 Q713,91 713,97 V169 Q713,175 719,175 H731.5",
+          "bends": 2,
+          "px": 397,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 4
+        },
+        {
+          "task": "t-rounds",
+          "stub": false,
+          "d": "M414,91 H707 Q713,91 713,97 V490.875 Q713,496.875 719,496.875 H731.5",
+          "bends": 2,
+          "px": 719,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 4
+        },
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M414,91 H1199 Q1205,91 1205,97 V169 Q1205,175 1211,175 H1223.5",
+          "bends": 2,
+          "px": 889,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 4
+        }
+      ]
+    },
+    {
+      "id": "1440-side-uk-hidden-below",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 91
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-search",
+          "stub": false,
+          "d": "M414,91 H707 Q713,91 713,97 V450.875 Q713,456.875 719,456.875 H731.5",
+          "bends": 2,
+          "px": 679,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-side-uk-hidden-above",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 91
+        }
+      ],
+      "wires": [
+        {
+          "task": null,
+          "stub": true,
+          "d": "M414,91 H707 Q713,91 713,97 V159 Q713,165 719,165 H732",
+          "bends": 2,
+          "px": 387,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1440-side-uk-deep-scrolled",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 91
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-upload",
+          "stub": false,
+          "d": "M414,91 H707 Q713,91 713,97 V450.875 Q713,456.875 719,456.875 H731.5",
+          "bends": 2,
+          "px": 679,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1280-top-uk-inbox-first",
+      "skipped": "no target in this layout",
+      "seatPorts": [],
+      "wires": []
+    },
+    {
+      "id": "1280-top-uk-assigned-first",
+      "skipped": "no target in this layout",
+      "seatPorts": [],
+      "wires": []
+    },
+    {
+      "id": "1280-top-uk-assigned-deep",
+      "skipped": "no target in this layout",
+      "seatPorts": [],
+      "wires": []
+    },
+    {
+      "id": "1280-top-uk-blocked-first",
+      "skipped": "no target in this layout",
+      "seatPorts": [],
+      "wires": []
+    },
+    {
+      "id": "1280-top-uk-several",
+      "skipped": "no target in this layout",
+      "seatPorts": [],
+      "wires": []
+    },
+    {
+      "id": "1280-top-uk-hidden-below",
+      "skipped": null,
+      "seatPorts": [],
+      "wires": []
+    },
+    {
+      "id": "1280-top-uk-hidden-above",
+      "skipped": null,
+      "seatPorts": [],
+      "wires": []
+    },
+    {
+      "id": "1280-top-uk-deep-scrolled",
+      "skipped": "no target in this layout",
+      "seatPorts": [],
+      "wires": []
+    },
+    {
+      "id": "1280-top-folded-uk-inbox-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 264,
+          "y": 123
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M264,123 H261 Q255,123 255,129 V258 Q255,264 261,264 H273.5",
+          "bends": 2,
+          "px": 164,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1280-top-folded-uk-assigned-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 590.65625,
+          "y": 137
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M590.65625,137 V174 Q590.65625,180 584.65625,180 H553 Q547,180 547,186 V258 Q547,264 553,264 H565.5",
+          "bends": 3,
+          "px": 182,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1280-top-folded-uk-assigned-deep",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 590.65625,
+          "y": 137
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-export",
+          "stub": false,
+          "d": "M590.65625,137 V174 Q590.65625,180 584.65625,180 H553 Q547,180 547,186 V539.875 Q547,545.875 553,545.875 H565.5",
+          "bends": 3,
+          "px": 464,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1280-top-folded-uk-blocked-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 1039,
+          "y": 137
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M1039,137 V258 Q1039,264 1045,264 H1057.5",
+          "bends": 1,
+          "px": 143,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1280-top-folded-uk-several",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 264,
+          "y": 123
+        },
+        {
+          "x": 590.65625,
+          "y": 137
+        },
+        {
+          "x": 1039,
+          "y": 137
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M264,123 H261 Q255,123 255,129 V258 Q255,264 261,264 H273.5",
+          "bends": 2,
+          "px": 164,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        },
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M590.65625,137 V174 Q590.65625,180 584.65625,180 H553 Q547,180 547,186 V258 Q547,264 553,264 H565.5",
+          "bends": 3,
+          "px": 182,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        },
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M1039,137 V258 Q1039,264 1045,264 H1057.5",
+          "bends": 1,
+          "px": 143,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1280-top-folded-uk-hidden-below",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 617.34375,
+          "y": 137
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-rounds",
+          "stub": false,
+          "d": "M617.34375,137 V174 Q617.34375,180 611.34375,180 H553 Q547,180 547,186 V539.875 Q547,545.875 553,545.875 H565.5",
+          "bends": 3,
+          "px": 491,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1280-top-folded-uk-hidden-above",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 617.34375,
+          "y": 137
+        }
+      ],
+      "wires": [
+        {
+          "task": null,
+          "stub": true,
+          "d": "M617.34375,137 V174 Q617.34375,180 611.34375,180 H553 Q547,180 547,186 V248 Q547,254 553,254 H566",
+          "bends": 3,
+          "px": 200,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1280-top-folded-uk-deep-scrolled",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 617.34375,
+          "y": 137
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-upload",
+          "stub": false,
+          "d": "M617.34375,137 V174 Q617.34375,180 611.34375,180 H553 Q547,180 547,186 V539.875 Q547,545.875 553,545.875 H565.5",
+          "bends": 3,
+          "px": 491,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1280-side-uk-inbox-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 175
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M414,175 H439.5",
+          "bends": 0,
+          "px": 26,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1280-side-uk-assigned-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 91
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M414,91 H707 Q713,91 713,97 V169 Q713,175 719,175 H731.5",
+          "bends": 2,
+          "px": 397,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1280-side-uk-assigned-deep",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 91
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-rounds",
+          "stub": false,
+          "d": "M414,91 H707 Q713,91 713,97 V450.875 Q713,456.875 719,456.875 H731.5",
+          "bends": 2,
+          "px": 679,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1280-side-uk-blocked-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 91
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M414,91 H1199 Q1205,91 1205,97 V169 Q1205,175 1211,175 H1223.5",
+          "bends": 2,
+          "px": 889,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1280-side-uk-several",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 175
+        },
+        {
+          "x": 414,
+          "y": 91
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M414,175 H439.5",
+          "bends": 0,
+          "px": 26,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        },
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M414,91 H707 Q713,91 713,97 V169 Q713,175 719,175 H731.5",
+          "bends": 2,
+          "px": 397,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 4
+        },
+        {
+          "task": "t-rounds",
+          "stub": false,
+          "d": "M414,91 H707 Q713,91 713,97 V490.875 Q713,496.875 719,496.875 H731.5",
+          "bends": 2,
+          "px": 719,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 4
+        },
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M414,91 H1199 Q1205,91 1205,97 V169 Q1205,175 1211,175 H1223.5",
+          "bends": 2,
+          "px": 889,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 4
+        }
+      ]
+    },
+    {
+      "id": "1280-side-uk-hidden-below",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 91
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-search",
+          "stub": false,
+          "d": "M414,91 H707 Q713,91 713,97 V450.875 Q713,456.875 719,456.875 H731.5",
+          "bends": 2,
+          "px": 679,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1280-side-uk-hidden-above",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 91
+        }
+      ],
+      "wires": [
+        {
+          "task": null,
+          "stub": true,
+          "d": "M414,91 H707 Q713,91 713,97 V159 Q713,165 719,165 H732",
+          "bends": 2,
+          "px": 387,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1280-side-uk-deep-scrolled",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 414,
+          "y": 91
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-upload",
+          "stub": false,
+          "d": "M414,91 H707 Q713,91 713,97 V450.875 Q713,456.875 719,456.875 H731.5",
+          "bends": 2,
+          "px": 679,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-top-uk-inbox-first",
+      "skipped": "no target in this layout",
+      "seatPorts": [],
+      "wires": []
+    },
+    {
+      "id": "1000-top-uk-assigned-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 260,
+          "y": 163
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M260,163 H257 Q251,163 251,169 V306 Q251,312 257,312 H269.5",
+          "bends": 2,
+          "px": 172,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-top-uk-assigned-deep",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 260,
+          "y": 163
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-export",
+          "stub": false,
+          "d": "M260,163 H257 Q251,163 251,169 V563.875 Q251,569.875 257,569.875 H269.5",
+          "bends": 2,
+          "px": 430,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-top-uk-blocked-first",
+      "skipped": "no target in this layout",
+      "seatPorts": [],
+      "wires": []
+    },
+    {
+      "id": "1000-top-uk-several",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 260,
+          "y": 163
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M260,163 H257 Q251,163 251,169 V306 Q251,312 257,312 H269.5",
+          "bends": 2,
+          "px": 172,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-top-uk-hidden-below",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 260,
+          "y": 163
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-rounds",
+          "stub": false,
+          "d": "M260,163 H257 Q251,163 251,169 V563.875 Q251,569.875 257,569.875 H269.5",
+          "bends": 2,
+          "px": 430,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-top-uk-hidden-above",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 260,
+          "y": 163
+        }
+      ],
+      "wires": [
+        {
+          "task": null,
+          "stub": true,
+          "d": "M260,163 H257 Q251,163 251,169 V296 Q251,302 257,302 H270",
+          "bends": 2,
+          "px": 162,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-top-uk-deep-scrolled",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 260,
+          "y": 163
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-upload",
+          "stub": false,
+          "d": "M260,163 H257 Q251,163 251,169 V563.875 Q251,569.875 257,569.875 H269.5",
+          "bends": 2,
+          "px": 430,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-top-folded-uk-inbox-first",
+      "skipped": "no target in this layout",
+      "seatPorts": [],
+      "wires": []
+    },
+    {
+      "id": "1000-top-folded-uk-assigned-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 260,
+          "y": 163
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M260,163 H257 Q251,163 251,169 V306 Q251,312 257,312 H269.5",
+          "bends": 2,
+          "px": 172,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-top-folded-uk-assigned-deep",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 260,
+          "y": 163
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-export",
+          "stub": false,
+          "d": "M260,163 H257 Q251,163 251,169 V563.875 Q251,569.875 257,569.875 H269.5",
+          "bends": 2,
+          "px": 430,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-top-folded-uk-blocked-first",
+      "skipped": "no target in this layout",
+      "seatPorts": [],
+      "wires": []
+    },
+    {
+      "id": "1000-top-folded-uk-several",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 260,
+          "y": 163
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M260,163 H257 Q251,163 251,169 V306 Q251,312 257,312 H269.5",
+          "bends": 2,
+          "px": 172,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-top-folded-uk-hidden-below",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 260,
+          "y": 163
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-rounds",
+          "stub": false,
+          "d": "M260,163 H257 Q251,163 251,169 V563.875 Q251,569.875 257,569.875 H269.5",
+          "bends": 2,
+          "px": 430,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-top-folded-uk-hidden-above",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 260,
+          "y": 163
+        }
+      ],
+      "wires": [
+        {
+          "task": null,
+          "stub": true,
+          "d": "M260,163 H257 Q251,163 251,169 V296 Q251,302 257,302 H270",
+          "bends": 2,
+          "px": 162,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-top-folded-uk-deep-scrolled",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 260,
+          "y": 163
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-upload",
+          "stub": false,
+          "d": "M260,163 H257 Q251,163 251,169 V563.875 Q251,569.875 257,569.875 H269.5",
+          "bends": 2,
+          "px": 430,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-side-uk-inbox-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 78,
+          "y": 210
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M78,210 H103.5",
+          "bends": 0,
+          "px": 26,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-side-uk-assigned-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 78,
+          "y": 126
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M78,126 H371 Q377,126 377,132 V204 Q377,210 383,210 H395.5",
+          "bends": 2,
+          "px": 397,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-side-uk-assigned-deep",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 78,
+          "y": 126
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-export",
+          "stub": false,
+          "d": "M78,126 H371 Q377,126 377,132 V485.875 Q377,491.875 383,491.875 H395.5",
+          "bends": 2,
+          "px": 679,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-side-uk-blocked-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 78,
+          "y": 126
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M78,126 H863 Q869,126 869,132 V204 Q869,210 875,210 H887.5",
+          "bends": 2,
+          "px": 889,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-side-uk-several",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 78,
+          "y": 210
+        },
+        {
+          "x": 78,
+          "y": 126
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M78,210 H103.5",
+          "bends": 0,
+          "px": 26,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        },
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M78,126 H371 Q377,126 377,132 V204 Q377,210 383,210 H395.5",
+          "bends": 2,
+          "px": 397,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 4
+        },
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M78,126 H863 Q869,126 869,132 V204 Q869,210 875,210 H887.5",
+          "bends": 2,
+          "px": 889,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 4
+        }
+      ]
+    },
+    {
+      "id": "1000-side-uk-hidden-below",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 78,
+          "y": 126
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-rounds",
+          "stub": false,
+          "d": "M78,126 H371 Q377,126 377,132 V485.875 Q377,491.875 383,491.875 H395.5",
+          "bends": 2,
+          "px": 679,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-side-uk-hidden-above",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 78,
+          "y": 126
+        }
+      ],
+      "wires": [
+        {
+          "task": null,
+          "stub": true,
+          "d": "M78,126 H371 Q377,126 377,132 V194 Q377,200 383,200 H396",
+          "bends": 2,
+          "px": 387,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1000-side-uk-deep-scrolled",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 78,
+          "y": 126
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-upload",
+          "stub": false,
+          "d": "M78,126 H371 Q377,126 377,132 V485.875 Q377,491.875 383,491.875 H395.5",
+          "bends": 2,
+          "px": 679,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-top-narrow-uk-inbox-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 764,
+          "y": 856
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M764,856 H265 Q259,856 259,862 V951 Q259,957 265,957 H277.5",
+          "bends": 2,
+          "px": 620,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-top-narrow-uk-assigned-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 764,
+          "y": 856
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M764,856 H635.65625 Q629.65625,856 629.65625,862 V951 Q629.65625,957 635.65625,957 H648.15625",
+          "bends": 2,
+          "px": 249,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-top-narrow-uk-blocked-first",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 1165.65625,
+          "y": 870
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M1165.65625,870 V951 Q1165.65625,957 1171.65625,957 H1184.15625",
+          "bends": 1,
+          "px": 103,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "1920-top-narrow-uk-several",
+      "skipped": null,
+      "seatPorts": [
+        {
+          "x": 764,
+          "y": 856
+        },
+        {
+          "x": 1165.65625,
+          "y": 870
+        }
+      ],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M764,856 H265 Q259,856 259,862 V951 Q259,957 265,957 H277.5",
+          "bends": 2,
+          "px": 620,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 6
+        },
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M764,856 H635.65625 Q629.65625,856 629.65625,862 V951 Q629.65625,957 635.65625,957 H648.15625",
+          "bends": 2,
+          "px": 249,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 6
+        },
+        {
+          "task": "t-limits",
+          "stub": false,
+          "d": "M1165.65625,870 V951 Q1165.65625,957 1171.65625,957 H1184.15625",
+          "bends": 1,
+          "px": 103,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "390-phone-uk-assigned-first",
+      "skipped": null,
+      "seatPorts": [],
+      "wires": [
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M12,101.75 H11 Q5,101.75 5,107.75 V193.25 Q5,196.75 8.5,196.75 H8.5",
+          "bends": 2,
+          "px": 102,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "390-phone-uk-assigned-deep",
+      "skipped": null,
+      "seatPorts": [],
+      "wires": [
+        {
+          "task": "t-merge-a",
+          "stub": false,
+          "d": "M12,101.75 H11 Q5,101.75 5,107.75 V343.875 Q5,347.375 8.5,347.375 H8.5",
+          "bends": 2,
+          "px": 253,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "390-phone-uk-inbox-first",
+      "skipped": null,
+      "seatPorts": [],
+      "wires": [
+        {
+          "task": "t-pending",
+          "stub": false,
+          "d": "M12,101.75 H11 Q5,101.75 5,107.75 V193.25 Q5,196.75 8.5,196.75 H8.5",
+          "bends": 2,
+          "px": 102,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "390-phone-uk-several",
+      "skipped": null,
+      "seatPorts": [],
+      "wires": [
+        {
+          "task": "t-links",
+          "stub": false,
+          "d": "M12,101.75 H11 Q5,101.75 5,107.75 V193.25 Q5,196.75 8.5,196.75 H8.5",
+          "bends": 2,
+          "px": 102,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        },
+        {
+          "task": "t-export",
+          "stub": false,
+          "d": "M12,101.75 H11 Q5,101.75 5,107.75 V343.875 Q5,347.375 8.5,347.375 H8.5",
+          "bends": 2,
+          "px": 253,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 2
+        },
+        {
+          "task": "t-rounds",
+          "stub": false,
+          "d": "M12,101.75 H11 Q5,101.75 5,107.75 V459.75 Q5,463.25 8.5,463.25 H8.5",
+          "bends": 2,
+          "px": 368,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 4
+        }
+      ]
+    },
+    {
+      "id": "390-phone-uk-hidden-below",
+      "skipped": null,
+      "seatPorts": [],
+      "wires": [
+        {
+          "task": "t-bulk-29",
+          "stub": false,
+          "d": "M12,101.75 H11 Q5,101.75 5,107.75 V343.875 Q5,347.375 8.5,347.375 H8.5",
+          "bends": 2,
+          "px": 253,
+          "cardPx": 0,
+          "seatPx": 0,
+          "textPx": 0,
+          "sharedOutsideTrunk": false,
+          "nearParallelPx": 0
+        }
+      ]
+    },
+    {
+      "id": "390-phone-uk-other-tab",
+      "skipped": null,
+      "seatPorts": [],
+      "wires": []
+    }
+  ]
+}

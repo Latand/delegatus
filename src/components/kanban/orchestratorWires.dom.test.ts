@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 
 import { ORCHESTRATOR_WIRE_FADE_MS, ORCHESTRATOR_WIRE_HOLD_MS } from "./orchestratorArrows";
@@ -295,4 +295,237 @@ test("repeated actions in a hidden tab keep one pulse a wire, and the hold's end
   expect(node()).toBeNull();
   expect(live()).toEqual([]);
   expect(document.querySelectorAll(".oa-dot, .oa-ring").length).toBe(0);
+});
+
+describe("route geometry across the board's layouts", () => {
+  /* docs/design/orchestrator-wire-routing.md: for each layout of the case study,
+     the number of bends (rounded corners, `Q` in the path) and no straight run
+     through a card, the seat panel or a row of column links. The boxes are the
+     case study's own, measured in the browser at the layouts named. */
+  beforeEach(() => { dom.happyDOM.setViewport({ width: 1920, height: 1080 }); });
+
+  type R = [left: number, top: number, right: number, bottom: number];
+  const box = ([left, top, right, bottom]: R) => ({ x: left, y: top, left, top, right, bottom, width: right - left, height: bottom - top, toJSON() {} }) as DOMRect;
+
+  /* A desktop board: the seat, the columns (each with its scroller from 46 px under its top), the cards, and the row of column links. */
+  function layout(spec: { seat: R; placement: "top" | "side"; columns: Record<string, R>; cards: Record<string, [status: string, box: R]>; links?: R[] }) {
+    const root = document.createElement("div");
+    root.className = "kb";
+    const links = (spec.links ?? []).map((_, index) => `<button data-link="${index}"></button>`).join("");
+    root.innerHTML = `<section data-kanban-seat="atlas" data-placement="${spec.placement}"></section>
+      ${links ? `<div class="tabs-nav jump">${links}</div>` : ""}
+      ${Object.keys(spec.columns).map((status) => `<section class="column" data-status="${status}"><div class="col-body">${
+        Object.entries(spec.cards).filter(([, [at]]) => at === status).map(([id]) => `<article class="card" data-id="task:${id}"></article>`).join("")
+      }</div></section>`).join("")}`;
+    document.body.append(root);
+    const place = (node: Element | null, at: R) => { if (node) (node as HTMLElement).getBoundingClientRect = () => box(at); };
+    place(root.querySelector("[data-kanban-seat]"), spec.seat);
+    spec.links?.forEach((at, index) => place(root.querySelector(`[data-link="${index}"]`), at));
+    for (const [status, at] of Object.entries(spec.columns)) {
+      place(root.querySelector(`.column[data-status="${status}"]`), at);
+      place(root.querySelector(`.column[data-status="${status}"] .col-body`), [at[0], at[1] + 46, at[2], at[3]]);
+    }
+    for (const [id, [, at]] of Object.entries(spec.cards)) place(root.querySelector(`[data-id="task:${id}"]`), at);
+    const layer = createOrchestratorWires({ root, phone: false });
+    layers.push(layer);
+    const act = (...ids: string[]) => layer.act(ids.map((taskId) => ({ kind: "pipeline" as const, taskId, pipelineId: `p-${taskId}`, at: Date.now() })));
+    const wire = (id: string) => root.querySelector(`g[data-wire="${id}"] path.oa-wire`)?.getAttribute("d") ?? null;
+    const stub = () => root.querySelector("path.oa-wire[data-stub]")?.getAttribute("d") ?? null;
+    const seatPorts = () => [...root.querySelectorAll(".oa-port[data-seat]")].map((port) => `M${port.getAttribute("cx")},${port.getAttribute("cy")}`);
+    return { act, wire, stub, seatPorts, spec };
+  }
+
+  /* The path's corners as a polyline: every M/H/V end and every Q end point. */
+  function points(d: string): { x: number; y: number }[] {
+    const out: { x: number; y: number }[] = [];
+    let at = { x: 0, y: 0 };
+    for (const [, op, args] of d.matchAll(/([MHVQ])\s*([^MHVQ]*)/g)) {
+      const n = args!.trim().split(/[\s,]+/).map(Number);
+      if (op === "M") at = { x: n[0]!, y: n[1]! };
+      else if (op === "H") at = { x: n[0]!, y: at.y };
+      else if (op === "V") at = { x: at.x, y: n[0]! };
+      else at = { x: n[2]!, y: n[3]! };
+      out.push(at);
+    }
+    return out;
+  }
+  const bends = (d: string) => (d.match(/Q/g) ?? []).length;
+  const length = (d: string) => Math.round(points(d).reduce((sum, p, i, all) => (i ? sum + Math.hypot(p.x - all[i - 1]!.x, p.y - all[i - 1]!.y) : 0), 0));
+  /** Whether any straight run of the path passes through the inside of a box (1.5 px inset). */
+  function through(d: string, boxes: R[]): boolean {
+    const list = points(d);
+    for (let i = 1; i < list.length; i++) {
+      const a = list[i - 1]!, b = list[i]!;
+      for (let s = 0; s <= 40; s++) {
+        const x = a.x + ((b.x - a.x) * s) / 40, y = a.y + ((b.y - a.y) * s) / 40;
+        if (boxes.some(([l, t, r, bt]) => x > l + 1.5 && x < r - 1.5 && y > t + 1.5 && y < bt - 1.5)) return true;
+      }
+    }
+    return false;
+  }
+  const obstacles = (spec: ReturnType<typeof layout>["spec"]) => [spec.seat, ...Object.values(spec.cards).map(([, at]) => at), ...(spec.links ?? [])];
+
+  /* The operator's board (2026-10-07) as the fixture draws it at 1920 × 1080, the wide mode: the seat on
+     top, open, centred over the columns; Inbox starts left of it (routes.json, 1920-top-en-*). */
+  const WIDE = {
+    seat: [564, 60, 1604, 870] as R,
+    columns: { inbox: [268, 882, 623, 1080] as R, assigned: [639, 882, 1159, 1080] as R, blocked: [1175, 882, 1529, 1080] as R, done: [1545, 882, 1900, 1080] as R },
+  };
+
+  test("seat on top over the target's gutter (the operator's case): one elbow down from the seat's foot, through nothing", () => {
+    const { act, wire, spec } = layout({ ...WIDE, placement: "top", cards: { a: ["assigned", [652, 935, 1146, 1245]] } });
+    act("a");
+    const d = wire("a")!;
+    expect(bends(d)).toBe(1);
+    expect(d.startsWith("M630,870 ")).toBe(true);
+    expect(through(d, obstacles(spec))).toBe(false);
+    expect(length(d)).toBeLessThan(120);
+  });
+
+  test("seat on top, target column left of it: two elbows out of the seat's left side", () => {
+    const { act, wire, spec } = layout({ ...WIDE, placement: "top", cards: { a: ["inbox", [281, 935, 610, 1192]] } });
+    act("a");
+    const d = wire("a")!;
+    expect(bends(d)).toBe(2);
+    expect(d.startsWith(`M${WIDE.seat[0]},`)).toBe(true);
+    expect(through(d, obstacles(spec))).toBe(false);
+  });
+
+  test("seat on top narrowed by its width grip, target column right of it: two elbows out of the seat's right side", () => {
+    const { act, wire, spec } = layout({ ...WIDE, seat: [784, 60, 1384, 870], placement: "top", cards: { a: ["done", [1558, 935, 1888, 1060]] } });
+    act("a");
+    const d = wire("a")!;
+    expect(bends(d)).toBe(2);
+    expect(d.startsWith("M1384,")).toBe(true);
+    expect(through(d, obstacles(spec))).toBe(false);
+  });
+
+  /* 1440 × 900 beside the sidebar: the scrolling board, its row of column links under the seat (1440-top-en-*). */
+  const SCROLL = {
+    seat: [324, 60, 1364, 735] as R,
+    columns: { inbox: [264, 787, 544, 1571] as R, assigned: [556, 787, 1036, 1571] as R, blocked: [1048, 787, 1328, 1571] as R },
+    links: [[264, 747, 330, 775], [332, 747, 429, 775], [431, 747, 507, 775], [509, 747, 574, 775]] as R[],
+  };
+
+  test("a row of column links under the gutter: round it along the bus, three elbows, never through a link", () => {
+    const { act, wire, spec } = layout({ ...SCROLL, placement: "top", cards: { a: ["assigned", [569, 840, 1023, 1150]] } });
+    act("a");
+    const d = wire("a")!;
+    expect(bends(d)).toBe(3);
+    expect(through(d, obstacles(spec))).toBe(false);
+  });
+
+  test("a row of column links clear of the gutter: one elbow", () => {
+    const { act, wire, spec } = layout({ ...SCROLL, placement: "top", cards: { a: ["blocked", [1061, 840, 1315, 1150]] } });
+    act("a");
+    const d = wire("a")!;
+    expect(bends(d)).toBe(1);
+    expect(through(d, obstacles(spec))).toBe(false);
+  });
+
+  /* The seat at the side, 1440 × 900: the row of column links above the columns (1440-side-en-*). */
+  const SIDE = {
+    seat: [34, 48, 414, 900] as R,
+    columns: { inbox: [430, 100, 710, 884] as R, assigned: [722, 100, 1202, 884] as R },
+    links: [[430, 60, 496, 88], [498, 60, 595, 88], [597, 60, 673, 88], [675, 60, 740, 88]] as R[],
+  };
+
+  test("seat at the side, card in the column beside it: a straight wire", () => {
+    const { act, wire, spec } = layout({ ...SIDE, placement: "side", cards: { a: ["inbox", [443, 153, 697, 442]] } });
+    act("a");
+    const d = wire("a")!;
+    expect(bends(d)).toBe(0);
+    expect(through(d, obstacles(spec))).toBe(false);
+  });
+
+  test("seat at the side, card in a farther column: two elbows along the bus, over no card", () => {
+    const { act, wire, spec } = layout({ ...SIDE, placement: "side", cards: { a: ["assigned", [735, 153, 1189, 460]], b: ["inbox", [443, 153, 697, 600]] } });
+    act("a");
+    const d = wire("a")!;
+    expect(bends(d)).toBe(2);
+    expect(through(d, obstacles(spec))).toBe(false);
+  });
+
+  test("seat at the side with the columns flush with its top (1920, wide): two elbows, no hook back above the seat", () => {
+    const { act, wire, spec } = layout({
+      seat: [34, 48, 414, 1080], placement: "side",
+      columns: { inbox: [434, 60, 733, 1060], assigned: [749, 60, 1269, 1060] },
+      cards: { a: ["assigned", [762, 113, 1256, 423]], b: ["inbox", [447, 113, 720, 402]] },
+    });
+    act("a", "b");
+    const [a, b] = ["a", "b"].map((id) => wire(id)!);
+    expect(bends(a)).toBe(2);
+    expect(bends(b)).toBe(0);
+    /* Every horizontal run goes one way: right. */
+    for (const d of [a, b]) {
+      const xs = points(d).map((p) => p.x);
+      expect(xs.every((x, i) => !i || x >= xs[i - 1]!)).toBe(true);
+      expect(through(d, obstacles(spec))).toBe(false);
+    }
+  });
+
+  test("several wires at once: two cards of one column share their trunk from the seat, wires to other columns share nothing", () => {
+    const { act, wire, seatPorts, spec } = layout({ ...WIDE, placement: "top", cards: {
+      a: ["assigned", [652, 935, 1146, 1040]], b: ["assigned", [652, 1050, 1146, 1075]], c: ["blocked", [1188, 935, 1517, 1060]], i: ["inbox", [281, 935, 610, 1060]],
+    } });
+    act("a", "b", "c", "i");
+    const [a, b, c, i] = ["a", "b", "c", "i"].map((id) => wire(id)!);
+    for (const d of [a, b, c, i]) expect(through(d, obstacles(spec))).toBe(false);
+    expect([a, b, c, i].map(bends)).toEqual([1, 1, 1, 2]);
+    /* One trunk for a column: the same start; different columns: different starts. */
+    expect(a.split(" ")[0]).toBe(b.split(" ")[0]);
+    expect(new Set([a, c, i].map((d) => d.split(" ")[0])).size).toBe(3);
+    /* A port on the seat at each of the three exits. */
+    expect(seatPorts().sort()).toEqual([a, c, i].map((d) => d.split(" ")[0]!).sort());
+  });
+
+  test("a card scrolled out below its column: the count's wire takes the same one-elbow route", () => {
+    const { act, stub, spec } = layout({ ...WIDE, placement: "top", cards: { far: ["assigned", [652, 1400, 1146, 1600]] } });
+    act("far");
+    const d = stub()!;
+    expect(bends(d)).toBe(1);
+    expect(through(d, obstacles(spec))).toBe(false);
+  });
+
+  test("a column whose scroller shows a few pixels under its header draws no count over the header", () => {
+    /* 1280 × 800, the seat on top open: the columns start 4 px above the window's foot (1280-top-en-hidden-below). */
+    const { act, stub } = layout({
+      seat: [264, 95, 1264, 695], placement: "top", columns: { assigned: [556, 747, 1036, 1396] },
+      links: [[264, 707, 337, 735], [339, 707, 442, 735], [444, 707, 527, 735], [529, 707, 601, 735]],
+      cards: { far: ["assigned", [569, 900, 1023, 1100]] },
+    });
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 800 });
+    act("far");
+    expect(stub()).toBeNull();
+  });
+
+  test("a full-width row of tabs under the seat: no route through it, the margin route stays", () => {
+    /* 1000 × 700, the tabs mode (1000-top-en-*). */
+    const { act, wire, spec } = layout({
+      seat: [260, 135, 988, 177], placement: "top", columns: { assigned: [260, 237, 988, 700] },
+      links: [[260, 189, 439, 225], [443, 189, 622, 225], [626, 189, 805, 225], [809, 189, 988, 225]], cards: { a: ["assigned", [273, 290, 975, 576]] },
+    });
+    act("a");
+    const d = wire("a")!;
+    expect(bends(d)).toBe(2);
+    expect(through(d, obstacles(spec))).toBe(false);
+  });
+
+  test("the phone: the last corner never runs past the card's port", () => {
+    const root = document.createElement("div");
+    root.innerHTML = `<section data-mobile2-seat-card></section><div data-phone-kanban-column="assigned"><article data-phone-card="task:a"></article></div>`;
+    document.body.append(root);
+    const place = (selector: string, at: R) => { root.querySelector<HTMLElement>(selector)!.getBoundingClientRect = () => box(at); };
+    place("[data-mobile2-seat-card]", [12, 58, 378, 116]);
+    place("[data-phone-kanban-column]", [0, 169, 390, 787]);
+    place("[data-phone-card]", [12, 177, 334, 319]);
+    const layer = createOrchestratorWires({ root, phone: true });
+    layers.push(layer);
+    layer.act([{ kind: "pipeline", taskId: "a", pipelineId: "p", at: Date.now() }]);
+    const d = root.querySelector("g[data-wire] path.oa-wire")!.getAttribute("d")!;
+    /* The corner into the port ends at or before the port: no run back to the left. */
+    const [corner, end] = points(d).slice(-2);
+    expect(corner!.x).toBeLessThanOrEqual(end!.x);
+    expect(bends(d)).toBe(2);
+  });
 });

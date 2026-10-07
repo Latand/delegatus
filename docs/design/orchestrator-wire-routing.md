@@ -350,8 +350,12 @@ marked; against the prototype all thirteen pass.
 `evidence/orchestrator-wire-routing/draft/browser-block.tsx.txt`, which the
 builder turns from a reading into a gate: for every case, no length through a
 card, the seat or text, no overlap outside a trunk, and the bends this table
-gives. It writes `evidence/orchestrator-wire-routing/routes.json` and the frames
-to `.artifacts/orchestrator-wire-routing/`. Lane 344a7704 owns the other cases
+gives. The expected bends are the `rule` readings in
+`evidence/orchestrator-wire-routing/routes.json`, which stays the study's
+record; a full run writes the built layer's readings to
+`evidence/orchestrator-wire-routing/rendered.json` and the frames to
+`.artifacts/orchestrator-wire-routing/<label>/`. `WIRE_ROUTING_LABEL=current`
+only reads, for the frames of a build without the rule. Lane 344a7704 owns the other cases
 of that file and its fixtures: the builder adds this one block and touches
 nothing else there; the fixture needs nothing new (the narrowed seat is the
 seat store's `topWidths`, set in the block's init script).
@@ -415,9 +419,8 @@ that file.
 
 ## Reproducing
 
-The block of §7 and the prototype diff are under
-`evidence/orchestrator-wire-routing/draft/`. Apply the diff to a scratch export
-of `2fda8a4e`, append the block to the export's
-`kanbanBoard.browser.test.tsx`, and run it there twice with
-`WIRE_ROUTING_LABEL=current` (unpatched) and `=rule`; `WR_ONLY=<regex>` limits
-it to the matching case ids.
+The rule is built: the block of §7 runs as a gate on any checkout that has
+it. For the frames of the route before the rule, append the block to a
+scratch export of `2fda8a4e` and run it there with `WIRE_ROUTING_LABEL=current`;
+`WR_ONLY=<regex>` limits either run to the matching case ids. The drafts the
+study was measured with stay under `evidence/orchestrator-wire-routing/draft/`.
