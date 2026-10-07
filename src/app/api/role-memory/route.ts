@@ -9,6 +9,8 @@ export const dynamic = "force-dynamic";
    from the injected list or puts one back; both stay in its history. Local
    only: nothing here is sent to a linked board. */
 const NO_STORE = { headers: { "Cache-Control": "no-store" } };
+/** A rule id as the store draws it (eight random bytes), or the four-byte form it drew before. */
+const RULE_ID = /^r_(?:[0-9a-f]{16}|[0-9a-f]{8})$/;
 function answer(project: string) {
   try { return Response.json(projectView(project), NO_STORE); }
   catch { return Response.json({ error: "unavailable" }, { status: 503, ...NO_STORE }); }
@@ -24,7 +26,7 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     if (typeof body.project !== "string" || !body.project.trim() || body.project.length > 256
-      || typeof body.ruleId !== "string" || !/^r_[0-9a-f]{8}$/.test(body.ruleId) || !["delete", "restore"].includes(body.action)) return Response.json({}, { status: 400 });
+      || typeof body.ruleId !== "string" || !RULE_ID.test(body.ruleId) || !["delete", "restore"].includes(body.action)) return Response.json({}, { status: 400 });
     if (body.action === "delete") deleteRule(body.ruleId); else restoreRule(body.ruleId);
     return answer(body.project);
   } catch (error) {

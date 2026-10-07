@@ -2,6 +2,7 @@ import type { Pipeline, PipelineStage, PipelineStageAttempt } from "@/lib/pipeli
 import { ROLE_IDS } from "@/lib/roles/types";
 
 import { automaticMemoryExcluded, roleIsClean } from "./eligibility";
+import { LESSON_MATCH_MIN_CHARS, lettersAndDigits } from "./roleConsolidate";
 import { lessonRequestLines, type HandedFindings } from "./roleRender";
 import { learnedRulesBlock, leaveLessons, lessonRequest, recordLessonRequest, RoleMemoryRefusal, type LeftLesson } from "./roleStore";
 import { roleMemoryEnabled } from "./settings";
@@ -66,6 +67,14 @@ function text(value: unknown, field: string, min: number, max: number): string {
   return trimmed;
 }
 
+/** A stored rule and why are kept off everything that leaves this machine by
+    their words (roleStore.ts); text with too few to recognise is refused. */
+function recognisable(value: string, field: string): string {
+  const count = lettersAndDigits(value);
+  if (count < LESSON_MATCH_MIN_CHARS) throw new RoleMemoryRefusal("LESSON_INVALID", `${field} needs at least ${LESSON_MATCH_MIN_CHARS} letters or digits; it has ${count}. Say it in words`);
+  return value;
+}
+
 /** Validates leave_lesson's arguments into lessons, before anything is resolved or written. */
 export function parseLessons(args: { lessons?: unknown; none?: unknown }, writerRole: string | null): { lessons: LessonInput[]; none: string | null } {
   const raw = args.lessons === undefined ? [] : args.lessons;
@@ -84,7 +93,8 @@ export function parseLessons(args: { lessons?: unknown; none?: unknown }, writer
       role = item.role;
     }
     if (scope === "role" && !role && !writerRole) throw new RoleMemoryRefusal("LESSON_INVALID", `lessons[${index}]: this stage has no role; name one in role, or use scope project`);
-    return { scope, ...(role ? { role } : {}), rule: text(item.rule, `lessons[${index}].rule`, RULE_MIN_CHARS, RULE_MAX_CHARS), why: text(item.why, `lessons[${index}].why`, 1, WHY_MAX_CHARS) };
+    return { scope, ...(role ? { role } : {}), rule: recognisable(text(item.rule, `lessons[${index}].rule`, RULE_MIN_CHARS, RULE_MAX_CHARS), `lessons[${index}].rule`),
+      why: recognisable(text(item.why, `lessons[${index}].why`, 1, WHY_MAX_CHARS), `lessons[${index}].why`) };
   });
   return { lessons, none };
 }

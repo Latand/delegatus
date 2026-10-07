@@ -84,24 +84,27 @@ test("an accepted fix report asks for a lesson naming the handed findings, and l
 });
 
 test("text limits count Unicode code points in the schema and in the store alike", async () => {
-  const emoji = (n: number) => "\u{1F600}".repeat(n);
+  /* A Gothic letter: a supplementary character that is a letter, so a rule of them is words. */
+  const wide = (n: number) => "\u{10330}".repeat(n);
   const schema = TOOL_INPUT_SCHEMAS.leave_lesson;
   const lesson = (rule: string, why = "w") => ({ clientRequestId: "x", lessons: [{ scope: "role", rule, why }] });
   /* 151 supplementary characters are 302 UTF-16 units and well within 300 code points. */
-  expect(schema.safeParse(lesson(emoji(151))).success).toBe(true);
-  expect(schema.safeParse(lesson(emoji(300))).success).toBe(true);
-  expect(schema.safeParse(lesson(emoji(301))).success).toBe(false);
-  expect(schema.safeParse(lesson(RULE, emoji(160))).success).toBe(true);
-  expect(schema.safeParse(lesson(RULE, emoji(161))).success).toBe(false);
-  expect(schema.safeParse({ clientRequestId: "x", none: emoji(160) }).success).toBe(true);
-  expect(schema.safeParse({ clientRequestId: "x", none: emoji(161) }).success).toBe(false);
-  expect(parseLessons({ lessons: [{ scope: "role", rule: emoji(300), why: emoji(160) }], none: emoji(160) }, "builder").lessons).toHaveLength(1);
-  expect(() => parseLessons({ lessons: [{ scope: "role", rule: emoji(301), why: "w" }] }, "builder")).toThrow(/at most|1–300|20–300/);
+  expect(schema.safeParse(lesson(wide(151))).success).toBe(true);
+  expect(schema.safeParse(lesson(wide(300))).success).toBe(true);
+  expect(schema.safeParse(lesson(wide(301))).success).toBe(false);
+  expect(schema.safeParse(lesson(RULE, wide(160))).success).toBe(true);
+  expect(schema.safeParse(lesson(RULE, wide(161))).success).toBe(false);
+  expect(schema.safeParse({ clientRequestId: "x", none: wide(160) }).success).toBe(true);
+  expect(schema.safeParse({ clientRequestId: "x", none: wide(161) }).success).toBe(false);
+  expect(parseLessons({ lessons: [{ scope: "role", rule: wide(300), why: wide(160) }], none: wide(160) }, "builder").lessons).toHaveLength(1);
+  expect(() => parseLessons({ lessons: [{ scope: "role", rule: wide(301), why: "w" }] }, "builder")).toThrow(/at most|1–300|20–300/);
+  /* Symbols alone are no words to recognise the rule by. */
+  expect(() => parseLessons({ lessons: [{ scope: "role", rule: "\u{1F600}".repeat(40), why: wide(160) }] }, "builder")).toThrow(/letters or digits/);
 
   /* Through the real service: the fix attempt was asked for a lesson by the test above. */
-  const over = await call("conversation_fix", "leave_lesson", { lessons: [{ scope: "role", rule: emoji(301), why: "w" }] });
+  const over = await call("conversation_fix", "leave_lesson", { lessons: [{ scope: "role", rule: wide(301), why: "w" }] });
   expect(over.ok).toBe(false);
-  const atCap = await call("conversation_fix", "leave_lesson", { lessons: [{ scope: "role", rule: emoji(300), why: emoji(160) }] });
+  const atCap = await call("conversation_fix", "leave_lesson", { lessons: [{ scope: "role", rule: wide(300), why: wide(160) }] });
   expect(atCap).toMatchObject({ ok: true, stageId: "fix" });
-  expect(learnedRulesBlock(PROJECT, "builder")).toContain(emoji(300));
+  expect(learnedRulesBlock(PROJECT, "builder")).toContain(wide(300));
 });

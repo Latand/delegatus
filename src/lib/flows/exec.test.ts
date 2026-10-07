@@ -78,7 +78,7 @@ test.each([
       .toEqual([name, email, name, email]);
     if (engine === "claude") {
       const settings = JSON.parse(built.args[built.args.indexOf("--settings") + 1]!);
-      expect(settings.env).toEqual(agentPublicationIdentityEnv(process.env));
+      expect(settings.env).toEqual({ ...agentPublicationIdentityEnv(process.env), CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" });
     } else {
       expect(built.args).toContain(`shell_environment_policy.set.GIT_AUTHOR_EMAIL=${JSON.stringify(email)}`);
     }
@@ -564,6 +564,35 @@ test("restart reconstruction: dead run with no output at all times out past the 
 
 /* Issue #1067: the one-shot summarizer the orchestrator rotation runs shares
    this runner's account, process-group and artifact discipline. */
+
+test("a headless Claude reviewer is a clean launch on every account path: auto memory off and no shared-memory hook", () => {
+  const settingsOf = (built: ReturnType<typeof reviewerCommand>) => {
+    const value = built.args[built.args.indexOf("--settings") + 1]!;
+    return JSON.parse(value.startsWith("{") ? value : fs.readFileSync(value, "utf8")) as { autoMemoryEnabled?: boolean; env: Record<string, string>; hooks?: { UserPromptSubmit?: unknown[] } };
+  };
+  /* The hook would install for a launch holding a capability; the port is closed. */
+  const saved = { capability: process.env.LLV_SPAWN_CAPABILITY, port: process.env.LLV_VIEWER_PORT };
+  process.env.LLV_SPAWN_CAPABILITY = "synthetic-capability";
+  process.env.LLV_VIEWER_PORT = "9";
+  try {
+    const launches = [null, false, true].map((managed) => {
+      if (managed === null) return reviewerCommand({ engine: "claude", model: null, effort: null }, "review prompt", "/out/review.md", "/repo", null, null, "synthetic-capability");
+      const home = fs.mkdtempSync(path.join(process.env.LLV_STATE_DIR!, "clean-reviewer-"));
+      return reviewerCommand({ engine: "claude", model: null, effort: null }, "review prompt", "/out/review.md", "/repo", null, { home, projectsDir: path.join(home, "projects"), managed }, "synthetic-capability");
+    });
+    for (const built of launches) {
+      const settings = settingsOf(built);
+      expect(settings.autoMemoryEnabled).toBe(false);
+      expect(settings.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe("1");
+      expect(JSON.stringify(settings.hooks?.UserPromptSubmit ?? [])).not.toContain("shared-memory-");
+      expect(built.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe("1");
+    }
+  } finally {
+    for (const [name, value] of [["LLV_SPAWN_CAPABILITY", saved.capability], ["LLV_VIEWER_PORT", saved.port]] as const) {
+      if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    }
+  }
+});
 
 test("a read-only one-shot command drops the sandbox bypass and keeps the empty MCP server table", () => {
   const built = reviewerCommand(

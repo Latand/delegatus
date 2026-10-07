@@ -1,4 +1,4 @@
-import { ruleLine } from "./roleConsolidate";
+import { LESSON_MATCH_MIN_CHARS, ruleLine } from "./roleConsolidate";
 import { scopeKind, scopeRole } from "./roleScopes";
 import { RULE_MAX_CHARS, WHY_MAX_CHARS, type RoleMemoryRule } from "./roleTypes";
 
@@ -71,7 +71,7 @@ export function lessonRequestLines(handed: HandedFindings | null): string[] {
     ...handedLine(handed),
     "Write one to three lessons. Each is an abstract rule: a class of mistake or situation and what to do about it, so the whole class stops recurring. A one-off fact (a file name, a pull request number, the state of a branch today) belongs in your report and makes no lesson.",
     "Look first at the findings you were handed or found yourself: which rule, followed from the start, would have prevented each class? Then at a wrong turn you corrected, a check that failed late, a retry, or a learned rule that proved wrong.",
-    `For each lesson give rule (imperative, at most ${RULE_MAX_CHARS} characters), why (one line, at most ${WHY_MAX_CHARS} characters: what went wrong here) and scope:`,
+    `For each lesson give rule (imperative, at most ${RULE_MAX_CHARS} characters), why (one line, at most ${WHY_MAX_CHARS} characters: what went wrong here), each in words with at least ${LESSON_MATCH_MIN_CHARS} letters, and scope:`,
     "- role: the next agent of a role on this project; your own role unless you name another in role. Reviewers and verifiers take no learned rules.",
     "- project: every role on this project.",
     "- machine: every project on this machine (tools, the operating system, the environment).",

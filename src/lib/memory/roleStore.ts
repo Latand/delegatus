@@ -205,7 +205,7 @@ export function leaveLessons(input: {
   const now = input.now ?? new Date().toISOString();
   const project = canonicalProject(input.source.project);
   joinMovedScopes(now);
-  return collection(true)!.boundedPatch(4096, (tx) => {
+  const result = collection(true)!.boundedPatch(4096, (tx) => {
     const request = tx.get(requestKey(input.request.pipelineId, input.request.stageId, input.request.attempt));
     if (request?.kind !== "request") throw new RoleMemoryRefusal("LESSON_NOT_REQUESTED", "this stage attempt was not asked for a lesson");
     if (request.ruleIds.length + input.lessons.length > MAX_LESSONS_PER_ATTEMPT) {
@@ -238,6 +238,10 @@ export function leaveLessons(input: {
     tx.put({ ...request, ruleIds: [...request.ruleIds, ...left.map((entry) => entry.id)], none });
     return { left, none };
   });
+  /* The agents' publication gate reads the new lesson from now on; a file
+     that could not be rewritten is gone, and the gate refuses until it is. */
+  if (result.left.length) { try { refreshLessonKnownValues(); } catch { /* fails closed */ } }
+  return result;
 }
 
 /** The operator removes one rule from the injected list; it stays a record, archived as "deleted", and its scope's history says so. */
@@ -343,54 +347,132 @@ export function stageLessons(project: string): StageLessonView[] {
    that; these are the checks behind it at the boundaries where text leaves a
    stage: the next stage's prompt and the files composed for it, the linked
    board's wire, the bridge and issue reports, and the publication privacy
-   gate. Every stored rule and why counts, active or not; the record itself
-   is untouched. */
+   gate, for the controller's push and for every agent's own. Every stored
+   rule and why counts, active or not; the record itself is untouched.
 
-/** What a stored lesson becomes in outgoing text. Shorter than any text it replaces. */
+   Each check fails closed. A store that exists and cannot be read names no
+   lesson to look for, so the work that would carry text out is refused with
+   LESSON_PRIVACY_UNAVAILABLE instead of sent unchecked; a store never
+   created holds no lesson and refuses nothing. */
+
+/** What a stored lesson becomes in outgoing text. */
 export const WITHHELD_LESSON = "[learned rule]";
 
-/** Every stored rule and why long enough to look for, longest first. */
-export function storedLessonTexts(): string[] {
+const UNREADABLE = "role memory could not be read, so its learned rules cannot be kept out of outgoing text; nothing was sent. Repair or restore state.sqlite, or set LLV_ROLE_MEMORY=off and remove the role_memory rows";
+
+/** The stored rows, or a refusal that quotes nothing a row holds. */
+function readableRows(): { rows: RoleMemoryRow[]; signature: string } {
+  try {
+    const held = collection();
+    return held ? { signature: held.signature(), rows: held.snapshot() as RoleMemoryRow[] } : { signature: "", rows: [] };
+  } catch {
+    throw new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", UNREADABLE);
+  }
+}
+
+function lessonTextsOf(all: readonly RoleMemoryRow[]): string[] {
   const texts = new Set<string>();
-  for (const row of rows()) if (row.kind === "rule") for (const text of [row.rule, row.why]) if (lessonPattern(text)) texts.add(text);
+  for (const row of all) if (row.kind === "rule") for (const text of [row.rule, row.why]) if (lessonPattern(text)) texts.add(text);
   return [...texts].sort((a, b) => b.length - a.length);
 }
 
-let patternCache: { key: string; patterns: RegExp[] } | null = null;
-function storedLessonPatterns(): RegExp[] {
-  const held = collection();
-  if (!held) return [];
-  const key = held.signature();
-  if (patternCache?.key !== key) patternCache = { key, patterns: storedLessonTexts().flatMap((text) => { const pattern = lessonPattern(text); return pattern ? [pattern] : []; }) };
-  return patternCache.patterns;
+/** Every stored rule and why, longest first. Throws LESSON_PRIVACY_UNAVAILABLE when the store cannot be read. */
+export function storedLessonTexts(): string[] {
+  return lessonTextsOf(readableRows().rows);
 }
 
-/** The text with every stored lesson it quotes withheld. A store that cannot
-    be read withholds nothing: it names no lesson to look for. */
+let matcherCache: { key: string; matcher: RegExp | null } | null = null;
+/** One pattern for every stored lesson, longest first, so a longer lesson wins where two overlap. */
+function storedLessonMatcher(): RegExp | null {
+  const { rows: all, signature } = readableRows();
+  if (matcherCache?.key !== signature) {
+    const sources = lessonTextsOf(all).flatMap((text) => { const pattern = lessonPattern(text); return pattern ? [pattern.source] : []; });
+    matcherCache = { key: signature, matcher: sources.length ? new RegExp(sources.map((source) => `(?:${source})`).join("|"), "giu") : null };
+  }
+  return matcherCache.matcher;
+}
+
+/** The text with every stored lesson it quotes withheld. */
 export function withoutStoredLessons(text: string): string {
   if (!text) return text;
-  let patterns: RegExp[];
-  try { patterns = storedLessonPatterns(); } catch { return text; }
-  let result = text;
-  for (const pattern of patterns) result = result.replace(pattern, WITHHELD_LESSON);
-  return result;
+  const matcher = storedLessonMatcher();
+  return matcher ? text.replace(matcher, WITHHELD_LESSON) : text;
 }
 
-/** The publication privacy gate's environment: every stored lesson as a known
-    value, in a private file under the state directory, so a push that carries
-    one is refused like any other private value. Empty when nothing is stored. */
-export function lessonPublicationEnv(): { LLV_PRIVACY_KNOWN_VALUES_FILE?: string } {
-  const texts = storedLessonTexts();
-  if (!texts.length) return {};
-  const directory = statePath("role-memory");
-  const file = path.join(directory, "known-values.txt");
-  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const temporary = path.join(directory, `.${crypto.randomUUID()}.tmp`);
+/** withoutStoredLessons over every text a record holds, however deep; the
+    record itself when none quotes a lesson. */
+export function withoutStoredLessonsIn<T>(value: T): T {
+  const matcher = storedLessonMatcher();
+  if (!matcher) return value;
+  const walk = (item: unknown): unknown => {
+    if (typeof item === "string") return item && item.replace(matcher, WITHHELD_LESSON);
+    if (Array.isArray(item)) {
+      const mapped = item.map(walk);
+      return mapped.some((entry, index) => entry !== item[index]) ? mapped : item;
+    }
+    if (item && typeof item === "object") {
+      let changed = false;
+      const mapped = Object.fromEntries(Object.entries(item).map(([key, entry]) => {
+        const next = walk(entry);
+        if (next !== entry) changed = true;
+        return [key, next];
+      }));
+      return changed ? mapped : item;
+    }
+    return item;
+  };
+  return walk(value) as T;
+}
+
+/** Where the stored lessons are kept as the publication gate's known values:
+    one path for the installation, rewritten after every lesson. */
+export function lessonKnownValuesFile(): string {
+  return path.join(statePath("role-memory"), "known-values.txt");
+}
+
+/** Rewrites the known-values file from the store, again when a lesson landed
+    while it was written. When the store cannot be read the file is removed,
+    and the gate refuses a push whose known-values file is missing. */
+export function refreshLessonKnownValues(): string {
+  const file = lessonKnownValuesFile();
+  const directory = path.dirname(file);
   try {
-    fs.writeFileSync(temporary, `${texts.join("\n")}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
-    fs.renameSync(temporary, file);
-  } finally {
-    fs.rmSync(temporary, { force: true });
+    for (let pass = 0; pass < 4; pass += 1) {
+      const { rows: all, signature } = readableRows();
+      const texts = lessonTextsOf(all);
+      fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+      const temporary = path.join(directory, `.${crypto.randomUUID()}.tmp`);
+      try {
+        fs.writeFileSync(temporary, texts.length ? `${texts.join("\n")}\n` : "", { encoding: "utf8", mode: 0o600, flag: "wx" });
+        fs.renameSync(temporary, file);
+      } finally {
+        fs.rmSync(temporary, { force: true });
+      }
+      if (readableRows().signature === signature) return file;
+    }
+    return file;
+  } catch (error) {
+    fs.rmSync(file, { force: true });
+    throw error instanceof RoleMemoryRefusal ? error : new RoleMemoryRefusal("LESSON_PRIVACY_UNAVAILABLE", UNREADABLE);
+  }
+}
+
+/** The publication privacy gate's environment for the controller's push:
+    every stored lesson as a known value, so a push that carries one is
+    refused like any other private value. Throws LESSON_PRIVACY_UNAVAILABLE
+    when the store cannot be read. */
+export function lessonPublicationEnv(): { LLV_PRIVACY_KNOWN_VALUES_FILE: string } {
+  return { LLV_PRIVACY_KNOWN_VALUES_FILE: refreshLessonKnownValues() };
+}
+
+/** The same input for an agent's own pushes, through its pre-push hook. The
+    path is handed at launch and the file is rewritten after every lesson, so
+    a lesson learned while the agent runs is refused too. A store that cannot
+    be read leaves no file, and the gate then refuses every push. */
+export function agentLessonPublicationEnv(): { LLV_PRIVACY_KNOWN_VALUES_FILE: string } {
+  const file = lessonKnownValuesFile();
+  if (!fs.existsSync(file)) {
+    try { refreshLessonKnownValues(); } catch { /* no file: the gate refuses */ }
   }
   return { LLV_PRIVACY_KNOWN_VALUES_FILE: file };
 }

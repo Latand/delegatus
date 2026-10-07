@@ -811,14 +811,21 @@ role memory is a default feature. This is what the lane builds.
    written before the mark); the Claude launch installs no shared-memory hook
    and sets `autoMemoryEnabled: false` and `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`
    in its settings; the Codex launch installs no hook and passes
-   `features.memories=false` to the app-server and to the thread. Explicit
+   `features.memories=false` to the app-server and to the thread. A headless
+   reviewer of an implement→review flow (`reviewerCommand`,
+   `src/lib/agent/headless.ts`) is a clean launch on every account path:
+   managed, unmanaged and account-free Claude launches carry the same settings
+   and environment, and the Codex one already disables every feature a
+   single-agent launch has not reviewed, memories among them. Explicit
    evidence searches (`search_memory`, `search_transcripts`) stay available:
    the stage calls them itself. The visual critic is not excluded
    by role (2.3): it reads and writes its rules when it runs as an ordinary
    stage, and like any role it stays clean when its stage carries a fail edge.
 4. **Consolidation, without a model.** On every append, in the same
-   transaction: a lesson that repeats an active rule of its scope word for
-   word (case, spacing and punctuation aside) merges into it; similar wording
+   transaction: a lesson that repeats an active rule of its scope (case,
+   spacing and a closing full stop aside) merges into it. Every symbol counts:
+   "x > 0" and "x < 0", or "set -x" and "set +x", stay two rules, on append
+   and when succession joins two keys' scopes. Similar wording
    never merges, because two rules that share most of their words can ask for
    different things, or opposite ones, and only a model could combine them
    without losing one. Then, while the scope is over 10 000 characters, its
@@ -864,16 +871,29 @@ role memory is a default feature. This is what the lane builds.
    unchanged: it already reaches 355 of the 360 px its driver allows.
 7. **Privacy for the MVP** is the abstract-rule instruction in the request and
    in the block, the detector hints, and the existing privacy checks, told
-   which text is a lesson. Every stored rule and why of at least 16 letters
-   and digits is looked for, whatever the case, spacing or punctuation between
-   its words, at the boundaries where text leaves a stage: the next stage's
-   prompt and every file the composer and a runtime handoff write for it
-   (a report relayed as the previous output becomes `[learned rule]`), a
-   task's text and details on the linked board's wire, the bridge's and the
-   issue reports' private-text filter (class "a learned rule"), and the
-   publication privacy gate, which the pipeline's publication push runs with
-   the stored lessons as known values (`LLV_PRIVACY_KNOWN_VALUES_FILE`, a 0600
-   file under the state directory). The lesson's own record is untouched.
+   which text is a lesson. `leave_lesson` refuses a rule or a why with fewer
+   than 16 letters and digits ("Writes raced.", a rule of symbols), because
+   text that short cannot be told apart from ordinary text. Every stored rule
+   and why is looked for, whatever the case, spacing or punctuation between
+   its words (a record kept from before that minimum only as written), at the
+   boundaries where text leaves a stage: the next stage's prompt and every
+   file the composer and a runtime handoff write for it (a report relayed as
+   the previous output becomes `[learned rule]`), every text of a task on the
+   linked board's wire (text, details, prototype review titles, variants and
+   decisions, original or replica) and an agent's title there, the bridge's
+   and the issue reports' private-text filter (class "a learned rule"), and
+   the publication privacy gate. The gate reads the stored lessons as known
+   values from one file, `statePath("role-memory/known-values.txt")` (0600),
+   rewritten after every lesson: the pipeline's publication push passes it,
+   and every agent launch is handed its path in the publication environment
+   (`agentPublicationIdentityEnv`), so the agent's own pre-push hook refuses a
+   file or a commit message that carries a lesson, one learned after the
+   agent started included. Each check fails closed: a store that exists and
+   cannot be read refuses the relay, the linked board's page, the bridge
+   report and the publication with `LESSON_PRIVACY_UNAVAILABLE` and quotes
+   nothing, and leaves no known-values file, which the gate refuses as a
+   configuration error. A store never created holds no lesson and refuses
+   nothing. The lesson's own record is untouched.
 
 Tests on isolated state: the bound in code points, merge and archive with the
 dropped rule visible, two obligations and a contradiction kept apart, the lane
@@ -887,7 +907,11 @@ flags of a clean launch, a removed rule kept as a record and put back, forced
 id collisions, project succession under both keys, `leave_lesson` and
 `lessonRequest` through the MCP service with code-point limits, briefs at the
 envelope's bound in English and Ukrainian with every scope full, and the
-linked-board, bridge, issue-report and publication-gate boundaries. Rendered evidence goes through
+linked-board, bridge, issue-report and publication-gate boundaries, short
+reasons and rules of symbols, rules that differ by one operator, an agent's
+own push of a lesson learned after its launch, a corrupt lesson row against
+every boundary and the publication, and the rules window's route with the ids
+the store draws. Rendered evidence goes through
 the existing phone driver (`issue1671Evidence.browser.test.tsx`) over the
 kanban fixture, desktop and 390 px, English and Ukrainian.
 
@@ -895,11 +919,12 @@ kanban fixture, desktop and 390 px, English and Ukrainian.
 its own:
 
 - The rest of the egress system of 2.9: the HMAC fingerprint file for
-  processes outside the Viewer, the `commit-msg` and `pre-push` checks in the
-  agent Git guard (an agent's own push runs the gate without the lessons), the
-  `gh` shim extended to `pr`, `issue` and `api` bodies, the scans of staged
-  blobs, the check on prototype reviews, and the replacement of a quoted rule
-  by its id rather than a placeholder.
+  processes outside the Viewer, the canary matching, the `commit-msg` and
+  `pre-push` checks in the agent Git guard (the MVP relies on the repository's
+  own pre-push hook, which an agent can skip), the `gh` shim extended to `pr`,
+  `issue` and `api` bodies, the scans of staged blobs, the check on prototype
+  reviews published to a forge, and the replacement of a quoted rule by its id
+  rather than a placeholder.
 - Consolidation by a model (2.5): the headless Codex turn, the partition
   contract and its server check, the frozen input and the commit against a
   moving scope, rewrites with before and after.

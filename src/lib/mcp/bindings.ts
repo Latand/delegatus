@@ -3679,11 +3679,9 @@ async function productionPublicDenyList(project: string | null, control: ViewerC
     if (requireComplete) throw error;
     // An unreadable catalog contributes nothing.
   }
-  let lessons: string[] = [];
-  try { lessons = storedLessonTexts(); } catch (error) {
-    if (requireComplete) throw error;
-    // An unreadable role memory contributes nothing.
-  }
+  /* Role memory is never optional here: a store that cannot be read throws
+     LESSON_PRIVACY_UNAVAILABLE, and nothing is sent unchecked. */
+  const lessons = storedLessonTexts();
   return { accounts, people, local, projects, lessons };
 }
 

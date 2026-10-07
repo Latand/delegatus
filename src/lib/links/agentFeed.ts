@@ -9,6 +9,7 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import type { Engine, FileEntry } from "@/lib/types";
 import { decodeLaneRow, isLaneKey, laneRowsFor, MAX_LANE_ROWS, type LaneRow } from "./laneFeed";
 import { linkedContext, runsHere } from "./linked";
+import { withoutStoredLessons } from "@/lib/memory/roleStore";
 
 export type AgentRow = { k: string; p: string; t: string; e: string; m: string; st: "working" | "waiting" | "done"; task?: string; at: number; pl?: { id: string; state: string; stage: string; stageState: string } };
 type Change = AgentRow | LaneRow | { k: string; gone: true };
@@ -43,7 +44,8 @@ function rowFor(file: FileEntry, tasks: ReturnType<typeof loadTasksForList>, pro
   const model = safeId(file.launchModel) ?? safeId(file.model) ?? "unknown";
   const stage = pipeline?.stages.find((item) => item.id === membership?.stageId);
   const attempt = pipeline?.runs.find((run) => run.stageId === stage?.id)?.attempts.find((item) => item.conversationId === file.conversationId || item.agentPath === file.path);
-  const title = boundTask?.chosen ? boundTask.text.split(/\r?\n|\r/, 1)[0]!.slice(0, 120)
+  /* The whole first line is checked before it is cut, so a lesson it quotes is withheld whole. */
+  const title = boundTask?.chosen ? withoutStoredLessons(boundTask.text.split(/\r?\n|\r/, 1)[0]!).slice(0, 120)
     : stage ? `${safeId(stage.id) ?? "Pipeline"} stage` : `${engine} agent`;
   const working = file.proc === "running" && (file.activity === "live" || file.activity === "recent");
   const st = file.pendingQuestion || file.waitingInput || file.pendingPermission ? "waiting" : working ? "working" : "done";

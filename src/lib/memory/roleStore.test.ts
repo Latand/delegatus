@@ -251,3 +251,39 @@ test("project succession keeps every stored rule, its history and the stage line
   expect(merged.active.map((entry) => entry.id)).toContain(removed);
   expect(merged.chars).toBeLessThanOrEqual(ROLE_MEMORY_BOUND);
 });
+
+test("rules that differ only by an operator or a flag stay two active rules on append and on succession; a true repeat still merges", () => {
+  const pairs = [
+    ["Reject a value when x > 0.", "Reject a value when x < 0."],
+    ["Run every gate script under set -x when it fails without output.", "Run every gate script under set +x when it fails without output."],
+    ["Compare the two digests with === before trusting a cached baseline.", "Compare the two digests with !== before trusting a cached baseline."],
+  ] as const;
+  for (const [a, b] of pairs) expect(sameRule(a, b)).toBe(false);
+  expect(sameRule("Reject a value when x > 0.", "  reject a value when X>0 ")).toBe(true);
+
+  const project = PROJECT();
+  const left = leaveLessons({ request: request(), source: source(), none: null, lessons: pairs[0].map((rule) => ({ scope: "role" as const, rule, why: "A sign was flipped in review." })) }).left;
+  expect(left.map((entry) => entry.state)).toEqual(["active", "active"]);
+  const repeat = leaveLessons({ request: request(2), source: source(2), none: null, lessons: [{ scope: "role", rule: "reject a value when x>0", why: "Seen again." }] }).left[0]!;
+  expect(repeat).toMatchObject({ state: "merged", mergedInto: left[0]!.id });
+  const block = learnedRulesBlock(project, "builder");
+  expect(block).toContain("x > 0");
+  expect(block).toContain("x < 0");
+
+  /* Succession joins a moved key's scope into the current one by the same comparison. */
+  const old = `dir-${project}-flags-old`;
+  const current = `repo-${project}-flags-current`;
+  const leave = (key: string, attempt: number, rule: string) => {
+    const req = { pipelineId: `p-${key}`, stageId: "fix", attempt };
+    recordLessonRequest({ ...req, project: key, roleId: "builder", conversationId: `conversation_${key}_${attempt}`, at: "2026-10-07T12:00:00.000Z" });
+    return leaveLessons({ request: req, source: { ...source(attempt), project: key, pipelineId: req.pipelineId, conversationId: `conversation_${key}_${attempt}` }, none: null,
+      lessons: [{ scope: "role", rule, why: "A flag was flipped in review." }], now: new Date(Date.UTC(2026, 9, 7, 1, attempt)).toISOString() }).left[0]!;
+  };
+  const x = leave(old, 1, pairs[1][0]);
+  const plus = leave(current, 2, pairs[1][1]);
+  const again = leave(current, 3, pairs[1][0].toUpperCase());
+  expect(persistProjectAliases([{ source: old, target: current, displayName: "flags" }])).toBe(true);
+  const builder = projectView(current).scopes.find((scope) => scope.roleId === "builder")!;
+  expect(builder.active.map((entry) => entry.id)).toEqual([x.id, plus.id]);
+  expect(builder.left).toContainEqual(expect.objectContaining({ id: again.id, state: "merged", reason: "duplicate", mergedInto: x.id }));
+});

@@ -8393,8 +8393,9 @@ describe("role memory: rules window and the rule line", () => {
       { scope: "role", rule: "Keep a fix round to the handed findings and what they reveal; a wider rewrite restarts the review from zero.", why: "A fix round that also refactored drew five new findings." },
       { scope: "machine", rule: "Give a browser started from a pipeline stage a short temporary directory for its sockets.", why: "The driver died on the socket path limit until TMPDIR was shortened." },
     ]);
+    /* The same rule again, cased and spaced differently: it merges into the first and shows in history. */
     seed("p-ledger", "build", 30 * 60, "builder", [
-      { scope: "role", rule: "Keep a fix round to the handed findings.", why: "Restated by a later round." },
+      { scope: "role", rule: "keep a fix round to the handed findings and what they reveal;  a wider rewrite restarts the review from zero", why: "Restated by a later round of the same lane." },
     ]);
     seed("p-md-decision", "implement", 41, "builder", [
       { scope: "role", rule: "When a change adds a branch for empty, missing or zero input, write the test for that branch in the same commit as the branch.", why: "An untested empty-list path failed review twice." },
@@ -8545,6 +8546,7 @@ describe("role memory: rules window and the rule line", () => {
           expect(await page.locator("[data-rules-starts]").innerText()).toContain(lang === "en" ? "Visual critic" : "Критик вигляду");
           await page.locator('[data-rules-window] [data-rules-role="builder"]').click();
           await page.locator('[data-rules-window] [data-rules-history="role"]').click();
+          /* History holds the repeat, merged; the rule removed and put back is active again. */
           expect(await page.locator("[data-rules-window] [data-left-rule]").count()).toBe(1);
           const window = await inside("[data-rules-window]");
           expect(window.right).toBeLessThanOrEqual(width); expect(window.bottom).toBeLessThanOrEqual(height);

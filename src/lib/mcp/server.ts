@@ -33,6 +33,7 @@ import { PIPELINE_ACTIONS, PIPELINE_DISALLOWED_ROLE_IDS, PIPELINE_FAIL_EDGE_EXHA
 import { procBackend } from "@/lib/proc";
 import { parseMessageOrigin, type MessageOrigin } from "@/lib/runtime/messageOrigin";
 import { lessonTextLength, MAX_LESSONS_PER_ATTEMPT, RULE_MAX_CHARS, RULE_MIN_CHARS, WHY_MAX_CHARS } from "@/lib/memory/roleTypes";
+import { LESSON_MATCH_MIN_CHARS } from "@/lib/memory/roleConsolidate";
 import { ROLE_IDS, type RoleId } from "@/lib/roles/types";
 import { SELECTED_TAIL_MAX_LINES } from "@/lib/selection/resolve";
 import { renderTaskColorRule } from "@/lib/tasks/colorRule";
@@ -3783,7 +3784,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       scope: z.enum(["role", "project", "machine"]).describe("role: the next agent of a role on this project (yours unless role names another); project: every role on this project; machine: every project on this machine."),
       role: z.enum(ROLE_IDS).optional().describe("With scope role only: the role the rule is for, when another role would have prevented or caught the problem earlier."),
       rule: lessonTextSchema(RULE_MIN_CHARS, RULE_MAX_CHARS).describe(`One or two imperative sentences, true beyond this task: a class of mistake or situation and what to do about it. ${RULE_MIN_CHARS}–${RULE_MAX_CHARS} characters.`),
-      why: lessonTextSchema(1, WHY_MAX_CHARS).describe(`One line: what went wrong here, or what it cost. At most ${WHY_MAX_CHARS} characters.`),
+      why: lessonTextSchema(1, WHY_MAX_CHARS).describe(`One line: what went wrong here, or what it cost. At most ${WHY_MAX_CHARS} characters; at least ${LESSON_MATCH_MIN_CHARS} letters or digits, as the rule needs too.`),
     })).max(MAX_LESSONS_PER_ATTEMPT).optional(),
     none: lessonTextSchema(1, WHY_MAX_CHARS).optional().describe(`When this stage taught nothing new: one line saying why, at most ${WHY_MAX_CHARS} characters.`),
   }),
