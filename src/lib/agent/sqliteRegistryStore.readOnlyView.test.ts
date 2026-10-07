@@ -280,3 +280,108 @@ test("the view keeps the keyed readers of the loaded file, and a complete read f
   expect(reader.readOnlySnapshot().file.receipts[removed]).toBeUndefined();
   expect(parsed(reader).has(removed)).toBe(false);
 });
+
+test("a reader cannot replace, delete or restamp the envelope the shared view comes in", () => {
+  const { open, kept } = fixture();
+  const store = open();
+  const envelope = store.readOnlySnapshot() as { file?: RegistryFile; revision: number; stamp?: string };
+  const { file, revision, stamp } = envelope;
+  expect(Object.isFrozen(envelope)).toBe(true);
+  /* The regression: the file was frozen and the envelope every reader gets was not. */
+  expect(attempt(() => { envelope.file = { ...file!, receipts: {} }; })).toBe(false);
+  expect(attempt(() => { delete envelope.file; })).toBe(false);
+  expect(attempt(() => { envelope.revision = revision + 100; })).toBe(false);
+  expect(attempt(() => { envelope.stamp = "restamped by a reader"; })).toBe(false);
+
+  const next = store.readOnlySnapshot() as typeof envelope;
+  expect(next.file).toBe(file);
+  expect(next.revision).toBe(revision);
+  expect(next.stamp).toBe(stamp);
+  expect(next.file!.receipts[kept]).toBeDefined();
+
+  /* The envelope a local commit patches in is frozen too, and the write is in it. */
+  store.mutate((written) => { written.receipts[kept]!.error = "updated locally"; }, false);
+  const patched = store.readOnlySnapshot();
+  expect(Object.isFrozen(patched)).toBe(true);
+  expect(patched.revision).toBe(revision + 1);
+  expect(patched.file.receipts[kept]?.error).toBe("updated locally");
+
+  const detached = store.snapshot() as { file: RegistryFile; revision: number };
+  expect(Object.isFrozen(detached)).toBe(false);
+  detached.file = { ...detached.file, receipts: {} };
+  detached.revision += 100;
+  expect(store.readOnlySnapshot().file.receipts[kept]).toBeDefined();
+  expect(store.readOnlySnapshot().revision).toBe(revision + 1);
+});
+
+for (const mode of ["off", "dual-write"] as const) {
+  const jsonFixture = () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-registry-readonly-json-"));
+    directories.push(directory);
+    const filename = path.join(directory, "agent-registry.json");
+    const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: mode });
+    const conversation = registry.ensureConversation("codex", "/sessions/readonly-json.jsonl", "default");
+    const kept = registry.beginSpawn("codex", "/repo/kept", { title: "Kept receipt" }).launchId;
+    return { registry, conversation, kept };
+  };
+
+  test(`${mode}: a reader cannot change the shared JSON view, directly or in anything nested`, () => {
+    const { registry, conversation, kept } = jsonFixture();
+    try {
+      const view = registry.readOnlySnapshot();
+      expect(registry.readOnlySnapshot()).toBe(view);
+      /* The regression: the parsed file was cached as it was and every row stayed writable. */
+      expect(attempt(() => { view.receipts[kept]!.error = "reader-corruption"; })).toBe(false);
+      expect(attempt(() => { view.receipts[kept]!.launchProfile!.cwd = "/reader/corruption"; })).toBe(false);
+      expect(attempt(() => { view.conversations[conversation.id]!.generations.push(view.conversations[conversation.id]!.generations[0]!); })).toBe(false);
+      expect(attempt(() => { delete view.receipts[kept]; })).toBe(false);
+      expect(attempt(() => { view.receipts["receipt-added-by-a-reader"] = view.receipts[kept]!; })).toBe(false);
+      expect(attempt(() => { (view as { receipts: RegistryFile["receipts"] }).receipts = {}; })).toBe(false);
+      expect(attempt(() => { view.engineRouting.codex.revision += 1; })).toBe(false);
+
+      const next = registry.readOnlySnapshot();
+      expect(next).toBe(view);
+      expect(next.receipts[kept]?.error).toBeNull();
+      expect(next.receipts[kept]?.launchProfile?.cwd).toBe("/repo/kept");
+      expect(next.conversations[conversation.id]?.generations).toHaveLength(1);
+      expect(registry.snapshot().receipts[kept]?.error).toBeNull();
+    } finally {
+      registry.close();
+    }
+  });
+
+  test(`${mode}: a write reaches the next read of the JSON view, and a detached snapshot stays mutable`, () => {
+    const { registry, kept } = jsonFixture();
+    try {
+      const failed = registry.beginSpawn("codex", "/repo/failed", { title: "Failed receipt" }).launchId;
+      const before = registry.readOnlySnapshot();
+
+      expect(registry.failSpawn(failed, "written locally")).toBe(true);
+      const local = registry.readOnlySnapshot();
+      expect(local).not.toBe(before);
+      expect(local.receipts[failed]?.error).toBe("written locally");
+      expect(Object.isFrozen(local.receipts[failed])).toBe(true);
+      expect(before.receipts[failed]?.error).toBeNull();
+
+      /* A write by another registry over the same files. */
+      const other = new AgentRegistry(registry.filename, undefined, undefined, { sqliteMode: mode });
+      try {
+        expect(other.failSpawn(kept, "written elsewhere")).toBe(true);
+      } finally {
+        other.close();
+      }
+      const foreign = registry.readOnlySnapshot();
+      expect(foreign.receipts[kept]?.error).toBe("written elsewhere");
+      expect(Object.isFrozen(foreign.receipts[kept])).toBe(true);
+      expect(local.receipts[kept]?.error).toBeNull();
+
+      const detached = registry.snapshot();
+      expect(Object.isFrozen(detached)).toBe(false);
+      detached.receipts[kept]!.error = "edited on a private copy";
+      detached.receipts = {};
+      expect(registry.readOnlySnapshot().receipts[kept]?.error).toBe("written elsewhere");
+    } finally {
+      registry.close();
+    }
+  });
+}

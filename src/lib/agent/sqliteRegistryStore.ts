@@ -774,7 +774,8 @@ export class SqliteAgentRegistryStore {
     const storedJson: StoredRowJson | undefined = complete
       ? (collection, key) => this.rowCache.get(collection)?.get(key)?.valueJson
       : undefined;
-    this.readOnlyCache = { ...snapshot, file: this.readerViews.view(snapshot.file, storedJson) };
+    /* The envelope is shared with every reader too, so it is frozen with its file. */
+    this.readOnlyCache = Object.freeze({ ...snapshot, file: this.readerViews.view(snapshot.file, storedJson) });
     return this.readOnlyCache;
   }
 

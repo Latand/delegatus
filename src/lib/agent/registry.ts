@@ -5,6 +5,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import { statePath } from "@/lib/configDir";
+import { deepFreeze } from "@/lib/deepFreeze";
 import { assertNotOperatorStateUnderTest, assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
 import { hotStateWriterRevision } from "@/lib/state/hotStateAuthority";
 import {
@@ -5184,19 +5185,21 @@ export class AgentRegistry {
 
   /** Shared process-local snapshot for projections that never mutate registry
       objects. Atomic writers change the inode/signature, including writers in
-      the runtime-host process, so the next reader reparses immediately. */
+      the runtime-host process, so the next reader reparses immediately. The
+      JSON view is a copy nobody else holds, frozen all the way down before a
+      reader sees it, as the SQLite store's view is. */
   readOnlySnapshot(): RegistryFile {
     if (this.sqliteMode === "read" || this.sqliteMode === "sqlite") return this.sqliteStore!.readOnlySnapshot().file;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const before = registryFileSignature(this.filename);
       if (this.readOnlyCache?.signature === before) return this.readOnlyCache.snapshot;
-      const snapshot = readFile(this.filename, this.mcpGrantPolicy);
+      const snapshot = deepFreeze(structuredClone(readFile(this.filename, this.mcpGrantPolicy)));
       const after = registryFileSignature(this.filename);
       if (before !== after) continue;
       this.readOnlyCache = { signature: after, snapshot };
       return snapshot;
     }
-    return readFile(this.filename, this.mcpGrantPolicy);
+    return deepFreeze(structuredClone(readFile(this.filename, this.mcpGrantPolicy)));
   }
 
   private readKeyed<T>(reader: (file: RegistryFile) => T): T {
