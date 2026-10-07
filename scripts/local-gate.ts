@@ -16,8 +16,8 @@ export interface Step {
   selection?: string;
   /** Consecutive steps with the same group run at once, under one phase marker. */
   group?: string;
-  /** A check the hosted job also runs: when the push budget runs out it is
-      stopped and named as left to that job, never failed or dropped. */
+  /** A check the hosted job also runs: stopped at a caller's deadline, it is
+      named as left to that job, never failed or dropped. */
   deferrable?: boolean;
 }
 export interface PlanEnvironment {
@@ -254,25 +254,18 @@ function codexFixture(root: string, cache: string, version: string): string {
   return binary;
 }
 
-/** How long a push may spend in this hook when nobody says otherwise. Only
-    deferrable checks are held to it then; a person's push still waits for
-    every decisive verdict. */
-export const PUSH_BUDGET_MS = 12 * 60_000;
-export interface PushDeadline { at: number; startedAt: number; enforced: boolean }
+export interface PushDeadline { at: number; startedAt: number }
 
 /** `LLV_GATE_PUSH_DEADLINE` (Unix ms) is set by a caller that kills the push
     at a limit of its own, as the controller's publication does: every step
-    then ends by it, so the hook fits that limit by construction. */
-export function pushDeadline(env: Partial<NodeJS.ProcessEnv>, startedAt: number): PushDeadline {
+    then ends by it, so the hook fits that limit by construction. Without it
+    nothing is stopped and every step reaches its verdict. */
+export function pushDeadline(env: Partial<NodeJS.ProcessEnv>, startedAt: number): PushDeadline | null {
   const raw = env.LLV_GATE_PUSH_DEADLINE;
-  if (raw === undefined || raw === "") return { at: startedAt + PUSH_BUDGET_MS, startedAt, enforced: false };
+  if (raw === undefined || raw === "") return null;
   const at = Number(raw);
   if (!Number.isSafeInteger(at) || at <= 0) throw new Error("LLV_GATE_PUSH_DEADLINE must be a Unix time in milliseconds");
-  return { at, startedAt, enforced: true };
-}
-/** When a step is stopped; Infinity when nothing stops it. */
-export function stepDeadline(step: Step, deadline: PushDeadline): number {
-  return step.deferrable || deadline.enforced ? deadline.at : Infinity;
+  return { at, startedAt };
 }
 const seconds = (ms: number) => `${Math.max(0, Math.round(ms / 1000))} s`;
 export function budgetSeconds(deadline: PushDeadline): number {
@@ -285,7 +278,7 @@ export function deferredLine(mode: Mode, step: Step, deadline: PushDeadline, ran
   return `${mode}: left to the hosted job: "${step.name}" was stopped ${when}, when the push budget of ${budgetSeconds(deadline)} s ran out; `
     + `its verdict comes from the "Bun runtime pin" workflow (gh workflow run bun-runtime.yml --ref ${ref})`;
 }
-/** A decisive step the enforced deadline stopped. The publication reads this
+/** A decisive step the caller's deadline stopped. The publication reads this
     line as an interrupted push (src/lib/pipelines/git.ts), not as a refusal. */
 export const NO_VERDICT_PREFIX = "no verdict within the push budget of ";
 export class NoVerdict extends Error {
@@ -349,15 +342,16 @@ export interface Prepared { command: string[]; env: NodeJS.ProcessEnv }
 /** Runs the plan in order. A group runs at once and is reported once all of
     it has settled. Resolves with the checks left to the hosted job. */
 export async function runSteps(mode: Mode, steps: readonly Step[], options: {
-  root: string; deadline: PushDeadline; logDir: string; prepare: (step: Step) => Prepared; say?: (line: string) => void; ref?: string;
+  root: string; deadline: PushDeadline | null; logDir: string; prepare: (step: Step) => Prepared; say?: (line: string) => void; ref?: string;
 }): Promise<string[]> {
   const { root, deadline, logDir, prepare } = options;
   const say = options.say ?? ((line: string) => console.error(line));
   const deferred: string[] = [];
   // A stopped step is deferred when the hosted job also runs it, and is a
   // missing verdict otherwise.
+  const until = deadline?.at ?? Infinity;
   const settle = (step: Step, outcome: Outcome) => {
-    if (!outcome.stopped) return outcome.code === 0;
+    if (!outcome.stopped || !deadline) return outcome.code === 0;
     if (!step.deferrable) throw new NoVerdict(step, deadline, outcome.ranMs);
     say(deferredLine(mode, step, deadline, outcome.ranMs, options.ref));
     deferred.push(step.name);
@@ -372,14 +366,14 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: {
     say(`${mode}: ${step.group ?? step.name}`);
     if (!step.group) {
       const { command, env } = prepare(step);
-      const outcome = await execute(command, root, env, stepDeadline(step, deadline));
+      const outcome = await execute(command, root, env, until);
       if (!settle(step, outcome)) throw new Error(`${command[0]} failed (${outcome.code})`);
       continue;
     }
     // Grouped steps take their machine admission together and wait for none
     // of each other; each writes its own log, shown when it failed.
     const prepared = group.map(member => ({ member, ...prepare(member), log: path.join(logDir, `${member.name.replace(/[^\w.-]+/g, "-")}.log`) }));
-    const outcomes = await Promise.all(prepared.map(({ member, command, env, log }) => execute(command, root, env, stepDeadline(member, deadline), log)));
+    const outcomes = await Promise.all(prepared.map(({ command, env, log }) => execute(command, root, env, until, log)));
     const failed: string[] = [];
     let missing: NoVerdict | undefined;
     prepared.forEach(({ member, log }, at) => {

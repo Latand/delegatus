@@ -663,7 +663,7 @@ test("a hook that stopped at the deadline it was handed is retried as an interru
     trailingLane(h, 2, { "src/work.ts": "export const work = 1;\n" });
     const { NoVerdict } = await import("../../../scripts/local-gate");
     // The hook's own line, as scripts/local-gate.ts writes it.
-    const line = `pre-push: ${new NoVerdict({ name: "touched tests", command: [] }, { at: 840_000, startedAt: 0, enforced: true }, 830_000).message}`;
+    const line = `pre-push: ${new NoVerdict({ name: "touched tests", command: [] }, { at: 840_000, startedAt: 0 }, 830_000).message}`;
     const handed = path.join(h.root, "deadline");
     fs.writeFileSync(h.hook, `#!/bin/sh\necho "$LLV_GATE_PUSH_DEADLINE" > '${handed}'\necho 'pre-push: privacy' >&2\necho 'pre-push: touched tests' >&2\necho '${line}' >&2\nexit 75\n`, { mode: 0o700 });
     let clock = Date.parse("2026-10-04T10:00:00.000Z");

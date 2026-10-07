@@ -3,7 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { discover, gateTemporaryRoot, isolatedEnvironment, NATIVE_GROUP, NoVerdict, pinnedBunVersion, plan, PUSH_BUDGET_MS, pushDeadline, requiresMediaTools, runSteps, stepDeadline, type PlanEnvironment, type PushDeadline, type Step } from "./local-gate";
+import { discover, gateTemporaryRoot, isolatedEnvironment, NATIVE_GROUP, NoVerdict, pinnedBunVersion, plan, pushDeadline, requiresMediaTools, runSteps, type PlanEnvironment, type PushDeadline, type Step } from "./local-gate";
 import { nativeBatches } from "./verify-native-codex-runtime";
 import { changedSinceBase } from "./ci-platform-scope";
 const root = path.resolve(import.meta.dir, "..");
@@ -68,21 +68,14 @@ test("the engine and shared selections are exactly the hosted job's selection, s
   for (const file of shared) expect(readFileSync(path.join(root, file), "utf8"), file).not.toMatch(startsCodex);
   for (const file of engine) expect(readFileSync(path.join(root, file), "utf8"), file).toMatch(startsCodex);
 });
-test("a caller's push deadline bounds every step; without one only deferrable checks are held to the budget", () => {
-  const free = pushDeadline({}, 1_000);
-  expect(free).toEqual({ at: 1_000 + PUSH_BUDGET_MS, startedAt: 1_000, enforced: false });
-  const decisive: Step = { name: "types", command: ["bunx", "tsc"] };
-  const tail: Step = { ...decisive, name: "tail", deferrable: true };
-  expect(stepDeadline(decisive, free)).toBe(Infinity);
-  expect(stepDeadline(tail, free)).toBe(free.at);
-  const held = pushDeadline({ LLV_GATE_PUSH_DEADLINE: "5000" }, 1_000);
-  expect(held.enforced).toBeTrue();
-  expect(stepDeadline(decisive, held)).toBe(5_000);
-  expect(stepDeadline(tail, held)).toBe(5_000);
+test("only a caller's deadline bounds the push, and it must be a Unix time in milliseconds", () => {
+  expect(pushDeadline({}, 1_000)).toBeNull();
+  expect(pushDeadline({ LLV_GATE_PUSH_DEADLINE: "" }, 1_000)).toBeNull();
+  expect(pushDeadline({ LLV_GATE_PUSH_DEADLINE: "5000" }, 1_000)).toEqual({ at: 5_000, startedAt: 1_000 });
   for (const bad of ["soon", "-1", "1.5"]) expect(() => pushDeadline({ LLV_GATE_PUSH_DEADLINE: bad }, 1_000)).toThrow("LLV_GATE_PUSH_DEADLINE");
 });
 
-function stepRunner(deadline: PushDeadline, scripts: (dir: string) => Record<string, string>) {
+function stepRunner(deadline: PushDeadline | null, scripts: (dir: string) => Record<string, string>) {
   const dir = mkdtempSync(path.join(tmpdir(), "gate-steps-")); roots.push(dir);
   const lines: string[] = [], commands = scripts(dir);
   const run = (steps: Step[]) => runSteps("pre-push", steps, { root: dir, deadline, logDir: dir, say: line => lines.push(line),
@@ -90,22 +83,21 @@ function stepRunner(deadline: PushDeadline, scripts: (dir: string) => Record<str
   return { lines, run, dir };
 }
 const grouped = (name: string, deferrable = false): Step => ({ name, command: [], group: NATIVE_GROUP, ...(deferrable ? { deferrable } : {}) });
-const soon = (ms: number, enforced: boolean): PushDeadline => ({ at: Date.now() + ms, startedAt: Date.now(), enforced });
+const soon = (ms: number): PushDeadline => ({ at: Date.now() + ms, startedAt: Date.now() });
 function alive(pid: number): boolean {
   try { return !/^\d+ \(.*\) Z/.test(readFileSync(`/proc/${pid}/stat`, "utf8")); } catch { return false; }
 }
 
 test("a group's steps run at once and report each verdict", async () => {
-  const runner = stepRunner(soon(60_000, false), () => ({ a: "sleep 1.5", b: "sleep 1.5", c: "sleep 1.5" }));
+  const runner = stepRunner(soon(60_000), () => ({ a: "sleep 1.5", b: "sleep 1.5", c: "sleep 1.5" }));
   const started = performance.now();
   expect(await runner.run([grouped("a"), grouped("b"), grouped("c", true)])).toBeNull();
   expect(performance.now() - started).toBeLessThan(4_000);
   expect(runner.lines[0]).toBe(`pre-push: ${NATIVE_GROUP}`);
   for (const name of ["a", "b", "c"]) expect(runner.lines).toContainEqual(expect.stringMatching(new RegExp(`^pre-push: ${name} passed in \\d+ s$`)));
 }, 20_000);
-test("the budget leaves a deferrable check to the hosted job and says so; a decisive one still gets its verdict", async () => {
-  // No caller deadline: the decisive step outlives the budget and still passes.
-  const runner = stepRunner(soon(1_000, false), () => ({ engine: "sleep 2", tail: "sleep 60" }));
+test("a caller's deadline leaves a deferrable check to the hosted job and says so; a decisive one that finished keeps its verdict", async () => {
+  const runner = stepRunner(soon(2_500), () => ({ engine: "sleep 0.5", tail: "sleep 60" }));
   const started = performance.now();
   expect(await runner.run([grouped("engine"), grouped("tail", true)])).toBeNull();
   expect(performance.now() - started).toBeLessThan(15_000);
@@ -115,8 +107,14 @@ test("the budget leaves a deferrable check to the hosted job and says so; a deci
   // Neither line reads as a phase marker to the publication.
   for (const line of runner.lines.slice(1)) if (line.includes("hosted job")) expect(line).not.toMatch(/^pre-push: [^;:]{1,60}$/);
 }, 30_000);
+test("without a caller's deadline nothing is stopped: a person's push waits for every verdict", async () => {
+  const runner = stepRunner(null, () => ({ engine: "sleep 1", tail: "sleep 1" }));
+  expect(await runner.run([grouped("engine"), grouped("tail", true)])).toBeNull();
+  expect(runner.lines.filter(line => line.includes("hosted job"))).toEqual([]);
+  expect(runner.lines).toContainEqual(expect.stringMatching(/^pre-push: tail passed in \d+ s$/));
+}, 30_000);
 test("a caller's deadline stops a decisive step and everything it started, with no verdict", async () => {
-  const runner = stepRunner(soon(1_500, true), dir => ({ "touched tests": `sleep 60 & echo $! > '${dir}/helper.pid'; wait` }));
+  const runner = stepRunner(soon(1_500), dir => ({ "touched tests": `sleep 60 & echo $! > '${dir}/helper.pid'; wait` }));
   const started = performance.now();
   const error = await runner.run([{ name: "touched tests", command: [] }]);
   expect(error).toBeInstanceOf(NoVerdict);
@@ -126,13 +124,13 @@ test("a caller's deadline stops a decisive step and everything it started, with 
   for (let wait = 0; wait < 40 && alive(helper); wait++) await Bun.sleep(50);
   expect(alive(helper)).toBeFalse();
   // A step the deadline already passed never starts.
-  const lateRunner = stepRunner(soon(-1, true), dir => ({ "touched tests": `touch '${dir}/started'` }));
+  const lateRunner = stepRunner(soon(-1), dir => ({ "touched tests": `touch '${dir}/started'` }));
   const late = await lateRunner.run([{ name: "touched tests", command: [] }]);
   expect((late as Error).message).toContain('"touched tests" could not start');
   expect(existsSync(path.join(lateRunner.dir, "started"))).toBeFalse();
 }, 30_000);
 test("a red verdict in a group fails the push with its log, even while the long tail is deferred", async () => {
-  const runner = stepRunner(soon(1_000, false), () => ({ "native Codex 0.154.0": "echo '(fail) installed Codex: adapter pagination [3.00ms]'; exit 1", tail: "sleep 60" }));
+  const runner = stepRunner(soon(2_500), () => ({ "native Codex 0.154.0": "echo '(fail) installed Codex: adapter pagination [3.00ms]'; exit 1", tail: "sleep 60" }));
   const error = await runner.run([grouped("native Codex 0.154.0"), grouped("tail", true)]);
   expect((error as Error).message).toBe("native Codex 0.154.0 failed");
   expect(runner.lines).toContain("(fail) installed Codex: adapter pagination [3.00ms]");
