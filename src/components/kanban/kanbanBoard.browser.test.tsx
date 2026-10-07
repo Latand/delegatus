@@ -22520,7 +22520,9 @@ describe("sidebar and board count working agents by one rule", () => {
    * the selected project's sidebar row and the board header show one number,
    * the Overview row is the sum of the rows, the In progress column counts the
    * same agents on its own cards, and the phone's project list says the
-   * desktop's number. Desktop 1440 and phone 390, English and Ukrainian.
+   * desktop's number in the same green ● style. On the Overview the top line
+   * says who is working and the bar's «need you» is the rail's Overview row 👤.
+   * Desktop 1440 and phone 390, English and Ukrainian.
    *
    *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "one rule"
    *
@@ -22563,9 +22565,35 @@ describe("sidebar and board count working agents by one rule", () => {
           expect(read.rowTitle).toContain(translate(lang, "rail.rowWorking", { count: header }));
           expect(count(read.overview)).toBe(sum);
           expect(count(read.column)).toBeLessThanOrEqual(header);
+          /* The column says its agents with the header's plural forms: «3 працюють». */
+          expect(read.column).toBe(translate(lang, "kanban.columnWorking", { count: count(read.column) }));
           await desk.page.screenshot({ path: path.join(out, `${lang}-1440.png`) });
-          expect(desk.pageErrors).toEqual([]);
           readings.push({ lang, width: 1440, ...read, sum });
+
+          /* The Overview says who is working once, on its top line, and its bar's «need you»
+             is the rail's Overview row 👤. */
+          await desk.page.locator("aside[data-project-rail] [data-rail-overview]").click();
+          await desk.page.waitForSelector(".bar[data-bar='overview']", { timeout: 20_000 });
+          await desk.page.waitForTimeout(500);
+          const overview = await desk.page.evaluate(() => {
+            const text = (element: Element | null | undefined) => element?.textContent ?? null;
+            return {
+              railNeeds: text(document.querySelector("aside[data-project-rail] [data-rail-overview] [data-rail-needs]")),
+              railLive: text(document.querySelector("aside[data-project-rail] [data-rail-overview] [data-rail-live]")),
+              topLine: text(document.querySelector("h1")?.nextElementSibling),
+              summary: text(document.querySelector(".bar[data-bar='overview'] .summary")),
+              column: text(document.querySelector("[data-kanban-board] [data-status='assigned'] .col-head .live .ct")),
+            };
+          });
+          const working = count(overview.railLive);
+          expect(overview.topLine).toContain(translate(lang, "overview.agentsWorkingIn", { count: working, projects: translate(lang, "overview.projects", { count: read.rows.filter((row) => count(row.live) > 0).length }) }));
+          expect(overview.summary).not.toContain(translate(lang, "kanban.overviewWorking", { count: working }));
+          expect(count(overview.railNeeds)).toBeGreaterThan(0);
+          expect(overview.summary).toContain(translate(lang, "kanban.overviewNeeds", { count: count(overview.railNeeds) }));
+          if (overview.column) expect(overview.column).toBe(translate(lang, "kanban.columnWorking", { count: count(overview.column) }));
+          await desk.page.screenshot({ path: path.join(out, `${lang}-1440-overview.png`) });
+          expect(desk.pageErrors).toEqual([]);
+          readings.push({ lang, width: 1440, surface: "overview", ...overview });
         } finally { await desk.context.close(); }
 
         const phone = await openFixture(browser, server.base, { width: 390, height: 844 }, "light", lang, "reduce", true);
@@ -22576,9 +22604,21 @@ describe("sidebar and board count working agents by one rule", () => {
           await phone.page.waitForTimeout(400);
           const text = await row.innerText();
           expect(text).toContain(translate(lang, "mobile2.projects.live", { count: header }));
+          /* The row draws working as the green ● count the desktop draws, selected or not. */
+          const colour = await row.evaluate((element) => {
+            const working = element.querySelector("[data-mobile2-working]");
+            const probe = document.createElement("span");
+            probe.className = "text-success";
+            document.body.appendChild(probe);
+            const success = getComputedStyle(probe).color;
+            probe.remove();
+            return { working: working ? getComputedStyle(working).color : null, dot: Boolean(working?.querySelector(".bg-success")), success };
+          });
+          expect(colour.working).toBe(colour.success);
+          expect(colour.dot).toBe(true);
           await phone.page.screenshot({ path: path.join(out, `${lang}-390-projects.png`) });
           expect(phone.pageErrors).toEqual([]);
-          readings.push({ lang, width: 390, row: text.replace(/\s+/g, " ").trim(), header });
+          readings.push({ lang, width: 390, row: text.replace(/\s+/g, " ").trim(), header, colour });
         } finally { await phone.context.close(); }
       }
       fs.mkdirSync("evidence/working-agents-count", { recursive: true });

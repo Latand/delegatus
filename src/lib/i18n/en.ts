@@ -4132,7 +4132,7 @@ export const en = {
   "kanban.columns": "Columns",
   "kanban.scrollTo": "Scroll to {column}",
   "kanban.columnCount": "{shown} of {total}",
-  "kanban.columnWorking": "{count} working",
+  "kanban.columnWorking": { one: "{count} working", other: "{count} working" },
   "kanban.columnNeeds": { one: "{count} needs you", other: "{count} need you" },
   "kanban.columnStopped": "{count} stopped",
   "kanban.columnNoReason": "{count} no reason",

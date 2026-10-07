@@ -5,7 +5,7 @@
       "lang": "en",
       "width": 1440,
       "row": "5",
-      "rowTitle": "atlas · 3 need you · 5 working · 21 conversations · updated 30s",
+      "rowTitle": "atlas · 3 need you · 5 working · 21 conversations · updated 31s",
       "overview": "8",
       "rows": [
         {
@@ -39,9 +39,24 @@
     },
     {
       "lang": "en",
+      "width": 1440,
+      "surface": "overview",
+      "railNeeds": "5",
+      "railLive": "8",
+      "topLine": "8 agents working in 3 projects · Only what is working right now",
+      "summary": "5 need you·15 tasks on the board",
+      "column": "3 working"
+    },
+    {
+      "lang": "en",
       "width": 390,
       "row": "atlas 5 working 3",
-      "header": 5
+      "header": 5,
+      "colour": {
+        "working": "rgb(23, 122, 55)",
+        "dot": true,
+        "success": "rgb(23, 122, 55)"
+      }
     },
     {
       "lang": "uk",
@@ -76,14 +91,29 @@
         }
       ],
       "header": "5 працюють",
-      "column": "3 працює",
+      "column": "3 працюють",
       "sum": 8
+    },
+    {
+      "lang": "uk",
+      "width": 1440,
+      "surface": "overview",
+      "railNeeds": "5",
+      "railLive": "8",
+      "topLine": "8 агентів працюють у 3 проєктах · Тільки те, над чим працюють зараз",
+      "summary": "5 чекають на вас·16 задач на дошці",
+      "column": "3 працюють"
     },
     {
       "lang": "uk",
       "width": 390,
       "row": "atlas 5 працюють 3",
-      "header": 5
+      "header": 5,
+      "colour": {
+        "working": "rgb(23, 122, 55)",
+        "dot": true,
+        "success": "rgb(23, 122, 55)"
+      }
     }
   ]
 }

@@ -139,12 +139,12 @@ test("the sidebar row and the board header of one project read the same number",
   expect(phone.columns.inbox.working).toBe(1);
 });
 
-test("the Overview row is the sum of the rows, and the Overview board header says the same", () => {
+test("the Overview row is the sum of the rows", () => {
   const rows = buildProjectSummaries(files, NOW, workflows, [], pipelines, {}, undefined, workingAgentCounts(files, NOW));
   const sum = rows.reduce((total, summary) => total + summary.liveCount, 0);
   expect(sum).toBe(5);
   expect(sum).toBe(workingAgentCount(files, NOW));
-  expect(board(files).totals.working).toBe(sum);
+  expect(overviewWorkingTotal(rows, new Set())).toBe(sum);
 });
 
 test("a per-second clock and the board's 15 s clock agree at every second", () => {
@@ -159,22 +159,19 @@ test("a per-second clock and the board's 15 s clock agree at every second", () =
   }
 });
 
-test("the Overview counts one scope: its top line, its board header and the rail's Overview row leave an archived project out", () => {
+test("the Overview counts one scope: its top line and the rail's Overview row leave an archived project out", () => {
   /* One busy agent in an archived project: the Overview page lists only the
-     projects that are not archived, so none of its working numbers counts it,
-     and the rail's Overview row sums the rows the Overview shows. */
+     projects that are not archived, so its top line does not count it, and the
+     rail's Overview row sums the rows the Overview shows. */
   const ARCHIVED = "repo-archived";
   const archivedBusy = file("archived-busy", { ...open, project: ARCHIVED, cwd: "/work/archived" });
   const fleet = [...files, archivedBusy];
   const archived = new Set([ARCHIVED]);
   const rows = buildProjectSummaries(fleet, NOW, workflows, [], pipelines, {}, undefined, workingAgentCounts(fleet, NOW));
   const shown = rows.filter((summary) => !archived.has(summary.project));
-  const projects = new Set(shown.map((summary) => summary.project));
 
   const topLine = overviewWorkingTotal(rows, archived);
-  const header = buildKanbanModel({ bands: [], tasks: [], pipelines: [], projection: projectTaskWorkflows([], [], [], fleet), files: fleet, workingProjects: projects, now: Math.floor(NOW / 15) * 15 }).totals.working;
   expect(topLine).toBe(5);
-  expect(header).toBe(topLine);
   expect(shown.reduce((total, summary) => total + summary.liveCount, 0)).toBe(topLine);
   /* The archived row keeps its own count in the rail's archive section. */
   expect(rows.find((summary) => summary.project === ARCHIVED)?.liveCount).toBe(1);

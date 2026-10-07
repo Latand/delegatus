@@ -4046,7 +4046,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "kanban.columns": "Колонки",
   "kanban.scrollTo": "Прокрутити до колонки «{column}»",
   "kanban.columnCount": "{shown} з {total}",
-  "kanban.columnWorking": "{count} працює",
+  "kanban.columnWorking": { one: "{count} працює", few: "{count} працюють", many: "{count} працюють", other: "{count} працюють" },
   "kanban.columnNeeds": { one: "{count} чекає на вас", few: "{count} чекають на вас", many: "{count} чекають на вас", other: "{count} чекають на вас" },
   "kanban.columnStopped": "Без руху: {count}",
   "kanban.columnNoReason": "Без причини: {count}",

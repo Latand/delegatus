@@ -23,7 +23,7 @@ import { ChevronLeft, ChevronRight, Crown, FolderPlus, MoreHorizontal, Search } 
 import { BoardRowsSkeleton } from "./skeletons";
 import { LanguageToggle } from "./LanguageToggle";
 import { LimitsFooter } from "./LimitsFooter";
-import { buildProjectSummaries, OVERVIEW, partitionCrownedSummaries, type ProjectSummary } from "./projectModel";
+import { attentionTotal, buildProjectSummaries, OVERVIEW, partitionCrownedSummaries, type ProjectSummary } from "./projectModel";
 import { overviewWorkingTotal, workingAgentCounts } from "./workingAgents";
 import { PushBell } from "./PushBell";
 import { ResourcesFooter } from "./ResourcesFooter";
@@ -165,7 +165,7 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
   /* The Overview row sums the rows the Overview shows: an archived project
      keeps its count on its own row in the archive section. */
   const totalLive = useMemo(() => overviewWorkingTotal(summaries, archivedProjects), [summaries, archivedProjects]);
-  const totalAttention = useMemo(() => summaries.reduce((sum, s) => sum + s.attentionCount, 0), [summaries]);
+  const totalAttention = useMemo(() => attentionTotal(summaries), [summaries]);
   /* First run (issue #1162): the catalog answered and named no project at all.
      Distinct from a filter query that matched none, and from a failed fetch —
      both of those keep their own treatment. */

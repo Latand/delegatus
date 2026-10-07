@@ -24,7 +24,7 @@ import { useSeatConversations } from "./orchestrator/useOrchestratorSeat";
 import { MobileAccountsScreen, MobileBarTitle, MobileShell, type MobileShellHost } from "./mobile/MobileShell";
 import { topScreen, useMobileNav, useMobileNavStore, type MobileSheetName } from "./mobile/mobileNav";
 import { OverviewKanban, type OverviewPhoneDoors } from "./OverviewKanban";
-import { buildProjectSummaries } from "./projectModel";
+import { attentionTotal, buildProjectSummaries } from "./projectModel";
 import { overviewWorkingTotal, workingAgentCounts } from "./workingAgents";
 
 const noop = () => {};
@@ -113,6 +113,8 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
      rail's Overview row count the same scope. */
   const totalLive = useMemo(() => overviewWorkingTotal(allSummaries, archivedProjects), [allSummaries, archivedProjects]);
   const liveProjects = summaries.filter((s) => s.liveCount > 0).length;
+  /* The board header's «N need you»: the rail's Overview row 👤, over the same summaries. */
+  const totalNeeds = useMemo(() => attentionTotal(allSummaries), [allSummaries]);
   /* The board's scope. Stable by membership, so a poll that returns the same
      projects never re-groups the whole file list. */
   const projects = useMemo(() => summaries.map((summary) => summary.project), [summaries]);
@@ -193,6 +195,7 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
           tasks={tasks}
           flows={flows}
           pipelines={pipelines}
+          needsYou={totalNeeds}
           loaded={loaded || cached}
           catalogFailures={catalogFailures}
           onSelectProject={onSelectProject}

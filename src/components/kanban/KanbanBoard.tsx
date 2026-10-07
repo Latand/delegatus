@@ -112,9 +112,9 @@ export interface KanbanOverviewScope {
   /** The cards the Overview keeps. Applied exactly where search is applied,
       so a rejected card leaves the columns and no count. */
   keep: (card: KanbanCardModel) => boolean;
-  /** The projects the Overview shows, archived ones removed: the header's
-      «N working» counts these only, as the Overview's top line does. */
-  projects: ReadonlySet<string>;
+  /** The decisions waiting on the operator, the number the rail's Overview
+      row 👤 shows (`attentionTotal`): the header's «N need you» says this one. */
+  needsYou: number;
 }
 
 export interface KanbanBoardProps {
@@ -455,11 +455,11 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const previousModel = useRef<KanbanModel | null>(null);
   // eslint-disable-next-line react-hooks/refs -- Identity cache: the ref only decides which equal object is kept, never what the model holds.
   const model: KanbanModel = useMemo(() => {
-    const built = buildKanbanModel({ bands, tasks: effectiveTasks, pipelines, projection, files, flows: props.flows, statusOverrides: statuses, cardFilter: props.overview?.keep, workingProjects: props.overview?.projects, reasonFilter, seat: seatRefs, query, openReaders: unfoldedReaders, launched: isLaunchedConversation, now: modelNow });
+    const built = buildKanbanModel({ bands, tasks: effectiveTasks, pipelines, projection, files, flows: props.flows, statusOverrides: statuses, cardFilter: props.overview?.keep, reasonFilter, seat: seatRefs, query, openReaders: unfoldedReaders, launched: isLaunchedConversation, now: modelNow });
     const shared = reuseKanbanModel(previousModel.current, built);
     previousModel.current = shared;
     return shared;
-  }, [bands, effectiveTasks, pipelines, projection, files, props.flows, statuses, props.overview?.keep, props.overview?.projects, reasonFilter, seatRefs, query, unfoldedReaders, modelNow]);
+  }, [bands, effectiveTasks, pipelines, projection, files, props.flows, statuses, props.overview?.keep, reasonFilter, seatRefs, query, unfoldedReaders, modelNow]);
   const cardsById = useMemo(() => {
     const map = new Map<string, KanbanCardModel>();
     for (const status of KANBAN_STATUSES) for (const card of model.columns[status].cards) map.set(card.id, card);
@@ -2769,20 +2769,18 @@ export function KanbanBoard(props: KanbanBoardProps) {
           (`barLead`, `barTrail`); the right reserve is the Viewer's attention island. */}
       {props.overview ? (
         /* The Overview keeps the bar it had before the project board's header was put in order
-           (#1801 was the project board only): its three facts, and the tools wrapping under the
-           island on its narrow faces. */
+           (#1801 was the project board only), and the tools wrapping under the island on its
+           narrow faces. Who is working is said once, on the Overview's top line above it; the
+           need-you number is the rail's Overview row's. */
         <header className="bar" data-bar="overview">
           <span className="summary">
-            <span className="dot" aria-hidden="true" />
-            <span className="num">{t("kanban.overviewWorking", { count: model.totals.working })}</span>
-            {model.totals.needsYou ? (
+            {props.overview.needsYou ? (
               <>
-                <span aria-hidden="true">·</span>
                 <span className="dot warn" aria-hidden="true" />
-                <span className="num">{t("kanban.overviewNeeds", { count: model.totals.needsYou })}</span>
+                <span className="num">{t("kanban.overviewNeeds", { count: props.overview.needsYou })}</span>
+                <span aria-hidden="true">·</span>
               </>
             ) : null}
-            <span aria-hidden="true">·</span>
             <span className="num">{t("kanban.overviewTasks", { count: model.totals.onBoard })}</span>
           </span>
           {reachStatus}

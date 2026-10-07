@@ -95,13 +95,18 @@ export function MobileProjectSheet({
         attrs={{ "data-mobile2-project": summary.project, "data-mobile2-quiet": quiet ? "1" : undefined }}
         trailing={
           <>
-            <span className={quiet ? "text-muted" : ""}>
-              {summary.liveCount
-                ? t("mobile2.projects.live", { count: summary.liveCount })
-                : summary.smt
-                  ? t("mobile2.projects.quietSince", { age: fmtAge(summary.smt) })
-                  : t("mobile2.projects.quiet")}
-            </span>
+            {/* Working is the green ● count the rail row, the board header and
+                its columns draw, whichever row is selected. */}
+            {summary.liveCount ? (
+              <span data-mobile2-working="" className="inline-flex items-center gap-1 font-bold tabular-nums text-success">
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-success motion-reduce:animate-none" aria-hidden />
+                {t("mobile2.projects.live", { count: summary.liveCount })}
+              </span>
+            ) : (
+              <span className={quiet ? "text-muted" : ""}>
+                {summary.smt ? t("mobile2.projects.quietSince", { age: fmtAge(summary.smt) }) : t("mobile2.projects.quiet")}
+              </span>
+            )}
             {summary.attentionCount ? (
               <Badge tone="warning">
                 <TriangleAlert className="h-[11px] w-[11px]" aria-hidden /> {summary.attentionCount}

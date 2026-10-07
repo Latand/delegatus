@@ -187,7 +187,7 @@ const SEAT_TASKS: BoardTask[] = [
 
 interface Taps { projects: string[] }
 
-function mount(files: FileEntry[], tasks: BoardTask[], archivedProjects: ReadonlySet<string> = new Set()): { host: HTMLElement; taps: Taps } {
+function mount(files: FileEntry[], tasks: BoardTask[], archivedProjects: ReadonlySet<string> = new Set(), needsYouCounts?: ReadonlyMap<string, number>): { host: HTMLElement; taps: Taps } {
   const taps: Taps = { projects: [] };
   const host = dom.document.createElement("div");
   dom.document.body.appendChild(host);
@@ -204,6 +204,7 @@ function mount(files: FileEntry[], tasks: BoardTask[], archivedProjects: Readonl
       flows={[]}
       loaded
       now={NOW}
+      needsYouCounts={needsYouCounts}
       onSelectProject={(project) => taps.projects.push(project)}
     />,
   ));
@@ -319,13 +320,16 @@ test("what needs one project to write into is absent, never faked", () => {
   expect([...host.querySelectorAll('.menu [role="menuitemradio"]')].slice(0, 4).map((item) => item.textContent)).toEqual(["Inbox", "Assigned", "Blocked", "Done"]);
 });
 
-test("the Overview's bar keeps its three facts; the project board's bar, put in order (#1801), says each once", () => {
+test("the Overview says who is working once, on its top line; the project board's bar, put in order (#1801), says each once", () => {
   const { host } = mount(FILES, TASKS);
   const summary = (root: HTMLElement) => root.querySelector<HTMLElement>(".bar .summary")?.textContent ?? "";
+  const topLine = host.querySelector<HTMLElement>("h1")?.nextElementSibling?.textContent ?? "";
 
-  /* Three live turns across three projects; the task count is the board's, before the narrowing. */
-  expect(summary(host)).toContain(translate("en", "kanban.overviewWorking", { count: 3 }));
-  expect(summary(host)).toContain(translate("en", "kanban.overviewTasks", { count: 5 }));
+  /* Three live turns across three projects, said by the top line only; the
+     task count is the board's, before the narrowing. */
+  expect(topLine).toContain(translate("en", "overview.agentsWorkingIn", { count: 3, projects: translate("en", "overview.projects", { count: 3 }) }));
+  expect(summary(host)).not.toContain(translate("en", "kanban.overviewWorking", { count: 3 }));
+  expect(summary(host)).toBe(translate("en", "kanban.overviewTasks", { count: 5 }));
 
   /* The project's own board keeps only who is working: the waiting signal and the
      task count live elsewhere on its bar and its columns. */
@@ -333,16 +337,23 @@ test("the Overview's bar keeps its three facts; the project board's bar, put in 
   expect(summary(project)).toBe(translate("en", "kanban.summaryWorking", { count: 0 }));
 });
 
-test("an archived project's working agent is in neither the top line nor the board header", () => {
-  /* The Overview shows the projects that are not archived, and both of its
-     «working» numbers count those: the top line and the board header agree. */
+test("an archived project's working agent is not on the Overview's top line", () => {
+  /* The Overview shows the projects that are not archived, and its «working»
+     number counts those, as the rail's Overview row does. */
   const { host } = mount(FILES, TASKS, new Set([MESH]));
   const topLine = host.querySelector<HTMLElement>("h1")?.nextElementSibling?.textContent ?? "";
-  const header = host.querySelector<HTMLElement>(".bar .summary")?.textContent ?? "";
 
   expect(topLine).toContain(translate("en", "overview.agentsWorkingIn", { count: 2, projects: translate("en", "overview.projects", { count: 2 }) }));
   expect(topLine).toContain(translate("en", "overview.archived", { count: 1 }));
-  expect(header).toContain(translate("en", "kanban.overviewWorking", { count: 2 }));
+});
+
+test("the Overview bar's «need you» is the rail's Overview row 👤", () => {
+  /* The rail sums the needs-you queue per project; the bar says that sum,
+     whatever the cards on the board carry. */
+  const { host } = mount(FILES, TASKS, new Set(), new Map([[LEDGER, 3], [ATLAS, 2]]));
+  const header = host.querySelector<HTMLElement>(".bar .summary")?.textContent ?? "";
+
+  expect(header).toContain(translate("en", "kanban.overviewNeeds", { count: 5 }));
 });
 
 test("nothing that navigates is nested inside anything else that navigates (#699)", () => {

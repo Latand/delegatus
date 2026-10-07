@@ -255,6 +255,17 @@ export function buildProjectSummaries(
 }
 
 /**
+ * The decisions waiting on the operator across every project: the rail's
+ * Overview row 👤 and the Overview board header's «N need you» show this one
+ * number, so the two never disagree on one screen.
+ */
+export function attentionTotal(summaries: readonly ProjectSummary[]): number {
+  let count = 0;
+  for (const summary of summaries) count += summary.attentionCount;
+  return count;
+}
+
+/**
  * Crowned projects float in their own pinned section above everything else;
  * inside each half the rows keep the summaries' own order (attention → live →
  * bucketed recency), so pinning changes grouping, never the recency rule.
