@@ -3,10 +3,12 @@
 import { startTransition, useEffect, useRef, useState } from "react";
 
 import { createFreshAwareCoalescer } from "@/lib/asyncCoalescer";
-import { useLocale } from "@/lib/i18n";
+import { useLocale, type MessageKey } from "@/lib/i18n";
+import type { DiskPressure } from "@/lib/state/diskPressure";
 import type { ResourceSession, ResourcesPayload, ResourcesViewer } from "@/lib/types";
 
 import { X } from "./icons";
+import { LINE_EDGE, MeterLine, type RailFooterDensity } from "./railFooterDensity";
 import { AttachControls } from "./resources/AttachControls";
 import { bulkKillTargets, idleKillTargets, isStructuredHost, resourceCounts } from "./resources/hostSelection";
 import { activityDot, engineTintOf, fmtAge } from "./utils";
@@ -24,7 +26,7 @@ function fmtBytes(n: number): string {
   return Math.max(0, Math.round(n / MIB)) + " MiB";
 }
 
-/** Bar color mirrors the LimitRow thresholds: amber under 30% headroom, red under 10%. */
+/** Bar color mirrors the limit window thresholds: amber under 30% headroom, red under 10%. */
 function ramColor(availablePercent: number): string {
   if (availablePercent < 10) return "var(--color-danger)";
   if (availablePercent < 30) return "var(--color-warning)";
@@ -116,7 +118,7 @@ export function stickySnap(prev: ResourcesSnap | null, next: ResourcesPayload, a
 
 /** Rail block above LimitsFooter: RAM/swap pressure bars; clicking it opens
     the per-session cleanup list. */
-export function ResourcesFooter() {
+export function ResourcesFooter({ density = "full" }: { density?: RailFooterDensity } = {}) {
   const { t } = useLocale();
   const [snap, setSnap] = useState<ResourcesSnap | null>(null);
   const [open, setOpen] = useState(false);
@@ -190,6 +192,65 @@ export function ResourcesFooter() {
   const ramAvailPct = system ? (100 * system.ramAvailable) / system.ramTotal : 100;
   const swapUsedPct = system && system.swapTotal > 0 ? (100 * system.swapUsed) / system.swapTotal : 0;
 
+  /* Why the amber dot is lit: the readings are old, or the session list is. */
+  const staleReason = snap.staleSince
+    ? t("resources.stale", { stale: fmtAge(snap.staleSince) })
+    : sessionsStale
+      ? sessionsCapturedAt
+        ? t("resources.sessionsStaleDot", { age: fmtAge(Date.parse(sessionsCapturedAt) / 1000) })
+        : t("resources.sessionsUnavailable")
+      : null;
+  /* A compact line names what is left and draws that same share, so the number and the bar agree. */
+  const swapFree = system ? system.swapTotal - system.swapUsed : 0;
+  const reading = [
+    system ? `${t("resources.ram")} ${t("resources.free", { amount: fmtBytes(system.ramAvailable) })}` : t("resources.title"),
+    system && system.swapTotal > 0 ? `${t("resources.swap")} ${t("resources.free", { amount: fmtBytes(swapFree) })}` : null,
+    system && viewer ? `${t("resources.viewer")} ${viewerAmount(viewer, t)}` : null,
+    system ? t("resources.captured", { age: fmtAge(Date.parse(system.capturedAt) / 1000) }) : null,
+    staleReason,
+  ].filter(Boolean).join(" · ");
+  const cleanup = open ? (
+    <CleanupPanel
+      sessions={sessions}
+      now={snap.at}
+      sessionsStale={sessionsStale}
+      sessionsCapturedAt={sessionsCapturedAt}
+      viewer={viewer}
+      onRefresh={() => loadRef.current(true)}
+      onClose={() => setOpen(false)}
+    />
+  ) : null;
+  if (density !== "full") {
+    /* The dot follows the name it qualifies. */
+    const staleDot = staleReason ? <span className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-warning align-middle" data-testid="resources-stale-dot" title={staleReason} /> : null;
+    return (
+      <div ref={panelRef} className="relative shrink-0 border-t border-border" data-resources-footer>
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-label={t("resources.openAria")}
+          title={reading}
+          onClick={() => setOpen((value) => !value)}
+          className={`block w-full ${LINE_EDGE} py-1 text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40`}
+        >
+          {system ? (
+            <>
+              <MeterLine label={<>{t("resources.ram")}{staleDot}</>} value={t("resources.free", { amount: fmtBytes(system.ramAvailable) })} percent={ramAvailPct} color={ramColor(ramAvailPct)} />
+              {system.swapTotal > 0 ? <MeterLine label={t("resources.swap")} value={t("resources.free", { amount: fmtBytes(swapFree) })} percent={100 - swapUsedPct} color={swapColor(swapUsedPct)} /> : null}
+              {/* Behind "All windows": what Delegatus itself holds, and how old the reading is. */}
+              {density === "detail" && viewer ? <span className="block" data-testid="resources-viewer-line" title={t("resources.viewerHint")}><MeterLine label={t("resources.viewer")} value={viewerAmount(viewer, t)} percent={null} color="var(--color-muted)" bar={false} /></span> : null}
+              {density === "detail" ? <span data-meter-note="" className="block break-words pb-0.5 text-[10px] leading-[13px] text-muted">{t("resources.captured", { age: fmtAge(Date.parse(system.capturedAt) / 1000) })}</span> : null}
+            </>
+          ) : (
+            <MeterLine label={<>{t("resources.title")}{staleDot}</>} value={sessions.length} percent={null} color="var(--color-muted)" />
+          )}
+        </button>
+        {snap.data.diskPressure ? <DiskPressureNotice pressure={snap.data.diskPressure} density={density} /> : null}
+        {cleanup}
+      </div>
+    );
+  }
+
   return (
     <div ref={panelRef} className="relative shrink-0 border-t border-border" data-resources-footer>
       <button
@@ -244,6 +305,7 @@ export function ResourcesFooter() {
           <span className="text-[11px] font-semibold text-primary">{t("resources.title")}</span>
         )}
       </button>
+      {snap.data.diskPressure ? <DiskPressureNotice pressure={snap.data.diskPressure} /> : null}
       {open ? (
         <CleanupPanel
           sessions={sessions}
@@ -310,6 +372,66 @@ async function killSession(
   } catch (error) {
     return { outcome: "refused", reason: error instanceof Error ? error.message : String(error) };
   }
+}
+
+/** Low free space on a volume Delegatus writes to, while its episode lasts
+    and a volume is still below the warning threshold. The sidebar draws it on
+    the system block's grid: one line per low volume, then what takes the space.
+    Behind "All windows" the block has room for the line alone, so the rest is
+    in its tooltip. */
+export function DiskPressureNotice({ pressure, density = "full" }: { pressure: DiskPressure; density?: RailFooterDensity }) {
+  const { t } = useLocale();
+  const low = pressure.volumes.filter((volume) => volume.level === "warning" || volume.level === "critical");
+  if (!pressure.episode || low.length === 0) return null;
+  const role = (name: string) => t(`resources.diskRole.${name}` as MessageKey);
+  const consumers = [...pressure.consumers].sort((a, b) => b.bytes - a.bytes).map((consumer) => `${role(consumer.kind)} ${fmtBytes(consumer.bytes)}`).join(", ");
+  const waiting = low.some((volume) => volume.level === "critical" && (volume.provisioning || volume.roles.includes("state")));
+  const volumeText = (volume: DiskPressure["volumes"][number]) => `${volume.roles.map(role).join(" / ")}: ${t("resources.free", { amount: fmtBytes(volume.freeBytes ?? 0) })}`;
+  if (density !== "full") {
+    const NOTE = "block break-words text-[10px] leading-[13px] text-muted";
+    const rest = [consumers ? `${t("resources.diskConsumers")} ${consumers}` : t("resources.diskMeasuring"), waiting ? t("resources.diskWaiting") : null].filter(Boolean).join(" · ");
+    const notes = density === "line";
+    return (
+      <div
+        role="status"
+        data-disk-pressure
+        aria-label={[t("resources.diskLow"), ...low.map(volumeText), rest].join(" · ")}
+        className={`${LINE_EDGE} -mt-1 pb-1`}
+      >
+        {low.map((volume, index) => {
+          const critical = volume.level === "critical";
+          const share = volume.totalBytes ? (100 * (volume.freeBytes ?? 0)) / volume.totalBytes : null;
+          return (
+            <span key={`${index}:${volume.roles.join("/")}`} className="block" data-disk-level={volume.level} title={[t("resources.diskLow"), volumeText(volume), ...(notes ? [] : [rest])].join(" · ")}>
+              <MeterLine
+                label={t("resources.disk")}
+                value={<span className={critical ? "text-danger" : "text-warning"}>{t("resources.free", { amount: fmtBytes(volume.freeBytes ?? 0) })}</span>}
+                percent={share}
+                color={critical ? "var(--color-danger)" : "var(--color-warning)"}
+                bar={share !== null}
+              />
+            </span>
+          );
+        })}
+        {!notes ? null : consumers
+          ? <span data-meter-note="" className={`-mt-0.5 ${NOTE}`} title={`${t("resources.diskConsumersHint")} ${consumers}`}>{t("resources.diskConsumers")} {consumers}</span>
+          : <span data-meter-note="" className={`-mt-0.5 ${NOTE}`}>{t("resources.diskMeasuring")}</span>}
+        {notes && waiting ? <span data-meter-note="" className={NOTE} title={t("resources.diskWaiting")}>{t("resources.diskWaitingShort")}</span> : null}
+      </div>
+    );
+  }
+  return (
+    <div role="status" data-disk-pressure className="px-3.5 pb-2 text-xs leading-relaxed text-warning">
+      <strong className="block">{t("resources.diskLow")}</strong>
+      {low.map((volume, index) => (
+        <div key={`${index}:${volume.roles.join("/")}`}>{volumeText(volume)}</div>
+      ))}
+      {consumers
+        ? <div title={`${t("resources.diskConsumersHint")} ${consumers}`}>{t("resources.diskConsumers")} {consumers}</div>
+        : <div>{t("resources.diskMeasuring")}</div>}
+      {waiting ? <div>{t("resources.diskWaiting")}</div> : null}
+    </div>
+  );
 }
 
 /** The "Agent sessions" dialog. Exported for the DOM test, which drives the

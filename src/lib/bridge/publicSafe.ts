@@ -83,22 +83,35 @@ const PATTERNS: readonly [PrivateClass, RegExp][] = [
   ["email", /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/],
   ["ip", /\b(?:\d{1,3}\.){3}\d{1,3}\b/],
   ["ip", /\b(?:[0-9a-f]{1,4}:){3,7}[0-9a-f]{1,4}\b/i],
+  /* The compressed forms: `fd00::1234`, `fe80::1:2`, `::1`. */
+  ["ip", /(?<![\w:])(?:[0-9a-f]{1,4}:){1,7}:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6})?(?![\w:])/i],
+  ["ip", /(?<![\w:])::[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6}(?![\w:])/i],
   ["host", /\b[\w-]+\.ts\.net\b/i],
   ["host", /\b[\w-]+\.local\b/i],
   ["host", /\blocalhost\b/i],
   ["domain", new RegExp(`\\b(?:[a-z0-9-]+\\.)+${TLD}\\b(?![.\\w])`, "i")],
-  ["port", /(?:\blocalhost|\b[\w-]+\.[\w.-]+|\b\d{1,3}(?:\.\d{1,3}){3}):\d{2,5}\b/i],
-  ["port", /(?<!\p{L})(?:port|порт[уіа]?|порта)\s+\d{2,5}\b/iu],
-  /* A path starts a token: `/x/y`, `~/x`, `$HOME/x`, `C:\x`. A repository-
+  ["port", /(?<!\p{L})(?:port|порт[уіа]?|порта)(?:\s+|\s*[:=]\s*)\d{1,5}\b/iu],
+  /* A path starts a token: `/x/y`, `~/x`, `~user/x`, `$HOME/x`, `C:\x`. A repository-
      relative path (`src/lib/x.ts`) names nothing about this machine. */
-  ["path", /(?:^|[\s(«"'`=:])(?:~\/|\$HOME\b|\$\{HOME\})/],
-  ["path", /(?:^|[\s(«"'`=])\/(?:[\w.@-]+\/)+[\w.@-]*/],
+  /* A shell tilde prefix ends at its first slash. NSS user names can contain
+     combining marks and punctuation; Markdown can surround the prefix. */
+  ["path", /(?:^|[\s[(«"'`=:>*_])(?:~[^\s/]*\/|\$HOME\b|\$\{HOME\})/u],
+  /* A complete shell home expression needs no slash. Keep approximate
+     numbers and Markdown strike-through readable. */
+  ["path", /(?:^|[\s[(«“‹"'`=:>*_])~(?!~)(?:[+-]|[\p{L}\p{M}_][\p{L}\p{M}\p{N}_.+-]*)?(?=$|[\s/)\]»”›"'`,.;:!?*_])/u],
+  /* Folder names are letters of any script, so `\w` would miss most of them,
+     and may hold spaces (`/My data/notes.txt`), written or shell-escaped. A
+     space-separated run counts only once a later slash closes the folder. */
+  ["path", /(?:^|[\s(«"'`=])\/(?:[\p{L}\p{N}_.@-]+(?:(?: |\\ )[\p{L}\p{N}_.@-]+)*\/)+[\p{L}\p{N}_.@-]*/u],
   ["path", /(?:^|[\s(«"'`=])\/(?:home|root|Users|tmp|var|etc|opt|usr|mnt|srv|proc|run|private)\b/],
-  ["path", /\b[a-z]:\\[\w\\. -]+/i],
+  /* A drive path, with either slash: `C:\x`, `C:/x`. A scheme (`ftp://`) has
+     more than one letter before its colon and two slashes after it. */
+  ["path", /(?<![\p{L}\p{N}_])[a-z]:(?:\\|\/(?!\/))[^\s\\/]/iu],
   ["phone", /\+\d{1,3}[\s-]?\(?\d{2,4}\)?(?:[\s-]?\d{2,4}){2,4}\b/],
   ["id", /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i],
-  ["id", /\bconversation_[\w-]+/i],
-  ["id", /\b(?:rpt|rsg|dep|task|card|pipeline)_[0-9a-z]{6,}\b/i],
+  /* Delegatus's own tool names share the prefix and name nothing private. */
+  ["id", /\bconversation_(?!(?:action|messages|migration|deliverability)\b)[\w-]+/i],
+  ["id", /\b(?:rpt|rsg|dep|task|card|pipeline)_(?!action\b)[0-9a-z]{6,}\b/i],
   /* A share or an amount next to the words for a limit, in English, Ukrainian
      and Russian. `\b` and `\w` are ASCII-only, so the Cyrillic words are
      bounded by letter classes instead. */
@@ -113,7 +126,7 @@ function escape(text: string): string {
 }
 
 function wholeWord(name: string): RegExp {
-  return new RegExp(`(?<![\\p{L}\\p{N}_])${escape(name)}(?![\\p{L}\\p{N}_])`, "iu");
+  return new RegExp(`(?<![\\p{L}\\p{M}\\p{N}_])${name.split(/\s+/u).map(escape).join("\\s+")}(?![\\p{L}\\p{M}\\p{N}_])`, "iu");
 }
 
 function usableName(name: string): boolean {
@@ -128,31 +141,46 @@ function repositoryShaped(name: string): boolean {
   return /[-_.\d]/.test(name);
 }
 
-function namesHit(text: string, names: readonly string[]): boolean {
-  return names.some((name) => usableName(name) && wholeWord(name.trim()).test(text));
+export interface PrivateMatch {
+  class: PrivateClass;
+  start: number;
+  end: number;
+}
+
+/** Shared pattern occurrences. Issue reports use these as advisory pointers.
+    Manager reports retain their existing class-based filtering policy. */
+export function privateMatches(text: string, deny: PublicDenyList = EMPTY_DENY_LIST): PrivateMatch[] {
+  const found: PrivateMatch[] = [];
+  const scan = (kind: PrivateClass, pattern: RegExp) => {
+    for (const match of text.matchAll(new RegExp(pattern.source, pattern.flags.replace("g", "") + "g"))) {
+      found.push({ class: kind, start: match.index, end: match.index + match[0].length });
+    }
+  };
+  const redacted = hardenedRedact(text);
+  if (redacted !== text) {
+    let start = 0;
+    while (text[start] === redacted[start] && start < text.length) start += 1;
+    let tail = 0;
+    while (tail < text.length - start && tail < redacted.length - start
+      && text[text.length - 1 - tail] === redacted[redacted.length - 1 - tail]) tail += 1;
+    found.push({ class: "secret", start, end: text.length - tail });
+  }
+  for (const [kind, pattern] of PATTERNS) scan(kind, pattern);
+  scan("port", /(?:\blocalhost|\b[\w-]+\.[\w.-]+|\b\d{1,3}(?:\.\d{1,3}){3}):\d{1,5}\b/i);
+  const names = (kind: PrivateClass, values: readonly string[]) => {
+    for (const name of values) if (usableName(name)) scan(kind, wholeWord(name.trim()));
+  };
+  names("account", deny.accounts);
+  names("person", deny.people);
+  names("host", deny.local);
+  for (const project of deny.projects) {
+    if (project.repository?.includes("/")) scan("project", new RegExp(escape(project.repository), "i"));
+    names("project", project.names.filter(repositoryShaped));
+  }
+  return found;
 }
 
 /** Every private class found in `text`, each once, in a stable order. */
 export function privateClasses(text: string, deny: PublicDenyList = EMPTY_DENY_LIST): PrivateClass[] {
-  if (!text) return [];
-  const found = new Set<PrivateClass>();
-  if (hardenedRedact(text) !== text) found.add("secret");
-  for (const [kind, pattern] of PATTERNS) {
-    if (!found.has(kind) && pattern.test(text)) found.add(kind);
-  }
-  if (namesHit(text, deny.accounts)) found.add("account");
-  if (namesHit(text, deny.people)) found.add("person");
-  if (namesHit(text, deny.local)) found.add("host");
-  const lower = text.toLowerCase();
-  for (const project of deny.projects) {
-    if (project.repository && project.repository.includes("/") && lower.includes(project.repository.toLowerCase())) {
-      found.add("project");
-      break;
-    }
-    if (namesHit(text, project.names.filter(repositoryShaped))) {
-      found.add("project");
-      break;
-    }
-  }
-  return [...found];
+  return [...new Set(privateMatches(text, deny).map((match) => match.class))];
 }

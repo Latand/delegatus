@@ -9,7 +9,7 @@ import ts from "typescript";
 import { getBabelConfigFile } from "next/dist/build/get-babel-config-file";
 import { getSupportedBrowsers } from "next/dist/build/get-supported-browsers";
 import { findConfig } from "next/dist/lib/find-config";
-import { isImageInput } from "./docker-image-scope.cjs";
+import { isImageInput, isMultiArchInput } from "./docker-image-scope.cjs";
 
 const root = path.resolve(import.meta.dir, "..");
 interface Job {
@@ -18,12 +18,12 @@ interface Job {
   "timeout-minutes": string | number;
   concurrency?: { group: string; "cancel-in-progress": boolean; queue: string };
   outputs?: Record<string, string>;
-  steps: { name?: string; with?: Record<string, unknown>; env?: Record<string, string>; run?: string }[];
+  steps: { name?: string; if?: string; uses?: string; with?: Record<string, unknown>; env?: Record<string, string>; run?: string }[];
 }
 const workflow = Bun.YAML.parse(readFileSync(path.join(root, ".github/workflows/docker-image.yml"), "utf8")) as {
   jobs: Record<string, Job>;
   concurrency: { group: string; "cancel-in-progress": string };
-  on: { pull_request?: { paths?: string[]; "paths-ignore"?: string[] }; push: { branches: string[]; tags: string[] } };
+  on: { pull_request?: { types?: string[]; paths?: string[]; "paths-ignore"?: string[] }; push: { branches: string[]; tags: string[] } };
 };
 
 test("image inputs build, while prose, unrelated CI and shell tooling skip", () => {
@@ -35,7 +35,7 @@ test("image inputs build, while prose, unrelated CI and shell tooling skip", () 
     "scripts/runtime-host-healthcheck.ts", "scripts/published-image-entrypoint.sh",
     "landing/site/demo/taskIcons.json", "evals/probe.ts", "spikes/probe.mts", "test-preload.ts",
     "scripts/demo-capture-browser.cjs", "scripts/newcomer-install.mjs", "scripts/npm-package-smoke.mjs",
-    "scripts/fixtures/usage-metrics/recorded.json", "scripts/docker-image-scope.cjs",
+    "scripts/fixtures/usage-metrics/recorded.json", "scripts/package-revision.mjs", "scripts/docker-image-scope.cjs",
     ".env", ".env.local", ".env.production", ".env.production.local",
     ".gitignore", "src/.gitignore", "src/components/.gitignore", "public/.gitignore",
     "bin/.gitignore", "patches/.gitignore", "vendor/.gitignore", ".github/workflows/docker-image.yml",
@@ -49,6 +49,20 @@ test("image inputs build, while prose, unrelated CI and shell tooling skip", () 
     ".env.development", ".env.test", ".env.example", "docs/.env.production",
     "docs/.gitignore", "docs/design/desktop-v2/.gitignore", "landing/site/.gitignore",
   ]) expect(isImageInput(file), file).toBe(false);
+});
+
+test("native installation and runtime inputs verify both architectures; app changes verify amd64", () => {
+  for (const file of ["Dockerfile", ".dockerignore", "Dockerfile.dockerignore", "package.json", "bun.lock", "bunfig.toml",
+    "patches/native.patch", "vendor/native/index.js", "bin/provision-telegram-connector.mjs",
+    "src/runtime-host/main.ts", "src/lib/platform/linux.ts", "scripts/whisper_transcribe.py",
+    "scripts/published-image-entrypoint.sh", "scripts/newcomer-install.mjs", "scripts/npm-package-smoke.mjs",
+    ".github/workflows/docker-image.yml", "scripts/docker-image-scope.cjs"]) {
+    expect(isMultiArchInput(file), file).toBe(true);
+    expect(isImageInput(file), file).toBe(true);
+  }
+  for (const file of ["src/app/page.tsx", "src/app/globals.css", "public/icon.svg", "README.md", "docs/native.md"]) {
+    expect(isMultiArchInput(file), file).toBe(false);
+  }
 });
 
 test("the admission list covers every repository JS/JSON dependency in the TypeScript program", () => {
@@ -133,6 +147,12 @@ test("workflow gates Docker steps and reserves capacity across different refs", 
   expect(scope["timeout-minutes"]).toBe(3);
   expect(scope.steps[0].with?.["fetch-depth"]).toBe(0);
   expect(scope.outputs?.build).toBe("${{ steps.inputs.outputs.build }}");
+  expect(scope.outputs?.platforms).toBe("${{ steps.inputs.outputs.platforms }}");
+  expect(workflow.on.pull_request?.types).toEqual(["opened", "synchronize", "reopened", "closed"]);
+  for (const step of scope.steps.slice(0, 2)) {
+    expect(step.if).toBe("github.event.pull_request.state == 'open' && !startsWith(github.head_ref, 'merge-batch/')");
+  }
+  expect(scope.steps[2].if).toBe("github.event.pull_request.state != 'open' || startsWith(github.head_ref, 'merge-batch/')");
   expect(scope.steps[1].env).toEqual({
     BASE_SHA: "${{ github.event.pull_request.base.sha }}",
     HEAD_SHA: "${{ github.event.pull_request.head.sha }}",
@@ -140,14 +160,28 @@ test("workflow gates Docker steps and reserves capacity across different refs", 
   expect(scope.steps[1].run).toBe('node scripts/docker-image-scope.cjs "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"');
   expect(build.needs).toBe("scope");
   expect(build.if).toBe("${{ !cancelled() && (github.event_name != 'pull_request' || needs.scope.outputs.build == 'true') }}");
-  expect(build.concurrency).toEqual({ group: "docker-image-build", "cancel-in-progress": false, queue: "max" });
-  expect(workflow.concurrency.group).toBe("docker-image-${{ github.ref }}");
+  expect(build.concurrency).toEqual({
+    group: "${{ github.event_name == 'pull_request' && 'docker-image-build' || 'docker-image-publish-build' }}",
+    "cancel-in-progress": false, queue: "max",
+  });
+  expect(workflow.concurrency.group).toBe("docker-image-${{ github.event.pull_request.number && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.ref }}");
   expect(workflow.concurrency["cancel-in-progress"]).toBe("${{ github.ref_type != 'tag' }}");
   expect(workflow.on.push).toEqual({ branches: ["main"], tags: ["v*"] });
   expect(build["timeout-minutes"]).toBe("${{ github.event_name == 'pull_request' && 45 || 360 }}");
-  const image = build.steps.find((step: { name?: string }) => step.name === "Build both architectures");
+  const qemu = build.steps.find(step => step.uses === "docker/setup-qemu-action@v3");
+  expect(qemu?.if).toBe("github.event_name != 'pull_request' || needs.scope.outputs.platforms == 'linux/amd64,linux/arm64'");
+  const verify = build.steps.find(step => step.name === "Verify PR image");
+  expect(verify?.if).toBe("github.event_name == 'pull_request'");
+  expect(verify?.uses).toBe("docker/build-push-action@v6");
+  expect(verify?.with?.platforms).toBe("${{ needs.scope.outputs.platforms }}");
+  expect(verify?.with?.push).toBe(false);
+  expect(verify?.with?.["cache-from"]).toBe("type=gha");
+  expect(verify?.with?.["cache-to"]).toBeUndefined();
+  expect(verify?.with?.tags).toBeUndefined();
+  const image = build.steps.find(step => step.name === "Publish both architectures");
+  expect(image?.if).toBe("github.event_name != 'pull_request'");
   expect(image?.with?.platforms).toBe("linux/amd64,linux/arm64");
-  expect(image?.with?.push).toBe("${{ github.event_name != 'pull_request' }}");
+  expect(image?.with?.push).toBe(true);
 });
 
 test("real Git diff excludes main merges and retains deletions, renames and files beyond 300", () => {
@@ -175,9 +209,9 @@ test("real Git diff excludes main merges and retains deletions, renames and file
     git("checkout", "-q", "topic");
     write("docs/guide.md"); commit();
     // Before and after merging main, only the PR's prose is a changed input.
-    expect(run(main, git("rev-parse", "HEAD")).stdout).toBe("build=false\n");
+    expect(run(main, git("rev-parse", "HEAD")).stdout).toBe("build=false\nplatforms=linux/amd64\n");
     git("merge", "-qm", "Merge fixture main", "main");
-    expect(run(main, git("rev-parse", "HEAD")).stdout).toBe("build=false\n");
+    expect(run(main, git("rev-parse", "HEAD")).stdout).toBe("build=false\nplatforms=linux/amd64\n");
     // Evaluate each change on its own, through the workflow's real CLI.
     let previous = git("rev-parse", "HEAD");
     for (const [file, build] of [
@@ -195,20 +229,22 @@ test("real Git diff excludes main merges and retains deletions, renames and file
       [".env.production", true], [".env.production.local", true],
       [".babelrc", true], [".browserslistrc", true],
       ["Dockerfile.dockerignore", true], [".postcssrc.json", true], [".postcssrc.js", true],
+      ["Dockerfile", true], ["package.json", true], ["bun.lock", true],
+      ["patches/native.patch", true],
     ] as const) {
       write(file, file.startsWith(".env") ? "LLV_STANDALONE=1\n" : "{}");
       const current = commit();
       const result = run(previous, current);
       expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout, file).toBe(`build=${build}\n`);
+      expect(result.stdout, file).toBe(`build=${build}\nplatforms=${isMultiArchInput(file) ? "linux/amd64,linux/arm64" : "linux/amd64"}\n`);
       previous = current;
     }
     git("mv", "src/old.ts", "docs/old.txt"); const moved = commit();
-    expect(run(previous, moved).stdout).toBe("build=true\n");
+    expect(run(previous, moved).stdout).toBe("build=true\nplatforms=linux/amd64\n");
     expect(git("diff", "--name-only", "--no-renames", previous, moved)).toContain("src/old.ts");
     for (let i = 0; i < 305; i++) write(`docs/${i}.md`);
     write("src/late\ninput.ts"); const large = commit();
-    expect(run(moved, large).stdout).toBe("build=true\n");
+    expect(run(moved, large).stdout).toBe("build=true\nplatforms=linux/amd64\n");
     expect(git("diff", "--name-only", "-z", moved, large).split("\0").filter(Boolean)).toHaveLength(306);
     expect(run("missing", large).status).not.toBe(0);
     expect(run("0".repeat(40), large).status).not.toBe(0);

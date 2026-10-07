@@ -1,15 +1,52 @@
 "use client";
 
-import { useId, useState, type ChangeEvent, type FormEvent } from "react";
+import { useEffect, useId, useState, type ChangeEvent, type FormEvent } from "react";
+import { createPortal } from "react-dom";
 
+import { Z } from "@/components/layers";
 import { useVoiceCompanionSettings } from "@/hooks/useVoiceCompanionSettings";
 import { useLocale } from "@/lib/i18n";
 import { companionErrorMessage } from "@/lib/voiceCompanion/errors";
 
 import { COMPANION_SETTINGS_EVENT } from "./hostSurfaces";
 
+export const OPEN_VOICE_COMPANION_SETTINGS_EVENT = "delegatus:open-voice-companion-settings";
+/** Opens the voice companion's settings: the header menu's Settings row and the companion's own failure notice. */
+export const openVoiceCompanionSettings = () => window.dispatchEvent(new Event(OPEN_VOICE_COMPANION_SETTINGS_EVENT));
+
 /**
- * The voice companion's rows in the settings dialog (#2519 D): the switch, the
+ * The dialog behind «Voice Delegatus» on the header menu's Settings page, like
+ * the install ping's beside it. It reads nothing until it is opened; the rows
+ * inside read the settings while they are shown.
+ */
+export function VoiceCompanionSettingsHost() {
+  const { t } = useLocale();
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    const show = () => setOpen(true);
+    window.addEventListener(OPEN_VOICE_COMPANION_SETTINGS_EVENT, show);
+    return () => window.removeEventListener(OPEN_VOICE_COMPANION_SETTINGS_EVENT, show);
+  }, []);
+  useEffect(() => {
+    if (!open) return;
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
+    window.addEventListener("keydown", escape);
+    return () => window.removeEventListener("keydown", escape);
+  }, [open]);
+  if (!open || typeof document === "undefined") return null;
+  return createPortal(
+    <div className={`fixed inset-0 ${Z.overlay} flex items-center justify-center bg-black/40 p-4`} onClick={() => setOpen(false)}>
+      <section data-voice-companion-settings="" role="dialog" aria-modal="true" aria-labelledby="voice-companion-settings-title" className="max-h-[90dvh] w-full max-w-lg overflow-y-auto rounded-xl border border-border bg-canvas p-5 text-primary shadow-xl" onClick={(event) => event.stopPropagation()}>
+        <div className="flex items-center justify-between gap-4"><h2 id="voice-companion-settings-title" className="text-lg font-semibold">{t("voiceCompanion.settings.label")}</h2><button type="button" autoFocus className="min-h-11 px-2" onClick={() => setOpen(false)}>{t("telemetry.close")}</button></div>
+        <VoiceCompanionSetting />
+      </section>
+    </div>,
+    document.body,
+  );
+}
+
+/**
+ * The voice companion's rows in its settings dialog (#2519 D): the switch, the
  * choice between the real voice and the free demo, the OpenAI key, and the
  * monthly cap with the month's usage.
  *
@@ -51,10 +88,10 @@ export function VoiceCompanionSetting() {
   const typed = { type: "password", value: key, onChange: (event: ChangeEvent<HTMLInputElement>) => { setKey(event.target.value); setKeySaved(false); } } as const;
   const field = "min-h-9 w-full min-w-0 rounded-[8px] border border-border bg-well px-2.5 text-[13px] text-primary placeholder:text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-55";
   return (
-    <div className="mt-5 border-t border-border pt-4" data-voice-companion-setting>
+    <div className="mt-4" data-voice-companion-setting>
       <label className="flex min-h-11 items-center justify-between gap-4 text-sm font-semibold">
-        {t("voiceCompanion.settings.label")}
-        <input type="checkbox" role="switch" aria-label={t("voiceCompanion.settings.label")} data-voice-companion-enable checked={settings?.enabled ?? false} disabled={busy || !settings} onChange={(event) => void change({ enabled: event.target.checked })} className="h-6 w-10 shrink-0 accent-[var(--accent)]" />
+        {t("voiceCompanion.settings.enable")}
+        <input type="checkbox" role="switch" aria-label={t("voiceCompanion.settings.enable")} data-voice-companion-enable checked={settings?.enabled ?? false} disabled={busy || !settings} onChange={(event) => void change({ enabled: event.target.checked })} className="h-6 w-10 shrink-0 accent-[var(--accent)]" />
       </label>
       <p className="text-[13px] leading-relaxed text-muted">{t("voiceCompanion.settings.explanation")}</p>
       {settings?.enabled ? (

@@ -402,3 +402,16 @@ test("a launched setup with no exit code stays running until the settle window p
     fs.rmSync(workflowArtifactsDir(wf.id), { recursive: true, force: true });
   }
 });
+
+test("setup is refused with the reason when CPU containment is missing, and starts no child", () => {
+  const repoDir = makeRepo();
+  const marker = path.join(SANDBOX, "setup-refused-ran");
+  const wf = { ...makeWorkflow(repoDir), id: "wfidcpu1", worktreeDir: repoDir, template: normalizeTemplate({ ...TEMPLATE, setup: `echo run > "${marker}"` })! };
+  let probes = 0;
+  const refused = startSetup(wf, { env: { DELEGATUS_AGENT_CPU: "auto" }, ports: { probe: () => { probes += 1; return { kind: "missing", reason: "the systemd user manager does not delegate the cpu controller" }; } } });
+  expect(probes).toBe(1);
+  expect(refused.pid).toBeNull();
+  expect(refused.error).toBe("CPU containment for agent work is unavailable: the systemd user manager does not delegate the cpu controller. Set DELEGATUS_AGENT_CPU=off to run work without CPU placement.");
+  expect(fs.existsSync(marker)).toBe(false);
+  expect(fs.existsSync(setupStdoutPath(wf.id))).toBe(false);
+});

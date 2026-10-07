@@ -856,7 +856,7 @@ test("a spoken no, a request taken back and an unanswered confirmation each send
 });
 
 test("a spoken send needs the operator's own agreement in a later completed turn: a question, a condition, a negation or other speech sends nothing", async () => {
-  const answers = ["What is on the board?", "Only if the tests pass.", "Not yet.", "Let's talk about the release notes.", "Що зараз на дошці?", "Так, якщо тести пройдуть."];
+  const answers = ["What is on the board?", "Only if the tests pass.", "Not yet.", "Let's talk about the release notes.", "Що зараз на дошці?", "Так, якщо тести пройдуть.", "Да нет.", "Ну нет."];
   for (const answer of [...answers, null]) {
     fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
     const f = fixture();
@@ -884,8 +884,9 @@ test("a spoken send needs the operator's own agreement in a later completed turn
     expect(f.admission.session(s.sessionId).proposals[held.proposal.proposalId]).toMatchObject({ state: "admitted", via: "tap" });
     await f.service.close(s.sessionId);
   }
-  // A plain spoken yes in a later turn sends the original request once, in either language.
-  for (const answer of ["Yes, send it.", "Так, надсилай."]) {
+  // A plain spoken yes in a later turn sends the original request once, in either language, and so does a yes
+  // opened by a filler word or said in the short forms speech uses ("Ну да.", "Окей.", "Угу.").
+  for (const answer of ["Yes, send it.", "Так, надсилай.", "Ну да.", "Ну давай, отправляй.", "Окей.", "Угу.", "Well, yes, go ahead."]) {
     fs.rmSync(path.join(root, "state"), { recursive: true, force: true });
     const f = fixture();
     f.provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output") ? backendResponse(`resp_${index}`, [message("Spoken.")])

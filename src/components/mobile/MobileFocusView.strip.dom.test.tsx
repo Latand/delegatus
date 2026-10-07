@@ -119,7 +119,14 @@ test("the phone renders no inline control strip: every control is a labelled 44 
   const sheet = root.querySelector('[data-mobile2-sheet="menu"]') as HTMLElement;
   expect(sheet).not.toBeNull();
 
-  const rows = [...sheet.querySelectorAll("[data-mobile2-menu-row]")] as unknown as HTMLElement[];
+  /* Interrupt is at rest; the other controls are behind the menu's named rows, each opened in place in turn. */
+  expect(sheet.querySelector('[data-mobile2-menu-row="stop"]')).not.toBeNull();
+  const rows: HTMLElement[] = [];
+  for (const fold of [...sheet.querySelectorAll("[data-mobile2-menu-section]")] as unknown as HTMLButtonElement[]) {
+    expect(fold.className).toContain("min-h-11");
+    flushSync(() => fold.click());
+    for (const row of [...sheet.querySelectorAll("[data-mobile2-menu-row]")] as unknown as HTMLElement[]) if (!rows.some((seen) => seen.getAttribute("data-mobile2-menu-row") === row.getAttribute("data-mobile2-menu-row"))) rows.push(row);
+  }
   const named = rows.map((row) => row.getAttribute("data-mobile2-menu-row"));
   /* The structured root answers for its subagent, so the runtime controls are
      the ones the capability matrix admits — not an empty menu. */

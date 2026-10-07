@@ -18,7 +18,7 @@ test("refresh builds only in Viewer state and a test with no explicit roots neve
     expect(fs.existsSync(process.env.LLV_STATE_DIR)).toBe(false);
     const roots = { claudeHomes: [], codexHome: path.join(root, "codex"), skillRoots: [] };
     expect(await refreshMemoryIndex(roots)).toMatchObject({ filesRead: 1, entriesIndexed: 1 });
-    expect(index.search({ query: "widget" }).items).toHaveLength(1);
+    expect((await index.search({ query: "widget" })).items).toHaveLength(1);
     expect(await refreshMemoryIndex(roots)).toMatchObject({ filesRead: 0 });
     expect(fs.readdirSync(path.dirname(filename))).toEqual(["memory_summary.md"]);
     for (const name of fs.readdirSync(process.env.LLV_STATE_DIR)) {

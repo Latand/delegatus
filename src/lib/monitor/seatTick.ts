@@ -1354,6 +1354,11 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
       candidates.push({ kind: "interval", detail: "the wake interval elapsed while work is open" });
     }
   }
+  /* Low disk leads and does not wait for the interval: a volume that fills
+     kills every agent writing to it. The episode is shown once. */
+  if (input.signals.some(signal => signal.id === "disk-space" && signal.episode && signal.episode !== input.state.diskPressureShown)) {
+    candidates.unshift({ kind: "disk-pressure", detail: "free space on a volume Delegatus writes to is below the warning threshold" });
+  }
 
   const shownItems = new Set(input.state.itemsShown ?? []);
   const all = wakeItems({ input, ownLanes, stalled: persistedStalls, stalledChildren: persistedChildStalls, harvest, runningChildren, laneEvents, unstarted })
@@ -1369,13 +1374,14 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
       case "unmerged-pr": return item.kind === "pull-request";
       case "unstarted-task": return item.kind === "task";
       case "permission-request": return item.kind === "permission";
+      case "disk-pressure": return item.kind === "signal" && item.id === "disk-space";
       case "own-lane-settled": return !!item.laneAnnouncement;
       case "stalled": return !!item.stallToken || (item.kind === "pipeline" && persistedStalls.some(entry => entry.pipeline.id === item.id)) || (item.kind === "child" && persistedChildStalls.some(entry => entry.child.conversationId === item.id));
       case "interval": return true;
       default: return false;
     }
   });
-  const versionedReasons = new Set<SeatTickWakeReasonKind>(["unmerged-pr", "unstarted-task", "own-lane-settled", "stalled", "interval", "permission-request"]);
+  const versionedReasons = new Set<SeatTickWakeReasonKind>(["unmerged-pr", "unstarted-task", "own-lane-settled", "stalled", "interval", "permission-request", "disk-pressure"]);
   const cards: SeatTickCard[] = [];
   const reasons: SeatTickWakeReason[] = [];
   let guardHeld = 0;
@@ -1925,7 +1931,11 @@ function wakeItems(context: {
     items.push({ kind: "child", id: child.outcomeId ?? child.conversationId, label: `${child.title} — spawned child running` });
   }
   for (const signal of input.signals) {
-    items.push({ kind: "signal", id: signal.id, label: signal.label });
+    if (signal.id === "disk-space" && signal.episode === input.state.diskPressureShown) continue;
+    const item: SeatTickItem = { kind: "signal", id: signal.id, label: signal.label, ...(signal.id === "disk-space" && signal.episode ? { diskPressureEpisode: signal.episode } : {}) };
+    /* Low disk leads the agenda, so the per-wake bound never cuts it. */
+    if (item.diskPressureEpisode) items.unshift(item);
+    else items.push(item);
   }
   return items;
 }
@@ -1997,6 +2007,8 @@ export function seatTickWakeCommitPlan(
   /* The stalls the wake actually names, never the check's whole stall list:
      one the per-wake bound cut was not reported. */
   const reportedStalls = items.flatMap((item) => item.stallToken ? [item.stallToken] : []);
+  /* The pressure episode this wake names, credited once the item is seen. */
+  const disk = items.find((item) => item.diskPressureEpisode && item.itemVersion);
   const acknowledgmentLines = items.flatMap(item => {
     const keys = [
       ...(item.kind === "child" ? (item.outcomeIds?.length ? item.outcomeIds : [item.outcomeId ?? item.id])
@@ -2016,6 +2028,7 @@ export function seatTickWakeCommitPlan(
   }
   return {
     proposal: false, reasons: verdict.reasons.map((reason) => reason.kind), fingerprint, eventsThrough, children, announcedLanes, announcedDeploys, announcedMaintenance, shownChildren, ...note,
+    ...(disk ? { diskPressure: { episode: disk.diskPressureEpisode!, version: disk.itemVersion! } } : {}),
     itemsShown: items.flatMap(item => item.itemVersion ? [item.itemVersion] : []),
     itemLines: items.flatMap(item => item.itemVersion ? [{ version: item.itemVersion, line: redactMonitorText(seatTickBullet(item)) }] : []),
     acknowledgmentLines,
@@ -2101,6 +2114,7 @@ export function seatTickWakeCommit(
     releasedWake: null,
     harvestedChildren: harvested(state.harvestedChildren, commit.children),
     childrenShown: childrenShown(state.childrenShown ?? [], commit.shownChildren ?? []),
+    ...(commit.diskPressure && visibleAgendaVersions(state, commit).includes(commit.diskPressure.version) ? { diskPressureShown: commit.diskPressure.episode } : {}),
     itemsShown: mergeAgendaVersions(state.itemsShown ?? [], visibleAgendaVersions(state, commit)),
     announcedLanes: announced(state.announcedLanes ?? [], commit.announcedLanes ?? []),
     announcedMaintenance: announced(state.announcedMaintenance ?? [], commit.announcedMaintenance ?? [], SEAT_TICK_ANNOUNCED_MAINTENANCE_LIMIT),
@@ -2153,10 +2167,11 @@ function agendaVersion(item: SeatTickItem, input: SeatTickCheckInput): string | 
   const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
   const pipeline = kind === "pipeline" ? input.pipelines.find(row => row.id === item.id) : undefined;
   const ownLane = kind === "pipeline" ? input.ownLanes.find(row => row.id === item.id) : undefined;
-  const source = kind === "task" ? input.tasks.find(row => row.id === item.id)
+  const signal = kind === "signal" ? input.signals.find(row => row.id === item.id) : undefined;
+  const source = signal?.episode ?? (kind === "task" ? input.tasks.find(row => row.id === item.id)
     : kind === "pull-request" ? input.pullRequests.find(row => `#${row.number}` === item.id)
     : pipeline ? { title: pipeline.title, state: pipeline.state, stageId: pipeline.stageId, updatedAt: pipeline.updatedAt, pausedBy: pipeline.pausedBy, stall: pipeline.pausedBy !== "seat" && input.state.stalledSeen.includes(pipeline.id) && stalledLanes(input).some(entry => entry.pipeline.id === pipeline.id) ? laneStallToken(pipeline) : null, activity: pipeline.stageActivity?.lifecycle, reason: pipeline.stageActivity?.reason }
-    : ownLane ?? item.label;
+    : ownLane ?? item.label);
   // A settlement's resume instruction can outlive the deploy's own showing.
   // Keep its identity in each paused lane's version after the source drops it.
   const resumeAfter = pipeline?.pausedBy === "seat"

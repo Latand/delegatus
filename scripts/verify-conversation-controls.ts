@@ -77,6 +77,8 @@ try {
       await interrupt.click({ trial: true });
       assert.equal(posts.length, before + 1, `${surface}/${transport} interrupt`);
       assert.equal(posts.at(-1)!.action, "interrupt");
+      /* Stop host is behind «Close or stop», which a scenario rendered over the last one may have left open. */
+      if (surface === "mobile" && await page.locator('[data-mobile2-menu-section="end"][aria-expanded="false"]').count()) await page.locator('[data-mobile2-menu-section="end"]').click();
       const kill = surface === "mobile" ? page.locator('[data-mobile2-menu-row="kill"]') : page.getByRole("button", { name: "Stop host", exact: true });
       await kill.waitFor({ state: "visible" });
       await kill.focus(); await page.keyboard.press("Space");

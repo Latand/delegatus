@@ -436,21 +436,37 @@ for (const engine of ["claude", "codex"] as const) for (const locale of ["en", "
 }
 
 for (const locale of ["en", "uk"] as const) {
-  test(`a memory offer is plain text when it is one short title and one expandable line otherwise in ${locale}`, () => {
+  test(`a turn draws a chip with its count, a quiet line, or nothing in ${locale}`, () => {
     setLocale(locale);
     const turn = (ref: string): Item => ({ kind: "user", ts: "2026-10-01T12:00:00Z", text: `Turn ${ref}`, structuredUserRef: ref });
-    const short = turn("short"), many = turn("many"), long = turn("long");
+    const one = turn("one"), many = turn("many"), quiet = turn("quiet"), ordinary = turn("ordinary");
     const titles = Array.from({ length: 4 }, (_, i) => `Synthetic title ${i + 1}`);
-    const lookup = provenanceLookupFor({ memoryOffers: { short: ["Synthetic title"], many: titles, long: ["x".repeat(60)] } }, [short, many, long]);
+    const lookup = provenanceLookupFor({
+      memoryOffers: { one: ["Synthetic title"], many: titles },
+      memoryPaths: { many: ["~/fixture/memory/a.md", null] },
+      memoryNone: ["quiet", "many"],
+    }, [one, many, quiet, ordinary]);
+    /* Titles without a recorded file stay readable; a turn that has titles is never also "nothing relevant". */
+    expect(lookup.memoryOn!(one)).toEqual({ added: [{ title: "Synthetic title", path: null }], none: false });
+    expect(lookup.memoryOn!(many).added.map(entry => entry.path)).toEqual(["~/fixture/memory/a.md", null, null, null]);
+    expect(lookup.memoryOn!(many).none).toBe(false);
+    expect(lookup.memoryOn!(quiet)).toEqual({ added: [], none: true });
+    expect(lookup.memoryOn!(ordinary)).toEqual({ added: [], none: false });
     const render = (item: Item) => renderToStaticMarkup(<MessageProvenanceProvider value={lookup}><FeedItem item={item} /></MessageProvenanceProvider>);
-    const plain = render(short);
-    expect(plain).toContain("data-memory-offer");
-    expect(plain).not.toContain("<summary");
-    expect(plain).not.toContain("<details");
-    for (const item of [many, long]) expect(render(item)).toContain("<summary");
-    const folded = render(many);
-    for (const title of titles) expect(folded.split(`${title}`).length - 1).toBe(2); // the label and the title attribute
-    expect(folded).not.toMatch(/<\/summary><p/);
+    for (const [item, count] of [[one, 1], [many, 4]] as const) {
+      const markup = render(item);
+      expect(markup.match(/data-memory-offer/g)).toHaveLength(1);
+      /* Static markup reads the server's language; the wording is held in MemoryOnMessage.dom.test.tsx. */
+      expect(markup).toContain(`· ${count}</span>`);
+      expect(markup).toContain('aria-expanded="false"');
+      expect(markup).not.toContain("data-memory-none");
+    }
+    /* Every title is in the row once, behind the chip. */
+    for (const title of titles) expect(render(many).split(`${title}<`).length - 1).toBe(1);
+    const line = render(quiet);
+    expect(line).toContain(`data-memory-none`);
+    expect(line).not.toContain("data-memory-offer");
+    expect(render(ordinary)).not.toMatch(/data-memory-(offer|none)/);
   });
 }
 

@@ -16,7 +16,7 @@ import { SelectedContextBadge } from "../SelectedContextBadge";
 import { CopyButton } from "./CopyButton";
 import { InboxImageCard } from "./InboxImage";
 import { md, mdBlocks, mdImages } from "./markdown";
-import { MemoryOffer } from "./MemoryOffer";
+import { MemoryOnMessage } from "./MemoryOnMessage";
 import { BUBBLE_MEASURE, READING_MEASURE } from "./measure";
 import { UserMessageRow } from "./UserMessageRow";
 import { NO_PROVENANCE, useMessageProvenance, type ProvenanceLookup } from "./messageProvenance";
@@ -319,9 +319,9 @@ function FeedItemBody({ item: sourceItem, speakText, speakId, resumesAsk, proven
        it replaces (send-latency slice 3): the message keeps one width, one
        opacity, one type size and one set of controls from the moment it is
        submitted to the moment the transcript carries it. */
-    const memoryNames = provenance.memoryFor?.(sourceItem) ?? [];
+    const memory = provenance.memoryOn?.(sourceItem);
     return <UserMessageRow text={item.text} selectedContext={item.selectedContext ?? null} sender={provenance.senderFor(sourceItem)}
-      below={memoryNames.length ? <MemoryOffer names={memoryNames} mobile={isMobile} /> : undefined} />;
+      below={memory && (memory.added.length || memory.none) ? <MemoryOnMessage memory={memory} mobile={isMobile} /> : undefined} />;
   }
   if (item.kind === "tool" && item.mcp) return <McpCallCard event={item} />;
   if (item.kind === "tool" && item.wakeup) return <WakeupCard event={item} wakeup={item.wakeup} />;

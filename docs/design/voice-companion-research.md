@@ -52,7 +52,10 @@ The rule as built:
    operator's own words too (`liveConsentRefusal` in
    `src/lib/voiceCompanion/liveGate.ts`, `explicitConsent` in `gate.ts`): the
    turn that delegated the answer must come after the request's own turn and
-   open a sentence with a plain yes ("Yes, send it.", "Так, надсилай."). A
+   open a sentence with a plain yes ("Yes, send it.", "Так, надсилай."), after
+   at most one filler word and in the short forms speech uses ("Well, yes.",
+   "Ну да.", "Ну давай, отправляй.", "Окей.", "Угу."); "Да нет." and "Ну нет."
+   read as the no they are. A
    question ("What is on the board?"), a condition, a negation or speech about
    something else sends nothing, whatever the model decided; the confirmation
    keeps waiting, the tool answers `not_confirmed` and the model may ask once
@@ -536,7 +539,7 @@ flagged in red while one is shown:
 
 | Failure | Where it is said |
 | --- | --- |
-| No key | Before any start: the tap on Talk is answered in the lane and the microphone is left alone. A Settings button opens the settings dialog. |
+| No key | Before any start: the tap on Talk is answered in the lane and the microphone is left alone. A Settings button opens the voice companion's settings dialog. |
 | Cap reached | The same, when the month's usage and reservations have reached the cap; the server refuses a start on its own count as well. |
 | Microphone refused, provider error | The adapter's error event of the failed start or the lost session. |
 | No orchestrator | A note as the conversation starts, when the project in view has no seat; a proposal the model still raises is refused by the server and its card says the same sentence. |
@@ -567,9 +570,16 @@ The component reads the adapter through `createCompanionStore`
 (`src/hooks/useVoiceCompanion.ts`), which applies the hook's session rules
 outside React: a played-audio level sample moves the mouth and renders nothing.
 
-**Settings rows** (point D) are a section of the existing settings dialog
-(`TelemetrySettings`, the "Settings" row of the rail and board menus), below
-shared memory, and absent on a phone. The switch comes first, and the other
+**Settings rows** (point D) live on the existing settings surface. Since
+`main` regrouped the header's ⋯ (`docs/design/header-menu.md`), its Settings
+page lists one row per setting, and the old settings dialog holds only the
+install ping. The voice companion has a row there, «Голосовий Delegatus /
+Voice Delegatus» (`headerMenuModel.ts`, item `voice`, desktop only, so the
+phone's menu has none), which opens its own dialog
+(`VoiceCompanionSettingsHost` in `VoiceCompanionSetting.tsx`), the way
+«Install ping», «Linked installs» and «Chat relay» open theirs. The
+companion's Settings button on a failure opens the same dialog. The switch
+comes first, and the other
 rows appear once it is on: the choice between the real voice and the demo; the
 OpenAI key in a masked field with Save; the monthly cap with the month's usage
 beside it. The key is sent once and the field is cleared whatever the answer;

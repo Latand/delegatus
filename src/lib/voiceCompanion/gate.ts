@@ -56,7 +56,7 @@ const ORCHESTRATOR = /\borchestrator\b|оркестратор/u;
 const QUOTES = /["“”„«»]/u;
 /* A condition anywhere in the sentence makes the request conditional. */
 const CONDITION = /\b(?:if|unless|maybe|perhaps|in case|whether)\b|(?:^|[\s,])(?:якщо|якби|можливо|мабуть|раптом|чи)(?=[\s,]|$)/u;
-const NEGATION = /\b(?:not|no|nobody|nothing|never|don't|dont|do not)\b|n't\b|(?:^|[\s,])(?:не|ні|нікому|нічого|ніколи)(?=[\s,]|$)/u;
+const NEGATION = /\b(?:not|no|nobody|nothing|never|don't|dont|do not)\b|n't\b|(?:^|[\s,])(?:не|ні|нет|нікому|нічого|ніколи)(?=[\s,.:;!?…]|$)/u;
 /* Beside the request a looser condition counts too: "only when…", "лише коли…". */
 const FOLLOWUP_CONDITION = /\b(?:when|once|only|provided|assuming)\b|(?:^|[\s,])(?:коли|лише|тільки|хіба|за умови)(?=[\s,]|$)/u;
 /* After the request in its own sentence, a clause that says when to send makes
@@ -151,10 +151,12 @@ export function explicitDelegationRequest(utterance: string): GateVerdict {
   return { admit: true };
 }
 
-/* A spoken yes opens its sentence: an agreement word, or the sending verb itself. */
+/* A spoken yes opens its sentence: an agreement word, or the sending verb itself, after at most one filler
+   word speech puts first ("Well, yes.", "Ну да.", "Ну, надсилай."). */
+const FILLER = String.raw`(?:(?:well|so|oh|ah|hm+|ну|о|ой|хм+),?\s+)?`;
 const EN_CONSENT = String.raw`(?:yes|yeah|yep|yup|sure|ok|okay|alright|all right|correct|right|confirm(?:ed)?|i confirm|go ahead|go for it|do it|send it|send|please do|please send(?: it)?|absolutely|of course|definitely|affirmative|that's right)(?![\w'])`;
-const UK_CONSENT = String.raw`(?:так|да|ага|авжеж|звісно|звичайно|гаразд|добре|згоден|згодна|підтверджую|надсилай|надішли|відправляй|відправ|шли|давай|роби|конечно|подтверждаю|отправляй|отправь|согласен|согласна|хорошо|ладно)(?=[\s,.:;!?…]|$)`;
-const CONSENT = new RegExp(`^(?:${EN_CONSENT}|${UK_CONSENT})`, "u");
+const UK_CONSENT = String.raw`(?:так|да|ага|угу|ок|окей|авжеж|звісно|звичайно|гаразд|добре|згоден|згодна|підтверджую|надсилай|надішли|відправляй|відправ|шли|давай|роби|конечно|подтверждаю|отправляй|отправь|согласен|согласна|хорошо|ладно)(?=[\s,.:;!?…]|$)`;
+const CONSENT = new RegExp(`^${FILLER}(?:${EN_CONSENT}|${UK_CONSENT})`, "u");
 
 /**
  * Whether one utterance, read whole, agrees to send a request the companion

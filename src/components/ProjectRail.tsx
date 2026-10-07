@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { LayoutGrid, User } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 
 import { DelegatusMark } from "@/components/brand/BrandMark";
 import { Badge } from "@/components/ui/Badge";
@@ -17,22 +18,15 @@ import { AccessQrButton } from "./AccessQrButton";
 import { CatalogFailureNotice } from "./CatalogFailureNotice";
 import { DirectoryPicker, isDirectoryPath, splitDirectoryPath } from "./DirectoryPicker";
 import { FlipRow } from "./FlipRow";
-import { Archive, ChevronLeft, ChevronRight, Crown, FolderPlus, MoreHorizontal } from "./icons";
+import { HeaderMenuPanel } from "./headerMenu/HeaderMenu";
+import { ChevronLeft, ChevronRight, Crown, FolderPlus, MoreHorizontal, Search } from "./icons";
 import { BoardRowsSkeleton } from "./skeletons";
 import { LanguageToggle } from "./LanguageToggle";
-import { openOnboarding } from "./onboarding/useOnboarding";
-import { startInterfaceWalk } from "./onboarding/walkStop";
-import { openSelfUpdate } from "./selfUpdate/openSelfUpdate";
-import { openTelemetrySettings } from "./telemetry/TelemetrySettings";
-import { openLinkedSettings } from "./links/openLinkedSettings";
-import { openExternalRelaySettings } from "./externalRelay/openExternalRelaySettings";
 import { LimitsFooter } from "./LimitsFooter";
 import { buildProjectSummaries, OVERVIEW, partitionCrownedSummaries, type ProjectSummary } from "./projectModel";
 import { PushBell } from "./PushBell";
 import { ResourcesFooter } from "./ResourcesFooter";
-import { fmtAge } from "./utils";
 import { Z } from "@/components/layers";
-import { useTeamView } from "@/components/team/teamClient";
 
 /**
  * Asks the rail to open the create-project form it already owns (issue #1162).
@@ -43,7 +37,7 @@ import { useTeamView } from "@/components/team/teamClient";
  * inside it.
  */
 
-interface Props {
+export interface ProjectRailProps {
   files: FileEntry[];
   projectCatalog: ProjectCatalogEntry[];
   projectDisplayNames?: Readonly<Record<string, string>>;
@@ -76,7 +70,78 @@ interface Props {
 
 const EMPTY_CROWNS: ReadonlySet<string> = new Set();
 
-export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, pipelines, workflows, archivedProjects, crownedProjects = EMPTY_CROWNS, selected, loaded, catalogFailures = 0, now, needsYouCounts, onHide, onSelect, onToggleCrown, onCreateProject }: Props) {
+const FOCUS = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40";
+/* A header control is an icon until the pointer is on it, so the first frame the eye meets is the filter. */
+const HEADER_SQUARE = `flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-[8px] text-muted hover:bg-canvas hover:text-primary ${FOCUS}`;
+/* The columns at the right of a row's first line: who waits, who works, how old. */
+const SLOT_NEEDS = "flex w-8 shrink-0 items-center";
+const SLOT_LIVE = "flex w-6 shrink-0 items-center";
+const SLOT_AGE = "w-[30px] shrink-0 text-right text-[10.5px] tabular-nums text-muted";
+
+type Translate = ReturnType<typeof useLocale>["t"];
+
+/** An age short enough for a column: `31s`, `11m`, `3h`, `6d`. */
+function shortAge(smt: number, now: number, t: Translate): string {
+  if (!Number.isFinite(smt) || smt <= 0) return "";
+  const seconds = Math.max(0, now - smt);
+  if (seconds < 90) return t("rail.ageSeconds", { n: Math.round(seconds) });
+  if (seconds < 5_400) return t("rail.ageMinutes", { n: Math.round(seconds / 60) });
+  if (seconds < 129_600) return t("rail.ageHours", { n: Math.round(seconds / 3_600) });
+  return t("rail.ageDays", { n: Math.round(seconds / 86_400) });
+}
+
+/** How many wait on the operator: the person mark the board's Waiting cards carry, and a number. */
+function NeedsMark({ count }: { count: number }) {
+  const { t } = useLocale();
+  if (count <= 0) return null;
+  return (
+    <span data-rail-needs="" title={t("rail.rowNeedsYou", { count })} className="inline-flex h-[18px] shrink-0 items-center gap-[3px] rounded-full bg-warning-soft px-1 text-[10.5px] font-bold tabular-nums text-warning">
+      <User className="h-2.5 w-2.5" strokeWidth={2.6} aria-hidden />
+      {count > 99 ? "99+" : count}
+    </span>
+  );
+}
+
+/** How many are working: the green dot of the board header's "N working", and a number. */
+function LiveMark({ count }: { count: number }) {
+  const { t } = useLocale();
+  if (count <= 0) return null;
+  return (
+    <span data-rail-live="" title={t("rail.rowWorking", { count })} className="inline-flex shrink-0 items-center gap-1 text-[10.5px] font-bold tabular-nums text-success">
+      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-success motion-reduce:animate-none" />
+      {count > 99 ? "99+" : count}
+    </span>
+  );
+}
+
+/**
+ * The two marks of a row, each in a column of its own, so "waiting" and
+ * "working" are read down the list. A column exists while some project carries
+ * its mark. `own`: a project row gives its name the columns it does not use
+ * itself; the marks stand at fixed distances from the row's right edge, so a
+ * waiting mark keeps the working column to its right.
+ */
+function MarkColumns({ needs, live, anyNeeds, anyLive, own = false }: { needs: number; live: number; anyNeeds: boolean; anyLive: boolean; own?: boolean }) {
+  return (
+    <>
+      {anyNeeds && (!own || needs > 0) ? <span data-rail-slot="needs" className={SLOT_NEEDS}><NeedsMark count={needs} /></span> : null}
+      {anyLive && (!own || needs > 0 || live > 0) ? <span data-rail-slot="live" className={SLOT_LIVE}><LiveMark count={live} /></span> : null}
+    </>
+  );
+}
+
+/* Every label in the list starts where a project's name starts: 11 px inside the list's own 8 px. */
+function SectionLabel({ children, count, icon }: { children: ReactNode; count: number; icon?: ReactNode }) {
+  return (
+    <div data-rail-section="" className="flex h-6 items-center gap-1.5 px-[11px] text-[11px] font-bold text-muted">
+      <span data-rail-label="">{children}</span>
+      <span data-rail-count="" className="font-semibold tabular-nums">{count}</span>
+      {icon}
+    </div>
+  );
+}
+
+export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, pipelines, workflows, archivedProjects, crownedProjects = EMPTY_CROWNS, selected, loaded, catalogFailures = 0, now, needsYouCounts, onHide, onSelect, onToggleCrown, onCreateProject }: ProjectRailProps) {
   const { t } = useLocale();
   const isMobile = useIsMobile();
   const [query, setQuery] = useState("");
@@ -123,56 +188,27 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
     if (mobileFirstRun) setCreateOpen(true);
   }
 
-  const railRow = (summary: ProjectSummary) => {
-    const crowned = crownedProjects.has(summary.project);
-    return (
-      <div key={summary.project} data-flip-key={summary.project} className="group relative">
-        <RailRow
-          label={summary.displayName}
-          live={summary.liveCount}
-          attention={summary.attentionCount}
-          total={summary.conversations}
-          age={fmtAge(summary.smt)}
-          active={selected === summary.project}
-          hasLive={summary.liveCount > 0}
-          muted={summary.catalogOnly}
-          crowned={crowned}
-          reserveCrownSlot={isMobile}
-          onClick={() => onSelect(summary.project)}
-        />
-        {onToggleCrown ? (
-          <button
-            type="button"
-            className={[
-              "group/crown absolute right-1.5 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-[7px] border border-border bg-card transition-opacity focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
-              isMobile ? "" : "opacity-0 group-hover:opacity-100",
-            ].join(" ")}
-            title={crowned ? t("rail.uncrown") : t("rail.crown")}
-            aria-label={crowned ? t("rail.uncrown") : t("rail.crown")}
-            aria-pressed={crowned}
-            onClick={() => onToggleCrown(summary.project, !crowned)}
-          >
-            {/* Same crown idiom as conversation favorites (FavoriteCrown):
-                dashed gray when unset, lit gold when committed. */}
-            <Crown
-              className={`h-3.5 w-3.5 ${
-                crowned
-                  ? "fill-crown text-crown"
-                  : "text-muted [stroke-dasharray:2_3] group-hover/crown:fill-crown group-hover/crown:text-crown group-hover/crown:[stroke-dasharray:0]"
-              }`}
-              aria-hidden
-            />
-          </button>
-        ) : null}
-      </div>
-    );
-  };
+  const columns = { anyNeeds: totalAttention > 0, anyLive: totalLive > 0 };
+  /* An archived row is drawn as the quiet rows above it, without the crown control. */
+  const railRow = (summary: ProjectSummary, archived = false) => (
+    <RailRow
+      key={summary.project}
+      summary={summary}
+      active={selected === summary.project}
+      now={now}
+      columns={columns}
+      crowned={crownedProjects.has(summary.project)}
+      onSelect={onSelect}
+      onToggleCrown={archived ? undefined : onToggleCrown}
+    />
+  );
+  const overview = selected === OVERVIEW;
 
   return (
-    <aside className="flex w-[248px] shrink-0 flex-col border-r border-border bg-card">
+    <aside data-project-rail="" className="flex w-[248px] shrink-0 flex-col border-r border-border bg-card">
       <header
-        className={`flex shrink-0 items-center gap-2 border-b border-border text-[13.5px] font-bold ${
-          isMobile ? "min-h-[52px] gap-1.5 px-2 py-1.5" : "h-10 px-2"
+        className={`flex shrink-0 items-center border-b border-border text-[13.5px] font-bold ${
+          isMobile ? "min-h-[52px] gap-1.5 px-2 py-1.5" : "h-10 gap-1 px-2"
         }`}
       >
         {isMobile ? (
@@ -206,7 +242,8 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
              that puts the rail away, and ONE menu; the counts are gone from
              here, because the rows below carry their own marks and the board
              header already says how many agents work and how many need the
-             operator. */
+             operator. Both controls are icons with no frame until the pointer
+             is on them, so the filter row holds the only frames above the list. */
           <>
             <span className="flex min-w-0 flex-1 items-center gap-2">
               <DelegatusMark size={20} />
@@ -216,7 +253,7 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
               <button
                 type="button"
                 data-rail-hide=""
-                className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-[8px] border border-border bg-card text-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                className={HEADER_SQUARE}
                 title={t("rail.hide")}
                 aria-label={t("rail.hide")}
                 onClick={onHide}
@@ -224,7 +261,7 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
                 <ChevronLeft className="h-3.5 w-3.5" aria-hidden />
               </button>
             ) : null}
-            <RailHeaderMenu />
+            <RailHeaderMenu project={selected === OVERVIEW ? null : selected} />
           </>
         )}
       </header>
@@ -232,14 +269,19 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
           8 px inset, and the field sits 8 px from the header above and from
           the first row below (#2185). */}
       <div className={`flex gap-1.5 pb-1 ${isMobile ? "px-2.5 pt-2.5" : "px-2 pt-2"}`}>
-        <input
-          className={`w-full min-w-0 flex-1 rounded-[9px] border border-border bg-canvas px-2.5 text-[12px] outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
-            isMobile ? "min-h-11" : "py-1.5"
-          }`}
-          placeholder={t("rail.filter")}
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-        />
+        {/* A rail with no project has nothing to filter, so the labelled button takes the row. */}
+        {firstRun && onCreateProject ? null : (
+          <label className={`flex min-w-0 flex-1 items-center gap-1.5 rounded-[9px] border border-border bg-canvas px-2 focus-within:ring-2 focus-within:ring-accent/40 ${isMobile ? "min-h-11" : "h-[30px]"}`}>
+            <Search className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden />
+            <input
+              data-rail-filter=""
+              className="w-full min-w-0 bg-transparent text-[12px] outline-none"
+              placeholder={t("rail.filter")}
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          </label>
+        )}
         {onCreateProject ? (
           /* Issue #1162: on a rail with no projects at all the icon is the only
              thing on screen that starts anything, and an icon alone does not say
@@ -249,14 +291,14 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
             type="button"
             data-testid="rail-create-project"
             className={[
-              "flex shrink-0 items-center justify-center gap-1.5 rounded-[9px] border bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
-              isMobile ? "min-h-11" : "",
+              `flex shrink-0 items-center justify-center gap-1.5 rounded-[9px] border bg-canvas ${FOCUS}`,
+              isMobile ? "min-h-11" : "h-[30px]",
               firstRun
-                ? "border-accent/45 px-2.5 text-[12px] font-semibold text-accent hover:bg-accent/10"
+                ? "min-w-0 flex-1 border-accent/45 px-2.5 text-[12px] font-semibold text-accent hover:bg-accent/10"
                 : [
-                  "border-border text-muted hover:text-primary",
-                  isMobile ? "min-w-11" : "w-8",
-                  createOpen ? "text-primary" : "",
+                  "border-border hover:text-primary",
+                  isMobile ? "min-w-11" : "w-[30px]",
+                  createOpen ? "text-primary" : "text-muted",
                 ].join(" "),
             ].join(" ")}
             title={t("rail.createProject")}
@@ -279,58 +321,49 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
           onCancel={() => setCreateOpen(false)}
         />
       ) : null}
-      <nav className="flex-1 overflow-y-auto px-2 pb-3 pt-1" aria-label={t("rail.projects")}>
-        <RailRow
-          label={t("rail.overview")}
-          live={0}
-          attention={0}
-          total={null}
-          age=""
-          active={selected === OVERVIEW}
-          hasLive={false}
+      <nav className="flex-1 overflow-y-auto px-2 pb-2 pt-1" aria-label={t("rail.projects")}>
+        <button
+          type="button"
+          data-rail-overview=""
+          aria-current={overview ? "page" : undefined}
           onClick={() => onSelect(OVERVIEW)}
-        />
-        <div className="mx-2.5 my-1.5 border-t border-border" />
+          className={`mb-1 flex w-full items-center gap-1.5 rounded-[10px] border px-2.5 py-1.5 text-left ${FOCUS} ${isMobile ? "min-h-11" : "min-h-[32px]"} ${overview ? "border-border bg-canvas" : "border-transparent hover:bg-canvas"}`}
+        >
+          {/* The grid follows the word, so Overview starts on the edge every name starts on. */}
+          <span className="flex min-w-0 flex-1 items-center gap-1.5">
+            <span data-rail-label="" className={`min-w-0 truncate text-[13px] ${overview ? "font-bold" : "font-semibold"}`}>{t("rail.overview")}</span>
+            <LayoutGrid className="h-3.5 w-3.5 shrink-0 text-muted" aria-hidden />
+          </span>
+          {/* The totals of both marks, in the columns the rows below use. */}
+          <MarkColumns needs={totalAttention} live={totalLive} {...columns} />
+          <span className={SLOT_AGE} />
+        </button>
+        {crownedRows.length ? (
+          <SectionLabel count={crownedRows.length} icon={<Crown className="h-3 w-3 fill-crown text-crown" aria-hidden data-testid="crown-marker" />}>{t("rail.pinned")}</SectionLabel>
+        ) : null}
         <FlipRow>
-          {crownedRows.map(railRow)}
-          {crownedRows.length && regularRows.length ? (
-            <div data-flip-key="__crown-divider__" className="mx-2.5 my-1.5 border-t border-border" />
+          {crownedRows.map((summary) => railRow(summary))}
+          {crownedRows.length || regularRows.length ? (
+            <div data-flip-key="__projects-label__" className={crownedRows.length ? "mt-1.5" : ""}>
+              <SectionLabel count={regularRows.length}>{t("rail.projects")}</SectionLabel>
+            </div>
           ) : null}
-          {regularRows.map(railRow)}
+          {regularRows.map((summary) => railRow(summary))}
         </FlipRow>
         {archivedRows.length ? (
           <>
-            <div className="mx-2.5 my-1.5 border-t border-border" />
             <button
               type="button"
-              className={`mb-0.5 flex w-full items-center gap-1.5 rounded-[10px] px-2.5 text-left text-[11.5px] font-bold text-muted hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
-                isMobile ? "min-h-11" : "py-1.5"
-              }`}
+              data-rail-archive=""
+              className={`mt-1.5 flex w-full items-center gap-1.5 rounded-[8px] px-[11px] text-left text-[11px] font-bold text-muted hover:bg-canvas ${FOCUS} ${isMobile ? "min-h-11" : "h-6"}`}
               aria-expanded={archiveOpen}
               onClick={() => setArchiveOpen((value) => !value)}
             >
+              <span data-rail-label="">{t("rail.archive")}</span>
+              <span data-rail-count="" className="font-semibold tabular-nums">{archivedRows.length}</span>
               <ChevronRight className={`h-3 w-3 shrink-0 transition-transform ${archiveOpen ? "rotate-90" : ""}`} aria-hidden />
-              <Archive className="h-3 w-3 shrink-0" aria-hidden />
-              {t("rail.archive")}
-              <span className="font-semibold">{archivedRows.length}</span>
             </button>
-            {archiveOpen
-              ? archivedRows.map((summary) => (
-                  <RailRow
-                    key={summary.project}
-                    label={summary.displayName}
-                    live={summary.liveCount}
-                    attention={summary.attentionCount}
-                    total={summary.conversations}
-                    age={fmtAge(summary.smt)}
-                    active={selected === summary.project}
-                    hasLive={summary.liveCount > 0}
-                    muted={summary.catalogOnly}
-                    crowned={crownedProjects.has(summary.project)}
-                    onClick={() => onSelect(summary.project)}
-                  />
-                ))
-              : null}
+            {archiveOpen ? <div data-rail-archived="">{archivedRows.map((summary) => railRow(summary, true))}</div> : null}
           </>
         ) : null}
         {!activeRows.length && !archivedRows.length ? (
@@ -359,36 +392,102 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
 }
 
 /**
- * The desktop rail header's one overflow menu (issue #1819).
- *
- * `EN`, a QR square and a bell said nothing about themselves, so they move
- * behind one button and each gets a line of text saying what it is and, where
- * it has one, what state it is in. The controls themselves are the existing
- * ones — LanguageToggle, AccessQrButton and PushBell keep their own behaviour;
- * this only gives them labels and a place to live.
+ * One project (docs/design/sidebar-redesign.md, variant 1): its name, then a
+ * column for each mark, then a short age. The marks and the age stand at the
+ * right of the first line only; a name longer than what is left of that line
+ * goes on under them across the whole row and is cut after two lines, with the
+ * whole name in the tooltip. The conversation count is in the tooltip too.
+ * A row is the same height selected or not, so choosing a project moves nothing.
  */
-/** Ends this browser's member session and goes to the sign-in page. */
-async function signOutMember(): Promise<void> {
-  try {
-    await fetch("/api/team/session/sign-out", { method: "POST" });
-  } finally {
-    window.location.replace("/sign-in");
-  }
+function RailRow({ summary, active, now, columns, crowned, onSelect, onToggleCrown }: {
+  summary: ProjectSummary;
+  active: boolean;
+  now: number;
+  columns: { anyNeeds: boolean; anyLive: boolean };
+  crowned: boolean;
+  onSelect: (project: string) => void;
+  /** Absent on an archived row, which carries no crown control. */
+  onToggleCrown?: (project: string, crowned: boolean) => void;
+}) {
+  const { t } = useLocale();
+  const isMobile = useIsMobile();
+  const age = shortAge(summary.smt, now, t);
+  const title = [
+    summary.displayName,
+    summary.attentionCount ? t("rail.rowNeedsYou", { count: summary.attentionCount }) : null,
+    summary.liveCount ? t("rail.rowWorking", { count: summary.liveCount }) : null,
+    t("rail.rowConversations", { count: summary.conversations }),
+    age ? t("rail.rowUpdated", { age }) : null,
+  ].filter(Boolean).join(" · ");
+  /* The crown control stands where the age stands. On the desktop it shows while the pointer is on the
+     row or the keyboard is on the control, and the age steps aside for exactly as long; the phone keeps
+     the control in view, so its rows carry no age. */
+  const ageClass = !onToggleCrown ? "" : isMobile ? "opacity-0" : "group-hover:opacity-0 group-has-[[data-rail-crown]:focus-visible]:opacity-0";
+  return (
+    <div data-flip-key={summary.project} className="group relative">
+      <button
+        type="button"
+        data-rail-project={summary.project}
+        title={title}
+        aria-current={active ? "page" : undefined}
+        onClick={() => onSelect(summary.project)}
+        className={`mb-px block w-full rounded-[10px] border px-2.5 text-left ${FOCUS} ${isMobile ? "min-h-11" : ""} ${active ? "border-border bg-canvas" : "border-transparent hover:bg-canvas"} ${summary.catalogOnly ? "opacity-70" : ""}`}
+      >
+        <span data-rail-name="" className={`my-1.5 line-clamp-2 text-[13px] leading-[18px] ${active ? "font-bold" : "font-semibold"} ${summary.catalogOnly ? "text-muted" : ""}`}>
+          <span className="block break-words">
+            <span className="float-right ml-1.5 flex h-[18px] items-center gap-1.5 font-normal">
+              <MarkColumns needs={summary.attentionCount} live={summary.liveCount} {...columns} own />
+              <span data-rail-slot="age" className={`${SLOT_AGE} ${ageClass}`}>{age}</span>
+            </span>
+            {summary.displayName}
+          </span>
+        </span>
+      </button>
+      {onToggleCrown ? (
+        <button
+          type="button"
+          data-rail-crown=""
+          className={`group/crown absolute right-1.5 flex items-center justify-center rounded-[7px] border border-border bg-card transition-opacity focus-visible:opacity-100 ${FOCUS} ${
+            isMobile ? "top-1/2 h-6 w-6 -translate-y-1/2" : "top-[5px] h-[22px] w-[22px] opacity-0 group-hover:opacity-100"
+          }`}
+          title={crowned ? t("rail.uncrown") : t("rail.crown")}
+          aria-label={crowned ? t("rail.uncrown") : t("rail.crown")}
+          aria-pressed={crowned}
+          onClick={() => onToggleCrown(summary.project, !crowned)}
+        >
+          {/* Same crown idiom as conversation favorites (FavoriteCrown):
+              dashed gray when unset, lit gold when committed. */}
+          <Crown
+            className={`h-3.5 w-3.5 ${
+              crowned
+                ? "fill-crown text-crown"
+                : "text-muted [stroke-dasharray:2_3] group-hover/crown:fill-crown group-hover/crown:text-crown group-hover/crown:[stroke-dasharray:0]"
+            }`}
+            aria-hidden
+          />
+        </button>
+      ) : null}
+    </div>
+  );
 }
 
-function RailHeaderMenu() {
-  const { t, locale } = useLocale();
+/**
+ * The desktop rail header's one overflow menu (issue #1819), laid out as the
+ * operator's mix of the header-menu variants (docs/design/header-menu.md):
+ * `HeaderMenuPanel` draws it; this owns the trigger and the dismissal.
+ */
+export function RailHeaderMenu({ project }: { project: string | null }) {
+  const { t } = useLocale();
   const [open, setOpen] = useState(false);
-  /* Passive: the app's session guard loads the team view once per page. */
-  const team = useTeamView({ load: false });
-  const teamMe = team?.mode === "team" ? team.me : null;
-  const [push, setPush] = useState({ supported: false, enabled: false });
   const ref = useRef<HTMLDivElement | null>(null);
-  const onPushStatus = useCallback((status: { supported: boolean; enabled: boolean }) => setPush(status), []);
+  const trigger = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {
     if (!open) return;
+    /* A page of the menu holds focus when it closes, so the keyboard comes back to ⋯. */
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
+      if (event.key !== "Escape") return;
+      setOpen(false);
+      trigger.current?.focus();
     };
     /* pointerdown, like the QR popover's own dismissal: the QR panel opens
        INSIDE this menu, so a click on it is a click inside and the menu stays. */
@@ -402,21 +501,18 @@ function RailHeaderMenu() {
       window.removeEventListener("pointerdown", onDown);
     };
   }, [open]);
-  const pushLabel = !push.supported
-    ? t("rail.menuNotificationsUnavailable")
-    : push.enabled
-      ? t("rail.menuNotificationsOn")
-      : t("rail.menuNotificationsOff");
+  const close = useCallback(() => setOpen(false), []);
   return (
     <div ref={ref} className="relative shrink-0">
       <button
+        ref={trigger}
         type="button"
         data-rail-menu=""
         aria-expanded={open}
         aria-haspopup="menu"
         title={t("rail.menu")}
         aria-label={t("rail.menu")}
-        className="flex h-[26px] w-[26px] items-center justify-center rounded-[8px] border border-border bg-card text-muted hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        className={`${HEADER_SQUARE} ${open ? "bg-canvas text-primary" : ""}`}
         onClick={() => setOpen((value) => !value)}
       >
         <MoreHorizontal className="h-3.5 w-3.5" aria-hidden />
@@ -426,96 +522,7 @@ function RailHeaderMenu() {
           data-rail-menu-panel=""
           className={`absolute right-0 top-[30px] ${Z.popover} w-[232px] rounded-[10px] border border-border bg-card p-1 shadow-2`}
         >
-          <div className="flex items-center gap-2 rounded-[8px] px-2 py-1.5">
-            <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-primary">
-              {t("rail.menuLanguage")}: {locale === "en" ? "English" : "Українська"}
-            </span>
-            <LanguageToggle />
-          </div>
-          <div className="flex items-center gap-2 rounded-[8px] px-2 py-1.5">
-            <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-primary">{t("rail.menuQr")}</span>
-            <AccessQrButton />
-          </div>
-          <div className="flex items-center gap-2 rounded-[8px] px-2 py-1.5">
-            <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-primary">{pushLabel}</span>
-            <PushBell onStatus={onPushStatus} />
-          </div>
-          {/* #1876: the setup guide, its agent mapping and dictation, reachable again; #2166: the interface walk. */}
-          <div className="my-1 border-t border-border" />
-          <button
-            type="button"
-            data-rail-menu-setup-guide=""
-            className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            onClick={() => { setOpen(false); openOnboarding("guide"); }}
-          >
-            {t("onboarding.menu.guide")}
-          </button>
-          <button
-            type="button"
-            data-rail-menu-interface-walk=""
-            className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            onClick={() => { setOpen(false); startInterfaceWalk(); }}
-          >
-            {t("onboarding.menu.walk")}
-          </button>
-          <button
-            type="button"
-            data-rail-menu-agent-mapping=""
-            className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            onClick={() => { setOpen(false); openOnboarding("mapping"); }}
-          >
-            {t("onboarding.menu.mapping")}
-          </button>
-          <button
-            type="button"
-            data-rail-menu-dictation=""
-            className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            onClick={() => { setOpen(false); openOnboarding("voice"); }}
-          >
-            {t("onboarding.menu.voice")}
-          </button>
-          <button type="button" data-rail-menu-settings="" className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken" onClick={() => { setOpen(false); openTelemetrySettings(); }}>{t("telemetry.settings")}</button>
-          {/* #2007: how this install updates itself. */}
-          <button type="button" data-rail-menu-linked-settings="" className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" onClick={() => { setOpen(false); openLinkedSettings(); }}>
-            {t("links.title")}
-          </button>
-          <button type="button" data-rail-menu-external-relay="" className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" onClick={() => { setOpen(false); openExternalRelaySettings(); }}>
-            {t("externalRelay.title")}
-          </button>
-          <button
-            type="button"
-            data-rail-menu-update=""
-            className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            onClick={() => { setOpen(false); openSelfUpdate(); }}
-          >
-            {t("selfUpdate.menu")}
-          </button>
-          {/* Your time and your agents' time, per day and per project. */}
-          <a
-            href="/activity"
-            data-rail-menu-activity=""
-            className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-          >
-            {t("activity.menu")}
-          </a>
-          {/* Members, who did what and sessions (sign-in-and-team §6.9). */}
-          <a
-            href="/team"
-            data-rail-menu-team=""
-            className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-          >
-            {t("team.menu")}
-          </a>
-          {teamMe ? (
-            <button
-              type="button"
-              data-rail-menu-sign-out=""
-              className="flex w-full items-center rounded-[8px] px-2 py-1.5 text-left text-[12px] font-semibold text-secondary hover:bg-sunken hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-              onClick={() => { setOpen(false); void signOutMember(); }}
-            >
-              {t("team.signOut", { name: teamMe.name })}
-            </button>
-          ) : null}
+          <HeaderMenuPanel project={project} onClose={close} />
         </div>
       ) : null}
     </div>
@@ -533,57 +540,97 @@ export const RAIL_HIDDEN_STORAGE_KEY = "llv:rail-hidden:v1";
 /** Where this browser remembers whether the rail's footer is folded away. */
 export const RAIL_FOOTER_STORAGE_KEY = "llv:rail-footer:v1";
 
+/** Where this browser remembers whether the system block shows every limit window. */
+export const RAIL_FOOTER_DETAIL_STORAGE_KEY = "llv:rail-footer-detail:v1";
+
+/* One screen's choice, kept in this browser's storage. The server and the first paint read the
+   default, so hydration is identical; a browser that refuses the write keeps the choice for the page. */
+const choiceListeners = new Set<() => void>();
+const unsavedChoices = new Map<string, string>();
+const subscribeToChoices = (notify: () => void) => {
+  choiceListeners.add(notify);
+  return () => { choiceListeners.delete(notify); };
+};
+
+function useStoredChoice(key: string, on: string, off: string): [boolean, () => void] {
+  const value = useSyncExternalStore(
+    subscribeToChoices,
+    () => {
+      try {
+        return (unsavedChoices.get(key) ?? window.localStorage.getItem(key)) === on;
+      } catch {
+        return false; /* private mode: the default holds for this page */
+      }
+    },
+    () => false,
+  );
+  const toggle = useCallback(() => {
+    const next = value ? off : on;
+    try {
+      window.localStorage.setItem(key, next);
+      unsavedChoices.delete(key);
+    } catch {
+      unsavedChoices.set(key, next); /* private mode: the choice holds for this page only */
+    }
+    for (const notify of choiceListeners) notify();
+  }, [key, on, off, value]);
+  return [value, toggle];
+}
+
 /**
- * The rail's footer — resources, the limit bars and the Telegram row — behind
- * one control on its top edge (issue #1802).
+ * The rail's system block — memory, the accounts with what is left of each,
+ * Telegram — behind one control on its top edge (issue #1802).
  *
  * Folded, the row carries a short label and nothing else: no percentage, no
  * plan and no account name, because the reason to put it away is a stream
- * watching the screen. The footers are UNMOUNTED rather than hidden, so their
+ * watching the screen. The blocks are UNMOUNTED rather than hidden, so their
  * polls stop with them, and the project list above takes the freed height by
- * itself. The choice is one screen's, so it lives in this browser's storage,
- * read in an effect to keep the server's first paint and hydration identical.
+ * itself.
+ *
+ * Open, it is one line per reading on the left edge the project names start
+ * on. "All windows" adds every limit window with its reset under its account,
+ * and the choice is remembered (docs/design/sidebar-redesign.md).
  */
 function RailFooter() {
   const { t } = useLocale();
-  const [folded, setFolded] = useState(false);
-  useEffect(() => {
-    try {
-      setFolded(window.localStorage.getItem(RAIL_FOOTER_STORAGE_KEY) === "folded");
-    } catch {
-      /* private mode: the footer stays open for this page */
-    }
-  }, []);
-  const toggle = () => {
-    setFolded((value) => {
-      const next = !value;
-      try {
-        window.localStorage.setItem(RAIL_FOOTER_STORAGE_KEY, next ? "folded" : "open");
-      } catch {
-        /* private mode: the choice holds for this page only */
-      }
-      return next;
-    });
-  };
+  const [folded, toggleFold] = useStoredChoice(RAIL_FOOTER_STORAGE_KEY, "folded", "open");
+  const [detail, toggleDetail] = useStoredChoice(RAIL_FOOTER_DETAIL_STORAGE_KEY, "full", "line");
+  const density = detail ? "detail" : "line";
   return (
     <div className="shrink-0" data-rail-footer={folded ? "folded" : "open"}>
-      <button
-        type="button"
-        data-rail-footer-toggle=""
-        aria-expanded={!folded}
-        aria-label={t(folded ? "rail.footerShow" : "rail.footerHide")}
-        title={t(folded ? "rail.footerShow" : "rail.footerHide")}
-        onClick={toggle}
-        className="flex w-full items-center gap-1.5 border-t border-border px-3 py-1.5 text-left text-[11px] font-bold text-muted hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-      >
-        <ChevronRight className={`h-3 w-3 shrink-0 transition-transform ${folded ? "" : "rotate-90"}`} aria-hidden />
-        {t("rail.footerLabel")}
-      </button>
+      {/* A span, so the block's only <div> child is the readings: folded, no subtree is left under it. */}
+      <span className="flex items-center border-t border-border">
+        <button
+          type="button"
+          data-rail-footer-toggle=""
+          aria-expanded={!folded}
+          aria-label={t(folded ? "rail.footerShow" : "rail.footerHide")}
+          title={t(folded ? "rail.footerShow" : "rail.footerHide")}
+          onClick={toggleFold}
+          className={`flex h-7 min-w-0 flex-1 items-center gap-1.5 pl-[19px] pr-2 text-left text-[11px] font-bold text-muted hover:bg-canvas ${FOCUS}`}
+        >
+          <span data-rail-label="">{t("rail.footerLabel")}</span>
+          <ChevronRight className={`h-3 w-3 shrink-0 transition-transform ${folded ? "" : "rotate-90"}`} aria-hidden />
+        </button>
+        {folded ? null : (
+          /* The only way to every window and its reset time, so it is named in words and framed as a control. */
+          <button
+            type="button"
+            data-rail-footer-detail=""
+            aria-pressed={detail}
+            title={t(detail ? "rail.footerCompactHint" : "rail.footerDetailHint")}
+            onClick={toggleDetail}
+            className={`mr-1.5 flex h-[22px] shrink-0 items-center rounded-[7px] border border-border px-1.5 text-[10.5px] font-semibold text-secondary hover:bg-canvas hover:text-primary ${FOCUS}`}
+          >
+            {t(detail ? "rail.footerCompact" : "rail.footerDetail")}
+          </button>
+        )}
+      </span>
       {folded ? null : (
-        <>
-          <ResourcesFooter />
-          <LimitsFooter />
-        </>
+        <div data-rail-footer-body={density} className="pb-1">
+          <ResourcesFooter density={density} />
+          <LimitsFooter density={density} />
+        </div>
       )}
     </div>
   );
@@ -825,66 +872,5 @@ export function CreateProjectForm({
         ) : null}
       </div>
     </form>
-  );
-}
-
-function RailRow({
-  label,
-  live,
-  attention,
-  total,
-  age,
-  active,
-  hasLive,
-  muted = false,
-  crowned = false,
-  reserveCrownSlot = false,
-  onClick,
-}: {
-  label: string;
-  live: number;
-  attention: number;
-  total: number | null;
-  age: string;
-  active: boolean;
-  hasLive: boolean;
-  muted?: boolean;
-  /** Pinned rows render a persistent crown marker beside the name. */
-  crowned?: boolean;
-  /** Mobile rails keep the crown toggle always visible, so the row's counts
-      leave room for it instead of underlapping. */
-  reserveCrownSlot?: boolean;
-  onClick: () => void;
-}) {
-  const isMobile = useIsMobile();
-  return (
-    <button
-      className={[
-        "mb-0.5 flex w-full items-center gap-2 rounded-[10px] border px-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40",
-        isMobile ? "min-h-11" : "py-2",
-        reserveCrownSlot ? "pr-9" : "",
-        active ? "border-border bg-canvas shadow-1" : "border-transparent hover:bg-canvas",
-        muted ? "opacity-65" : "",
-      ].join(" ")}
-      aria-current={active ? "page" : undefined}
-      onClick={onClick}
-    >
-      <span
-        className={[
-          "h-2 w-2 shrink-0 rounded-full",
-          hasLive ? "animate-pulse bg-success" : muted ? "bg-strong" : "bg-strong",
-        ].join(" ")}
-      />
-      <span className="min-w-0 flex-1">
-        <span className="flex items-center gap-1">
-          {crowned ? <Crown className="h-3 w-3 shrink-0 fill-crown text-crown" aria-hidden data-testid="crown-marker" /> : null}
-          <span className={`min-w-0 truncate text-[13px] ${active ? "font-bold" : "font-semibold"} ${muted ? "text-muted" : ""}`}>{label}</span>
-        </span>
-        {age ? <span className="block text-[10.5px] text-muted">{age}</span> : null}
-      </span>
-      {live > 0 ? <span className="shrink-0 text-[11px] font-semibold tabular-nums text-muted">{live}</span> : null}
-      {attention > 0 ? <Badge tone="warning">⏸ {attention}</Badge> : null}
-      {total !== null ? <span className="shrink-0 text-[11px] font-semibold text-muted">{total}</span> : null}
-    </button>
   );
 }

@@ -1,7 +1,7 @@
 {
   "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
   "fixture": "?scenario=voice-companion&mount=product",
-  "rule": "nothing is mounted until the switch in the settings dialog is on; the key is typed masked, sent once, cleared, and never present in the page afterwards; a key from the environment takes precedence and closes the field; the cap is kept with the month's usage beside it; the demo choice plays the simulator through the shell's own mount",
+  "rule": "nothing is mounted until the switch in the settings dialog, reached from the header menu's Settings page, is on; the key is typed masked, sent once, cleared, and never present in the page afterwards; a key from the environment takes precedence and closes the field; the cap is kept with the month's usage beside it; the demo choice plays the simulator through the shell's own mount",
   "note": "the settings routes are answered by the fixture from memory and the key is a made-up string; no provider, microphone or orchestrator is reached",
   "cases": [
     {
@@ -52,15 +52,15 @@
       "shellMount": {
         "block": {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         },
         "lane": {
           "x": 36,
-          "y": 218,
+          "y": 206,
           "width": 280,
-          "height": 220
+          "height": 360
         },
         "overlapArea": 0,
         "textUnderCharacter": 0
@@ -176,15 +176,15 @@
       "shellMount": {
         "block": {
           "x": 184,
-          "y": 448,
+          "y": 576,
           "width": 132,
           "height": 148
         },
         "lane": {
           "x": 36,
-          "y": 218,
+          "y": 206,
           "width": 280,
-          "height": 220
+          "height": 360
         },
         "overlapArea": 0,
         "textUnderCharacter": 0

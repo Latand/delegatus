@@ -1,4 +1,5 @@
 import { AgentMemoryCell, planAgentMemory, wrapAgentCommand } from "@/lib/runtime/agentMemory";
+import { planAgentCpu } from "@/lib/runtime/cpuPlacement";
 import { agentRegistry } from "./registry";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { agentCodexPublicationArgs, agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
@@ -395,7 +396,8 @@ export function launchDetached(input: {
   const stderrFd = fs.openSync(input.stderrPath, "w");
   let child: ChildProcess;
   try {
-    const plan = planAgentMemory({ engine: "headless", sessionKey: input.key, liveAgents: Object.values(agentRegistry().readOnlySnapshot().entries).filter((entry) => entry.structuredHost && entry.status !== "dead" && entry.status !== "unhosted").length + 1 });
+    // Reviews, relays and digests run unattended: they are work.
+    const plan = planAgentMemory({ engine: "headless", sessionKey: input.key, liveAgents: Object.values(agentRegistry().readOnlySnapshot().entries).filter((entry) => entry.structuredHost && entry.status !== "dead" && entry.status !== "unhosted").length + 1, cpu: planAgentCpu("work") });
     const wrapped = wrapAgentCommand(plan, input.runtime?.command ?? input.built.command, input.built.args);
     const memoryCell = plan ? new AgentMemoryCell(plan) : null;
     child = spawn(wrapped.command, wrapped.args, {

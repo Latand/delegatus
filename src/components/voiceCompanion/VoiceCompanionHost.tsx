@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo } from "react";
 
 import { useOrchestratorSeat } from "@/components/orchestrator/useOrchestratorSeat";
-import { openTelemetrySettings } from "@/components/telemetry/TelemetrySettings";
 import { useVoiceCompanionSettings } from "@/hooks/useVoiceCompanionSettings";
 import { useLocale } from "@/lib/i18n";
 import type { VoiceCompanionAdapter } from "@/lib/voiceCompanion/contract";
@@ -13,6 +12,7 @@ import { createSimulatedCompanion } from "@/lib/voiceCompanion/simulator";
 
 import { COMPANION_PROTECT, COMPANION_ROWS, COMPANION_SETTINGS_EVENT, companionReserved, companionShellReady } from "./hostSurfaces";
 import { VoiceCompanion } from "./VoiceCompanion";
+import { openVoiceCompanionSettings } from "./VoiceCompanionSetting";
 
 /**
  * The voice companion on the desktop shell (#2519). Off by default: nothing is
@@ -70,7 +70,7 @@ function MountedCompanion({ project, demo, keyMissing, capReached, onSessionEnd 
       locale={speech}
       seat={hasSeat}
       preflight={preflight}
-      onOpenSettings={openTelemetrySettings}
+      onOpenSettings={openVoiceCompanionSettings}
       protect={COMPANION_PROTECT}
       rows={COMPANION_ROWS}
       reserve={companionReserved}

@@ -1,0 +1,652 @@
+{
+  "readings": {
+    "desktop-1280-pane": {
+      "fit": {
+        "x": 52,
+        "y": 53,
+        "w": 1176,
+        "h": 735,
+        "frame": {
+          "x": 0,
+          "y": 41,
+          "w": 1280,
+          "h": 759
+        },
+        "scale": 0.735,
+        "position": null,
+        "closed": false,
+        "pageScale": 1,
+        "scrollY": 0,
+        "innerWidth": 1280,
+        "captures": 0,
+        "menus": 0,
+        "menusRefused": 0,
+        "menuOnPicture": false
+      },
+      "zoomed": {
+        "x": -512.5,
+        "y": -299.8,
+        "w": 2305,
+        "h": 1440.6,
+        "frame": {
+          "x": 0,
+          "y": 41,
+          "w": 1280,
+          "h": 759
+        },
+        "scale": 1.4406,
+        "position": null,
+        "closed": false,
+        "pageScale": 1,
+        "scrollY": 0,
+        "innerWidth": 1280,
+        "captures": 0,
+        "menus": 0,
+        "menusRefused": 0,
+        "menuOnPicture": false
+      },
+      "press-right": {
+        "before": {
+          "x": -512.5,
+          "y": -299.8
+        },
+        "after": {
+          "x": -512.5,
+          "y": -299.8
+        },
+        "follow": {
+          "dx": 0,
+          "dy": 0
+        },
+        "captures": 0,
+        "menus": 1,
+        "menusRefused": 0,
+        "menuOnPicture": true
+      },
+      "press-middle": {
+        "before": {
+          "x": -512.5,
+          "y": -299.8
+        },
+        "after": {
+          "x": -512.5,
+          "y": -299.8
+        },
+        "follow": {
+          "dx": 0,
+          "dy": 0
+        },
+        "captures": 0,
+        "menus": 0,
+        "menusRefused": 0,
+        "menuOnPicture": true
+      },
+      "press-ctrl-primary": {
+        "before": {
+          "x": -512.5,
+          "y": -299.8
+        },
+        "after": {
+          "x": -512.5,
+          "y": -299.8
+        },
+        "follow": {
+          "dx": 0,
+          "dy": 0
+        },
+        "captures": 0,
+        "menus": 0,
+        "menusRefused": 0,
+        "menuOnPicture": true
+      },
+      "press-shift-primary": {
+        "before": {
+          "x": -512.5,
+          "y": -299.8
+        },
+        "after": {
+          "x": -512.5,
+          "y": -299.8
+        },
+        "follow": {
+          "dx": 0,
+          "dy": 0
+        },
+        "captures": 0,
+        "menus": 0,
+        "menusRefused": 0,
+        "menuOnPicture": true
+      },
+      "pan": {
+        "drag": {
+          "dx": -60,
+          "dy": 42
+        },
+        "afterRelease": {
+          "dx": 0,
+          "dy": 0
+        }
+      },
+      "pan-blur": {
+        "follow": {
+          "dx": 0,
+          "dy": 0
+        }
+      },
+      "pan-lost-capture": {
+        "follow": {
+          "dx": 0,
+          "dy": 0
+        }
+      },
+      "wheel": {
+        "from": 0.735,
+        "to": 1.1878,
+        "drift": 0.3,
+        "pageScale": 1,
+        "innerWidth": 1280,
+        "scrollY": 0
+      },
+      "ctrl-wheel": {
+        "from": 0.735,
+        "to": 1.8078,
+        "drift": 0.7,
+        "pageScale": 1,
+        "innerWidth": 1280,
+        "scrollY": 0
+      },
+      "thrown": {
+        "box": {
+          "x": 640,
+          "y": 420.5,
+          "w": 2892.5,
+          "h": 1807.8
+        },
+        "inView": {
+          "w": 640,
+          "h": 380
+        }
+      },
+      "zoomedOut": {
+        "scale": 0.735,
+        "fit": 0.735,
+        "box": {
+          "x": 52,
+          "y": 53,
+          "w": 1176,
+          "h": 735
+        }
+      },
+      "doubleClick": {
+        "fit": 0.735,
+        "zoomed": 1.47,
+        "back": 0.735
+      }
+    },
+    "phone-390-pane": {
+      "fit": {
+        "x": 12,
+        "y": 336.1,
+        "w": 366,
+        "h": 228.8,
+        "frame": {
+          "x": 0,
+          "y": 57,
+          "w": 390,
+          "h": 787
+        },
+        "scale": 0.2288,
+        "position": null,
+        "closed": false,
+        "pageScale": 1,
+        "scrollY": 0,
+        "innerWidth": 390,
+        "captures": 0,
+        "menus": 0,
+        "menusRefused": 0,
+        "menuOnPicture": false
+      },
+      "fitDrag": {
+        "moved": {
+          "dx": 0,
+          "dy": 0
+        },
+        "scrollY": 0
+      },
+      "buttonZoomThenTouch": {
+        "zoomed": 0.4484,
+        "drag": {
+          "dx": -50,
+          "dy": 60
+        },
+        "laterTouch": {
+          "dx": 3,
+          "dy": 0
+        },
+        "scrollY": 0,
+        "pageScale": 1
+      },
+      "pinch": {
+        "fit": 0.2288,
+        "to": 0.6863,
+        "ratio": 3,
+        "scales": [
+          0.2573,
+          0.2859,
+          0.3145,
+          0.3431,
+          0.3717,
+          0.4003,
+          0.4289,
+          0.4575,
+          0.4861,
+          0.5147,
+          0.5433,
+          0.5719,
+          0.6005,
+          0.6291,
+          0.6577,
+          0.6863
+        ],
+        "secondFingerLands": {
+          "dx": 0,
+          "dy": 0,
+          "scale": 1
+        },
+        "midpointDrift": 0.1,
+        "firstFingerLifts": {
+          "dx": 0,
+          "dy": 0,
+          "scale": 1
+        },
+        "lastFingerLifts": {
+          "dx": 0,
+          "dy": 0,
+          "scale": 1
+        },
+        "largestStep": 1.125,
+        "smallestStep": 1.043,
+        "pageScale": 1,
+        "scrollY": 0
+      },
+      "laterTouch": {
+        "onTouch": {
+          "dx": 0,
+          "dy": 0
+        },
+        "onNudge": {
+          "dx": 3,
+          "dy": 0
+        }
+      },
+      "onefingerPan": {
+        "drag": {
+          "dx": -50,
+          "dy": 60
+        },
+        "scale": 1,
+        "pageScale": 1,
+        "scrollY": 0
+      },
+      "thrown": {
+        "box": {
+          "x": 195,
+          "y": 450.5,
+          "w": 1098,
+          "h": 686.3
+        },
+        "inView": {
+          "w": 195,
+          "h": 394
+        },
+        "scrollY": 0
+      },
+      "pinchedIn": {
+        "scale": 0.2288,
+        "fit": 0.2288,
+        "box": {
+          "x": 12,
+          "y": 336.1,
+          "w": 366,
+          "h": 228.8
+        }
+      },
+      "doubleTap": {
+        "fit": 0.2288,
+        "zoomed": 1,
+        "back": 0.2288
+      },
+      "page": {
+        "pageScale": 1,
+        "scrollY": 0
+      }
+    },
+    "desktop-1280-fullscreen": {
+      "fit": {
+        "x": 37.8,
+        "y": 47.3,
+        "w": 1204.4,
+        "h": 752.7,
+        "frame": {
+          "x": 0,
+          "y": 47.3,
+          "w": 1280,
+          "h": 752.8
+        },
+        "scale": 0.7527,
+        "position": "1 / 3",
+        "closed": false,
+        "pageScale": 1,
+        "scrollY": 0,
+        "innerWidth": 1280,
+        "captures": 0,
+        "menus": 0,
+        "menusRefused": 0,
+        "menuOnPicture": false
+      },
+      "zoomed": {
+        "x": -540.3,
+        "y": -314.1,
+        "w": 2360.6,
+        "h": 1475.4,
+        "frame": {
+          "x": 0,
+          "y": 47.3,
+          "w": 1280,
+          "h": 752.8
+        },
+        "scale": 1.4754,
+        "position": "1 / 3",
+        "closed": false,
+        "pageScale": 1,
+        "scrollY": 0,
+        "innerWidth": 1280,
+        "captures": 0,
+        "menus": 0,
+        "menusRefused": 0,
+        "menuOnPicture": false
+      },
+      "press-right": {
+        "before": {
+          "x": -540.3,
+          "y": -314.1
+        },
+        "after": {
+          "x": -540.3,
+          "y": -314.1
+        },
+        "follow": {
+          "dx": 0,
+          "dy": 0
+        },
+        "captures": 0,
+        "menus": 1,
+        "menusRefused": 0,
+        "menuOnPicture": true
+      },
+      "press-middle": {
+        "before": {
+          "x": -540.3,
+          "y": -314.1
+        },
+        "after": {
+          "x": -540.3,
+          "y": -314.1
+        },
+        "follow": {
+          "dx": 0,
+          "dy": 0
+        },
+        "captures": 0,
+        "menus": 0,
+        "menusRefused": 0,
+        "menuOnPicture": true
+      },
+      "press-ctrl-primary": {
+        "before": {
+          "x": -540.3,
+          "y": -314.1
+        },
+        "after": {
+          "x": -540.3,
+          "y": -314.1
+        },
+        "follow": {
+          "dx": 0,
+          "dy": 0
+        },
+        "captures": 0,
+        "menus": 0,
+        "menusRefused": 0,
+        "menuOnPicture": true
+      },
+      "press-shift-primary": {
+        "before": {
+          "x": -540.3,
+          "y": -314.1
+        },
+        "after": {
+          "x": -540.3,
+          "y": -314.1
+        },
+        "follow": {
+          "dx": 0,
+          "dy": 0
+        },
+        "captures": 0,
+        "menus": 0,
+        "menusRefused": 0,
+        "menuOnPicture": true
+      },
+      "pan": {
+        "drag": {
+          "dx": -60,
+          "dy": 42
+        },
+        "afterRelease": {
+          "dx": 0,
+          "dy": 0
+        }
+      },
+      "pan-blur": {
+        "follow": {
+          "dx": 0,
+          "dy": 0
+        }
+      },
+      "pan-lost-capture": {
+        "follow": {
+          "dx": 0,
+          "dy": 0
+        }
+      },
+      "wheel": {
+        "from": 0.7527,
+        "to": 1.2165,
+        "drift": 0.4,
+        "pageScale": 1,
+        "innerWidth": 1280,
+        "scrollY": 0
+      },
+      "ctrl-wheel": {
+        "from": 0.7527,
+        "to": 1.8515,
+        "drift": 0.9,
+        "pageScale": 1,
+        "innerWidth": 1280,
+        "scrollY": 0
+      },
+      "thrown": {
+        "box": {
+          "x": 639.5,
+          "y": 423.9,
+          "w": 2962.3,
+          "h": 1851.4
+        },
+        "inView": {
+          "w": 641,
+          "h": 376
+        }
+      },
+      "zoomedOut": {
+        "scale": 0.7527,
+        "fit": 0.7527,
+        "box": {
+          "x": 37.8,
+          "y": 47.3,
+          "w": 1204.4,
+          "h": 752.7
+        }
+      },
+      "doubleClick": {
+        "fit": 0.7527,
+        "zoomed": 1.5055,
+        "back": 0.7527
+      }
+    },
+    "phone-390-fullscreen": {
+      "fit": {
+        "x": 0,
+        "y": 332.1,
+        "w": 390,
+        "h": 243.8,
+        "frame": {
+          "x": 0,
+          "y": 64,
+          "w": 390,
+          "h": 780
+        },
+        "scale": 0.2438,
+        "position": "1 / 3",
+        "closed": false,
+        "pageScale": 1,
+        "scrollY": 0,
+        "innerWidth": 390,
+        "captures": 0,
+        "menus": 0,
+        "menusRefused": 0,
+        "menuOnPicture": false
+      },
+      "fitSwipe": {
+        "afterLeft": "2 / 3",
+        "afterRight": "1 / 3",
+        "pictureLeftAt": {
+          "dx": 0,
+          "dy": 0
+        }
+      },
+      "buttonZoomThenTouch": {
+        "zoomed": 0.4778,
+        "drag": {
+          "dx": -50,
+          "dy": 60
+        },
+        "laterTouch": {
+          "dx": 3,
+          "dy": 0
+        },
+        "scrollY": 0,
+        "pageScale": 1
+      },
+      "pinch": {
+        "fit": 0.2438,
+        "to": 0.7313,
+        "ratio": 3,
+        "scales": [
+          0.2742,
+          0.3047,
+          0.3352,
+          0.3656,
+          0.3961,
+          0.4266,
+          0.457,
+          0.4875,
+          0.518,
+          0.5484,
+          0.5789,
+          0.6094,
+          0.6398,
+          0.6703,
+          0.7008,
+          0.7313
+        ],
+        "secondFingerLands": {
+          "dx": 0,
+          "dy": 0,
+          "scale": 1
+        },
+        "midpointDrift": 0.1,
+        "firstFingerLifts": {
+          "dx": 0,
+          "dy": 0,
+          "scale": 1
+        },
+        "lastFingerLifts": {
+          "dx": 0,
+          "dy": 0,
+          "scale": 1
+        },
+        "largestStep": 1.125,
+        "smallestStep": 1.044,
+        "pageScale": 1,
+        "scrollY": 0
+      },
+      "laterTouch": {
+        "onTouch": {
+          "dx": 0,
+          "dy": 0
+        },
+        "onNudge": {
+          "dx": 3,
+          "dy": 0
+        }
+      },
+      "onefingerPan": {
+        "drag": {
+          "dx": -50,
+          "dy": 60
+        },
+        "scale": 1,
+        "pageScale": 1,
+        "scrollY": 0
+      },
+      "thrown": {
+        "box": {
+          "x": 195,
+          "y": 454.4,
+          "w": 1170,
+          "h": 731.3
+        },
+        "inView": {
+          "w": 195,
+          "h": 390
+        },
+        "scrollY": 0
+      },
+      "pinchedIn": {
+        "scale": 0.2438,
+        "fit": 0.2438,
+        "box": {
+          "x": 0,
+          "y": 332.1,
+          "w": 390,
+          "h": 243.8
+        }
+      },
+      "doubleTap": {
+        "fit": 0.2438,
+        "zoomed": 0.4875,
+        "back": 0.2438
+      },
+      "fitVerticalDrag": {
+        "openBefore": true,
+        "closed": true
+      },
+      "page": {
+        "pageScale": 1,
+        "scrollY": 0
+      }
+    }
+  },
+  "failures": []
+}

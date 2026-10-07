@@ -10,6 +10,8 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, write
 import { join } from "node:path";
 import { setPriority } from "node:os";
 
+import { wrapWorkCommand } from "@/lib/runtime/cpuPlacement";
+import { machineCpuPressureGate, waitForCpuPressure, type CpuPressureGate } from "@/lib/runtime/cpuPressure";
 import { runGit, TIP_REF } from "./git";
 import { readStartIdentity, sameProcess, signalGroup, type RecordedPid } from "./pid";
 import { releaseDirFor, type Release } from "./release";
@@ -18,7 +20,11 @@ import { CHECKOUT_STEPS, idleUpdate, pendingSteps, shortSha, type CheckoutStepNa
 export const TAIL_LINES = 40;
 export const MIN_AVAILABLE_MB = 4_096;
 
-export interface RunOptions { cwd: string; env: Record<string, string>; onLine(line: string): void; lowPriority?: boolean }
+export interface RunOptions {
+  cwd: string; env: Record<string, string>; onLine(line: string): void; lowPriority?: boolean;
+  /** Heavy work: the real port runs it in a CPU work scope under this label. */
+  work?: string;
+}
 
 export interface StepPorts {
   /** Runs a command to completion and answers its exit code. */
@@ -232,9 +238,9 @@ export class UpdateRunner {
     const { checkout, remote, branch, bun, env } = this.config;
     const target = this.state.target!;
     const release = this.state.releaseDir!;
-    const command = async (argv: string[], cwd: string): Promise<number> => {
+    const command = async (argv: string[], cwd: string, work?: string): Promise<number> => {
       push(`$ ${argv.join(" ")}   (in ${cwd})`, false);
-      const code = await this.ports.run(argv, { cwd, env, onLine: (line) => push(line), lowPriority: this.state.trigger === "auto" });
+      const code = await this.ports.run(argv, { cwd, env, onLine: (line) => push(line), lowPriority: this.state.trigger === "auto", ...(work ? { work } : {}) });
       push(`exit ${code}`, false);
       if (code !== 0) throw new CommandFailure(code);
       return code;
@@ -276,12 +282,12 @@ export class UpdateRunner {
       case "install":
         if (await reusable()) { push(`${shortSha(target)} is already built in ${release}; its dependencies are kept`, false); return null; }
         guardMemory();
-        return command([bun, "install", "--frozen-lockfile"], release);
+        return command([bun, "install", "--frozen-lockfile"], release, "update-install");
       case "build":
         if (await reusable()) { push(`${shortSha(target)} is already built in ${release}; the build is reused`, false); return null; }
         guardMemory();
         this.ports.markBuilt?.(release, null);
-        return command([bun, "run", "build"], release);
+        return command([bun, "run", "build"], release, "update-build");
       case "ready": {
         const head = (await this.ports.revParse("HEAD", release)).trim();
         if (head !== target) throw new StepError({ kind: "head-mismatch", head: shortSha(head), expected: shortSha(target) }, `HEAD is ${shortSha(head)}, expected ${shortSha(target)}`);
@@ -301,11 +307,24 @@ export class UpdateRunner {
     this runner started and nothing else. */
 export interface RealPorts extends StepPorts { abort(): void }
 
-export function realPorts(publish: (release: Release) => void | Promise<void>): RealPorts {
+export function realPorts(publish: (release: Release) => void | Promise<void>,
+  cpu: { pressure?: () => Pick<CpuPressureGate, "check"> | null; pollMs?: number } = {}): RealPorts {
   let current: RecordedPid | null = null;
+  let waiting: AbortController | null = null;
   return {
-    async run(command, { cwd, env, onLine, lowPriority }) {
+    async run(command, { cwd, env, onLine, lowPriority, work }) {
       mkdirSync(env.TMPDIR ?? cwd, { recursive: true });
+      if (work) {
+        // Heavy work: a missing CPU mechanism refuses the step with its reason
+        // (CpuContainmentUnavailable names the opt-out), and the start waits
+        // for CPU pressure to fall. Neither creates a child.
+        const wrapped = wrapWorkCommand(command[0]!, command.slice(1), { label: work });
+        command = [wrapped.command, ...wrapped.args];
+        waiting = new AbortController();
+        try {
+          if (!await waitForCpuPressure((cpu.pressure ?? machineCpuPressureGate)(), { subject: work, onReason: onLine, signal: waiting.signal, ...(cpu.pollMs ? { pollMs: cpu.pollMs } : {}) })) return 143;
+        } finally { waiting = null; }
+      }
       const child = spawn(command[0]!, command.slice(1), { cwd, env: env as NodeJS.ProcessEnv, detached: true, stdio: ["ignore", "pipe", "pipe"] });
       const exited = new Promise<number>((resolve) => {
         child.once("error", (error) => { onLine(error.message); resolve(127); });
@@ -324,6 +343,7 @@ export function realPorts(publish: (release: Release) => void | Promise<void>): 
       }
     },
     abort() {
+      waiting?.abort();
       if (current) signalGroup(current, "SIGTERM");
     },
     childAlive: () => current === null || sameProcess(current),

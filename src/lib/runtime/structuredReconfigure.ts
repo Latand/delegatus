@@ -1,3 +1,4 @@
+import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import { accountManager } from "@/lib/accounts/manager";
 import { advanceConversationMigration } from "@/lib/accounts/migration/coordinator";
 import { RegisteredSuccessorProvider } from "@/lib/accounts/migration/provider";
@@ -5,6 +6,7 @@ import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { agentRegistry, type AgentRegistry, type RegistryConversation } from "@/lib/agent/registry";
 import type { SessionKey } from "@/lib/agent/sessionKey";
 
+import type { PipelineSwitchFence } from "@/lib/pipelines/runtimeSwitchFence";
 import type { StructuredReconfigureEffect } from "./structuredDeliveryQueue";
 import { recoverDeadStructuredConversation } from "./structuredRecovery";
 
@@ -39,13 +41,22 @@ export interface StructuredReconfigureDependencies {
   releaseHost?: (key: SessionKey) => Promise<boolean>;
   recover?: typeof recoverDeadStructuredConversation;
   ownsOperation?: () => Promise<boolean>;
+  /** The pipeline switch that issued this operation, or null for a conversation's own reconfigure. */
+  pipelineSwitch?: (operationId: string) => PipelineSwitchFence | null | Promise<PipelineSwitchFence | null>;
   migrate?: (
     conversationId: ViewerConversationId,
     targetAccountId: string,
     registry: AgentRegistry,
     ownsOperation: () => Promise<boolean>,
     reconfigureOperationId?: string,
+    authorizeTarget?: () => void | Promise<void>,
   ) => Promise<RegistryConversation>;
+}
+
+async function readPipelineSwitch(operationId: string): Promise<PipelineSwitchFence | null> {
+  if (!operationId.startsWith("pswitch-")) return null;
+  const { pipelineSwitchFence } = await import("@/lib/pipelines/runtimeSwitchFence");
+  return pipelineSwitchFence(operationId);
 }
 
 async function validateAccountAuthentication(engine: "claude" | "codex", accountId: string): Promise<void> {
@@ -59,6 +70,7 @@ async function migrateConversation(
   registry: AgentRegistry,
   ownsOperation: () => Promise<boolean>,
   reconfigureOperationId?: string,
+  authorizeTarget?: () => void | Promise<void>,
 ): Promise<RegistryConversation> {
   /* The established provider keeps one Viewer conversation identity while it
      creates an account-owned resume artifact. Codex forks the rollout under
@@ -69,12 +81,14 @@ async function migrateConversation(
     conversationId,
     registry,
     new RegisteredSuccessorProvider(),
-    { ownsOperation, reconfigureOperationId },
+    { ownsOperation, reconfigureOperationId, ...(authorizeTarget ? { authorizeTarget } : {}) },
   );
 }
 
-function profilePatch(effect: StructuredReconfigureEffect) {
-  return { model: effect.model, effort: effect.effort, fast: effect.fast };
+/* A pipeline switch names its speed exactly, so a tier the profile already held never outlives the choice. */
+function profilePatch(effect: StructuredReconfigureEffect, fence: PipelineSwitchFence | null) {
+  return { model: effect.model, effort: effect.effort, fast: effect.fast,
+    ...(fence && fence.serviceTier !== undefined ? { serviceTier: fence.serviceTier } : {}) };
 }
 
 function failureMessage(error: unknown): string {
@@ -103,10 +117,11 @@ export async function applyStructuredReconfigure(
   const inheritedApplyingOperation = conversation.reconfigure?.status === "applying";
 
   if (!await ownsOperation()) throw new StructuredReconfigureSupersededError();
+  const fence = await (dependencies.pipelineSwitch ?? readPipelineSwitch)(effect.operationId);
   const claim = registry.claimConversationReconfigure(conversationId, {
     operationId: effect.operationId,
     revision: effect.eventSeq,
-    profile: profilePatch(effect),
+    profile: profilePatch(effect, fence),
     ...(effect.previousProfile ? { previousProfile: effect.previousProfile } : {}),
     ...(effect.accountId ? { accountId: effect.accountId } : {}),
   });
@@ -141,12 +156,21 @@ export async function applyStructuredReconfigure(
     revision: effect.eventSeq,
     owns: () => ownsDurableReconfigure(status),
     releaseHost: release,
+    /* The project may drop an account while a host is being released: every
+       recovery this operation asks for, the restorations after a failure
+       included, asks the pipeline again about the account it would start on. */
+    ...(fence ? { authorizeAccount: (accountId: string | null) => fence.authorize(accountId) } : {}),
   });
 
-  if (switchingAccount) {
+  /* A pipeline's project may have dropped the target account since the switch
+     was admitted: asked here, before anything is released or launched. */
+  if (switchingAccount || fence) {
     try {
-      await (dependencies.validateAccount ?? validateAccountAuthentication)(engine as "claude" | "codex", targetAccountId!);
-      (dependencies.resolveAccount ?? accountManager.resolveSpawn)(engine, targetAccountId);
+      fence?.authorize();
+      if (switchingAccount) {
+        await (dependencies.validateAccount ?? validateAccountAuthentication)(engine as "claude" | "codex", targetAccountId!);
+        (dependencies.resolveAccount ?? accountManager.resolveSpawn)(engine, targetAccountId);
+      }
     } catch (error) {
       await settle("failed", error);
       if (inheritedApplyingOperation) {
@@ -260,6 +284,7 @@ export async function applyStructuredReconfigure(
         registry,
         ownsOperation,
         effect.operationId,
+        fence ? () => fence.authorize() : undefined,
       );
       const owner = registry.conversation(conversationId)?.reconfigure;
       if (ownerCancelled()) throw new StructuredReconfigureCancelledError();
@@ -285,6 +310,10 @@ export async function applyStructuredReconfigure(
       await settle("failed", error);
       if (committedSuccessorId) await restoreCommittedSuccessor(committedSuccessorId);
       throw error;
+    } finally {
+      // Admission may have ticked while this executor still owned the switch.
+      // Wake again after commit so its assigned messages dispatch immediately.
+      if (committedSuccessorId) requestAccountMigrationTick();
     }
   }
 

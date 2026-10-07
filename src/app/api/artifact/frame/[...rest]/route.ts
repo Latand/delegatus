@@ -1,4 +1,4 @@
-import { constants as FS, type promises as fsp } from "node:fs";
+import type { promises as fsp } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -6,7 +6,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { classifyArtifact } from "@/lib/artifact/classify";
 import { FRAME_CSP, frameMime, verifyFrameScope } from "@/lib/artifact/frameScope";
-import { homeRoot, streamWindow, underRoot } from "@/lib/artifact/localFile";
+import { fencedStores, homeRoot, inFencedStore, openAdmitted, realAllowedRoots, streamWindow, underRoot } from "@/lib/artifact/localFile";
 import { artifactEtag, artifactLimits, SNIFF_BYTES, sniffAgrees } from "@/lib/artifact/serve";
 import { rejectForeignHost } from "@/lib/sameOrigin";
 
@@ -89,7 +89,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   const abs = path.resolve(directory, ...inside);
   const home = homeRoot();
-  if (!underRoot(abs, directory) || !underRoot(abs, home)) return refuse(403, "outside the report directory");
+  if (!underRoot(abs, directory) || !underRoot(abs, home) || inFencedStore(abs, fencedStores())) return refuse(403, "outside the report directory");
 
   const classified = classifyArtifact(abs);
   if (!classified) return refuse(415, "not a previewable file type");
@@ -103,11 +103,13 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   } catch {
     return refuse(404, "file not found");
   }
-  if (!underRoot(real, realDirectory)) return refuse(403, "outside the report directory");
+  if (!underRoot(real, realDirectory) || inFencedStore(real, (await realAllowedRoots()).fenced)) return refuse(403, "outside the report directory");
 
+  /* Kept only when the open file lies at the resolved path: a directory
+     swapped for a link after the checks above reads nothing. */
   let handle: fsp.FileHandle;
   try {
-    handle = await fs.open(real, FS.O_RDONLY | FS.O_NOFOLLOW | FS.O_NONBLOCK);
+    handle = await openAdmitted(real);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     return refuse(code === "ENOENT" || code === "EISDIR" ? 404 : 403, "file not readable");

@@ -1,4 +1,5 @@
 import { AgentMemoryCell, planAgentMemory } from "./agentMemory";
+import { planAgentCpu, workloadForMemberships } from "./cpuPlacement";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,7 +9,7 @@ import { launchServiceTier } from "./codexTurnProfile";
 import { accountManager } from "@/lib/accounts/manager";
 import { claudeSettingsPath } from "@/lib/accounts/claude";
 import { claudeValidityFromLimitRead } from "@/lib/accounts/spawnHealth";
-import { explicitLaunchProfileSandbox, launchProfileEngineReadOnly, type LaunchProfile } from "@/lib/accounts/migration/contracts";
+import { explicitLaunchProfileSandbox, launchProfileEngineReadOnly, type LaunchProfile, type ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import type { SpawnAccountAdmission } from "@/lib/agent/accountLiveness";
 import { effectiveClaudePermissionMode, resolveCopilotBinary, type AgentEngine, type ResumeSpec } from "@/lib/agent/cli";
 import { identityMaterializationFence, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt, type StructuredHostColumns } from "@/lib/agent/registry";
@@ -46,7 +47,7 @@ import { enqueueStructuredMessage } from "./structuredMessageDelivery";
 import { runtimeImageCapability, runtimeImageStore } from "./runtimeImageStore";
 import { publishFilesRevision } from "./filesRevision";
 import { parseStructuredImageRefs, structuredContent, type StructuredImageRef } from "./structuredContent";
-import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH } from "./telegramConnectorEnv";
+import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH, TELEGRAM_SEAT_INACTIVE_BEFORE_LAUNCH } from "./telegramConnectorEnv";
 import { STAGED_RECOVERY_PREFIX, stagedLaunchRecovery, type StagedLaunchRecovery } from "./stagedRecovery";
 
 export type SpawnedStructuredHost = EngineHost & {
@@ -1034,6 +1035,11 @@ export interface StructuredSpawnInput {
   imageRefs?: StructuredImageRef[];
   registry: AgentRegistry;
   client: RuntimeHostClient;
+  /** Throws when the caller's owner no longer allows this launch's account.
+      Asked again after each async boundary that precedes a side effect: once
+      runtime admission returns, before the host starts, and once the host is
+      set up, before it is published, by this call or by its staged probe. */
+  authorize?: () => void | Promise<void>;
 }
 
 function admittedStructuredLaunchInput(input: StructuredSpawnInput): StructuredSpawnInput {
@@ -1045,7 +1051,7 @@ function admittedStructuredLaunchInput(input: StructuredSpawnInput): StructuredS
   }
   if (receipt.launchProfile.mcpServers.includes("telegram") && receipt.telegramSeatGrant
     && !isCurrentOperatorSeat(receipt.parentConversationId ?? "", input.registry)) {
-    throw new Error("telegram MCP orchestrator seat is no longer active");
+    throw new Error(TELEGRAM_SEAT_INACTIVE_BEFORE_LAUNCH);
   }
   return { ...input, receipt, spec: { ...input.spec, launchProfile: receipt.launchProfile } };
 }
@@ -1678,6 +1684,20 @@ export function claudeStructuredHostOptions(
   };
 }
 
+/**
+ * The memory and CPU cell a structured host launches in. A fresh start, a
+ * resume, boot adoption and a migration successor all build it here, so a host
+ * keeps its class and its controls across restarts. Throws
+ * CpuContainmentUnavailable for work that cannot be contained.
+ */
+export function structuredHostCell(registry: AgentRegistry, engine: string, sessionKey: string, conversationId: ViewerConversationId | null | undefined): AgentMemoryCell | null {
+  const snapshot = registry.readOnlySnapshot();
+  const liveAgents = Object.values(snapshot.entries).filter((entry) => entry.structuredHost && entry.status !== "dead" && entry.status !== "unhosted").length + 1;
+  const cpu = planAgentCpu(workloadForMemberships(conversationId ? snapshot.memberships[registry.canonicalConversationId(conversationId)] : undefined));
+  const plan = planAgentMemory({ engine, sessionKey, liveAgents, cpu });
+  return plan ? new AgentMemoryCell(plan) : null;
+}
+
 /** Narrow external-engine seam for launch-path tests; production passes none. */
 export async function defaultStartHost(
   input: StructuredSpawnInput,
@@ -1688,9 +1708,7 @@ export async function defaultStartHost(
   } = {},
 ): Promise<SpawnedStructuredHost> {
   input = admittedStructuredLaunchInput(input);
-  const liveAgents = Object.values(input.registry.readOnlySnapshot().entries).filter((entry) => entry.structuredHost && entry.status !== "dead" && entry.status !== "unhosted").length + 1;
-  const plan = planAgentMemory({ engine: input.engine, sessionKey: input.receipt.launchId, liveAgents });
-  const memoryCell = plan ? new AgentMemoryCell(plan) : null;
+  const memoryCell = structuredHostCell(input.registry, input.engine, input.receipt.launchId, input.receipt.conversationId);
   if (input.engine === "copilot") return await startCopilotStructuredHost(input, capability, {
     ...(memoryCell ? { memoryCell } : {}),
   });
@@ -2178,6 +2196,7 @@ export async function spawnStructuredConversation(
     }), admissionRetry);
     input = admittedStructuredLaunchInput(input);
     assertResumeSurvivorsRetired();
+    await input.authorize?.();
     const capability = input.registry.rotateSpawnCapabilityForReceipt(input.receipt.launchId);
     input.registry.setReceiptViewerMcpTransport(input.receipt.launchId,
       viewerMcpTransportForLaunch({ ...input.account.env, LLV_SPAWN_CAPABILITY: capability }));
@@ -2244,6 +2263,9 @@ export async function spawnStructuredConversation(
     binding.stopPersistence = await withinDurableSetup(
       bindHost(input.registry, key, host, claimed.claimOwner, claimed.claimEpoch),
     );
+    /* Still unpublished: a refusal here enters the failure path below, which
+       retires the host this launch started and fails its receipt. */
+    await input.authorize?.();
     const ownsLaunch = async () => {
       if (durableSetupTimedOut || launchReleased) return false;
       const snapshot = input.registry.readOnlySnapshot();
@@ -2255,12 +2277,36 @@ export async function spawnStructuredConversation(
         && current.state !== "conflicted"
         && entry?.structuredHostOperationId === input.receipt.launchId);
     };
+    /* The registration awaits the host and the journal after the check above,
+       so it asks the account fence again at each of its own boundaries. A
+       refusal there leaves the host unregistered and is raised once the
+       registration returns, into the same failure path as any other. */
+    const publishAuthorized = async (): Promise<() => Promise<void>> => {
+      let refusal: { error: unknown } | null = null;
+      const unregister = await publishHost(key!, host!, async () => {
+        if (refusal || !await ownsLaunch()) return false;
+        try {
+          await input.authorize?.();
+        } catch (error) {
+          refusal = { error };
+          return false;
+        }
+        return true;
+      });
+      const refused = refusal as { error: unknown } | null;
+      if (refused) throw refused.error;
+      return unregister;
+    };
     const recovery: StagedLaunchRecovery = { phase: "unpublished", startedAt: now(), checks: 0, nextTryAt: now(), reason: "host publication pending" };
     writeStagedRecovery(input.registry, operationId, recovery);
     const continuation: StagedContinuation = {
       host,
       owns: async () => await ownsLaunch() && input.registry.ownsStructuredHostClaim(key!, claimed.claimOwner!, claimed.claimEpoch),
-      publish: async () => { binding.unregister = await publishHost(key!, host!, ownsLaunch); forgetUnpublishedHost(); },
+      publish: async () => {
+        await input.authorize?.();
+        binding.unregister = await publishAuthorized();
+        forgetUnpublishedHost();
+      },
       deliver: () => deliverFirst(input, identity.path),
     };
     stagedContinuations.set(operationId, continuation);
@@ -2271,7 +2317,7 @@ export async function spawnStructuredConversation(
         await cleanupHost(host, binding);
       },
     });
-    binding.unregister = await withinDurableSetup(publishHost(key, host, ownsLaunch));
+    binding.unregister = await withinDurableSetup(publishAuthorized());
     forgetUnpublishedHost();
     if (!await ownsLaunch()) throw new Error("staged launch was released before publication completed");
     writeStagedRecovery(input.registry, operationId, { ...recovery, phase: "uncertain", reason: "first-message acknowledgement pending" });

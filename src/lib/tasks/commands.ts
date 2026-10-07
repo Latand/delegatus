@@ -13,6 +13,7 @@ import { readTaskPriorityInput } from "./priority";
 import { readTaskSteps } from "./steps";
 import { assignmentAdmissionOrigin, assignmentIdentity, ensureTaskMembership, identityHeldBy, type MembershipIdentity } from "./membership";
 import { applyLineEdits, LINE_EDIT_KEYS, type LineEdits } from "@/lib/lineEdits";
+import type { PauseResumeActor } from "@/lib/pauseResumeActor";
 import { editStoredWorkLinks, normalizeWorkLinkInput, workLinkInputs, type NormalizedWorkLink, type StoredWorkLink, type WorkLinkKind, type WorkLinkVia } from "@/lib/forge/workLinks";
 import { TASK_NOTE_LIMIT, type TaskNoteAuthor, LAUNCH_NOT_STARTED_ERROR, TASK_COLORS, TASK_DETAILS_LIMIT, TASK_PRIORITIES, TASK_TEXT_LIMIT, type AssignmentRef, type BoardTask, type TaskAttachment, type TaskAssignment, type TaskBoardVisibility, type TaskColor, type TaskGroupHidden, type TaskSource, type TaskStatus } from "./types";
 
@@ -171,6 +172,9 @@ export interface PatchTaskOptions {
   explicit?: boolean;
   /** Internal system cards that must remain visible may occupy an overflow band. */
   allowBoardOverflow?: boolean;
+  /** Trusted transport attribution of a status change, never read from the
+      request body. Without it a changed status records no writer. */
+  statusActor?: PauseResumeActor;
 }
 
 /** Injected so the pure command can ask the store whether an attachment ref's
@@ -194,6 +198,8 @@ export interface TaskCommandDeps {
   explicit?: boolean;
   /** Internal system cards that must remain visible may occupy an overflow band. */
   allowBoardOverflow?: boolean;
+  /** Trusted transport attribution of the create; see {@link PatchTaskOptions.statusActor}. */
+  statusActor?: PauseResumeActor;
 }
 
 /** The refusal both admission paths give when the board is full. */
@@ -401,6 +407,7 @@ export function createTask(
     id,
     project,
     status: hold ? "blocked" : "inbox",
+    ...(deps.statusActor ? { statusBy: { actor: structuredClone(deps.statusActor), from: null, at: now } } : {}),
     ...(hold ? { hold } : {}),
     text,
     ...(details.details ? { details: details.details } : {}),
@@ -660,6 +667,10 @@ export function patchTask(existing: BoardTask[], id: string, input: PatchTaskInp
   if (Object.hasOwn(patch, "board")) {
     delete updated.boardAutoHidden;
     updated.boardChoice = true;
+  }
+  if (updated.status !== task.status) {
+    if (options.statusActor) updated.statusBy = { actor: structuredClone(options.statusActor), from: task.status, at: now };
+    else delete updated.statusBy;
   }
   /* An explicit clear leaves `undefined` fields on the spread; drop them so the
      persisted row and its validator agree that the deadline is gone. */

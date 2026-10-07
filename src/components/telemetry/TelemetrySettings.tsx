@@ -3,17 +3,14 @@ import { createPortal } from "react-dom";
 import { Z } from "@/components/layers";
 import { useEffect, useState } from "react";
 import { useLocale } from "@/lib/i18n";
-import { OpenRouterKeySetting } from "@/components/asks/OpenRouterKeySetting";
-import { MemorySetting } from "@/components/memory/MemorySetting";
-import { VoiceCompanionSetting } from "@/components/voiceCompanion/VoiceCompanionSetting";
-import { useIsMobile } from "@/hooks/useIsMobile";
 import { telemetryNotice } from "../../../bin/telemetry-notice.mjs";
 export const openTelemetrySettings = () => window.dispatchEvent(new Event("delegatus:open-settings"));
 type Status = { enabled: boolean; locked: boolean; noticeDismissed: boolean };
-export function TelemetrySettingsHost({ project }: { project?: string }) {
+/* The install ping's dialog, behind «Install ping» on the header menu's
+   Settings page: the notice and the one switch. Shared memory and the
+   OpenRouter key have rows of their own on that page. */
+export function TelemetrySettingsHost() {
   const { t, locale } = useLocale();
-  /* The voice companion is a desktop surface, so its rows are too. */
-  const phone = useIsMobile();
   const [status, setStatus] = useState<Status | null>(null);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -44,22 +41,19 @@ export function TelemetrySettingsHost({ project }: { project?: string }) {
     {status && !status.noticeDismissed && !open && <aside data-telemetry-notice="" className={`fixed bottom-4 left-4 right-4 ${Z.toast} mx-auto max-w-2xl rounded-xl border border-border bg-canvas p-4 text-[13px] text-primary shadow-xl`}>
       <p>{telemetryNotice[locale]}</p>
       <div className="mt-2 flex gap-3">
-        <button type="button" className="min-h-11 font-semibold text-accent" onClick={() => setOpen(true)}>{t("telemetry.settings")}</button>
+        <button type="button" className="min-h-11 font-semibold text-accent" onClick={() => setOpen(true)}>{t("headerMenu.ping")}</button>
         <button type="button" className="min-h-11" disabled={busy} onClick={() => void save({ noticeDismissed: true })}>{t("telemetry.dismiss")}</button>
       </div>
       {error && <p role="alert">{t("telemetry.error")}</p>}
     </aside>}
     {open && <div className={`fixed inset-0 ${Z.overlay} flex items-center justify-center bg-black/40 p-4`} onClick={() => setOpen(false)}>
       <section data-telemetry-settings="" role="dialog" aria-modal="true" aria-labelledby="telemetry-title" className="max-h-[90dvh] w-full max-w-lg overflow-y-auto rounded-xl border border-border bg-canvas p-5 text-primary shadow-xl" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between gap-4"><h2 id="telemetry-title" className="text-lg font-semibold">{t("telemetry.settings")}</h2><button type="button" autoFocus className="min-h-11 px-2" onClick={() => setOpen(false)}>{t("telemetry.close")}</button></div>
+        <div className="flex items-center justify-between gap-4"><h2 id="telemetry-title" className="text-lg font-semibold">{t("headerMenu.ping")}</h2><button type="button" autoFocus className="min-h-11 px-2" onClick={() => setOpen(false)}>{t("telemetry.close")}</button></div>
         <p className="my-4 text-[13px] leading-relaxed">{telemetryNotice[locale]}</p>
         {status && <label className="flex min-h-11 items-center justify-between gap-4 text-sm font-semibold">
           {t("telemetry.label")}<input type="checkbox" role="switch" aria-label={t("telemetry.label")} checked={status.enabled} disabled={busy || status.locked} onChange={e => void save({ enabled: e.target.checked })} className="h-6 w-10 shrink-0 accent-[var(--accent)]" />
         </label>}
         {status?.locked && <p className="mt-3 text-[13px] text-muted">{t("telemetry.locked")}</p>}
-        {project && <MemorySetting project={project} />}
-        <OpenRouterKeySetting />
-        {phone ? null : <VoiceCompanionSetting />}
         {error && <p role="alert" className="mt-3 text-sm">{t("telemetry.error")}</p>}
       </section>
     </div>}

@@ -24,8 +24,8 @@ test("Docker publishing stays on main and tags; PR scope admits image inputs and
   for (const file of ["CONTRIBUTING.md", "docs/guide.md", ".githooks/pre-commit", "scripts/audit-with-retry.sh"]) expect(isImageInput(file), file).toBeFalse();
   expect(docker.jobs.build!["timeout-minutes"]).toBe("${{ github.event_name == 'pull_request' && 45 || 360 }}");
   expect(docker.concurrency["cancel-in-progress"]).toBe("${{ github.ref_type != 'tag' }}");
-  const build = docker.jobs.build!.steps!.find(step => step.name === "Build both architectures")!;
-  expect(build.with!.push).toBe("${{ github.event_name != 'pull_request' }}");
+  const build = docker.jobs.build!.steps!.find(step => step.name === "Publish both architectures")!;
+  expect(build.with!.push).toBe(true);
   expect(build.with!.platforms).toBe("linux/amd64,linux/arm64");
 });
 test("OS-specific CI jobs are bounded and keep cancellation", () => {

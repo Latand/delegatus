@@ -319,6 +319,23 @@ test("spawn_agent listTools publishes every registry role exactly once", async (
   });
 });
 
+test("spawn_agent, create_pipeline and pipeline_action publish the visual critic", async () => {
+  await withProtocolClient(inertBindings(), async (client) => {
+    const tools = (await client.listTools()).tools;
+    const schema = (name: string) => tools.find((tool) => tool.name === name)?.inputSchema.properties as Record<string, {
+      enum?: string[]; items?: { properties?: { role?: { properties?: { roleId?: { enum?: string[] } } } } };
+      properties?: { role?: { properties?: { roleId?: { enum?: string[] } } }; roleId?: { enum?: string[] } };
+      anyOf?: { properties?: { roleId?: { enum?: string[] } } }[];
+    }>;
+    expect(schema("spawn_agent").role?.enum).toContain("visual-critic");
+    expect(schema("create_pipeline").stages?.items?.properties?.role?.properties?.roleId?.enum).toContain("visual-critic");
+    const action = schema("pipeline_action");
+    expect(action.stage?.properties?.role?.properties?.roleId?.enum).toContain("visual-critic");
+    const overrideRole = action.role?.properties ? action.role : action.role?.anyOf?.find((branch) => branch.properties);
+    expect(overrideRole?.properties?.roleId?.enum).toContain("visual-critic");
+  });
+});
+
 test("get_conversation listTools publishes every bounded tail target", async () => {
   await withProtocolClient(inertBindings(), async (client) => {
     const listed = await client.listTools();
