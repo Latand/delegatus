@@ -42,7 +42,7 @@ test("upstream errors and malformed mint results never echo credential-bearing b
   for (const response of [Response.json({ error: "synthetic-credential" }, { status: 401 }), Response.json({ session: { id: "../invalid" }, transport: { sdp: "answer" } })]) {
     let called = 0;
     const provider = new OpenAILiveProvider((async () => { called++; return response; }) as unknown as typeof fetch);
-    await expect(provider.create("synthetic-credential", "en", "v=0")).rejects.toThrow("PROVIDER_ERROR");
+    await expect(provider.create("synthetic-credential", "en", "v=0")).rejects.toThrow(/^PROVIDER_(?:ERROR|REFUSED)$/);
     expect(called).toBe(1);
   }
 });
@@ -93,4 +93,12 @@ test("a hangup is confirmed by success or by a session the provider no longer ha
   for (const status of [401, 409, 429, 500, 503]) await expect(answering(status).hangup("live_fake", "synthetic-credential")).rejects.toThrow("PROVIDER_ERROR");
   const lost = new OpenAILiveProvider((async () => { throw new Error("offline"); }) as unknown as typeof fetch);
   await expect(lost.hangup("live_fake", "synthetic-credential")).rejects.toThrow("PROVIDER_ERROR");
+});
+
+test("a mint is refused only by the provider's own client-error answer; a server error, a lost answer or an unreadable success may hide a session", async () => {
+  const mint = (answer: () => Promise<Response>) => new OpenAILiveProvider((async () => answer()) as unknown as typeof fetch).create("synthetic-credential", "en", "v=0");
+  for (const status of [400, 401, 403, 429]) await expect(mint(async () => Response.json({ error: "no" }, { status })), String(status)).rejects.toThrow("PROVIDER_REFUSED");
+  for (const [label, answer] of [["500", async () => Response.json({ error: "no" }, { status: 500 })], ["timeout", async () => { throw new DOMException("timed out", "TimeoutError"); }],
+    ["unreadable", async () => new Response("not json", { status: 201 })], ["no id", async () => Response.json({ transport: { type: "webrtc", sdp: "answer" } }, { status: 201 })]] as const)
+    await expect(mint(answer), label).rejects.toThrow(/^PROVIDER_ERROR$/);
 });

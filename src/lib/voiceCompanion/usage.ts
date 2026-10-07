@@ -15,6 +15,12 @@ export const VOICE_SESSION_RESERVE_USD = 0.27; // five minutes plus close drain
  * room beside it for one backend response, so a board question can be answered. */
 export const SESSION_START_ROOM_USD = VOICE_SESSION_RESERVE_USD + BACKEND_RESPONSE_RESERVE_USD;
 export const LIVE_SESSION_LIMIT_MS = 300_000;
+/** How long a mint whose answer was lost blocks the next one. The provider
+ * lists no sessions, so one created without its answer cannot be named or hung
+ * up. Its browser never received the negotiation answer and closed its peer,
+ * so no media can reach it; it is held as open, and charged, for the first
+ * voice window its reservation pays for. */
+export const UNCERTAIN_MINT_HOLD_MS = LIVE_SESSION_LIMIT_MS;
 
 /** A cache write costs 1.25 times the input rate it is billed at. */
 const CACHE_WRITE = 1.25;

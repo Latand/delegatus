@@ -130,3 +130,68 @@ test("a mint whose SDP answer or session id echoes the credential is refused, hu
   expect((await answer.json()).sdp).toBe(sdp);
   await f.service.close(Object.values(f.service.storage.read().sessions)[0].id);
 });
+
+function restartedService(provider: FakeLiveProvider, now: () => number = Date.now) {
+  const storage = new CompanionStorage(now);
+  const service = new CompanionLiveSessions(storage, new CompanionAdmission(storage, { recipient: () => null, send: async () => { throw new Error("unexpected"); }, reports: () => [] }, now),
+    new CompanionBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] }), provider, { key: () => "synthetic-credential", timers: false, closeTimeoutMs: 20, now });
+  setCompanionSessionsForTests(service);
+  return { storage, service };
+}
+
+test("a mint whose answer was lost keeps its reservation and blocks every new paid session, across a restart, until it is reconciled", async () => {
+  const f = fixture();
+  f.provider.createFailures = ["lost"];
+  const first = await POST(request({ action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId: "lost-answer" }));
+  expect(first.status).toBeGreaterThanOrEqual(400);
+  expect(await first.json()).toEqual({ code: "MINT_UNCERTAIN" });
+  // The same service, then a restarted one, mint nothing more while the first may be open.
+  expect(await (await POST(request({ action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId: "same-service" }))).json()).toEqual({ code: "MINT_UNCERTAIN" });
+  let now = Date.now();
+  const restarted = restartedService(f.provider, () => now);
+  await restarted.service.recover();
+  const second = await POST(request({ action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId: "after-restart" }));
+  expect(await second.json()).toEqual({ code: "MINT_UNCERTAIN" });
+  expect(f.provider.sessions).toHaveLength(1);
+  expect(f.provider.hangups).toHaveLength(0);
+  const [row] = Object.values(restarted.storage.read().sessions);
+  expect(row).toMatchObject({ closed: true, remoteOpen: true, mintUncertain: true });
+  expect(restarted.storage.read().charges[row.id]).toMatchObject({ reserved: false, incomplete: true });
+  expect(restarted.storage.read().charges[row.id].usd).toBeGreaterThanOrEqual(0.27);
+  expect(restarted.storage.settings().incomplete).toBe(true);
+  // Once a provider session that never got its answer cannot still be running, the next Talk mints.
+  now += 5 * 60_000 + 1;
+  const third = await POST(request({ action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId: "reconciled" }));
+  expect(third.status).toBe(201);
+  expect(f.provider.sessions).toHaveLength(2);
+  expect(restarted.storage.read().sessions[row.id]).toMatchObject({ remoteOpen: false });
+  expect(restarted.storage.read().sessions[row.id].mintUncertain).toBeUndefined();
+  expect(restarted.storage.read().charges[row.id]).toMatchObject({ reserved: false, incomplete: true });
+  await POST(request({ action: "close", sessionId: (await third.json()).sessionId }));
+});
+
+test("a restart between the provider creating a session and its id being recorded mints nothing more", async () => {
+  const f = fixture();
+  f.provider.createFailures = ["hang"];
+  void f.service.start({ project: "fixture", locale: "en", sdp: "v=0", requestId: "never-answered" }).catch(() => undefined);
+  for (let waited = 0; waited < 50 && f.provider.sessions.length === 0; waited += 1) await new Promise(resolve => setTimeout(resolve, 2));
+  expect(f.provider.sessions).toHaveLength(1);
+  restartedService(f.provider);
+  const answer = await POST(request({ action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId: "new-tab" }));
+  expect(await answer.json()).toEqual({ code: "MINT_UNCERTAIN" });
+  expect(f.provider.sessions).toHaveLength(1);
+});
+
+test("a mint the provider refused outright leaves no barrier and no charge", async () => {
+  const f = fixture();
+  f.provider.createFailures = ["refused"];
+  const refused = await POST(request({ action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId: "refused" }));
+  expect(await refused.json()).toEqual({ code: "PROVIDER_ERROR" });
+  const [row] = Object.values(f.service.storage.read().sessions);
+  expect(row).toMatchObject({ closed: true, remoteOpen: false });
+  expect(f.service.storage.read().charges[row.id]).toMatchObject({ reserved: false, usd: 0 });
+  const next = await POST(request({ action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId: "next" }));
+  expect(next.status).toBe(201);
+  expect(f.provider.sessions).toHaveLength(1);
+  await POST(request({ action: "close", sessionId: (await next.json()).sessionId }));
+});

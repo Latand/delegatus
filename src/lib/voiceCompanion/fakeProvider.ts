@@ -28,6 +28,10 @@ export class FakeLiveProvider implements LiveProvider {
   readonly hangups: string[] = [];
   /** Hangups that answer with a provider failure before one succeeds. */
   hangupFailures = 0;
+  /** How the next mints fail, oldest first: "lost" creates the session and loses
+   * the answer (a timeout after the provider accepted the request); "refused" is
+   * the provider's own answer that nothing was created; "hang" never answers. */
+  createFailures: Array<"lost" | "refused" | "hang"> = [];
   /** The answer a mint returns; a test may make it echo something. */
   answer: (fallbackId: string) => { id?: string; sdp: string } = () => ({ sdp: "v=0\r\ns=fake-answer\r\n" });
   /** Every backend request this server paid for and sent, in order. */
@@ -39,10 +43,14 @@ export class FakeLiveProvider implements LiveProvider {
     if (this.hangupFailures > 0) { this.hangupFailures -= 1; throw new Error("PROVIDER_ERROR"); }
   }
   async create(_key: string, locale: Locale, sdp: string) {
+    const failure = this.createFailures.shift();
+    if (failure === "refused") throw new Error("PROVIDER_REFUSED");
     const fallback = `live_fake_${this.sessions.length + 1}`;
     const answer = this.answer(fallback);
     const id = answer.id ?? fallback;
     this.sessions.push({ id, locale, sdp });
+    if (failure === "lost") throw new Error("PROVIDER_ERROR");
+    if (failure === "hang") return new Promise<never>(() => undefined);
     return { id, sdp: answer.sdp };
   }
   async respond(_key: string, request: BackendRequest, signal: AbortSignal): Promise<unknown> {

@@ -1,8 +1,19 @@
-import { expect, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { OfficialVoiceCompanionAdapter } from "./liveAdapter";
 import { INITIAL_COMPANION_STATE, reduceCompanion } from "./reducer";
 import type { CompanionEvent } from "./contract";
 import type { MediaCallbacks, CompanionMedia } from "./media";
+import { FakeLiveProvider } from "./fakeProvider";
+import { CompanionBoardReads } from "./boardReads";
+
+const root = fs.mkdtempSync(path.join(os.tmpdir(), "voice-adapter-"));
+process.env.LLV_STATE_DIR = path.join(root, "state");
+process.env.XDG_CONFIG_HOME = path.join(root, "config");
+process.env.OPENAI_API_KEY = "";
+afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
 function fixture() {
   let callbacks!: MediaCallbacks;
@@ -102,5 +113,99 @@ test("a confirmed delivery receives its correlated card after hangup without ope
   expect(state.delegation?.stage).toBe("queued");
   expect(f.opens).toBe(1);
   expect(f.requests.filter(row => row.action === "start")).toHaveLength(1);
+  await f.adapter.dispose();
+});
+
+/** The production adapter against the production session service, with fake media and a fake provider. */
+async function served() {
+  const { CompanionStorage } = await import("./storage");
+  const { CompanionAdmission } = await import("./admission");
+  const { CompanionLiveSessions } = await import("./liveSession");
+  const storage = new CompanionStorage(); storage.updateSettings({ enabled: true });
+  const admission = new CompanionAdmission(storage, { recipient: () => null, send: async () => { throw new Error("unexpected"); }, reports: () => [] });
+  const provider = new FakeLiveProvider();
+  const service = new CompanionLiveSessions(storage, admission, new CompanionBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] }),
+    provider, { key: () => "synthetic-credential", timers: false, closeTimeoutMs: 20 });
+  let callbacks!: MediaCallbacks;
+  let clock = 1_000;
+  const media: CompanionMedia = { open: async () => "v=0", answer: async () => {}, mute: () => {}, interrupt: () => {}, close: async () => {} };
+  const adapter = new OfficialVoiceCompanionAdapter({ pollMs: 100_000, now: () => clock, media: cb => { callbacks = cb; return media; },
+    fetch: (async (url: string, init?: RequestInit) => {
+      if (!init?.body) {
+        const query = new URL(url, "http://127.0.0.1").searchParams;
+        return Response.json({ events: await service.events(query.get("sessionId")!, Number(query.get("after"))) });
+      }
+      const body = JSON.parse(String(init.body));
+      if (body.action === "start") return Response.json(await service.start(body), { status: 201 });
+      if (body.action === "close") await (body.sessionId ? service.close(body.sessionId) : service.closeRequest(body.requestId));
+      if (body.action === "command") await service.command(body.sessionId, body.command);
+      return Response.json({ ok: true });
+    }) as typeof fetch });
+  let state = INITIAL_COMPANION_STATE;
+  adapter.subscribe(event => { state = reduceCompanion(state, event); });
+  await adapter.start({ project: "fixture", locale: "en" });
+  const sessionId = Object.keys(storage.read().sessions)[0];
+  const providerId = storage.read().sessions[sessionId].providerId!;
+  let at = 0;
+  return {
+    adapter, get state() { return state; }, get callbacks() { return callbacks; },
+    advance(ms: number) { clock += ms; },
+    /** One companion line from the provider, then the next poll; each starts after a display pause. */
+    async says(text: string) {
+      at += 3_000;
+      provider.replay(providerId, { type: "session.output_transcript.delta", event_id: `out-${at}`, delta: text, start_ms: at, end_ms: at + 400 });
+      await service.drain(sessionId);
+      await adapter.refresh();
+    },
+    lines: () => state.lines.filter(line => line.speaker === "companion").map(line => [line.text, line.playback, line.playedMs]),
+  };
+}
+
+test("played audio reaches its own line in any order: audio before text, text before audio, text after the audio stopped, the next answer and a barge-in", async () => {
+  const f = await served();
+  // Audio before its words: the mouth moves at once, and the line it belongs to plays when its words arrive.
+  f.callbacks.playback({ speaking: true, rms: 0.6, playedMs: 0 });
+  expect(f.state.mouth).toBe(0.6);
+  await f.says("Hello, I can help with the board.");
+  expect(f.lines()).toEqual([["Hello, I can help with the board.", "playing", null]]);
+  f.callbacks.playback({ speaking: false, rms: 0, playedMs: 1_000 });
+  expect(f.lines()).toEqual([["Hello, I can help with the board.", "played", null]]);
+  expect(f.state.mouth).toBe(0);
+  // The next answer, words first: its audio is its own and leaves the first line alone.
+  f.advance(2_000);
+  await f.says("The plan is ready.");
+  expect(f.lines().at(-1)).toEqual(["The plan is ready.", "pending", null]);
+  f.callbacks.playback({ speaking: true, rms: 0.4, playedMs: 0 });
+  expect(f.lines().map(line => line[1])).toEqual(["played", "playing"]);
+  f.callbacks.playback({ speaking: false, rms: 0, playedMs: 700 });
+  expect(f.lines().map(line => line[1])).toEqual(["played", "played"]);
+  // Words that arrive after their audio stopped are shown as played.
+  f.advance(2_000);
+  f.callbacks.playback({ speaking: true, rms: 0.5, playedMs: 0 });
+  f.callbacks.playback({ speaking: false, rms: 0, playedMs: 900 });
+  await f.says("Done.");
+  expect(f.lines().map(line => line[1])).toEqual(["played", "played", "played"]);
+  // A barge-in cuts audio whose words have not arrived; they arrive marked cut where it stopped.
+  f.advance(2_000);
+  f.callbacks.playback({ speaking: true, rms: 0.5, playedMs: 0 });
+  f.callbacks.playback({ speaking: true, rms: 0.5, playedMs: 300 });
+  f.callbacks.input(true);
+  expect(f.state.mouth).toBe(0);
+  await f.says("Here is a long answer that was cut.");
+  expect(f.lines().at(-1)).toEqual(["Here is a long answer that was cut.", "cut", 300]);
+  f.callbacks.input(false);
+  // A short pause inside one line continues that line's audio; nothing else takes it.
+  f.advance(2_000);
+  await f.says("First part. Second part.");
+  f.callbacks.playback({ speaking: true, rms: 0.5, playedMs: 0 });
+  f.callbacks.playback({ speaking: false, rms: 0, playedMs: 600 });
+  f.advance(400);
+  f.callbacks.playback({ speaking: true, rms: 0.5, playedMs: 0 });
+  f.callbacks.playback({ speaking: true, rms: 0.5, playedMs: 200 });
+  expect([f.lines().at(-1)![1], f.state.playedMs]).toEqual(["playing", 800]);
+  f.callbacks.playback({ speaking: false, rms: 0, playedMs: 300 });
+  expect(f.lines().map(line => line[1])).toEqual(["played", "played", "played", "cut", "played"]);
+  // No line without words carries playback.
+  expect(f.state.lines.filter(line => line.speaker === "companion" && !line.text)).toEqual([]);
   await f.adapter.dispose();
 });

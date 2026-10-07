@@ -9,6 +9,7 @@ export const COMPANION_MESSAGES = {
   AUDIO_REFUSED: ["Allow audio playback in the browser to hear Delegatus.", "Дозвольте відтворення звуку в браузері, щоб чути Delegatus."],
   FINALIZATION_INCOMPLETE: ["The call ended without confirmed final usage. Its reserved cost is retained.", "Розмова завершилася без підтвердження підсумкових витрат. Зарезервовану суму збережено."],
   PROVIDER_ERROR: ["The voice provider could not continue. Try starting a new session.", "Голосовий сервіс не зміг продовжити. Спробуйте почати нову розмову."],
+  MINT_UNCERTAIN: ["The provider did not confirm whether the last voice session started. Its reserved cost is kept, and voice can start again within five minutes.", "Сервіс не підтвердив, чи почалася попередня голосова розмова. Її зарезервовану суму збережено; нову розмову можна почати протягом п’яти хвилин."],
   no_orchestrator: ["This project has no designated orchestrator.", "У цьому проєкті немає призначеного оркестратора."],
   DELIVERY_UNCONFIRMED: ["Delivery is unconfirmed. Recover the original send before retrying.", "Доставку не підтверджено. Перевірте початкове надсилання перед повтором."],
   SEND_UNCONFIRMED: ["Delivery is not confirmed. Tap Send again to check it: the request goes out once.", "Доставку не підтверджено. Натисніть «Надіслати» ще раз для перевірки: запит піде один раз."],

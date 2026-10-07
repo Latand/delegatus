@@ -116,6 +116,7 @@ test("a delayed spoken confirmation remains visible after a newer proposal and a
   admission.input(session.id, { itemId: "input-b", text: "Tell the orchestrator to deploy the release.", final: true });
   const b = await admission.delegate(session.id, "call-b", "input-b", "Deploy the release", { confirmation: "Check before sending." });
   if (a.state !== "awaiting" || b.state !== "awaiting") throw new Error("expected both proposals to await confirmation");
+  admission.input(session.id, { itemId: "answer-a", text: "Yes, send it.", final: true });
   await admission.confirm(session.id, { type: "confirmation", proposalId: a.proposal.proposalId, decision: "send", via: "speech", confirmationItemId: "answer-a" });
   await admission.pollReceipts(session.id);
 

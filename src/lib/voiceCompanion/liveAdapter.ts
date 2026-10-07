@@ -7,11 +7,23 @@ interface AdapterOptions {
   fetch?: typeof fetch;
   media?(callbacks: MediaCallbacks): CompanionMedia;
   pollMs?: number;
+  /** The clock playback pauses are measured on. */
+  now?(): number;
 }
+type StopReason = Extract<Payload, { type: "playback.stopped" }>["reason"];
+/** A pause in played audio shorter than the transcript's display pause continues the same line. */
+const CONTINUE_MS = 1_500;
 
 /** Typed adapter consumed by useVoiceCompanion. Server events own transcripts,
  * proposals, receipt/reply correlation and usage. Local events own played RMS.
- * No provider key, provider tool invocation or usage submission enters here. */
+ * No provider key, provider tool invocation or usage submission enters here.
+ *
+ * Played audio and the companion's lines arrive separately, in either order:
+ * audio is heard at once, its words come with the next poll. A stretch of audio
+ * plays the oldest line nothing has played yet, or carries on the line it
+ * paused in; with no such line it waits, mouth moving, and takes the next line
+ * that arrives, even after it stopped. A barge-in cuts it, and lines already
+ * shown that never played stay unplayed. */
 export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
   readonly mode = "official-realtime";
   private listeners = new Set<(event: CompanionEvent) => void>();
@@ -25,8 +37,14 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
   private born = 0;
   private epoch = 0;
   private localSession = "";
-  private latestOutput: string | null = null;
-  private playing: { responseId: string; itemId: string; playedMs: number } | null = null;
+  /** Companion lines in arrival order, and those audio has played or skipped. */
+  private outputs: string[] = [];
+  private claimed = new Set<string>();
+  /** `bound` is false while the audio waits for its line's words. */
+  private playing: { responseId: string; itemId: string; bound: boolean; offsetMs: number; playedMs: number } | null = null;
+  private lastPlayed: { responseId: string; itemId: string; bound: boolean; endedAt: number; playedMs: number } | null = null;
+  /** Audio that ended before its words arrived, oldest first. */
+  private unbound: Array<{ responseId: string; playedMs: number; reason: StopReason }> = [];
   private timer: ReturnType<typeof setTimeout> | null = null;
   private closing: Promise<void> | null = null;
   private starting: Promise<void> | null = null;
@@ -58,7 +76,8 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
     this.stopObserver();
     const epoch = ++this.epoch;
     this.localSession = crypto.randomUUID(); this.requestId = crypto.randomUUID();
-    this.cursor = 0; this.seq = 0; this.born = performance.now(); this.latestOutput = null;
+    this.cursor = 0; this.seq = 0; this.born = performance.now();
+    this.outputs = []; this.claimed = new Set(); this.playing = null; this.lastPlayed = null; this.unbound = [];
     const callbacks: MediaCallbacks = { playback: sample => { if (epoch === this.epoch) this.playback(sample); },
       input: value => { if (epoch === this.epoch) this.input(value); }, lost: code => { if (epoch === this.epoch) this.lost(code); } };
     const media = this.media = this.options.media?.(callbacks) ?? new BrowserCompanionMedia(callbacks);
@@ -111,8 +130,8 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
         if (value.type === "delegation.tool.result" && "delivery" in value.result) this.pendingDeliveries.add(value.result.delivery.clientMessageId);
         if (value.type === "delegation.delivery.settled" && value.status === "failed") this.pendingDeliveries.delete(value.delivery.clientMessageId);
         if (value.type === "orchestrator.answer" && value.status !== "progress") this.pendingDeliveries.delete(value.delivery.clientMessageId);
-        if (value.type === "transcript.snapshot" && value.speaker === "companion") this.latestOutput = value.itemId;
         this.emit(value, value);
+        if (value.type === "transcript.snapshot" && value.speaker === "companion") this.arrived(value.itemId);
         if (value.type === "session.closed") {
           this.stopPlayback("closed");
           await this.media?.close(); this.media = null;
@@ -125,30 +144,65 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
     this.poll = promise;
     return promise.finally(() => { if (this.poll === promise) this.poll = null; });
   }
+  private clock(): number { return this.options.now?.() ?? performance.now(); }
+  /** A companion line's words arrived: audio that waits for its line takes it. */
+  private arrived(itemId: string): void {
+    if (this.outputs.includes(itemId)) return;
+    this.outputs = [...this.outputs, itemId].slice(-64);
+    if (this.playing && !this.playing.bound) {
+      this.claimed.add(itemId);
+      Object.assign(this.playing, { itemId, bound: true });
+      this.emit({ type: "playback.started", responseId: this.playing.responseId, itemId, playedMs: this.playing.playedMs });
+      return;
+    }
+    const finished = this.unbound.shift();
+    if (!finished) return;
+    this.claimed.add(itemId);
+    this.emit({ type: "playback.stopped", responseId: finished.responseId, itemId, playedMs: finished.playedMs, reason: finished.reason });
+  }
   private playback(sample: { rms: number; playedMs: number; speaking: boolean }): void {
     if (!this.sessionId) return;
     if (sample.speaking && !this.playing) {
-      this.playing = { responseId: `played-${crypto.randomUUID()}`, itemId: this.latestOutput ?? `audio-${crypto.randomUUID()}`, playedMs: 0 };
-      this.emit({ type: "playback.started", ...this.playing });
+      const paused = this.lastPlayed && this.clock() - this.lastPlayed.endedAt < CONTINUE_MS ? this.lastPlayed : null;
+      if (paused && !paused.bound) this.unbound = this.unbound.filter(row => row.responseId !== paused.responseId);
+      const next = paused ? null : this.outputs.find(id => !this.claimed.has(id)) ?? null;
+      if (next) this.claimed.add(next);
+      this.playing = { responseId: `played-${crypto.randomUUID()}`, itemId: paused?.itemId ?? next ?? `audio-${crypto.randomUUID()}`,
+        bound: paused ? paused.bound : !!next, offsetMs: paused?.playedMs ?? 0, playedMs: paused?.playedMs ?? 0 };
+      this.lastPlayed = null;
+      this.emit({ type: "playback.started", responseId: this.playing.responseId, itemId: this.playing.itemId, playedMs: this.playing.playedMs });
     }
     if (this.playing) {
-      this.playing.playedMs = sample.playedMs;
-      if (sample.speaking) this.emit({ type: "playback.level", ...this.playing, rms: sample.rms });
+      this.playing.playedMs = this.playing.offsetMs + sample.playedMs;
+      const { responseId, itemId, playedMs } = this.playing;
+      if (sample.speaking) this.emit({ type: "playback.level", responseId, itemId, playedMs, rms: sample.rms });
       else this.stopPlayback("ended");
     }
   }
-  private stopPlayback(reason: Extract<Payload, { type: "playback.stopped" }>["reason"]): void {
-    if (this.playing) this.emit({ type: "playback.stopped", ...this.playing, reason });
+  private stopPlayback(reason: StopReason): void {
+    const playing = this.playing;
     this.playing = null;
+    if (!playing) return;
+    const { responseId, itemId, playedMs, bound } = playing;
+    this.emit({ type: "playback.stopped", responseId, itemId, playedMs, reason });
+    if (!bound) this.unbound = [...this.unbound, { responseId, playedMs, reason }].slice(-4);
+    this.lastPlayed = reason === "ended" ? { responseId, itemId, bound, endedAt: this.clock(), playedMs } : null;
+  }
+  /** A barge-in or an interruption: what plays is cut, and lines that never played will not. */
+  private yieldPlayback(): void {
+    this.stopPlayback("interrupted");
+    this.lastPlayed = null;
+    for (const itemId of this.outputs) this.claimed.add(itemId);
+    this.media?.interrupt();
   }
   private input(speaking: boolean): void {
     if (!this.sessionId) return;
-    if (speaking) { this.stopPlayback("interrupted"); this.media?.interrupt(); }
+    if (speaking) this.yieldPlayback();
     this.emit({ type: speaking ? "input.speech.started" : "input.speech.stopped", itemId: "local-microphone" });
   }
   async command(command: CompanionCommand): Promise<void> {
     if (!this.sessionId) throw new Error("SESSION_CLOSED");
-    if (command.type === "interrupt") { this.stopPlayback("interrupted"); this.media?.interrupt(); }
+    if (command.type === "interrupt") this.yieldPlayback();
     if (command.type === "mute") this.media?.mute(command.muted);
     await this.request({ action: "command", sessionId: this.sessionId, command });
     await this.readEvents();

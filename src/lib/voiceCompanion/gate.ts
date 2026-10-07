@@ -42,7 +42,8 @@ export type GateRefusal =
   | "not_imperative"
   | "not_addressed"
   | "source_changed"
-  | "empty_instruction";
+  | "empty_instruction"
+  | "not_confirmed";
 
 export type GateVerdict = { admit: true } | { admit: false; reason: GateRefusal };
 
@@ -148,6 +149,31 @@ export function explicitDelegationRequest(utterance: string): GateVerdict {
     if (sentence.includes("?")) return { admit: false, reason: "question" };
   }
   return { admit: true };
+}
+
+/* A spoken yes opens its sentence: an agreement word, or the sending verb itself. */
+const EN_CONSENT = String.raw`(?:yes|yeah|yep|yup|sure|ok|okay|alright|all right|correct|right|confirm(?:ed)?|i confirm|go ahead|go for it|do it|send it|send|please do|please send(?: it)?|absolutely|of course|definitely|affirmative|that's right)(?![\w'])`;
+const UK_CONSENT = String.raw`(?:так|да|ага|авжеж|звісно|звичайно|гаразд|добре|згоден|згодна|підтверджую|надсилай|надішли|відправляй|відправ|шли|давай|роби|конечно|подтверждаю|отправляй|отправь|согласен|согласна|хорошо|ладно)(?=[\s,.:;!?…]|$)`;
+const CONSENT = new RegExp(`^(?:${EN_CONSENT}|${UK_CONSENT})`, "u");
+
+/**
+ * Whether one utterance, read whole, agrees to send a request the companion
+ * asked about. A sentence must open with a yes ("Yes, send it.", "Так,
+ * надсилай."), and nothing beside it may take that back, make it conditional,
+ * negate it or ask something: "Yes, if the tests pass." and "Not yet." refuse,
+ * and so does speech about something else.
+ */
+export function explicitConsent(utterance: string): GateVerdict {
+  const all = gateSentences(utterance);
+  if (!all.length) return { admit: false, reason: "no_input" };
+  if (QUOTES.test(utterance)) return { admit: false, reason: "quoted" };
+  for (const sentence of all) {
+    if (RETRACTION.test(sentence)) return { admit: false, reason: "retracted" };
+    if (NEGATION.test(sentence)) return { admit: false, reason: "negated" };
+    if (CONDITION.test(sentence) || FOLLOWUP_CONDITION.test(sentence)) return { admit: false, reason: "conditional" };
+    if (sentence.includes("?")) return { admit: false, reason: "question" };
+  }
+  return all.some((sentence) => CONSENT.test(sentence)) ? { admit: true } : { admit: false, reason: "not_confirmed" };
 }
 
 /**

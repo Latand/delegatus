@@ -132,11 +132,14 @@ function wellFormed(event: CompanionEvent): boolean {
     && Number.isFinite(event.atMs) && event.atMs >= 0;
 }
 
-function upsertLine(lines: readonly SpeechLine[], speaker: LineSpeaker, itemId: Id, revision: number, change: (line: SpeechLine) => Partial<SpeechLine>): readonly SpeechLine[] {
+/** `fresh`: how a companion line that does not exist yet starts; null leaves a missing line missing. */
+function upsertLine(lines: readonly SpeechLine[], speaker: LineSpeaker, itemId: Id, revision: number, change: (line: SpeechLine) => Partial<SpeechLine>,
+  fresh: LinePlayback | null = "pending"): readonly SpeechLine[] {
   const key = `${speaker}:${itemId}`;
   const index = lines.findIndex((line) => line.key === key);
+  if (index === -1 && fresh === null) return lines;
   const current: SpeechLine = index === -1
-    ? { key, speaker, itemId, text: "", final: false, playback: speaker === "operator" ? "none" : "pending", playedMs: null, revision }
+    ? { key, speaker, itemId, text: "", final: false, playback: speaker === "operator" ? "none" : fresh ?? "pending", playedMs: null, revision }
     : lines[index]!;
   const next = { ...current, ...change(current), revision };
   if (index === -1) return [...lines, next].slice(-LINE_HISTORY);
@@ -199,8 +202,9 @@ function standing(delegation: DelegationView | null, lines: readonly SpeechLine[
 }
 
 /** Marks the companion line that was playing as cut, keeping its generated text. */
+/* Playback marks only a line whose words have arrived; audio whose words have not names no line yet. */
 function cut(lines: readonly SpeechLine[], itemId: Id, playedMs: number, revision: number) {
-  return upsertLine(lines, "companion", itemId, revision, (line) => (line.playback === "played" ? {} : { playback: "cut", playedMs: ms(playedMs) }));
+  return upsertLine(lines, "companion", itemId, revision, (line) => (line.playback === "played" ? {} : { playback: "cut", playedMs: ms(playedMs) }), null);
 }
 
 export function reduceCompanion(state: CompanionState, event: CompanionEvent): CompanionState {
@@ -238,6 +242,9 @@ export function reduceCompanion(state: CompanionState, event: CompanionEvent): C
   }
   return { ...next, deliveryCards: cards.slice(-CALL_HISTORY), reports };
 }
+
+/** A companion line whose words arrive while its audio already plays starts playing. */
+const freshLine = (state: CompanionState, itemId: Id): LinePlayback => (state.playing?.itemId === itemId ? "playing" : "pending");
 
 function reduceCurrent(state: CompanionState, event: CompanionEvent): CompanionState {
   if (!wellFormed(event)) return state;
@@ -288,7 +295,7 @@ function reduceCurrent(state: CompanionState, event: CompanionEvent): CompanionS
       if (!validId(event.itemId)) return base;
       const existing = base.lines.find((line) => line.key === `${event.speaker}:${event.itemId}`);
       if (existing?.final) return next({});
-      const lines = upsertLine(base.lines, event.speaker, event.itemId, revision, (line) => ({ text: bounded(line.text + event.delta) }));
+      const lines = upsertLine(base.lines, event.speaker, event.itemId, revision, (line) => ({ text: bounded(line.text + event.delta) }), freshLine(base, event.itemId));
       return next({ lines, delegation: event.speaker === "operator" ? standing(base.delegation, lines) : base.delegation });
     }
     case "transcript.final":
@@ -296,7 +303,7 @@ function reduceCurrent(state: CompanionState, event: CompanionEvent): CompanionS
       if (!validId(event.itemId)) return base;
       /* The final transcript replaces the provisional text. It says nothing
          about playback, so a cut line stays cut. */
-      const lines = upsertLine(base.lines, event.speaker, event.itemId, revision, () => ({ text: bounded(event.text), final: event.type === "transcript.final" || event.final }));
+      const lines = upsertLine(base.lines, event.speaker, event.itemId, revision, () => ({ text: bounded(event.text), final: event.type === "transcript.final" || event.final }), freshLine(base, event.itemId));
       return next({ lines, delegation: event.speaker === "operator" ? standing(base.delegation, lines) : base.delegation });
     }
     case "response.started":
@@ -305,19 +312,27 @@ function reduceCurrent(state: CompanionState, event: CompanionEvent): CompanionS
       /* Generation ending says nothing about playback: the mouth follows the
          audio that is still being played. */
       return next(event.status === "failed" && !base.playing ? { phase: "idle" } : {});
-    case "playback.started":
+    case "playback.started": {
       if (!validId(event.itemId)) return base;
-      return next({ phase: "speaking", playing: { responseId: event.responseId, itemId: event.itemId }, playedMs: 0,
-        lines: upsertLine(base.lines, "companion", event.itemId, revision, () => ({ playback: "playing", playedMs: null })) });
+      const lines = upsertLine(base.lines, "companion", event.itemId, revision, () => ({ playback: "playing", playedMs: null }), null);
+      /* The playing response named the line its audio belongs to: the mouth and the count carry on. */
+      if (base.playing?.responseId === event.responseId)
+        return next({ playing: { responseId: event.responseId, itemId: event.itemId }, playedMs: ms(event.playedMs ?? base.playedMs), lines });
+      return next({ phase: "speaking", playing: { responseId: event.responseId, itemId: event.itemId }, playedMs: ms(event.playedMs ?? 0), lines });
+    }
     case "playback.stopped": {
       const line = base.lines.find((candidate) => candidate.key === `companion:${event.itemId}`);
       if (base.playing?.responseId !== event.responseId) {
         /* A barge-in already cut this line; the player's own count of what played is the better number. */
         if (line?.playback === "cut" && event.reason !== "ended") return next({ lines: upsertLine(base.lines, "companion", event.itemId, revision, () => ({ playedMs: ms(event.playedMs) })) });
+        /* Audio that finished before its words arrived: the line takes how it ended. */
+        if (line?.playback === "pending") return next({ lines: event.reason === "ended"
+          ? upsertLine(base.lines, "companion", event.itemId, revision, () => ({ playback: "played", playedMs: null }))
+          : cut(base.lines, event.itemId, event.playedMs, revision) });
         return next({});
       }
       const lines = event.reason === "ended"
-        ? upsertLine(base.lines, "companion", event.itemId, revision, () => ({ playback: "played", playedMs: null }))
+        ? upsertLine(base.lines, "companion", event.itemId, revision, () => ({ playback: "played", playedMs: null }), null)
         : cut(base.lines, event.itemId, event.playedMs, revision);
       return next({ phase: "idle", playing: null, mouth: 0, lines });
     }

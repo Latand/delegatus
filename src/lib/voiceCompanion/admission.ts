@@ -3,7 +3,7 @@ import type { BridgeReportV1 } from "@/lib/bridge/types";
 import { canonicalProject } from "@/lib/projects/aliases";
 import type { CompanionCommand, CompanionEvent, Delivery, Locale, Payload, Proposal, Recipient } from "./contract";
 import { admitDelegationProposal, type OperatorInput } from "./gate";
-import { liveProposalRefusal } from "./liveGate";
+import { liveConsentRefusal, liveProposalRefusal } from "./liveGate";
 import { cleanStrings, withoutCredentials, withoutLocalPaths } from "./redaction";
 import { CompanionStorage, type StoredProposal, type StoredSession } from "./storage";
 
@@ -14,6 +14,14 @@ export interface CompanionDeliveryPaths {
   reports(project: string): BridgeReportV1[];
   receipt?(delivery: Delivery): Promise<"delivered" | "failed" | "pending">;
 }
+/** Instruction text as one request reads, whatever its spacing, case or closing stop. */
+const requestText = (text: string) => text.normalize("NFC").replace(/\s+/gu, " ").trim().replace(/[.!?…]+$/u, "").toLowerCase();
+/** One logical request: the same words from the same completed operator turn,
+ * whatever Live delegation named it. Without a turn the delegation is all
+ * there is to tell two requests apart. */
+const sameRequest = (row: StoredProposal, sourceItemId: string, instruction: string, sourceTurn?: number) =>
+  requestText(row.proposal.instruction) === requestText(instruction)
+  && (sourceTurn !== undefined && row.sourceTurn !== undefined ? row.sourceTurn === sourceTurn : row.proposal.sourceItemId === sourceItemId);
 const sameRecipient = (left: Recipient | null, right: Recipient) => !!left && canonicalProject(left.project) === canonicalProject(right.project)
   && left.conversationId === right.conversationId && left.seatEpoch === right.seatEpoch && left.engine === right.engine;
 const reportStatus = (report: BridgeReportV1): "progress" | "result" | "question" | "blocked" | null => {
@@ -57,7 +65,8 @@ export type DelegationOutcome =
   | { state: "awaiting"; proposal: Proposal }
   | { state: "sent"; status: "delivered" | "queued" | "unknown" | "failed" }
   | { state: "refused"; code: string };
-type Admit = { proposalId: string; decision: "send" | "cancel"; via: "auto" | "tap" | "speech" };
+/** `answerTurn`: the operator's turn when Live delegated a spoken answer. */
+type Admit = { proposalId: string; decision: "send" | "cancel"; via: "auto" | "tap" | "speech"; answerTurn?: number };
 export class CompanionAdmission {
   private readonly sending = new Map<string, Promise<void>>();
   private readonly secrets = new Set<string>();
@@ -136,8 +145,7 @@ export class CompanionAdmission {
   async delegate(id: string, callId: string, sourceItemId: string, instruction: string, options: { sourceTurn?: number; confirmation?: string } = {}): Promise<DelegationOutcome> {
     const clean = this.cleaner();
     const logicalInstruction = clean(instruction).trim();
-    const duplicate = Object.values(this.session(id).proposals).find(row => row.proposal.sourceItemId === clean(sourceItemId)
-      && row.proposal.instruction.trim() === logicalInstruction);
+    const duplicate = Object.values(this.session(id).proposals).find(row => sameRequest(row, clean(sourceItemId), logicalInstruction, options.sourceTurn));
     if (duplicate) {
       // Recover older two-commit records when a caller retries after restart.
       if (duplicate.state === "pending" && !duplicate.proposal.confirmation) {
@@ -149,7 +157,7 @@ export class CompanionAdmission {
     }
     const proposal = this.propose(id, callId, sourceItemId, instruction, { ...options, autosend: !options.confirmation?.trim() });
     const row = Object.values(this.session(id).proposals).find(held => held.proposal.callId === clean(callId)
-      || (held.proposal.sourceItemId === clean(sourceItemId) && held.proposal.instruction.trim() === logicalInstruction));
+      || sameRequest(held, clean(sourceItemId), logicalInstruction, options.sourceTurn));
     if (!row) {
       const last = this.events(id, 0).at(-1);
       return { state: "refused", code: last?.type === "delegation.tool.result" && "code" in last.result ? last.result.code : "not_admitted" };
@@ -170,6 +178,14 @@ export class CompanionAdmission {
       : Object.values(this.session(id).proposals).findLast(held => held.state === "pending" && !!held.proposal.confirmation);
     return row?.state === "pending" && !!row.proposal.confirmation && this.now() <= row.expiresAt ? row.proposal : null;
   }
+  /** Why the operator's spoken answer in `answerTurn` does not agree to send
+   * this confirmation, or null when it does. Only a Live confirmation reads it. */
+  spokenConsentRefusal(id: string, proposalId: string, answerTurn: number | undefined): string | null {
+    const session = this.session(id);
+    const row = session.proposals[proposalId];
+    if (!row) return "proposal_unavailable";
+    return session.authority === "live-model" ? liveConsentRefusal(session.inputs, row.sourceTurn, answerTurn) : null;
+  }
   /** The confirmation asked last, whatever became of it: a spoken answer that finds none waiting reports this one. */
   lastAsked(id: string): Proposal | null {
     return Object.values(this.session(id).proposals).findLast(row => !!row.proposal.confirmation)?.proposal ?? null;
@@ -185,8 +201,7 @@ export class CompanionAdmission {
     const proposal = this.storage.change(document => {
       const session = document.sessions[id];
       if (!session || session.closed) { refusal = "session_closed"; return null; }
-      const logicalDuplicate = Object.values(session.proposals).find(row => row.proposal.sourceItemId === sourceItemId
-        && row.proposal.instruction.trim() === instruction.trim());
+      const logicalDuplicate = Object.values(session.proposals).find(row => sameRequest(row, sourceItemId, instruction, sourceTurn));
       if (logicalDuplicate) { reusedLogicalRequest = true; return logicalDuplicate.proposal; }
       const reason = session.authority === "live-model" ? liveProposalRefusal(instruction, session.inputs, sourceTurn)
         : (() => { const gate = admitDelegationProposal({ sourceItemId, instruction, inputs: session.inputs }); return gate.admit ? null : gate.reason; })();
@@ -226,6 +241,7 @@ export class CompanionAdmission {
    * answer arrives through the model's tool, and "auto" from `delegate`. */
   async confirm(id: string, command: Extract<CompanionCommand, { type: "confirmation" }> | Admit): Promise<void> {
     let refusal = "proposal_unavailable";
+    let unanswered = false;
     const binding = this.storage.change(document => {
       const session = document.sessions[id];
       const row = session?.proposals[command.proposalId];
@@ -234,6 +250,9 @@ export class CompanionAdmission {
       // original key and target; it cannot admit new work to the current seat.
       if (row.state === "admitted") return row;
       if (command.decision === "cancel") { row.state = "cancelled"; row.cancelCode = refusal = "operator_cancelled"; return null; }
+      // A spoken send stands only on the operator's own yes; anything else leaves the confirmation waiting.
+      if (command.via === "speech" && session.authority === "live-model"
+        && liveConsentRefusal(session.inputs, row.sourceTurn, "answerTurn" in command ? command.answerTurn : undefined) !== null) { unanswered = true; return null; }
       const allowed = session.authority === "live-model" ? liveProposalRefusal(row.proposal.instruction, session.inputs, row.sourceTurn) === null
         : admitDelegationProposal({ ...row.proposal, inputs: session.inputs, frozenSourceText: row.sourceText, waiting: true }).admit;
       if (session.closed || this.now() > row.expiresAt || !allowed || !sameRecipient(this.paths.recipient(session.project), row.proposal.recipient)) {
@@ -249,6 +268,7 @@ export class CompanionAdmission {
       row.text = `${row.proposal.instruction}\n\n[Voice Delegatus reply: report progress or the result using bridge_report with correlatesDirective equal to ${row.delivery.clientMessageId}. Keep the report tied to this request.]`;
       return row;
     });
+    if (unanswered) return;
     if (!binding) {
       const row = this.session(id).proposals[command.proposalId];
       if (row) this.emit(id, { type: "delegation.tool.result", callId: row.proposal.callId, proposalId: command.proposalId,

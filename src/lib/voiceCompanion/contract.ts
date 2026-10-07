@@ -57,7 +57,9 @@ export type Payload =
   | { type: "transcript.snapshot"; speaker: "operator" | "companion"; itemId: Id; text: string; final: boolean; startMs?: number; endMs?: number }
   | { type: "response.started"; responseId: Id; itemId: Id }
   | { type: "response.generated"; responseId: Id; status: "completed" | "cancelled" | "failed" }
-  | { type: "playback.started"; responseId: Id; itemId: Id }
+  /** A started playback names the line it plays. The same response again names
+   * the line its audio turned out to belong to, with what has played so far. */
+  | { type: "playback.started"; responseId: Id; itemId: Id; playedMs?: number }
   | { type: "playback.level"; responseId: Id; itemId: Id; rms: number; playedMs: number }
   | { type: "playback.stopped"; responseId: Id; itemId: Id; playedMs: number; reason: "ended" | "interrupted" | "muted" | "closed" }
   | { type: "tool.called"; callId: Id; name: string; summary: string }

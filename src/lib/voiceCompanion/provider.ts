@@ -4,6 +4,8 @@ import { liveSessionConfiguration, type BackendRequest } from "./sessionConfig";
 export type LiveCommand = Record<string, unknown> & { type: string };
 export interface LiveConnection { send(event: LiveCommand): void; dispose(): void }
 export interface LiveProvider {
+  /** Rejects with PROVIDER_REFUSED only when the provider answered that it
+   * created nothing; any other failure may have created a session. */
   create(key: string, locale: Locale, sdp: string): Promise<{ id: string; sdp: string }>;
   attach(id: string, key: string, event: (value: unknown) => void, lost: () => void): Promise<LiveConnection>;
   hangup(id: string, key: string): Promise<void>;
@@ -39,18 +41,22 @@ export class OpenAILiveProvider implements LiveProvider {
     } catch { throw new Error("PROVIDER_ERROR"); }
   }
   async create(key: string, locale: Locale, sdp: string) {
+    let refused = false;
     try {
       const response = await this.http("https://api.openai.com/v1/live/sessions", { method: "POST", redirect: "error",
         headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
         body: JSON.stringify({ session: liveSessionConfiguration(locale), transport: { type: "webrtc", sdp } }),
         signal: AbortSignal.timeout(15_000) });
+      // A client error is the provider's answer that it created nothing. A
+      // server error, a timeout or an unreadable success may hide a session.
+      refused = response.status >= 400 && response.status < 500;
       if (!response.ok) throw new Error("PROVIDER_ERROR");
       const result = jsonObject(await response.json());
       const session = jsonObject(result?.session); const transport = jsonObject(result?.transport);
       if (typeof session?.id !== "string" || !/^[A-Za-z0-9_-]{1,200}$/.test(session.id)
         || transport?.type !== "webrtc" || typeof transport.sdp !== "string" || transport.sdp.length > 96_000) throw new Error("PROVIDER_ERROR");
       return { id: session.id, sdp: transport.sdp };
-    } catch { throw new Error("PROVIDER_ERROR"); }
+    } catch { throw new Error(refused ? "PROVIDER_REFUSED" : "PROVIDER_ERROR"); }
   }
   async attach(id: string, key: string, event: (value: unknown) => void, lost: () => void): Promise<LiveConnection> {
     const socket = this.socket(`wss://api.openai.com/v1/live/sessions/${encodeURIComponent(id)}/attach`, key);

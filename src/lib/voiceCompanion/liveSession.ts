@@ -9,7 +9,7 @@ import { jsonObject, type LiveConnection, type LiveProvider } from "./provider";
 import { withoutCredentials, withoutLocalPaths } from "./redaction";
 import { backendRequest, type BackendItem } from "./sessionConfig";
 import { runCompanionTool } from "./tools";
-import { backendUsageUsd, BACKEND_RESPONSE_RESERVE_USD, BACKEND_ROUNDS, LIVE_SESSION_LIMIT_MS, LIVE_USD_PER_SECOND, SESSION_START_ROOM_USD, VOICE_SESSION_RESERVE_USD } from "./usage";
+import { backendUsageUsd, BACKEND_RESPONSE_RESERVE_USD, BACKEND_ROUNDS, LIVE_SESSION_LIMIT_MS, LIVE_USD_PER_SECOND, SESSION_START_ROOM_USD, UNCERTAIN_MINT_HOLD_MS, VOICE_SESSION_RESERVE_USD } from "./usage";
 
 function processAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true; }
@@ -68,7 +68,9 @@ export class CompanionLiveSessions {
     // No new paid session while one that lost its owner is still open, or
     // while the provider has not confirmed that an earlier one is closed.
     await this.recover();
-    if (this.orphans().some(row => row.remoteOpen)) throw new Error("PROVIDER_ERROR");
+    const open = this.orphans().filter(row => row.remoteOpen);
+    if (open.some(row => row.mintUncertain && !row.providerId)) throw new Error("MINT_UNCERTAIN");
+    if (open.length) throw new Error("PROVIDER_ERROR");
     const digest = createHash("sha256").update(JSON.stringify([input.project, input.locale, input.sdp])).digest("hex");
     const previous = Object.values(this.storage.read().sessions).find(row => row.mintRequestId === requestId);
     if (previous) {
@@ -107,19 +109,27 @@ export class CompanionLiveSessions {
       delegations: new Set(), backend: new Set(), abort: new AbortController(), timers: [], ended: false, endRequested: false, lastSeen: this.now(),
       createdAt: this.now(), voiceAllowanceSeconds: LIVE_SESSION_LIMIT_MS / 1_000 };
     this.active.set(id, active);
-    this.storage.change(document => { document.sessions[id].usage = { seconds: 0, responses: {} }; });
+    // Recorded before the provider is asked: a lost answer or a stop before the
+    // id is stored leaves a session that may be open and that nobody can name.
+    this.storage.change(document => { Object.assign(document.sessions[id], { usage: { seconds: 0, responses: {} }, remoteOpen: true, mintUncertain: true }); });
+    let refused = false;
+    let hungUpUnnamed = false;
     try {
-      const minted = await this.provider.create(key, input.locale, input.sdp);
+      const minted = await this.provider.create(key, input.locale, input.sdp).catch(error => {
+        refused = error instanceof Error && error.message === "PROVIDER_REFUSED";
+        throw error;
+      });
       // A negotiation answer that echoes a credential is never stored or
       // answered, and it cannot be cleaned without breaking the protocol: the
       // minted session is hung up instead.
       if (echoes(minted.id, secrets) || hardenedRedact(minted.id) !== minted.id) {
-        for (let attempt = 0; attempt < 3; attempt += 1) { try { await this.provider.hangup(minted.id, key); break; } catch { /* The id cannot be stored for a later retry. */ } }
+        // The id cannot be stored for a later retry: unless a hangup is confirmed the mint stays uncertain.
+        for (let attempt = 0; attempt < 3; attempt += 1) { try { await this.provider.hangup(minted.id, key); hungUpUnnamed = true; break; } catch { /* asked again */ } }
         throw new Error("PROVIDER_ERROR");
       }
       active.providerId = minted.id;
       active.hangup = () => this.provider.hangup(minted.id, key);
-      this.storage.change(document => { Object.assign(document.sessions[id], { providerId: minted.id, remoteOpen: true }); });
+      this.storage.change(document => { Object.assign(document.sessions[id], { providerId: minted.id, remoteOpen: true }); delete document.sessions[id].mintUncertain; });
       if (echoes(minted.sdp, secrets) || active.ended) throw new Error("PROVIDER_ERROR");
       this.storage.change(document => { document.sessions[id].answerSdp = minted.sdp; });
       this.storage.observe(id, 15 * LIVE_USD_PER_SECOND);
@@ -144,8 +154,15 @@ export class CompanionLiveSessions {
         try { await this.provider.hangup(active.providerId, key); active.hungUp = true; }
         catch { /* remoteOpen stays set: recovery retries the hangup. */ }
       }
+      const uncertain = !active.providerId && !refused && !hungUpUnnamed;
+      if (!active.providerId && !uncertain) {
+        // The provider said it created nothing, or the session it named is hung up.
+        this.storage.change(document => { document.sessions[id].remoteOpen = false; delete document.sessions[id].mintUncertain; });
+        // A refusal bills nothing; a created session keeps its reservation as incomplete usage.
+        if (refused) this.storage.settle(id, 0);
+      }
       this.finish(active, false);
-      throw new Error("PROVIDER_ERROR");
+      throw new Error(uncertain ? "MINT_UNCERTAIN" : "PROVIDER_ERROR");
     }
   }
   private enqueue(active: ActiveSession, event: unknown): void {
@@ -346,10 +363,10 @@ export class CompanionLiveSessions {
   }
   /** A provider session that may still be open bills by the second. Its
    * settled charge covers the time since it was minted, whatever was reserved. */
-  private chargeOpenTime(id: string): void {
+  private chargeOpenTime(id: string, untilMs = Infinity): void {
     const session = this.admission.session(id);
     const usage = session.usage ?? { seconds: 0, responses: {} };
-    this.storage.accrue(id, Math.max(15, usage.seconds, (this.now() - session.createdAt) / 1_000) * LIVE_USD_PER_SECOND
+    this.storage.accrue(id, Math.max(15, usage.seconds, (Math.min(this.now(), untilMs) - session.createdAt) / 1_000) * LIVE_USD_PER_SECOND
       + Object.values(usage.responses).reduce((sum, row) => sum + (row.complete && row.usd !== null ? row.usd : BACKEND_RESPONSE_RESERVE_USD), 0));
   }
   private retryHangup(id: string): void {
@@ -371,6 +388,12 @@ export class CompanionLiveSessions {
       const session = this.admission.session(id);
       if (this.active.has(id)) return;
       const remote = !!session.providerId && (session.remoteOpen ?? !session.closed);
+      // A mint whose answer was lost names no session to hang up. It stays open,
+      // blocking the next mint, until such a session cannot still be running.
+      const uncertain = !session.providerId && !!session.mintUncertain && session.remoteOpen !== false;
+      const holdUntil = session.createdAt + UNCERTAIN_MINT_HOLD_MS;
+      if (uncertain && this.now() >= holdUntil)
+        this.storage.change(document => { document.sessions[id].remoteOpen = false; delete document.sessions[id].mintUncertain; });
       if (remote) {
         let confirmed = false;
         try { await this.provider.hangup(session.providerId!, this.options.key?.() ?? this.storage.providerKey()); confirmed = true; }
@@ -384,6 +407,7 @@ export class CompanionLiveSessions {
         this.admission.retire(id);
       }
       if (remote) this.chargeOpenTime(id);
+      if (uncertain) this.chargeOpenTime(id, holdUntil);
     })();
     this.reaping.set(id, promise);
     return promise.finally(() => { this.reaping.delete(id); });

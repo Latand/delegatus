@@ -42,6 +42,10 @@ export interface StoredSession {
   /** The provider session may still be open (and billing): set at mint, cleared
    * only by a confirmed hangup or the provider's own close. Recovery retries it. */
   remoteOpen?: boolean;
+  /** A mint asked of the provider whose answer never arrived: it may have
+   * created a session nobody can name. Set before the request, cleared by its
+   * answer, by the provider's refusal, or once such a session cannot be open. */
+  mintUncertain?: boolean;
   /** The process and service instance that minted the provider session. */
   owner?: { pid: number; instance: string };
   mintRequestId?: string;
@@ -80,6 +84,7 @@ function sessionValid(key: string, session: unknown): boolean {
   if (session.authority !== undefined && session.authority !== "live-model") return false;
   if (session.providerId !== undefined && !identifier(session.providerId)) return false;
   if (session.remoteOpen !== undefined && typeof session.remoteOpen !== "boolean") return false;
+  if (session.mintUncertain !== undefined && typeof session.mintUncertain !== "boolean") return false;
   if (session.owner !== undefined && (!record(session.owner) || !Number.isSafeInteger(session.owner.pid) || !identifier(session.owner.instance))) return false;
   if (session.mintRequestId !== undefined && !identifier(session.mintRequestId)) return false;
   if (session.mintDigest !== undefined && (typeof session.mintDigest !== "string" || !/^[a-f0-9]{64}$/.test(session.mintDigest))) return false;

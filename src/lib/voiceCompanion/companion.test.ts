@@ -672,9 +672,13 @@ describe("transcripts are generated text; playback alone says what played", () =
   });
 
   test("the mouth follows playback past the end of generation; a level is clamped and costs no revision", () => {
+    const silent = run([at({ type: "session.ready", mode: "simulated" }), at({ type: "playback.started", responseId: "r", itemId: "i" })]);
+    // Audio whose words have not arrived names no line: no empty line carries playback.
+    expect(silent.lines).toEqual([]);
     const speaking = run([
       at({ type: "session.ready", mode: "simulated" }),
       at({ type: "playback.started", responseId: "r", itemId: "i" }),
+      at({ type: "transcript.delta", speaker: "companion", itemId: "i", responseId: "r", delta: "Sure" }),
       at({ type: "playback.level", responseId: "r", itemId: "i", rms: 7, playedMs: 10 }),
       at({ type: "response.generated", responseId: "r", status: "completed" }),
     ]);

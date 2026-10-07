@@ -64,7 +64,11 @@ export const COMPANION_TOOL_REGISTRY: readonly ToolEntry[] = [
         const ended = last ? context.admission.outcome(context.sessionId, last.proposalId) : null;
         return ended?.state === "refused" ? spoken(ended) : { status: "nothing_waiting", speech: "No confirmation is waiting. Nothing was sent by this answer." };
       }
-      await context.admission.confirm(context.sessionId, { proposalId: proposal.proposalId, decision: args.decision as "send" | "cancel", via: "speech" });
+      // The model's "send" is a reading of the operator; their own words in the turn that delegated must say yes.
+      const unconfirmed = args.decision === "send" ? context.admission.spokenConsentRefusal(context.sessionId, proposal.proposalId, context.sourceTurn) : null;
+      if (unconfirmed) return { status: "awaiting_confirmation", code: "not_confirmed", heard: unconfirmed,
+        speech: "Nothing was sent: the operator's last words were not a plain yes to this request. If they still want it, ask once in one short sentence; the card's Send button answers it too." };
+      await context.admission.confirm(context.sessionId, { proposalId: proposal.proposalId, decision: args.decision as "send" | "cancel", via: "speech", answerTurn: context.sourceTurn });
       return spoken(context.admission.outcome(context.sessionId, proposal.proposalId));
     } },
   { name: "end_conversation", class: "session-control",

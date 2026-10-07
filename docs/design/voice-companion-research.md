@@ -48,6 +48,15 @@ The rule as built:
    an unclear answer is asked again and calls nothing. The tap stays as the
    second way, and whichever answer comes first decides once. The page cannot
    claim a spoken answer: the session route still accepts only `via: "tap"`.
+   The model's `send` is its reading of the operator, so the server reads the
+   operator's own words too (`liveConsentRefusal` in
+   `src/lib/voiceCompanion/liveGate.ts`, `explicitConsent` in `gate.ts`): the
+   turn that delegated the answer must come after the request's own turn and
+   open a sentence with a plain yes ("Yes, send it.", "Так, надсилай."). A
+   question ("What is on the board?"), a condition, a negation or speech about
+   something else sends nothing, whatever the model decided; the confirmation
+   keeps waiting, the tool answers `not_confirmed` and the model may ask once
+   more. A spoken no needs no such reading: declining is always safe.
 4. **A declined or abandoned confirmation sends nothing and says so.** A spoken
    or tapped no stores the request as cancelled (`operator_cancelled`); speech
    that takes the request back while it waits withdraws it (`source_changed`,
@@ -67,6 +76,11 @@ The rule as built:
    end (`VoiceCompanion.tsx`, the `:decided` floater key). The asking card
    leaves from where it was and, as any element leaving the lane does, takes
    the older ones with it, so the lane never moves toward the character.
+   **One request, one send.** A request is the same words from the same
+   completed operator turn, whatever Live delegation named it: two delegation
+   ids for one turn, in sequence or in parallel, or a retry after a restart,
+   find the first send and its key and answer with its outcome. The same words
+   in a later turn are a new request (`sameRequest` in `admission.ts`).
 5. **Events.** A request sent with no confirmation emits
    `delegation.sending { proposal }` after `delegation.tool.called`; one the
    model asked about emits `delegation.confirmation.required` (the proposal now
@@ -214,7 +228,14 @@ playback and muting. Provider transcript timing never drives the mouth. Local
 microphone detection drops current output on barge-in; input mute keeps output
 available. Speech captions and measured audio segments have no provider-supplied
 word alignment; their association is best effort and never proves which words
-were heard. Explicit interrupt also asks Live to yield without canceling
+were heard. Audio is heard at once and its words arrive with the next poll, so
+either can come first (`OfficialVoiceCompanionAdapter`): a stretch of played
+audio takes the oldest companion line nothing has played yet, or carries on the
+line it paused in when the pause is shorter than the 1,500 ms display pause;
+with neither it moves the mouth and waits for the next line to arrive, even
+after it stopped, which then shows as played or as cut where it stopped. A
+barge-in cuts what plays, and lines already shown that never played stay
+unplayed. A line without words never carries playback. Explicit interrupt also asks Live to yield without canceling
 already confirmed work.
 
 ### What leaves the server
@@ -343,6 +364,19 @@ usage incomplete instead of claiming a zero charge. The demo remains free.
 
 Mint request IDs bind the project, locale and SDP digest. Retry recovers the same
 mint while it is owned; a restart never silently mints another paid session.
+A mint is recorded as uncertain (`mintUncertain`, with `remoteOpen`) before the
+provider is asked. Its answer clears that. So does the provider's own refusal,
+a client-error answer (4xx), which creates nothing and settles at zero. A
+server error, a timeout, a lost answer or a stop before the id is stored leave
+it: the provider may have created a session that nobody can name, because the
+Live API documents no way to list sessions, so it cannot be hung up. Every
+start, in this service or a restarted one, then answers `MINT_UNCERTAIN` ("The
+provider did not confirm whether the last voice session started…") and mints
+nothing; the reservation is kept as incomplete usage. Its browser never
+received the negotiation answer and closed its peer, so no media reaches such a
+session; it is held as open, and charged, for the five-minute voice window its
+reservation pays for (`UNCERTAIN_MINT_HOLD_MS`), and the next start after that
+mints.
 Each stored session names the process and service instance that minted it. A
 service closes every open session whose owner is gone when it is created and
 again before each mint, so a restart followed by a reload or a new tab leaves no
