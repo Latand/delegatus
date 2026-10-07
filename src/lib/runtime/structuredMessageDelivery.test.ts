@@ -3982,7 +3982,7 @@ test("a dead-host resume that throws leaves the accepted send recorded as awaiti
     client: () => client,
     registry: () => registry,
     progress,
-    recover: async (request) => {
+    recover: async (request: { operationId?: string }) => {
       duringResume = { ...progress.get(request.operationId!)! };
       throw new Error("recovery spawn failed");
     },

@@ -35,12 +35,13 @@ import {
 } from "./contracts";
 import { republishStructuredDeliveryHost } from "./structuredDeliveryController";
 import { recoverDeadStructuredConversation, StructuredRecoveryHeldForUpdateError, StructuredResumeUnpublishedError } from "./structuredRecovery";
-import { runtimeImageCapability, runtimeImageRefsForUploads, runtimeImageStore, type RuntimeImageCapability, type RuntimeImageUpload } from "./runtimeImageStore";
+import { runtimeImageCapability, runtimeImageRefsForUploads, runtimeImageStore, type RuntimeImageUpload } from "./runtimeImageStore";
 import { admitRuntimeImagePayload } from "./runtimeImageAdmission";
 import {
   assertStructuredTextEnvelope,
   structuredContent,
   StructuredEnvelopeTooLargeError,
+  type RuntimeImageCapability,
   type StructuredImageRef,
 } from "./structuredContent";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";

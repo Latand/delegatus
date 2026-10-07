@@ -52,7 +52,11 @@ export interface StructuredDeliveryQueuePort {
   /** A terminal provider turn engages an account pick immediately (#1983).
       Live host health still fences a newer turn before applying it. */
   terminalTurn?(conversationId: string): boolean;
-  nativeQueueExecute?(command: NativeQueueCommand & { operationId: string; eventSeq: number }, refusalReason?: string): Promise<void | false>;
+  nativeQueueExecute?(
+    command: NativeQueueCommand & { operationId: string; eventSeq: number },
+    refusalReason?: string,
+    note?: (reason: DeliveryWaitReason, detail?: string | null) => void,
+  ): Promise<void | false>;
   nativeQueueReconcile?(): Promise<void>;
   /** Startup owns recovery for hosts it has not registered yet. Leave their
    * original operations pending while already registered hosts keep serving. */
@@ -707,6 +711,13 @@ function isMessageEffect(effect: DeliveryEffect): effect is SendEffect | InjectE
   return effect.kind === "send" || effect.kind === "steer" || effect.kind === "inject";
 }
 
+/** A message handed to Codex's own queue: an ordinary queue send the journal
+    converted, or a Queue-for-Codex hand-off. Its add operation carries the
+    message's progress record (A6). */
+function isNativeAddEffect(effect: DeliveryEffect): boolean {
+  return effect.kind === "native-queue" && effect.action === "add";
+}
+
 function progressTerminalState(status: string): "delivered" | "failed" | "uncertain" {
   if (status === "uncertain") return "uncertain";
   return status === "failed" || status === "rejected" ? "failed" : "delivered";
@@ -1202,7 +1213,8 @@ export class StructuredDeliveryQueue {
       sinceMs?: number;
     } = {},
   ): void {
-    if (!isMessageEffect(effect)) return;
+    const message = isMessageEffect(effect);
+    if (!message && !isNativeAddEffect(effect)) return;
     if (options.lane) {
       const current = options.lane.current;
       if (!current || current.operationId !== effect.operationId || current.phase !== reason) {
@@ -1210,7 +1222,7 @@ export class StructuredDeliveryQueue {
           operationId: effect.operationId,
           phase: reason,
           since: this.timing.now(),
-          replacesTurn: effect.kind !== "inject" && effect.policy === "interrupt-active",
+          replacesTurn: message && effect.kind !== "inject" && effect.policy === "interrupt-active",
         };
       }
     }
@@ -1218,7 +1230,7 @@ export class StructuredDeliveryQueue {
     if (!progress) return;
     const note: DeliveryProgressNote = {
       waitReason: reason,
-      kind: effect.kind,
+      ...(message ? { kind: effect.kind } : {}),
       executorId: this.executorId,
       /* A wait the queue scheduled a retry for is looked at within the retry
          delay; every other wait ends with an event, and the watchdog's
@@ -1469,7 +1481,9 @@ export class StructuredDeliveryQueue {
     if (!retry.ready()) { this.retrySoon(); return false; }
     try {
       if (!this.port.nativeQueueExecute) throw new Error("native queue executor is unavailable");
-      if (await this.port.nativeQueueExecute(effect, reason) === false) {
+      const note = (wait: DeliveryWaitReason, detail?: string | null) =>
+        this.noteWait(effect, wait, { wake: wait === "awaiting-turn" ? "event" : "retry", ...(detail !== undefined ? { detail } : {}) });
+      if (await this.port.nativeQueueExecute(effect, reason, note) === false) {
         this.retrySoon();
         return false;
       }
@@ -1523,6 +1537,7 @@ export class StructuredDeliveryQueue {
           retry.fail();
           this.nativeExecutionRetries.set(effect.conversationId, retry);
           nativeReceiptUnavailable = true;
+          this.noteWait(effect, "evidence-unreadable", { wake: "retry", detail: "delivery journal status is unavailable" });
           continue;
         }
         this.noteWait(effect, "evidence-unreadable", { wake: "retry", detail: "delivery journal status is unavailable" });

@@ -2,7 +2,7 @@ import { memoryIndex } from "@/lib/memory/service";
 import { registeredHostForPath } from "@/lib/conversation/registeredHost";
 import { resumeEligibility, resumeSpecFor } from "@/lib/agent/cli";
 import type { AgentReconfiguration } from "@/lib/agent/reconfigure";
-import { agentRegistry, deliveryMayHaveArrived, serviceTierForSpeed, type AgentRegistry, type AgentRegistryEntry, type RegistryConversation, type TmuxHostEvidence } from "@/lib/agent/registry";
+import { agentRegistry, deliveryMayHaveArrived, REGISTRY_WRITER_BUSY, serviceTierForSpeed, type AgentRegistry, type AgentRegistryEntry, type RegistryConversation, type TmuxHostEvidence } from "@/lib/agent/registry";
 import { accountManager, ProjectAccountRefusedError, resolveResumeAccountId } from "@/lib/accounts/manager";
 import { AccountProjectBindingsUnreadableError } from "@/lib/accounts/projectBindings";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
@@ -22,6 +22,8 @@ import { procBackend } from "@/lib/proc";
 import { recoverDeadStructuredConversation } from "@/lib/runtime/structuredRecovery";
 import type { MessageOrigin } from "@/lib/runtime/messageOrigin";
 import { withConversationActuation, type ActuationLease } from "@/lib/deliveryActuation";
+import { ownedDeliveryProgressStore } from "@/lib/runtime/deliveryProgress";
+import { recordWait, type DeliveryProgressPort } from "@/lib/runtime/recordWait";
 import { structuredContent } from "@/lib/runtime/structuredContent";
 import { SEND_UNVERIFIED_REASON, type SendResendGuidance } from "@/lib/runtime/sendSettlement";
 import type { RuntimeOperationReceipt } from "@/lib/runtime/contracts";
@@ -719,6 +721,30 @@ interface DeliveryOverrides {
   listFiles?: typeof listFiles;
   resumeSpecFor?: typeof resumeSpecFor;
   deliver?: typeof deliverToTranscriptHost;
+  /** Where the send's waits are recorded; the Viewer's own store by default. */
+  progress?: DeliveryProgressPort | null;
+}
+
+/**
+ * The transcript a legacy request addresses when the registry knows no
+ * conversation for it (docs/design/delivery-progress-and-drain.md, A9): its
+ * path, else the scanner entry of its pid. A pid or path that names no Claude
+ * or Codex transcript is refused with the answers the ladder gives today,
+ * before anything is reserved or typed.
+ */
+async function addressedTranscript(
+  message: ConversationMessage,
+  overrides: DeliveryOverrides,
+): Promise<{ entry: FileEntry } | { refused: DeliveryFailure } | null> {
+  if (message.path) {
+    const entry = (await (overrides.listFiles ?? listFiles)({ pin: message.path })).find((item) => item.path === message.path);
+    if (!entry) return { refused: failure("file is unknown to the viewer", 403) };
+    return entry.engine === "claude" || entry.engine === "codex" ? { entry } : null;
+  }
+  if (message.pid === null) return null;
+  const entry = (await (overrides.listFiles ?? listFiles)()).find((item) => item.pid === message.pid && item.proc === "running");
+  if (!entry) return { refused: failure("process is unknown to the viewer", 403) };
+  return entry.engine === "claude" || entry.engine === "codex" ? { entry } : null;
 }
 
 /**
@@ -736,9 +762,31 @@ export async function deliverConversationMessage(message: ConversationMessage, o
   const requestLocalPayload = images.length > 0 || textBytes > 32_000;
 
   const registry = agentRegistry();
-  const conversation = message.conversationId?.startsWith("conversation_")
+  let conversation = message.conversationId?.startsWith("conversation_")
     ? registry.conversation(message.conversationId as `conversation_${string}`)
     : registry.conversationForPath(message.path);
+  /* A9: a request the registry knows no conversation for (a pid only, or a
+     transcript nothing registered) resolves the transcript it addresses and
+     registers its conversation the way a resume of it would, so the send
+     takes the reserved branch below like every other. The pid keeps its own
+     pane as the target. */
+  let pidAddressed = false;
+  if (!conversation && !message.reservedDeliveryId && !message.conversationId) {
+    const addressed = await addressedTranscript(message, overrides);
+    if (addressed && "refused" in addressed) return addressed.refused;
+    if (addressed) {
+      const { entry } = addressed;
+      conversation = registry.conversationForPath(entry.path);
+      if (!conversation) {
+        const engine = entry.engine as "claude" | "codex";
+        const ensured = await registry.deliveryWrite({ label: "conversation.ensure" },
+          () => registry.ensureConversation(engine, entry.path, null));
+        if (!ensured.acquired) return failure(REGISTRY_WRITER_BUSY, 503);
+        conversation = ensured.value;
+      }
+      pidAddressed = !message.path;
+    }
+  }
   const rejected = supersededRejection(registry, conversation);
   if (rejected) return rejected;
   if (conversation) {
@@ -799,13 +847,16 @@ export async function deliverConversationMessage(message: ConversationMessage, o
       return failure(error);
     }
   }
-  const filePath = conversation?.generations.at(-1)?.path ?? message.path;
+  const filePath = pidAddressed ? null : conversation?.generations.at(-1)?.path ?? message.path;
+  const progress = overrides.progress === undefined ? ownedDeliveryProgressStore() : overrides.progress;
   if (conversation && !message.reservedDeliveryId) {
+    const reservedConversation = conversation;
     /* #1709: the reservation, its claim and the claim's actuation run in the conversation's actuation section.
        Recovery above runs outside it, so nothing nests, and a send claimed after another is actuated after it.
        The reservation is admitted only once the section is this send's, so nothing acts on it before its claim:
        the migration tick cancels an unclaimed reservation with no owner evidence and fails a request-local one. */
-    return withConversationActuation<DeliveryOutcome>(conversation.id, async () => {
+    return withConversationActuation<DeliveryOutcome>(reservedConversation.id, async (lease) => {
+      const conversation = reservedConversation;
       const current = registry.conversation(conversation.id) ?? conversation;
       if (deliveryFence(current) === "held" && requestLocalPayload) return failure("request-local delivery waits for migration completion", 409);
       let queued;
@@ -823,7 +874,8 @@ export async function deliverConversationMessage(message: ConversationMessage, o
         } catch {
           contentDigest = null;
         }
-        queued = registry.holdDelivery(
+        /* Waited for off the loop (rule c); refused, nothing is reserved. */
+        queued = await registry.holdDeliveryOffLoop(
           conversation.id,
           heldText,
           message.clientMessageId ?? null,
@@ -835,6 +887,9 @@ export async function deliverConversationMessage(message: ConversationMessage, o
       } catch (error) {
         return failure(error, 409);
       }
+      if (!queued) return failure(REGISTRY_WRITER_BUSY, 503);
+      const reservation = queued;
+      lease.act(reservation.command.operationId);
       /* #1131: an earlier attempt under this same request began typing into the
          pane and nothing came back. The legacy path has no journal that could
          say whether the recipient got it, and this reservation is the only
@@ -853,23 +908,39 @@ export async function deliverConversationMessage(message: ConversationMessage, o
       if (queued.state === "delivered" || deliveryMayHaveArrived(registry.readOnlySnapshot(), queued)) {
         return settledReservationAnswer(registry, queued.id, conversation.id);
       }
+      /* A request-local payload's own discard, off the loop; refused, it
+         stays and the drain fails it as request-local. */
+      const discardOwn = () => registry.deliveryWrite({ label: "delivery.discard", operationId: reservation.command.operationId },
+        () => registry.discardDelivery(reservation.id));
       if (queued.state === "held") {
         if (requestLocalPayload) {
-          registry.discardDelivery(queued.id);
+          await discardOwn();
           return failure("request-local delivery waits for migration completion", 409);
         }
+        recordWait(progress, registry, reservation, { reason: "switching-accounts" });
         requestAccountMigrationTick();
         return { ok: true, target: conversation.id, outcome: "held", operationId: queued.command.operationId };
       }
       if (queued.state !== "assigned" || !queued.generationId) {
-        if (requestLocalPayload) registry.discardDelivery(queued.id);
+        if (requestLocalPayload) await discardOwn();
         return failure("delivery target is unavailable", 409);
       }
-      const claimed = registry.beginDeliveryAttempt(queued.id, queued.generationId);
+      /* Rule (a): the record exists from the reservation on. */
+      recordWait(progress, registry, reservation, { reason: "checking", detail: "claiming the delivery record", nextWakeMs: null });
+      const generationId = queued.generationId;
+      const claim = await registry.beginDeliveryAttemptOffLoop(reservation.command.operationId, reservation.id, generationId);
+      if (!claim.acquired) {
+        /* Nothing was claimed: it stays assigned, the drain delivers a text
+           payload and fails a request-local one. */
+        recordWait(progress, registry, reservation, { reason: "checking", detail: "the writer claim waited past its lock deadline" });
+        requestAccountMigrationTick();
+        return { ok: true, target: conversation.id, outcome: "held", operationId: reservation.command.operationId };
+      }
+      const claimed = claim.value;
       if (claimed) {
         const claimedConversation = registry.conversation(conversation.id);
         return actuateConversationMessage(message, overrides, {
-          filePath: claimedConversation?.generations.find((generation) => generation.id === claimed.generationId)?.path ?? filePath,
+          filePath: pidAddressed ? null : claimedConversation?.generations.find((generation) => generation.id === claimed.generationId)?.path ?? filePath,
           deliveryId: claimed.id,
           acceptedOperationId: claimed.command.operationId,
         });
@@ -879,10 +950,13 @@ export async function deliverConversationMessage(message: ConversationMessage, o
       const refused = registry.readOnlySnapshot().heldDeliveries[queued.id];
       if (refused?.state !== "held" && refused?.state !== "assigned") return settledReservationAnswer(registry, queued.id, conversation.id);
       if (requestLocalPayload) {
-        registry.discardDelivery(queued.id);
+        await discardOwn();
         return failure("request-local delivery waits for migration completion", 409);
       }
-      registry.requeueHeldDelivery(queued.id);
+      /* Off the loop; refused, it stays as it was. */
+      await registry.deliveryWrite({ label: "delivery.requeue", operationId: reservation.command.operationId },
+        () => registry.requeueHeldDelivery(reservation.id));
+      recordWait(progress, registry, reservation, { reason: "conversation-busy", detail: "an earlier delivery on this conversation is still being claimed" });
       requestAccountMigrationTick();
       return { ok: true, target: conversation.id, outcome: "held", operationId: queued.command.operationId };
     });
@@ -920,6 +994,9 @@ async function actuateConversationMessage(
   const text = message.text.trim();
   const registry = agentRegistry();
   const { filePath, deliveryId, acceptedOperationId } = claim;
+  const progress = overrides.progress === undefined ? ownedDeliveryProgressStore() : overrides.progress;
+  /* The claimed reservation this actuation answers for, read once by its key. */
+  const reserved = deliveryId ? registry.readOnlySnapshot().heldDeliveries[deliveryId] ?? null : null;
   let actuation: "none" | "started" | "completed" = "none";
   /**
    * The answer an ambiguous legacy send must give (#1131).
@@ -940,7 +1017,13 @@ async function actuateConversationMessage(
   const discardTerminal = () => {
     for (const id of terminalIds) try { memoryIndex().forgetTerminalDelivery(id); } catch { /* Optional bookkeeping cannot block delivery. */ }
   };
-  const settle = (outcome: DeliveryOutcome): DeliveryOutcome => {
+  /** The send's record, ended the way this actuation ended it. */
+  const settleRecord = (state: "delivered" | "failed" | "uncertain", reason: string | null) => {
+    if (!progress || !acceptedOperationId) return;
+    try { progress.settle?.(acceptedOperationId, state, reason); }
+    catch { /* A progress record never fails delivery. */ }
+  };
+  const settle = async (outcome: DeliveryOutcome): Promise<DeliveryOutcome> => {
     if (!outcome.ok && outcome.actuation !== "started") discardTerminal();
     try {
       if (deliveryId) {
@@ -950,14 +1033,30 @@ async function actuateConversationMessage(
            send under this request may already be in the pane. It is absorbing —
            a replay of the same request is answered from it rather than typed
            again — and a receipt query past the settlement window ends it as an
-           unverified failure (#1131). */
-        if (outcome.ok) registry.recordDeliveryOutcome(deliveryId, "delivered", null, "delivered");
-        else if (outcome.actuation !== "started") registry.discardDelivery(deliveryId);
+           unverified failure (#1131).
+
+           Both writes wait for the lock off the loop (rule c). A refused
+           `delivered` leaves it absorbing and the sweep ends it unverified at
+           its deadline (Note 3); a refused discard leaves it for the drain or
+           the sweep. */
+        if (outcome.ok) {
+          await registry.deliveryWrite({ label: "delivery.settle", operationId: acceptedOperationId },
+            () => registry.recordDeliveryOutcome(deliveryId, "delivered", null, "delivered"));
+        } else if (outcome.actuation !== "started") {
+          await registry.deliveryWrite({ label: "delivery.discard", operationId: acceptedOperationId },
+            () => registry.discardDelivery(deliveryId));
+        }
       }
+      if (outcome.ok) settleRecord("delivered", null);
+      else settleRecord(outcome.actuation === "started" ? "uncertain" : "failed", outcome.error);
       return absorbing(outcome);
     } catch (error) {
       return absorbing(failure(error, 500, actuation === "none" ? undefined : "started"));
     }
+  };
+  /* Rule (a): the send is being typed now, an in-request wait with no next wake. */
+  const dispatching = () => {
+    if (reserved) recordWait(progress, registry, reserved, { reason: "dispatching", detail: "typing into the conversation's pane", nextWakeMs: null });
   };
 
   /* Saved paths stay visible to the catch-all: a delivery that fails after
@@ -978,14 +1077,21 @@ async function actuateConversationMessage(
     } catch { /* The hook also fails open if its derivative is unavailable. */ }
   };
   const conversationForTerminal = message.conversationId ? registry.conversation(message.conversationId as `conversation_${string}`) : null;
-  const recordArtifacts = () => {
-    if (deliveryId && imagePaths.length > 0) registry.recordDeliveryArtifacts(deliveryId, imagePaths);
+  /* The paths are recorded before anything is typed, off the loop. Refused,
+     nothing is typed: the send fails before actuation, its images are deleted
+     and its reservation discarded the way a failure there always is. */
+  const recordArtifacts = async () => {
+    if (!deliveryId || imagePaths.length === 0) return;
+    const paths = imagePaths;
+    const recorded = await registry.deliveryWrite({ label: "delivery.artifacts", operationId: acceptedOperationId },
+      () => registry.recordDeliveryArtifacts(deliveryId, paths));
+    if (!recorded.acquired) throw new Error(REGISTRY_WRITER_BUSY);
   };
   try {
     let target: string | null = null;
     if (!filePath && pid !== null) {
       const resolved = await (overrides.targetForKnownPid ?? targetForKnownPid)(pid);
-      if (resolved === "unknown" && !filePath) return settle(failure("process is unknown to the viewer", 403));
+      if (resolved === "unknown" && !filePath) return await settle(failure("process is unknown to the viewer", 403));
       target = resolved === "unknown" ? null : resolved;
     }
     /* Images are only saved to the inbox once a deliverable destination is
@@ -994,24 +1100,25 @@ async function actuateConversationMessage(
     if (target !== null) {
       const bundle = materializePayload();
       imagePaths = bundle.imagePaths;
-      recordArtifacts();
+      await recordArtifacts();
       recordTerminal(bundle.payload);
+      dispatching();
       await (overrides.sendText ?? sendText)(target, bundle.payload);
       actuation = "completed";
-      return settle({ ok: true, target, ...(imagePaths.length ? { imagePaths } : {}) });
+      return await settle({ ok: true, target, ...(imagePaths.length ? { imagePaths } : {}) });
     }
 
     /* No live pane: reopen the conversation as a fresh agent window in the
        user's current tmux session and type the prompt there. */
     if (!filePath || !(overrides.pathAllowed ?? pathAllowed)(filePath)) {
-      return settle(failure("process is not in a tmux session", 409));
+      return await settle(failure("process is not in a tmux session", 409));
     }
     /* Pinned: the reopenable transcript may have aged past the scan's recency
        cap — a conversation the operator can still message must stay openable. */
     const all = await (overrides.listFiles ?? listFiles)({ pin: filePath });
     const entry = all.find((item) => item.path === filePath);
     if (!entry) {
-      return settle(failure("file is unknown to the viewer", 403));
+      return await settle(failure("file is unknown to the viewer", 403));
     }
     const entryProfile = registry.launchProfileForPath(entry.path);
     /* Resolved before any image is materialized, like every other precondition
@@ -1020,7 +1127,7 @@ async function actuateConversationMessage(
     try {
       entryAccount = resumeAccountId(registry, entry);
     } catch (error) {
-      return settle(accountFenceFailure(error));
+      return await settle(accountFenceFailure(error));
     }
     const spec = (overrides.resumeSpecFor ?? resumeSpecFor)(entry.root, entry.path, {
       model: message.resumeModel ?? entry.launchModel ?? entry.model,
@@ -1036,12 +1143,13 @@ async function actuateConversationMessage(
     if (spec) {
       const bundle = materializePayload();
       imagePaths = bundle.imagePaths;
-      recordArtifacts();
+      await recordArtifacts();
       recordTerminal(bundle.payload);
+      dispatching();
       const outcome = await hostOutcome((overrides.deliver ?? deliverToTranscriptHost)({ entry, spec, payload: bundle.payload }));
-      if (!outcome.ok) { actuation = outcome.actuation === "started" ? "started" : "none"; return settle(cleanupFailedImageDelivery(outcome, imagePaths)); }
+      if (!outcome.ok) { actuation = outcome.actuation === "started" ? "started" : "none"; return await settle(cleanupFailedImageDelivery(outcome, imagePaths)); }
       actuation = "completed";
-      return settle({ ...outcome, ...(imagePaths.length ? { imagePaths } : {}) });
+      return await settle({ ...outcome, ...(imagePaths.length ? { imagePaths } : {}) });
     }
 
     const byPath = new Map(all.map((item) => [item.path, item]));
@@ -1052,7 +1160,7 @@ async function actuateConversationMessage(
       root = byPath.get(root.parent)!;
     }
     if (root.path === entry.path) {
-      return settle(failure("this conversation cannot be resumed", 409));
+      return await settle(failure("this conversation cannot be resumed", 409));
     }
     /* Resolved before saving anything: the root's live pane or resume spec
        must exist, or the request is rejected without ever writing an image. */
@@ -1061,7 +1169,7 @@ async function actuateConversationMessage(
     try {
       rootAccount = resumeAccountId(registry, root);
     } catch (error) {
-      return settle(accountFenceFailure(error));
+      return await settle(accountFenceFailure(error));
     }
     const rootSpec = (overrides.resumeSpecFor ?? resumeSpecFor)(root.root, root.path, {
       model: root.launchModel ?? root.model,
@@ -1074,25 +1182,31 @@ async function actuateConversationMessage(
       mcpServers: rootProfile?.mcpServers,
     });
     if (!rootSpec) {
-      return settle(failure("root session is unavailable for messaging", 409));
+      return await settle(failure("root session is unavailable for messaging", 409));
     }
     const bundle = materializePayload();
     imagePaths = bundle.imagePaths;
-    recordArtifacts();
+    await recordArtifacts();
     const relayText = `User message for your branch «${entry.title.slice(0, 100)}» — forward it or handle it yourself:\n${bundle.payload}`;
     const imageField = imagePaths.length ? { imagePaths } : {};
     recordTerminal(relayText, root.path, true);
+    dispatching();
     const outcome = await hostOutcome((overrides.deliver ?? deliverToTranscriptHost)({ entry: root, spec: rootSpec, payload: relayText }));
-    if (!outcome.ok) { actuation = outcome.actuation === "started" ? "started" : "none"; return settle(cleanupFailedImageDelivery(outcome, imagePaths)); }
+    if (!outcome.ok) { actuation = outcome.actuation === "started" ? "started" : "none"; return await settle(cleanupFailedImageDelivery(outcome, imagePaths)); }
     actuation = "completed";
-    return settle({ ...outcome, ...imageField });
+    return await settle({ ...outcome, ...imageField });
   } catch (error) {
     const uncertain = actuation === "completed" || error instanceof TmuxDeliveryUncertainError;
     if (!uncertain) {
       discardTerminal();
-      if (deliveryId) try { registry.discardDelivery(deliveryId); } catch { /* the original registry failure remains actionable */ }
+      if (deliveryId) {
+        try {
+          await registry.deliveryWrite({ label: "delivery.discard", operationId: acceptedOperationId }, () => registry.discardDelivery(deliveryId));
+        } catch { /* the original registry failure remains actionable */ }
+      }
       deleteInboxImages(imagePaths);
     }
+    settleRecord(uncertain ? "uncertain" : "failed", error instanceof Error ? error.message : String(error));
     return absorbing(failure(error, 500, uncertain ? "started" : undefined));
   }
 }

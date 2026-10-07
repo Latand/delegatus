@@ -3,6 +3,7 @@ import { pipelineHostHasLiveWork } from "@/lib/pipelines/hostRetirement";
 import { handoffQueue } from "./handoffQueueStore";
 import { blockingHostActivityFlags } from "./hostActivityFlags";
 import { runtimeIdleKillMatches } from "./contracts";
+import { settleNativeQueueEntry } from "./nativeQueueSettlement";
 import { NativeQueueExecutor } from "./nativeQueueExecutor";
 import { RetryBackoff } from "./retryBackoff";
 import crypto from "node:crypto";
@@ -763,10 +764,8 @@ export async function bindStructuredDeliveryQueue(
   const nativeQueueExecutor = new NativeQueueExecutor({
     client,
     resolveHost: hostResolver(registry, hosts),
-    settled: (entry) => {
-      registry.recordDeliveryOutcomeForOperation(entry.conversationId as `conversation_${string}`, entry.entryId,
-        entry.state === "removed" ? "failed" : "delivered", entry.state === "removed" ? "delivery-discarded" : null);
-    },
+    /* Off the loop, a hand-off's own row included (C3, A8). */
+    settled: async (entry) => { await settleNativeQueueEntry(registry, entry, progressStore); },
     binding: (conversationId) => {
       const snapshot = registry.readOnlySnapshot();
       const conversation = snapshot.conversations[conversationId];
@@ -875,7 +874,7 @@ export async function bindStructuredDeliveryQueue(
         if (bound === null) throw new Error(REGISTRY_WRITER_BUSY);
         return bound;
       },
-      nativeQueueExecute: (command, refusalReason) => nativeQueueExecutor.execute(command, refusalReason),
+      nativeQueueExecute: (command, refusalReason, note) => nativeQueueExecutor.execute(command, refusalReason, note),
       nativeQueueReconcile: async () => {
         if (!client.nativeQueueRead) return;
         const readyHosts = [...hosts].filter(([key, host]) => {

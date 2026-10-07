@@ -2263,7 +2263,7 @@ test("a terminal retry has its row and record before the retry command, so a los
       journal.retryOperation(...args);
       throw new RuntimeHostUnavailableError("runtime host is unavailable");
     },
-  } as RuntimeHostClient;
+  } as unknown as RuntimeHostClient;
   let kicks = 0;
   try {
     const response = await handleRuntimeRetry(new NextRequest(`http://127.0.0.1/api/runtime/operations/${originalOperationId}`,

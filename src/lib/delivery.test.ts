@@ -1856,3 +1856,112 @@ test("tmux branch relay carries the root's ultrafast tier into its reopen comman
   expect(outcome).toMatchObject({ ok: true });
   expect(command).toContain("-c 'service_tier=ultrafast'");
 });
+
+/* docs/design/delivery-progress-and-drain.md, P17 (A1 legacy steps, A9, C2). */
+function legacyEntry(pathname: string, pid: number | null): FileEntry {
+  return {
+    path: pathname, root: "codex-sessions", name: path.basename(pathname), project: "viewer",
+    title: "legacy", engine: "codex", kind: "session", fmt: "codex", parent: null, mtime: 1, size: 0,
+    activity: "idle", proc: pid === null ? null : "running", pid, model: "gpt-5.6-sol", effort: "high", fast: false,
+    pendingQuestion: null, waitingInput: null,
+  } as FileEntry;
+}
+
+test("a legacy send whose request names only a pid reserves on its transcript's conversation, types once, and a replay of its key is answered from the reservation", async () => {
+  const registry = new AgentRegistry(path.join(SANDBOX, "legacy-pid-only-registry.json"));
+  setAgentRegistryForTests(registry);
+  const transcript = path.join(SANDBOX, "pid-only.jsonl");
+  const { DeliveryProgressStore } = await import("./runtime/deliveryProgress");
+  const progress = new DeliveryProgressStore(null);
+  const typed: string[] = [];
+  const send = () => deliverConversationMessage({
+    pid: 4242, path: "", text: "type me once", images: [], clientMessageId: "pid-only-key",
+  }, {
+    listFiles: async () => [legacyEntry(transcript, 4242)],
+    targetForKnownPid: async () => "%42",
+    sendText: async (_target: string, payload: string) => { typed.push(payload); },
+    progress,
+  } as never);
+  expect(await send()).toMatchObject({ ok: true });
+  expect(await send()).toMatchObject({ ok: true });
+  expect(typed).toEqual(["type me once"]);
+  const conversation = registry.conversationForPath(transcript);
+  expect(conversation).not.toBeNull();
+  const [reservation] = Object.values(registry.snapshot().heldDeliveries).filter((delivery) => delivery.clientMessageId === "pid-only-key");
+  expect(reservation).toMatchObject({ state: "delivered", conversationId: conversation!.id });
+  expect(progress.get(reservation!.command.operationId)).toMatchObject({ originalKey: "pid-only-key", terminal: { state: "delivered" } });
+});
+
+test("a legacy send to an unregistered transcript path reserves the same way, and an unknown pid is refused before anything is reserved or typed", async () => {
+  const registry = new AgentRegistry(path.join(SANDBOX, "legacy-unregistered-registry.json"));
+  setAgentRegistryForTests(registry);
+  const transcript = path.join(SANDBOX, "unregistered.jsonl");
+  let typed = 0;
+  const overrides = {
+    listFiles: async () => [legacyEntry(transcript, null)],
+    pathAllowed: () => true,
+    resumeSpecFor: () => ({ command: "codex resume", cwd: SANDBOX, windowName: "codex-resume", engine: "codex" }),
+    deliver: async () => { typed += 1; return { ok: true, outcome: "resumed", target: "%5" }; },
+  };
+  const byPath = () => deliverConversationMessage({ pid: null, path: transcript, text: "by path", images: [], clientMessageId: "path-key" }, overrides as never);
+  expect(await byPath()).toMatchObject({ ok: true });
+  expect(await byPath()).toMatchObject({ ok: true });
+  expect(typed).toBe(1);
+  expect(registry.conversationForPath(transcript)).not.toBeNull();
+
+  const unknown = await deliverConversationMessage({ pid: 9999, path: "", text: "nobody", images: [], clientMessageId: "unknown-pid" }, {
+    listFiles: async () => [],
+    targetForKnownPid: async () => "unknown",
+    sendText: async () => { typed += 1; },
+  } as never);
+  expect(unknown).toMatchObject({ ok: false, status: 403, error: "process is unknown to the viewer" });
+  expect(typed).toBe(1);
+  expect(Object.values(registry.snapshot().heldDeliveries).filter((delivery) => delivery.clientMessageId === "unknown-pid")).toEqual([]);
+});
+
+test("a legacy send is recorded from its reservation, dispatching while the pane actuation hangs, and its hold, claim and settle wait off the loop", async () => {
+  const { sqliteRegistryFixture, registryLockHolder, holdBeforeEachWrite, longestLoopGap } = await import("./agent/registryLockHolderFixture");
+  const { blockingWaitDiagnostics, resetBlockingWaitsForTests } = await import("./blockingWaits");
+  const made = sqliteRegistryFixture("llv-legacy-offloop");
+  const holder = registryLockHolder(made.sqliteFilename);
+  const registry = made.registry;
+  setAgentRegistryForTests(registry);
+  try {
+    const conversation = registry.ensureConversation("codex", "", "default");
+    const { DeliveryProgressStore } = await import("./runtime/deliveryProgress");
+    const progress = new DeliveryProgressStore(null);
+    let release!: () => void;
+    let during: ReturnType<typeof progress.get> = null;
+    resetBlockingWaitsForTests(() => {});
+    const hook = holdBeforeEachWrite(registry, holder, 120, /lib\/delivery\.ts/);
+    const sending = longestLoopGap(() => deliverConversationMessage({
+      pid: 1, path: "", conversationId: conversation.id, text: "hang in the pane", images: [], clientMessageId: "legacy-record",
+    }, {
+      recover: async () => null,
+      targetForKnownPid: async () => "%1",
+      sendText: async () => {
+        const [reserved] = registry.pendingDeliveries(conversation.id);
+        during = { ...progress.get(reserved!.command.operationId)! };
+        await new Promise<void>((resolve) => { release = resolve; });
+      },
+      progress,
+    } as never));
+    for (let attempt = 0; attempt < 400 && !release; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(during).toMatchObject({ waitReason: "dispatching", originalKey: "legacy-record", nextWakeAt: null });
+    release();
+    const { value: outcome, gapMs } = await sending;
+    hook.restore();
+    expect(outcome).toMatchObject({ ok: true });
+    expect(hook.unwrapped).toEqual([]);
+    expect(gapMs).toBeLessThan(50);
+    const operationId = Object.values(registry.snapshot().deliveryOperationOwners).find((owner) => owner.clientMessageId === "legacy-record")!.command.operationId;
+    for (const label of ["delivery.admit", "delivery.claim", "delivery.settle"]) {
+      expect(blockingWaitDiagnostics().longest.some((sample) => sample.label === label && sample.operationId === operationId)).toBe(true);
+    }
+    expect(progress.get(operationId)).toMatchObject({ terminal: { state: "delivered" } });
+  } finally {
+    await holder.close();
+    registry.close();
+    made.cleanup();
+  }
+});

@@ -5350,11 +5350,11 @@ test("one host's unanswered continuation admission holds no other host's", async
       Bun.sleep(2_000).then(() => "waiting"),
     ]).catch(() => "waiting");
     expect(admitted).toBe("admitted");
-    releaseFirst!();
+    (releaseFirst as unknown as () => void)();
     await pass;
     await waitFor(() => ledgers.every((ledger) => ledger.writes.length === 1), 500);
   } finally {
-    releaseFirst?.();
+    (releaseFirst as (() => void) | null)?.();
     await bindStructuredDeliveryQueue([], { registry, client: null });
     journal.close();
     fs.rmSync(directory, { recursive: true, force: true });
@@ -5497,12 +5497,12 @@ test("one seat's unanswered interruption continuation holds no other seat's", as
       Bun.sleep(2_000).then(() => "waiting"),
     ]).catch(() => "waiting");
     expect(admitted).toBe("admitted");
-    releaseFirst!();
+    (releaseFirst as unknown as () => void)();
     await pass;
     await waitFor(() => [...ledgers.values()].every((ledger) => ledger.writes.length === 1), 1_000);
     expect([...ledgers.values()].flatMap((ledger) => ledger.writes)).toHaveLength(2);
   } finally {
-    releaseFirst?.();
+    (releaseFirst as (() => void) | null)?.();
     for (const [key, value] of Object.entries(previousEnvironment)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;

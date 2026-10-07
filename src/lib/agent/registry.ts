@@ -9406,7 +9406,7 @@ export class AgentRegistry {
   recordDirectAdmission(
     admission:
       | { operationId: string; retryOf: string; identity?: DirectAdmissionIdentity; reopenLost?: boolean }
-      | { handOff: DirectAdmissionIdentity },
+      | { handOff: DirectAdmissionIdentity; adoptOperationId?: string },
   ): DeliveryOperationOwner | null {
     if ("retryOf" in admission && (!admission.operationId || admission.operationId === admission.retryOf)) return null;
     return this.mutate((file) => {
@@ -9436,10 +9436,36 @@ export class AgentRegistry {
       if ("handOff" in admission) {
         const identity = admission.handOff;
         const canonicalId = resolveConversationAlias(file, identity.conversationId);
-        const existing = identity.clientMessageId
-          ? conversationRows(file, "deliveryOperationOwners", canonicalId).find((owner) =>
-            owner.directAdmission === "native-queue-add" && owner.clientMessageId === identity.clientMessageId)
-          : undefined;
+        /* The key's rows, the open one first, then the newest. */
+        const keyed = identity.clientMessageId
+          ? conversationRows(file, "deliveryOperationOwners", canonicalId)
+            .filter((owner) => owner.directAdmission === "native-queue-add" && owner.clientMessageId === identity.clientMessageId)
+            .sort((left, right) => Number(left.terminalState !== null) - Number(right.terminalState !== null)
+              || right.createdAt.localeCompare(left.createdAt))
+          : [];
+        if (admission.adoptOperationId) {
+          /* The journal holds this key under an operation older code admitted.
+             This request's own row names nothing the journal admitted, so it
+             ends lost, and the journal's operation gets the row, in one
+             transaction. */
+          const adopted = admission.adoptOperationId;
+          const settledAt = now();
+          for (const owner of keyed) {
+            if (owner.command.operationId === adopted || owner.terminalState !== null) continue;
+            owner.terminalState = "failed";
+            owner.terminalDisposition = "lost";
+            owner.terminalReason = "the runtime journal holds this key under an earlier operation";
+            owner.settledAt = settledAt;
+          }
+          const existingAdopted = file.deliveryOperationOwners[adopted];
+          if (existingAdopted) return clone(existingAdopted);
+          const owner: DeliveryOperationOwner = { ...ownerFor(identity, adopted), directAdmission: "native-queue-add" };
+          file.deliveryOperationOwners[adopted] = owner;
+          return clone(owner);
+        }
+        /* A row that ended `lost` names an admission the journal refused or
+           never held: the key is free again, as a failed reservation's is. */
+        const existing = keyed.find((owner) => owner.terminalState === null || owner.terminalDisposition !== "lost");
         if (existing) {
           const digest = heldDeliveryRequestDigest(canonicalId, identity.text, canonicalHeldDeliveryCommand(identity.command, existing.deliveryId));
           if (existing.requestDigest !== digest) throw new DeliveryReservationConflictError();
