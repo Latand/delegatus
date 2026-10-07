@@ -8381,9 +8381,9 @@ describe("role memory: rules window and the rule line", () => {
     fs.mkdirSync(out, { recursive: true });
     const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
     /* The card's lane is the fixture's `p-md-decision`, whose builder stage `implement` reported. */
-    const seed = (pipelineId: string, stageId: string, minutes: number, roleId: string, lessons: Parameters<typeof store.leaveLessons>[0]["lessons"]) => {
-      store.recordLessonRequest({ pipelineId, stageId, attempt: 1, project: "atlas", roleId, conversationId: `conversation_${pipelineId}`, at: at(minutes) });
-      store.leaveLessons({ request: { pipelineId, stageId, attempt: 1 }, source: { project: "atlas", pipelineId, stageId, attempt: 1, roleId, fixRound: stageId === "fix", conversationId: `conversation_${pipelineId}` }, lessons, none: null, now: at(minutes) });
+    const seed = (pipelineId: string, stageId: string, minutes: number, roleId: string, lessons: Parameters<typeof store.leaveLessons>[0]["lessons"], project = "atlas") => {
+      store.recordLessonRequest({ pipelineId, stageId, attempt: 1, project, roleId, conversationId: `conversation_${pipelineId}`, at: at(minutes) });
+      store.leaveLessons({ request: { pipelineId, stageId, attempt: 1 }, source: { project, pipelineId, stageId, attempt: 1, roleId, fixRound: stageId === "fix", conversationId: `conversation_${pipelineId}` }, lessons, none: null, now: at(minutes) });
     };
     seed("p-search", "build", 3 * 24 * 60, "builder", [
       { scope: "role", rule: "Before opening a pull request, check each acceptance criterion of the pinned specification against the head, one by one.", why: "A lane met its brief and failed review on a criterion only the specification named." },
@@ -8401,6 +8401,11 @@ describe("role memory: rules window and the rule line", () => {
       { scope: "role", rule: "When a change adds a branch for empty, missing or zero input, write the test for that branch in the same commit as the branch.", why: "An untested empty-list path failed review twice." },
       { scope: "role", role: "visual-critic", rule: "Judge the 390 px Ukrainian frame first: Ukrainian labels run about a third longer than English, and clipping shows there first.", why: "A button clipped only at 390 px in Ukrainian." },
     ]);
+    /* A second project whose one role holds more rules than the desktop window is tall, opened only to measure the window. */
+    const LONG_RULES = 14;
+    for (let n = 1; n <= LONG_RULES; n++) seed(`p-long-${n}`, "build", (n + 3) * 24 * 60, "builder", [
+      { scope: "role", rule: `Long list, rule ${n}: name the check that proves a change before writing the change itself.`, why: "A column this long has to scroll inside the window." },
+    ], "long-rules");
     const server = await serveEvidenceFixture(path.join(root, "bundle-root"), undefined, {
       "/api/telemetry": { enabled: false, locked: false, noticeDismissed: true },
       "/api/team": { mode: "solo", me: null, members: [], methods: {} },
@@ -8455,9 +8460,25 @@ describe("role memory: rules window and the rule line", () => {
           expect(fromCard.left).toBeGreaterThanOrEqual(0); expect(fromCard.right).toBeLessThanOrEqual(width);
           expect(fromCard.top).toBeGreaterThanOrEqual(0); expect(fromCard.bottom).toBeLessThanOrEqual(height);
           expect(fromCard.overflow).toBeLessThanOrEqual(1);
-          /* Three kinds, each its own section, and the header names what a new agent of the shown role starts with. */
+          /* Three kinds, each its own section; the head is the title and one line under it, with no count and no role name of its own. */
           for (const kind of ["role", "project", "machine"]) await page.locator(`[data-rules-window] [data-rules-section="${kind}"]`).waitFor();
-          expect(await page.locator("[data-rules-starts]").innerText()).toContain(translate(lang, "roleMemory.n.machine", { count: 1 }));
+          const starts = page.locator("[data-rules-starts]");
+          expect(await starts.innerText()).toBe(translate(lang, "roleMemory.startsWith"));
+          expect(await starts.evaluate((node) => ({ lines: Math.round(node.getBoundingClientRect().height / parseFloat(getComputedStyle(node).lineHeight)), cut: node.scrollWidth - node.clientWidth }))).toEqual({ lines: 1, cut: 0 });
+          /* Each number once: the chips count the roles, the headings count the project and the machine, and scopes far from their bound show no size. */
+          expect(await page.locator('[data-rules-section="role"] [data-rules-count]').count()).toBe(0);
+          expect(await page.locator("[data-rules-window] [data-rules-count]").allInnerTexts()).toEqual(["1", "1"]);
+          expect(await page.locator("[data-rules-window] [data-rules-size]").count()).toBe(0);
+          const roleLabel = lang === "en" ? "Builder" : "Білдер";
+          expect((await page.locator("[data-rules-window] header").allInnerTexts()).join("\n").split(roleLabel).length - 1).toBe(1);
+          if (!phone) {
+            /* The desktop window is as tall as its longest column needs, and no taller. */
+            const fit = await page.locator("[data-rules-window]").evaluate((node) => {
+              const lowest = Math.max(...[...node.querySelectorAll("[data-learned-rule], [data-rules-history]")].map((row) => row.getBoundingClientRect().bottom));
+              return Math.round(node.getBoundingClientRect().bottom - lowest);
+            });
+            expect(fit).toBeGreaterThanOrEqual(0); expect(fit).toBeLessThanOrEqual(40);
+          }
           expect(await page.locator('[data-rules-section="role"] [data-learned-rule]').count()).toBe(3);
           cases.push({ lang, width, surface: "window-from-card", ...fromCard, file: await shot("window-from-card") });
           /* One tap removes a rule; it is archived, not gone, and Undo brings it back. */
@@ -8465,6 +8486,12 @@ describe("role memory: rules window and the rule line", () => {
           const ruleId = (await target.getAttribute("data-learned-rule"))!;
           await target.locator("[data-learned-rule-delete]").click();
           await page.locator("[data-rules-undo]").waitFor();
+          /* The notice is one line, inside the window's margins. */
+          const notice = await page.locator("[data-rules-undo]").evaluate((node) => {
+            const box = node.getBoundingClientRect(); const label = node.firstElementChild!;
+            return { left: box.left, right: box.right, lines: Math.round(label.getBoundingClientRect().height / parseFloat(getComputedStyle(label).lineHeight)) };
+          });
+          expect(notice.lines).toBe(1); expect(notice.left).toBeGreaterThanOrEqual(12); expect(notice.right).toBeLessThanOrEqual(width - 12);
           await page.waitForFunction((id) => !document.querySelector(`[data-rules-section="role"] [data-learned-rule="${id}"]`), ruleId);
           const removed = store.projectView("atlas").scopes.find((scope) => scope.roleId === "builder")!.left.find((rule) => rule.id === ruleId);
           expect(removed).toMatchObject({ state: "archived", reason: "deleted" });
@@ -8530,7 +8557,7 @@ describe("role memory: rules window and the rule line", () => {
             await page.locator('[data-kanban-board] [data-bar-more][aria-expanded="true"]').waitFor();
           }
           const row = page.locator("[data-learned-rules-open]").locator("visible=true").first();
-          await row.locator("[data-learned-rules-count]").filter({ hasText: translate(lang, "roleMemory.n.machine", { count: 1 }) }).waitFor();
+          await row.locator("[data-learned-rules-count]").filter({ hasText: translate(lang, "roleMemory.total", { count: 6 }) }).waitFor();
           await row.scrollIntoViewIfNeeded();
           expect(await page.locator(`${container} [role="switch"][data-learned-rules-switch]`).count()).toBe(0);
           expect(await row.locator(".truncate").evaluateAll((nodes) => nodes.filter((node) => node.scrollWidth > node.clientWidth + 1).length)).toBe(0);
@@ -8542,8 +8569,12 @@ describe("role memory: rules window and the rule line", () => {
           await row.click();
           /* The window from the row outlives the menu that opened it, and a press inside it keeps it open. */
           await page.locator("[data-rules-window] [data-learned-rule]").first().waitFor();
+          /* The row's figure is what the window adds up to: its role chips plus its project and machine headings. */
+          const shown = await page.locator("[data-rules-window] [data-rules-role] span, [data-rules-window] [data-rules-count]").allInnerTexts();
+          expect(shown.reduce((sum, text) => sum + Number(text), 0)).toBe(6);
           await page.locator('[data-rules-window] [data-rules-role="visual-critic"]').click();
-          expect(await page.locator("[data-rules-starts]").innerText()).toContain(lang === "en" ? "Visual critic" : "Критик вигляду");
+          await page.locator('[data-rules-window] [data-rules-role="visual-critic"][aria-selected="true"]').waitFor();
+          expect(await page.locator('[data-rules-section="role"] [data-learned-rule]').count()).toBe(1);
           await page.locator('[data-rules-window] [data-rules-role="builder"]').click();
           await page.locator('[data-rules-window] [data-rules-history="role"]').click();
           /* History holds the repeat, merged; the rule removed and put back is active again. */
@@ -8552,6 +8583,17 @@ describe("role memory: rules window and the rule line", () => {
           expect(window.right).toBeLessThanOrEqual(width); expect(window.bottom).toBeLessThanOrEqual(height);
           expect(window.overflow).toBeLessThanOrEqual(1);
           cases.push({ lang, width, surface: "window", ...window, file: await shot("window") });
+          if (!phone) {
+            /* A column longer than the window allows scrolls inside it; the window keeps its maximum and stays within the screen. */
+            await page.evaluate(() => { globalThis.dispatchEvent(new CustomEvent("delegatus:open-learned-rules", { detail: { project: "long-rules" } })); });
+            await page.locator('[data-rules-section="role"] [data-learned-rule]').nth(LONG_RULES - 1).waitFor();
+            const long = await page.locator("[data-rules-window]").evaluate((node) => {
+              const box = node.getBoundingClientRect(); const scroller = node.querySelector('[data-rules-section="role"] > div')!;
+              return { top: box.top, bottom: box.bottom, height: Math.round(box.height), scrolls: scroller.scrollHeight > scroller.clientHeight + 1 };
+            });
+            expect(long.top).toBeGreaterThanOrEqual(0); expect(long.bottom).toBeLessThanOrEqual(height);
+            expect(long.height).toBe(640); expect(long.scrolls).toBe(true);
+          }
           expect(pageErrors).toEqual([]);
         } finally { await context.close(); }
       }

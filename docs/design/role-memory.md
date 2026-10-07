@@ -853,13 +853,16 @@ role memory is a default feature. This is what the lane builds.
    The one way to stop it, for safety, is the installation's setting
    `LLV_ROLE_MEMORY=off`, which stops both the request and the injection and
    leaves stored rules as they are; the window then says so. One row,
-   "Learned rules · n role · n project · n machine", on the board's ⋯ and
+   "Learned rules · n rules" with the project's total, on the board's ⋯ and
    among the phone's project rules, opens the rules window (variant 2). The
-   window's header names what a new agent starts with ("A new Builder starts
-   with: 3 role · 1 project · 1 machine"); its body holds three sections, each
-   with its own heading and colour: Role (a picker over the roles that have
-   rules), Project and Machine, side by side on the desktop and stacked on the
-   phone. Each rule is a small row: its text in at most two lines, its why on
+   window's header is its title and one line ("A new agent starts with all
+   three kinds"); its body holds three sections, each with its own heading and
+   colour: Role (a picker over the roles that have rules, each chip with its
+   count), Project and Machine with their counts, side by side on the desktop
+   and stacked on the phone. Each number appears once and adds up to the row's
+   total. A section shows its size against 10 000 only from 80% of the bound.
+   On the desktop the window is as tall as its longest column needs, up to
+   640 px, then the column scrolls inside. Each rule is a small row: its text in at most two lines, its why on
    hover or a tap, and one tap on × that removes it from the injected list
    with an Undo. A removed rule is archived as "removed by you", recorded in
    its scope's history with the operator as author, and listed under "Left the
