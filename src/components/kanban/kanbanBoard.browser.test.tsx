@@ -14,7 +14,7 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import { REPORT_LOG_CHAT_MIN_WIDTH, REPORT_LOG_MAX_WIDTH, REPORT_LOG_MIN_WIDTH, REPORT_LOG_SPLIT_WIDTH } from "@/components/orchestrator/OrchestratorPanel";
 
 import { playPath, pointerPath, recordDrag } from "./dragFrameMeter";
-import { browserCase, caseChromium as chromium, captureSeatMandateHandover, openFixture, serveEvidenceFixture } from "./issue1695BrowserHarness";
+import { browserCase, caseChromium as chromium, captureSeatMandateHandover, openFixture, serveEvidenceFixture, waitForSectionOpen } from "./issue1695BrowserHarness";
 import { kanbanLayoutMode } from "./KanbanBoard";
 import { clipTitle } from "./taskText";
 import { maintenanceCardText } from "@/lib/boardMaintenance/text";
@@ -935,6 +935,7 @@ describe("#1695 K1+K2 kanban board", () => {
         await links.page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
         const presentationWrites = () => links.page.evaluate(() => (window as unknown as { evidence: { boardMutations: Array<{ kind: string }> } }).evidence.boardMutations.filter((mutation) => mutation.kind === "set-presentation").length);
         await links.page.click('.card[data-id="task:t-auth"] details.history > summary');
+        await waitForSectionOpen(links.page, '.card[data-id="task:t-auth"] details.history');
         await links.page.click('.card[data-id="task:t-auth"] [data-elsewhere-toggle]');
         await links.page.click('.card[data-id="task:t-auth"] [data-elsewhere-row] button');
         await links.page.waitForTimeout(400);
@@ -8364,6 +8365,7 @@ describe("ghost cards: no «Untitled task» wall, and every counted conversation
             } else failures.push(`${label}: the failed launch offers no Open`);
             /* The conversation off the board waits behind one line in the folded Past attempts section, and opens from its list. */
             await page.locator(`${card("t-ghost-elsewhere")} details.history > summary`).click();
+            await waitForSectionOpen(page, `${card("t-ghost-elsewhere")} details.history`);
             await page.locator(`${card("t-ghost-elsewhere")} [data-elsewhere-toggle]`).click();
             const open = page.locator(`${card("t-ghost-elsewhere")} [data-elsewhere-row] button`);
             if (await open.count()) {

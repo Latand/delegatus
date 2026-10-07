@@ -3,7 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import tailwind from "@tailwindcss/postcss";
-import { chromium, type Browser, type ConnectOptions } from "playwright-core";
+import { chromium, type Browser, type ConnectOptions, type Page } from "playwright-core";
 import postcss from "postcss";
 
 import { taskIconNodes } from "@/lib/tasks/taskIconNodes";
@@ -184,6 +184,19 @@ export async function openFixture(
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.goto(url);
   return { context, page, pageErrors };
+}
+
+/** Waits until an opened `<details>` shows all of its content. The board's
+ * sections ease their content open from no height under `overflow: clip`, so
+ * a control near the end is clipped for a moment; a click there lands on the
+ * card behind it. */
+export async function waitForSectionOpen(page: Page, selector: string, timeout = 20_000): Promise<void> {
+  await page.waitForFunction((target) => {
+    const details = document.querySelector<HTMLDetailsElement>(target);
+    if (!details?.open) return false;
+    const last = details.lastElementChild;
+    return !last || last.getBoundingClientRect().bottom <= details.getBoundingClientRect().bottom + 0.5;
+  }, selector, { timeout, polling: "raf" });
 }
 
 /** Shared fast-speech case for the existing phone and desktop drivers. The
