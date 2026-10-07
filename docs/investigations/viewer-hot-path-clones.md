@@ -239,12 +239,12 @@ Release remains outside this stage. Record in the eventual PR body: the operator
 The build implemented plan steps 1 and 2 and the low-risk part of step 3:
 
 - `loadTasksForList` deep-freezes each task when its row changes and freezes the list. `GET /api/tasks` filters that list and binds it against `loadPipelinesForList`. The files response reads the same list: `reconcileTasks` and `projectSupersededTaskHandoffs` already copy only the tasks they change.
-- `readOnlySnapshot()` of the SQLite registry store hands out a plain data view that is frozen all the way down: its root, every collection record, every row with everything nested in it, and every meta value. That closes the accessor-setter route (`view.receipts = {}`) and the direct one (`view.receipts[id].error = …`). The view is built from the store's own frozen copies, never from its working objects: the parse cache and the loaded rows the assembled grant decision rewrites in place stay private and mutable. A copy is made only for a row whose decided JSON changed. A view patched after a local commit keeps the previous view's frozen rows, and a reload stringifies each decided row and reuses the copy with the same JSON. A copy is never changed, so a view a reader already holds stays as it was. The keyed and path readers of the loaded file still serve the view.
+- `readOnlySnapshot()` of the SQLite registry store hands out a plain data view that is frozen all the way down: its root, every collection record, every row with everything nested in it, and every meta value. That closes the accessor-setter route (`view.receipts = {}`) and the direct one (`view.receipts[id].error = …`). The view is built from the store's own frozen copies, never from its working objects: the parse cache and the loaded rows the assembled grant decision rewrites in place stay private and mutable. A copy is made only for a row whose decided value changed. A view patched after a local commit keeps the previous view's frozen rows. A complete reload keeps a row's copy while its stored JSON and its MCP grant lists are both unchanged, which is what the recorded grant decisions already rest on; an operation owner, which a held delivery can rewrite, and a row a local commit patched in are compared by their decided JSON. A copy is never changed, so a view a reader already holds stays as it was. The keyed and path readers of the loaded file still serve the view.
 - A write may be built from that view: `upsert({ ...view.entries[id], status })` carries the view's frozen nested objects into the mutation. Before the view was frozen, a later edit inside the same mutation changed the shared rows; frozen, the mutation's tracking proxy cannot wrap them. Every value that enters a mutation (a row, a nested field, a replaced collection or meta value) has each frozen object in it replaced by a mutable copy, which loses no write because nobody could have changed a frozen object.
 - `quiet.dispatchVersion` reads that shared view through `registryAdmissionEvidence` (`src/lib/selfUpdate/quiet.ts`) instead of `agentRegistry().snapshot()`. It produces the same hash.
 - A complete read-only load drops parse-cache rows that it proved deleted (PR #2529). A read-only load no longer takes the metadata mutation baselines.
 
-The writer path that #2572 changes (`mutate`, `withWriter`) is untouched. Normalized-row caching and the duplicate held-delivery normalization on a foreign-write reload were not built. The foreign-write reload still costs about 85–105 ms per changed generation, and that is the next step if a profile shows it dominating.
+The writer path that #2572 changes (`mutate`, `withWriter`) is untouched; the write boundary above sits in the lazy loader's tracking traps and setters. Normalized-row caching and the duplicate held-delivery normalization on a foreign-write reload were not built. The foreign-write reload still costs about 85–105 ms per changed generation, and that is the next step if a profile shows it dominating.
 
 The same harness ran twice per side, alternating before (`d2fba8b`) and after, from fresh seeds of identical size: 32,219,217 registry bytes, 575 tasks, 150 + 194 pipelines and 881 + 827 attempts. Four cases were added to `probe-measure.ts` so that the bursts run the production handlers instead of a direct `registry.snapshot()`:
 
@@ -280,6 +280,26 @@ Per-request source counters (`runner.py counts`, restricted to these cases):
 - `dispatchVersion` falls from 17,571 JSON parses, 6,148 stringifies and 12 collection SELECTs to 0, 2 and 0.
 
 Inside one after-state, every case compared byte for byte with the replaced computation: `projectTaskPipelineIds(loadTasks().filter(…), loadPipelines())` for `/api/tasks`, `?project=viewer` and `?status=inbox&project=project-1`, and a files response built with `loadTasks()` (tasks, pipelines, workLinks and flows). The `dispatchVersion` hash is the same before and after. Client deadlines in `src/lib/runtime/client.ts` are unchanged.
+
+## After the review fix
+
+Review found that the first build froze the view's root and collection records but handed out the loaded rows themselves: `view.receipts[id].error = …`, a generation's `path` or a held delivery's `command` could still be changed, and the next reader got the change. The fix is the deep reader view and the write boundary described above. `src/lib/agent/sqliteRegistryStore.readOnlyView.test.ts` covers direct row fields, nested arrays and commands, a view that shares no object with the parse cache, a write built from a view row and edited in the same mutation, and a reload that copies only the changed row; those cases fail on the first build. `mcpAllowlist.test.ts` ("a recorded grant decision never outlives a change to any row it was assembled from") fails if the reload key leaves out the grant lists.
+
+The same harness, twice per side, alternating `d2fba8b` and the fixed head from fresh seeds of the size above (`registryForeignWrite` is one foreign write followed by `readOnlySnapshot()`). Medians in ms, wall / Viewer CPU; every response 200 with the same byte count on both sides:
+
+| Operation | Before (run 1; run 2) | After (run 1; run 2) |
+| --- | ---: | ---: |
+| Summary under six fence + project-task GET pairs (`burstHandlersSummary`) | 1119.3 / 1192.4; 1231.1 / 1280.4 | 32.7 / 32.5; 25.2 / 26.3 |
+| Full snapshot under the same load (`burstHandlersFull`) | 1247.9 / 1290.9; 1144.8 / 1204.7 | 31.1 / 29.8; 26.1 / 26.5 |
+| Quiet fence `quietDispatchVersion` | 214.1 / 212.7; 211.1 / 216.2 | 3.14 / 3.18; 2.46 / 2.46 |
+| Reload after a foreign write (`registryForeignWrite`) | 162.4 / 161.3; 175.5 / 176.4 | 181.9 / 201.5; 121.0 / 134.3 |
+| `GET /api/tasks?project=viewer` | 9.28 / 9.29; 10.36 / 10.56 | 0.68 / 0.68; 0.45 / 0.46 |
+| `GET /api/tasks` | 13.65 / 13.42; 13.26 / 12.79 | 5.03 / 5.05; 3.53 / 3.53 |
+| Files response, empty scan | 35.4 / 49.5; 29.8 / 40.5 | 28.3 / 34.3; 20.8 / 27.4 |
+| Quiet runtime summary | 4.22 / 5.40; 2.14 / 1.79 | 3.70 / 2.88; 1.65 / 1.26 |
+| Quiet runtime full | 6.00 / 4.24; 5.30 / 4.14 | 5.49 / 4.13; 4.16 / 3.08 |
+
+Summary and full snapshot under load are 34–49 times faster, with Viewer CPU down by the same order. Building the view after a complete reload, with every row unchanged, takes 15–23 ms at this size (six calls); keying that reload on each row's decided JSON instead cost 37–138 ms, which is why the reload keys on stored JSON and grant lists. A first view of a cold store copies every row once.
 
 ## Evidence command ledger
 
