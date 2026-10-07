@@ -14,6 +14,26 @@ rule it adds or changes carries the tag **[delta]**, and §B.16 is the
 install's implementation outline. Its code claims were checked at `f5e45ff2`
 on `main`.
 
+Revision of 2026-10-06, slice 1 of the relay integration: the
+`requester_context` feature (who asked, the chat's short-term memory, the
+service's tools for the requester's role, and hand-off) and a 30-day record
+of every relayed answer. It is **implemented**, and every rule it adds or
+changes carries the tag **[rc]**. It also corrects what the install keeps
+per chat. The chat conversations of the 2026-09-29 revision are still not
+implemented: no install lists `chat_conversations` in its claim, and before
+this revision nothing of an exchange outlived its run. The probe behind the
+transport choice is `docs/design/relay-integration-probe.md`.
+
+The operator amended that design on 2026-10-06, and the amendment is part of
+**[rc]**: every relay answer may use the engine's native web search (§B.6);
+the install keeps a per-member limit and declines a member past it as
+`member_limit` (§B.8); the requester block's `is_owner` is recorded and
+grants nothing yet; a hand-off carries a fixed line written by the install;
+and the slice 2 read feature is named `relay_tool_calls`. The owner's
+unrestricted tier and the persistent conversation per chat with compaction
+are deferred to the next slice; the requester is already the input of the
+profile choice and of the record, so that tier can branch on it.
+
 ## Originating requirement of this revision
 
 Operator, 2026-09-29, pinned on the task "Relay contract delta: one-tap
@@ -222,7 +242,9 @@ Validation against these quotes is in the last section.
   build host (see "Evidence"). `[phase 0]` is a fact the earlier verification
   stage established, restated here without its third-party detail.
 - **[delta]** marks a rule added or changed by the revision of 2026-09-29.
-  Untagged text is Phase 1 and holds unless a tagged rule says otherwise.
+  **[rc]** marks one added or changed by the revision of 2026-10-06, which
+  is implemented. Untagged text is Phase 1 and holds unless a tagged rule
+  says otherwise.
 - The only third-party products named are the two agent engines this
   repository already launches. No account, handle, id or home path appears;
   paths are repo-relative, `$HOME`-relative or `<state>`-relative.
@@ -289,12 +311,12 @@ the code:
 | Pairing | A short code and a link. The relay service resolves the owner's identity and the owner confirms it there; the install shows the same identity and the operator confirms it here. Only then is the credential issued. **[delta]** The install-side confirmation became a fallback (§A.3 rule 3). |
 | Liveness | No answer deadline. The relay service falls back only when the install is not polling, nobody claims, the claim is not acknowledged, the install declines or fails, or heartbeats stop for `stall_window_s` (45 s). |
 | Progress | At most one label per heartbeat: `{kind, label, tool, status, at}`. |
-| Answer | `{action: "reply" \| "ignore", text, reply_to}`, enforced by the CLI's schema option and checked again by the install. |
+| Answer | `{action: "reply" \| "ignore", text, reply_to}`, enforced by the CLI's schema option and checked again by the install. **[rc]** A request with a non-empty tool index also offers `"handoff"` (§A.8). |
 | Launch | A new `runEphemeralAgent` (`src/lib/agent/ephemeral.ts`) on the existing `launchDetached` primitive. |
 | Codex profile | A dedicated `CODEX_HOME` per account that holds only a link to the account's `auth.json`, feature switches, and a per-run model catalog without sub-agent and patch tools. |
-| Claude profile | `--restricted --safe-mode --tools "" --strict-mcp-config`, with no `--settings` and no `--mcp-config`. |
+| **[rc]** Claude profile | `--restricted --safe-mode --tools WebSearch --allowedTools WebSearch --strict-mcp-config`, with no `--settings` and no `--mcp-config`. No agent, command, file or other acting tool is offered. |
 | Names | `src/lib/externalRelay/`, `/api/external-relay/`, `ExternalRelay*`. **[delta]** Code names stay. Text a person reads uses the service's own name (§B.12). |
-| State | Two JSON files and one answer home per account under `<state>/external-relay/`. Chat text lives only in a per-run temp directory that is removed when the run settles. **[delta]** A chat's conversation keeps its chat text in that conversation's engine transcript (§B.14). |
+| State | Two JSON files and one answer home per account under `<state>/external-relay/`. **[rc]** Answer records keep the received chat text and answer for 30 days under `<state>/external-relay/answers/` (§B.2); each run's temp directory is removed when it settles. **[delta]** A chat's conversation keeps its chat text in that conversation's engine transcript (§B.14). |
 | **[delta]** Branding | The descriptor's `name` and a same-origin `icon_url`. The install fetches the icon, checks it and serves its own copy. A monogram stands in when there is none. |
 | **[delta]** One-tap pairing | "Connect in <channel>" and a QR code. The owner confirms once, in the service. A watcher in the Viewer completes the pairing without a click unless the redeemer is a stranger to this service's pairing history on the install (known owners, the previous owner, identities rejected with "Not me"). Codes live up to 30 minutes and refresh while the dialog is open. |
 | **[delta]** Conversations | One engine session per (pairing, target, chat key), resumed once per request by a fresh process in the same locked profile, and compacted by the engine. The service holds a chat's next request until the current turn's lease ends. |
@@ -366,8 +388,10 @@ the code:
     7 and 8) and `chat_list` (§A.4 rows 12 and 13). An install uses an
     optional part only when the descriptor lists it. A missing array means
     none. `ClaimRequest.features` lists what the install implements:
-    `chat_conversations` (§A.6 F7, §A.8). Both sides ignore feature names
-    they do not know. The install reads the descriptor again at least once a
+    **[rc]** `requester_context` (§A.8), which the install sends on every
+    claim, and `chat_conversations` (§A.6 F7, §A.8), which is specified and
+    not yet implemented, so no install sends it today. Both sides ignore
+    feature names they do not know. The install reads the descriptor again at least once a
     day (§B.3), so a service can add a feature without a new pairing.
 
 ## A.3 Pairing
@@ -876,6 +900,27 @@ unknown fields, rule A.2.6), so only the CLI answer schema in §A.8 is closed.
       "required": ["key"],
       "properties": { "key": { "$ref": "#/$defs/ChatKey" } }
     },
+    "Requester": {
+      "type": "object",
+      "required": ["key", "is_admin", "can_restrict_members", "can_delete_messages", "is_anonymous_admin", "is_owner"],
+      "properties": {
+        "key": { "$ref": "#/$defs/Id" },
+        "is_admin": { "type": "boolean" },
+        "can_restrict_members": { "type": "boolean" },
+        "can_delete_messages": { "type": "boolean" },
+        "is_anonymous_admin": { "type": "boolean" },
+        "is_owner": { "type": "boolean" }
+      }
+    },
+    "ServiceTool": {
+      "type": "object",
+      "required": ["name", "summary", "mode"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "summary": { "type": "string", "maxLength": 200 },
+        "mode": { "enum": ["direct", "handoff"] }
+      }
+    },
 
     "PairingStart": {
       "type": "object",
@@ -1009,7 +1054,10 @@ unknown fields, rule A.2.6), so only the CLI answer schema in §A.8 is closed.
           "items": { "$ref": "#/$defs/Message" }
         },
         "respond_to": { "anyOf": [{ "$ref": "#/$defs/Id" }, { "type": "null" }] },
-        "request_text": { "anyOf": [{ "type": "string", "maxLength": 4000 }, { "type": "null" }] }
+        "request_text": { "anyOf": [{ "type": "string", "maxLength": 4000 }, { "type": "null" }] },
+        "requester": { "anyOf": [{ "$ref": "#/$defs/Requester" }, { "type": "null" }] },
+        "short_term_memory": { "anyOf": [{ "type": "string", "maxLength": 16000 }, { "type": "null" }] },
+        "tools": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/ServiceTool" } }
       }
     },
     "Message": {
@@ -1086,7 +1134,7 @@ unknown fields, rule A.2.6), so only the CLI answer schema in §A.8 is closed.
           "properties": {
             "lease_id": { "$ref": "#/$defs/LeaseId" },
             "outcome": { "const": "declined" },
-            "reason": { "enum": ["not_configured", "disabled", "busy", "no_capacity", "unsupported_kind", "invalid_request", "profile_error"] },
+            "reason": { "enum": ["not_configured", "disabled", "busy", "no_capacity", "unsupported_kind", "invalid_request", "profile_error", "handoff", "member_limit"] },
             "detail": { "anyOf": [{ "type": "string", "maxLength": 200 }, { "type": "null" }] },
             "retry_after_s": { "anyOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }] }
           }
@@ -1179,6 +1227,34 @@ of a target's chats.
     { "chat_key": "ck_3Rw9TtYqL0pZx7VbN2mD4e", "title": "North pier club", "member_count": 42, "answered_by": "install" },
     { "chat_key": "ck_Vn2Qa8Lr5Ko1Jd6Hs3Xy0w", "title": "Helpers' room", "member_count": null, "answered_by": "service" } ],
   "next_cursor": "c2.7h3K" }
+```
+
+**[rc]** The schema above gained `Requester` and `ServiceTool`, the optional
+properties `Input.requester`, `Input.short_term_memory` and `Input.tools`,
+and the declined reasons `handoff` and `member_limit`. Tool names are unique
+within one request. The service sends the three properties, and accepts the
+two reasons, only when `requester_context` was listed both in the stored
+claim at enqueue and in the claim that takes the request (§A.8).
+A synthetic request's new input fields, a hand-off and a member past the limit:
+
+```json
+{ "requester": { "key": "u_a", "is_admin": true,
+    "can_restrict_members": true, "can_delete_messages": true,
+    "is_anonymous_admin": false, "is_owner": false },
+  "short_term_memory": "The meetup moved to Friday this week.",
+  "tools": [
+    { "name": "lookup_notes", "summary": "Search the chat's documents.", "mode": "direct" },
+    { "name": "restrict_member", "summary": "Mute a participant for a while.", "mode": "handoff" } ] }
+```
+
+```json
+{ "lease_id": "ls_Zq3vN8bY1xKp4LmT0aW9rE", "outcome": "declined", "reason": "handoff",
+  "detail": "The agent handed this request to the service's own assistant.", "retry_after_s": null }
+```
+
+```json
+{ "lease_id": "ls_Zq3vN8bY1xKp4LmT0aW9rE", "outcome": "declined", "reason": "member_limit",
+  "detail": "This member reached 10 answers in the last hour in this chat.", "retry_after_s": 1260 }
 ```
 
 ## A.6 Liveness and fallback
@@ -1303,7 +1379,9 @@ Rules:
   derives an outcome from it.
 - The Phase 1 answer profile has no tools (§B.6), so an install sends only
   `note` today. The `tool_*` kinds are defined now so a relay service's
-  renderer is ready when a later phase grants tools.
+  renderer is ready when a later phase grants tools. **[rc]** The native web
+  search is that first tool: a search sends `tool_start` (and on Codex
+  `tool_done`) with `tool: "web_search"`.
 - `Request.answer.progress = "none"` tells the install not to ask the agent
   for status lines. A relay service that wants in-chat progress sends
   `"notes"`.
@@ -1382,6 +1460,95 @@ most `answer.max_chars` characters; for `ignore`, it sends `text` as `""`;
 `reply_to` names a message in `conversation`, otherwise it is replaced with
 null. A check that fails completes the lease as `failed` / `invalid_answer`.
 The relay service checks again before posting.
+
+**[rc] Requester context.** A service that implements the feature sends
+three more `Input` fields, only when `requester_context` was listed both
+in the stored claim at enqueue and in the claim that takes the request.
+Each is optional. For requester and memory, absent and null mean the same.
+The tool index is an array; absent or empty adds no hand-off action.
+A request without the additions is answered exactly as above.
+
+| Field | Written by | Meaning |
+|---|---|---|
+| `requester` | the relay service | Exactly six fields: `key` is the triggering message's `author.key` in the same opaque domain; `is_admin`, `can_restrict_members`, `can_delete_messages`, `is_anonymous_admin` and `is_owner` are required booleans derived by the service. `is_owner` is false when the owner posts as an anonymous admin or a channel. |
+| `short_term_memory` | the relay service | The chat's short-term memory, as the service's own agent would see it. At most 16 000 Unicode code points. |
+| `tools` | the relay service | The service's tools that the requester's role may use: a unique `name` of at most 64 characters, a one-line `summary` of at most 200, and a `mode`. At most 100 items. String bounds count Unicode code points. |
+
+- `mode: "direct"` names a tool the install could call itself once a later
+  feature negotiates reads (`relay_tool_calls`, slice 2); `"handoff"` names
+  one only the service's own agent performs. An install that lists only
+  `requester_context` calls no tool, so to it both modes are reasons to hand
+  off. Until a pairing lists a read feature, the service SHOULD mark every
+  tool `handoff`.
+- The block informs the model and authorizes nothing. The service checks
+  every action against its own record of the message, never against what
+  the install reports. The service derives `is_owner` from its own record of
+  the message. The install records it with the exchange (§B.2), exempts the
+  owner from the member limit, and gives every requester the same answer profile in
+  this revision; a later owner tier will branch on it.
+- The install counts answers per `key` and chat for its member limit (§B.8).
+  All anonymous admins of a chat share one key, and everyone posting as one
+  channel shares that channel's key. Non-exempt requests sharing a key share
+  the count; `is_admin` or `is_owner` exempts the request.
+- Media of the triggering message and of the message it replies to travels
+  as text appended to that message's `text`: a transcript, a description, or
+  a status when neither is available. The trigger and the replied message
+  each stay within the service's 12 000-code-point media budget. When the
+  window is trimmed, older messages go first; the trigger and the message
+  it replies to stay.
+- The whole `Claimed` body, serialized as UTF-8 JSON, fits
+  `Descriptor.limits.max_response_bytes`, the memory and the index included.
+  When the context the service needs cannot fit, it answers the request
+  itself.
+- No platform user or chat id enters any of the three fields.
+
+The install adds them to the prompt as escaped JSON data sections after
+`<request>`, each only when the request carries it, and names them in the
+first frame paragraph as data written by other people:
+
+```
+<requester>
+[Input.requester as JSON]
+</requester>
+<short_term_memory>
+[Input.short_term_memory as a JSON string]
+</short_term_memory>
+<tools>
+[Input.tools as JSON]
+</tools>
+[frame: as above, plus, when <tools> is present: "handoff" posts nothing
+ and hands the message back to the service, whose own assistant answers it
+ with the tools in <tools>; this agent cannot call them; choose "handoff"
+ when a good answer needs one of them]
+```
+
+**[rc] Hand-off.** When `Input.tools` lists at least one tool, the answer
+schema's `action` gains a third value; the schema stays closed and every
+property required:
+
+```json
+{ "action": { "type": "string", "enum": ["reply", "ignore", "handoff"] } }
+```
+
+Whether to hand off is the model's judgment from the index and the message;
+there is no keyword list on either side. The install completes a `handoff`
+answer as `declined` / `handoff`, with the fixed `detail` below and
+`retry_after_s` null, and drops the model's `text` and `reply_to`: nothing the model wrote reaches
+the service. A `handoff` answer to a request without tools fails the answer
+check (`failed` / `invalid_answer`). On `declined` / `handoff` the service
+answers the original request with its own agent, from its own stored copy,
+with its own role checks, confirmations and charges, whatever the target's
+`fallback`, `"none"` included, and it posts no fallback notice: nothing
+failed. **[rc]** The completion's `detail` is a fixed line the install
+writes ("The agent handed this request to the service's own assistant."),
+so a person reading the service's logs sees why; it never carries model
+text or arguments.
+
+**[rc] Member limit.** When a request's requester is past the target's
+per-member limit (§B.8), the install completes it as `declined` /
+`member_limit` with a human-readable `detail` and `retry_after_s` set to
+when the oldest counted answer leaves the hour. The service treats it like
+any decline: its target's `fallback` decides whether its own agent answers.
 
 **[delta] The chat key.** A request MAY carry `chat: {key}`. The key is
 opaque, stable and scoped to one target:
@@ -1488,7 +1655,8 @@ the install.
 | 429 | `rate_limited` | Too many calls; `retry_after_s` and `Retry-After` say how long to wait. | Sleeps that long. |
 | 5xx | `server_error` | The relay service failed. | Backs off, doubling from 5 s to 60 s. |
 
-Completion reasons, all of which make the relay service fall back:
+Completion reasons. These follow the target's fallback setting, except
+**[rc]** `handoff`, which always asks the service's own agent to answer (§A.8):
 
 | Outcome | `reason` | When |
 |---|---|---|
@@ -1499,6 +1667,8 @@ Completion reasons, all of which make the relay service fall back:
 | declined | `unsupported_kind` | A request kind the install did not list. |
 | declined | `invalid_request` | The request fails the schema or its limits. |
 | declined | `profile_error` | The locked profile cannot be built for this account (§B.6). |
+| declined | **[rc]** `handoff` | The model chose to hand the request to the service's own agent; that agent answers whatever the target's fallback setting. |
+| declined | **[rc]** `member_limit` | The member reached the target's hourly answer limit in this chat (§B.8); follows the target's fallback setting. |
 | failed | `agent_error` | The CLI exited with an error or reported an error result. |
 | failed | `invalid_answer` | The answer failed the checks of §A.8. |
 | failed | `profile_violation` | A runtime tripwire saw a tool or server the profile excludes (§B.6.5). |
@@ -1537,6 +1707,12 @@ to version 1. The path, the header and `Descriptor.versions` stay at 1.
 | Chat conversations (§A.6 F7, §A.8) | Optional `Request.chat` and the `chat_conversations` claim feature | v1, additive | Ignores `chat` (rule A.2.6) and does not list the feature, so the service does not hold (F7) and the install answers one-shot. | No `chat`: answers one-shot. |
 | Chat management (§A.4 rows 12, 13) | Two new endpoints behind `chat_list`, and the new error code `cursor_expired` | v1, additive (new endpoints the install discovers) | Never calls them. The routing rule leaves every chat on, so this install answers the chats the owner did not switch off. | Hides the chat list. |
 
+**[rc] The revision of 2026-10-06.** Additive to version 1 as well.
+
+| Change | What changes on the wire | Class | An install without the feature with a revised service | A revised install with a service without it |
+|---|---|---|---|---|
+| Requester context (§A.8) | The `requester_context` claim feature; optional `Input.requester`, `Input.short_term_memory` and `Input.tools`; media text inside `Message.text`; the declined reasons `handoff` and `member_limit` | v1, additive | Does not list the feature, so it receives none of the fields and never sends `handoff`. Media text in `Message.text` reaches it too. | Receives no fields, so it answers with the two-action schema and never hands off. |
+
 No change needs version 2, because nothing a Phase 1 party already sends or
 accepts changes meaning. Two changes were shaped to stay that way. A busy
 chat reuses the declined reason `busy` with a detail and gets no new reason,
@@ -1558,8 +1734,10 @@ pairing.
 - Serve only over TLS, set no cookies, and redirect nothing under `{api}`.
 - Say in `Descriptor.description`, which the install shows during pairing,
   that a connected target is answered on the owner's machine with the
-  owner's own agent account. **[delta]** Also say that the machine keeps one
-  conversation per chat.
+  owner's own agent account. **[delta]** Once the install lists
+  `chat_conversations`, also say that the machine keeps one conversation per
+  chat. **[rc]** Say that the machine keeps a read-only record of each
+  exchange for 30 days.
 - **[delta]** Serve `icon_url` from the descriptor's origin, as PNG, JPEG or
   WebP of at most 256 KiB (§A.2 rule 10).
 - **[delta]** Under `one_tap_pairing`: at confirmation, show the install's
@@ -1578,6 +1756,13 @@ pairing.
   into a request that carries a key. Hold a chat's next request while its
   lease lives, for pairings that list `chat_conversations` (§A.6 F7). Keep
   platform ids out of chat listings and titles (§A.4).
+- **[rc]** Send the requester context only when `requester_context` was listed
+  both in the stored claim at enqueue and in the claim taking the request,
+  within `max_response_bytes`, and accept `handoff` and `member_limit` only from such a pairing. On `declined` /
+  `handoff`, answer the original request with the service's own agent
+  regardless of `fallback`, and take no argument of an action from the
+  install. On `declined` / `member_limit`, apply `fallback` as for any
+  decline (§A.8).
 
 ---
 
@@ -1628,6 +1813,7 @@ New files:
 | `<state>/external-relay/runs.json` | 0600 | In-flight runs only: request id, lease id, relay id, target id, child pid and process identity, owning Viewer pid and identity, run directory, start time. No chat text. |
 | `<state>/external-relay/codex-homes/<account id>/` | 0700 | The Codex answer home of §B.6.2. |
 | `<os temp root>/llv-external-relay-XXXXXX/` | 0700 (`mkdtemp`) | One run: `cwd/`, `schema.json`, `catalog.json` (Codex), `stdout.log`, `stderr.txt`, `answer.json` (Codex). Removed when the run settles, on every path. |
+| **[rc]** `<state>/external-relay/answers/<relay id>/<target id>/<start ms>_<request id>.json` | 0600 in 0700 directories | One record per claimed request whose ids are valid (`src/lib/externalRelay/answers.ts`): `Request.input` exactly as received (unknown fields included), the chat key, the requester (the six service fields: `key`, `is_admin`, `can_restrict_members`, `can_delete_messages`, `is_anonymous_admin`, `is_owner`), whether the run was admitted, the answer profile it ran with, engine and model, claim, start and end times, duration, `state` (`running` or `finished`), the outcome (`answered`, `declined:<reason>`, `failed:<reason>` or `lease_lost`; hand-off is `declined:handoff`), the answer or hand-off, and whether the service acknowledged the completion (`accepted`, `refused` or `unconfirmed`). No credential, no lease id. Written `running` when the agent launches and `finished` with the local decision before completion is sent, including early declines. Delivery starts `unconfirmed` and is updated after the receipt; a transport failure can change the outcome, while the locally generated answer or hand-off is preserved. Kept `RELAY_ANSWER_RETENTION_DAYS` (30) after it finished; readers hide an expired record at once and the controller removes it within the hour. |
 | **[delta]** `relays.json`, new optional fields | as above | Per relay: `features`, `verify_channel`, `icon` (`{type, sha256, source, fetchedAt}`) and `connected` (`{at, via: "auto" \| "click", acknowledged}`). Per pending pairing: `startedAt` (when the operator clicked Connect, carried across refreshes), `engine` (the setup guide's choice, `claude` or `codex`, absent when the pairing started in settings, carried across refreshes) and the watcher's last status. At the top level, per origin and kept after unpair: `knownOwners` (`{origin, namespace, id, display_name, addedAt}`, at most 20 per origin); `previousOwners` (`{origin, namespace, id, display_name, at}`, one per origin, overwritten by each completion); and `rejectedOwners` (`{origin, namespace, id, display_name, rejectedAt}`, at most 20 per origin, the oldest dropped first). Together they are the stranger check of §A.3 rule 3. Readers accept the file without these fields, so `v` stays 1. |
 | **[delta]** `<state>/external-relay/conversations.json` | 0600 | The chat conversation map (§B.14). Per conversation: id, relay id, target id, chat key, engine, engine session id, the account last used, cwd, turns, created and last-turn times, the ids of messages seen since the last compaction (at most 1 000), the frame digest, the last prompt size, compactions, and `state` (`idle`, `running` with its request id, or `broken`). It holds no chat text. |
 | **[delta]** `<state>/external-relay/conversations/<conversation id>/codex/` | 0700 | A Codex conversation's own `CODEX_HOME`: the `auth.json` link of the account that runs the turn, and the conversation's rollout and CLI state. |
@@ -1657,7 +1843,10 @@ New files:
   directory of the account's transcript store. `relays.json`, `runs.json`,
   `conversations.json` and the logs carry ids, digests, outcomes and
   durations only. A conversation is deleted by the rules of §B.14 and is
-  never backed up.
+  never backed up. **[rc]** The answer records are the one place under
+  `<state>` that holds chat text: what the service sent and what the agent
+  answered, for 30 days, never backed up, read only by the operator's own
+  routes (§B.9).
 
 ## B.3 The poller controller
 
@@ -1685,9 +1874,10 @@ Each round sends `ClaimRequest` with `wait_s` = min(25,
 `limits.max_wait_s`), `kinds: ["answer"]`, and `slots` for every enabled,
 configured target. When a run ends and frees a slot, the loop aborts its open
 poll and opens a new one with fresh slots, so the relay service never goes on
-believing a target is busy. **[delta]** It also sends `features:
-["chat_conversations"]` (§A.8). Today the claim body names only `kinds`
-(`src/lib/externalRelay/poller.ts:108` [code]).
+believing a target is busy. **[rc]** It also sends `features:
+["requester_context"]` (`CLAIM_FEATURES` in `src/lib/externalRelay/poller.ts`).
+**[delta]** The chat conversations of §B.14 add `chat_conversations` to that
+list once they are implemented; no install sends it today.
 
 **[delta] What else the controller runs**, all in the release that owns
 traffic and never in staging:
@@ -1744,18 +1934,41 @@ run whose owning Viewer is gone (its pid and identity no longer match,
 child's group if the child's own pid and identity still match
 (`terminateHeadlessReviewerGroup`, `headless.ts:118-146` [code]), completes
 the lease as `failed` / `install_restarted` (a 409 is fine), removes the run
-directory and drops the entry. Runs owned by a live Viewer are left alone. A
+directory and drops the entry. **[rc]** It also finishes that run's answer
+record as `failed:install_restarted` if it is still `running`. Delivery is
+`accepted` after a successful completion, `refused` after a terminal refusal,
+and `unconfirmed` after a transient failure or when the pairing is gone;
+an already finished local result keeps its answer and outcome, with delivery
+`unconfirmed` if its original receipt was pending. The same pass removes
+expired answer records once an hour. Runs
+owned by a live Viewer are left alone. A
 new generation does not take over another generation's run; that is deferred.
+**[rc]** The hourly record sweep also reconciles unfinished records without a
+ledger entry, including a failed archive write followed by successful ledger
+cleanup. It snapshots record files before reading the active ledger, preserves
+active runs, and settles recent abandoned records as `failed:install_restarted`
+with delivery `unconfirmed`. Abandoned records whose last write is older than
+the 30-day retention are removed even if settlement could not be written.
+The sweep recognizes the writer's atomic temporary-file names too, removing
+expired abandoned writes while preserving active runs and unrelated files.
 **[delta]** When the swept run was a conversation's turn, the sweep also sets
 that conversation back to `idle`. The transcript keeps whatever the
 interrupted turn wrote, and the next turn resumes it (§B.14).
 
 ## B.4 One claimed request
 
+**[rc]** Every request claimed here, unless it repeats one this install is
+already running, gets an answer record (§B.2): every completion below writes
+its terminal state, and a run that loses its lease is finished as
+`lease_lost`. A record that cannot be written is logged and changes nothing
+else.
+
 1. Validate the request against the schema and limits; otherwise complete
    `declined` / `invalid_request`.
 2. Find the target. Unknown or not configured: `declined` / `not_configured`.
-   Paused: `declined` / `disabled`. Concurrency full: `declined` / `busy`.
+   Paused: `declined` / `disabled`. **[rc]** A member past the target's
+   limit: `declined` / `member_limit` (§B.8). Concurrency full: `declined` /
+   `busy`.
 3. Resolve an account with
    `accountManager.resolveHeadlessSpawn(engine, null, [], target.project, target.model)`
    (`src/lib/accounts/manager.ts:557-594` [code]). `exhausted` completes
@@ -1779,7 +1992,8 @@ interrupted turn wrote, and the next turn resumes it (§B.14).
    unsent progress label or null.
 7. A heartbeat answered 409 `lease_lost` cancels the run: kill the group,
    drop the run, complete nothing.
-8. On exit: `done` with a valid answer completes `answered`; a failing
+8. On exit: `done` with a valid answer completes `answered`; **[rc]** a
+   valid `handoff` completes `declined` / `handoff` (§A.8); a failing
    answer check completes `failed` / `invalid_answer`; `failed` completes
    `failed` / `agent_error`; `timeout` completes `failed` / `hard_cap`;
    `violation` completes `failed` / `profile_violation`.
@@ -1889,11 +2103,11 @@ environment scrub, and keep separate flag sets.
 
 | Requirement | Codex | Claude | Evidence |
 |---|---|---|---|
-| No command execution | `--disable shell_tool --disable unified_exec` | `--tools ""` | [phase 0]; E3 |
+| No command execution | `--disable shell_tool --disable unified_exec` | `--tools` naming no command tool | [phase 0]; E3 |
 | No apps, plugins or connectors | `--disable apps --disable plugins` | `--strict-mcp-config` with no `--mcp-config` | [phase 0]: without them both engines expose the signed-in account's hosted apps or connectors |
-| No web search | `-c web_search=disabled` | `--tools ""` (no web tools) | [phase 0] |
-| No sub-agent tools | per-run catalog without `multi_agent_version`; `--disable multi_agent` alone does not remove them | `--tools ""` (no agent tool); init tripwire | E2; E6 |
-| No other acting tools | `--disable view_image`, catalog without `apply_patch_tool_type`, `--disable image_generation --disable goals --disable memories --disable browser_use --disable computer_use --disable sleep_tool` | `--tools ""`, `--restricted` | E3; E6 |
+| **[rc]** The native web search, and no other web tool | `-c web_search=live` | `--tools WebSearch --allowedTools WebSearch` (no `WebFetch`) | E9 |
+| No sub-agent tools | per-run catalog without `multi_agent_version`; `--disable multi_agent` alone does not remove them | **[rc]** `--tools WebSearch --allowedTools WebSearch` (no agent tool); init tripwire | E2; E6; E8 |
+| No other acting tools | `--disable view_image`, catalog without `apply_patch_tool_type`, `--disable image_generation --disable goals --disable memories --disable browser_use --disable computer_use --disable sleep_tool` | **[rc]** `--tools WebSearch --allowedTools WebSearch`, `--restricted` | E3; E6; E8 |
 | No personal instruction files | a dedicated answer `CODEX_HOME` with no `AGENTS.md`; `-c project_doc_max_bytes=0` blocks project files from the cwd and its ancestors | `--restricted --safe-mode`; cwd outside `$HOME` | E1; E6; test 7 |
 | No hooks | the answer home has no config, where Codex hooks live | `--safe-mode`; no `--settings` | Claude: E7. Codex: follows from the empty home (E1, E4) |
 | No MCP servers | `--ignore-user-config`; the answer home has no config | `--strict-mcp-config` | E4; E6 |
@@ -1947,7 +2161,7 @@ codex exec -
   --disable shell_tool --disable unified_exec --disable apps --disable plugins
   --disable multi_agent --disable goals --disable image_generation --disable memories
   --disable browser_use --disable computer_use --disable sleep_tool --disable view_image
-  -c web_search=disabled
+  -c web_search=live            [rc]; disabled for a profile without web search
   -c project_doc_max_bytes=0
   -c skills.include_instructions=false
   -c include_environment_context=false
@@ -1982,7 +2196,7 @@ Viewer's spawn endpoint.
 claude -p
   --output-format stream-json --verbose
   --restricted --safe-mode
-  --tools "" --strict-mcp-config
+  --tools WebSearch --allowedTools WebSearch --strict-mcp-config    [rc]; --tools "" without web search
   --json-schema '<schema JSON>'
   --no-session-persistence
   --model <model> --effort <effort>
@@ -2006,7 +2220,9 @@ cwd: <runDir>/cwd
   alone kept the marker out, and so did the pair; `--safe-mode` without
   `--restricted` was not run. Both are passed.
 - **`--tools ""`** leaves only `StructuredOutput`, the tool through which the
-  CLI returns the schema answer (E6). **`--strict-mcp-config`** with no
+  CLI returns the schema answer (E6). **[rc]** `--tools WebSearch` adds the
+  native search and nothing else; `--allowedTools WebSearch` lets it run in
+  print mode, where nobody can approve a tool (E9). **`--strict-mcp-config`** with no
   `--mcp-config` loads no MCP server, including the account's hosted
   connectors [phase 0].
 - **No `--session-id`**: there is no transcript to find. Provider accounts
@@ -2041,11 +2257,20 @@ catch drift in the field. Each kills the group and completes the lease as
 - **Claude:** the first `system` / `init` event must list exactly
   `tools: ["StructuredOutput"]` and `mcp_servers: []` (it did in the probes,
   E6). Any `tool_use` block other than `StructuredOutput` trips it too.
+  **[rc]** With web search the list must be exactly `StructuredOutput` and
+  `WebSearch`, and a `WebSearch` tool use is admitted (E9).
 - **Codex:** any `item.*` event whose item type is not `agent_message`,
   `reasoning` or `error` (a command, file change, MCP call, web search,
-  sub-agent call or anything new) trips it. This allowlist fails closed: an
+  sub-agent call or anything new) trips it. **[rc]** With web search the
+  item type `web_search` is admitted too, and nothing else new (E9). This allowlist fails closed: an
   unknown but harmless item type also fails the run, and the probe test of
   §B.11 is where a new CLI version shows it.
+
+**[rc] Who gets which profile.** `answerProfileFor(requester)` in
+`src/lib/externalRelay/profile.ts` chooses the profile from the request's
+requester. In this revision every requester, the owner included, gets the
+profile above with web search, and nothing is granted from `is_owner`. The
+owner's unrestricted tier is the next slice's, and branches there.
 
 ### B.6.6 [delta] The profile in a long-lived conversation
 
@@ -2073,6 +2298,8 @@ same tripwires on the next turn.
 | Claude | `assistant` content block `text` | `note` with the first non-empty line |
 | Claude | `tool_use` `StructuredOutput` (the answer) | none |
 | both | reasoning or thinking blocks | none; they carry no text [phase 0] |
+| **[rc]** Codex | `item.started` / `item.completed` with a `web_search` item | `tool_start` / `tool_done`, `tool: "web_search"` |
+| **[rc]** Claude | `tool_use` `WebSearch` | `tool_start`, `tool: "web_search"` (the result arrives in a later event that is not mapped) |
 
 Every label goes through `redactTranscriptText`
 (`src/components/feed/toolRedaction.ts:9-12` [code]), has its whitespace
@@ -2082,6 +2309,11 @@ asks for one status line when `answer.progress` is `"notes"`.
 `summarizeTool` (`src/components/feed/tools.ts:319` [code]) is the right
 source for `tool_*` labels once a later phase grants tools; Phase 1 has none
 to summarize.
+
+**[rc]** Native web search sends model-chosen queries to the engine's search
+provider. Chat text or prompt content can appear in those queries, including
+when chat text contains an instruction injection; the tool tripwire admits
+web search and does not inspect or redact its queries.
 
 ## B.8 Concurrency per target, and account capacity
 
@@ -2097,6 +2329,23 @@ to summarize.
   agents binds a dedicated account to that project; the project's binding
   then fences the pick (`src/lib/accounts/manager.ts:579-587` [code]).
 - There is no install-wide cap across targets (deferred).
+- **[rc] Member limit.** Each target has `memberLimitPerHour`: answers per
+  member per hour in each chat. Absent means the default,
+  `RELAY_MEMBER_ANSWERS_PER_HOUR` (10, `src/lib/externalRelay/profile.ts`);
+  null or 0 means no limit. Before reserving a run, the runner counts the
+  target's answer records of the last hour that were admitted to run for
+  the same requester `key` and the same chat key (a request without a key
+  counts against the member's other keyless ones). At the limit it declines
+  `member_limit` (§A.8). A requester with `is_owner` or `is_admin` is
+  never counted, including runs made in those roles before a later role
+  change. A request without a requester block is never limited. Hand-offs,
+  failed runs and running admissions count toward the member's limit.
+  An admission is counted only after the agent launches; declines during
+  capacity, drain or profile checks consume none of the member's allowance.
+  The count reads records, so it survives a restart, and two requests of one
+  member that arrive in the same instant can both pass. The setting is the
+  target's and applies to every chat of it; a chat of its own can get one
+  once the install lists chats (§B.15).
 - **[delta] One turn at a time per conversation.** A conversation runs at
   most one turn, across Viewer generations too. Reserving a turn sets the
   conversation to `running` inside the `conversations.json` lock. That lock
@@ -2127,9 +2376,11 @@ and 409 in staging (`isStagingMode`):
 | `GET /api/external-relay/pairings/[id]` | Polls the pairing once; returns its status and, when awaiting, the owner identity to confirm. |
 | `POST /api/external-relay/pairings/[id]` `{ownerId}` | Confirms; stores the credential; starts the loop. |
 | `DELETE /api/external-relay/pairings/[id]` | Cancels a pending pairing. |
-| `PATCH /api/external-relay/relays/[id]` | Pause or resume; target settings (engine, model, effort, project, concurrency, hard cap). |
+| `PATCH /api/external-relay/relays/[id]` | Pause or resume; target settings (engine, model, effort, project, concurrency, hard cap, **[rc]** `memberLimitPerHour`: a whole number from 0 to 1000, or null). |
 | `PATCH /api/external-relay/relays/[id]/targets/[targetId]` | Forwards `answered_by` and `fallback` to the relay service. |
 | `DELETE /api/external-relay/relays/[id]` | Unpairs: `DELETE {api}/pairing`, then removes the relay locally; when the service is unreachable it removes it anyway and says the service could not be told, as linked installs do. **[delta]** It also deletes the relay's conversations (§B.14). |
+| **[rc]** `GET /api/external-relay/relays/[id]/targets/[targetId]/answers` | The target's answer records, newest first, at most 50: times, duration, outcome, delivery, and the first 160 characters of the message and of the answer. Reads local files only; never calls the service. |
+| **[rc]** `GET /api/external-relay/relays/[id]/targets/[targetId]/answers/[requestId]` | One record in full, the received input included; 404 once it expired. |
 | **[delta]** `GET /api/external-relay/icons/[id]` | The stored icon of a relay or a pending pairing (§B.12). |
 | **[delta]** `POST /api/external-relay/pairings/[id]/refresh` | Replaces a pending pairing's code (§B.13). |
 | **[delta]** `PATCH /api/external-relay/relays/[id]` `{acknowledged: true}` | "That's me" on an automatic completion; records a known owner (§B.13). |
@@ -2141,6 +2392,25 @@ and 409 in staging (`isStagingMode`):
 status from `relays.json` and no longer calls the service (§B.13).
 `POST /api/external-relay/pairings/[id]` `{ownerId}` stays, for the click
 fallback. Every new route has the guards above.
+
+**[rc] Member limit.** Each target row has an "Answers per member per
+hour" / "Відповідей на учасника за годину" number field, showing the default
+until the operator sets one, saved when it loses focus. Empty or 0 is no
+limit. Its hint says that it counts in each chat, that the owner and chat
+admins are not counted, and that past it the service's fallback decides.
+
+**[rc] Recent answers.** Each target row of the relay card ends with a
+"Recent answers" / "Останні відповіді" disclosure. Opening it reads the list
+route above and shows each exchange as one button: its outcome ("Handed off
+to the service" / "Передано сервісу" for a hand-off), time and duration, and
+the beginning of the message and of the answer. A button opens that exchange
+in place, read-only: received time, duration, engine and model, outcome,
+what the service did with the completion, who asked (name, role, owner,
+anonymous) and how many service tools were listed, the message, the answer,
+and the whole input as received behind a fold. "Back to recent answers"
+returns to the list. There is no composer, no resume and no new panel.
+Everything is plain text. An empty list says no answers were kept in the
+last 30 days; a record that expired meanwhile says so.
 
 Target settings are validated against the existing catalogs:
 `validateLaunchModel` (`src/lib/agent/models.ts:84-93` [code]) and
@@ -2267,10 +2537,11 @@ No new driver.
   that owns traffic.
 - The answer homes live under `<state>` because they persist per account; the
   Viewer creates them at runtime, as their declared owner.
-- Chat text lives only in run directories under the OS temp root, with the
-  `llv-` prefix the temp sweeper recognizes (`src/lib/tempDirs.ts:27-28`
-  [code]). **[delta]** A chat conversation's transcript is the exception of
-  §B.2.
+- **[rc]** Answer records keep the received chat text and answer for 30 days
+  under `<state>/external-relay/answers/` (§B.2). Run directories under the
+  OS temp root also hold chat text until the run settles, with the `llv-`
+  prefix the temp sweeper recognizes (`src/lib/tempDirs.ts:27-28` [code]).
+  **[delta]** Chat conversations also keep their engine transcripts (§B.2).
 - **[delta]** The pairing watcher, the descriptor refresh, the chat routes
   and conversation turns all run inside the Viewer, which is their declared
   owner. The revision adds no entry point, so there is nothing new for
@@ -2323,6 +2594,11 @@ Bun pin are untouched, so `scripts/verify-runtime-host.ts` is not needed.
 | 18 | **[delta]** `ExternalRelaySection.dom.test.tsx`, the phone driver's "external relay" case | The service's name and avatar, and the monogram, in the menu rows and the dialog title; the one-tap panel (button, QR, folded code, countdown, refresh, "Show a new code"); the "Connected as" banner with both actions and the menu badge; the click fallback naming the previous owner; a target answered by another install; the chat list with switches, member counts, "Start fresh", "Show more" and the disabled state. At 390 and 1440, in both languages, no sideways scroll and 44 px controls on the phone. The readings go to `evidence/external-relay/settings.json`. No new driver. |
 | 19 | **[delta]** manual, once per engine, in the implementing stage | A live two-turn conversation on a real signed-in account at the lowest effort. The second turn answers from a fact given only in the first. The marker probe of test 8 still holds on the resume. The PR records the outcome without identities. |
 | 20 | **[delta]** `src/lib/externalRelay/poller.test.ts` against `testRelay.ts`, which implements F1b with L7 and the F7 hold, and the stub CLI of test 4 | A target of concurrency 1 with a chat key. Request 1 is claimed and heartbeated, so the open poll lists `free: 0`. Request 2 for the same chat is queued and held (F7). Request 1 completes before the install opens its next poll. Request 2 does not fall back: it is claimed by the poll reopened after completion, within `claim_window_s`, and runs as the conversation's second turn without `chat busy`. Two controls. With L7 removed from `testRelay.ts`, request 2 falls back by F1b at once, so the test goes red. With an install that keeps its `free: 0` poll open after request 1 completes and opens no new one, request 2 is not claimed on that poll and falls back by F2 after `claim_window_s`. |
+| 21 | **[rc]** `src/lib/externalRelay/protocol.test.ts`, `src/lib/externalRelay/prompt.test.ts` | A request without the new fields parses as before and gets the Phase 1 prompt byte for byte. The new fields parse with unknown inner fields dropped; the focused bounds refuse a 65-code-point name, a duplicate name, an unknown mode, 16 001 code points of memory, a non-boolean role flag; service-built claims cover all four roles, the 12 000-emoji media budget and 16 000-emoji memory. The install also refuses its lenient bounds of 129 tools and a 241-code-point summary. The sections are escaped and named as data; the hand-off rule appears only with tools. `handoff` is an answer only with tools, and drops text and `reply_to`. |
+| 22 | **[rc]** `src/lib/externalRelay/runner.test.ts` with the stub CLI of test 4 | With tools, the schema offers `handoff` and the completion is exactly `declined` / `handoff` with the fixed `HANDOFF_DETAIL` and null `retry_after_s`; without tools the schema keeps two actions. Records: input as received, engine, model, outcome, delivery `accepted` / `refused`, a declined request, a lost lease, no record for ids that cannot name a file, and neither the lease id nor the credential in any record. |
+| 23 | **[rc]** `src/lib/externalRelay/answers.test.ts`, `src/lib/externalRelay/poller.test.ts`, `src/app/api/external-relay/route.test.ts` | One 30-day constant: a record ended 29.99 days ago is read and kept, one ended 30.01 days ago is hidden and pruned, a running one is never pruned. The list is newest first and bounded. The orphan sweep finishes a dead owner's record as `failed:install_restarted` and leaves a live one running. The claim sends `features: ["requester_context"]`. Both routes keep every guard and refuse an agent caller. |
+| 24 | **[rc]** `ExternalRelaySection.dom.test.tsx`, and the `relay-answers` case of `scripts/capture-board-geometry.ts` | The disclosure, the list, one exchange read-only with no field to type into, back, empty and expired, in English and Ukrainian, chat text as plain text. The capture renders the list and one exchange in the real settings dialog at 1440 and 390 in both languages, with no sideways overflow. |
+| 25 | **[rc]** `src/lib/agent/ephemeral.test.ts`, `src/lib/externalRelay/progress.test.ts`, `src/lib/externalRelay/runner.test.ts`, `src/app/api/external-relay/route.test.ts`, `ExternalRelaySection.dom.test.tsx`, and test 7 with `LLV_ANSWER_PROFILE_PROBE=1` | Web search: the argument lists add only `web_search=live` and `--tools WebSearch --allowedTools WebSearch`, every other hardening stays; the tripwire admits the search events only with web search on, and still trips on `WebFetch`, `Bash`, MCP, command and file items; every relay run is launched with it and its record says so. Member limit: a member's third request at a limit of 2 is declined `member_limit` with its line and a `retry_after_s` under an hour; another chat, another member, an admin, the owner, a limit of 0 or null, and a request without a requester all pass; the route takes 0 to 1000 or null and refuses the rest; the field shows the default and saves a number or no limit. |
 
 ## B.12 [delta] Branding: the service's name and look
 
@@ -2515,6 +2791,13 @@ push, and only for a question (`:171-223`).
 Without a subscription, the dot and the banner are the whole notice.
 
 ## B.14 [delta] Chat conversations
+
+**[rc] Not implemented.** Nothing in this section runs today. Every request
+is answered one-shot by a fresh, session-less run (§B.5); the claim does not
+list `chat_conversations`; `Request.chat.key` is used only for the member
+limit and answer records, and nothing resumes or serializes by it; the run directory
+and the `runs.json` entry are removed when the run settles. What outlives an
+exchange is its read-only answer record (§B.2), which nothing resumes.
 
 **Identity and map.** A (relay id, target id, chat key) maps to one record in
 `conversations.json` (§B.2), created by the first request with that key. The
@@ -2724,6 +3007,13 @@ both engines emit progress events before a schema-valid answer; the first
 event arrives about 0.9 s (Codex) and 3.4 s (Claude) after spawn; and no Codex
 sandbox mode starts on the build host.
 
+**[rc] E8 and E9, 2026-10-06**, codex-cli 0.159.3 and Claude Code 2.1.284.
+
+| # | Finding |
+|---|---|
+| E8 | Against the recording stub (test 7's method, no quota), the Claude profile with `--tools WebSearch --allowedTools WebSearch` offers the model exactly `StructuredOutput` and `WebSearch`, and no instruction marker reaches the request. The Codex stub probe does not start on this host, on the base commit as on this one: the CLI refuses the `--disable future_worker` that the feature inventory reports. |
+| E9 | One live run per engine through `runEphemeralAgent`, on signed-in accounts at the lowest effort, in a scratch state directory, with a prompt asking for one web search. Codex printed `item.started` and `item.completed` with an item of type `web_search` (`query`, `action: {type: "search", query}`, `results`) and nothing else new; Claude's init listed `tools: ["StructuredOutput", "WebSearch"]`, `mcp_servers: []`, then a `tool_use` named `WebSearch` and its `tool_result`. With the tripwire before this revision both runs were stopped as violations; with the one of §B.6.5 both ended `done` with a schema-valid answer built on the search. |
+
 **A finding outside this lane.** E2 also applies to ordinary Codex spawns and
 to headless reviewers. Both rely on `multi_agent: false`
 (`src/lib/agent/spawnPolicy.ts:48-52` [code]) or `--disable multi_agent`
@@ -2834,7 +3124,7 @@ observations cannot settle is left to tests 15 and 19.
 | "no fixed answer deadline" | §A.6 rules L1–L4; the hard cap is an orphan guard the relay service never sees |
 | "post the final JSON answer" | §A.8, §A.4 complete |
 | "generic, stack-neutral … the first client … not named" | Part A names no platform; `Owner.namespace` and `target` are opaque |
-| Codex: shell, apps, plugins and web search off, no sub-agent tools, settled and proven | §B.6.1, §B.6.2; E2, E3; test 7 |
+| Codex: shell, apps and plugins off, no sub-agent tools; **[rc]** native web search enabled | §B.6.1, §B.6.2; E2, E3, E9; tests 7 and 25 |
 | Claude: restricted tools, `--strict-mcp-config`, no connectors | §B.6.3; E6; [phase 0] |
 | No personal instruction files, one marker probe per engine | E1 and E6 (stub marker probes), tests 7 and 8 |
 | Structured JSON answers; progress before the answer | §B.6.1, §B.7 |

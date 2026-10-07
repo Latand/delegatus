@@ -52,7 +52,7 @@ test("search_memory keeps the complete MCP envelope within 16,000 bytes for esca
 });
 
 test("search_memory open stays bounded, and rejects an overlong caller key", async () => {
-  const id = index.search({ query: "widget" }).items[0]!.id;
+  const id = (await index.search({ query: "widget" })).items[0]!.id;
   for (const clientRequestId of ["open-key", `o${"\u0002".repeat(255)}`]) {
     const result = await service.callTool("search_memory", { clientRequestId, id });
     expect(result.ok, JSON.stringify(result)).toBe(true);
@@ -68,7 +68,7 @@ test("search_memory budgets clamped limit metadata when opening an escaped topic
   const sourcePath = path.join(directory, "escaped.md");
   fs.writeFileSync(sourcePath, `---\nname: Widget${"\u0001".repeat(154)}\ndescription: Widget${"\u0001".repeat(394)}\ntype: feedback\n---\nWidget${"\u0001".repeat(2042)}\n`);
   await index.refresh([{ path: sourcePath, sourceKind: "claude_memory", engine: "claude", project: "project-a" }]);
-  const id = index.search({ query: "widget", kind: "preference" }).items[0]!.id;
+  const id = (await index.search({ query: "widget", kind: "preference" })).items[0]!.id;
   for (const limit of [999, "20", 0]) {
     const result = await service.callTool("search_memory", { clientRequestId: `clamped-open-${limit}`, id, limit });
     expect(result.ok).toBe(true);
