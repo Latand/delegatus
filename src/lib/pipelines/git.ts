@@ -26,111 +26,17 @@ export type PipelineGitResult = ({ ok: true; sha: string; baseBranch?: string } 
   /** Set only when `git commit` itself answered no for a passed stage. */
   commitRefusal?: StageCommitRefusal;
 };
-/** What a refused stage commit was about. `repairable` is a hint for the
-    controller, and it wants evidence that the hook judged the content of a
-    file this stage staged: a diagnostic placed at a line of that file
-    (`path:15: trailing whitespace`, `path:3:1 rule: message`, a lint report
-    that lists positions under the file), or a privacy verdict made only of
-    content findings. A staged path that the output merely mentions proves
-    nothing: a progress line names it, and so does a tool that could not open
-    it. A position needs a message after it, so a stack frame or a crash header
-    that places the file is no verdict. A commit that was killed, a hook whose
-    command was missing or could not run (127, 126), output that reports a
-    failed tool, configuration or machine (an errno, a stack trace, a missing
-    command, a privacy class outside the content ones), and every refusal
-    without that evidence leave it false, and the lane parks with what the
-    hook printed. */
-export type StageCommitRefusal = { repairable: boolean; paths: string[] };
+/** A refused stage commit, handed back to the stage that wrote it. The
+    controller does not judge what the hook printed: the stage reads it, repairs
+    its files or reports why it cannot. `paths` are the files the refused commit
+    held, for the message to name. */
+export type StageCommitRefusal = { paths: string[] };
 export type PipelineBaseResult = { ok: true; baseBranch: string; baseRef: string } | { ok: false; error: string };
 
-/** Privacy findings that are about what a file says. The gate's other classes
-    (`configuration_error`, `inspection_error`, `tool_unavailable`, the
-    provenance and media ones) report that it could not judge. */
-const PRIVACY_CONTENT_FINDINGS = new Set([
-  "credential", "email_address", "home_path", "known_value", "private_network", "resource_identifier", "transcript_content",
-]);
-
-/** The finding classes of every privacy verdict in the output. */
-function privacyFindings(lines: readonly string[]): string[] {
-  const findings: string[] = [];
-  lines.forEach((line, verdict) => {
-    if (line !== "PRIVACY GATE: FAIL") return;
-    for (const report of lines.slice(verdict + 1)) {
-      const finding = /^([a-z_]+): \d+$/.exec(report);
-      if (!finding) break;
-      findings.push(finding[1]!);
-    }
-  });
-  return findings;
-}
-
-function pathAt(line: string, file: string, from = 0): number {
-  for (let at = line.indexOf(file, from); at !== -1; at = line.indexOf(file, at + 1)) {
-    if (!/[\w.-]/.test(line[at - 1] ?? "")) return at;
-  }
-  return -1;
-}
-
-/** Output that says a tool, its configuration or the machine failed. Whatever
-    position it names, no edit to the staged files answers it. */
-const INFRASTRUCTURE_FAILURE = [
-  /\bE(?:ACCES|AGAIN|BUSY|CONNREFUSED|CONNRESET|DQUOT|IO|ISDIR|MFILE|NFILE|NOENT|NOMEM|NOSPC|NOTDIR|PERM|PIPE|ROFS|TIMEDOUT)\b/,
-  /too many open files|no such file or directory|permission denied|no space left on device|cannot allocate memory|out of memory|command not found|segmentation fault/i,
-  /* `/bin/sh` (dash) on a missing command: `<script>: <line>: <command>: not found`.
-     `git commit` exits 1 for any hook status, so the 127 never reaches us. */
-  /: \d+: \S+: not found$/,
-  /* A stack frame (`    at fn (file:1:20)`) or a Python traceback: a program crashed. */
-  /^\s+at\s.*:\d+:\d+\)?$/,
-  /^Traceback \(most recent call last\):/,
-];
-
-/** A line of the staged content a hook echoes under its diagnostic: a diff
-    line (`git diff --check` prints the added line after its position) or a
-    code frame row (`> 3 | const x = 1;`, `    |       ^`). What it spells is
-    the stage's text, never a report of what failed. */
-function sourceExcerpt(line: string): boolean {
-  return line.startsWith("+") || /^\s*>?\s*\d*\s*\|/.test(line);
-}
-
-/** A line as a report of what failed: an excerpt says nothing, and a name the
-    message quotes (`'ENOENT' is assigned a value but never used`) is the
-    stage's text too. An apostrophe inside a word opens no quote. */
-function reportedText(line: string): string {
-  if (sourceExcerpt(line)) return "";
-  return line.replace(/(^|[^\w])'[^']*'/g, "$1").replace(/"[^"]*"/g, "").replace(/`[^`]*`/g, "");
-}
-
-/** A diagnostic placed at a line of `file`, with a message after the position. */
-function locatesDiagnostic(lines: readonly string[], file: string): boolean {
-  return lines.some((line, index) => {
-    for (let at = pathAt(line, file); at !== -1; at = pathAt(line, file, at + 1)) {
-      const after = line.slice(at + file.length);
-      const position = /^:\d+(?::\d+)?/.exec(after);
-      if (position && /^(?::|\s)[\s\-–—]*[A-Za-z]/.test(after.slice(position[0].length))) return true;
-      /* The file on a line of its own, then `line:column  error` under it. */
-      if (after === "" && /^\s+\d+:\d+\s+(?:error|warning)\b/.test(lines[index + 1] ?? "")) return true;
-    }
-    return false;
-  });
-}
-
-async function stageCommitRefusal(commit: ExecResult, staged: readonly string[] | null, exec: ExecPort, cwd: string): Promise<StageCommitRefusal> {
-  let paths = staged ? [...staged] : [];
-  if (!staged) {
-    const index = await exec("git", ["diff", "--cached", "--name-only", "--no-renames", "-z", "HEAD", "--"], cwd);
-    if (index.code === 0) paths = index.stdout.split("\0").filter(Boolean);
-  }
-  const lines = `${commit.stderr}\n${commit.stdout}`.split("\n").map((line) => line.trimEnd());
-  const judged = typeof commit.code === "number" && commit.code !== 126 && commit.code !== 127 && !killedAtBound(commit);
-  /* A privacy class that says the gate could not judge vetoes the repair
-     whatever else the hook placed: the gate runs after the whitespace check,
-     and no edit to the staged files answers it. */
-  const privacy = privacyFindings(lines);
-  const unjudged = privacy.some((finding) => !PRIVACY_CONTENT_FINDINGS.has(finding));
-  const infrastructure = unjudged || lines.map(reportedText).some((line) => INFRASTRUCTURE_FAILURE.some((pattern) => pattern.test(line)));
-  const repairable = judged && !infrastructure && paths.length > 0
-    && (privacy.length > 0 || paths.some((file) => locatesDiagnostic(lines, file)));
-  return { repairable, paths };
+async function stageCommitRefusal(staged: readonly string[] | null, exec: ExecPort, cwd: string): Promise<StageCommitRefusal> {
+  if (staged) return { paths: [...staged] };
+  const index = await exec("git", ["diff", "--cached", "--name-only", "--no-renames", "-z", "HEAD", "--"], cwd);
+  return { paths: index.code === 0 ? index.stdout.split("\0").filter(Boolean) : [] };
 }
 
 function failure(step: string, result: ExecResult): { ok: false; error: string } {
@@ -774,7 +680,7 @@ export async function commitPipelineStage(
     ...(receipt ? ["-m", `Delegatus-Stage-Commit: ${receipt.id}`] : [])], pipeline.worktreeDir, controllerCommitIdentityEnv()));
   if (commit.code !== 0) {
     return { ...failure("committing the passed stage", commit),
-      commitRefusal: await stageCommitRefusal(commit, allowCommit ? null : changedOutputPaths, exec, pipeline.worktreeDir) };
+      commitRefusal: await stageCommitRefusal(allowCommit ? null : changedOutputPaths, exec, pipeline.worktreeDir) };
   }
   const head = (await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir));
   if (head.code !== 0 || !head.stdout.trim()) return failure("recording the passed stage commit", head);

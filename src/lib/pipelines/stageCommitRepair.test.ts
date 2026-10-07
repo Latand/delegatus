@@ -40,9 +40,14 @@ const PASS = "The study is written.\n\n```json\n{\"status\":\"pass\"}\n```";
 
 /* ---------- the commit itself, against a real repository and a real hook ---------- */
 
+const ESLINT = path.resolve("node_modules/.bin/eslint");
+type HookMode = "broken" | "tool-missing" | "tool-missing-after-check" | "privacy-unconfigured" | "timeout-after-check"
+  | "eslint-unconfigured-after-check" | "lints-nested";
+
 /** A repository of its own, with a pre-commit hook that refuses staged
-    whitespace the way the project's gate words it, or fails for a reason no
-    file can fix when `LLV_TEST_HOOK_BROKEN` is set. */
+    whitespace the way the project's gate words it, or, in a named mode, fails
+    the ways review rounds found: a broken slot, a missing tool, an unconfigured
+    privacy gate or linter, a timeout, a diagnostic in another file. */
 function hookedRepo() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-commit-repair-repo-"));
   const home = path.join(root, "home");
@@ -74,7 +79,11 @@ function hookedRepo() {
     /* The project's own gate order: staged whitespace, then privacy, here with
        a fingerprints file that does not exist, so the gate cannot judge. */
     `if [ -f "$(git rev-parse --git-dir)/hook-privacy-unconfigured" ]; then git diff --cached --check >&2; LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE="$(git rev-parse --git-dir)/missing-fingerprints.json" '${process.execPath}' '${path.resolve("scripts/privacy-publication-gate.ts")}' --base HEAD --require-known-values --paths $(git diff --cached --name-only) >&2; exit 1; fi`,
-    "if [ -f \"$(git rev-parse --git-dir)/hook-runs-staged-checks\" ]; then for check in $(git diff --cached --name-only -- '*.cjs'); do node \"$check\" || exit 1; done; fi",
+    /* Review round five: a check that times out, and a linter with no configuration, each after a genuine whitespace hit. */
+    "if [ -f \"$(git rev-parse --git-dir)/hook-timeout-after-check\" ]; then git diff --cached --check >&2; timeout --verbose 0.02s sleep 1; exit 1; fi",
+    `if [ -f "$(git rev-parse --git-dir)/hook-eslint-unconfigured-after-check" ]; then git diff --cached --check >&2; '${ESLINT}' $(git diff --cached --name-only) >&2; exit 1; fi`,
+    /* A lint of a file the stage did not stage, whose name ends like one it did. */
+    `if [ -f "$(git rev-parse --git-dir)/hook-lints-nested" ]; then '${ESLINT}' --no-config-lookup --rule 'no-unused-vars:error' nested/source.js >&2 || exit 1; fi`,
     "if ! out=$(git diff --cached --check 2>&1); then echo \"pre-commit: staged whitespace — $out\" >&2; exit 1; fi",
     "",
   ].join("\n"), { mode: 0o755 });
@@ -84,11 +93,7 @@ function hookedRepo() {
     stages: [], runs: [], cursor: null, state: "running", pausedState: null, stateDetail: null,
     srcPath: null, srcConversationId: null, createdAt: "now", closedAt: null,
   } as unknown as Pipeline;
-  return { root, repo, exec, run, calls, subject, breakHook: () => fs.writeFileSync(path.join(repo, ".git", "hook-broken"), ""),
-    loseHookTool: () => fs.writeFileSync(path.join(repo, ".git", "hook-tool-missing"), ""),
-    loseHookToolAfterCheck: () => fs.writeFileSync(path.join(repo, ".git", "hook-tool-missing-after-check"), ""),
-    runStagedChecks: () => fs.writeFileSync(path.join(repo, ".git", "hook-runs-staged-checks"), ""),
-    unconfigurePrivacy: () => fs.writeFileSync(path.join(repo, ".git", "hook-privacy-unconfigured"), "") };
+  return { root, repo, exec, run, calls, subject, hookMode: (mode: HookMode) => fs.writeFileSync(path.join(repo, ".git", `hook-${mode}`), "") };
 }
 
 function writeOutput(repo: string, relative: string, content: string) {
@@ -96,7 +101,7 @@ function writeOutput(repo: string, relative: string, content: string) {
   fs.writeFileSync(path.join(repo, relative), content);
 }
 
-test("a hook that refuses a read-only stage's declared output names that output as repairable, and the repaired output commits through the same hook", async () => {
+test("a hook that refuses a read-only stage's declared output hands back its files, and the repaired output commits through the same hook", async () => {
   const box = hookedRepo();
   try {
     writeOutput(box.repo, OUTPUT, "+ a line the stage wrote \n");
@@ -105,7 +110,7 @@ test("a hook that refuses a read-only stage's declared output names that output 
     if (refused.ok) throw new Error("unreachable");
     /* The park text is unchanged: the step, then what the hook printed. */
     expect(refused.error).toStartWith("committing the passed stage: pre-commit: staged whitespace — ");
-    expect(refused.commitRefusal).toEqual({ repairable: true, paths: [OUTPUT] });
+    expect(refused.commitRefusal).toEqual({ paths: [OUTPUT] });
     expect(box.run("rev-parse", "HEAD")).toBe(box.subject.lastPassedCommit!);
 
     writeOutput(box.repo, OUTPUT, "+ a line the stage wrote\n");
@@ -133,154 +138,64 @@ test("a read-only repair that touches a path outside the declared outputs is sti
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
-test("a writable stage's refused commit is repairable on the files it staged", async () => {
+test("a writable stage's refused commit hands back the files it staged", async () => {
   const box = hookedRepo();
   try {
     fs.writeFileSync(path.join(box.repo, "source.ts"), "export const value = 2; \n");
     const refused = await commitPipelineStage(box.subject, "build", true, box.exec);
-    expect(refused).toMatchObject({ ok: false, commitRefusal: { repairable: true, paths: ["source.ts"] } });
+    expect(refused).toMatchObject({ ok: false, commitRefusal: { paths: ["source.ts"] } });
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
-test("a hook that fails for a reason no staged file names is not repairable", async () => {
+/** What a real hook in `mode` prints when it refuses a declared output with a trailing space. */
+async function realRefusal(mode: HookMode): Promise<string> {
   const box = hookedRepo();
   try {
-    box.breakHook();
-    writeOutput(box.repo, OUTPUT, "+ a clean line\n");
-    const refused = await commitPipelineStage(box.subject, "study", false, box.exec, ["evidence/draft"], box.subject.lastPassedCommit);
-    expect(refused).toMatchObject({
-      ok: false,
-      error: "committing the passed stage: gate-slot: no slot became free within 600s",
-      commitRefusal: { repairable: false, paths: [OUTPUT] },
-    });
-  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
-});
-
-test("a commit that was killed at its time limit is not repairable, whatever it printed first", async () => {
-  const box = hookedRepo();
-  try {
-    writeOutput(box.repo, OUTPUT, "+ a line the stage wrote \n");
-    const exec: ExecPort = (command, args, cwd, overrides, options) => args[0] === "commit"
-      ? { code: null, signal: "SIGKILL", stdout: "", stderr: WHITESPACE_REFUSAL }
-      : box.exec(command, args, cwd, overrides, options);
-    const refused = await commitPipelineStage(box.subject, "study", false, exec, ["evidence/draft"], box.subject.lastPassedCommit);
-    expect(refused).toMatchObject({ ok: false, commitRefusal: { repairable: false } });
-  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
-});
-
-test("a hook whose tool is missing is not repairable, although its progress line names the staged file", async () => {
-  const box = hookedRepo();
-  try {
-    box.loseHookTool();
-    writeOutput(box.repo, OUTPUT, "+ a clean line\n");
-    const refused = await commitPipelineStage(box.subject, "study", false, box.exec, ["evidence/draft"], box.subject.lastPassedCommit);
-    expect(refused.ok).toBe(false);
-    if (refused.ok) throw new Error("unreachable");
-    expect(refused.error).toContain(`checking ${OUTPUT}`);
-    expect(refused.commitRefusal).toEqual({ repairable: false, paths: [OUTPUT] });
-  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
-});
-
-test("a hook whose tool is missing is not repairable, although the whitespace check before it placed a genuine defect in the staged file", async () => {
-  const box = hookedRepo();
-  try {
-    box.loseHookToolAfterCheck();
+    box.hookMode(mode);
     writeOutput(box.repo, OUTPUT, "+ a line the stage wrote \n");
     const refused = await commitPipelineStage(box.subject, "study", false, box.exec, ["evidence/draft"], box.subject.lastPassedCommit);
-    expect(refused.ok).toBe(false);
-    if (refused.ok) throw new Error("unreachable");
-    expect(refused.error).toContain(`${OUTPUT}:1: trailing whitespace.`);
-    /* `/bin/sh` words it `<hook>: <line>: <command>: not found`, and the commit exits 1, not 127. */
-    expect(refused.error).toMatch(/llv-test-tool-that-is-not-installed: (?:command )?not found/);
-    expect(refused.commitRefusal).toEqual({ repairable: false, paths: [OUTPUT] });
+    if (refused.ok) throw new Error(`the ${mode} hook accepted the commit`);
+    expect(refused.commitRefusal).toEqual({ paths: [OUTPUT] });
+    expect(box.run("rev-parse", "HEAD")).toBe(box.subject.lastPassedCommit!);
+    return refused.error.slice("committing the passed stage: ".length);
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
-});
+}
 
-test("a whitespace defect on a source line that spells an errno is repairable, and the repaired line commits", async () => {
+/** What a real hook prints when it lints `nested/source.js` while the stage staged only `source.js`. */
+async function nestedSuffixRefusal(): Promise<string> {
   const box = hookedRepo();
   try {
-    writeOutput(box.repo, OUTPUT, "+ const missingFile = \"ENOENT\"; \n");
-    const refused = await commitPipelineStage(box.subject, "study", false, box.exec, ["evidence/draft"], box.subject.lastPassedCommit);
-    expect(refused.ok).toBe(false);
-    if (refused.ok) throw new Error("unreachable");
-    /* The hook echoes the offending line under its diagnostic. */
-    expect(refused.error).toContain("++ const missingFile = \"ENOENT\";");
-    expect(refused.commitRefusal).toEqual({ repairable: true, paths: [OUTPUT] });
-
-    writeOutput(box.repo, OUTPUT, "+ const missingFile = \"ENOENT\";\n");
-    expect((await commitPipelineStage(box.subject, "study", false, box.exec, ["evidence/draft"], box.subject.lastPassedCommit)).ok).toBe(true);
+    fs.writeFileSync(path.join(box.repo, "source.js"), "export const value = 1;\n");
+    writeOutput(box.repo, "nested/source.js", "const unused = 1;\n");
+    box.run("add", "source.js", "nested/source.js");
+    box.run("-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "commit", "-m", "two sources");
+    box.hookMode("lints-nested");
+    fs.writeFileSync(path.join(box.repo, "source.js"), "export const value = 2;\n");
+    const refused = await commitPipelineStage(box.subject, "build", true, box.exec);
+    if (refused.ok) throw new Error("the lints-nested hook accepted the commit");
+    expect(refused.commitRefusal).toEqual({ paths: ["source.js"] });
+    return refused.error.slice("committing the passed stage: ".length);
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
-});
+}
 
-test("a staged check that crashes on a missing hook configuration is not repairable, although its stack frame places the staged file", async () => {
-  const box = hookedRepo();
-  try {
-    box.runStagedChecks();
-    const check = "evidence/draft/check.cjs";
-    writeOutput(box.repo, check, "const config = require(\"fs\").readFileSync(\".git/hook-config.json\", \"utf8\");\nconsole.log(config);\n");
-    const refused = await commitPipelineStage(box.subject, "study", false, box.exec, ["evidence/draft"], box.subject.lastPassedCommit);
-    expect(refused.ok).toBe(false);
-    if (refused.ok) throw new Error("unreachable");
-    expect(refused.error).toContain("ENOENT");
-    expect(refused.error).toContain(`${check}:1:`);
-    expect(refused.commitRefusal).toEqual({ repairable: false, paths: [check] });
-  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
-});
-
-test("a privacy gate that could not judge is not repairable, although the whitespace check before it placed a genuine defect in the staged file", async () => {
-  const box = hookedRepo();
-  try {
-    box.unconfigurePrivacy();
-    writeOutput(box.repo, OUTPUT, "+ a line the stage wrote \n");
-    const refused = await commitPipelineStage(box.subject, "study", false, box.exec, ["evidence/draft"], box.subject.lastPassedCommit);
-    expect(refused.ok).toBe(false);
-    if (refused.ok) throw new Error("unreachable");
-    expect(refused.error).toContain(`${OUTPUT}:1: trailing whitespace.`);
-    expect(refused.error).toContain("PRIVACY GATE: FAIL");
-    expect(refused.error).toContain("configuration_error: 1");
-    expect(refused.commitRefusal).toEqual({ repairable: false, paths: [OUTPUT] });
-  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
-});
-
-const EMFILE_REFUSAL = `pre-commit: eslint — could not open ${OUTPUT}: EMFILE: too many open files`;
-const LOCATED_EMFILE_REFUSAL = `${OUTPUT}:15:1: error: EMFILE: too many open files`;
-const PRIVACY_REFUSAL = "pre-commit: privacy\nPRIVACY GATE: FAIL\nhome_path: 1\nknown_value: 2\npre-commit: bun failed (1); gate failed";
-
+/* No pattern in the output decides anything: every refusal of `git commit` is
+   handed back whole, with the files the commit held. */
 test.each([
-  ["a located whitespace diagnostic", 1, WHITESPACE_REFUSAL, true],
-  ["a located lint diagnostic", 1, `pre-commit: eslint\n${OUTPUT}:3:1 no-unused-vars: 'x' is defined but never used`, true],
-  ["a lint report that lists positions under the file", 1, `/work/tree/${OUTPUT}\n  3:1  error  'x' is defined but never used  no-unused-vars\n\n1 problem`, true],
-  ["a privacy verdict on the staged content", 1, PRIVACY_REFUSAL, true],
-  ["a privacy gate that could not run", 1, "pre-commit: privacy\nPRIVACY GATE: FAIL\nconfiguration_error: 1", false],
-  ["a privacy gate that lacks a tool, beside a content finding", 1, "PRIVACY GATE: FAIL\nhome_path: 1\ntool_unavailable: 1", false],
-  ["a privacy gate that could not run, after a located whitespace defect", 1, `${WHITESPACE_REFUSAL}\npre-commit: privacy\nPRIVACY GATE: FAIL\nconfiguration_error: 1\ninspection_error: 1`, false],
-  ["a privacy gate that lacks a tool, after a located lint defect", 1, `${OUTPUT}:3:1 no-unused-vars: 'x' is defined but never used\nPRIVACY GATE: FAIL\ntool_unavailable: 1`, false],
-  ["a privacy gate that could not inspect a file, beside a content finding and a located defect", 1, `${WHITESPACE_REFUSAL}\nPRIVACY GATE: FAIL\nhome_path: 1\ninspection_error: 1`, false],
-  ["a privacy content verdict after a located whitespace defect", 1, `${WHITESPACE_REFUSAL}\n${PRIVACY_REFUSAL}`, true],
-  ["a resource failure that names the staged file", 1, EMFILE_REFUSAL, false],
-  ["a resource failure placed at a line of the staged file", 1, LOCATED_EMFILE_REFUSAL, false],
-  ["a stack frame in the staged file", 1, `TypeError: x is not a function\n    at run (/work/tree/${OUTPUT}:4:9)\n    at main (/work/tree/${OUTPUT}:9:3)`, false],
-  ["a crash header that places the staged file with no message", 1, `/work/tree/${OUTPUT}:4\nthrow new Error("config");\n^`, false],
-  ["a Python traceback beside a located line", 1, `Traceback (most recent call last):\n${OUTPUT}:2: in <module>\nModuleNotFoundError: No module named 'yaml'`, false],
-  ["a progress line that names the staged file", 1, `checking ${OUTPUT}\nfatal: unable to write new index file`, false],
-  ["a shell that could not find a command after a located defect", 1, `${WHITESPACE_REFUSAL}\n.git/hooks/pre-commit: 3: llv-lint: not found`, false],
-  ["a shell that could not find a command", 1, `${WHITESPACE_REFUSAL}\nsh: 1: llv-lint: not found`, false],
-  ["a located defect whose echoed source line spells an errno", 1, `${WHITESPACE_REFUSAL}\n++ const missingFile = "ENOENT"; `, true],
-  ["a located defect whose echoed prose says permission denied", 1, `${WHITESPACE_REFUSAL}\n+When the socket answers permission denied, retry. `, true],
-  ["a located defect whose echoed code frame spells an errno", 1, `${OUTPUT}:3:7 no-unused-vars: 'x' is defined but never used\n> 3 | const x = "EACCES";\n    |       ^`, true],
-  ["a lint message that quotes an errno name", 1, `${OUTPUT}:3:7 no-unused-vars: 'ENOENT' is assigned a value but never used`, true],
-  ["a hook that could not find its command", 127, WHITESPACE_REFUSAL, false],
-  ["a hook that could not be executed", 126, WHITESPACE_REFUSAL, false],
-] as const)("%s decides whether the stage is asked", async (_name, code, stderr, repairable) => {
-  const box = hookedRepo();
-  try {
-    writeOutput(box.repo, OUTPUT, "+ a line the stage wrote\n");
-    const exec: ExecPort = (command, args, cwd, overrides, options) => args[0] === "commit"
-      ? { code, stdout: "", stderr }
-      : box.exec(command, args, cwd, overrides, options);
-    const refused = await commitPipelineStage(box.subject, "study", false, exec, ["evidence/draft"], box.subject.lastPassedCommit);
-    expect(refused).toMatchObject({ ok: false, commitRefusal: { repairable, paths: [OUTPUT] } });
-  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+  ["a slot that never became free", "broken", ["gate-slot: no slot became free within 600s"]],
+  ["a tool that is missing", "tool-missing", [`checking ${OUTPUT}`, "not found"]],
+  ["a tool that is missing after a whitespace hit", "tool-missing-after-check", [`${OUTPUT}:1: trailing whitespace.`, "llv-test-tool-that-is-not-installed"]],
+  ["a privacy gate that could not judge after a whitespace hit", "privacy-unconfigured", [`${OUTPUT}:1: trailing whitespace.`, "PRIVACY GATE: FAIL", "configuration_error: 1"]],
+  ["a check that timed out after a whitespace hit", "timeout-after-check", [`${OUTPUT}:1: trailing whitespace.`, "timeout: sending signal TERM to command"]],
+  ["a linter with no configuration after a whitespace hit", "eslint-unconfigured-after-check", [`${OUTPUT}:1: trailing whitespace.`, "eslint.config"]],
+] as const)("a real hook refusal (%s) is handed back with all it printed", async (_name, mode, printed) => {
+  const output = await realRefusal(mode);
+  for (const line of printed) expect(output).toContain(line);
+});
+
+test("a real lint refusal of another file whose name ends like the staged one is handed back with all it printed", async () => {
+  const output = await nestedSuffixRefusal();
+  expect(output).toContain("nested/source.js");
+  expect(output).toMatch(/1:7\s+error/);
 });
 
 /* ---------- the controller, over an isolated store ---------- */
@@ -434,9 +349,8 @@ async function runningStage(h: ReturnType<typeof harness>, access: "read-only" |
 }
 
 const refusal = (stderr: string): ExecResult => ({ code: 1, stdout: "", stderr });
-/** What the real hook above prints when its whitespace check is followed by a command `/bin/sh` cannot find. */
-const MISSING_TOOL_REFUSAL = `${OUTPUT}:1: trailing whitespace.\n+ a line the stage wrote \n.git/hooks/pre-commit: 3: llv-test-tool-that-is-not-installed: not found`;
-const UNCONFIGURED_PRIVACY_REFUSAL = `${WHITESPACE_REFUSAL}\n+ a line the stage wrote \npre-commit: privacy\nPRIVACY GATE: FAIL\nconfiguration_error: 1\ninspection_error: 1`;
+const BLOCKED_REASON = "the hook's own tooling failed; no edit to my files answers it";
+const BLOCKED = `My files cannot answer this refusal.\n\n\`\`\`json\n${JSON.stringify({ status: "fail", blocked: true, blockedReason: BLOCKED_REASON })}\n\`\`\``;
 const study = () => loadPipelines()[0]!.runs[0]!.attempts[0]!;
 
 test.each(["read-only", "read-write"] as const)("a passed %s stage whose output a pre-commit hook refuses repairs it in the same conversation and advances without the operator", async (access) => {
@@ -510,26 +424,60 @@ test("a second refusal after the repair parks with the hook's output", async () 
   expect(h.requests).toHaveLength(1);
 });
 
+/* Review round five found these two the controller's classifier got wrong.
+   The output is what a real hook printed; the stage, not the controller, reads it. */
 test.each([
-  ["a hook failure no stage file names", refusal("gate-slot: no slot became free within 600s"), "committing the passed stage: gate-slot: no slot became free within 600s"],
-  ["a resource failure that names the stage's file", refusal(EMFILE_REFUSAL), `committing the passed stage: ${EMFILE_REFUSAL}`],
-  ["a resource failure placed at a line of the stage's file", refusal(LOCATED_EMFILE_REFUSAL), `committing the passed stage: ${LOCATED_EMFILE_REFUSAL}`],
-  ["a commit killed at its time limit", { code: null, signal: "SIGKILL", stdout: "", stderr: WHITESPACE_REFUSAL } as ExecResult, `committing the passed stage: ${WHITESPACE_REFUSAL}`],
-  ["a hook command missing after a located defect", refusal(MISSING_TOOL_REFUSAL), `committing the passed stage: ${MISSING_TOOL_REFUSAL}`],
-  ["a privacy gate that could not run after a located defect", refusal(UNCONFIGURED_PRIVACY_REFUSAL), `committing the passed stage: ${UNCONFIGURED_PRIVACY_REFUSAL}`],
-])("%s parks immediately and asks the stage for nothing", async (_name, answer, detail) => {
+  ["a check that timed out after a whitespace hit", async () => refusal(await realRefusal("timeout-after-check"))],
+  ["a linter with no configuration after a whitespace hit", async () => refusal(await realRefusal("eslint-unconfigured-after-check"))],
+  ["a lint diagnostic in another file whose name ends like the staged one", async () => refusal(await nestedSuffixRefusal())],
+  ["a privacy gate that could not judge after a whitespace hit", async () => refusal(await realRefusal("privacy-unconfigured"))],
+  ["a hook failure no stage file names", async () => refusal("gate-slot: no slot became free within 600s")],
+  ["a commit killed at its time limit", async () => ({ code: null, signal: "SIGKILL", stdout: "", stderr: WHITESPACE_REFUSAL }) as ExecResult],
+] as const)("%s is handed to the stage once, verbatim, and the stage's blocked report parks with the hook's output", async (_name, answer) => {
+  const refused = await answer();
+  const detail = `committing the passed stage: ${refused.stderr.trim()}`;
   const h = harness();
   await runningStage(h);
-  h.hookAnswers(answer);
+  h.hookAnswers(refused);
   h.advance(1_000);
   h.endTurn(PASS);
   await tickPipelines([], h.ports);
 
+  /* Exactly one request, carrying every line the hook printed. */
+  expect(h.requests).toHaveLength(1);
+  expect(h.requests[0]!.text).toContain(detail);
+  expect(h.requests[0]!.text).toContain("\"blocked\":true");
+  expect(loadPipelines()[0]!.state).toBe("running");
+  expect(study().commitRepair).toMatchObject({ detail, requestedAt: expect.any(String) });
+
+  /* The stage judged the refusal outside its files and said so. */
+  h.advance(TICK_MS);
+  h.endTurn(BLOCKED);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+
   const parked = loadPipelines()[0]!;
   expect(parked.state).toBe("needs_decision");
-  expect(parked.stateDetail).toBe(detail);
-  expect(h.requests).toEqual([]);
-  expect(study().commitRepair).toBeUndefined();
+  expect(parked.stateDetail).toStartWith(detail);
+  expect(parked.stateDetail).toContain(BLOCKED_REASON);
+  expect(study()).toMatchObject({ state: "needs_decision", error: parked.stateDetail });
+  /* Not committed again, and not asked again. */
+  expect(h.calls.filter((call) => call.startsWith("git commit"))).toHaveLength(1);
+  expect(h.requests).toHaveLength(1);
+});
+
+test("a hint that the output names none of the stage's files is only a hint: the stage is asked the same way", async () => {
+  for (const [stderr, hinted] of [["gate-slot: no slot became free within 600s", true], [WHITESPACE_REFUSAL, false]] as const) {
+    const h = harness();
+    await runningStage(h);
+    h.hookAnswers(refusal(stderr));
+    h.advance(1_000);
+    h.endTurn(PASS);
+    await tickPipelines([], h.ports);
+    expect(h.requests).toHaveLength(1);
+    expect(h.requests[0]!.text.includes("names none of these files")).toBe(hinted);
+    expect(loadPipelines()[0]!.state).toBe("running");
+  }
 });
 
 test("a read-only repair that leaves an undeclared path changed parks on the fence", async () => {

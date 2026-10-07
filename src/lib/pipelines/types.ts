@@ -516,8 +516,8 @@ export type PipelineStageAttempt = {
     clientMessageId?: string;
   };
   /** The one repair the controller asked this attempt for after a repository
-      hook refused the commit of its passed work over a file the stage itself
-      staged. `detail` is the park text that refusal would have produced and
+      hook refused the commit of its passed work; the stage repairs its files
+      or reports a blocked verdict, which parks. `detail` is the park text that refusal would have produced and
       `messageTs` the stage's last message when it was refused, so the repair
       is over on the first completed turn after it. `sendingAt` is stored
       before a request leaves and kept until the delivery surface answers, so a

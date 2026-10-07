@@ -3420,13 +3420,18 @@ function routeFailedAttempt(
  * back to that conversation once and the same commit runs again through the
  * same hook.
  *
- * Only for a refusal the stage's own files can answer (`StageCommitRefusal`),
- * only for a pane-less structured attempt with a delivery seam, and only once:
- * the next refusal parks with what the hook printed, as every refusal did
- * before. The read-only fence is the committer's and is untouched, so a repair
- * that leaves an undeclared path changed parks there. The whole wait is bounded
- * by `refusedAt`, which covers a delivery surface that keeps refusing or
- * throwing and a repair turn that never ends. The record is in the store before
+ * The controller does not judge what the hook printed: no pattern in it
+ * permits or vetoes the request, because every such classifier was wrong on a
+ * case the next review found. The stage reads the output and decides. It
+ * repairs its own files and the commit runs again through the same hook, or it
+ * reports a blocked verdict with the reason (infrastructure, a file it does not
+ * own, a gate misconfiguration) and the lane parks with that reason after what
+ * the hook printed. Only for a pane-less structured attempt with a delivery
+ * seam, and only once: the next refusal parks with what the hook printed, as
+ * every refusal did before. The read-only fence is the committer's and is
+ * untouched, so a repair that leaves an undeclared path changed parks there.
+ * The whole wait is bounded by `refusedAt`, which covers a delivery surface
+ * that keeps refusing or throwing and a repair turn that never ends. The record is in the store before
  * the request leaves: a settlement that dies around the delivery finds it on
  * the next tick, so it neither commits again nor starts a second wait. So is
  * the moment the request leaves: the delivery surface may have admitted a
@@ -3436,26 +3441,42 @@ function routeFailedAttempt(
  * keeps the refusal the stage was asked about.
  */
 const COMMIT_REPAIR_WAIT_MS = 20 * 60_000;
-const COMMIT_REPAIR_DETAIL = "a commit hook refused the passed stage's files; the stage is repairing them once";
-const COMMIT_REPAIR_OUTPUT_CHARS = 4_000;
+const COMMIT_REPAIR_DETAIL = "a commit hook refused the passed stage's commit; the stage is reading the hook's output once to repair its files or report why it cannot";
+/** Generous: the stage needs every line the hook printed. */
+const COMMIT_REPAIR_OUTPUT_CHARS = 64_000;
 const COMMIT_REPAIR_PATHS = 50;
+
+/** The hook's output whole, or its head and tail around a marked cut. */
+function hookOutputForRepair(detail: string): string {
+  if (detail.length <= COMMIT_REPAIR_OUTPUT_CHARS) return detail;
+  const half = COMMIT_REPAIR_OUTPUT_CHARS / 2;
+  return `${detail.slice(0, half)}\n[… ${detail.length - COMMIT_REPAIR_OUTPUT_CHARS} characters of the hook's output omitted …]\n${detail.slice(-half)}`;
+}
 
 function stageCommitRepairText(stage: PipelineStage, attempt: PipelineStageAttempt, detail: string, paths: readonly string[]): string {
   const outputs = attemptStage(stage, attempt).outputs ?? [];
   const readOnly = attempt.effectiveRole.access !== "read-write";
+  /* A hint for the stage, never a gate: the controller acts the same either way. */
+  const named = paths.some((file) => detail.includes(file));
   return [
     "Your stage passed, and the repository's commit hook then refused the pipeline controller's commit of your work."
       + " The verdict you gave stands; nothing about it is in question.",
-    `What the hook printed:\n${redactBounded(detail, COMMIT_REPAIR_OUTPUT_CHARS)}`,
-    `Files in the refused commit:\n${paths.map((file) => `- ${file}`).join("\n")}`,
+    `What the hook printed, verbatim:\n${hookOutputForRepair(detail)}`,
+    `Files in the refused commit:\n${paths.length ? paths.map((file) => `- ${file}`).join("\n") : "(none could be listed)"}`
+      + (paths.length && !named ? "\nHint: the hook's output names none of these files, so the refusal may be about something else." : ""),
+    "Decide from that output whether your own files can answer it.",
     readOnly
-      ? `Repair those files so the hook accepts them. This stage is read-only: change only its declared outputs (${outputs.join(", ")}),`
+      ? `If they can, repair them so the hook accepts them. This stage is read-only: change only its declared outputs (${outputs.join(", ")}),`
         + " leave every other path exactly as it is, and do not commit, stage or push. The controller commits when your turn ends."
-      : "Repair those files so the hook accepts them and leave the result in the worktree or in a commit of your own on this branch;"
+      : "If they can, repair them so the hook accepts them and leave the result in the worktree or in a commit of your own on this branch;"
         + " the controller commits whatever is uncommitted when your turn ends.",
     "The hook decides again on that commit, so fix what it names: never skip, disable or bypass it (no --no-verify, no skip variable,"
-      + " no hook path change). If the refusal is something your files cannot fix, change nothing and say so in one line."
-      + " No new stage report is needed. This is the only repair turn; a second refusal parks the stage for the operator.",
+      + " no hook path change).",
+    "If they cannot (the tool, the machine or the gate's configuration failed, or the output is about a file this stage does not own),"
+      + " change nothing and end your turn with one fenced JSON block, the reason in blockedReason; the stage then parks for the operator"
+      + " with the hook's output and your reason. stage_report is closed for this stage, so this block is how you report it:",
+    "```json\n{\"status\":\"fail\",\"blocked\":true,\"blockedReason\":\"<why your files cannot answer this refusal>\"}\n```",
+    "This is the only repair turn; a second refusal parks the stage for the operator.",
   ].join("\n\n");
 }
 
@@ -3507,7 +3528,7 @@ async function requestStageCommitRepair(
   pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
   result: Extract<import("./git").PipelineGitResult, { ok: false }>, ports: PipelinePorts, persist: () => void | Promise<void>,
 ): Promise<boolean> {
-  if (!result.commitRefusal?.repairable || attempt.commitRepair) return false;
+  if (!result.commitRefusal || attempt.commitRepair) return false;
   if (stage.kind !== "run" || attempt.paneId || !attempt.conversationId || !attempt.agentPath || !ports.resumeSeveredTurn) return false;
   const durable = await stageRepairEvidence(attempt, ports);
   attempt.commitRepair = {
@@ -3527,6 +3548,15 @@ async function stageRepairEvidence(attempt: PipelineStageAttempt, ports: Pipelin
   return await Promise.resolve()
     .then(() => ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath!, undefined, attempt.startedAt))
     .catch(() => null);
+}
+
+/** The stage's reason when its repair turn ended on a verdict other than
+    pass (`blocked:true` is the one it is asked for), null otherwise. */
+function stageCommitRepairDeclined(text: string): string | null {
+  const parsed = parsePipelineStageVerdict(text);
+  if (!parsed || !("verdict" in parsed)) return null;
+  if (parsed.verdict.blocked !== true && parsed.verdict.status === "pass") return null;
+  return parsed.verdict.blockedReason ?? (parsed.output || `the stage answered ${parsed.verdict.status}`);
 }
 
 /** The park text for a stage that was asked to repair and is parked by `reason`. */
@@ -3565,6 +3595,8 @@ async function stageCommitRepairSettled(
     if (expired) return giveUp("The stage was asked once to repair its files and did not finish that turn in time.");
     return false;
   }
+  const declined = stageCommitRepairDeclined(durable.message?.text ?? "");
+  if (declined !== null) return giveUp(`The stage was asked once to repair its files and reported it cannot: ${declined}`);
   repair.settledAt = ports.now();
   if (pipeline.stateDetail === COMMIT_REPAIR_DETAIL) pipeline.stateDetail = null;
   await persist();
