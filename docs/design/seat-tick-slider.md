@@ -265,6 +265,18 @@ with the old chip down to its glyph and dot, and a knob on the full travel
 pushed «Зупинити хост» 21 px outside it. The drag reads the travel that is
 drawn, so a stop is 10 px there.
 
+**Notches.** A notch marks a stop the thumb is not on. The thumb is wider
+than a step, so a notch closer to it than its half, the notch's radius and a
+2 px gap is not drawn, and it fades back in over the next 0.3 of a stop as the
+thumb moves away. At a stop on the full pill that leaves the notches two and
+three stops away; on the knob the same rule leaves those two stops away.
+
+**Off is grey in both themes.** The tint behind the thumb, the hover border
+and the drag's halo are mixed in OKLab. In OKLCH Chrome reads the hue of a
+grey as missing and takes it as 0°, so grey over the dark pill came out a
+faint wine red. The ramp between stops stays in OKLCH, where one side always
+has a hue.
+
 **Two readings the build settled.**
 
 - A release on the stop already set writes nothing, an expiry included. The

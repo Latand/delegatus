@@ -509,6 +509,16 @@ test("a value that is not a preset sits between the stops, says its exact number
   }
 });
 
+test("a notch stands clear of the thumb: the distance it needs grows with the thumb's word", async () => {
+  /* Half the thumb, the notch's 2 px radius and a 2 px gap, in 20 px steps. */
+  await mount();
+  expect(control().style.getPropertyValue("--tick-clear")).toBe("1.350");
+  row = { enabled: true, wakeIntervalMinutes: 1439, reason: "a release afternoon", until: null };
+  await remount();
+  expect(thumb().textContent).toBe("1439 min");
+  expect(control().style.getPropertyValue("--tick-clear")).toBe("1.650");
+});
+
 test("a temporary setting shows the hourglass outside the pill and says until when", async () => {
   row = { enabled: true, wakeIntervalMinutes: 10, reason: "a release afternoon", until: new Date(Date.now() + 150 * 60_000).toISOString() };
   await mount();

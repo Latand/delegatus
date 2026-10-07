@@ -16525,6 +16525,13 @@ describe("seat tick switch: four stops in the seat header and the phone's seat r
     const row = control.closest("[data-seat-tick-row]");
     const label = row ? row.querySelector('[data-mobile2-open="tick"] span:last-child') : null;
     const tops = controls ? [...controls.children].map(el => Math.round(el.getBoundingClientRect().top + el.getBoundingClientRect().height / 2)) : [];
+    const edge = thumb.getBoundingClientRect();
+    /* A notch that is drawn at all, within 1 px of the thumb's edge or under it. */
+    const notchesTouching = [...control.querySelectorAll(".seat-tick-notch")].flatMap((notch, index) => {
+      const r = notch.getBoundingClientRect();
+      const opacity = Number(getComputedStyle(notch).opacity);
+      return opacity > 0.02 && r.right > edge.left - 1 && r.left < edge.right + 1 ? [index + ":" + opacity.toFixed(2)] : [];
+    });
     return {
       state: control.getAttribute("data-seat-tick-chip"),
       stop: control.getAttribute("data-seat-tick-stop"),
@@ -16540,6 +16547,7 @@ describe("seat tick switch: four stops in the seat header and the phone's seat r
       dotInsideTrack: track.contains(control.querySelector("[data-seat-tick-dot]")),
       until: control.querySelector("[data-seat-tick-until]") !== null,
       control: box(control), track: box(track), thumb: box(thumb),
+      notchesTouching,
       thumbInsideTrack: thumb.getBoundingClientRect().left >= track.getBoundingClientRect().left - 0.5 && thumb.getBoundingClientRect().right <= track.getBoundingClientRect().right + 0.5,
       wordFits: face ? face.getBoundingClientRect().width <= thumb.getBoundingClientRect().width - 2 : true,
       controlsOnOneRow: tops.length ? Math.max(...tops) - Math.min(...tops) <= 2 : null,
@@ -16563,7 +16571,7 @@ describe("seat tick switch: four stops in the seat header and the phone's seat r
     window.__tickMark = () => trace.length;
     window.__tickTrace = () => { on = false; return trace; };
   }`;
-  type Reading = { state: string; stop: string; mode: string; now: string; valueText: string; expanded: string; title: string; word: string | null; wordShown: boolean; thumbKind: string; dot: string; dotInsideTrack: boolean; until: boolean; control: { x: number; y: number; w: number; h: number }; track: { x: number; y: number; w: number; h: number }; thumb: { x: number; y: number; w: number; h: number }; thumbInsideTrack: boolean; wordFits: boolean; controlsOnOneRow: boolean | null; labelTruncated: boolean | null; labelText: string | null; pageOverflow: boolean };
+  type Reading = { state: string; stop: string; mode: string; now: string; valueText: string; expanded: string; title: string; word: string | null; wordShown: boolean; thumbKind: string; dot: string; dotInsideTrack: boolean; until: boolean; notchesTouching: string[]; offTint?: { tint: number[]; pill: number[] }; control: { x: number; y: number; w: number; h: number }; track: { x: number; y: number; w: number; h: number }; thumb: { x: number; y: number; w: number; h: number }; thumbInsideTrack: boolean; wordFits: boolean; controlsOnOneRow: boolean | null; labelTruncated: boolean | null; labelText: string | null; pageOverflow: boolean };
 
   /** A column of captioned crops on the page's own background, as one PNG. */
   async function sheet(file: string, rows: Array<{ caption: string; png: Buffer }>, scheme: Scheme, captionWidth: number): Promise<void> {
@@ -16663,6 +16671,14 @@ describe("seat tick switch: four stops in the seat header and the phone's seat r
       return { ...fixture, phone, crop: phone ? "[data-mobile2-sheet='seat'] [data-seat-tick-row]" : "[data-kanban-seat] [data-orchestrator-controls]" };
     }
     const shot = (page: Page, selector: string) => page.locator(selector).first().screenshot();
+    /** One pixel's colour, averaged over the device pixels under a CSS pixel. */
+    const pixel = async (page: Page, x: number, y: number) => {
+      const { data, info } = await sharp(await page.screenshot({ clip: { x, y, width: 1, height: 1 } })).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+      const sum = [0, 0, 0];
+      for (let i = 0; i < data.length; i += 3) for (let c = 0; c < 3; c += 1) sum[c]! += data[i + c]!;
+      const n = info.width * info.height;
+      return sum.map((value) => Math.round(value / n)) as [number, number, number];
+    };
     const centre = async (page: Page) => {
       const box = (await page.locator(CONTROL).first().boundingBox())!;
       return { x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2) };
@@ -16700,6 +16716,16 @@ describe("seat tick switch: four stops in the seat header and the phone's seat r
                   must(reading.dot === want.dot && !reading.dotInsideTrack, `${tag}: dot ${reading.dot}${reading.dotInsideTrack ? " inside the pill" : ""}, wanted ${want.dot} outside it`);
                   must(reading.until === (state === "until"), `${tag}: hourglass ${reading.until ? "drawn" : "missing"}`);
                   must(reading.thumbInsideTrack && reading.wordFits, `${tag}: the thumb leaves the pill or its word does not fit`);
+                  must(reading.notchesTouching.length === 0, `${tag}: notches ${reading.notchesTouching.join(", ")} touch the thumb`);
+                  if (state === "off") {
+                    /* The tint in the inset left of the thumb against the bare pill
+                       at its right end: off adds no hue, so it is no warmer. */
+                    const mid = reading.track.y + reading.track.h / 2 - 0.5;
+                    const tint = await pixel(page, reading.track.x + 1.5, mid);
+                    const pill = await pixel(page, reading.track.x + reading.track.w - 5, mid);
+                    must(tint[0] - tint[2] <= pill[0] - pill[2] + 1, `${tag}: the tint left of the off thumb is rgb(${tint.join(",")}), warmer than the pill's rgb(${pill.join(",")})`);
+                    reading.offTint = { tint, pill };
+                  }
                   must(reading.control.h === (phone ? 36 : 24), `${tag}: the control is ${reading.control.h} px tall`);
                   must(!reading.pageOverflow, `${tag}: the page scrolls sideways`);
                   if (phone) must(reading.labelTruncated === false, `${tag}: the row's label «${reading.labelText}» is truncated`);
@@ -16813,9 +16839,25 @@ describe("seat tick switch: four stops in the seat header and the phone's seat r
         }
       }
 
-      /* Where the row gives up the word, the thumb is a round knob. */
+      /* Where the row gives up the word, the thumb is a round knob: every
+         state, with no notch against it, then the drag on the short pill. */
       for (const lang of ["en", "uk"] as const) {
-        const { context, page, pageErrors, crop } = await open(768, lang, "light", "10m");
+        const knobs: Array<{ caption: string; png: Buffer }> = [];
+        for (const state of Object.keys(STATES)) {
+          const { context, page, pageErrors, crop } = await open(768, lang, "light", state);
+          try {
+            const reading = await read(page);
+            const tag = `768-${lang} ${state}`;
+            must(reading !== null && !reading.wordShown && reading.thumb.w === 18, `${tag}: the thumb is ${reading?.thumb.w} px with the word ${reading?.wordShown ? "shown" : "hidden"}`);
+            must(reading?.notchesTouching.length === 0, `${tag}: notches ${reading?.notchesTouching.join(", ")} touch the knob`);
+            must(pageErrors.length === 0, `${tag}: page errors ${pageErrors.join(" | ")}`);
+            knobs.push({ caption: state, png: await shot(page, crop) });
+          } finally {
+            await context.close();
+          }
+        }
+        await sheet(path.join(FRAMES, `knob-768-${lang}-light.png`), knobs, "light", 110);
+        const { context, page, pageErrors } = await open(768, lang, "light", "10m");
         try {
           const reading = await read(page);
           must(reading !== null && !reading.wordShown && reading.thumb.w === 18 && reading.thumb.h === 18, `768-${lang}: the thumb is ${reading?.thumb.w} × ${reading?.thumb.h} with the word ${reading?.wordShown ? "shown" : "hidden"}`);
@@ -16835,7 +16877,6 @@ describe("seat tick switch: four stops in the seat header and the phone's seat r
           must(reading?.controlsOnOneRow === true && !reading.pageOverflow, `768-${lang}: the controls wrapped or the page scrolls`);
           must(pageErrors.length === 0, `768-${lang}: page errors ${pageErrors.join(" | ")}`);
           readings[`768-${lang}-knob`] = reading;
-          await sharp(await shot(page, crop)).png({ compressionLevel: 9, palette: true }).toFile(path.join(FRAMES, `knob-768-${lang}-light.png`));
         } finally {
           await context.close();
         }

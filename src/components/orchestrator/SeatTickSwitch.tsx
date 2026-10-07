@@ -55,6 +55,10 @@ const GEOMETRY = {
   mobile: { travel: 60, thumb: 56, inset: 3, perChar: 7 },
 } as const;
 
+/** A notch's radius and the gap it keeps from the thumb's edge, in pixels. */
+const NOTCH_RADIUS = 2;
+const NOTCH_GAP = 2;
+
 /** The travel as drawn: a host that gave up the word also shortens the pill
     (`globals.css`), and the drag follows the pill that is on screen. */
 function travelOf(root: HTMLElement, fallback: number): number {
@@ -348,6 +352,8 @@ export function SeatTickSwitch({ read, reading, now, surface, open, onOpen, onRe
 
   const phone = surface === "mobile";
   const thumb = geometry.thumb + Math.max(0, word.length - 6) * geometry.perChar;
+  /* How many stops from the thumb's centre a notch has to be to stand clear of it. */
+  const clear = (thumb / 2 + NOTCH_RADIUS + NOTCH_GAP) / (geometry.travel / SEAT_TICK_LAST_STOP);
   const dragging = dragAt !== null;
   return (
     <div
@@ -373,12 +379,12 @@ export function SeatTickSwitch({ read, reading, now, surface, open, onOpen, onRe
       onPointerCancel={(event) => finish(event, true)}
       onClick={onClick}
       onKeyDown={onKeyDown}
-      style={{ "--tick-thumb": `${thumb}px`, "--tick-inset": `${geometry.inset}px`, "--tick-travel": `${geometry.travel}px`, touchAction: "pan-y" } as CSSProperties}
+      style={{ "--tick-thumb": `${thumb}px`, "--tick-inset": `${geometry.inset}px`, "--tick-travel": `${geometry.travel}px`, "--tick-clear": clear.toFixed(3), touchAction: "pan-y" } as CSSProperties}
       className={`seat-tick-switch group/tick inline-flex shrink-0 select-none items-center outline-none gap-1.5 ${dragging ? "cursor-grabbing" : "cursor-grab"} ${className}`}
     >
       <span
         data-seat-tick-track
-        className={`seat-tick-track relative inline-block shrink-0 rounded-full border border-border transition-colors group-hover/tick:border-[color-mix(in_oklch,var(--tick)_55%,transparent)] group-focus-visible/tick:ring-2 group-focus-visible/tick:ring-accent/40 ${phone ? "h-9" : "h-6"}`}
+        className={`seat-tick-track relative inline-block shrink-0 rounded-full border border-border transition-colors group-hover/tick:border-[color-mix(in_oklab,var(--tick)_55%,transparent)] group-focus-visible/tick:ring-2 group-focus-visible/tick:ring-accent/40 ${phone ? "h-9" : "h-6"}`}
       >
         {[0, 1, 2, 3].map((stop) => (
           <span
@@ -398,7 +404,7 @@ export function SeatTickSwitch({ read, reading, now, surface, open, onOpen, onRe
             outlineColor: preset ? undefined : "var(--tick)",
             outlineOffset: preset ? undefined : "-1.5px",
             color: off ? "var(--color-muted)" : "color-mix(in oklch, var(--tick) 60%, var(--color-primary))",
-            boxShadow: dragging ? "0 0 0 4px color-mix(in oklch, var(--tick) 22%, transparent)" : undefined,
+            boxShadow: dragging ? "0 0 0 4px color-mix(in oklab, var(--tick) 22%, transparent)" : undefined,
           }}
         >
           <span data-seat-tick-face className="whitespace-nowrap tabular-nums">{word}</span>
