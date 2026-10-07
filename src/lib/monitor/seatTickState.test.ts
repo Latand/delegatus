@@ -429,3 +429,12 @@ test("a released-wake marker survives the legacy import, and a broken one is dro
   expect(readSeatTickState("other", file).releasedWake).toBeNull();
   expect(readSeatTickState("never", file).releasedWake).toBeNull();
 });
+
+test("a disk episode acknowledgment survives persistence and a seat succession", () => {
+  const file = path.join(SANDBOX, "disk-seat-tick.json");
+  const pressure = { ...row, diskPressureShown: "2026-10-06T10:00:00Z" };
+  writeSeatTickState("viewer", pressure, file);
+  const read = readSeatTickState("viewer", file);
+  expect(read.diskPressureShown).toBe(pressure.diskPressureShown);
+  expect(seatTickStateForEpoch(read, 8).diskPressureShown).toBe(pressure.diskPressureShown);
+});

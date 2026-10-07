@@ -3,6 +3,7 @@ import type { PipelineRuntimeSwitch } from "./types";
 import { launchServiceTier } from "@/lib/runtime/codexTurnProfile";
 import { isAccountMutationContention } from "@/lib/accounts/contentionMessage";
 import { agentMemoryHeadroom, memoryKillText, type AgentMemoryKill } from "@/lib/runtime/agentMemory";
+import { CPU_PRESSURE_DETAIL_PREFIXES, cpuPressureHoldDetail, machineCpuPressureGate, type CpuPressureHold } from "@/lib/runtime/cpuPressure";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -48,6 +49,7 @@ import { enqueueStructuredMessage } from "@/lib/runtime/structuredMessageDeliver
 import { delegatusMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { interruptionObligationDirectory, interruptionObligationStore, submittedContinuationOutcome, type InterruptionObligation } from "@/lib/runtime/interruptionObligations";
 import { StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
+import { DISK_SPACE_RETRY_MS, DISK_SPACE_WAIT_PREFIX, worktreeDiskWait } from "@/lib/state/diskPressure";
 import { dispatchStructuredControl, RUNTIME_HOST_UNAVAILABLE_CODE } from "@/lib/runtime/structuredControls";
 import {
   describeStructuredHostOwnerGeneration,
@@ -210,6 +212,9 @@ export type StageInterruption = Pick<InterruptionObligation, "state" | "recorded
 
 export interface PipelinePorts {
   exec: ExecPort;
+  /** Why a new worktree must wait for disk space, or null. Defaults to the
+      volumes' free space against `DISK_CRITICAL_BYTES`. */
+  worktreeDiskWait?: (repoDir: string, worktreeDir: string, usesClaude: boolean) => string | null;
   /** Controller-only: committing-stage Git settles after its lease is released. */
   deferStageGit?: boolean;
   remoteActionSupported?: (action: string) => boolean;
@@ -255,6 +260,8 @@ export interface PipelinePorts {
   failStageLaunch?(launchId: string, conversationId: string, reason: string): boolean;
   claimSpawnRetry(launchId: string, claimId: string): "claimed" | "settled" | "conflict";
   drainHold?(): DrainLease | null;
+  /** A held stage start waits for CPU pressure to fall; null admits. */
+  cpuPressureHold?(): CpuPressureHold | null;
   /** Whether the ticking process can publish a structured host: `ready` now,
       `rebinding` between publications, `unbound` never at all (#1191). */
   structuredDeliveryPublication?(): "ready" | "rebinding" | "unbound";
@@ -1296,6 +1303,7 @@ export function defaultPipelinePorts(
        structured hosting switched off there is no publication to wait for and
        the spawn must fail in the open, as it always did. */
     drainHold: () => activeDrain(),
+    cpuPressureHold: () => machineCpuPressureGate()?.check() ?? null,
     structuredDeliveryPublication: () => structuredHostsEnabled()
       ? structuredDeliveryPublicationState()
       : "ready",
@@ -4869,7 +4877,21 @@ function holdStageLaunch(pipeline: Pipeline, ports: PipelinePorts, persist: () =
     return true;
   }
   if (pipeline.stateDetail?.startsWith("held for the automatic update to ")) { pipeline.stateDetail = null; persist(); }
+  // Heavy work yields to production under CPU pressure. Only a fresh stage
+  // start asks; recovery and reconciliation of launched work never do.
+  const pressure = ports.cpuPressureHold?.();
+  if (pressure) {
+    const detail = cpuPressureHoldDetail(pressure);
+    if (pipeline.stateDetail !== detail) { pipeline.stateDetail = detail; persist(); }
+    ports.scheduleTick?.(5_000);
+    return true;
+  }
+  if (heldForCpuPressure(pipeline)) { pipeline.stateDetail = null; persist(); }
   return false;
+}
+
+function heldForCpuPressure(pipeline: Pipeline): boolean {
+  return CPU_PRESSURE_DETAIL_PREFIXES.some((prefix) => pipeline.stateDetail?.startsWith(prefix));
 }
 
 /** Runtime controls and handoff setup run without the shared collection lease.
@@ -6093,10 +6115,25 @@ async function provisionPendingPipelines(ports: PipelinePorts): Promise<Map<stri
   // by collection revision; polling needs no lease and no close-path hook.
   const watch = setInterval(revalidate, 50);
   const repositoryTails = new Map<string, Promise<void>>();
+  const diskAdmission = ports.worktreeDiskWait ?? ((repoDir: string, worktreeDir: string, usesClaude: boolean) =>
+    worktreeDiskWait(repoDir, worktreeDir, undefined, undefined, undefined, usesClaude));
   try {
     await Promise.all(jobs.map(async (job) => {
+      /* Below the critical free space a new checkout waits, before any git
+         runs and again right before `git worktree add`; running work is never
+         touched by it. */
+      const usesClaude = job.pipeline.stages.some(stage => stage.effectiveRole.engine === "claude");
+      const diskWait = diskAdmission(job.pipeline.repoDir, job.pipeline.worktreeDir, usesClaude);
+      if (diskWait) {
+        outcomes.set(job.pipeline.id, { id: job.pipeline.id, fence: provisionFence(job.pipeline), base: null, head: null, error: diskWait });
+        return;
+      }
       const guardedExec: ProvisionExecPort = async (command, args, cwd, signal) => {
         revalidate();
+        if (command === "git" && args[0] === "worktree" && args[1] === "add") {
+          const wait = diskAdmission(job.pipeline.repoDir, job.pipeline.worktreeDir, usesClaude);
+          if (wait) return { code: 1, stdout: "", stderr: wait };
+        }
         if (signal?.aborted) return { code: null, stdout: "", stderr: "pipeline provisioning cancelled" };
         try { return await exec(command, args, cwd, signal); }
         catch (error) { return { code: null, stdout: "", stderr: String(error) }; }
@@ -6180,6 +6217,14 @@ function transientProvisioningFailure(error: string): TransientGitFailure | null
  * park with the cause and the action that clears it.
  */
 function deferOrParkProvisioning(pipeline: Pipeline, error: string, ports: PipelinePorts): void {
+  /* A disk wait spends no retry budget and never parks: the lane says why it
+     waits and the next tick after space returns provisions it. */
+  if (error.includes(DISK_SPACE_WAIT_PREFIX)) {
+    delete pipeline.provisioningWait;
+    pipeline.stateDetail = error.slice(error.indexOf(DISK_SPACE_WAIT_PREFIX));
+    ports.scheduleTick?.(DISK_SPACE_RETRY_MS);
+    return;
+  }
   const kind = transientProvisioningFailure(error);
   if (!kind) {
     delete pipeline.provisioningWait;
@@ -7721,7 +7766,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     }
     const followUpAt = unixMs(ports.now());
     followUp = followUp || result.pipelines.some((pipeline) => pipeline.state === "running"
-      && ((pipeline.cursor?.state === "pending" && !ports.drainHold?.()) || (settledGitIds.has(pipeline.id)
+      && ((pipeline.cursor?.state === "pending" && !ports.drainHold?.() && !heldForCpuPressure(pipeline)) || (settledGitIds.has(pipeline.id)
         && (pipeline.cursor?.state === "committing" || pipeline.stateDetail === "approved review head verification pending")
         && unixMs(currentAttempt(pipeline, pipeline.cursor?.stageId ?? "")?.remoteHeadWait?.retryAfter ?? "") <= followUpAt))
       && !stageActivationIsWaiting(pipeline, followUpAt));

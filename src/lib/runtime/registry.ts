@@ -659,6 +659,8 @@ export async function adoptCodexRegistryHosts(
             } catch { /* retain the live process and claim until its late reap is observed */ }
             return;
           }
+          // A refused cell (work that cannot be contained) or a failed open; the next message relaunches it.
+          console.error(`[structured hosts] boot adoption of ${sessionKeyId(entry.key)} failed: ${error instanceof Error ? error.message : String(error)}`);
           registry.setStructuredHostClaimed(entry.key, {
             ...claimed.structuredHost,
             endpoint: "stdio:released",
@@ -774,6 +776,8 @@ export async function adoptClaudeRegistryHosts(
             } catch { /* retain the live process and claim until its late reap is observed */ }
             return;
           }
+          // A refused cell (work that cannot be contained) or a failed open; the next message relaunches it.
+          console.error(`[structured hosts] boot adoption of ${sessionKeyId(entry.key)} failed: ${error instanceof Error ? error.message : String(error)}`);
           registry.setStructuredHostClaimed(entry.key, {
             ...claimed.structuredHost,
             endpoint: "stdio:released",

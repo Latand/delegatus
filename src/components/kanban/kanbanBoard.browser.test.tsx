@@ -20295,6 +20295,10 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
   /* `everywhere` states are shot at both sizes, both schemes and both languages; the rest at 1440x900 light, once in `lang` or once per language. */
   interface State {
     name: string; query: string; folded?: boolean; detail?: boolean; click?: string; first?: boolean; bare?: boolean; everywhere: boolean; lang?: "en" | "uk" | "both";
+    /** Shot in the dark scheme too, at 1440x900. */
+    dark?: boolean;
+    /** A low-disk state: the frame of the same sidebar without the warning, and the level it draws. */
+    disk?: { beside: string; level: "warning" | "critical" };
     /** The frame of the replaced sidebar this state stands beside, when its name differs. */
     today?: string;
     /** What the state is about: a selector that has to match something drawn inside the window. A click that opens no panel names what it opens here. */
@@ -20331,9 +20335,22 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
     { name: "panel-telegram", query: "rail=few", click: "[data-rail-footer] button[aria-haspopup='dialog']", everywhere: false, lang: "uk" },
     { name: "crown-hover", query: "rail=few", crown: "hover", everywhere: false, lang: "uk" },
     { name: "crown-focus", query: "rail=few", crown: "focus", everywhere: false, lang: "both" },
+    /* Low disk space on the block's grid: one volume under state, worktrees and temp, three consumers, at each level. */
+    ...(["critical", "warning"] as const).flatMap((level): State[] => {
+      const query = `disk-role=all${level === "warning" ? "&disk-level=warning" : ""}`;
+      const shared = { everywhere: false, lang: "both", dark: true, shows: "[data-disk-pressure] [data-meter-line]" } as const;
+      return [
+        { name: `disk-${level}`, query: `rail=few&${query}`, disk: { beside: "selected", level }, ...shared },
+        { name: `disk-${level}-many`, query: `rail=many&${query}`, disk: { beside: "many", level }, ...shared },
+        { name: `disk-${level}-detail`, query: `rail=few&${query}`, detail: true, disk: { beside: "detail", level }, ...shared },
+      ];
+    }),
   ];
-  /* The fixture's machine: what a memory line's amount is a share of. */
-  const TOTAL_GIB: Record<string, number> = { RAM: 32, Swap: 8 };
+  /* The fixture's machine: what a memory or disk line's amount is a share of. */
+  const TOTAL_GIB: Record<string, number> = { RAM: 32, Swap: 8, Disk: 256, "Диск": 256 };
+  /* What the disk warning may add to the compact block, and the rows a long list keeps beside it. */
+  const DISK_ADDS = 66;
+  const DISK_ROWS = 13;
 
   interface Reading {
     frame: string; state: string; width: number; height: number; scheme: Scheme; lang: "en" | "uk";
@@ -20356,6 +20373,8 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
     archive: { labelLeft: number | null; open: boolean; rows: number };
     /** How many elements the state is about are drawn inside the window; null when the state names none. */
     shows: number | null;
+    /** The low-disk lines: each volume's level and the colour its reading is drawn in. */
+    disk: { level: string; color: string }[];
     /** A panel opened in this frame, and whether all of it is inside the window. */
     panel: { width: number; height: number; inside: boolean } | null;
     /** A row whose crown control is reached: the control and the row's age, and whether one is drawn over the other. */
@@ -20423,6 +20442,7 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
           rows: [...rail.querySelectorAll<HTMLElement>("[data-rail-archived] [data-rail-project]")].map((row) => row.getBoundingClientRect()).filter((box) => box.height > 0 && box.bottom <= within + 1).length,
         };
       })(),
+      disk: [...rail.querySelectorAll<HTMLElement>("[data-disk-pressure] [data-disk-level]")].map((line) => ({ level: line.dataset.diskLevel ?? "", color: getComputedStyle(line.querySelector("[data-meter-value] span") ?? line).color })),
       shows: shows === null ? null : [...rail.querySelectorAll<HTMLElement>(shows)].map((element) => element.getBoundingClientRect()).filter((box) => box.width > 0 && box.height > 0 && box.top >= 0 && box.bottom <= innerHeight).length,
       panel: dialog ? { width: Math.round(dialog.width), height: Math.round(dialog.height), inside: dialog.left >= 0 && dialog.top >= 0 && dialog.right <= innerWidth && dialog.bottom <= innerHeight } : null,
       crown: (() => {
@@ -20510,7 +20530,7 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
     try {
       const jobs: { state: State; size: (typeof SIZES)[number]; scheme: Scheme; lang: "en" | "uk"; frame: string }[] = [];
       for (const state of STATES) for (const size of SIZES) for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) {
-        if (!state.everywhere && !(size.width === 1440 && scheme === "light" && langsOf(state).includes(lang))) continue;
+        if (!state.everywhere && !(size.width === 1440 && (scheme === "light" || state.dark) && langsOf(state).includes(lang))) continue;
         const frame = `built-${state.name}-${size.width}x${size.height}-${scheme}-${lang}`;
         if (!ONLY || ONLY.test(frame)) jobs.push({ state, size, scheme, lang, frame });
       }
@@ -20639,6 +20659,23 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
       }));
       const order = new Map(jobs.map((job, index) => [job.frame, index]));
       readings.sort((one, other) => order.get(one.frame)! - order.get(other.frame)!);
+      /* The disk warning is judged beside the same sidebar without it: what it adds, what the list keeps, and a critical volume that reads apart from a warning. */
+      for (const reading of readings) {
+        const disk = STATES.find((state) => state.name === reading.state)?.disk;
+        if (!disk) continue;
+        const fail = (text: string) => failures.push(`${reading.frame}: ${text}`);
+        const combo = (scheme: Scheme) => `${reading.width}x${reading.height}-${scheme}-${reading.lang}`;
+        /* The schemes share a geometry, and the frame without the warning is shot in the light one. */
+        const beside = readings.find((entry) => entry.frame === `built-${disk.beside}-${combo(reading.scheme)}`) ?? readings.find((entry) => entry.frame === `built-${disk.beside}-${combo("light")}`);
+        if (reading.disk.length !== 1 || reading.disk[0]!.level !== disk.level) fail(`the block draws ${JSON.stringify(reading.disk)} for one ${disk.level} volume`);
+        if (!beside) fail(`no frame of "${disk.beside}" to stand beside`);
+        else if (disk.beside === "detail") {
+          if (reading.rail.footerHeight >= reading.rail.listHeight) fail(`behind "All windows" the footer is ${reading.rail.footerHeight} px over a list of ${reading.rail.listHeight} px`);
+        } else if (reading.rail.footerHeight - beside.rail.footerHeight > DISK_ADDS) fail(`the warning adds ${reading.rail.footerHeight - beside.rail.footerHeight} px to a footer of ${beside.rail.footerHeight} px`);
+        if (disk.beside === "many" && reading.rail.rowsInView < DISK_ROWS) fail(`${reading.rail.rowsInView} of ${reading.rail.rows} rows in view beside the warning`);
+        const other = readings.find((entry) => entry.frame === reading.frame.replace(`disk-${disk.level}`, `disk-${disk.level === "critical" ? "warning" : "critical"}`));
+        if (other?.disk[0] && other.disk[0].color === reading.disk[0]?.color) fail(`a ${disk.level} volume is drawn in the colour of the other level, ${other.disk[0].color}`);
+      }
       failures.sort();
     } finally {
       await running.browser.close().catch(() => {});
@@ -20691,11 +20728,120 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
       const kept = [];
       for (const state of STATES.filter((entry) => !entry.everywhere)) for (const lang of langsOf(state)) kept.push(await cell(`built · ${state.name} · ${lang}`, path.join(OUT, `built-${state.name}-1440x900-light-${lang}.png`), 0, 760, 1));
       await sheet(path.join(OUT, "sheet-built-states.png"), 4, kept);
+      /* The disk warning beside the same sidebar without it: the sidebars alone, per scheme and language. */
+      for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) {
+        const combo = `1440x900-${scheme}-${lang}`;
+        const cells = [];
+        for (const name of ["selected", "disk-critical", "disk-warning", "many", "disk-critical-many", "disk-warning-many", "disk-critical-detail", "disk-warning-detail"]) cells.push(await cell(`built · ${name}`, path.join(OUT, `built-${name}-${combo}.png`), 0, CROP, 1));
+        await sheet(path.join(OUT, `sheet-disk-${combo}.png`), 8, cells);
+      }
       fs.writeFileSync(path.resolve("evidence/sidebar-redesign/built.json"), `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", block: "the left sidebar: one tidy panel with a compact system block", readings, failures }, null, 2)}\n`);
     }
     if (failures.length) throw new Error(failures.join("\n"));
     expect(failures).toEqual([]);
   }, 3_600_000);
+});
+
+describe("disk warning destinations", () => {
+  browserTest("waiting lanes name free space and clear the reason after recovery", async () => {
+    const out = path.resolve(".artifacts/disk-warning-destinations");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    const detail = "waiting for disk space: temp has 0.50 GiB free (needs 2.00 GiB); retries automatically";
+    const reasonSelector = '[data-pipeline-reason="p-admitted"]';
+    type DiskLaneEvidence = { admitLane(title: string, detail: string): void; admitted: { pipeline: Pipeline } };
+    try {
+      for (const size of [{ width: 1440, height: 900 }, { width: 390, height: 844 }])
+        for (const lang of ["en", "uk"] as const)
+          for (const scheme of ["light", "dark"] as const) {
+            const { context, page, pageErrors } = await openFixture(browser, size.width < 640 ? server.base : `${server.base}?scenario=issue1820-quiet`, size, scheme, lang, "reduce", size.width < 640);
+            try {
+              try { await page.waitForSelector(size.width < 640 ? "[data-phone-kanban]" : "[data-kanban-board]"); }
+              catch (error) {
+                await page.screenshot({ path: path.join(out, `lane-${size.width}-${lang}-${scheme}-unavailable.png`) });
+                throw error;
+              }
+              await page.evaluate(detail => {
+                (window as unknown as { evidence: DiskLaneEvidence }).evidence.admitLane("Prepare a checkout", detail);
+                document.dispatchEvent(new Event("visibilitychange"));
+              }, detail);
+              if (size.width < 640) await page.locator('[data-phone-kanban-tab="assigned"]').click();
+              const reason = page.locator(reasonSelector).first();
+              await reason.waitFor({ state: "visible" });
+              await reason.scrollIntoViewIfNeeded();
+              expect(await reason.innerText()).toContain(detail);
+              const geometry = await reason.evaluate(element => {
+                const box = element.getBoundingClientRect();
+                return { width: box.width, right: box.right, bottom: box.bottom, scrollWidth: element.scrollWidth, clientWidth: element.clientWidth };
+              });
+              expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth);
+              expect(geometry.right).toBeLessThanOrEqual(size.width);
+              expect(geometry.bottom).toBeLessThanOrEqual(size.height);
+              const frame = `lane-${size.width}-${lang}-${scheme}`;
+              await page.screenshot({ path: path.join(out, frame + "-waiting.png") });
+              await page.evaluate(() => {
+                const lane = (window as unknown as { evidence: DiskLaneEvidence }).evidence.admitted.pipeline;
+                lane.state = "running";
+                lane.stateDetail = null;
+                document.dispatchEvent(new Event("visibilitychange"));
+              });
+              await page.waitForSelector(reasonSelector, { state: "hidden" });
+              expect(await page.locator('[data-pipeline="p-admitted"][data-lane-state="running"]').count()).toBeGreaterThan(0);
+              expect(pageErrors).toEqual([]);
+              await page.screenshot({ path: path.join(out, frame + "-recovered.png") });
+              readings.push({ frame, waiting: detail, recovered: true, ...geometry });
+            } finally { await context.close(); }
+          }
+      fs.mkdirSync("evidence/disk-pressure", { recursive: true });
+      fs.writeFileSync("evidence/disk-pressure/waiting-lanes.json", JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
+
+  browserTest("critical temp and state notices describe admission and fit desktop and phone", async () => {
+    const out = path.resolve(".artifacts/disk-warning-destinations");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: unknown[] = [];
+    try {
+      for (const density of ["line", "detail", "full"] as const)
+        for (const role of ["state", "temp", "required-temp"] as const)
+          for (const lang of ["en", "uk"] as const)
+            for (const scheme of ["light", "dark"] as const) {
+              const size = density === "full" ? { width: 390, height: 844 } : { width: 1280, height: 800 };
+              const { context, page, pageErrors } = await openFixture(browser,
+                `${server.base}?disk-density=${density}&disk-role=${role}`, size, scheme, lang, "reduce", density === "full");
+              try {
+                await page.waitForSelector("[data-disk-pressure]");
+                const notice = page.locator("[data-disk-pressure]");
+                const text = await notice.innerText();
+                /* The phone's block prints the sentence. The sidebar's line is short and its tooltip carries the sentence; behind "All windows" the volume's tooltip does. */
+                const waiting = translate(lang, "resources.diskWaiting");
+                if (density === "full") expect(text.includes(waiting)).toBe(role !== "temp");
+                else {
+                  expect(text.includes(translate(lang, "resources.diskWaitingShort"))).toBe(density === "line" && role !== "temp");
+                  expect(await notice.locator(`[title*="${waiting}"]`).count()).toBe(role === "temp" ? 0 : 1);
+                }
+                const geometry = await notice.evaluate(element => {
+                  const box = element.getBoundingClientRect();
+                  return { width: box.width, right: box.right, bottom: box.bottom, scrollWidth: element.scrollWidth, clientWidth: element.clientWidth };
+                });
+                expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth);
+                expect(geometry.right).toBeLessThanOrEqual(size.width);
+                expect(geometry.bottom).toBeLessThanOrEqual(size.height);
+                expect(pageErrors).toEqual([]);
+                const frame = `${density}-${role}-${lang}-${scheme}`;
+                await page.screenshot({ path: path.join(out, frame + ".png") });
+                readings.push({ frame, ...geometry });
+              } finally { await context.close(); }
+            }
+      const record = path.resolve("evidence/disk-pressure/destinations.json");
+      fs.mkdirSync(path.dirname(record), { recursive: true });
+      fs.writeFileSync(record, JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
 });
 
 /* A worker slot wait reads as a free worker, and a resource hold carries its
@@ -21855,9 +22001,10 @@ describe("prototype review on a task: the card's button, the review and the orch
           await shot("files-gone");
           await frameCheck("files-gone");
           await accentCheck("files-gone", true);
-          const goneState = await page.evaluate(() => ({ retired: Boolean(document.querySelector("[data-prototype-retired]")), decision: Boolean(document.querySelector("[data-prototype-decision]")), images: document.querySelectorAll("[data-prototype-canvas] img").length }));
+          const goneState = await page.evaluate(() => ({ retired: Boolean(document.querySelector("[data-prototype-retired]")), banner: document.querySelector("[data-prototype-retired]")?.textContent ?? "", decision: Boolean(document.querySelector("[data-prototype-decision]")), images: document.querySelectorAll("[data-prototype-canvas] img").length }));
           record("files-gone", goneState);
           if (!goneState.retired || !goneState.decision || goneState.images) failures.push(`${label}: a retired round reads ${JSON.stringify(goneState)}`);
+          if (lang === "en" && /\d+\/\d+\/\d{4}/.test(goneState.banner)) failures.push(`${label}: the files-gone banner writes a numeric date: ${goneState.banner}`);
           await closeReview();
           if (size.phone) { await page.goBack(); await page.waitForTimeout(400); }
 

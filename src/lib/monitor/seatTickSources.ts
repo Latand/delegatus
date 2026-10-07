@@ -1,3 +1,4 @@
+import { readDiskPressure, diskPressureLabel, diskPressureWakeReady, type DiskPressure } from "@/lib/state/diskPressure";
 import { maintenanceRuns } from "@/lib/boardMaintenance/store";
 import { maintenanceRunIsLive, type MaintenanceRun } from "@/lib/boardMaintenance/types";
 import crypto from "node:crypto";
@@ -460,6 +461,7 @@ export async function withdrawRuntimeWake(
 }
 
 export interface SeatTickSources {
+  diskPressure?: () => Promise<DiskPressure>;
   maintenanceRuns?: (project: string) => readonly MaintenanceRun[];
   seatFor: typeof orchestratorSeatFor;
   /** Whether an orchestrator ever held the project (#2170). Absent: assumed,
@@ -648,6 +650,7 @@ export function defaultSeatTickSources(): SeatTickSources {
     latestDeployment: latestLedgerDeployment,
     seatDeployments: (conversationId) => seatDeploymentsFor(conversationId),
     deployment: (deploymentId) => ledgerDeployment(deploymentId),
+    diskPressure: () => readDiskPressure(),
     retirementReport: () => {
       const report = readJsonCache(statePath("host-retirement-report.json"));
       return report && typeof report === "object" ? report as StructuredHostRetirementReport : null;
@@ -1342,6 +1345,20 @@ function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatT
     found.push({ id: "seat-host", label: `the seat's own turn is ${seatActivity.lifecycle} in ${project} (${seatActivity.reason})` });
   }
   return found;
+}
+
+async function diskPressureSignals(sources: SeatTickSources): Promise<SeatTickSignalInput[]> {
+  if (!sources.diskPressure) return [];
+  let pressure: DiskPressure;
+  try {
+    pressure = await sources.diskPressure();
+  } catch {
+    /* A failed volume read wakes nobody; the System panel still shows the last one. */
+    return [];
+  }
+  /* One item per episode: it waits for the consumer sizes, so the one the
+     orchestrator gets names them. */
+  return pressure.episode && diskPressureWakeReady(pressure) ? [{ id: "disk-space", episode: pressure.episode, label: diskPressureLabel(pressure) }] : [];
 }
 
 export function selfUpdateSignals(auto: Pick<AutoState, "off" | "noticeAt" | "waitingSince" | "waitingTarget" | "lastBlockers" | "pending"> & Pick<Partial<AutoState>, "drain">): SeatTickSignalInput[] {
@@ -2372,7 +2389,7 @@ export async function gatherSeatTickInput(
     pullRequests,
     pullRequestsUnavailable,
     pullRequestEvidenceKey: pullRequestEvidenceKeyAtRead,
-    signals: signals(canonical, seat, sources),
+    signals: [...signals(canonical, seat, sources), ...await diskPressureSignals(sources)],
     ownLanes,
     settledDeploys,
     settledMaintenance,

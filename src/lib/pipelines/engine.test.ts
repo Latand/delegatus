@@ -27,6 +27,7 @@ import { forkClaudeHistory } from "@/lib/accounts/migration/safeHistoryCopy";
 import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 import { CONTROLLER_ARTIFACT_GIT_PATHS } from "./controllerArtifacts";
 import { realExec } from "@/lib/workflows/provision";
+import { worktreeDiskWait } from "@/lib/state/diskPressure";
 
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pipeline-engine-"));
 const engineModule = await import("./engine");
@@ -2352,6 +2353,57 @@ test("automatic-update hold keeps a pending attempt and releases exactly one lau
   await tickPipelines([], h.ports);
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.n).toBe(attempt.n);
   expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(1);
+});
+
+test("CPU pressure holds a fresh stage start with a visible reason and releases exactly one launch", async () => {
+  const h = harness();
+  const { CpuPressureGate, DEFAULT_CPU_PRESSURE_POLICY } = await import("@/lib/runtime/cpuPressure");
+  let pressure: number | null = 45;
+  let clock = Date.parse("2026-10-06T12:00:00Z");
+  const gate = new CpuPressureGate(DEFAULT_CPU_PRESSURE_POLICY, { sample: () => pressure, now: () => clock });
+  const wakes: number[] = [];
+  h.ports.cpuPressureHold = () => gate.check();
+  h.ports.scheduleTick = (delayMs) => { wakes.push(delayMs); };
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const held = loadPipelines()[0]!;
+  expect(held.cursor?.state).toBe("pending");
+  expect(held.runs[0]!.attempts[0]!.spawnCalls ?? 0).toBe(0);
+  expect(held.stateDetail).toBe("stage start held for CPU pressure since 2026-10-06T12:00:00.000Z (avg10 45% ≥ 20%)");
+  expect(wakes).toContain(5_000);
+  clock += 120_000;
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.stateDetail).toStartWith("stage start deferred by CPU pressure: held since 2026-10-06T12:00:00.000Z");
+  // Below the release threshold the hold lasts ten seconds more.
+  pressure = 4;
+  await tickPipelines([], h.ports);
+  clock += 9_000;
+  await tickPipelines([], h.ports);
+  expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(0);
+  clock += 1_000;
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const released = loadPipelines()[0]!;
+  expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(1);
+  expect(released.runs[0]!.attempts).toHaveLength(1);
+  expect(released.stateDetail ?? "").not.toContain("CPU pressure");
+  // A launched stage is never held again: pressure returns and nothing respawns.
+  pressure = 80;
+  await tickPipelines([], h.ports);
+  expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(1);
+});
+
+test("a failed CPU pressure sample admits the stage start", async () => {
+  const h = harness();
+  const { CpuPressureGate, DEFAULT_CPU_PRESSURE_POLICY } = await import("@/lib/runtime/cpuPressure");
+  const gate = new CpuPressureGate(DEFAULT_CPU_PRESSURE_POLICY, { sample: () => { throw new Error("EACCES"); }, now: Date.now });
+  h.ports.cpuPressureHold = () => gate.check();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(h.calls.filter((call) => call.startsWith("spawn:"))).toHaveLength(1);
+  expect(loadPipelines()[0]!.stateDetail ?? "").not.toContain("CPU pressure");
 });
 
 test("automatic drain holds a new embedded legacy review stage and releases once", async () => {
@@ -20891,4 +20943,52 @@ test("a persisted Codex migration retry stays fenced after its target account is
   expect(switches).toEqual([SPARE_ACCOUNT]);
   expect(loadPipelines()[0]!.stateDetail).toContain("target is no longer allowed");
   expect(f.h.spawnInputs).toHaveLength(1);
+});
+
+test("critical disk pressure defers new provisioning without parking and automatically resumes", async () => {
+  const h = harness();
+  savePipelines([]);
+  const { scheduled, advance } = provisionRetryClock(h);
+  let low = true;
+  h.ports.worktreeDiskWait = () => low ? "waiting for disk space: worktrees has 0.50 GiB free; retries automatically" : null;
+  await createPipelineFromRequest({ task: "Disk admission", repoDir: "/repo", stages: RUN_STAGES as never }, h.ports);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "provisioning", stateDetail: expect.stringContaining("waiting for disk space:") });
+  expect(h.calls.some(call => call.includes("worktree add"))).toBe(false);
+  expect(scheduled).toContain(60_000);
+  // The wait has no exhausted retry budget, even after days of pressure.
+  advance(7 * 24 * 60 * 60_000);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("provisioning");
+  low = false;
+  advance(60_000);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]).toMatchObject({ state: "running", stateDetail: null });
+  expect(h.calls.some(call => call.includes("worktree add"))).toBe(true);
+});
+
+test.each(["codex", "claude"].flatMap(engine => ["full", "restricted"].map(sandbox => [engine, sandbox] as const)))("provisioning selects actual %s/%s stage temp destinations at both admission boundaries", async (engine, sandbox) => {
+  const h = harness();
+  savePipelines([]);
+  const stages = RUN_STAGES.map(stage => ({ ...stage, engine, sandbox, model: engine === "codex" ? "gpt-6.1-sol" : "fable" }));
+  const source = { NODE_ENV: "test" as const, TMPDIR: "/srv/agent-temp", CLAUDE_CODE_TMPDIR: "/srv/claude-temp" };
+  const observed: boolean[] = [];
+  h.ports.worktreeDiskWait = (repo, worktree, usesClaude) => {
+    observed.push(usesClaude);
+    return worktreeDiskWait(repo, worktree, directory => ({ volume: directory === source.CLAUDE_CODE_TMPDIR ? "claude" : "writer",
+      freeBytes: directory === source.CLAUDE_CODE_TMPDIR ? 1024 ** 3 : 500 * 1024 ** 3, totalBytes: 1000 * 1024 ** 3 }), source, [], usesClaude);
+  };
+  const created = await createPipelineFromRequest({ task: "Stage volume admission", repoDir: "/repo", stages: stages as never }, h.ports);
+  expect(created.error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  expect(observed.every(value => value === (engine === "claude"))).toBeTrue();
+  if (engine === "codex") {
+    expect(observed.length).toBeGreaterThanOrEqual(2);
+    expect(h.calls.some(call => call.includes("worktree add"))).toBeTrue();
+    expect(loadPipelines()[0]!.state).toBe("running");
+  } else {
+    expect(observed).toHaveLength(1);
+    expect(h.calls.some(call => call.includes("worktree add"))).toBeFalse();
+    expect(loadPipelines()[0]).toMatchObject({ state: "provisioning", stateDetail: expect.stringContaining("1.00 GiB free") });
+  }
 });

@@ -618,3 +618,64 @@ for (const change of ["reused", "missing", "cycle"] as const) test(`Linux reject
     expect(cell.snapshot().kills).toBe(0);
   } finally { cell.close(); }
 });
+
+const operatorCpu = { workload: "operator" as const, slice: "delegatus-agents-test.slice", weight: 1000, quotaPercent: null, periodMs: 20, systemdVersion: 255 };
+const workCpu = { workload: "work" as const, slice: "delegatus-agents-test-work.slice", weight: 100, quotaPercent: 300, periodMs: 20, systemdVersion: 255 };
+const propertiesOf = (args: string[]) => args.flatMap((arg, index) => args[index - 1] === "-p" ? [arg] : []);
+test("operator scopes carry a high CPU weight beside their memory ceiling", () => {
+  const wrapped = wrapAgentCommand({ ...basePlan, cpu: operatorCpu }, "agent", ["x"]);
+  expect(wrapped.args).toContain("--slice=delegatus-agents-test.slice");
+  expect(propertiesOf(wrapped.args)).toEqual([`MemoryMax=${15 * GIB}`, "MemorySwapMax=0", "OOMPolicy=continue", "CPUWeight=1000", "BindsTo=delegatus.service", "After=delegatus.service"]);
+});
+test("work scopes sit in the work slice with a per-scope quota whatever the memory mode", () => {
+  const scoped = wrapAgentCommand({ ...basePlan, cpu: workCpu }, "agent", ["x"]);
+  expect(scoped.args).toContain("--slice=delegatus-agents-test-work.slice");
+  expect(propertiesOf(scoped.args)).toContain(`MemoryMax=${15 * GIB}`);
+  expect(propertiesOf(scoped.args)).toEqual(expect.arrayContaining(["CPUWeight=100", "CPUQuota=300%", "CPUQuotaPeriodSec=20ms"]));
+  // A watchdog keeps its raised OOM score and gains the CPU scope.
+  const watched = wrapAgentCommand({ ...basePlan, mechanism: "watchdog", cpu: workCpu }, "agent", ["x"]);
+  expect(watched.command).toBe("systemd-run");
+  expect(propertiesOf(watched.args).some((property) => property.startsWith("Memory"))).toBe(false);
+  expect(watched.args.slice(watched.args.indexOf("--") + 1, watched.args.indexOf("--") + 2)).toEqual(["/bin/sh"]);
+  // Memory off: the scope carries CPU placement alone.
+  const off = planAgentMemory({ engine: "codex", sessionKey: "off", liveAgents: 1, cpu: workCpu }, { NODE_ENV: "test", DELEGATUS_AGENT_MEMORY: "off" })!;
+  expect(off).toMatchObject({ mechanism: "none", cpu: workCpu });
+  expect(off.unit).toMatch(/^delegatus-agent-codex-[0-9a-f]{12}\.scope$/);
+  const bare = wrapAgentCommand(off, "agent", ["x"]);
+  expect(bare.args.slice(bare.args.indexOf("--") + 1)).toEqual(["agent", "x"]);
+  expect(propertiesOf(bare.args).filter((property) => !property.startsWith("BindsTo=") && !property.startsWith("After="))).toEqual(["CPUWeight=100", "CPUQuota=300%", "CPUQuotaPeriodSec=20ms"]);
+  const cell = new AgentMemoryCell(off, { cgroupForPid: () => null });
+  try { expect(cell.memoryState()).toBeNull(); } finally { cell.close(); }
+  expect(planAgentMemory({ engine: "codex", sessionKey: "off", liveAgents: 1 }, { NODE_ENV: "test", DELEGATUS_AGENT_MEMORY: "off" })).toBeNull();
+});
+test("a work scope that systemd refuses fails its launch with the containment reason", async () => {
+  const off = planAgentMemory({ engine: "codex", sessionKey: "refused", liveAgents: 1, cpu: workCpu }, { NODE_ENV: "test", DELEGATUS_AGENT_MEMORY: "off" })!;
+  const cell = new AgentMemoryCell(off, { cgroupForPid: () => null });
+  const child = Object.assign(new EventEmitter(), { pid: 123, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() });
+  try {
+    cell.wrapSpawn(() => child as unknown as ChildProcessWithoutNullStreams)("agent", [], {});
+    child.stderr.write("Failed to start transient scope unit: Unit delegatus-agents-work.slice has a bad unit file setting.");
+    child.emit("close", 1, null);
+    expect(cell.launchFailure()).toBe("CPU containment for agent work is unavailable: Failed to start transient scope unit: Unit delegatus-agents-work.slice has a bad unit file setting.");
+  } finally { cell.close(); }
+});
+test("a work scope nested below the memory slice still attributes a shared-budget kill", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-memory-nested-"));
+  const plan: AgentMemoryPlan = { ...basePlan, cpu: workCpu };
+  const group = `/${plan.slice}/${workCpu.slice}/${plan.unit}`;
+  fs.mkdirSync(path.join(root, group), { recursive: true });
+  const own = path.join(root, group, "memory.events");
+  const budget = path.join(root, plan.slice, "memory.events");
+  fs.writeFileSync(own, "oom 0\noom_kill 0\n");
+  fs.writeFileSync(path.join(root, plan.slice, workCpu.slice, "memory.events"), "oom 0\noom_kill 0\n");
+  fs.writeFileSync(budget, "oom 0\noom_kill 0\n");
+  const cell = new AgentMemoryCell(plan, { cgroupRoot: root, cgroupForPid: () => group, now: () => 100_000, runner: () => "",
+    watch: (() => ({ close() {} })) as unknown as typeof fs.watch });
+  try {
+    cell.attach(123);
+    fs.writeFileSync(budget, "oom 1\noom_kill 1\n");
+    fs.writeFileSync(own, "oom 0\noom_kill 1\n");
+    cell.readEvents();
+    expect(cell.snapshot().lastKill?.limit).toBe("shared");
+  } finally { cell.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});
