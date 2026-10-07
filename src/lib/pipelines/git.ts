@@ -27,19 +27,55 @@ export type PipelineGitResult = ({ ok: true; sha: string; baseBranch?: string } 
   commitRefusal?: StageCommitRefusal;
 };
 /** What a refused stage commit was about. `repairable` is a hint for the
-    controller: the commit ran to its own exit and what it printed names a file
-    this stage staged, so the stage that wrote the file can act on it. A commit
-    that was killed, or a hook that names none of the staged files (a slot that
-    never came free, a missing tool), leaves it false. */
+    controller, and it wants evidence that the hook judged the content of a
+    file this stage staged: a diagnostic placed at a line of that file
+    (`path:15: trailing whitespace`, `path:3:1 rule: message`, a lint report
+    that lists positions under the file), or a privacy verdict made only of
+    content findings. A staged path that the output merely mentions proves
+    nothing: a progress line names it, and so does a tool that could not open
+    it. A commit that was killed, a hook whose command was missing or could not
+    run (127, 126), and every refusal without that evidence leave it false, and
+    the lane parks with what the hook printed. */
 export type StageCommitRefusal = { repairable: boolean; paths: string[] };
 export type PipelineBaseResult = { ok: true; baseBranch: string; baseRef: string } | { ok: false; error: string };
 
-function outputNamesPath(output: string, file: string): boolean {
-  for (let at = output.indexOf(file); at !== -1; at = output.indexOf(file, at + 1)) {
-    const before = output[at - 1] ?? "", after = output.slice(at + file.length, at + file.length + 2);
-    if (!/[\w.-]/.test(before) && !/^(?:[\w/-]|\.\w)/.test(after)) return true;
+/** Privacy findings that are about what a file says. The gate's other classes
+    (`configuration_error`, `inspection_error`, `tool_unavailable`, the
+    provenance and media ones) report that it could not judge. */
+const PRIVACY_CONTENT_FINDINGS = new Set([
+  "credential", "email_address", "home_path", "known_value", "private_network", "resource_identifier", "transcript_content",
+]);
+
+function privacyContentVerdict(lines: readonly string[]): boolean {
+  const verdict = lines.indexOf("PRIVACY GATE: FAIL");
+  if (verdict === -1) return false;
+  const findings: string[] = [];
+  for (const line of lines.slice(verdict + 1)) {
+    const finding = /^([a-z_]+): \d+$/.exec(line);
+    if (!finding) break;
+    findings.push(finding[1]!);
   }
-  return false;
+  return findings.length > 0 && findings.every((finding) => PRIVACY_CONTENT_FINDINGS.has(finding));
+}
+
+function pathAt(line: string, file: string, from = 0): number {
+  for (let at = line.indexOf(file, from); at !== -1; at = line.indexOf(file, at + 1)) {
+    if (!/[\w.-]/.test(line[at - 1] ?? "")) return at;
+  }
+  return -1;
+}
+
+/** A diagnostic placed at a line of `file`. */
+function locatesDiagnostic(lines: readonly string[], file: string): boolean {
+  return lines.some((line, index) => {
+    for (let at = pathAt(line, file); at !== -1; at = pathAt(line, file, at + 1)) {
+      const after = line.slice(at + file.length);
+      if (/^:\d+(?::\d+)?(?:[:\s]|$)/.test(after)) return true;
+      /* The file on a line of its own, then `line:column  error` under it. */
+      if (after === "" && /^\s+\d+:\d+\s+(?:error|warning)\b/.test(lines[index + 1] ?? "")) return true;
+    }
+    return false;
+  });
 }
 
 async function stageCommitRefusal(commit: ExecResult, staged: readonly string[] | null, exec: ExecPort, cwd: string): Promise<StageCommitRefusal> {
@@ -48,9 +84,11 @@ async function stageCommitRefusal(commit: ExecResult, staged: readonly string[] 
     const index = await exec("git", ["diff", "--cached", "--name-only", "--no-renames", "-z", "HEAD", "--"], cwd);
     if (index.code === 0) paths = index.stdout.split("\0").filter(Boolean);
   }
-  const output = `${commit.stderr}\n${commit.stdout}`;
-  const ended = typeof commit.code === "number" && !killedAtBound(commit);
-  return { repairable: ended && paths.some((file) => outputNamesPath(output, file)), paths };
+  const lines = `${commit.stderr}\n${commit.stdout}`.split("\n").map((line) => line.trimEnd());
+  const judged = typeof commit.code === "number" && commit.code !== 126 && commit.code !== 127 && !killedAtBound(commit);
+  const repairable = judged && paths.length > 0
+    && (privacyContentVerdict(lines) || paths.some((file) => locatesDiagnostic(lines, file)));
+  return { repairable, paths };
 }
 
 function failure(step: string, result: ExecResult): { ok: false; error: string } {

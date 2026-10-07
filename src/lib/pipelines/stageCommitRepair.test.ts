@@ -16,6 +16,7 @@ const { loadPipelines, savePipelines } = await import("./store");
 const { registerPipelineTick } = await import("./controllerSignal");
 type PipelinePorts = import("./engine").PipelinePorts;
 type Pipeline = import("./types").Pipeline;
+type PipelineStageAttempt = import("./types").PipelineStageAttempt;
 type StageTurnEvidence = import("./durableEvidence").StageTurnEvidence;
 
 /* A tick this suite did not ask for must never reach the real ports. */
@@ -66,6 +67,7 @@ function hookedRepo() {
   fs.writeFileSync(path.join(repo, ".git", "hooks", "pre-commit"), [
     "#!/bin/sh",
     "if [ -f \"$(git rev-parse --git-dir)/hook-broken\" ]; then echo 'gate-slot: no slot became free within 600s' >&2; exit 1; fi",
+    "if [ -f \"$(git rev-parse --git-dir)/hook-tool-missing\" ]; then echo \"checking $(git diff --cached --name-only)\" >&2; llv-test-tool-that-is-not-installed; exit 1; fi",
     "if ! out=$(git diff --cached --check 2>&1); then echo \"pre-commit: staged whitespace — $out\" >&2; exit 1; fi",
     "",
   ].join("\n"), { mode: 0o755 });
@@ -75,7 +77,8 @@ function hookedRepo() {
     stages: [], runs: [], cursor: null, state: "running", pausedState: null, stateDetail: null,
     srcPath: null, srcConversationId: null, createdAt: "now", closedAt: null,
   } as unknown as Pipeline;
-  return { root, repo, exec, run, calls, subject, breakHook: () => fs.writeFileSync(path.join(repo, ".git", "hook-broken"), "") };
+  return { root, repo, exec, run, calls, subject, breakHook: () => fs.writeFileSync(path.join(repo, ".git", "hook-broken"), ""),
+    loseHookTool: () => fs.writeFileSync(path.join(repo, ".git", "hook-tool-missing"), "") };
 }
 
 function writeOutput(repo: string, relative: string, content: string) {
@@ -155,6 +158,45 @@ test("a commit that was killed at its time limit is not repairable, whatever it 
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
+test("a hook whose tool is missing is not repairable, although its progress line names the staged file", async () => {
+  const box = hookedRepo();
+  try {
+    box.loseHookTool();
+    writeOutput(box.repo, OUTPUT, "+ a clean line\n");
+    const refused = await commitPipelineStage(box.subject, "study", false, box.exec, ["evidence/draft"], box.subject.lastPassedCommit);
+    expect(refused.ok).toBe(false);
+    if (refused.ok) throw new Error("unreachable");
+    expect(refused.error).toContain(`checking ${OUTPUT}`);
+    expect(refused.commitRefusal).toEqual({ repairable: false, paths: [OUTPUT] });
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+const EMFILE_REFUSAL = `pre-commit: eslint — could not open ${OUTPUT}: EMFILE: too many open files`;
+const PRIVACY_REFUSAL = "pre-commit: privacy\nPRIVACY GATE: FAIL\nhome_path: 1\nknown_value: 2\npre-commit: bun failed (1); gate failed";
+
+test.each([
+  ["a located whitespace diagnostic", 1, WHITESPACE_REFUSAL, true],
+  ["a located lint diagnostic", 1, `pre-commit: eslint\n${OUTPUT}:3:1 no-unused-vars: 'x' is defined but never used`, true],
+  ["a lint report that lists positions under the file", 1, `/work/tree/${OUTPUT}\n  3:1  error  'x' is defined but never used  no-unused-vars\n\n1 problem`, true],
+  ["a privacy verdict on the staged content", 1, PRIVACY_REFUSAL, true],
+  ["a privacy gate that could not run", 1, "pre-commit: privacy\nPRIVACY GATE: FAIL\nconfiguration_error: 1", false],
+  ["a privacy gate that lacks a tool, beside a content finding", 1, "PRIVACY GATE: FAIL\nhome_path: 1\ntool_unavailable: 1", false],
+  ["a resource failure that names the staged file", 1, EMFILE_REFUSAL, false],
+  ["a progress line that names the staged file", 1, `checking ${OUTPUT}\nfatal: unable to write new index file`, false],
+  ["a hook that could not find its command", 127, WHITESPACE_REFUSAL, false],
+  ["a hook that could not be executed", 126, WHITESPACE_REFUSAL, false],
+] as const)("%s decides whether the stage is asked", async (_name, code, stderr, repairable) => {
+  const box = hookedRepo();
+  try {
+    writeOutput(box.repo, OUTPUT, "+ a line the stage wrote\n");
+    const exec: ExecPort = (command, args, cwd, overrides, options) => args[0] === "commit"
+      ? { code, stdout: "", stderr }
+      : box.exec(command, args, cwd, overrides, options);
+    const refused = await commitPipelineStage(box.subject, "study", false, exec, ["evidence/draft"], box.subject.lastPassedCommit);
+    expect(refused).toMatchObject({ ok: false, commitRefusal: { repairable, paths: [OUTPUT] } });
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
 /* ---------- the controller, over an isolated store ---------- */
 
 function harness(options: { access?: "read-only" | "read-write" } = {}) {
@@ -163,6 +205,8 @@ function harness(options: { access?: "read-only" | "read-write" } = {}) {
   let wall = Date.parse("2026-10-07T09:00:00.000Z");
   let turn: StageTurnEvidence = { turn: "busy", message: null, lastRecordAt: wall };
   let requestAccepted = true;
+  let requestThrows = false;
+  const storedAtRequest: Array<PipelineStageAttempt["commitRepair"]> = [];
   let head = BASE_SHA;
   let remote = BASE_SHA;
   let spawns = 0;
@@ -231,6 +275,8 @@ function harness(options: { access?: "read-only" | "read-write" } = {}) {
     transcriptPresent: () => true,
     resumeSeveredTurn: async (input) => {
       requests.push({ ...input });
+      storedAtRequest.push(structuredClone(loadPipelines()[0]!.runs[0]!.attempts[0]!.commitRepair));
+      if (requestThrows) throw new Error("runtime host unreachable");
       return requestAccepted;
     },
     durableTurnEvidence: async () => turn,
@@ -258,6 +304,8 @@ function harness(options: { access?: "read-only" | "read-write" } = {}) {
     endTurn: (text: string) => { turn = { turn: "terminal", message: { text, ts: wall }, lastRecordAt: wall }; },
     keepWorking: () => { turn = { turn: "busy", message: turn.message, lastRecordAt: wall }; },
     refuseRequest: () => { requestAccepted = false; },
+    breakRequest: () => { requestThrows = true; },
+    storedAtRequest,
     hookAnswers: (result: ExecResult) => { hook = result; },
     stageLeaves: (...files: string[]) => { dirty = files; },
     spawnCount: () => spawns,
@@ -351,7 +399,9 @@ test("a second refusal after the repair parks with the hook's output", async () 
 
   const parked = loadPipelines()[0]!;
   expect(parked.state).toBe("needs_decision");
-  expect(parked.stateDetail).toBe(`committing the passed stage: ${second}`);
+  /* The refusal that parked it leads; the one the stage was asked about stays. */
+  expect(parked.stateDetail).toStartWith(`committing the passed stage: ${second}`);
+  expect(parked.stateDetail).toContain(`committing the passed stage: ${WHITESPACE_REFUSAL}`);
   expect(study()).toMatchObject({ state: "needs_decision", error: parked.stateDetail });
   /* The stage was asked exactly once. */
   expect(h.requests).toHaveLength(1);
@@ -359,6 +409,7 @@ test("a second refusal after the repair parks with the hook's output", async () 
 
 test.each([
   ["a hook failure no stage file names", refusal("gate-slot: no slot became free within 600s"), "committing the passed stage: gate-slot: no slot became free within 600s"],
+  ["a resource failure that names the stage's file", refusal(EMFILE_REFUSAL), `committing the passed stage: ${EMFILE_REFUSAL}`],
   ["a commit killed at its time limit", { code: null, signal: "SIGKILL", stdout: "", stderr: WHITESPACE_REFUSAL } as ExecResult, `committing the passed stage: ${WHITESPACE_REFUSAL}`],
 ])("%s parks immediately and asks the stage for nothing", async (_name, answer, detail) => {
   const h = harness();
@@ -392,8 +443,53 @@ test("a read-only repair that leaves an undeclared path changed parks on the fen
 
   const parked = loadPipelines()[0]!;
   expect(parked.state).toBe("needs_decision");
-  expect(parked.stateDetail).toBe("read-only stage study modified undeclared worktree paths");
+  expect(parked.stateDetail).toStartWith("read-only stage study modified undeclared worktree paths");
+  expect(parked.stateDetail).toContain(`committing the passed stage: ${WHITESPACE_REFUSAL}`);
+  expect(study().error).toBe(parked.stateDetail);
   expect(h.calls.filter((call) => call.startsWith("git commit"))).toHaveLength(1);
+});
+
+test("the refusal and its deadline are in the store before the request leaves", async () => {
+  const h = harness();
+  await runningStage(h);
+  h.hookAnswers(refusal(WHITESPACE_REFUSAL));
+  h.advance(1_000);
+  h.endTurn(PASS);
+  await tickPipelines([], h.ports);
+
+  expect(h.storedAtRequest).toHaveLength(1);
+  expect(h.storedAtRequest[0]).toMatchObject({ refusedAt: "2026-10-07T09:00:01.000Z", detail: `committing the passed stage: ${WHITESPACE_REFUSAL}` });
+  expect(h.storedAtRequest[0]!.requestedAt).toBeUndefined();
+});
+
+test("a delivery that throws spends the one repair budget: the commit is not tried again and the lane parks with the hook's output", async () => {
+  const h = harness();
+  await runningStage(h);
+  h.breakRequest();
+  h.hookAnswers(refusal(WHITESPACE_REFUSAL));
+  h.advance(1_000);
+  h.endTurn(PASS);
+  await tickPipelines([], h.ports);
+
+  /* What a restart right here would read back. */
+  expect(loadPipelines()[0]!.state).toBe("running");
+  expect(study().commitRepair).toMatchObject({ refusedAt: "2026-10-07T09:00:01.000Z" });
+  expect(study().commitRepair!.requestedAt).toBeUndefined();
+
+  h.advance(REPAIR_WAIT_MS / 2);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.state).toBe("running");
+  expect(study().commitRepair).toMatchObject({ refusedAt: "2026-10-07T09:00:01.000Z" });
+
+  for (let tick = 0; tick < 3; tick += 1) {
+    h.advance(REPAIR_WAIT_MS);
+    await tickPipelines([], h.ports);
+  }
+  const parked = loadPipelines()[0]!;
+  expect(parked.state).toBe("needs_decision");
+  expect(parked.stateDetail).toContain(`committing the passed stage: ${WHITESPACE_REFUSAL}`);
+  expect(h.calls.filter((call) => call.startsWith("git commit"))).toHaveLength(1);
+  expect(h.requests.length).toBe(2);
 });
 
 test("a repair the stage never finishes, or the delivery surface never accepts, parks with the hook's output on a bound", async () => {

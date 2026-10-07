@@ -3421,8 +3421,11 @@ function routeFailedAttempt(
  * the next refusal parks with what the hook printed, as every refusal did
  * before. The read-only fence is the committer's and is untouched, so a repair
  * that leaves an undeclared path changed parks there. The whole wait is bounded
- * by `refusedAt`, which covers a delivery surface that keeps refusing and a
- * repair turn that never ends.
+ * by `refusedAt`, which covers a delivery surface that keeps refusing or
+ * throwing and a repair turn that never ends. The record is in the store before
+ * the request leaves: a settlement that dies around the delivery finds it on
+ * the next tick, so it neither commits again nor starts a second wait. Whatever
+ * parks the stage after the request keeps the refusal the stage was asked about.
  */
 const COMMIT_REPAIR_WAIT_MS = 20 * 60_000;
 const COMMIT_REPAIR_DETAIL = "a commit hook refused the passed stage's files; the stage is repairing them once";
@@ -3457,7 +3460,9 @@ async function sendStageCommitRepair(
   if (ports.conversationDeliveryOutstanding?.(conversationId) === true) return false;
   /* Stable across ticks and processes, so a replay cannot mint a second ask. */
   const clientMessageId = `stage-commit-repair-${pipeline.id}-${stage.id}-${attempt.n}`;
-  const delivered = await ports.resumeSeveredTurn!({
+  /* A delivery surface that throws has accepted nothing: the next tick asks
+     again inside the same wait. */
+  const delivered = await Promise.resolve().then(() => ports.resumeSeveredTurn!({
     conversationId,
     transcriptPath: attempt.agentPath!,
     clientMessageId,
@@ -3465,7 +3470,7 @@ async function sendStageCommitRepair(
     project: pipeline.project,
     cwd: pipeline.repoDir,
     ...(attempt.startedAt ? { cohortAt: attempt.startedAt } : {}),
-  });
+  })).catch(() => false);
   if (delivered !== true) return false;
   repair.requestedAt = ports.now();
   repair.clientMessageId = clientMessageId;
@@ -3479,17 +3484,30 @@ async function requestStageCommitRepair(
 ): Promise<boolean> {
   if (!result.commitRefusal?.repairable || attempt.commitRepair) return false;
   if (stage.kind !== "run" || attempt.paneId || !attempt.conversationId || !attempt.agentPath || !ports.resumeSeveredTurn) return false;
-  const durable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, undefined, attempt.startedAt);
+  const durable = await stageRepairEvidence(attempt, ports);
   attempt.commitRepair = {
     refusedAt: ports.now(),
     detail: result.error,
     paths: result.commitRefusal.paths.slice(0, COMMIT_REPAIR_PATHS),
     messageTs: durable?.message?.ts ?? null,
   };
-  await sendStageCommitRepair(pipeline, stage, attempt, ports);
   pipeline.stateDetail = COMMIT_REPAIR_DETAIL;
   await persist();
+  if (await sendStageCommitRepair(pipeline, stage, attempt, ports)) await persist();
   return true;
+}
+
+/** Evidence that cannot be read is evidence of no finished turn. */
+async function stageRepairEvidence(attempt: PipelineStageAttempt, ports: PipelinePorts) {
+  return await Promise.resolve()
+    .then(() => ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath!, undefined, attempt.startedAt))
+    .catch(() => null);
+}
+
+/** The park text for a stage that was asked to repair and is parked by `reason`. */
+function afterCommitRepair(attempt: PipelineStageAttempt, reason: string): string {
+  const asked = attempt.commitRepair?.detail;
+  return !asked || asked === reason ? reason : `${reason}\nThe stage was asked once to repair this earlier refusal:\n${asked}`;
 }
 
 /** False while a requested repair is still out: the commit waits for it. */
@@ -3512,7 +3530,7 @@ async function stageCommitRepairSettled(
     if (await sendStageCommitRepair(pipeline, stage, attempt, ports)) await persist();
     return false;
   }
-  const durable = await ports.durableTurnEvidence(attempt.effectiveRole.engine, attempt.agentPath, undefined, attempt.startedAt);
+  const durable = await stageRepairEvidence(attempt, ports);
   const answered = durable?.turn === "terminal" && (durable.message?.ts ?? 0) > (repair.messageTs ?? 0)
     && (durable.lastRecordAt ?? durable.message?.ts ?? 0) >= unixMs(repair.requestedAt)
     && ports.conversationDeliveryOutstanding?.(attempt.conversationId) !== true
@@ -3553,7 +3571,7 @@ async function commitPassedStage(
       return;
     }
     if (await requestStageCommitRepair(pipeline, stage, attempt, result, ports, persist)) return;
-    park(pipeline, result.error, attempt);
+    park(pipeline, afterCommitRepair(attempt, result.error), attempt);
     return;
   }
   if (stage.kind === "review-loop" && result.sha !== attempt.reviewHeadSha) {
@@ -7348,20 +7366,26 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
           setCursorState(candidate, candidateStage.id, "committing");
         }
         await commitPassedStage(candidate, candidateStage, candidateAttempt, outside, async () => {
-          // Adoption must survive a restart before Git changes the destination.
-          // Persist only its intent, under the same full lane/flow fence used
-          // for final settlement, then advance our own observation fingerprint.
+          // Adoption must survive a restart before Git changes the destination,
+          // and a hook refusal handed back to the stage must survive one before
+          // the request leaves. Persist only those two intents, under the same
+          // full lane/flow fence used for final settlement, then advance our
+          // own observation fingerprint.
           await withPipelineMutation((pipelines, persist) => {
             const current = pipelines.find((pipeline) => pipeline.id === preview.id);
             if (!current || !matches(current)) { abort.abort(); return; }
-            if (candidateAttempt.branchAdoption) {
-              currentAttempt(current, candidateStage.id)!.branchAdoption = structuredClone(candidateAttempt.branchAdoption);
-              persist([current]);
-              fingerprint = JSON.stringify(current);
-              changed = true;
+            const recorded = currentAttempt(current, candidateStage.id)!;
+            if (!candidateAttempt.branchAdoption && !candidateAttempt.commitRepair) return;
+            if (candidateAttempt.branchAdoption) recorded.branchAdoption = structuredClone(candidateAttempt.branchAdoption);
+            if (candidateAttempt.commitRepair) {
+              recorded.commitRepair = structuredClone(candidateAttempt.commitRepair);
+              if (candidate.state === current.state) current.stateDetail = candidate.stateDetail;
             }
+            persist([current]);
+            fingerprint = JSON.stringify(current);
+            changed = true;
           });
-          if (abort.signal.aborted) throw new Error("stage settlement superseded before recording branch adoption");
+          if (abort.signal.aborted) throw new Error("stage settlement superseded before recording its intent");
         });
       }
       revalidate();
