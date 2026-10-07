@@ -119,6 +119,14 @@ function ports(overrides: Partial<WorktreeSweepPorts> & { prs?: MergedPullReques
   return {
     mode: "on",
     git: async (args, cwd) => {
+      if (args[0] === "ls-remote") {
+        const target = args.at(-1)!;
+        const url = await realGit(["remote", "get-url", target], cwd);
+        // The fixture's forge URL supplies only a repository name. Its
+        // unavailable remote never needs a real network request.
+        if (target === `https://github.com/${REPOSITORY}.git` || url.stdout.trim() === `https://github.com/${REPOSITORY}.git`)
+          return { code: 1, stdout: "", stderr: "fixture remote unavailable" };
+      }
       const result = await realGit(args, cwd);
       // Remote I/O stays in sandbox bare repositories. The URL seam models
       // a network transport, whose freshly advertised refs are read by Git.
@@ -2270,10 +2278,11 @@ test.each(["native", "unrelated-docker-view", "docker-local-copy"])("a private a
   const owners = [pipeline({ repoDir: root, worktreeDir: mergedLane.dir, branch: "topic/native-merged" }),
     pipeline({ repoDir: root, worktreeDir: retained, branch: "", baseRef: git(["rev-parse", "main"], root), closedAt: OLD_TERMINAL })];
   const commands: string[] = [];
+  const ordinary = ports({ pipelines: owners, prs: [merged(250, "topic/native-merged", mergedLane.tip)], now: () => RETAIN_NOW });
   const access = hostTempWorktreeAccess([{ path: path.join(caseDir, "tmp"), via: "/proc/42/root", anchor: { pid: 42, namespace: kind === "docker-local-copy" ? stageHostNamespace() ?? "mnt:[unavailable]" : "mnt:[private-agent]" } }],
-    async (command, args, cwd) => { commands.push(command); return realGit(args, cwd); },
+    async (command, args, cwd) => { commands.push(command); return ordinary.git(args, cwd); },
     { LLV_DOCKER_NSENTER_SHIMS: kind === "native" ? "0" : "1" });
-  const report = await sweepMergedWorktrees({ ...ports({ pipelines: owners, prs: [merged(250, "topic/native-merged", mergedLane.tip)], now: () => RETAIN_NOW }), ...access });
+  const report = await sweepMergedWorktrees({ ...ordinary, ...access });
   expect(commands.length).toBeGreaterThan(0);
   expect(commands.every(command => command === "git")).toBe(true);
   expect(report.errors).toEqual([]);
