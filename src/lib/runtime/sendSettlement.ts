@@ -364,7 +364,7 @@ export function sendReceiptFor(file: RegistryFile, operationId: string): SendRec
     clientMessageId,
     state: "in-flight",
     reason: delivery?.state === "held"
-      ? "held behind an account migration"
+      ? heldWaitReason(file, delivery)
       : "accepted for delivery and not settled yet",
     acceptedAt,
     settledAt: null,
@@ -372,6 +372,24 @@ export function sendReceiptFor(file: RegistryFile, operationId: string): SendRec
     resend: null,
     evidence: "delivery-record",
   };
+}
+
+/**
+ * What a held send is waiting on, as a reason code the composer translates.
+ *
+ * Only an account switch holds a reservation, and the record names it when
+ * the hold is placed. While the switch itself still waits for the running turn
+ * to end, the code says that, so the operator learns the message goes out once
+ * the turn is over and the switch has landed. A failed switch instead names
+ * the explicit retry or cancellation it needs before delivery can resume.
+ */
+export function heldWaitReason(file: RegistryFile, delivery: HeldDelivery): "switching-accounts" | "switch-after-turn" | "switch-failed" {
+  const migration = file.conversations[delivery.conversationId]?.migration;
+  if (delivery.fencedBy === migration?.operationId) {
+    if (migration?.phase === "failed-recoverable") return "switch-failed";
+    if (migration?.phase === "waiting-turn") return "switch-after-turn";
+  }
+  return delivery.waitReason ?? "switching-accounts";
 }
 
 /**

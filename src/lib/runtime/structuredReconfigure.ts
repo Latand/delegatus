@@ -1,3 +1,4 @@
+import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import { accountManager } from "@/lib/accounts/manager";
 import { advanceConversationMigration } from "@/lib/accounts/migration/coordinator";
 import { RegisteredSuccessorProvider } from "@/lib/accounts/migration/provider";
@@ -304,6 +305,10 @@ export async function applyStructuredReconfigure(
       await settle("failed", error);
       if (committedSuccessorId) await restoreCommittedSuccessor(committedSuccessorId);
       throw error;
+    } finally {
+      // Admission may have ticked while this executor still owned the switch.
+      // Wake again after commit so its assigned messages dispatch immediately.
+      if (committedSuccessorId) requestAccountMigrationTick();
     }
   }
 

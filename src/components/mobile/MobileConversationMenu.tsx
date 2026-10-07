@@ -2,6 +2,8 @@
 
 import { ArrowRightLeft, Bot, Boxes, ChevronRight, CornerDownRight, Crown, FoldVertical, GitFork, Info, Layers, ListTree, PencilLine, RotateCw, Search, ScrollText, Square, SquareTerminal, StickyNote, TriangleAlert, X } from "lucide-react";
 
+import { useState } from "react";
+
 import { useLocale } from "@/lib/i18n";
 import { cleanTitle } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";
@@ -15,7 +17,7 @@ import { useAgentControlActions } from "../AgentControlStrip";
 import { useProcessKill } from "../TaskHeader";
 import { effortTitle, engineBadge, fileModelLabel } from "../utils";
 import { MobileMeter } from "./MobileMeter";
-import { MobileSheet, MobileSheetDivider, MobileSheetRow, MobileSheetSection } from "./MobileSheet";
+import { MobileSheet, MobileSheetFold, MobileSheetRow } from "./MobileSheet";
 import { showReceipt } from "./MobileReceipt";
 import { chatStateBits, type StagePosition } from "./mobileChatState";
 
@@ -25,12 +27,15 @@ import { chatStateBits, type StagePosition } from "./mobileChatState";
  * It holds every former pane-header control as a LABELLED row — the 2026-08
  * audit's finding 18 is that an icon-only control has no touch route to its
  * meaning, and the phone's answer is that every control is a row in a sheet or
- * one of the bar's four icons. The first group holds the two rows that name
- * something OTHER than this conversation, when they apply (§4.2): «Orchestrator
- * seat» on the seat's own conversation, and the pipeline row on a stage (P2-9:
- * a stage conversation could not reach its own pipeline at all). Then the
- * identity actions, then a separator, then the two destructive rows: Close
- * card, and Kill agent in danger colour with a hint saying what it will stop.
+ * one of the bar's four icons. At rest it shows what names something OTHER
+ * than this conversation, when it applies (§4.2): what needs the operator,
+ * the pipeline row on a stage (P2-9: a stage conversation could not reach its
+ * own pipeline at all), «Orchestrator seat» on the seat's own conversation,
+ * the pinned message and the background tasks; then Interrupt. The rest sits
+ * behind named rows that open in place, one at a time
+ * (docs/design/compact-card-menu.md, variant 1): «This turn» (Compact,
+ * Re-check), «Conversation» (the identity actions) and «Close or stop» (Close
+ * card, and Kill agent in danger colour with a hint saying what it will stop).
  *
  * No row asks for confirmation (§2 rule 9, Q4). Close answers with a receipt
  * carrying Reopen; Kill answers with a receipt naming what it stopped once the
@@ -157,6 +162,9 @@ export function MobileConversationMenu({
   const showSubagents = subagents.length > 0 && onOpenSubagent !== undefined;
   const showPinned = hasPinned && onOpenPinned !== undefined;
   const showBackground = backgroundCount > 0 && onOpenBackground !== undefined;
+  /* The section opened in place; none at rest. */
+  const [opened, setOpened] = useState<string | null>(null);
+  const toggle = (id: string) => setOpened((current) => (current === id ? null : id));
   return (
     <>
       <MobileSheet name="menu" title={title} onClose={onClose}>
@@ -173,7 +181,12 @@ export function MobileConversationMenu({
           </span>
           {ctxLeft === null ? null : <MobileMeter left={ctxLeft} label={t("mobile2.meter.left", { left: ctxLeft })} className="ml-auto w-16 shrink-0" />}
         </div>
-        <div role="menu" aria-label={title} className="flex flex-col">
+        <div role="menu" aria-label={title} className="flex flex-col" data-mobile2-chat-menu={opened ?? "rest"}>
+          {/* At rest: what needs the operator, where this conversation sits,
+              and Interrupt, which is urgent while the agent works and so is
+              never behind a section. Everything else is one of the named
+              rows below, which open in place, one at a time
+              (docs/design/compact-card-menu.md). */}
           {/* What used to be two strips under the header: the pinned message
               and the background tasks. Each opens its own sheet, and neither
               marks the header button — the menu is where they live. */}
@@ -195,7 +208,6 @@ export function MobileConversationMenu({
               attrs={{ "data-mobile2-menu-row": "background" }}
             />
           ) : null}
-          {showPinned || showBackground ? <MobileSheetDivider /> : null}
           {/* The seat row (§4.2, §4.5): the seat's own conversation is where an
               operator asks what the orchestrator is holding, and the phone's
               pinned row — which used to carry the ⚙ — is gone with the strip,
@@ -233,69 +245,8 @@ export function MobileConversationMenu({
               attrs={{ "data-mobile2-menu-row": "pipeline" }}
             />
           ) : null}
-          {showSubagents ? (
-            <>
-              <MobileSheetSection count={subagents.length}>{t("mobile2.chat.menuSubagents")}</MobileSheetSection>
-              {subagents.map((child) => (
-                <MobileSheetRow
-                  key={child.id}
-                  icon={<GitFork className="h-[18px] w-[18px]" aria-hidden />}
-                  label={cleanTitle(child.title, 60)}
-                  trailing={t(`subagentTray.state.${child.state}`)}
-                  /* Unavailable is not a destination — the same reading the
-                     desktop badge gives a dead child. */
-                  disabled={child.state === "dead"}
-                  onSelect={act(() => onOpenSubagent?.(child.path))}
-                  attrs={{ "data-mobile2-menu-row": "subagent", "data-mobile2-subagent": child.id, "data-mobile2-subagent-state": child.state }}
-                />
-              ))}
-            </>
-          ) : null}
-          {onOpenSeat || showPipelineRow || showSubagents ? <MobileSheetDivider /> : null}
           {onAttention ? <MobileSheetRow icon={<TriangleAlert className="h-[18px] w-[18px]" aria-hidden />} label={t("mobile2.bar.attention", { count: attentionCount })} onSelect={act(onAttention)} attrs={{ "data-mobile2-menu-row": "attention" }} /> : null}
           {onReports ? <MobileSheetRow icon={<ScrollText className="h-[18px] w-[18px]" aria-hidden />} label={t("reportLog.show")} onSelect={act(onReports)} attrs={{ "data-mobile2-menu-row": "reports" }} /> : null}
-          <MobileSheetRow
-            icon={<PencilLine className="h-[18px] w-[18px]" aria-hidden />}
-            label={t("mobile2.chat.menuRename")}
-            disabled={!file.renamable}
-            onSelect={act(onRename)}
-            testId="mobile-menu-rename"
-            attrs={{ "data-mobile2-menu-row": "rename" }}
-          />
-          {onToggleCrown ? (
-            <MobileSheetRow
-              icon={<Crown className={`h-[18px] w-[18px] ${crowned ? "fill-crown text-crown" : ""}`} aria-hidden />}
-              label={crowned ? t("mobile2.chat.menuUncrown") : t("mobile2.chat.menuCrown")}
-              onSelect={act(onToggleCrown)}
-              attrs={{ "data-mobile2-menu-row": "crown" }}
-            />
-          ) : null}
-          {onHandoff && canHandoff(file) ? (
-            <MobileSheetRow
-              icon={<ArrowRightLeft className="h-[18px] w-[18px]" aria-hidden />}
-              label={t("mobile2.chat.menuHandoff")}
-              onSelect={act(onHandoff)}
-              attrs={{ "data-mobile2-menu-row": "handoff" }}
-            />
-          ) : null}
-          {/* The supersedence chain (#383). On the desktop it is a chip in the
-              pane header; the phone has no pane header, so the chain tail names
-              its round here and opens the retired predecessor through the same
-              durable `#c=` form the chip uses. */}
-          {file.continues ? (
-            <MobileSheetRow
-              icon={<CornerDownRight className="h-[18px] w-[18px]" aria-hidden />}
-              label={t("mobile2.chat.menuPredecessor", { round: file.continues.round })}
-              trailing={<ChevronRight className="h-4 w-4" aria-hidden />}
-              onSelect={act(() => {
-                /* The round opens through the store and takes this menu's
-                   entry, so Back returns to the conversation it was read from (#2105). */
-                navigateToFragment("#c=" + encodeURIComponent(file.continues!.conversationId));
-              })}
-              testId="mobile-menu-predecessor"
-              attrs={{ "data-mobile2-menu-row": "predecessor", "data-continues-conversation": file.continues.conversationId }}
-            />
-          ) : null}
           {/* Stop lives here until lane 5 makes it the composer's send slot
               (§2 rule 8); dropping it in between would leave a working agent
               unstoppable on the phone. */}
@@ -312,44 +263,6 @@ export function MobileConversationMenu({
               attrs={{ "data-mobile2-menu-row": "stop" }}
             />
           )}
-          {controls.compact.state === "hidden" ? null : (
-            <MobileSheetRow
-              icon={<FoldVertical className="h-[18px] w-[18px]" aria-hidden />}
-              label={t("mobile2.chat.menuCompact")}
-              disabled={controls.compact.state === "disabled" || actions.compactBusy}
-              trailing={ctxLeft !== null ? t("mobile2.meter.left", { left: ctxLeft }) : controls.compact.state === "disabled" ? t(controls.compact.reason) : undefined}
-              onSelect={() => actions.compact({ immediate: true })}
-              attrs={{ "data-mobile2-menu-row": "compact" }}
-            />
-          )}
-          <MobileSheetRow
-            icon={<Info className="h-[18px] w-[18px]" aria-hidden />}
-            label={t("mobile2.chat.menuDetails")}
-            /* Only when this screen was told the count. The conversation screen
-               is mounted inside the board's shell, which owns the background
-               processes; a screen that has not been handed the number says
-               nothing rather than claiming zero, and the board's own host row —
-               one row down, behind «Project · …» — still carries it. */
-            trailing={hostTaskCount ? t("mobile2.menu.hostTasks", { count: hostTaskCount }) : undefined}
-            onSelect={act(onOpenHost)}
-            attrs={{ "data-mobile2-open": "host", "data-mobile2-menu-row": "host" }}
-          />
-          {controls.terminal.state === "hidden" ? null : (
-            <MobileSheetRow
-              icon={<SquareTerminal className="h-[18px] w-[18px]" aria-hidden />}
-              label={t("mobile2.chat.menuTerminal")}
-              disabled={controls.terminal.state === "disabled"}
-              onSelect={actions.terminal}
-              attrs={{ "data-mobile2-menu-row": "terminal" }}
-            />
-          )}
-          <MobileSheetRow
-            icon={<RotateCw className="h-[18px] w-[18px]" aria-hidden />}
-            label={t("mobile2.chat.menuRecheck")}
-            disabled={actions.recheckBusy}
-            onSelect={actions.recheck}
-            attrs={{ "data-mobile2-menu-row": "recheck" }}
-          />
           {onOpenSearch ? (
             <MobileSheetRow
               icon={<Search className="h-[18px] w-[18px]" aria-hidden />}
@@ -358,15 +271,42 @@ export function MobileConversationMenu({
               attrs={{ "data-mobile2-open": "search", "data-mobile2-menu-row": "search" }}
             />
           ) : null}
-          {onOpenProjectMenu ? (
-            <MobileSheetRow
-              icon={<Boxes className="h-[18px] w-[18px]" aria-hidden />}
-              label={t("mobile2.chat.menuProject", { name: projectName })}
-              trailing={<ChevronRight className="h-4 w-4" aria-hidden />}
-              onSelect={onOpenProjectMenu}
-              attrs={{ "data-mobile2-menu-row": "project" }}
-            />
+          {showSubagents ? (
+            <MobileSheetFold id="subagents" title={t("mobile2.chat.menuSubagents")} value={subagents.length} open={opened === "subagents"} onToggle={() => toggle("subagents")}>
+              {subagents.map((child) => (
+                <MobileSheetRow
+                  key={child.id}
+                  icon={<GitFork className="h-[18px] w-[18px]" aria-hidden />}
+                  label={cleanTitle(child.title, 60)}
+                  trailing={t(`subagentTray.state.${child.state}`)}
+                  /* Unavailable is not a destination — the same reading the
+                     desktop badge gives a dead child. */
+                  disabled={child.state === "dead"}
+                  onSelect={act(() => onOpenSubagent?.(child.path))}
+                  attrs={{ "data-mobile2-menu-row": "subagent", "data-mobile2-subagent": child.id, "data-mobile2-subagent-state": child.state }}
+                />
+              ))}
+            </MobileSheetFold>
           ) : null}
+          <MobileSheetFold id="turn" title={t("mobile2.chat.sectionTurn")} open={opened === "turn"} onToggle={() => toggle("turn")}>
+            {controls.compact.state === "hidden" ? null : (
+              <MobileSheetRow
+                icon={<FoldVertical className="h-[18px] w-[18px]" aria-hidden />}
+                label={t("mobile2.chat.menuCompact")}
+                disabled={controls.compact.state === "disabled" || actions.compactBusy}
+                trailing={ctxLeft !== null ? t("mobile2.meter.left", { left: ctxLeft }) : controls.compact.state === "disabled" ? t(controls.compact.reason) : undefined}
+                onSelect={() => actions.compact({ immediate: true })}
+                attrs={{ "data-mobile2-menu-row": "compact" }}
+              />
+            )}
+            <MobileSheetRow
+              icon={<RotateCw className="h-[18px] w-[18px]" aria-hidden />}
+              label={t("mobile2.chat.menuRecheck")}
+              disabled={actions.recheckBusy}
+              onSelect={actions.recheck}
+              attrs={{ "data-mobile2-menu-row": "recheck" }}
+            />
+          </MobileSheetFold>
           {actions.status ? (
             <span
               role="status"
@@ -376,40 +316,117 @@ export function MobileConversationMenu({
               {actions.status.text}
             </span>
           ) : null}
-          <MobileSheetDivider />
-          {onCloseCard ? (
+          <MobileSheetFold id="manage" title={t("mobile2.chat.sectionManage")} open={opened === "manage"} onToggle={() => toggle("manage")}>
             <MobileSheetRow
-              icon={<X className="h-[18px] w-[18px]" aria-hidden />}
-              label={t("mobile2.chat.menuClose")}
-              trailing={t("mobile2.chat.menuCloseHint")}
-              onSelect={act(() => {
-                onCloseCard();
-                showReceipt(t("mobile2.chat.closed", { title }), onReopen ? { kind: "reopen", run: onReopen } : null);
-              })}
-              testId="mobile-menu-close"
-              attrs={{ "data-mobile2-menu-row": "close" }}
+              icon={<PencilLine className="h-[18px] w-[18px]" aria-hidden />}
+              label={t("mobile2.chat.menuRename")}
+              disabled={!file.renamable}
+              onSelect={act(onRename)}
+              testId="mobile-menu-rename"
+              attrs={{ "data-mobile2-menu-row": "rename" }}
             />
-          ) : null}
-          {kill.state === "hidden" ? null : (
+            {onToggleCrown ? (
+              <MobileSheetRow
+                icon={<Crown className={`h-[18px] w-[18px] ${crowned ? "fill-crown text-crown" : ""}`} aria-hidden />}
+                label={crowned ? t("mobile2.chat.menuUncrown") : t("mobile2.chat.menuCrown")}
+                onSelect={act(onToggleCrown)}
+                attrs={{ "data-mobile2-menu-row": "crown" }}
+              />
+            ) : null}
+            {onHandoff && canHandoff(file) ? (
+              <MobileSheetRow
+                icon={<ArrowRightLeft className="h-[18px] w-[18px]" aria-hidden />}
+                label={t("mobile2.chat.menuHandoff")}
+                onSelect={act(onHandoff)}
+                attrs={{ "data-mobile2-menu-row": "handoff" }}
+              />
+            ) : null}
+            {/* The supersedence chain (#383). On the desktop it is a chip in the
+                pane header; the phone has no pane header, so the chain tail names
+                its round here and opens the retired predecessor through the same
+                durable `#c=` form the chip uses. */}
+            {file.continues ? (
+              <MobileSheetRow
+                icon={<CornerDownRight className="h-[18px] w-[18px]" aria-hidden />}
+                label={t("mobile2.chat.menuPredecessor", { round: file.continues.round })}
+                trailing={<ChevronRight className="h-4 w-4" aria-hidden />}
+                onSelect={act(() => {
+                  /* The round opens through the store and takes this menu's
+                     entry, so Back returns to the conversation it was read from (#2105). */
+                  navigateToFragment("#c=" + encodeURIComponent(file.continues!.conversationId));
+                })}
+                testId="mobile-menu-predecessor"
+                attrs={{ "data-mobile2-menu-row": "predecessor", "data-continues-conversation": file.continues.conversationId }}
+              />
+            ) : null}
             <MobileSheetRow
-              icon={<Square className="h-[18px] w-[18px]" aria-hidden />}
-              label={t("mobile2.chat.menuKill")}
-              danger
-              disabled={kill.state === "disabled" || kill.busy}
-              /* A SIGTERM the host refused unlocks the escalation, and the row
-                 names it — the same word the desktop's armed button flips to —
-                 instead of repeating the hint of an attempt that has already
-                 failed. */
-              trailing={kill.state === "disabled" ? kill.reason : kill.force ? "SIGKILL" : killHint}
-              onSelect={answered(kill.kill, () => showReceipt(t("mobile2.chat.killed", { title })))}
-              testId="mobile-menu-kill"
-              attrs={{ "data-mobile2-menu-row": "kill" }}
+              icon={<Info className="h-[18px] w-[18px]" aria-hidden />}
+              label={t("mobile2.chat.menuDetails")}
+              /* Only when this screen was told the count. The conversation screen
+                 is mounted inside the board's shell, which owns the background
+                 processes; a screen that has not been handed the number says
+                 nothing rather than claiming zero, and the board's own host row —
+                 one row down, behind «Project · …» — still carries it. */
+              trailing={hostTaskCount ? t("mobile2.menu.hostTasks", { count: hostTaskCount }) : undefined}
+              onSelect={act(onOpenHost)}
+              attrs={{ "data-mobile2-open": "host", "data-mobile2-menu-row": "host" }}
             />
-          )}
-          {/* Only a kill that was NOT accepted is still on screen to say so:
-              an accepted one has closed this sheet for its receipt. */}
-          {kill.message ? (
-            <span role="status" data-mobile2-kill-status className="px-4 pb-1 text-label font-semibold text-danger">{kill.message}</span>
+            {controls.terminal.state === "hidden" ? null : (
+              <MobileSheetRow
+                icon={<SquareTerminal className="h-[18px] w-[18px]" aria-hidden />}
+                label={t("mobile2.chat.menuTerminal")}
+                disabled={controls.terminal.state === "disabled"}
+                onSelect={actions.terminal}
+                attrs={{ "data-mobile2-menu-row": "terminal" }}
+              />
+            )}
+            {onOpenProjectMenu ? (
+              <MobileSheetRow
+                icon={<Boxes className="h-[18px] w-[18px]" aria-hidden />}
+                label={t("mobile2.chat.menuProject", { name: projectName })}
+                trailing={<ChevronRight className="h-4 w-4" aria-hidden />}
+                onSelect={onOpenProjectMenu}
+                attrs={{ "data-mobile2-menu-row": "project" }}
+              />
+            ) : null}
+          </MobileSheetFold>
+          {onCloseCard || kill.state !== "hidden" ? (
+            <MobileSheetFold id="end" title={t("mobile2.chat.sectionEnd")} open={opened === "end"} onToggle={() => toggle("end")}>
+              {onCloseCard ? (
+                <MobileSheetRow
+                  icon={<X className="h-[18px] w-[18px]" aria-hidden />}
+                  label={t("mobile2.chat.menuClose")}
+                  trailing={t("mobile2.chat.menuCloseHint")}
+                  onSelect={act(() => {
+                    onCloseCard();
+                    showReceipt(t("mobile2.chat.closed", { title }), onReopen ? { kind: "reopen", run: onReopen } : null);
+                  })}
+                  testId="mobile-menu-close"
+                  attrs={{ "data-mobile2-menu-row": "close" }}
+                />
+              ) : null}
+              {kill.state === "hidden" ? null : (
+                <MobileSheetRow
+                  icon={<Square className="h-[18px] w-[18px]" aria-hidden />}
+                  label={t("mobile2.chat.menuKill")}
+                  danger
+                  disabled={kill.state === "disabled" || kill.busy}
+                  /* A SIGTERM the host refused unlocks the escalation, and the row
+                     names it — the same word the desktop's armed button flips to —
+                     instead of repeating the hint of an attempt that has already
+                     failed. */
+                  trailing={kill.state === "disabled" ? kill.reason : kill.force ? "SIGKILL" : killHint}
+                  onSelect={answered(kill.kill, () => showReceipt(t("mobile2.chat.killed", { title })))}
+                  testId="mobile-menu-kill"
+                  attrs={{ "data-mobile2-menu-row": "kill" }}
+                />
+              )}
+              {/* Only a kill that was NOT accepted is still on screen to say so:
+                  an accepted one has closed this sheet for its receipt. */}
+              {kill.message ? (
+                <span role="status" data-mobile2-kill-status className="px-4 pb-1 text-label font-semibold text-danger">{kill.message}</span>
+              ) : null}
+            </MobileSheetFold>
           ) : null}
         </div>
       </MobileSheet>

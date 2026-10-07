@@ -410,3 +410,18 @@ test("review of incident 2026-10-06: an accepted send no pass could reach shows 
   expect(messageRowModel(t("uk"), queued, { nowMs: AT + 500, progress: admitted }).transport)
     .toContain("прийнято; чекає наступного проходу черги доставки");
 });
+
+test("a send held while its conversation switches accounts says so in plain words, in both languages", () => {
+  const receipt = (reason: string) => ({ operationId: "op", idempotencyKey: "key", conversationId: "c", kind: "send",
+    status: "queued", reason, at: new Date(AT).toISOString(), revision: 1 }) as OutboxEntry["deliveryReceipt"];
+  for (const locale of ["en", "uk"] as const) {
+    const switching = messageRowModel(t(locale), entry({ state: "delivering", deliveryReceipt: receipt("switching-accounts") }), { nowMs: AT + 30_000 });
+    expect(switching.phase).toBe("pending");
+    expect(switching.transport).toBe(translate(locale, "receipt.human.switchingAccounts"));
+    const afterTurn = messageRowModel(t(locale), entry({ state: "delivering", deliveryReceipt: receipt("switch-after-turn") }), { nowMs: AT + 30_000 });
+    expect(afterTurn.transport).toBe(translate(locale, "receipt.human.switchAfterTurn"));
+    const named = messageRowModel(t(locale), entry({ state: "delivering", deliveryReceipt: receipt("switching-accounts") }),
+      { nowMs: AT, switchHold: { label: "Account B" } });
+    expect(named.transport).toBe(translate(locale, "outbox.heldForSwitch", { label: "Account B" }));
+  }
+});

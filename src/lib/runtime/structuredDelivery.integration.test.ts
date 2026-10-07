@@ -317,15 +317,15 @@ test("an engine event burst preserves every projection without polling the deliv
   });
   let effectBatchCalls = 0;
   let snapshotCalls = 0;
-  let deltaProjections = 0;
+  const deltaProjections: { text: string; eventKey: string }[] = [];
   let sessionStatusProjections = 0;
   const client = {
     snapshot: async () => {
       snapshotCalls += 1;
       return { filesRevision: 0 };
     },
-    append: async (event: { kind: string }) => {
-      if (event.kind === "delta") deltaProjections += 1;
+    append: async (event: { kind: string; payload: { text?: string }; producer?: { eventKey?: string } }) => {
+      if (event.kind === "delta") deltaProjections.push({ text: event.payload.text ?? "", eventKey: event.producer?.eventKey ?? "" });
       if (event.kind === "session-status") sessionStatusProjections += 1;
     },
     producerCursor: async () => 17,
@@ -349,14 +349,244 @@ test("an engine event burst preserves every projection without polling the deliv
       burst.emit({ kind: "delta", turnId: "turn:burst", text: `delta ${index}`, seq: index });
     }
 
-    await waitForCondition(() => deltaProjections === 40);
+    // A ready burst folds into fewer appends; every fragment still lands, in
+    // order, under the last sequence the journal's producer cursor resumes from.
+    const burstText = Array.from({ length: 40 }, (_, offset) => `delta ${offset + 18}`).join("");
+    await waitForCondition(() => deltaProjections.map(projection => projection.text).join("") === burstText);
     await Bun.sleep(50);
-    expect(deltaProjections).toBe(40);
+    expect(deltaProjections.map(projection => projection.text).join("")).toBe(burstText);
+    expect(deltaProjections.length).toBeLessThanOrEqual(40);
+    expect(deltaProjections.at(-1)!.eventKey).toBe("engine-host:codex:burst-session:57");
     expect(sessionStatusProjections - baselineStatuses).toBeLessThanOrEqual(1);
     expect(effectBatchCalls - baselineEffects).toBeLessThanOrEqual(1);
     expect(snapshotCalls - baselineSnapshots).toBeLessThanOrEqual(1);
   } finally {
     await bindStructuredDeliveryQueue([], { registry, client: null });
+  }
+});
+
+/** A structured host's own ledger: every attach replays what was produced
+    after its cursor, then follows new events as they arrive. */
+function ledgerObservableHost(sessionKey: string): {
+  host: EngineHost & { onStateChange(listener: (state: HostState) => void): () => void };
+  emit(...events: RuntimeEvent[]): void;
+} {
+  const ledger: RuntimeEvent[] = [];
+  const readers = new Set<() => void>();
+  const state: HostState = {
+    status: "active",
+    sessionKey,
+    endpoint: "fake:ledger-host",
+    pid: 1,
+    processStartIdentity: "fake:1",
+    eventCursor: 0,
+    protocolVersion: "fake-v1",
+    activeTurnRef: "turn:ledger",
+    pendingAttention: [],
+    activeFlags: [],
+    account: null,
+  };
+  const host = {
+    attach: (afterSeq: number) => ({
+      [Symbol.asyncIterator]: (): AsyncIterator<RuntimeEvent> => {
+        let position = ledger.findIndex((event) => event.seq > afterSeq);
+        if (position < 0) position = ledger.length;
+        let closed = false;
+        return {
+          next: async () => {
+            while (!closed && position >= ledger.length) {
+              await new Promise<void>((resolve) => {
+                const wake = () => { readers.delete(wake); resolve(); };
+                readers.add(wake);
+              });
+            }
+            return closed ? { value: undefined, done: true } : { value: ledger[position++], done: false };
+          },
+          return: async () => {
+            closed = true;
+            for (const wake of [...readers]) wake();
+            return { value: undefined, done: true };
+          },
+        };
+      },
+    }),
+    send: async (entry: QueueEntry) => ({ outcome: "turn-started" as const, turnId: `turn:${entry.id}` }),
+    interrupt: async () => {},
+    answer: async () => {},
+    health: async () => ({ ...state }),
+    release: async () => {},
+    onStateChange: () => () => {},
+  } satisfies EngineHost & { onStateChange(listener: (state: HostState) => void): () => void };
+  return {
+    host,
+    emit(...events) {
+      ledger.push(...events);
+      for (const wake of [...readers]) wake();
+    },
+  };
+}
+
+test("succession replay keeps text a predecessor's late append recorded exactly once", async () => {
+  const directory = path.join(sandbox, "controller-succession-fold");
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
+  const sessionId = "succession-fold-session";
+  const artifactPath = path.join(directory, `${sessionId}.jsonl`);
+  const profile = emptyLaunchProfile({ cwd: directory });
+  registry.reconcileConversations([{
+    engine: "codex",
+    path: artifactPath,
+    accountId: "succession-account",
+    launchProfile: profile,
+    turn: { state: "busy", source: "assistant", terminalAt: null },
+    observedAt: "2026-10-06T12:00:00.000Z",
+  }]);
+  const conversationId = registry.conversationForPath(artifactPath)!.id;
+  const key = { engine: "codex" as const, sessionId };
+  registry.upsert({
+    key,
+    artifactPath,
+    cwd: directory,
+    accountId: "succession-account",
+    launchProfile: profile,
+    status: "live",
+    host: null,
+    structuredHost: {
+      kind: "codex-app-server",
+      endpoint: "fake:ledger-host",
+      process: null,
+      eventCursor: 0,
+      protocolVersion: "fake-v1",
+      writerClaimEpoch: 0,
+      activeTurnRef: "turn:ledger",
+      pendingAttention: [],
+      activeFlags: [],
+    },
+    claimEpoch: 0,
+    claimOwner: null,
+    pendingAction: null,
+  });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const base = runtimeJournalClient(journal);
+  let held: { commit: () => void; committed: Promise<unknown> } | null = null;
+  let heldReady: () => void = () => {};
+  const heldAppend = new Promise<void>((resolve) => { heldReady = resolve; });
+  let cursorReads = 0;
+  const client = {
+    ...base,
+    append: async (event: Parameters<RuntimeHostClient["append"]>[0]) => {
+      if (event.kind !== "delta" || held) return await base.append(event);
+      // The predecessor's append is in flight across the succession.
+      let commit = () => {};
+      const committed = new Promise<void>((resolve) => { commit = resolve; }).then(() => base.append(event));
+      held = { commit, committed };
+      heldReady();
+      return await committed;
+    },
+    producerCursor: async (producerKind: string, eventKeyPrefix: string) => {
+      cursorReads += 1;
+      const observed = await base.producerCursor(producerKind, eventKeyPrefix);
+      if (cursorReads === 2 && held) {
+        // The successor read the cursor; the predecessor's append commits after.
+        held.commit();
+        await held.committed;
+      }
+      return observed;
+    },
+  } as RuntimeHostClient;
+  const ledger = ledgerObservableHost(sessionId);
+  const delta = (seq: number): RuntimeEvent => ({ kind: "delta", turnId: "turn:ledger", text: `[${seq}]`, seq });
+
+  try {
+    await bindStructuredDeliveryQueue([{ key, host: ledger.host }], { registry, client });
+    ledger.emit(delta(1), delta(2), delta(3), delta(4), delta(5));
+    await heldAppend;
+    ledger.emit(delta(6), delta(7), delta(8), delta(9), delta(10));
+    await bindStructuredDeliveryQueue([], { registry, client });
+    expect(cursorReads).toBe(2);
+    const expected = Array.from({ length: 10 }, (_, index) => `[${index + 1}]`).join("");
+    const recorded = () => journal.replay(0).events
+      .filter((event) => event.kind === "delta" && event.scope.id === conversationId)
+      .map((event) => String(event.payload.text))
+      .join("");
+    await waitForCondition(() => recorded().length >= expected.length);
+    await Bun.sleep(50);
+    expect(recorded()).toBe(expected);
+    expect(journal.producerCursor("codex-app-server", `engine-host:codex:${sessionId}:`)).toBe(10);
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close();
+  }
+});
+
+test("a ready burst of escaped text folds within the journal's payload budget and its turn ends", async () => {
+  const directory = path.join(sandbox, "controller-escaped-fold");
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
+  const sessionId = "escaped-fold-session";
+  const artifactPath = path.join(directory, `${sessionId}.jsonl`);
+  const profile = emptyLaunchProfile({ cwd: directory });
+  registry.reconcileConversations([{
+    engine: "codex",
+    path: artifactPath,
+    accountId: "escaped-account",
+    launchProfile: profile,
+    turn: { state: "busy", source: "assistant", terminalAt: null },
+    observedAt: "2026-10-06T12:00:00.000Z",
+  }]);
+  const conversationId = registry.conversationForPath(artifactPath)!.id;
+  const key = { engine: "codex" as const, sessionId };
+  registry.upsert({
+    key,
+    artifactPath,
+    cwd: directory,
+    accountId: "escaped-account",
+    launchProfile: profile,
+    status: "live",
+    host: null,
+    structuredHost: {
+      kind: "codex-app-server",
+      endpoint: "fake:ledger-host",
+      process: null,
+      eventCursor: 0,
+      protocolVersion: "fake-v1",
+      writerClaimEpoch: 0,
+      activeTurnRef: "turn:ledger",
+      pendingAttention: [],
+      activeFlags: [],
+    },
+    claimEpoch: 0,
+    claimOwner: null,
+    pendingAction: null,
+  });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const client = runtimeJournalClient(journal);
+  const ledger = ledgerObservableHost(sessionId);
+  // JSON writes each of these four characters as two bytes, so 8 KiB of this
+  // text is 16 KiB of payload before the identities around it.
+  const fragment = "\\\n\\\n";
+  const count = 2_048;
+
+  try {
+    await bindStructuredDeliveryQueue([{ key, host: ledger.host }], { registry, client });
+    ledger.emit(
+      { kind: "turn-started", turnId: "turn:ledger", seq: 1 },
+      ...Array.from({ length: count }, (_, index): RuntimeEvent => ({ kind: "delta", turnId: "turn:ledger", text: fragment, seq: index + 2 })),
+      { kind: "turn-ended", turnId: "turn:ledger", status: "completed", seq: count + 2 },
+    );
+    const recorded = () => journal.replay(0).events.filter((event) => event.scope.id === conversationId);
+    await waitForCondition(() => recorded().some((event) => event.kind === "turn-ended"));
+    const events = recorded();
+    const deltas = events.filter((event) => event.kind === "delta");
+    expect(deltas.map((event) => String(event.payload.text)).join("")).toBe(fragment.repeat(count));
+    expect(deltas.length).toBeGreaterThan(1);
+    expect(deltas.length).toBeLessThanOrEqual(8);
+    for (const event of deltas) expect(Buffer.byteLength(JSON.stringify(event.payload))).toBeLessThanOrEqual(16 * 1024);
+    // The turn's events keep their order: its start, all of its text, its end.
+    const kinds = events.map((event) => event.kind).filter((kind) => kind === "turn-started" || kind === "delta" || kind === "turn-ended");
+    expect(kinds).toEqual(["turn-started", ...deltas.map(() => "delta"), "turn-ended"]);
+    expect(journal.producerCursor("codex-app-server", `engine-host:codex:${sessionId}:`)).toBe(count + 2);
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close();
   }
 });
 

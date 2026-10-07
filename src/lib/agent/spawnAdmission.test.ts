@@ -74,8 +74,9 @@ function view(fields: Partial<FileView> = {}): FileView {
   return { conversations: {}, conversationAliases: {}, lineageEdges: {}, memberships: {}, ...fields };
 }
 
-test("the denied-role contract pins reviewer, verifier, maintainer, merger and issue-reporter", () => {
-  expect(SPAWN_DENIED_ROLE_IDS).toEqual(["reviewer", "verifier", "maintainer", "merger", "issue-reporter"]);
+test("the denied-role contract pins reviewer, verifier, maintainer, merger, issue-reporter and visual-critic", () => {
+  expect(SPAWN_DENIED_ROLE_IDS).toEqual(["reviewer", "verifier", "maintainer", "merger", "issue-reporter", "visual-critic"]);
+  expect(isSpawnDeniedRole("visual-critic")).toBe(true);
   expect(isSpawnDeniedRole("issue-reporter")).toBe(true);
   expect(isSpawnDeniedRole("reviewer")).toBe(true);
   expect(isSpawnDeniedRole("verifier")).toBe(true);
@@ -215,6 +216,7 @@ test("origin resolution keys on the agent caller or the container creator", () =
 test("rejection guidance is actionable and names the escalation paths", () => {
   expect(reviewerOriginSpawnGuidance("reviewer")).toContain("in-session");
   expect(reviewerOriginSpawnGuidance("verifier")).toStartWith("Verifier");
+  expect(reviewerOriginSpawnGuidance("visual-critic")).toStartWith("Visual critic sessions run every check in-session");
   expect(nestingDepthGuidance(3, 2)).toContain("depth 2");
   expect(nestingDepthGuidance(3, 2)).toContain("maxAgentNestingDepth");
   /* Agent-facing refusals name no endpoint (docs/design/agent-prompt-contract.md C7). */

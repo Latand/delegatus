@@ -304,6 +304,12 @@ test("a long-press opens the card's sheet; Move to moves the card at once with U
   const sheet = q(dom.document.body as unknown as HTMLElement, "[data-phone-card-sheet]")!;
   const actions = qa(sheet, "[data-phone-card-action]").map((row) => row.getAttribute("data-phone-card-action"));
   expect(actions).toEqual(["move-inbox", "move-blocked", "move-done", "hide", "open-agent"]);
+  /* The other columns are one row of cells under "Move to", each captioned with the column and named in full; the rest stay rows with their second line. */
+  expect(qa(sheet, "[data-phone-card-cells] > button").map((cell) => [cell.getAttribute("data-phone-card-action"), cell.textContent, cell.getAttribute("aria-label")])).toEqual([
+    ["move-inbox", "Inbox", "Move to Inbox"], ["move-blocked", "Waiting", "Move to Waiting"], ["move-done", "Done", "Move to Done"],
+  ]);
+  expect(q(sheet, "[data-phone-card-cells]")?.getAttribute("aria-label")).toBe("Move to");
+  expect(q(sheet, '[data-phone-card-action="hide"]')?.textContent).toContain("Hide from board");
   /* The press opened a sheet, not the task under the finger. */
   expect(opened.tasks).toEqual([]);
 
@@ -768,4 +774,33 @@ test("phone cards show a passive status note below the title", () => {
   expect(line.textContent).toContain(row.note.text);
   expect(line.querySelectorAll("button,input,textarea")).toHaveLength(0);
   expect(card.querySelector("[data-phone-card-title]")!.compareDocumentPosition(line) & 4).toBe(4);
+});
+
+test("a task card with a prototype review carries the review button beside its face; one tap opens the review where the operator is", () => {
+  const review = { latestReviewId: "pr_round", waitingReviewId: "pr_round" as string | null, title: "Layout", rounds: 1, createdAt: new Date((NOW - 300) * 1000).toISOString() };
+  const row = { ...task("p", "assigned"), prototypeReview: review } as BoardTask;
+  const { host, opened, render } = mount({ files: [], tasks: [row] });
+  const face = q(host, '[data-phone-card="task:p"]')!;
+  const button = q(host, '[data-phone-card-prototype-button="p"]')!;
+  expect(button.getAttribute("data-prototype-state")).toBe("ready");
+  expect(button.textContent).toBe(en("proto.button.word"));
+  /* A button of its own, never inside the card's button, and no amber line that only says it. */
+  expect(face.contains(button)).toBe(false);
+  expect(face.textContent).not.toContain(en("proto.notice.ready"));
+  const asked: unknown[] = [];
+  const listen = (event: Event) => asked.push((event as CustomEvent).detail);
+  const held = G.CustomEvent;
+  G.CustomEvent = dom.CustomEvent;
+  dom.addEventListener("llv:open-prototype-review", listen as never);
+  try { click(button); } finally { dom.removeEventListener("llv:open-prototype-review", listen as never); G.CustomEvent = held; }
+  expect(asked).toEqual([{ kind: "prototype-review", taskId: "p", reviewId: "pr_round", from: "card" }]);
+  expect(opened.tasks).toEqual([]);
+  /* Decided: the button keeps its word and names the chosen variants to assistive tech. */
+  render([{ ...row, prototypeReview: { ...review, waitingReviewId: null, decision: { chosen: [{ number: 2, name: "Two" }, { number: 3, name: "Three" }], comment: "", at: review.createdAt, delivery: "sent" } } } as BoardTask]);
+  expect(q(host, '[data-phone-card-prototype-button="p"]')!.getAttribute("data-prototype-state")).toBe("decided");
+  expect(q(host, '[data-phone-card-prototype-button="p"]')!.textContent).toBe(en("proto.button.word"));
+  expect(q(host, '[data-phone-card-prototype-button="p"]')!.getAttribute("aria-label")).toContain("2 · Two, 3 · Three");
+  /* A task with no review draws no button. */
+  render([task("p", "assigned")]);
+  expect(q(host, "[data-phone-card-prototype-button]")).toBeNull();
 });

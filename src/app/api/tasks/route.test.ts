@@ -14,7 +14,7 @@ process.env.LLV_STATE_DIR = sandbox;
 
 const route = await import("./route");
 const { buildPipeline, loadPipelines, savePipelines } = await import("@/lib/pipelines/store");
-const { loadTasks, saveTasks } = await import("@/lib/tasks/store");
+const { loadTasks, loadTasksForList, mutateTasks, saveTasks } = await import("@/lib/tasks/store");
 
 afterAll(() => {
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
@@ -66,6 +66,29 @@ test("GET derives pipelineIds including closed history and filters stale task id
   expect((loadPipelines()[0] as Pipeline).taskIds).toEqual([task.id, "deleted-task"]);
 });
 
+
+test("GET answers from the shared frozen list without writing into it, and a write reaches the next GET", async () => {
+  const row = (id: string, project: string): BoardTask => ({
+    id, project, status: "inbox", text: `Shared ${id}`, placement: "unplaced", assignments: [],
+    createdAt: "2026-10-07T00:00:00.000Z", updatedAt: "2026-10-07T00:00:00.000Z",
+  });
+  saveTasks([row("shared-1", "viewer"), row("shared-2", "elsewhere")]);
+  savePipelines([]);
+  const shared = loadTasksForList();
+  expect(Object.isFrozen(shared[0])).toBe(true);
+  const snapshot = JSON.stringify(shared);
+
+  const read = async (url: string) => (await (await route.GET(new NextRequest(url))).json()) as { tasks: Array<BoardTask & { pipelineIds: string[] }> };
+  const first = await read("http://localhost/api/tasks?project=viewer");
+  expect(first.tasks.map((task) => [task.id, task.pipelineIds])).toEqual([["shared-1", []]]);
+  expect(loadTasksForList()).toBe(shared);
+  expect(JSON.stringify(loadTasksForList())).toBe(snapshot);
+
+  mutateTasks((current) => ({ tasks: current.map((task) => task.id === "shared-1" ? { ...task, text: "Written between reads" } : task), result: null }));
+  const second = await read("http://localhost/api/tasks?project=viewer");
+  expect(second.tasks[0]?.text).toBe("Written between reads");
+  expect(shared[0]?.text).toBe("Shared shared-1");
+});
 
 test("REST creates, patches, lists and undoes a hold without changing another hidden card", async () => {
   const { PATCH } = await import("./[id]/route");

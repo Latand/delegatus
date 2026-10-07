@@ -23,6 +23,7 @@ import { agentRegistry, type AgentRegistry, type SpawnBeginResult, type SpawnRec
 import { sessionKeyFromTranscript } from "@/lib/agent/sessionKey";
 import { spawnResponseForReceipt, type SpawnResponse as AgentSpawnResponse } from "@/lib/agent/spawnResponse";
 import { resolveSpawnedTranscriptPath } from "@/lib/agent/spawnedTranscript";
+import { taskForResponse } from "@/lib/prototypeReview/read";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { projectInfoFromCwd } from "@/lib/scanner/describe";
 import { ensureTaskPipelineForAssignment } from "@/lib/pipelines/engine";
@@ -159,6 +160,7 @@ function persistAssignment(
 }
 
 function taskSpawnResponse(
+  req: NextRequest,
   receipt: SpawnReceipt,
   task: BoardTask,
   patch: AssignmentPatch,
@@ -169,7 +171,7 @@ function taskSpawnResponse(
   });
   return {
     ok: true,
-    task,
+    task: taskForResponse(req, task),
     target: receipt.pane?.display ?? receipt.target ?? null,
     path: receipt.artifactPath,
     panePid: receipt.pane?.panePid.pid ?? null,
@@ -398,7 +400,7 @@ async function postTaskSpawn(
       if (!binding.pipeline) {
         const at = isoNow();
         const patch = assignmentPatch(launchReceipt, at, account.accountId, engine);
-        return NextResponse.json(taskSpawnResponse(launchReceipt, task, { ...patch, state: "spawning" }, {
+        return NextResponse.json(taskSpawnResponse(req, launchReceipt, task, { ...patch, state: "spawning" }, {
           error: binding.error ?? "could not bind task to a pipeline",
         }), { status: 202 });
       }
@@ -411,11 +413,11 @@ async function postTaskSpawn(
       try {
         const result = persistAssignment(dependencies, id, patch, at);
         if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status });
-        const response = taskSpawnResponse(launchReceipt, result.task, patch);
+        const response = taskSpawnResponse(req, launchReceipt, result.task, patch);
         const status = patch.state === "spawning" ? 202 : 200;
         return NextResponse.json(response, { status });
       } catch (error) {
-        return NextResponse.json(taskSpawnResponse(launchReceipt, task, { ...patch, state: "spawning" }, {
+        return NextResponse.json(taskSpawnResponse(req, launchReceipt, task, { ...patch, state: "spawning" }, {
           error: error instanceof Error ? error.message : "task assignment write failed",
         }), { status: 202 });
       }
@@ -436,7 +438,7 @@ async function postTaskSpawn(
     } catch (error) {
       await registry.failSpawnOffLoop(launchReceipt.launchId, "task admission could not be persisted");
       const failed = registry.readOnlySnapshot().receipts[launchReceipt.launchId] ?? launchReceipt;
-      return NextResponse.json(taskSpawnResponse(failed, task, { ...admittedPatch, state: "failed" }, {
+      return NextResponse.json(taskSpawnResponse(req, failed, task, { ...admittedPatch, state: "failed" }, {
         error: error instanceof Error ? error.message : "task admission could not be persisted",
       }), { status: 500 });
     }
@@ -449,7 +451,7 @@ async function postTaskSpawn(
         const failedAt = isoNow();
         const failedPatch = assignmentPatch(failed, failedAt, account.accountId, engine);
         const persisted = persistAssignment(dependencies, id, failedPatch, failedAt);
-        return NextResponse.json(taskSpawnResponse(failed, persisted.ok ? persisted.task : admittedTask, failedPatch, {
+        return NextResponse.json(taskSpawnResponse(req, failed, persisted.ok ? persisted.task : admittedTask, failedPatch, {
           error: binding.error ?? "could not reserve task pipeline",
         }), { status: binding.status ?? 500 });
       }
@@ -503,7 +505,7 @@ async function postTaskSpawn(
       } catch {
         /* The replay path will fold this same launch identity into the task. */
       }
-      return NextResponse.json(taskSpawnResponse(pending, taskAfterRecovery, { ...patch, state: "spawning" }, {
+      return NextResponse.json(taskSpawnResponse(req, pending, taskAfterRecovery, { ...patch, state: "spawning" }, {
         error: error instanceof Error ? error.message : "task spawn attribution is pending",
       }), { status: 202 });
     }
@@ -517,7 +519,7 @@ async function postTaskSpawn(
     } catch {
       /* The failed receipt remains queryable by clientAttemptId. */
     }
-    return NextResponse.json(taskSpawnResponse(failed, admittedTask, patch, {
+    return NextResponse.json(taskSpawnResponse(req, failed, admittedTask, patch, {
       error: failed.error ?? "task spawn failed",
     }), { status: 500 });
   }
@@ -528,7 +530,7 @@ async function postTaskSpawn(
   if (dependencies.ensureTaskPipelineForAssignment && completed.artifactPath) {
     const binding = await dependencies.ensureTaskPipelineForAssignment(admittedTask, pipelineSpawnParams(completed.artifactPath));
     if (!binding.pipeline) {
-      return NextResponse.json(taskSpawnResponse(completed, admittedTask, { ...completedPatch, state: "spawning" }, {
+      return NextResponse.json(taskSpawnResponse(req, completed, admittedTask, { ...completedPatch, state: "spawning" }, {
         error: binding.error ?? "could not bind task to a pipeline",
       }), { status: 202 });
     }
@@ -536,9 +538,9 @@ async function postTaskSpawn(
   try {
     const result = persistAssignment(dependencies, id, completedPatch, completedAt);
     if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status });
-    return NextResponse.json(taskSpawnResponse(completed, result.task, completedPatch));
+    return NextResponse.json(taskSpawnResponse(req, completed, result.task, completedPatch));
   } catch (error) {
-    return NextResponse.json(taskSpawnResponse(completed, admittedTask, { ...completedPatch, state: "spawning" }, {
+    return NextResponse.json(taskSpawnResponse(req, completed, admittedTask, { ...completedPatch, state: "spawning" }, {
       error: error instanceof Error ? error.message : "task assignment write failed after launch",
     }), { status: 202 });
   }

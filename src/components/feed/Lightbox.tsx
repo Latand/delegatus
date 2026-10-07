@@ -30,6 +30,8 @@ export interface GalleryImage {
   detail?: string;
   owner?: unknown;
   at?: number;
+  /** The counter's words for it when its list numbers it its own way. */
+  place?: string;
 }
 
 /* The pictures of the conversation a viewer was opened from, in feed order.
@@ -158,7 +160,7 @@ export function Lightbox({ src, alt, caption, detail, at, onClose }: Props) {
       <div className={`flex items-center gap-x-2 px-4 py-2.5 ${image.detail ? "flex-wrap gap-y-1" : ""}`}>
         {images.length > 1 ? (
           <span data-lightbox-position className="shrink-0 text-[12.5px] font-semibold tabular-nums text-white/85">
-            {index + 1} / {images.length}
+            {image.place ?? `${index + 1} / ${images.length}`}
           </span>
         ) : null}
         {image.detail ? (

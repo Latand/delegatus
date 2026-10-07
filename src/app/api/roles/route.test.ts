@@ -63,7 +63,7 @@ test("roles route returns all merged role definitions with scaffold previews and
   expect(body.schemaVersion).toBe(5);
   expect(body.roles.map((role) => role.id)).toEqual([
     "orchestrator", "reviewer", "verifier", "builder", "architect",
-    "cleaner", "prod-auditor", "deployer", "merger", "maintainer", "issue-reporter",
+    "cleaner", "prod-auditor", "deployer", "merger", "maintainer", "issue-reporter", "visual-critic",
   ]);
   expect(body.roles.find((role) => role.id === "maintainer")?.config).toEqual({ engine: "codex", model: "gpt-6.1-sol", effort: "medium" });
   expect(body.roles[0]).toMatchObject({ id: "orchestrator" });
@@ -110,6 +110,15 @@ test("PUT refuses Sonnet on the reviewer, the architect and the orchestrator, an
   expect((await put({ overrides: { architect: { config: { engine: "claude", model: "haiku", effort: "high" } } } })).status).toBe(400);
   expect((await put({ overrides: { verifier: { config: { engine: "claude", model: "haiku", effort: "high" } } } })).status).toBe(400);
   expect(fs.existsSync(file)).toBe(false);
+});
+
+/* Visual judgement runs on Claude, never Codex: the row keeps its editable Claude runtime. */
+test("PUT refuses a Codex row for the visual critic and saves an edited Claude one", async () => {
+  const refused = await put({ overrides: { "visual-critic": { config: { engine: "codex", model: "gpt-6.1-sol", effort: "high" } } } });
+  expect(refused.status).toBe(400);
+  expect((await refused.json() as { error: string }).error).toBe("visual-critic runs on claude only");
+  expect(fs.existsSync(file)).toBe(false);
+  expect((await put({ overrides: { "visual-critic": { config: { engine: "claude", model: "fable", effort: "max" } } } })).status).toBe(200);
 });
 
 test("PUT admits Sonnet 5.5 on the verifier and the size=trivial reviewer", async () => {

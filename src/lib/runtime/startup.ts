@@ -22,6 +22,7 @@ import {
   type StructuredHostAdoptionFilter,
 } from "./registry";
 import { isRuntimeHostTransportFailure, RuntimeHostUnavailableError, runtimeHostClient, type RuntimeHostClient } from "./client";
+import { RUNTIME_STARTUP_READ_DEADLINE_MS } from "./deadlines";
 import { forEachStartupBatch } from "./startupWork";
 import type { RuntimeSession } from "./contracts";
 import { terminalRetryOperationId, type RuntimeOperationResult } from "./contracts";
@@ -42,7 +43,7 @@ import { recordDirectWait, stillAtStep } from "./recordWait";
 import { structuredContentDigest } from "./structuredContent";
 import { STRUCTURED_DELIVERY_TIMING } from "./structuredDeliveryQueue";
 import { delegatusOriginForRecipient } from "./agentMessageAuthor";
-import { claudeHostLaunchPaths, materializeStructuredHostAccess, recoverPendingStructuredSpawns, structuredHostAccessPolicy } from "./structuredSpawn";
+import { claudeHostLaunchPaths, materializeStructuredHostAccess, recoverPendingStructuredSpawns, structuredHostAccessPolicy, structuredHostCell } from "./structuredSpawn";
 import { conversationTurnLiveness, readTranscriptEvidence, transcriptEvidenceFromRecords, type TranscriptEventKind, type TurnLivenessDependencies } from "./liveness";
 import { markStructuredHostStartupProgress, type StructuredHostStartupPhase } from "./startupStatus";
 import { startupDiagnostic } from "../startupDiagnostics";
@@ -63,7 +64,6 @@ let adoptedHosts: AdoptedStructuredHost[] = [];
 let retryAdoptedHosts: AdoptedStructuredHost[] = [];
 /* The retry runner logs each failure; this diagnostic names the deferred work once. */
 let deferredAdoptionLogged = false;
-const STARTUP_READ_TIMEOUT_MS = 30_000;
 type StartupPassState = {
   generation?: string | null;
   retained?: AdoptedStructuredHost[];
@@ -999,10 +999,10 @@ async function readStartupRuntime(
   conversationIds: readonly string[],
 ): Promise<Pick<Awaited<ReturnType<RuntimeHostClient["snapshot"]>>, "sessions" | "recentOperations">> {
   // Compatibility with older embedders; the production client has session-read.
-  if (!client.readSession) return client.snapshot(undefined, { timeoutMs: STARTUP_READ_TIMEOUT_MS });
+  if (!client.readSession) return client.snapshot(undefined, { timeoutMs: RUNTIME_STARTUP_READ_DEADLINE_MS });
   const sessions: RuntimeSession[] = [];
   await forEachStartupBatch(conversationIds, async (conversationId) => {
-    const session = await client.readSession!({ conversationId }, { timeoutMs: STARTUP_READ_TIMEOUT_MS });
+    const session = await client.readSession!({ conversationId }, { timeoutMs: RUNTIME_STARTUP_READ_DEADLINE_MS });
     if (session) sessions.push(session);
   });
   return { sessions, recentOperations: sessions.flatMap((session) => session.recentReceipts ?? []) };
@@ -1580,9 +1580,16 @@ async function adoptStructuredHostsPass(
     const resolveClaudeOwner = dependencies.resolveClaudeOwner ?? ((entry: AgentRegistryEntry) =>
       accountManager.resolveTranscriptOwner("claude", entry.artifactPath));
     const startupEnvironment = withoutUnsupportedApiCredentials(process.env);
+    /* An adopted host gets the memory and CPU cell a fresh launch of its
+       conversation gets. Work that cannot be contained throws here, and the
+       adopter leaves the row dead with the reason. Adoption never waits on CPU
+       pressure. */
+    const adoptionCell = (entry: AgentRegistryEntry) =>
+      structuredHostCell(registry, entry.key.engine, sessionKeyId(entry.key), registry.conversationForPath(entry.artifactPath)?.id);
     const codex = resumeDeferred && codexCandidateCount === 0 ? [] : await (dependencies.adopt ?? adoptCodexRegistryHosts)(
       registry,
       (entry) => {
+        const memoryCell = adoptionCell(entry);
         const owner = resolveCodexOwner(entry);
         const capability = registry.rotateSpawnCapabilityForPath(entry.artifactPath);
         const access = materializeStructuredHostAccess(
@@ -1607,6 +1614,7 @@ async function adoptStructuredHostsPass(
           ...access.codex,
           ...access.host,
           env: access.env,
+          ...(memoryCell ? { memoryCell } : {}),
         };
       },
       startupEnvironment,
@@ -1625,6 +1633,7 @@ async function adoptStructuredHostsPass(
     const claude = resumeDeferred && claudeCandidateCount === 0 ? [] : await (dependencies.adoptClaude ?? adoptClaudeRegistryHosts)(
       registry,
       (entry) => {
+        const memoryCell = adoptionCell(entry);
         const options = {
           ...claudeStartupHostOptions(
             entry,
@@ -1646,7 +1655,7 @@ async function adoptStructuredHostsPass(
             reason: "no Claude account owns this transcript",
           });
         }
-        return options;
+        return { ...options, ...(memoryCell ? { memoryCell } : {}) };
       },
       startupEnvironment,
       shouldAdopt,

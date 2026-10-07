@@ -6,14 +6,17 @@ import { recordOperatorRequest } from "@/lib/activity/requestLedger";
 import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
 import { recordTeamEvent, refuseAnonymous, teamActor } from "@/lib/team";
 import { attachmentPath, sweepAttachments } from "@/lib/tasks/attachments";
-import { loadPipelines } from "@/lib/pipelines/store";
+import { loadPipelinesForList } from "@/lib/pipelines/store";
 import { projectTaskPipelineIds, type TaskPipelineReadModel } from "@/lib/pipelines/taskBinding";
 import { taskSeatHoldingSnapshot } from "@/lib/tasks/seatHolding";
 import { createTask, type CreateTaskInput, type CreateTaskResult } from "@/lib/tasks/commands";
-import { loadTasks, mutateTasksFile } from "@/lib/tasks/store";
+import { loadTasks, loadTasksForList, mutateTasksFile } from "@/lib/tasks/store";
 import type { BoardTask } from "@/lib/tasks/types";
+import { OPERATOR_PAUSE_RESUME_ACTOR } from "@/lib/pauseResumeActor";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
+import { taskForResponse, withPrototypeReviewSummaries } from "@/lib/prototypeReview/read";
+import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -48,10 +51,16 @@ export async function GET(req: NextRequest): Promise<NextResponse<{ tasks: TaskP
     /* Deliberately no migration here. This route serves the task LIST, which
        shows every task whatever its board flag, so it has nothing to migrate
        for — and a GET that writes surprises every caller. The board reads its
-       tasks through /api/files, and that is where the one-time migration runs. */
-    const tasks = loadTasks().filter((task) => (projects.size === 0 || projects.has(task.project))
+       tasks through /api/files, and that is where the one-time migration runs.
+       Both reads are the shared list caches, never a copy of every stored row:
+       the projection below copies each task it returns and only reads the
+       pipelines. */
+    const tasks = loadTasksForList().filter((task) => (projects.size === 0 || projects.has(task.project))
       && (statuses.size === 0 || statuses.has(task.status)));
-    return NextResponse.json({ tasks: projectTaskPipelineIds(tasks, loadPipelines()) });
+    const projected = withPrototypeReviewSummaries(projectTaskPipelineIds(tasks, loadPipelinesForList()));
+    // Agents read prototype contents through the project-scoped review tool.
+    if (req.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER)) for (const task of projected) delete task.prototypeReview;
+    return NextResponse.json({ tasks: projected });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "task read model unavailable" }, { status: 500 });
   }
@@ -78,7 +87,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; t
       /* An attachment ref only becomes task-owned once its bytes are actually
          in the store — a stale/forged ref is rejected loudly, never dangling. */
       attachmentExists: (att) => fs.existsSync(attachmentPath(att)),
-      explicit: true, seatHolding: taskSeatHoldingSnapshot(),
+      explicit: true, seatHolding: taskSeatHoldingSnapshot(), statusActor: OPERATOR_PAUSE_RESUME_ACTOR,
     });
     /* Persist only a fresh create; a validation failure or a replay (which left
        the list and receipts untouched) skips the rewrite. */
@@ -108,5 +117,5 @@ export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; t
   }
   /* An icon that names no lucide icon, or a colour that is no task colour, was
      clamped to none, and says so (#2102). */
-  return NextResponse.json({ ok: true, task: result.task, ...(result.notes ? { notes: result.notes } : {}) });
+  return NextResponse.json({ ok: true, task: taskForResponse(req, result.task), ...(result.notes ? { notes: result.notes } : {}) });
 }

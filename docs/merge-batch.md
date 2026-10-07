@@ -31,7 +31,8 @@ non-machine `Co-Authored-By` trailer is refused.
 `gate` validates one exact candidate: main's full SHA and the ordered list of
 PR numbers with their full reviewed head SHAs. It installs frozen dependencies,
 runs TypeScript, comparative ESLint, tests and the trusted publication gate
-through `/var/tmp/llv-gate`. Commands use isolated state; tests also use isolated
+through `scripts/gate-slot.sh` (a shared machine slot, CPU-pressure admission
+and a scope in the CPU work slice; see `docs/design/cpu-placement.md`). Commands use isolated state; tests also use isolated
 home, config and temp roots and run one file at a time with JUnit reports.
 
 Every validation rebuilds the touched-path union from the current candidate diff

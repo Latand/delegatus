@@ -1,4 +1,4 @@
-import { memoryKillText } from "./agentMemoryState";
+import { memoryField, memoryKillText } from "./agentMemoryState";
 import type { AgentMemoryCell } from "./agentMemory";
 import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from "node:child_process";
@@ -1215,7 +1215,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       pendingAttention: [...this.attentions.keys()],
       pendingPermissions: this.pendingPermissions(),
       providerRetry: this.activeTurnId ? this.providerRetry : null,
-      ...(this.memoryCell ? { memory: this.memoryCell.snapshot() } : {}),
+      ...memoryField(this.memoryCell),
       activeFlags: [...this.launchFlags],
       account: this.account,
     };

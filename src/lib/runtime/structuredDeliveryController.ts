@@ -34,7 +34,7 @@ import type { EngineHost, HostState } from "./engineHost";
 import { StructuredDeliveryQueue, type StructuredDeliveryQueueTiming } from "./structuredDeliveryQueue";
 import { deliveryProgressStore, type DeliveryProgressSink, type DeliveryProgressStore } from "./deliveryProgress";
 import { applyStructuredReconfigure, type StructuredReconfigureDependencies } from "./structuredReconfigure";
-import { projectEngineHostEvent } from "./engineHostEvents";
+import { coalesceReadyEngineDeltas, projectEngineHostEvent } from "./engineHostEvents";
 import { observeCodexSubagentEvent } from "./codexSubagentDetection";
 import { PermissionRequestGuard } from "./permissionGuard";
 import { permissionDenialRecorder, resolvePermissionAttendance } from "./permissionDenials";
@@ -1445,7 +1445,7 @@ export async function bindStructuredDeliveryQueue(
     if (!client.readSession) {
       if (typeof client.snapshot !== "function") return 0;
       try {
-        const runtime = await client.snapshot(undefined, { voiceBodiesFor: [], timeoutMs: 10_000 });
+        const runtime = await client.snapshot(undefined, { voiceBodiesFor: [] });
         listed = new Map((runtime.sessions ?? []).map((session) => [session.conversationId, session]));
       } catch { return 0; }
     }
@@ -1625,7 +1625,7 @@ export async function bindStructuredDeliveryQueue(
     const entry = entryForHost(registry, item);
     const conversationId = entry ? conversationIdForEntry(registry, entry) : null;
     if (conversationId) permissionGuard.adopt(key, item.host, conversationId, initialState);
-    const events = item.host.attach(acknowledgedEventCursor)[Symbol.asyncIterator]();
+    const events = coalesceReadyEngineDeltas(item.host.attach(acknowledgedEventCursor)[Symbol.asyncIterator](), conversationId ?? "");
     let eventsStopped = false;
     void (async () => {
       if (!conversationId) return;

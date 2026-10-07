@@ -159,6 +159,12 @@ export interface RuntimeEventInput {
       event, names the reading here so a row a new owner has published since
       is left as that owner wrote it. */
   expectedSessionRevision?: number;
+  /** A delta folded from consecutive engine deltas names the text length of
+      each one, oldest first; the last belongs to the sequence in its producer
+      key and each earlier one to the sequence before. The journal keeps only
+      the text after the sequence it already recorded, so a group that overlaps
+      an earlier writer's append is recorded exactly once. */
+  foldedTextLengths?: number[];
 }
 
 /** A fenced event met a session row that moved on after its writer read it. */
@@ -253,6 +259,8 @@ export interface RuntimeOperationReceipt {
   idempotencyKey: string;
   conversationId: string;
   kind: RuntimeOperationKind;
+  /** Kill authorship, derived from the admitted onlyIfIdle fence. */
+  origin?: "system" | "operator";
   status: RuntimeReceiptStatus;
   turnId?: string | null;
   queuePosition?: number | null;
@@ -1103,6 +1111,9 @@ export function axesForEvent(current: RuntimeSessionAxes, event: Pick<RuntimeEve
   return next;
 }
 
+/** The serialized payload budget of every event without a canonical voice response. */
+export const RUNTIME_EVENT_PAYLOAD_LIMIT_BYTES = 16 * 1024;
+
 export function assertRuntimeEvent(input: RuntimeEventInput): void {
   if (!input.payload || typeof input.payload !== "object" || Array.isArray(input.payload)) throw new Error("runtime event payload is invalid");
   const normalized = normalizeRuntimeEventInput(input);
@@ -1111,11 +1122,18 @@ export function assertRuntimeEvent(input: RuntimeEventInput): void {
   const carriesCanonicalVoiceResponse = normalized.kind === "item"
     && normalized.payload.voiceResponse !== null
     && typeof normalized.payload.voiceResponse === "object";
-  const payloadLimit = carriesCanonicalVoiceResponse ? 16 * 1024 * 1024 : 16 * 1024;
+  const payloadLimit = carriesCanonicalVoiceResponse ? 16 * 1024 * 1024 : RUNTIME_EVENT_PAYLOAD_LIMIT_BYTES;
   if (payloadBytes > payloadLimit) {
     throw new Error(carriesCanonicalVoiceResponse
       ? "runtime terminal response payload exceeds 16 MiB"
       : "runtime event payload exceeds 16 KiB");
+  }
+  const folded = input.foldedTextLengths;
+  if (folded !== undefined && (normalized.kind !== "delta" || typeof normalized.payload.text !== "string"
+    || !Array.isArray(folded) || folded.length === 0 || folded.length > payloadLimit
+    || folded.some((length) => !Number.isSafeInteger(length) || length < 0)
+    || folded.reduce((total, length) => total + length, 0) !== normalized.payload.text.length)) {
+    throw new Error("runtime folded delta lengths are invalid");
   }
 }
 

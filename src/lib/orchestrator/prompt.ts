@@ -92,7 +92,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-export const ORCHESTRATOR_PROMPT_VERSION = 40;
+export const ORCHESTRATOR_PROMPT_VERSION = 41;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -478,7 +478,9 @@ ${ORCHESTRATOR_REPORTS_AND_PROJECTS_DIRECTIVE}
 - Operate exclusively through the Delegatus MCP tools (tasks, pipelines, spawns, conversations, board reads). No direct process or runtime manipulation.
 - The project's own instruction files and playbooks govern how its code is built, checked and released; this mandate governs how you run agents, and wins where the two disagree about that.
 - Replacing manual spawns is a non-goal: the user's own agents keep working, and you coordinate them without taking them over.
-- Re-derive board state each turn from bounded snapshots; keep none of it in context.`;
+- Re-derive board state each turn from bounded snapshots; keep none of it in context.
+
+Prototype review: point to the task's review.`;
 
 /** Identifies the generated role table inside a delivered mandate. The table
     runs from this heading to the first blank line, and delivery replaces it
@@ -539,7 +541,7 @@ export function orchestratorRoleTable(roles: readonly RoleDefinition[]): string 
     `- ${registryStatus}`,
     "- Runtime overrides go on the stage. override-stage binds from the NEXT attempt.",
     "- Size each lane first. trivial (few UI/copy lines, one flag/label; brief pins exact change and acceptance): builder and reviewer size=trivial, one review round. normal: rows, effort low or medium. design (options, architecture, proposals, design issues): architect first.",
-    "- UI lane: Opus read-only brief stage (files, states, 390px and desktop, what not to touch), builder domain=frontend, Opus review-loop.",
+    "- UI lane: Opus read-only brief stage (files, states, 390px and desktop, what not to touch), builder domain=frontend, Opus review-loop, then a visual-critic stage last.",
     "- Fix stages (apply-fixes): fix findings/discoveries in spec; add checks. Never self-grade; fix discoveries and note out-of-spec. Fail only with blocked:true and blockedReason.",
     "- Sonnet 5.5 for well-scoped build, fix, docs, verification, repeated work. Opus 5.5 for design, orchestration, judgment-heavy or long-horizon lanes (engine redesigns, deploy/runtime host, accounts/migration, security, cross-cutting refactors), hardest problems. Review backend on Codex, frontend on Opus.",
     "- size=trivial and a hand-set Sonnet builder need a brief from a large model (Opus, Fable, large Codex). Sonnet never orchestrates, architects or reviews above size=trivial. README, docs, public text: builder domain=docs.",
@@ -564,6 +566,7 @@ function withoutRoleTable(text: string): string {
     has no heading of its own and is recognized by its whole text. Adding a
     directive is one entry here. */
 const DELIVERED_DIRECTIVES: readonly { markers: readonly string[]; directive: string }[] = [
+  { markers: ["Prototype review:"], directive: "Prototype review: point to the task's review." },
   { markers: [ORCHESTRATOR_TASK_OWNERSHIP_HEADING], directive: ORCHESTRATOR_TASK_OWNERSHIP_DIRECTIVE },
   { markers: [ORCHESTRATOR_VIEWER_CLOCK_HEADING, SHIPPED_CLOCK_HEADING], directive: ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE },
   { markers: [ORCHESTRATOR_BOARD_REPORT_HEADING], directive: ORCHESTRATOR_BOARD_REPORT_DIRECTIVE },
