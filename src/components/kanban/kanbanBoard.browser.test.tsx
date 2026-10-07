@@ -564,8 +564,9 @@ describe("linked boards M1 settings", () => {
         expect(await page.locator('[data-linked-peer="revoked"] button').first().isDisabled()).toBe(false);
         await page.getByRole("button", { name: "Allow a connection" }).click();
         await page.locator('[data-pair-code]').waitFor();
-        await page.locator('[data-code-state="open"]').waitFor();
-        expect(await page.locator('[data-code-state="open"]').textContent()).toContain("2 wrong attempts");
+        /* The new code answers with no attempts; the attempts arrive with the
+           next read of the code list. */
+        await page.locator('[data-code-state="open"]', { hasText: "2 wrong attempts" }).waitFor();
         burned = true;
         await page.waitForFunction(() => document.querySelector('[data-code-state="burned"]') !== null, null, { timeout: 6000 });
         expect(codeReads).toBeGreaterThanOrEqual(2);
