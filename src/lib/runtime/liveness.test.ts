@@ -7,6 +7,7 @@ import { expect, test } from "bun:test";
 import {
   conversationTurnLiveness,
   decideTurnLiveness,
+  engineRecordSince,
   LIVENESS_CPU_PROGRESS_WINDOW_MS,
   LIVENESS_OBSERVATION_WINDOW_MS,
   observeHostCpuProgress,
@@ -14,9 +15,13 @@ import {
   readHostProcessEvidence,
   readTranscriptEvidence,
   resetHostCpuProgressForTests,
+  restartCutDecision,
   transcriptEvidenceFromRecords,
+  type RestartCutInput,
   type TurnLivenessEvidence,
 } from "./liveness";
+import type { HostTurnRecord } from "./eventStore";
+import type { StableTailRead } from "@/lib/scanner/activity";
 
 const NOW = Date.parse("2026-08-29T04:02:00.000Z");
 const MINUTE = 60_000;
@@ -540,3 +545,132 @@ test.each(["busy", "terminal"] as const)(
     }
   },
 );
+
+/* Restart cut recognition (docs/design/restart-cut-recognition.md): the
+   decision table and the slice of the transcript that belongs to the host's
+   newest turn. */
+const AT = (offset: number) => new Date(NOW + offset * 1_000).toISOString();
+const tailOf = (records: Record<string, unknown>[], prefixTruncated = false): StableTailRead =>
+  ({ integrity: "complete", prefixTruncated, records });
+function ledgerOf(
+  turn: { turnId: string; closed?: "completed" | "interrupted" | "error" } | null,
+  framesBefore: Array<[string, "user" | "assistant", string | null]> = [],
+  framesAfter: Array<[string, "user" | "assistant", string | null]> = [],
+  mtimeMs = NOW,
+): HostTurnRecord {
+  const frames = (items: typeof framesBefore) => items.map(([uuid, type, turnId]) => ({ uuid, type, turnId }));
+  return {
+    state: "read", identity: "ledger", mtimeMs,
+    turn: turn ? { turnId: turn.turnId, closed: turn.closed ? { by: "turn-ended", status: turn.closed } : null } : null,
+    framesBefore: frames(framesBefore), framesAfter: frames(framesAfter),
+  };
+}
+const claudeUser = (uuid: string, content: unknown, extra: Record<string, unknown> = {}) =>
+  ({ type: "user", uuid, timestamp: AT(0), message: { role: "user", content }, ...extra });
+const claudeTool = (uuid: string, id: string) =>
+  ({ type: "assistant", uuid, timestamp: AT(1), message: { model: "claude", content: [{ type: "tool_use", id, name: "Bash" }] } });
+const claudeResult = (uuid: string, id: string) =>
+  ({ type: "user", uuid, timestamp: AT(2), message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] } });
+const claudeEnd = (uuid: string, dated = true) =>
+  ({ type: "assistant", uuid, ...(dated ? { timestamp: AT(3) } : {}), message: { model: "claude", stop_reason: "end_turn", content: [{ type: "text", text: "done" }] } });
+const NOTIFICATION = "<task-notification>\n<task-id>gatetask1</task-id>\n<status>completed</status>\n</task-notification>";
+const codex = (type: string, extra: Record<string, unknown> = {}, dated = true) =>
+  ({ ...(dated ? { timestamp: AT(0) } : {}), type: "event_msg", payload: { type, ...extra } });
+
+const liveRow = { status: "live" as const, turnRef: "T", neverObserved: false };
+test.each([
+  { row: 1, input: { host: { state: "unreadable" }, record: "open" }, decision: "undecided" },
+  { row: 2, input: { host: { state: "open", turnId: "T" }, record: "unreadable" }, decision: "undecided" },
+  { row: 2, input: { host: { state: "none" }, record: "undelimited" }, decision: "undecided" },
+  { row: 3, input: { host: { state: "open", turnId: "T" }, record: "open" }, decision: "cut" },
+  { row: 3, input: { host: { state: "open", turnId: "T" }, record: "empty" }, decision: "cut" },
+  { row: 3, input: { host: { state: "open", turnId: "T" }, record: "unknown" }, decision: "cut" },
+  { row: 4, input: { host: { state: "open", turnId: "T" }, record: "closed" }, decision: "no-cut" },
+  { row: 4, input: { host: { state: "open", turnId: "T" }, record: "closed", backgroundWork: true }, decision: "cut" },
+  { row: 5, input: { host: { state: "closed", turnId: "T" }, record: "open" }, decision: "cut" },
+  { row: 6, input: { host: { state: "closed", turnId: "T" }, record: "closed" }, decision: "no-cut" },
+  { row: 6, input: { host: { state: "closed", turnId: "T" }, record: "empty" }, decision: "no-cut" },
+  { row: 6, input: { host: { state: "closed", turnId: "T" }, record: "empty", backgroundWork: true }, decision: "cut" },
+  { row: 7, input: { host: { state: "none" }, record: "empty", row: { ...liveRow, neverObserved: true } }, decision: "cut" },
+  { row: 7, input: { host: { state: "none" }, record: "unknown", row: { ...liveRow, neverObserved: true } }, decision: "cut" },
+  { row: 8, input: { host: { state: "none" }, record: "open", row: { status: "idle", turnRef: null, neverObserved: false } }, decision: "no-cut" },
+  { row: 8, input: { host: { state: "none" }, record: "closed", row: { status: "idle", turnRef: null, neverObserved: false }, backgroundWork: true }, decision: "cut" },
+  { row: 9, input: { host: { state: "none" }, record: "open" }, decision: "cut" },
+  { row: 10, input: { host: { state: "none" }, record: "closed" }, decision: "no-cut" },
+  { row: 10, input: { host: { state: "none" }, record: "closed", backgroundWork: true }, decision: "cut" },
+  { row: 11, input: { host: { state: "none" }, record: "empty", stage: true }, decision: "cut" },
+  { row: 11, input: { host: { state: "none" }, record: "unknown", stage: true }, decision: "cut" },
+  { row: 12, input: { host: { state: "none" }, record: "empty" }, decision: "no-cut" },
+  { row: 12, input: { host: { state: "none" }, record: "unknown" }, decision: "no-cut" },
+] as const)("restart cut table row $row: $input.host.state host, $input.record record is $decision", ({ row, input, decision }) => {
+  const decided = restartCutDecision({ row: liveRow, stage: false, backgroundWork: false, ...input } as RestartCutInput);
+  expect(decided).toMatchObject({ decision, row });
+  if (decided.decision === "cut") {
+    expect(decided.namedBy).toBe(input.host.state === "none" ? "row" : "turn");
+  }
+});
+
+test.each([
+  { slice: "Claude, after a closed turn: task notification, then a tool call", reads: "open",
+    engine: "claude", host: ledgerOf({ turnId: "T", closed: "completed" }, [["a1", "assistant", "T"]]),
+    records: [claudeEnd("a1"), claudeUser("n1", NOTIFICATION), claudeTool("a2", "t2")] },
+  { slice: "Claude, the same follow-up finished", reads: "closed",
+    engine: "claude", host: ledgerOf({ turnId: "T", closed: "completed" }, [["a1", "assistant", "T"]]),
+    records: [claudeEnd("a1"), claudeUser("n1", NOTIFICATION), claudeTool("a2", "t2"), claudeResult("u2", "t2"), claudeEnd("a3")] },
+  { slice: "Claude, after a closed turn: a task notification alone", reads: "open",
+    engine: "claude", host: ledgerOf({ turnId: "T", closed: "completed" }, [["a1", "assistant", "T"]]),
+    records: [claudeEnd("a1"), claudeUser("n1", NOTIFICATION)] },
+  { slice: "Claude, after a closed turn: nothing but an interrupt marker", reads: "empty",
+    engine: "claude", host: ledgerOf({ turnId: "T", closed: "interrupted" }, [["a1", "assistant", "T"], ["m1", "user", "T"]]),
+    records: [claudeTool("a1", "t1"), claudeUser("m1", "[Request interrupted by user]"), claudeUser("m2", "replayed", { isMeta: true })] },
+  { slice: "Claude, an open turn's own records ending on an undated provider end", reads: "closed",
+    engine: "claude", host: ledgerOf({ turnId: "T" }, [["a0", "assistant", "T0"]], [["a1", "assistant", "T"]]),
+    records: [claudeEnd("a0"), claudeUser("u1", "go"), claudeTool("a1", "t1"), claudeResult("u2", "t1"), claudeEnd("a2", false)] },
+  { slice: "Claude, an open turn's own records: tool call, then a shutdown interrupt marker", reads: "open",
+    engine: "claude", host: ledgerOf({ turnId: "T" }, [["a0", "assistant", "T0"]]),
+    records: [claudeEnd("a0"), claudeUser("u1", "go"), claudeTool("a1", "t1"), claudeUser("m1", "[Request interrupted by user for tool use]", { interruptedByShutdown: true })] },
+  { slice: "Claude, an open turn whose prompt the transcript has not echoed", reads: "empty",
+    engine: "claude", host: ledgerOf({ turnId: "T2" }, [["a1", "assistant", "T1"]]),
+    records: [claudeUser("u1", "go"), claudeEnd("a1")] },
+  { slice: "Codex, the turn's own records: start, tool call, turn_aborted naming it", reads: "open",
+    engine: "codex", host: ledgerOf({ turnId: "T" }),
+    records: [codex("task_started", { turn_id: "T" }), codex("function_call", { call_id: "c1" }), codex("turn_aborted", { turn_id: "T" })] },
+  { slice: "Codex, the turn's own records: start, undated task_complete naming it", reads: "closed",
+    engine: "codex", host: ledgerOf({ turnId: "T" }),
+    records: [codex("task_started", { turn_id: "T" }), codex("task_complete", { turn_id: "T" }, false)] },
+  { slice: "Codex, an earlier turn's completion and nothing of the open one", reads: "empty",
+    engine: "codex", host: ledgerOf({ turnId: "T2" }),
+    records: [codex("task_started", { turn_id: "T1" }), codex("task_complete", { turn_id: "T1" }, false)] },
+  { slice: "Codex, a closed host turn", reads: "empty",
+    engine: "codex", host: ledgerOf({ turnId: "T", closed: "completed" }),
+    records: [codex("task_started", { turn_id: "T" }), codex("function_call", { call_id: "c1" })] },
+  { slice: "Codex, a reasoning item alone, no host turn", reads: "unknown",
+    engine: "codex", host: { state: "absent" }, records: [codex("reasoning")] },
+  { slice: "Codex, no host turn: a tool call, then turn_aborted", reads: "open",
+    engine: "codex", host: { state: "absent" },
+    records: [codex("user_message"), codex("function_call", { call_id: "c1" }), codex("turn_aborted")] },
+  { slice: "either engine, no record", reads: "empty", engine: "claude", host: { state: "absent" }, records: [] },
+] as const)("the engine's record since the host's boundary: $slice reads $reads", ({ engine, host, records, reads }) => {
+  expect(engineRecordSince(engine, host as HostTurnRecord, tailOf(records as unknown as Record<string, unknown>[]))).toBe(reads);
+});
+
+test("the slice is found by identity, or the row is left undelimited", () => {
+  const own = [claudeUser("u1", "go"), claudeTool("a1", "t1")];
+  /* The anchor lies above a tail that starts mid-file: all of it is after. */
+  expect(engineRecordSince("claude", ledgerOf({ turnId: "T" }, [["a0", "assistant", "T0"]]), tailOf(own, true))).toBe("open");
+  /* A whole transcript holding none of the assistant frames the host recorded. */
+  expect(engineRecordSince("claude", ledgerOf({ turnId: "T" }, [["a0", "assistant", "T0"]]), tailOf(own))).toBe("undelimited");
+  /* A ledger with no frame: the records dated after its last write. */
+  expect(engineRecordSince("claude", ledgerOf({ turnId: "T" }, [], [], NOW - 60_000), tailOf(own))).toBe("open");
+  expect(engineRecordSince("claude", ledgerOf({ turnId: "T" }, [], [], NOW + 60_000), tailOf(own))).toBe("empty");
+  expect(engineRecordSince("claude", ledgerOf({ turnId: "T" }), tailOf([...own, claudeEnd("a2", false)]))).toBe("undelimited");
+  /* A frame recorded under no turn after the close that never reached the transcript. */
+  expect(engineRecordSince("claude",
+    ledgerOf({ turnId: "T", closed: "completed" }, [["a1", "assistant", "T"]], [["a2", "assistant", null]]),
+    tailOf([claudeEnd("a1")]))).toBe("open");
+  /* Codex lifecycle records that name no turn, their start record above the tail. */
+  expect(engineRecordSince("codex", ledgerOf({ turnId: "T" }), tailOf([codex("task_complete")], true))).toBe("undelimited");
+  expect(engineRecordSince("codex", ledgerOf({ turnId: "T" }), tailOf([codex("function_call", { call_id: "c1", turn_id: "T" })], true))).toBe("open");
+  expect(engineRecordSince("codex", ledgerOf({ turnId: "T" }), tailOf([codex("function_call", { call_id: "c1", turn_id: "T" })]))).toBe("undelimited");
+  expect(engineRecordSince("claude", ledgerOf({ turnId: "T" }), { integrity: "uncertain", records: [] })).toBe("unreadable");
+});

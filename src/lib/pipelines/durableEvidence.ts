@@ -293,12 +293,35 @@ export function lastAgentWorkIndex(records: RecordLike[], codex: boolean): numbe
     if (record.type !== "user" && record.type !== "assistant") continue;
     const message = recordValue(record.message);
     if (record.isMeta === true || message?.model === "<synthetic>") continue;
-    const content = stringValue(message?.content) ?? claudeAssistantText(record);
-    if (record.type === "user" && (record.interruptedByShutdown === true || "interruptedMessageId" in record
-      || /^\s*\[Request interrupted by user(?: for tool use)?\]\s*$/.test(content))) continue;
+    if (claudeInterruptMarker(record)) continue;
     return index;
   }
   return -1;
+}
+
+function claudeInterruptMarker(record: RecordLike): boolean {
+  if (record.type !== "user") return false;
+  const content = stringValue(recordValue(record.message)?.content) ?? claudeAssistantText(record);
+  return record.interruptedByShutdown === true || "interruptedMessageId" in record
+    || /^\s*\[Request interrupted by user(?: for tool use)?\]\s*$/.test(content);
+}
+
+/** The records left once the bookkeeping a CLI writes as it exits or resumes
+    is removed, record by record: Codex token counts and turn aborts, and for
+    Claude meta prompts, shutdown and interrupt markers and the synthetic
+    no-response no-op. A provider failure record stays: it is how a turn the
+    provider closed is told from one a restart cut. */
+export function withoutExitBookkeeping(records: RecordLike[], codex: boolean): RecordLike[] {
+  return records.filter((record) => {
+    if (codex) {
+      const type = stringValue(recordValue(record.payload)?.type);
+      return !type || !CODEX_BOOKKEEPING_TYPES.has(type);
+    }
+    if (record.type === "user") return record.isMeta !== true && !claudeInterruptMarker(record);
+    if (record.type !== "assistant" || record.isApiErrorMessage === true) return true;
+    return recordValue(record.message)?.model !== "<synthetic>"
+      || !/^no response requested\.?$/i.test(claudeAssistantText(record).trim());
+  });
 }
 
 function agentEventAt(records: RecordLike[], codex: boolean): number | null {

@@ -4,7 +4,7 @@ import path from "node:path";
 import { expect, spyOn, test } from "bun:test";
 
 import type { RuntimeEvent } from "./engineHost";
-import { durableRuntimeEventTailSeq, FileRuntimeEventStore, reconcileRuntimeEventCursor } from "./eventStore";
+import { durableRuntimeEventTailSeq, FileRuntimeEventStore, readHostTurnRecord, reconcileRuntimeEventCursor } from "./eventStore";
 import { streamingVoiceDelivery } from "./voiceDelivery";
 
 test("runtime event store durably replays ordered events and ignores a partial tail", () => {
@@ -364,4 +364,125 @@ test("a final record larger than the probe's read step is still read, not report
      the file rather than finding a preceding boundary. */
   store.append("thread-only-large", { kind: "delta", turnId: "turn-1", text: "y".repeat(200 * 1024), seq: 1 });
   expect(durableRuntimeEventTailSeq("thread-only-large", directory)).toEqual({ determined: true, value: 1 });
+});
+
+/* The host's own turn record, as restart cut recognition reads it
+   (docs/design/restart-cut-recognition.md). */
+function turnLedger(events: Array<Record<string, unknown>>): { directory: string; filename: string; store: FileRuntimeEventStore } {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-host-turn-record-"));
+  const store = new FileRuntimeEventStore(directory);
+  events.forEach((event, index) => store.append("session", { ...event, seq: index + 1 } as RuntimeEvent));
+  return { directory, filename: path.join(directory, "session.jsonl"), store };
+}
+
+function frame(uuid: string, type: "user" | "assistant", turnId: string | null): Record<string, unknown> {
+  return { kind: "item", turnId, phase: "completed", item: { type, uuid, timestamp: "2026-10-07T00:00:00.000Z", message: { content: "x" } } };
+}
+
+test("the host turn record of a session with no ledger is absent", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-host-turn-record-"));
+  expect(readHostTurnRecord("session", { directory })).toEqual({ state: "absent" });
+});
+
+test.each([
+  { closed: "a turn-ended for it", events: [{ kind: "turn-ended", turnId: "T1", status: "completed" }], by: "turn-ended", status: "completed" },
+  { closed: "an adopting host's error end", events: [{ kind: "turn-ended", turnId: "T1", status: "error" }], by: "turn-ended", status: "error" },
+  { closed: "the host stopping hosting", events: [{ kind: "session-status", status: "unhosted" }], by: "session-status", status: null },
+  { closed: "the host dying", events: [{ kind: "session-status", status: "dead" }], by: "session-status", status: null },
+] as const)("the host turn record reads a turn closed by $closed", ({ events, by, status }) => {
+  const { directory } = turnLedger([{ kind: "turn-started", turnId: "T1" }, ...events]);
+  expect(readHostTurnRecord("session", { directory })).toMatchObject({
+    state: "read", turn: { turnId: "T1", closed: { by, status } },
+  });
+});
+
+test("the host turn record reads the newest turn open, with the frames recorded before and after its start", () => {
+  const { directory, filename } = turnLedger([
+    { kind: "turn-started", turnId: "T1" },
+    frame("u1", "user", "T1"),
+    { kind: "delta", turnId: "T1", text: "thinking" },
+    frame("a1", "assistant", "T1"),
+    { kind: "turn-ended", turnId: "T1", status: "completed" },
+    { kind: "session-status", status: "idle" },
+    frame("a2", "assistant", null),
+    { kind: "turn-started", turnId: "T2" },
+    frame("u3", "user", "T2"),
+  ]);
+  const read = readHostTurnRecord("session", { directory });
+  expect(read).toMatchObject({
+    state: "read",
+    turn: { turnId: "T2", closed: null },
+    framesBefore: [
+      { uuid: "u1", type: "user", turnId: "T1" },
+      { uuid: "a1", type: "assistant", turnId: "T1" },
+      { uuid: "a2", type: "assistant", turnId: null },
+    ],
+    framesAfter: [{ uuid: "u3", type: "user", turnId: "T2" }],
+  });
+  if (read.state !== "read") throw new Error("the ledger was not read");
+  expect(read.mtimeMs).toBe(fs.statSync(filename).mtimeMs);
+});
+
+test("a host turn record read without frames stops at the newest turn's start", () => {
+  const { directory } = turnLedger([
+    { kind: "turn-started", turnId: "T1" },
+    frame("a1", "assistant", "T1"),
+    { kind: "turn-ended", turnId: "T1", status: "completed" },
+    { kind: "turn-started", turnId: "T2" },
+    { kind: "delta", turnId: "T2", text: "thinking" },
+  ]);
+  expect(readHostTurnRecord("session", { directory, frames: false })).toMatchObject({
+    state: "read", turn: { turnId: "T2", closed: null }, framesBefore: [], framesAfter: [],
+  });
+});
+
+test("the host turn record splits frames at the event that closed the turn, and reads a ledger with no turn", () => {
+  const closed = turnLedger([
+    { kind: "turn-started", turnId: "T1" },
+    frame("a1", "assistant", "T1"),
+    { kind: "turn-ended", turnId: "T1", status: "completed" },
+    frame("a2", "assistant", null),
+  ]);
+  expect(readHostTurnRecord("session", { directory: closed.directory })).toMatchObject({
+    state: "read", turn: { turnId: "T1", closed: { by: "turn-ended", status: "completed" } },
+    framesBefore: [{ uuid: "a1" }], framesAfter: [{ uuid: "a2", turnId: null }],
+  });
+  const none = turnLedger([{ kind: "session-status", status: "idle" }]);
+  expect(readHostTurnRecord("session", { directory: none.directory })).toMatchObject({ state: "read", turn: null });
+});
+
+test("the host turn record ignores a torn final line and refuses a malformed complete record", () => {
+  const torn = turnLedger([{ kind: "turn-started", turnId: "T1" }]);
+  fs.appendFileSync(torn.filename, '{"kind":"turn-ended","turnId":"T1","sta');
+  expect(readHostTurnRecord("session", { directory: torn.directory })).toMatchObject({
+    state: "read", turn: { turnId: "T1", closed: null },
+  });
+  const malformed = turnLedger([{ kind: "turn-started", turnId: "T1" }]);
+  fs.appendFileSync(malformed.filename, '{"kind":"turn-ended","turnId":\n');
+  expect(readHostTurnRecord("session", { directory: malformed.directory }).state).toBe("unreadable");
+});
+
+test("a host turn record whose file was appended to or replaced between the read and the stat is unreadable", () => {
+  const appended = turnLedger([
+    { kind: "turn-started", turnId: "T1" },
+    { kind: "turn-ended", turnId: "T1", status: "completed" },
+  ]);
+  expect(readHostTurnRecord("session", {
+    directory: appended.directory,
+    afterRead: () => appended.store.append("session", { kind: "turn-started", turnId: "T2", seq: 3 }),
+  }).state).toBe("unreadable");
+  /* The file reads still afterwards, and shows the turn the first read missed. */
+  expect(readHostTurnRecord("session", { directory: appended.directory })).toMatchObject({
+    state: "read", turn: { turnId: "T2", closed: null },
+  });
+
+  const replaced = turnLedger([{ kind: "turn-started", turnId: "T1" }]);
+  expect(readHostTurnRecord("session", {
+    directory: replaced.directory,
+    afterRead: () => {
+      const contents = fs.readFileSync(replaced.filename);
+      fs.rmSync(replaced.filename);
+      fs.writeFileSync(replaced.filename, contents);
+    },
+  }).state).toBe("unreadable");
 });

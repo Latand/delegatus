@@ -106,3 +106,57 @@ test("a record appended to the pending journal while an import runs is kept for 
   expect(interruptionObligationStore(obligations).list().map((obligation) => obligation.id).sort())
     .toEqual([first.id, second.id].sort());
 });
+
+function restartInput(turnRef: string, lastEventAt: number | null, recordedAt: string) {
+  return {
+    conversationId: "conversation_restart-cut" as const,
+    engine: "claude" as const,
+    hostKey: "claude:session-restart-cut",
+    path: "/tmp/session-restart-cut.jsonl",
+    owner: null,
+    claimEpoch: 3,
+    turnRef,
+    boundary: "viewer-restart:turn",
+    reason: "viewer-restart" as const,
+    recordedAt,
+    checkpoint: { lastEventKind: lastEventAt === null ? null : "tool-call", lastEventAt },
+    seat: null,
+    answeredBy: "a pipeline stage: its controller retries the attempt",
+  };
+}
+
+test("a restart record found again with newer work moves its checkpoint and its time, and keeps its state", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-interruption-restart-"));
+  try {
+    const store = interruptionObligationStore(path.join(directory, "obligations"));
+    const first = store.record(restartInput("T2", 20, "2026-10-07T00:00:20.000Z"));
+    expect(first.created).toBe(true);
+    const again = store.record(restartInput("T2", 100, "2026-10-07T00:01:40.000Z"));
+    expect(again.created).toBe(false);
+    expect(store.list()).toEqual([{
+      ...first.obligation,
+      checkpoint: { lastEventKind: "tool-call", lastEventAt: 100 },
+      recordedAt: "2026-10-07T00:01:40.000Z",
+    }]);
+    expect(store.list()[0]).toMatchObject({ state: "discharged", resolution: "a pipeline stage: its controller retries the attempt" });
+    /* The same evidence found once more leaves the record as written. */
+    store.record(restartInput("T2", 100, "2026-10-07T00:05:00.000Z"));
+    expect(store.list()[0]!.recordedAt).toBe("2026-10-07T00:01:40.000Z");
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("two restart records that differ in turn are two cuts, whatever their times", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-interruption-restart-"));
+  try {
+    const store = interruptionObligationStore(path.join(directory, "obligations"));
+    store.record(restartInput("T2", 100, "2026-10-07T00:01:40.000Z"));
+    /* The transcript has not moved: the new turn has echoed nothing yet. */
+    const next = store.record(restartInput("T3", 100, "2026-10-07T00:02:00.000Z"));
+    expect(next.created).toBe(true);
+    expect(store.list().map(({ turnRef }) => turnRef)).toEqual(["T2", "T3"]);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

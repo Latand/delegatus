@@ -175,6 +175,9 @@ function sameOwner(left: InterruptionOwner | null, right: InterruptionOwner | nu
     as a severed turn — and must still owe one continuation. */
 function coversSameCut(existing: InterruptionObligation, input: InterruptionObligationInput): boolean {
   if (existing.conversationId !== input.conversationId || existing.hostKey !== input.hostKey) return false;
+  /* Between two restart records of a conversation that is no seat, the id is
+     the whole identity: each names its cut by the turn that was cut. */
+  if (restartRecordOfNoSeat(existing) && restartRecordOfNoSeat(input)) return false;
   if (sameOwner(existing.owner, input.owner) && existing.turnRef === input.turnRef) return true;
   if (input.reason !== "viewer-restart") return false;
   /* A resolved cut was taken up by its continuation or by another message,
@@ -187,6 +190,10 @@ function coversSameCut(existing: InterruptionObligation, input: InterruptionObli
   return lastEventAt === null
     ? interruptionObligationUnresolved(existing)
     : Date.parse(existing.recordedAt) >= lastEventAt;
+}
+
+function restartRecordOfNoSeat(record: Pick<InterruptionObligation, "reason" | "seat">): boolean {
+  return record.reason === "viewer-restart" && !record.seat;
 }
 
 function isObligation(value: unknown): value is InterruptionObligation {
@@ -364,7 +371,22 @@ export function interruptionObligationStore(
       /* The id is the cut: a record already under it is this cut's, in
          whatever state it has reached, and is never written over. */
       const covering = list().find((existing) => existing.id === id || coversSameCut(existing, input));
-      if (covering) return { obligation: covering, created: false };
+      if (covering) {
+        /* A restart record found standing again after its engine wrote more
+           says when it was last seen: the stage controller counts a cut only
+           when the attempt's newest work precedes the record, and the deploy
+           inventory lists by `recordedAt`. Its state and resolution stay. */
+        const seenAt = input.checkpoint.lastEventAt;
+        if (covering.id === id && restartRecordOfNoSeat(covering) && restartRecordOfNoSeat(input)
+          && seenAt !== null && seenAt > (covering.checkpoint.lastEventAt ?? -Infinity)) {
+          const moved: InterruptionObligation = {
+            ...covering, checkpoint: input.checkpoint, recordedAt: input.recordedAt ?? new Date().toISOString(),
+          };
+          writeJsonDurably(fileFor(id), moved);
+          return { obligation: moved, created: false };
+        }
+        return { obligation: covering, created: false };
+      }
       const obligation: InterruptionObligation = {
         version: 1,
         id,

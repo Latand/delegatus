@@ -283,6 +283,213 @@ export function durableRuntimeEventTailSeq(
   }
 }
 
+/** A transcript frame the Claude host recorded: the `uuid` is the one the CLI
+    gives the same record in the transcript. */
+export interface HostTurnFrame {
+  uuid: string;
+  type: "user" | "assistant";
+  /** The turn the host had open when it recorded the frame, or null. */
+  turnId: string | null;
+}
+
+/**
+ * What a host's own ledger says about its newest turn, for the restart cut
+ * decision (docs/design/restart-cut-recognition.md).
+ *
+ * `turn` is the newest turn the host started and how the host closed it: a
+ * `turn-ended` for it, or a `session-status` of `dead` or `unhosted`. The
+ * frames are split at that boundary, the turn's start while it is open and
+ * the closing event once it is closed, so a reader can tie the transcript to
+ * the turn by identity. `identity` names the file as it was read.
+ */
+export type HostTurnRecord =
+  | { state: "absent" }
+  | { state: "unreadable"; reason: string }
+  | {
+    state: "read";
+    identity: string;
+    mtimeMs: number;
+    turn: {
+      turnId: string;
+      closed: { by: "turn-ended" | "session-status"; status: "completed" | "interrupted" | "error" | null } | null;
+    } | null;
+    framesBefore: HostTurnFrame[];
+    framesAfter: HostTurnFrame[];
+  };
+
+const HOST_TURN_RECORD_STEP_BYTES = 1024 * 1024;
+/** Frames kept from before the boundary, newest first. The ledger records
+    frames in the transcript's order, so the anchor is the newest of them the
+    transcript tail holds; only frames that never reached the transcript stand
+    between it and the boundary. */
+const HOST_TURN_RECORD_FRAMES_BEFORE = 256;
+const DELTA_RECORD_PREFIX = '{"kind":"delta"';
+
+function hostLedgerFilename(threadId: string, directory: string): string {
+  return path.join(directory, `${encodeURIComponent(threadId)}.jsonl`);
+}
+
+function ledgerIdentityStamp(identity: LedgerIdentity): string {
+  return `${identity.dev}:${identity.ino}:${identity.size}:${identity.mtimeMs}:${identity.ctimeMs}`;
+}
+
+/** The identity of a session's ledger file as it is now, without reading it. */
+export function hostTurnRecordIdentity(
+  threadId: string,
+  directory: string = statePath("structured-host-events"),
+): string {
+  try {
+    return ledgerIdentityStamp(ledgerIdentity(fs.statSync(hostLedgerFilename(threadId, directory))));
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? "absent" : "unreadable";
+  }
+}
+
+/**
+ * One stable read of a session's ledger: one descriptor, a stat before the
+ * read and one after, and a stat of the path. A file that was appended to or
+ * replaced under the read is `unreadable`, never an answer from its old
+ * prefix, which is what {@link FileRuntimeEventStore.load} hands back. Only
+ * boundary and frame records are parsed, newest first; deltas are skipped by
+ * their kind. An unterminated final line is a write the crash cut short.
+ */
+export function readHostTurnRecord(
+  threadId: string,
+  options: {
+    directory?: string;
+    /** False for an engine whose ledger holds no transcript frames (Codex):
+        the read then stops at the newest turn's start. */
+    frames?: boolean;
+    /** Runs between the read and the closing stats. */
+    afterRead?: () => void;
+  } = {},
+): HostTurnRecord {
+  const framesBefore = options.frames === false ? 0 : HOST_TURN_RECORD_FRAMES_BEFORE;
+  const filename = hostLedgerFilename(threadId, options.directory ?? statePath("structured-host-events"));
+  let handle: number;
+  try {
+    handle = fs.openSync(filename, "r");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ENOENT" ? { state: "absent" } : { state: "unreadable", reason: `the host ledger could not be opened (${code ?? "unknown"})` };
+  }
+  try {
+    const before = ledgerIdentity(fs.fstatSync(handle));
+    type Boundary = { kind: "turn-ended"; turnId: string; status: "completed" | "interrupted" | "error" }
+      | { kind: "session-status" };
+    /* Newest first: what follows the newest turn's start, then the frames
+       recorded before it. */
+    const newer: Array<Boundary | { kind: "frame"; frame: HostTurnFrame }> = [];
+    const olderFrames: HostTurnFrame[] = [];
+    let started: string | null = null;
+    let malformed: string | null = null;
+    const visit = (line: string): void => {
+      if (line.startsWith(DELTA_RECORD_PREFIX)) return;
+      let event: Record<string, unknown> | null = null;
+      try {
+        const parsed = JSON.parse(line) as unknown;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) event = parsed as Record<string, unknown>;
+      } catch { /* reported below */ }
+      if (!event) {
+        malformed = "the host ledger holds a record that is not JSON";
+        return;
+      }
+      if (event.kind === "item") {
+        const item = event.item as Record<string, unknown> | null;
+        if (!item || typeof item !== "object" || typeof item.uuid !== "string") return;
+        if (item.type !== "user" && item.type !== "assistant") return;
+        const frame: HostTurnFrame = {
+          uuid: item.uuid, type: item.type, turnId: typeof event.turnId === "string" ? event.turnId : null,
+        };
+        if (started === null) newer.push({ kind: "frame", frame });
+        else olderFrames.push(frame);
+        return;
+      }
+      if (started !== null) return;
+      if (event.kind === "turn-started") {
+        if (typeof event.turnId !== "string" || !event.turnId) malformed = "the host ledger holds a turn start that names no turn";
+        else started = event.turnId;
+      } else if (event.kind === "turn-ended") {
+        if (typeof event.turnId !== "string" || (event.status !== "completed" && event.status !== "interrupted" && event.status !== "error")) {
+          malformed = "the host ledger holds a turn end it cannot name";
+        } else newer.push({ kind: "turn-ended", turnId: event.turnId, status: event.status });
+      } else if (event.kind === "session-status" && (event.status === "dead" || event.status === "unhosted")) {
+        newer.push({ kind: "session-status" });
+      }
+    };
+    let position = before.size;
+    let carry: Buffer = Buffer.alloc(0);
+    let newest = true;
+    while (position > 0 && malformed === null && !(started !== null && olderFrames.length >= framesBefore)) {
+      const length = Math.min(HOST_TURN_RECORD_STEP_BYTES, position);
+      const start = position - length;
+      const chunk = Buffer.allocUnsafe(length);
+      let offset = 0;
+      while (offset < length) {
+        const read = fs.readSync(handle, chunk, offset, length - offset, start + offset);
+        if (read <= 0) return { state: "unreadable", reason: "the host ledger shrank under the read" };
+        offset += read;
+      }
+      const data = carry.length > 0 ? Buffer.concat([chunk, carry]) : chunk;
+      position = start;
+      const firstNewline = start === 0 ? -1 : data.indexOf(0x0a);
+      if (start > 0 && firstNewline < 0) {
+        carry = data;
+        continue;
+      }
+      const lines = data.subarray(firstNewline + 1).toString("utf8").split("\n");
+      carry = start === 0 ? Buffer.alloc(0) : data.subarray(0, firstNewline + 1);
+      /* The text after the last newline of the file is a torn append. */
+      const torn = lines.pop();
+      if (!newest && torn) malformed = "the host ledger could not be split into records";
+      newest = false;
+      for (let index = lines.length - 1; index >= 0 && malformed === null; index -= 1) {
+        if (!lines[index]) malformed = "the host ledger holds an empty record";
+        else visit(lines[index]!);
+        if (started !== null && olderFrames.length >= framesBefore) break;
+      }
+    }
+    options.afterRead?.();
+    const after = ledgerIdentity(fs.fstatSync(handle));
+    let onPath: LedgerIdentity;
+    try {
+      onPath = ledgerIdentity(fs.statSync(filename));
+    } catch {
+      return { state: "unreadable", reason: "the host ledger was replaced under the read" };
+    }
+    if (!sameLedgerIdentity(before, after) || !sameLedgerIdentity(after, onPath)) {
+      return { state: "unreadable", reason: "the host ledger moved under the read" };
+    }
+    if (malformed !== null) return { state: "unreadable", reason: malformed };
+    const identity = ledgerIdentityStamp(before);
+    newer.reverse();
+    olderFrames.reverse();
+    const framesOf = (items: typeof newer) => items.flatMap((item) => item.kind === "frame" ? [item.frame] : []);
+    if (started === null) {
+      return { state: "read", identity, mtimeMs: before.mtimeMs, turn: null, framesBefore: framesOf(newer), framesAfter: [] };
+    }
+    const turnId: string = started;
+    const closedAt = newer.findIndex((item) =>
+      item.kind === "session-status" || (item.kind === "turn-ended" && item.turnId === turnId));
+    const closing = closedAt < 0 ? null : newer[closedAt] as Boundary;
+    return {
+      state: "read",
+      identity,
+      mtimeMs: before.mtimeMs,
+      turn: {
+        turnId,
+        closed: closing ? { by: closing.kind, status: closing.kind === "turn-ended" ? closing.status : null } : null,
+      },
+      framesBefore: closedAt < 0 ? olderFrames : [...olderFrames, ...framesOf(newer.slice(0, closedAt))],
+      framesAfter: closedAt < 0 ? framesOf(newer) : framesOf(newer.slice(closedAt + 1)),
+    };
+  } catch (error) {
+    return { state: "unreadable", reason: `the host ledger could not be read (${(error as NodeJS.ErrnoException).code ?? "unknown"})` };
+  } finally {
+    fs.closeSync(handle);
+  }
+}
+
 export class FileRuntimeEventStore implements RuntimeEventStore {
   /* The structured host claim makes this store the single writer of its
      ledger, so the durable tail (last sequence and byte length) is owned in

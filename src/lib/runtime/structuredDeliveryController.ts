@@ -6,7 +6,9 @@ import { runtimeIdleKillMatches } from "./contracts";
 import { NativeQueueExecutor } from "./nativeQueueExecutor";
 import { RetryBackoff } from "./retryBackoff";
 import crypto from "node:crypto";
+import fs from "node:fs";
 import { statePath } from "@/lib/configDir";
+import { readStableTailRecords, type StableTailRead } from "@/lib/scanner/activity";
 import { activeRestartGate } from "@/lib/selfUpdate/restartGate";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 
@@ -30,7 +32,9 @@ import { projectEngineHostEvent } from "./engineHostEvents";
 import { observeCodexSubagentEvent } from "./codexSubagentDetection";
 import { PermissionRequestGuard } from "./permissionGuard";
 import { permissionDenialRecorder, resolvePermissionAttendance } from "./permissionDenials";
-import { backgroundWorkAwaitedAtCut, conversationTurnLiveness, readTranscriptCutEvidence, type TurnLivenessDependencies } from "./liveness";
+import { backgroundWorkAwaitedAtCut, conversationTurnLiveness, engineRecordSince, hostTurnReading, readTranscriptCutEvidence, transcriptCutEvidenceFromRecords, type TurnLivenessDependencies } from "./liveness";
+import { readHostTurnRecord } from "./eventStore";
+import { restartCutEvidenceHolds } from "./restartCutHold";
 import {
   interruptionObligationDirectory,
   interruptionObligationStore,
@@ -1089,6 +1093,13 @@ export async function bindStructuredDeliveryQueue(
       const conversation = registry.conversation(conversationId as `conversation_${string}`);
       const generation = conversation?.generations.at(-1);
       if (!conversation || !generation) return false;
+      /* Startup holds this row until its restart cut evidence is decided:
+         the message stays queued and recovery is asked again. */
+      if (restartCutEvidenceHolds(sessionKeyId({ engine: conversation.engine, sessionId: generation.id }))) {
+        throw new (await import("./structuredRecovery")).StructuredRecoveryHeldForUpdateError(
+          "recovery is held until the conversation's restart cut evidence is decided",
+        );
+      }
       const recover = dependencies.recover
         ?? (await import("./structuredRecovery")).recoverDeadStructuredConversation;
       const recovered = await recover({
@@ -1950,7 +1961,8 @@ async function orchestratorSeatFor(
  * (#1835), before anything releases it. The host's own active turn is the
  * evidence; the registry's turn word only backs it up, so a host that finished
  * its turn before the release is owed nothing unless `backgroundTasks` names
- * work that turn left running. Every demotion path that releases a host
+ * work that turn left running or `selfStartedWork` says its engine began
+ * again by itself. Every demotion path that releases a host
  * reaches this through `handOverHostForDemotion`.
  */
 export async function recordDemotionInterruption(
@@ -1959,6 +1971,7 @@ export async function recordDemotionInterruption(
   current: HostState,
   options: DemotionInterruptionOptions,
   backgroundTasks: readonly string[] = [],
+  selfStartedWork = false,
 ): Promise<void> {
   const snapshot = registry.readOnlySnapshot();
   const hostKey = sessionKeyId(key);
@@ -1970,7 +1983,7 @@ export async function recordDemotionInterruption(
      a Copilot turn cut the same way is resumed by the operator (slice 1). */
   if (conversation.engine === "copilot") return;
   const turnRef = current.activeTurnRef ?? entry.structuredHost?.activeTurnRef ?? null;
-  if (turnRef === null && conversation.turn.state !== "busy" && backgroundTasks.length === 0) return;
+  if (turnRef === null && conversation.turn.state !== "busy" && backgroundTasks.length === 0 && !selfStartedWork) return;
   const conversationId = registry.canonicalConversationId(conversation.id);
   const generation = conversation.generations.at(-1)!;
   const transcript = await readTranscriptCutEvidence(conversation.engine, generation.path).catch(() => null);
@@ -2008,25 +2021,56 @@ export async function recordDemotionInterruption(
   }
 }
 
-/** The harness background work an idle Claude host's ended turn still waits
-    on. Releasing the host ends that work with its process, and the completion
-    notice that would have woken the agent with it. */
-async function idleHostBackgroundWork(registry: AgentRegistry, key: SessionKey): Promise<string[]> {
-  if (key.engine !== "claude") return [];
+/** How many times a release reads a live CLI's transcript before it gives
+    up on a tail that keeps moving. */
+const RELEASE_TAIL_READS = 3;
+
+/**
+ * What releasing an idle Claude host cuts, decided as a restart decides it
+ * (docs/design/restart-cut-recognition.md, rows 5 and 6) from the host's own
+ * ledger and transcript: harness background work its ended turn still waits
+ * on, and work the engine began by itself after the host recorded the turn's
+ * end, which nothing has ended. Releasing the host ends both with its process.
+ *
+ * This process is the ledger's only writer, so no append can land inside the
+ * synchronous read. The CLI is alive and may be writing the transcript, so
+ * the tail is read up to three times; one still uncertain records nothing.
+ */
+async function idleHostCut(registry: AgentRegistry, key: SessionKey): Promise<{ backgroundTasks: string[]; selfStartedWork: boolean }> {
+  const nothing = { backgroundTasks: [], selfStartedWork: false };
+  if (key.engine !== "claude") return nothing;
   const conversation = Object.values(registry.readOnlySnapshot().conversations).find((candidate) =>
     candidate.engine === key.engine && candidate.generations.at(-1)?.id === key.sessionId);
   const transcriptPath = conversation && !conversation.supersededBy ? conversation.generations.at(-1)!.path : null;
-  if (!transcriptPath) return [];
-  const evidence = await readTranscriptCutEvidence("claude", transcriptPath);
-  return evidence.verified ? backgroundWorkAwaitedAtCut("claude", transcriptPath, evidence, Date.now()) : [];
+  if (!transcriptPath) return nothing;
+  const ledger = readHostTurnRecord(key.sessionId);
+  let tail: StableTailRead = { integrity: "complete", prefixTruncated: false, records: [] };
+  if (fs.existsSync(transcriptPath)) {
+    for (let read = 0; read < RELEASE_TAIL_READS; read += 1) {
+      tail = await readStableTailRecords(transcriptPath);
+      if (tail.integrity === "complete") break;
+    }
+  }
+  if (tail.integrity !== "complete") {
+    console.error("[viewer release] an idle host's transcript could not be read whole; recording nothing for it", {
+      hostKey: sessionKeyId(key),
+    });
+    return nothing;
+  }
+  const evidence = transcriptCutEvidenceFromRecords(tail.records, "claude");
+  return {
+    backgroundTasks: await backgroundWorkAwaitedAtCut("claude", transcriptPath, evidence, Date.now()),
+    selfStartedWork: hostTurnReading(ledger).state === "closed" && engineRecordSince("claude", ledger, tail) === "open",
+  };
 }
 
 /**
  * Hands one host over to the successor before its release, recording what the
- * release cuts: a turn in flight, or the background work an idle Claude host
- * was waiting on. False when the release cuts nothing, so the host is simply
- * released. Throws when the host could not be marked or its record written;
- * the caller then leaves it running.
+ * release cuts: a turn in flight, or what an idle Claude host was in the
+ * middle of (background work it waits on, work its engine began by itself).
+ * False when the release cuts nothing, so the host is simply released. Throws
+ * when the host could not be marked or its record written; the caller then
+ * leaves it running.
  */
 export async function handOverHostForDemotion(
   registry: AgentRegistry,
@@ -2036,13 +2080,13 @@ export async function handOverHostForDemotion(
 ): Promise<boolean> {
   if (current.pid === null || current.processStartIdentity === null) return false;
   const inFlight = current.status === "active" || current.status === "attention";
-  const backgroundTasks = current.status === "idle" ? await idleHostBackgroundWork(registry, key) : [];
-  if (!inFlight && backgroundTasks.length === 0) return false;
+  const idle = current.status === "idle" ? await idleHostCut(registry, key) : { backgroundTasks: [], selfStartedWork: false };
+  if (!inFlight && idle.backgroundTasks.length === 0 && !idle.selfStartedWork) return false;
   if (!registry.markStructuredHostHandoff(
     key,
     captureProcessIdentity(current.pid, undefined, current.processStartIdentity),
   )) throw new Error(`structured host ${sessionKeyId(key)} changed before Viewer demotion`);
-  await recordDemotionInterruption(registry, key, current, options, backgroundTasks);
+  await recordDemotionInterruption(registry, key, current, options, idle.backgroundTasks, idle.selfStartedWork);
   return true;
 }
 

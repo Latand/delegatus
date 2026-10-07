@@ -94,6 +94,18 @@ function taskNotifications(text: string): Array<{ id: string; terminal: boolean 
   return found;
 }
 
+/** Whether a transcript record is a harness task notification: the prompt
+    the CLI writes into a conversation when background work reports. */
+export function isTaskNotificationRecord(record: RecordLike): boolean {
+  if (record.type === "attachment") {
+    const attachment = recordValue(record.attachment);
+    return attachment?.type === "queued_command"
+      && (stringValue(attachment.prompt) ?? "").trim().startsWith("<task-notification");
+  }
+  return record.type === "user"
+    && claudeUserText(recordValue(record.message)?.content).trim().startsWith("<task-notification");
+}
+
 function contentParts(record: RecordLike): RecordLike[] {
   const content = recordValue(record.message)?.content;
   return Array.isArray(content) ? content.map((part) => recordValue(part) ?? {}) : [];

@@ -1,3 +1,5 @@
+import fs from "node:fs";
+
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 
 import { accountManager } from "@/lib/accounts/manager";
@@ -9,7 +11,7 @@ import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { activeOrchestratorSeats, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { captureProcessIdentity, processIdentityMayOwn, processIdentityStatus, sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { assertDarwinStructuredRuntime } from "@/lib/proc/darwinIdentity";
-import { readStableTailRecords } from "@/lib/scanner/activity";
+import { readStableTailRecords, type StableTailRead } from "@/lib/scanner/activity";
 import { loadPipelinesForStartup, pipelineRegistryHealth, withPipelineStartupAdmission } from "@/lib/pipelines/store";
 
 import {
@@ -39,7 +41,9 @@ import { enqueueStructuredMessage } from "./structuredMessageDelivery";
 import { INTERRUPTED_CODEX_CONTINUATION_TEXT, RECOVERY_NOTICE_ORIGIN } from "./recoveryNotices";
 import { delegatusOriginForRecipient } from "./agentMessageAuthor";
 import { claudeHostLaunchPaths, materializeStructuredHostAccess, recoverPendingStructuredSpawns, structuredHostAccessPolicy } from "./structuredSpawn";
-import { backgroundWorkAwaitedAtCut, conversationTurnLiveness, readTranscriptCutEvidence, readTranscriptEvidence, transcriptCutEvidenceFromRecords, transcriptEvidenceFromRecords, type TranscriptEventKind, type TurnLivenessDependencies } from "./liveness";
+import { backgroundWorkAwaitedAtCut, conversationTurnLiveness, engineRecordSince, hostTurnReading, readTranscriptEvidence, restartCutDecision, transcriptCutEvidenceFromRecords, transcriptEvidenceFromRecords, type TranscriptEventKind, type TurnLivenessDependencies } from "./liveness";
+import { hostTurnRecordIdentity, readHostTurnRecord } from "./eventStore";
+import { holdRestartCutRow, setRestartCutHeldRows } from "./restartCutHold";
 import { markStructuredHostStartupProgress, type StructuredHostStartupPhase } from "./startupStatus";
 import { startupDiagnostic } from "../startupDiagnostics";
 import { launchServiceTier } from "./codexTurnProfile";
@@ -63,11 +67,9 @@ let retryAdoptedHosts: AdoptedStructuredHost[] = [];
 let deferredAdoptionLogged = false;
 const STARTUP_READ_TIMEOUT_MS = 30_000;
 type StartupPassState = {
-  /** The turns this process's restart cut have been recorded (once per boot). */
-  restartCutsRecorded?: boolean;
-  /** The host rows whose cut that capture found recorded, by the transcript's
-      last event at the cut: a record answers each of them. */
-  recordedCuts?: Map<string, number | null>;
+  /** The host rows this process has found cut. The set silences the generic
+      Codex nudge for them and gates nothing else. */
+  cutHostKeys?: Set<string>;
   generation?: string | null;
   retained?: AdoptedStructuredHost[];
   recoveries?: OrchestratorRestartRecoveryTarget[];
@@ -82,14 +84,21 @@ const startupPasses = processStartup.__llvStructuredStartupPasses ??= new WeakMa
 
 /** Rows a completed pass left exactly as they were because their pipeline's
     evidence (an alive or unverifiable survivor, an unreadable record) does not
-    yet admit a replacement. The pass itself is complete: the boot is ready,
-    every unrelated host is published and pending-spawn recovery has run. What
-    remains is a re-probe of this evidence alone, on a bounded backoff, and the
-    adoption pass runs again only when that evidence has changed. */
+    yet admit a replacement, or because their restart cut evidence could not be
+    decided or moved after it was (`held`). The pass itself is complete: the
+    boot is ready, every unrelated host is published and pending-spawn recovery
+    has run. What remains is a re-probe of this evidence alone, on a bounded
+    backoff, and the adoption pass runs again only when that evidence has
+    changed. */
 interface DeferredStructuredStartup {
   hostKeys: readonly string[];
   conversationIds: ReadonlySet<string>;
   fencedReceipts: number;
+  /** Rows held for their restart cut evidence, by the stamp last seen. */
+  held: Map<string, RestartCutStamp>;
+  /** The delay reached its cap with nothing moving, and pending work was
+      admitted to the held rows once. */
+  capAdmitted: boolean;
   message: string;
   delayMs: number;
 }
@@ -382,28 +391,21 @@ function recordOrchestratorRestartObligations(
  * A restart of the service (a deploy, a self-update, a crash) ends every
  * engine process the previous Viewer hosted: the claim below re-hosts the row
  * on a resumed, idle process, or the process dies with its stdin. Whatever
- * the conversation was doing goes with it. Four shapes are in flight:
+ * the conversation was doing goes with it.
  *
- *  - a turn still open in the transcript (a tool call, a reply being written);
- *  - a Claude turn that had ended on harness background work still running
- *    (`run_in_background`, a Monitor, a wakeup), whose row reads idle. The
- *    work was a child of the old process, so its completion notice, which is
- *    what would have woken the agent, never arrives;
- *  - a turn started moments before, whose transcript holds no record of its
- *    work yet: a pipeline stage's launch, or a spawned agent's first prompt
- *    the row names as its active turn;
- *  - the turn a message started after an earlier cut was resolved (its
- *    continuation, or an operator's or controller's send), which the row
- *    names as active before its transcript shows a word of it.
+ * Whether a turn was cut is decided by one rule
+ * (docs/design/restart-cut-recognition.md): the engine host's own ledger says
+ * which turn it started and whether it closed it, and the transcript records
+ * tied to that turn by identity say whether the engine ended it by itself.
+ * A Claude turn that had ended on harness background work still running is
+ * cut too, since the work was a child of the old process and its completion
+ * notice never arrives. A row whose host recorded no turn is decided from
+ * the transcript and the row, as before the ledger was read.
  *
- * The capture runs once per boot, before any claim can replace the process.
- * The transcript decides whether a turn was open; the row's process says
- * nothing, since the old one may stay alive for a few seconds more. The row's
- * active turn is what names the turn, so a turn a message started after an
- * earlier cut is a cut of its own and the same turn found again is the same cut.
- * A transcript whose tail cannot be read whole proves no turn, so it records
- * no cut: a record is what authorizes a stage's fresh attempt and what the
- * deploy verdict lists, and neither may rest on a guess.
+ * Evidence that cannot be read whole, or that moves under the read, decides
+ * nothing: the row is held and asked again, and no record is written. A
+ * record is what authorizes a stage's fresh attempt and what the deploy
+ * verdict lists, and neither may rest on a guess.
  */
 interface RestartCutTarget {
   conversationId: ViewerConversationId;
@@ -411,8 +413,12 @@ interface RestartCutTarget {
   hostKey: string;
   path: string;
   claimEpoch: number;
-  /** The turn the row names as active, when it names one. */
+  /** The turn the cut is named by: the newest turn the host started, or the
+      turn the row names as active where the host recorded none. */
   turnRef: string | null;
+  /** `turn` for a cut the host ledger names; the transcript's newest work or
+      `launch` for one decided without it. */
+  boundary: string;
   lastEvent: { kind: TranscriptEventKind | null; at: number | null };
   backgroundTasks: string[];
   stage: InterruptionStage | null;
@@ -422,77 +428,137 @@ interface RestartCutTarget {
   answeredBy: string | null;
 }
 
+interface RestartCutRecognition {
+  cuts: RestartCutTarget[];
+  /** Rows whose evidence could not be decided: held, re-probed, never recorded. */
+  undecided: Set<string>;
+  /** The evidence each row was decided "no cut" from, or not asked for its
+      age: compared wherever this pass would replace the predecessor's
+      ownership of the row. */
+  stamps: Map<string, RestartCutStamp>;
+}
+
+interface RestartCutStamp {
+  sessionId: string;
+  path: string;
+  endpoint: string;
+  value: string;
+}
+
+function transcriptIdentity(transcriptPath: string): string {
+  try {
+    const stats = fs.statSync(transcriptPath);
+    return `${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeMs}`;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? "absent" : "unreadable";
+  }
+}
+
+function restartCutStampValue(ledger: string, transcript: string, entry: AgentRegistryEntry): string {
+  return [ledger, transcript, entry.status, entry.structuredHost?.activeTurnRef ?? ""].join("|");
+}
+
+/** The stamp of a held or stamped row as its evidence stands now. */
+function currentRestartCutStamp(stamp: Pick<RestartCutStamp, "sessionId" | "path">, entry: AgentRegistryEntry): string {
+  return restartCutStampValue(hostTurnRecordIdentity(stamp.sessionId), transcriptIdentity(stamp.path), entry);
+}
+
+/**
+ * Decides, for every predecessor row in scope, whether the restart cut a turn
+ * (docs/design/restart-cut-recognition.md). Every pass asks before it adopts,
+ * demotes or nudges any row, and a decision belongs to the pass that made it.
+ */
 async function restartCutTargets(
   registry: AgentRegistry,
   seats: readonly OrchestratorSeat[],
   unresolved: readonly InterruptionObligation[],
-  recorded: readonly InterruptionObligation[],
+  scope: ReadonlySet<string> | null,
+  readLedger: typeof readHostTurnRecord,
   snapshot: RegistryFile = registry.readOnlySnapshot(),
   now = Date.now(),
-): Promise<RestartCutTarget[]> {
-  /* A seat has its own capture, and a conversation whose continuation is
-     still owed or on its way is covered by it: whatever its transcript gained
-     since is the provider's bookkeeping or that continuation's turn. One that
-     already arrived was settled before this capture and covers nothing. */
-  const covered = new Set([
-    ...seats.flatMap((seat) => seat.conversationId?.startsWith("conversation_")
-      ? [registry.canonicalConversationId(seat.conversationId as ViewerConversationId)]
-      : []),
-    ...unresolved.map((obligation) => registry.canonicalConversationId(obligation.conversationId)),
-  ]);
-  const targets: RestartCutTarget[] = [];
+): Promise<RestartCutRecognition> {
+  const seated = new Set(seats.flatMap((seat) => seat.conversationId?.startsWith("conversation_")
+    ? [registry.canonicalConversationId(seat.conversationId as ViewerConversationId)]
+    : []));
+  /* A conversation whose continuation is still owed or on its way is covered
+     by it: whatever its transcript gained since is the provider's bookkeeping
+     or that continuation's turn. One that already arrived was settled before
+     this capture and covers nothing. This only postpones the question. */
+  const postponed = new Set(unresolved.map((obligation) => registry.canonicalConversationId(obligation.conversationId)));
+  const recognition: RestartCutRecognition = { cuts: [], undecided: new Set(), stamps: new Map() };
   const self = captureProcessIdentity(process.pid);
   for (const conversation of Object.values(snapshot.conversations)) {
     const generation = conversation.generations.at(-1);
     if ((conversation.engine !== "claude" && conversation.engine !== "codex") || !generation || conversation.supersededBy) continue;
     const conversationId = registry.canonicalConversationId(conversation.id);
-    if (covered.has(conversationId)) continue;
+    /* A seat has its own capture and is not stamped by this one. */
+    if (seated.has(conversationId) || postponed.has(conversationId)) continue;
     const hostKey = sessionKeyId({ engine: conversation.engine, sessionId: generation.id });
+    if (scope && !scope.has(hostKey)) continue;
     const entry = snapshot.entries[hostKey];
     /* Only a structured row a previous Viewer hosted: a pane belongs to its
        terminal, and a row this process already claimed is its own work. The
        whole identity is compared: a predecessor whose pid this process was
-       given is still a predecessor. An idle row is a Claude turn that ended,
-       cut only when background work outlived it. */
+       given is still a predecessor. An idle row is a Claude turn that ended. */
     if (!entry?.structuredHost || entry.host !== null) continue;
     const live = entry.status === "live";
     if (!live && !(entry.status === "idle" && conversation.engine === "claude")) continue;
     const claimant = entry.claimOwner ? structuredClaimIdentity(entry.claimOwner) : null;
     if (claimant && sameRecordedProcessIdentity(self, claimant)) continue;
-    const evidence = await readTranscriptCutEvidence(conversation.engine, generation.path).catch(() => null);
-    if (!evidence?.verified) continue;
+    const transcript = transcriptIdentity(generation.path);
+    const ledger = readLedger(generation.id, { frames: conversation.engine === "claude" });
+    const tail: StableTailRead = transcript === "absent"
+      ? { integrity: "complete", prefixTruncated: false, records: [] }
+      : await readStableTailRecords(generation.path).catch((): StableTailRead => ({ integrity: "uncertain", records: [] }));
+    const evidence = tail.integrity === "complete" ? transcriptCutEvidenceFromRecords(tail.records, conversation.engine) : null;
+    const at = evidence?.lastWork?.at ?? null;
+    const stamp: RestartCutStamp = {
+      sessionId: generation.id,
+      path: generation.path,
+      endpoint: entry.structuredHost.endpoint,
+      value: restartCutStampValue(
+        ledger.state === "read" ? ledger.identity : ledger.state === "absent" ? "absent" : hostTurnRecordIdentity(generation.id),
+        transcript,
+        entry,
+      ),
+    };
+    /* The same window bounds every adoption a turn claim alone asks for. It
+       dates the newest durable activity: the host ledger's last write or the
+       transcript's newest work, and the row where the conversation has neither. */
+    const activity = Math.max(ledger.state === "read" ? ledger.mtimeMs : -Infinity, at ?? -Infinity);
+    if (now - (Number.isFinite(activity) ? activity : Date.parse(entry.updatedAt)) > startupTurnMaxAgeMs()) {
+      recognition.stamps.set(hostKey, stamp);
+      continue;
+    }
     const stage = interruptionStageOf(snapshot.memberships, conversationId);
-    const at = evidence.lastWork?.at ?? null;
-    /* The same window bounds every adoption a turn claim alone asks for. A
-       turn with no record of its work yet is as old as the row that started it. */
-    if (now - (at ?? Date.parse(entry.updatedAt)) > startupTurnMaxAgeMs()) continue;
-    const backgroundTasks = await backgroundWorkAwaitedAtCut(conversation.engine, generation.path, evidence, now);
-    const turnRef = live ? entry.structuredHost.activeTurnRef ?? null : null;
-    /* An earlier cut was resolved, by its continuation or by any message that
-       took the conversation up, and the transcript has not moved since while
-       the row names a turn other than the one that cut was. That turn is the
-       message's, open whatever the transcript, which has yet to show it. */
-    const resumedTurn = turnRef !== null && recorded.some((obligation) => !interruptionObligationUnresolved(obligation)
-      && registry.canonicalConversationId(obligation.conversationId) === conversationId
-      && obligation.turnRef !== turnRef && obligation.checkpoint.lastEventAt === at);
-    /* A turn whose work has no record yet is open when the row names one and
-       no record of the transcript was ever observed: the first prompt reached
-       the engine, as a stage's launch did. A row whose transcript was seen and
-       is now gone or empty says nothing current (#1281). */
-    const firstTurn = turnRef !== null && conversation.turn.source === "empty";
-    const inFlight = live && (resumedTurn || (at === null
-      ? (stage !== null || firstTurn) && evidence.turn !== "terminal"
-      : evidence.turn === "busy" || (stage !== null && evidence.turn === "unknown")));
-    if (!inFlight && backgroundTasks.length === 0) continue;
+    const backgroundTasks = evidence ? await backgroundWorkAwaitedAtCut(conversation.engine, generation.path, evidence, now) : [];
+    const turnWord = live ? entry.structuredHost.activeTurnRef ?? null : null;
+    const decided = restartCutDecision({
+      host: hostTurnReading(ledger),
+      record: engineRecordSince(conversation.engine, ledger, tail),
+      row: { status: live ? "live" : "idle", turnRef: turnWord, neverObserved: conversation.turn.source === "empty" },
+      stage: stage !== null,
+      backgroundWork: backgroundTasks.length > 0,
+    });
+    if (decided.decision === "undecided") {
+      recognition.undecided.add(hostKey);
+      recognition.stamps.set(hostKey, stamp);
+      continue;
+    }
+    if (decided.decision === "no-cut") {
+      recognition.stamps.set(hostKey, stamp);
+      continue;
+    }
     const memberships = snapshot.memberships[conversationId] ?? [];
-    targets.push({
+    recognition.cuts.push({
       conversationId,
       engine: conversation.engine,
       hostKey,
       path: generation.path,
       claimEpoch: entry.claimEpoch,
-      turnRef,
-      lastEvent: { kind: evidence.lastWork?.kind ?? null, at },
+      turnRef: decided.namedBy === "turn" ? decided.turnId : turnWord,
+      boundary: decided.namedBy === "turn" ? "viewer-restart:turn" : `viewer-restart:${at ?? "launch"}`,
+      lastEvent: { kind: evidence?.lastWork?.kind ?? null, at },
       backgroundTasks,
       stage,
       answeredBy: stage ? STAGE_CUT_RESOLUTION
@@ -501,22 +567,22 @@ async function restartCutTargets(
           : null,
     });
   }
-  return targets;
+  return recognition;
 }
 
-/** Records each cut once. The cut is named by the newest record the agent's
-    work wrote and the turn the row names, so a later boot that finds the same
-    silent turn lands on the record this boot wrote whatever the CLI appended
-    on its way down, and a turn the agent resumed and was cut again in gets its
-    own, echoed in the transcript or not yet. Every engine's continuation is
-    keyed by that record. */
+/** Records each cut once. A cut the host ledger decided is named by the turn
+    its host started, so a late echo of that turn's records moves only the
+    checkpoint; one decided without a ledger is named by the row's turn word
+    and the newest record the agent's work wrote. Either way a later pass that
+    finds the same cut lands on the record this one wrote, and a turn started
+    since gets its own. Every engine's continuation is keyed by that record. */
 function recordRestartCuts(
   store: InterruptionObligationStore,
   targets: readonly RestartCutTarget[],
-  recorded: Map<string, number | null>,
+  found: Set<string>,
 ): void {
   for (const target of targets) {
-    recorded.set(target.hostKey, target.lastEvent.at);
+    found.add(target.hostKey);
     const { obligation, created } = store.record({
       conversationId: target.conversationId,
       engine: target.engine,
@@ -525,7 +591,7 @@ function recordRestartCuts(
       owner: null,
       claimEpoch: target.claimEpoch,
       turnRef: target.turnRef,
-      boundary: `viewer-restart:${target.lastEvent.at ?? "launch"}`,
+      boundary: target.boundary,
       reason: "viewer-restart",
       checkpoint: {
         lastEventKind: target.lastEvent.kind,
@@ -810,31 +876,23 @@ function assertEligibleHostsResolved(
 }
 
 /**
- * The host rows whose cut a record already answers, in whatever state it is
- * in by now: its own continuation, a stage's fresh attempt, a flow's relaunch.
- *
- * The generic Codex nudge below is keyed by the claim, which every boot and
- * every generation renews, so it would answer such a cut once more on each of
- * them. A record names its cut by the newest record of the agent's work; a
- * transcript whose work moved since is a new turn the record does not name.
- * A pipeline stage's cuts are its controller's whatever the transcript did.
+ * The host rows the generic Codex nudge below never answers: a row this pass
+ * decided cut or could not decide, a row this process has found cut, and a
+ * pipeline stage, whose cuts are its controller's. The nudge is keyed by the
+ * claim, which every boot and every generation renews, so it would answer
+ * such a cut once more on each of them.
  */
-function cutsAnsweredByRecord(
+function rowsTheNudgeNeverAnswers(
   registry: AgentRegistry,
-  obligations: readonly InterruptionObligation[],
-  lastWorkByHost: ReadonlyMap<string, number | null>,
-  recordedCuts: ReadonlyMap<string, number | null> | undefined,
+  held: ReadonlySet<string>,
+  found: ReadonlySet<string>,
 ): Set<string> {
-  const memberships = registry.readOnlySnapshot().memberships;
-  const answered = new Set<string>();
-  for (const [hostKey, at] of recordedCuts ?? []) {
-    if (!lastWorkByHost.has(hostKey) || lastWorkByHost.get(hostKey) === at) answered.add(hostKey);
-  }
-  for (const obligation of obligations) {
-    const at = lastWorkByHost.get(obligation.hostKey) ?? null;
-    if ((at !== null && obligation.checkpoint.lastEventAt === at)
-      || interruptionStageOf(memberships, registry.canonicalConversationId(obligation.conversationId))) {
-      answered.add(obligation.hostKey);
+  const snapshot = registry.readOnlySnapshot();
+  const answered = new Set([...held, ...found]);
+  for (const conversation of Object.values(snapshot.conversations)) {
+    const generation = conversation.generations.at(-1);
+    if (generation && interruptionStageOf(snapshot.memberships, registry.canonicalConversationId(conversation.id))) {
+      answered.add(sessionKeyId({ engine: conversation.engine, sessionId: generation.id }));
     }
   }
   return answered;
@@ -985,7 +1043,6 @@ async function refreshStructuredTranscriptState(
   assertActive: () => void = () => {},
   lastEventByHost: Map<string, number | null> = new Map(),
   hostKeys: ReadonlySet<string> | null = null,
-  lastWorkByHost: Map<string, number | null> = new Map(),
 ): Promise<ReadonlySet<string>> {
   const snapshot = registry.readOnlySnapshot();
   const observedAt = new Date().toISOString();
@@ -1011,9 +1068,6 @@ async function refreshStructuredTranscriptState(
         const tail = await readStableTailRecords(generation.path);
         lastEventByHost.set(hostKey, tail.integrity === "complete"
           ? transcriptEvidenceFromRecords(tail.records, conversation.engine, null).lastEventAt
-          : null);
-        lastWorkByHost.set(hostKey, tail.integrity === "complete" && conversation.engine !== "copilot"
-          ? transcriptCutEvidenceFromRecords(tail.records, conversation.engine).lastWork?.at ?? null
           : null);
         if (tail.integrity !== "complete") {
           unreadable.add(hostKey);
@@ -1186,7 +1240,7 @@ async function structuredStartupAdoptionFilter(
   deferredStageConversationIds: ReadonlySet<string> = new Set(),
   lastEventByHost: Map<string, number | null> = new Map(),
   interruptedHostKeys: ReadonlySet<string> = new Set(),
-): Promise<StructuredHostAdoptionFilter> {
+): Promise<StartupAdoptionFilter> {
   const conversationsByCurrentEntry = new Map(Object.values(snapshot.conversations).flatMap((conversation) => {
     const generation = conversation.generations.at(-1);
     return generation
@@ -1209,7 +1263,16 @@ async function structuredStartupAdoptionFilter(
   const now = Date.now();
   const maxAgeMs = startupTurnMaxAgeMs();
   const loggedRefusals = new Set<string>();
-  return (entry) => {
+  const pendingWork = (entry: AgentRegistryEntry): boolean => {
+    const conversation = conversationsByCurrentEntry.get(sessionKeyId(entry.key));
+    if (!conversation || conversation.supersededBy) return false;
+    const conversationId = registry.canonicalConversationId(conversation.id);
+    return !deferredStageConversationIds.has(conversationId)
+      && (pendingDeliveryConversationIds.has(conversationId)
+        || signals.pendingOperationConversationIds.has(conversationId)
+        || entry.pendingAction === "handoff");
+  };
+  return Object.assign((entry: AgentRegistryEntry) => {
     const conversation = conversationsByCurrentEntry.get(sessionKeyId(entry.key));
     if (!conversation) return false;
     /* A superseded conversation is terminal (issue #383): a boot can never
@@ -1227,10 +1290,7 @@ async function structuredStartupAdoptionFilter(
       return true;
     }
     const conversationId = registry.canonicalConversationId(conversation.id);
-    const hasPendingWork = pendingDeliveryConversationIds.has(conversationId)
-      || signals.pendingOperationConversationIds.has(conversationId)
-      || entry.pendingAction === "handoff";
-    if (hasPendingWork) return true;
+    if (pendingWork(entry)) return true;
     if (conversation.turn.state === "terminal") return false;
     /* A stage attempt the pipeline has already settled has no controller
        left to drive it: no verdict will be accepted and no next stage will
@@ -1267,8 +1327,12 @@ async function structuredStartupAdoptionFilter(
       loggedRefusals.add(key);
     }
     return false;
-  };
+  }, { pendingWork });
 }
+
+/** The adoption filter, and its answer to whether a row has work waiting on
+    it: a held delivery, a pending runtime operation, a handoff. */
+type StartupAdoptionFilter = StructuredHostAdoptionFilter & { pendingWork(entry: AgentRegistryEntry): boolean };
 
 const SETTLED_STAGE_ATTEMPT_STATES = new Set(["passed", "failed", "needs_decision", "skipped"]);
 
@@ -1356,6 +1420,9 @@ export interface StructuredStartupDependencies {
   /** Durable interruption obligations (#1835). Defaults to the directory
       beside the registry file. */
   interruptions?: InterruptionObligationStore;
+  /** Reads a session's host ledger for the restart cut decision. Defaults to
+      one stable read of the file the engine host writes. */
+  readHostTurnRecord?: typeof readHostTurnRecord;
   /** Reconciles transcript state, answering which conversations it could not
       read. A stub that answers nothing reports nothing unreadable. */
   refreshTranscriptState?: (registry: AgentRegistry) => Promise<ReadonlySet<string> | void>;
@@ -1432,6 +1499,9 @@ export async function adoptStructuredHostsAtStartup(
 function startStructuredHostPass(
   dependencies: StructuredStartupDependencies,
   resumeDeferred: ReadonlySet<string> | null = null,
+  /** The re-probe of rows held for their restart cut evidence reached its
+      cap: pending work may adopt them. */
+  admitHeldPendingWork = false,
 ): Promise<AdoptedStructuredHost[]> {
   dependencies.assertActive?.();
   const registry = dependencies.registry ?? agentRegistry();
@@ -1455,7 +1525,7 @@ function startStructuredHostPass(
     if (replaced && client) await bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true });
     const scope = resumeDeferred ?? (replaced ? new Set(Object.keys(registry.readOnlySnapshot().entries)
       .filter((key) => !current.ready!.some((item) => sessionKeyId(item.key) === key))) : null);
-    const hosts = await adoptStructuredHostsPass({ ...dependencies, registry, client }, scope);
+    const hosts = await adoptStructuredHostsPass({ ...dependencies, registry, client }, scope, admitHeldPendingWork);
     current.generation = generation;
     current.ready = hosts;
     return hosts;
@@ -1466,6 +1536,7 @@ function startStructuredHostPass(
 async function adoptStructuredHostsPass(
   dependencies: StructuredStartupDependencies,
   resumeDeferred: ReadonlySet<string> | null = null,
+  admitHeldPendingWork = false,
 ): Promise<AdoptedStructuredHost[]> {
   const assertActive = dependencies.assertActive ?? (() => {});
   const admitState = <T>(admit: (available: boolean) => Promise<T>, phase = "startup evidence") =>
@@ -1490,16 +1561,47 @@ async function adoptStructuredHostsPass(
   const interruptions = dependencies.interruptions
     ?? interruptionObligationStore(interruptionObligationDirectory(registry.filename));
   recordOrchestratorRestartObligations(interruptions, orchestratorRecoveries);
+  /* Every pass asks the rows in its scope before it adopts, demotes or nudges
+     any of them; a decision belongs to the pass that made it. A continuation
+     that already arrived covers nothing any more: settle it first, so a turn
+     the agent resumed and the restart cut again is seen. */
+  const recognition = await restartCutTargets(
+    registry,
+    orchestratorSeats(),
+    settleSubmittedInterruptionObligations(registry, interruptions,
+      interruptions.list().filter(interruptionObligationUnresolved)),
+    resumeDeferred,
+    dependencies.readHostTurnRecord ?? readHostTurnRecord,
+  );
   const passState = startupPasses.get(registry);
-  if (passState && !passState.restartCutsRecorded && !resumeDeferred) {
-    /* A continuation that already arrived covers nothing any more: settle it
-       first, so a turn the agent resumed and the restart cut again is seen. */
-    const unresolved = settleSubmittedInterruptionObligations(registry, interruptions,
-      interruptions.list().filter(interruptionObligationUnresolved));
-    recordRestartCuts(interruptions, await restartCutTargets(registry, orchestratorSeats(), unresolved, interruptions.list()),
-      passState.recordedCuts ??= new Map());
-    passState.restartCutsRecorded = true;
-  }
+  const cutHostKeys = passState ? passState.cutHostKeys ??= new Set<string>() : new Set<string>();
+  recordRestartCuts(interruptions, recognition.cuts, cutHostKeys);
+  /* Rows whose evidence is undecided, or moved after it was decided: left
+     exactly as they were, and asked again by the deferral re-probe. */
+  const heldHostKeys = new Set(recognition.undecided);
+  /* A queued message's on-demand recovery waits for these rows as well, until
+     the re-probe decides them or reaches its cap. */
+  if (!admitHeldPendingWork) for (const key of heldHostKeys) holdRestartCutRow(key);
+  const stamps = recognition.stamps;
+  const self = captureProcessIdentity(process.pid);
+  const evidenceMoved = (entry: AgentRegistryEntry): boolean => {
+    const key = sessionKeyId(entry.key);
+    if (heldHostKeys.has(key)) return true;
+    const stamp = stamps.get(key);
+    if (!stamp) return false;
+    /* A row this process claimed and whose endpoint it replaced is its own
+       from here on: it opened the host or retired the row. */
+    const claimant = entry.claimOwner ? structuredClaimIdentity(entry.claimOwner) : null;
+    if (claimant && sameRecordedProcessIdentity(self, claimant) && entry.structuredHost?.endpoint !== stamp.endpoint) {
+      stamps.delete(key);
+      return false;
+    }
+    if (currentRestartCutStamp(stamp, entry) === stamp.value) return false;
+    console.error("[structured hosts] restart cut evidence moved after it was decided; holding the row", { key });
+    heldHostKeys.add(key);
+    if (!admitHeldPendingWork) holdRestartCutRow(key);
+    return true;
+  };
   const controllerBoundEarly = client !== null;
   if (client && !hasStructuredDeliveryController(registry)) {
     await bindStructuredDeliveryQueue([], {
@@ -1514,10 +1616,9 @@ async function adoptStructuredHostsPass(
     totalHosts: null,
   });
   const lastEventByHost = new Map<string, number | null>();
-  const lastWorkByHost = new Map<string, number | null>();
   const unreadableTranscripts = await (dependencies.refreshTranscriptState && !resumeDeferred
     ? dependencies.refreshTranscriptState(registry)
-    : refreshStructuredTranscriptState(registry, assertActive, lastEventByHost, resumeDeferred, lastWorkByHost))
+    : refreshStructuredTranscriptState(registry, assertActive, lastEventByHost, resumeDeferred))
     ?? new Set<string>();
   // Read under the existing lease, then release before any host or transcript I/O.
   // Each writer claim below re-resolves pipeline evidence in its own short hold.
@@ -1544,8 +1645,6 @@ async function adoptStructuredHostsPass(
       interruptions.list().filter(interruptionObligationUnresolved),
     );
     const interruptionHostKeys = new Set(unresolvedInterruptions.map((obligation) => obligation.hostKey));
-    const answeredCutHostKeys = cutsAnsweredByRecord(registry, interruptions.list(), lastWorkByHost,
-      startupPasses.get(registry)?.recordedCuts);
     let interruptedHostKeys: ReadonlySet<string> = interruptionHostKeys;
     const retainedRecoveryHostKeys = () => new Set([...orchestratorHostKeys, ...interruptedHostKeys]);
     let nextAdoptedHosts = await revalidateRetainedStartupHosts(
@@ -1562,7 +1661,8 @@ async function adoptStructuredHostsPass(
     reconcileDeadStructuredRegistryHosts(registry, (entry) => orchestratorHostKeys.has(sessionKeyId(entry.key))
       || interruptionHostKeys.has(sessionKeyId(entry.key))
       || (resumeDeferred !== null && !resumeDeferred.has(sessionKeyId(entry.key)))
-      || deferredHostKeys.has(sessionKeyId(entry.key)));
+      || deferredHostKeys.has(sessionKeyId(entry.key))
+      || evidenceMoved(entry));
     const signals = await structuredStartupSignals(
       registry,
       client,
@@ -1601,7 +1701,12 @@ async function adoptStructuredHostsPass(
       try { assertActive(); } catch { return false; }
       return (!resumeDeferred || resumeDeferred.has(sessionKeyId(entry.key)))
         && !retainedHostKeys.has(sessionKeyId(entry.key))
-        && !skippedHostKeys.has(sessionKeyId(entry.key)) && eligible(entry);
+        && !skippedHostKeys.has(sessionKeyId(entry.key))
+        /* The stamp is compared before the claim and again on the claimed
+           row, where nothing can write the evidence any more. Once the
+           re-probe has reached its cap, pending work takes a held row. */
+        && (!evidenceMoved(entry) || (admitHeldPendingWork && eligible.pendingWork(entry)))
+        && eligible(entry);
     };
     const adoptionCandidates = Object.values(registry.readOnlySnapshot().entries).filter((entry) =>
       entry.structuredHost && shouldAdopt(entry));
@@ -1780,12 +1885,14 @@ async function adoptStructuredHostsPass(
       || deferredHostKeys.has(sessionKeyId(entry.key))
       || skippedHostKeys.has(sessionKeyId(entry.key))
       || unreadableTranscripts.has(sessionKeyId(entry.key))
+      || evidenceMoved(entry)
       || shouldAdopt(entry);
+    const neverNudged = rowsTheNudgeNeverAnswers(registry, heldHostKeys, cutHostKeys);
     const candidateCodexHosts = nextAdoptedHosts.filter(
       (item): item is AdoptedCodexHost => item.key.engine === "codex"
         && !orchestratorHostKeys.has(sessionKeyId(item.key))
         && !interruptionHostKeys.has(sessionKeyId(item.key))
-        && !answeredCutHostKeys.has(sessionKeyId(item.key)),
+        && !neverNudged.has(sessionKeyId(item.key)),
     );
     const existingCodexContinuations = client
       ? await interruptedCodexContinuations(registry, client, candidateCodexHosts)
@@ -1797,6 +1904,12 @@ async function adoptStructuredHostsPass(
         const conversation = registry.conversationForPath(entry.artifactPath);
         if (conversation && evidence.deferred.has(registry.canonicalConversationId(conversation.id))) {
           deferredHostKeys.add(sessionKeyId(entry.key));
+          skippedHostKeys.add(sessionKeyId(entry.key));
+          return;
+        }
+        /* Before the claim and before the write that retires the row. */
+        const current = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
+        if (current && evidenceMoved(current)) {
           skippedHostKeys.add(sessionKeyId(entry.key));
           return;
         }
@@ -1844,7 +1957,8 @@ async function adoptStructuredHostsPass(
       (item): item is AdoptedCodexHost => item.key.engine === "codex"
         && !orchestratorHostKeys.has(sessionKeyId(item.key))
         && !interruptionHostKeys.has(sessionKeyId(item.key))
-        && !answeredCutHostKeys.has(sessionKeyId(item.key)),
+        && !neverNudged.has(sessionKeyId(item.key))
+        && !heldHostKeys.has(sessionKeyId(item.key)),
     );
     reportProgress("finalizing structured delivery");
     /* `controllerBoundEarly` is exactly "this pass has a runtime client", so the
@@ -1912,7 +2026,15 @@ async function adoptStructuredHostsPass(
     }
     assertActive();
     adoptedHosts = nextAdoptedHosts;
-    if (deferredHostKeys.size > 0 || fencedReceipts.length > 0) {
+    const heldEntries = registry.readOnlySnapshot().entries;
+    const held = new Map([...heldHostKeys].flatMap((key) => {
+      const stamp = stamps.get(key);
+      const entry = heldEntries[key];
+      return stamp && entry && !finalHostKeys.has(key)
+        ? [[key, { ...stamp, value: currentRestartCutStamp(stamp, entry) }] as const]
+        : [];
+    }));
+    if (deferredHostKeys.size > 0 || fencedReceipts.length > 0 || held.size > 0) {
       /* The rows are retained exactly as a retry would retain them: the next
          pass continues through the hosts this one published. The pass itself
          completes — throwing here made the boot's retry loop rerun the whole
@@ -1920,13 +2042,16 @@ async function adoptStructuredHostsPass(
          startup axis failed and never reached pending-spawn recovery. */
       retryAdoptedHosts = nextAdoptedHosts;
       retryOrchestratorRecoveries = [...orchestratorRecoveries];
-      rememberDeferredStructuredStartup(dependencies, registry, [...deferredHostKeys], pipelineEvidence.deferred, fencedReceipts.length);
+      rememberDeferredStructuredStartup(
+        dependencies, registry, [...deferredHostKeys], pipelineEvidence.deferred, fencedReceipts.length, held, admitHeldPendingWork,
+      );
       return adoptedHosts;
     }
+    setRestartCutHeldRows([]);
     retryAdoptedHosts = [];
     retryOrchestratorRecoveries = [];
     if (deferredStartup) {
-      console.error("[structured hosts] deferred pipeline rows admitted", { hosts: deferredStartup.hostKeys });
+      console.error("[structured hosts] deferred rows admitted", { hosts: deferredStartup.hostKeys });
       deferredStartup = null;
     }
     return adoptedHosts;
@@ -1948,26 +2073,42 @@ function fencedPendingSpawnReceipts(registry: AgentRegistry, deferred: ReadonlyS
 function rememberDeferredStructuredStartup(
   dependencies: StructuredStartupDependencies,
   registry: AgentRegistry,
-  hostKeys: readonly string[],
+  pipelineHostKeys: readonly string[],
   conversationIds: ReadonlySet<string>,
   fencedReceipts: number,
+  held: Map<string, RestartCutStamp>,
+  capAdmitted: boolean,
 ): void {
-  const message = `pipeline startup evidence is unresolved; deferred ${hostKeys.length} host(s)`
-    + (fencedReceipts > 0 ? ` and ${fencedReceipts} pending launch receipt(s)` : "");
+  const hostKeys = [...new Set([...pipelineHostKeys, ...held.keys()])];
+  const pipelineMessage = pipelineHostKeys.length > 0 || fencedReceipts > 0
+    ? `pipeline startup evidence is unresolved; deferred ${pipelineHostKeys.length} host(s)`
+      + (fencedReceipts > 0 ? ` and ${fencedReceipts} pending launch receipt(s)` : "")
+    : null;
+  const heldMessage = held.size > 0
+    ? `restart cut evidence is unresolved; holding ${held.size} host(s): ${[...held.keys()].join(", ")}`
+    : null;
+  const message = [pipelineMessage, heldMessage].filter((part) => part !== null).join("; ");
   const previous = deferredStartup;
   /* Unchanged evidence keeps growing the backoff; evidence that moved (a row
-     admitted, another fenced) starts the cadence over for what is left. */
+     admitted, another fenced, a held stamp that changed) starts the cadence
+     over for what is left. */
   const sameEvidence = previous !== null
     && previous.conversationIds.size === conversationIds.size
     && [...conversationIds].every((id) => previous.conversationIds.has(id))
-    && previous.fencedReceipts === fencedReceipts;
+    && previous.fencedReceipts === fencedReceipts
+    && previous.held.size === held.size
+    && [...held].every(([key, stamp]) => previous.held.get(key)?.value === stamp.value);
   const delayMs = sameEvidence
     ? Math.min(previous.delayMs * 2, DEFERRED_STARTUP_REPROBE_MAX_MS)
     : DEFERRED_STARTUP_REPROBE_INITIAL_MS;
   const state: DeferredStructuredStartup = {
-    hostKeys, conversationIds: new Set(conversationIds), fencedReceipts, message, delayMs,
+    hostKeys, conversationIds: new Set(conversationIds), fencedReceipts, held,
+    capAdmitted: sameEvidence && (capAdmitted || previous.capAdmitted), message, delayMs,
   };
   deferredStartup = state;
+  /* Past the cap, pending work takes a row that still cannot be decided, on
+     demand as well as in a pass. */
+  setRestartCutHeldRows(state.capAdmitted ? [] : held.keys());
   if (!sameEvidence) console.error(`[structured hosts] ${message}; re-probing the evidence`, { hosts: hostKeys, nextProbeMs: delayMs });
   scheduleDeferredStartupReprobe(dependencies, registry, state);
 }
@@ -1986,10 +2127,56 @@ function scheduleDeferredStartupReprobe(
   }, state.delayMs).unref?.();
 }
 
-/** The re-probe reads the pipeline evidence alone — the survivor identities
-    and the record — and reruns the adoption pass only when that evidence no
-    longer fences everything it fenced before. Nothing else about the boot is
-    repeated while a stray process merely stays alive. */
+/** What the rows held for their restart cut evidence look like now: whether
+    any of them can be decided, and whether any stamp moved since the last
+    probe. Local reads only. */
+async function probeHeldRestartCutRows(
+  dependencies: StructuredStartupDependencies,
+  registry: AgentRegistry,
+  state: DeferredStructuredStartup,
+): Promise<{ decidable: boolean; moved: boolean; queuedDelivery: boolean }> {
+  const snapshot = registry.readOnlySnapshot();
+  const interruptions = dependencies.interruptions
+    ?? interruptionObligationStore(interruptionObligationDirectory(registry.filename));
+  const recognition = await restartCutTargets(
+    registry,
+    (dependencies.orchestratorSeats ?? activeOrchestratorSeats)(),
+    interruptions.list().filter(interruptionObligationUnresolved),
+    new Set(state.held.keys()),
+    dependencies.readHostTurnRecord ?? readHostTurnRecord,
+    snapshot,
+  );
+  let moved = false;
+  for (const [key, stamp] of state.held) {
+    const entry = snapshot.entries[key];
+    const value = entry ? currentRestartCutStamp(stamp, entry) : "gone";
+    if (value === stamp.value) continue;
+    moved = true;
+    state.held.set(key, { ...stamp, value });
+  }
+  const heldPaths = new Set([...state.held.values()].map((stamp) => stamp.path));
+  const heldConversationIds = new Set(Object.values(snapshot.conversations)
+    .filter((conversation) => heldPaths.has(conversation.generations.at(-1)?.path ?? ""))
+    .map((conversation) => registry.canonicalConversationId(conversation.id)));
+  return {
+    decidable: [...state.held.keys()].some((key) => !recognition.undecided.has(key)),
+    moved,
+    queuedDelivery: Object.values(snapshot.heldDeliveries).some((delivery) =>
+      (delivery.state === "held" || delivery.state === "assigned" || delivery.state === "delivery-uncertain")
+        && heldConversationIds.has(registry.canonicalConversationId(delivery.conversationId))),
+  };
+}
+
+/** The re-probe reads the deferred evidence alone: the pipeline's survivor
+    identities and record, and the ledger and transcript of each row held for
+    its restart cut. It reruns the adoption pass only when the pipeline
+    evidence no longer fences everything it fenced before, or a held row can
+    now be decided; that pass decides the row before its adoption step. A held
+    stamp that moved brings the next probe after one second, and the delay
+    doubles only while nothing moves. Once it has reached its cap with nothing
+    moving, pending work adopts a row that still cannot be decided, and nothing
+    is recorded for it. Nothing else about the boot is repeated while a stray
+    process merely stays alive. */
 async function reprobeDeferredStructuredStartup(
   dependencies: StructuredStartupDependencies,
   registry: AgentRegistry,
@@ -2005,15 +2192,31 @@ async function reprobeDeferredStructuredStartup(
       error: error instanceof Error ? error.message : String(error),
     });
   }
-  if (unchanged) {
-    state.delayMs = Math.min(state.delayMs * 2, DEFERRED_STARTUP_REPROBE_MAX_MS);
+  let held = { decidable: false, moved: false, queuedDelivery: false };
+  /* With no row held this stays one synchronous step, as it was. */
+  if (state.held.size > 0) {
+    try {
+      held = await probeHeldRestartCutRows(dependencies, registry, state);
+    } catch (error) {
+      console.error("[structured hosts] held restart cut evidence probe failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    if (deferredStartup !== state) return;
+  }
+  const atCap = state.held.size > 0 && !held.moved && state.delayMs >= DEFERRED_STARTUP_REPROBE_MAX_MS;
+  const admitPendingWork = atCap && (!state.capAdmitted || held.queuedDelivery);
+  if (unchanged && !held.decidable && !admitPendingWork) {
+    state.delayMs = held.moved
+      ? DEFERRED_STARTUP_REPROBE_INITIAL_MS
+      : Math.min(state.delayMs * 2, DEFERRED_STARTUP_REPROBE_MAX_MS);
     scheduleDeferredStartupReprobe(dependencies, registry, state);
     return;
   }
   try {
-    await startStructuredHostPass(dependencies, new Set(state.hostKeys));
+    await startStructuredHostPass(dependencies, new Set(state.hostKeys), atCap);
   } catch (error) {
-    console.error("[structured hosts] deferred pipeline adoption pass failed; re-probing", {
+    console.error("[structured hosts] deferred adoption pass failed; re-probing", {
       error: error instanceof Error ? error.message : String(error),
     });
     if (deferredStartup === state) {

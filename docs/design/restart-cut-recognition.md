@@ -1,7 +1,8 @@
 # Restart cut recognition: one rule
 
 Status: revision 3 of the design for PR #2570, written against the code at
-branch head `57b174379` (2026-10-07). Revision 1 (`87d190109`) dated a later
+branch head `57b174379` (2026-10-07), and built on this branch; "Build notes"
+at the end records where the build settled a detail this text left open. Revision 1 (`87d190109`) dated a later
 turn by the runtime receipt that acknowledged its delivery; a first critique
 found six blockers (C1-C6 in the finding map). Revision 2 (`eb027b54f`) moved
 to the engine host's own event ledger and answered those six; a second
@@ -1006,6 +1007,46 @@ tests on top.
 - Unresolved evidence, a moving ledger included, is retried in the same Viewer
   before the row's ownership is replaced, and never yields a record (R5 F3,
   C4, D1, D2).
+
+## Build notes
+
+What the build settled, 2026-10-07:
+
+- **Pending work on a held row waits in the queue.** Holding a row out of the
+  startup pass was half of "pending work waits": the delivery queue asks for
+  on-demand recovery of a conversation with no host, and with the row held it
+  settled the waiting send `failed` ("structured host recovery did not
+  start"). `runtime/restartCutHold.ts` keeps the held host keys on the process
+  object; the queue's recovery callback in `structuredDeliveryController.ts`
+  answers a held row with the existing held-recovery error, so the message
+  stays queued and is asked again. The set is emptied once the re-probe has
+  reached its cap, which is when pending work takes the row in a pass or on
+  demand.
+- **A stamp stops applying once this process owns the row.** A row this
+  process claimed and whose endpoint it replaced (it opened the host, or
+  retired the row) is compared no further; until then the comparison holds on
+  the claimed row, as designed.
+- **The ledger read is bounded.** `readHostTurnRecord` keeps the 256 newest
+  frames recorded before the boundary: the ledger records frames in the
+  transcript's order, so the anchor is the newest of them the tail holds. A
+  Codex ledger holds no frames, so its read stops at the newest turn's start.
+- **Shared predicates.** `withoutExitBookkeeping` sits beside
+  `lastAgentWorkIndex` in `pipelines/durableEvidence.ts`, and
+  `isTaskNotificationRecord` beside `taskNotifications` in
+  `pipelines/backgroundTasks.ts`.
+- **After the cap.** The cap pass runs once; a row still held is re-probed at
+  the capped delay, and a pass runs again when the row can be decided or a
+  held delivery is waiting for it.
+- **Fixtures.** No fake host writes a ledger, so the release-seam case for an
+  orderly release appends the continuation's own turn to the ledger between
+  boots, as the delivering host would. The D2 cases use a turn its host saw
+  interrupted, whose transcript still reads open, so the row survives the
+  dead-wrapper cleanup between passes; the D4 case runs a real process as the
+  engine that outlives its Viewers. `startupAdoptionAttempts` in
+  `startup.test.ts` passes a `schedule` that arms nothing, because eight
+  existing cases there now hold a row (row 2), as the test map says.
+- **Existing cases.** Every case of the five mapped files passes with its
+  expectations unchanged.
 
 No question for the operator remains: the code, read-only counts over this
 machine's own ledgers and transcripts, three scratch runs of the existing

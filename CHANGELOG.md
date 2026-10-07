@@ -25,7 +25,13 @@ guarantees for the 1.x series.
   restart interrupted, with the pipeline stage when there is one; when those
   records cannot be read or are incomplete, it says the list is unknown and
   does not pass. A stage transcript that cannot be read whole is never taken
-  as proof of a cut.
+  as proof of a cut. Whether a turn was cut is decided from the engine
+  host's own record of the turn it started, so a message accepted moments
+  before the restart, a Codex turn whose shutdown wrote an abort, and work an
+  agent began by itself after a background task reported are all continued.
+  A conversation whose records cannot be read yet is left untouched and
+  asked again within seconds, in the same Delegatus, before anything takes
+  it over.
 
 ## [1.10.0] — 2026-10-06
 
