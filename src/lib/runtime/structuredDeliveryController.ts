@@ -1340,7 +1340,7 @@ export async function bindStructuredDeliveryQueue(
     if (!client.readSession) {
       if (typeof client.snapshot !== "function") return 0;
       try {
-        const runtime = await client.snapshot(undefined, { voiceBodiesFor: [], timeoutMs: 10_000 });
+        const runtime = await client.snapshot(undefined, { voiceBodiesFor: [] });
         listed = new Map((runtime.sessions ?? []).map((session) => [session.conversationId, session]));
       } catch { return 0; }
     }

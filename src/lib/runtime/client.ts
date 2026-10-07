@@ -7,6 +7,7 @@ import { parseViewerDeploymentListCursor, viewerDeploymentListCursor, viewerDepl
 
 
 import type { RuntimeDeliveryAction, RuntimeDeliveryActionClaim, RuntimeEventInput, RuntimeOperationCommand, RuntimeOperationResult, RuntimePendingEffect, RuntimeReceiptStatus, RuntimeReplay, RuntimeRetryOptions, RuntimeSession, RuntimeSessionRead, RuntimeSnapshot, RuntimeSocketRequest, RuntimeSocketResponse, RuntimeTransitionDetails, RuntimeTransitionOptions, ViewerDeploymentReceipt, ViewerDeploymentRequest, ViewerDeploymentStatus } from "./contracts";
+import { RUNTIME_RPC_DEADLINE_MS, RUNTIME_SNAPSHOT_DEADLINE_MS, VIEWER_DEPLOYMENT_DEADLINE_MS } from "./deadlines";
 import { runtimeHostSocket } from "./flags";
 
 // The snapshot frame carries every hosted session, and a hosted session keeps
@@ -17,8 +18,6 @@ import { runtimeHostSocket } from "./flags";
 // failed (#1145). The bound stays a last-resort guard against a runaway host;
 // the durable fix is a bounded snapshot on the journal side.
 const MAX_RESPONSE_FRAME_BYTES = 64 * 1024 * 1024;
-export const RUNTIME_SNAPSHOT_REQUEST_TIMEOUT_MS = 10_000;
-export const VIEWER_DEPLOYMENT_REQUEST_TIMEOUT_MS = 120_000;
 const RUNTIME_HOST_REQUEST_SAMPLE_LIMIT = 256;
 
 export interface RuntimeHostRequestHealth {
@@ -149,9 +148,9 @@ const deploymentListCapabilities = new Map<string, DeploymentListCapability>();
 export class UnixRuntimeHostClient implements RuntimeHostClient {
   constructor(
     private readonly socketPath: string,
-    private readonly timeoutMs = 3_000,
-    private readonly deploymentTimeoutMs = VIEWER_DEPLOYMENT_REQUEST_TIMEOUT_MS,
-    private readonly snapshotTimeoutMs = RUNTIME_SNAPSHOT_REQUEST_TIMEOUT_MS,
+    private readonly timeoutMs = RUNTIME_RPC_DEADLINE_MS,
+    private readonly deploymentTimeoutMs = VIEWER_DEPLOYMENT_DEADLINE_MS,
+    private readonly snapshotTimeoutMs = RUNTIME_SNAPSHOT_DEADLINE_MS,
   ) {}
 
   nativeQueueRead(conversationId: string): Promise<NativeQueueRecord[]> {
