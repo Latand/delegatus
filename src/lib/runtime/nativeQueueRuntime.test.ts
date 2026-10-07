@@ -788,6 +788,14 @@ test("a Queue-for-Codex hand-off whose reply is lost is owned and recorded from 
     expect(seen.map((call) => call.operationId)).toEqual([operationId, operationId]);
     await f.executor.execute(f.journal.effectBatch(100).find((effect) => effect.kind === "runtime.native-queue")!.payload as never);
     expect(f.calls.filter((call) => call.endsWith("/add"))).toHaveLength(1);
+
+    /* Past its deadline with the journal unreadable, the sweep ends the
+       hand-off's own row, and its record keeps the ending. */
+    const { settleDueSends } = await import("./sendSettlement");
+    const unreadable = { ...client, operationStatus: async () => { throw new RuntimeHostUnavailableError("runtime host is unavailable"); } } as RuntimeHostClient;
+    await settleDueSends({ registry, client: unreadable, progress, readMs: 200, now: () => Date.now() + 2 * 60 * 60_000 });
+    expect(registry.snapshot().deliveryOperationOwners[operationId]?.terminalState).not.toBeNull();
+    expect(progress.get(operationId)?.terminal).not.toBeNull();
   } finally {
     cleanup();
   }
