@@ -138,6 +138,11 @@ export const VOICE_COMPANION_CSS = `
 .vc-lane[data-side="right"][data-direction="down"] .vc-floater { transform-origin: 0 0; }
 .vc-lane[data-side="left"] .vc-floater[data-speaker="operator"] { justify-content: flex-start; }
 .vc-lane[data-side="right"] .vc-floater[data-speaker="operator"] { justify-content: flex-end; }
+/* Above the character, the lane lines up with one of its edges; its elements keep to that edge and the operator's to the other. */
+.vc-lane[data-side="above"][data-align="start"] .vc-floater { justify-content: flex-start; transform-origin: 0 100%; }
+.vc-lane[data-side="above"][data-align="end"] .vc-floater { justify-content: flex-end; transform-origin: 100% 100%; }
+.vc-lane[data-side="above"][data-align="start"] .vc-floater[data-speaker="operator"] { justify-content: flex-end; }
+.vc-lane[data-side="above"][data-align="end"] .vc-floater[data-speaker="operator"] { justify-content: flex-start; }
 .vc-floater > * { pointer-events: auto; max-width: 280px; }
 .vc-floater[data-leaving] > * { pointer-events: none; }
 
@@ -167,6 +172,11 @@ export const VOICE_COMPANION_CSS = `
 }
 .vc-lane[data-side="left"] .vc-bubble[data-newest]::after { right: -6px; transform: rotate(-45deg); }
 .vc-lane[data-side="right"] .vc-bubble[data-newest]::after { left: -6px; transform: rotate(135deg); }
+/* Above the character the tail points down at it, from over its middle (66 px in from the lane's edge) or, on a
+   narrower bubble, from the bubble's middle. */
+.vc-lane[data-side="above"] .vc-bubble[data-newest]::after { bottom: -6px; transform: rotate(45deg); }
+.vc-lane[data-side="above"][data-align="start"] .vc-bubble[data-newest]::after { left: min(61px, calc(50% - 5px)); }
+.vc-lane[data-side="above"][data-align="end"] .vc-bubble[data-newest]::after { right: min(61px, calc(50% - 5px)); }
 .vc-bubble[data-speaker="operator"] {
   background: color-mix(in srgb, var(--color-sunken) 94%, transparent); color: var(--color-secondary); border-radius: 14px;
   backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
@@ -201,7 +211,9 @@ export const VOICE_COMPANION_CSS = `
   background: color-mix(in srgb, var(--color-danger-soft) 70%, var(--color-raised)); border: 1px solid color-mix(in srgb, var(--color-danger) 40%, transparent);
 }
 .vc-notice-icon { display: grid; place-items: center; width: 22px; height: 22px; flex: none; border-radius: 7px; color: var(--color-danger); background: color-mix(in srgb, var(--color-danger) 14%, transparent); }
-.vc-notice-text { flex: 1; min-width: 0; overflow-wrap: anywhere; user-select: text; }
+/* The text keeps at least 180 px beside the icon; with less left beside the button, the button wraps under it.
+   It breaks at words, and inside one only when that word alone is wider than its line. */
+.vc-notice-text { flex: 1 1 180px; min-width: 0; overflow-wrap: break-word; user-select: text; }
 .vc-notice[data-tone="note"] { background: var(--color-raised); border-color: var(--color-border); }
 .vc-notice[data-tone="note"] .vc-notice-icon { color: var(--color-secondary); background: var(--color-sunken); }
 .vc-notice .vc-act { height: 26px; margin-left: auto; }
@@ -212,6 +224,12 @@ export const VOICE_COMPANION_CSS = `
   background: var(--color-info-soft); border: 1px solid color-mix(in srgb, var(--color-info) 45%, transparent); box-shadow: var(--shadow-2);
   font-family: var(--font-sans); font-size: 12.5px;
 }
+/* No taller than the lane holds (\`--vc-room\`, the lane less the room kept at its ends): in a short lane the request's
+   text and the answer give up height first and scroll inside the card, so the card never stands out of the lane's
+   far end over the page. A proposal that waits keeps its whole height: its reason, its text and both buttons. */
+.vc .vc-call.vc-deleg:not([data-stage="awaiting-confirmation"]) { max-height: var(--vc-room, none); }
+.vc-deleg > * { flex: none; }
+.vc-deleg > .vc-instruction, .vc-deleg > .vc-answer { flex: 0 1 auto; min-height: 0; }
 .vc-deleg-head { display: flex; align-items: center; gap: 6px; font-weight: 700; color: var(--vc-teal-ink); }
 .vc-deleg-head .vc-call-icon { width: 20px; height: 20px; border-radius: 6px; background: color-mix(in srgb, var(--color-info) 18%, transparent); color: var(--vc-teal-ink); }
 .vc-deleg[data-stage="refused"] .vc-call-icon, .vc-deleg[data-stage="failed"] .vc-call-icon, .vc-deleg[data-stage="unknown"] .vc-call-icon { color: var(--color-danger); background: var(--color-danger-soft); }

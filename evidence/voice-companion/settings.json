@@ -51,16 +51,16 @@
       },
       "shellMount": {
         "block": {
-          "x": 760,
-          "y": 400,
+          "x": 184,
+          "y": 448,
           "width": 132,
           "height": 148
         },
         "lane": {
-          "x": 470,
-          "y": 188,
+          "x": 36,
+          "y": 218,
           "width": 280,
-          "height": 360
+          "height": 220
         },
         "overlapArea": 0,
         "textUnderCharacter": 0
@@ -113,16 +113,16 @@
       },
       "shellMount": {
         "block": {
-          "x": 576,
-          "y": 400,
+          "x": 740,
+          "y": 404,
           "width": 132,
           "height": 148
         },
         "lane": {
-          "x": 286,
-          "y": 188,
+          "x": 450,
+          "y": 372,
           "width": 280,
-          "height": 360
+          "height": 180
         },
         "overlapArea": 0,
         "textUnderCharacter": 0
@@ -175,16 +175,16 @@
       },
       "shellMount": {
         "block": {
-          "x": 760,
-          "y": 400,
+          "x": 184,
+          "y": 448,
           "width": 132,
           "height": 148
         },
         "lane": {
-          "x": 470,
-          "y": 188,
+          "x": 36,
+          "y": 218,
           "width": 280,
-          "height": 360
+          "height": 220
         },
         "overlapArea": 0,
         "textUnderCharacter": 0
@@ -237,16 +237,16 @@
       },
       "shellMount": {
         "block": {
-          "x": 632,
-          "y": 400,
+          "x": 432,
+          "y": 404,
           "width": 132,
           "height": 148
         },
         "lane": {
-          "x": 342,
-          "y": 188,
+          "x": 574,
+          "y": 292,
           "width": 280,
-          "height": 360
+          "height": 260
         },
         "overlapArea": 0,
         "textUnderCharacter": 0

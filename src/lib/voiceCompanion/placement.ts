@@ -12,14 +12,20 @@
  *    lane is tried before giving up; with no free place for any lane the
  *    companion collapses to its small shape, which takes the nearest free
  *    place for itself.
- *  - A control inside a surface that fills with rows (a conversation's feed)
- *    is an obstacle along its whole track, its width over the surface's
- *    height: the component adds those rectangles, since a row that arrives or
- *    a scroll can put the control anywhere on it.
+ *  - Unless the operator put it there, neither the character nor its lane
+ *    covers a line of the page's text, and a surface that fills with rows (a
+ *    conversation's feed) is kept clear as a whole, its empty part included,
+ *    wherever a place outside it exists: the rows that arrive while it talks
+ *    then arrive where nothing of the companion stands.
+ *  - A control inside a surface that fills with rows is an obstacle along its
+ *    whole track, its width over the surface's height: the component adds
+ *    those rectangles, since a row that arrives or a scroll can put the
+ *    control anywhere on it.
  *  - The lane sits on the side of the character that faces the middle of the
  *    screen, and the bubbles rise upward; near an edge the lane flips to the
  *    other side, and near the top the bubbles run downward, so nothing leaves
- *    the viewport.
+ *    the viewport. In a column too narrow for the lane beside the character,
+ *    the lane stands above it and the bubbles rise away from it.
  */
 
 export interface Rect { x: number; y: number; width: number; height: number }
@@ -51,12 +57,14 @@ export const BUBBLE_MAX_WIDTH = 280;
 export const BUBBLE_MAX_LINES = 4;
 /** The characters one bubble holds before the sentence continues in the next. */
 export const BUBBLE_MAX_CHARS = 116;
-/** The lane heights tried, tallest first. */
-export const LANE_HEIGHTS = [360, 260, 180] as const;
+/** The lane heights tried, tallest first: the tallest that fits where the character may stand. */
+export const LANE_HEIGHTS = [360, 340, 320, 300, 280, 260, 240, 220, 200, 180] as const;
 
-export type LaneSide = "left" | "right";
+/** `above`: the lane stands over the character, in a column too narrow for it beside the character. */
+export type LaneSide = "left" | "right" | "above";
 export type LaneDirection = "up" | "down";
-export interface LaneLayout { side: LaneSide; direction: LaneDirection; rect: Rect }
+/** `align`, for a lane above the character: the edge of the character the lane lines up with. */
+export interface LaneLayout { side: LaneSide; direction: LaneDirection; rect: Rect; align?: "start" | "end" }
 
 export function intersectionArea(a: Rect, b: Rect): number {
   const width = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
@@ -89,55 +97,149 @@ export function defaultAnchor(viewport: Size, size: Size, margin = 16): Point {
  * then run downward. A viewport too short for the lane either way shortens it.
  */
 export function laneLayout(viewport: Size, block: Rect, height: number, width = BUBBLE_MAX_WIDTH, margin = VIEWPORT_MARGIN): LaneLayout {
-  const leftX = block.x - LANE_GAP - width;
-  const rightX = block.x + block.width + LANE_GAP;
+  const lane = { x: 0, y: 0, height: 0, side: "left" as LaneSide, direction: "up" as LaneDirection };
+  sideLane(viewport, block.x, block.y, block.width, block.height, height, lane, width, margin);
+  return { side: lane.side, direction: lane.direction, rect: { x: lane.x, y: lane.y, width, height: lane.height } };
+}
+
+/** `laneLayout` for a character at `x`, `y` of `width` by `tall`, written into `out` (the placement walk reuses one). */
+function sideLane(viewport: Size, x: number, y: number, width: number, tall: number, height: number, out: { x: number; y: number; height: number; side?: LaneSide; direction?: LaneDirection }, laneWidth = BUBBLE_MAX_WIDTH, margin = VIEWPORT_MARGIN) {
+  const leftX = x - LANE_GAP - laneWidth;
+  const rightX = x + width + LANE_GAP;
   const fitsLeft = leftX >= margin;
-  const fitsRight = rightX + width <= viewport.width - margin;
-  const prefersLeft = block.x + block.width / 2 >= viewport.width / 2;
+  const fitsRight = rightX + laneWidth <= viewport.width - margin;
+  const prefersLeft = x + width / 2 >= viewport.width / 2;
   const side: LaneSide = prefersLeft ? (fitsLeft || !fitsRight ? "left" : "right") : (fitsRight || !fitsLeft ? "right" : "left");
-  const x = side === "left" ? Math.max(margin, leftX) : Math.min(rightX, viewport.width - margin - width);
-  const bottom = block.y + block.height;
+  const laneX = side === "left" ? Math.max(margin, leftX) : Math.min(rightX, viewport.width - margin - laneWidth);
+  const bottom = y + tall;
   const roomUp = bottom - margin;
-  const roomDown = viewport.height - margin - block.y;
+  const roomDown = viewport.height - margin - y;
   const direction: LaneDirection = roomUp >= height || roomUp >= roomDown ? "up" : "down";
   const laneHeight = Math.max(0, Math.min(height, direction === "up" ? roomUp : roomDown));
-  const y = direction === "up" ? bottom - laneHeight : block.y;
-  return { side, direction, rect: { x: Math.round(x), y: Math.round(y), width, height: Math.round(laneHeight) } };
+  out.x = Math.round(laneX);
+  out.y = Math.round(direction === "up" ? bottom - laneHeight : y);
+  out.height = Math.round(laneHeight);
+  out.side = side;
+  out.direction = direction;
+}
+
+/** The lane above a character at `block`, lined up with its left (`start`) or right (`end`) edge, or null where it would leave the viewport. */
+export function laneAbove(viewport: Size, block: Rect, height: number, align: "start" | "end", width = BUBBLE_MAX_WIDTH, margin = VIEWPORT_MARGIN): LaneLayout | null {
+  const x = align === "start" ? block.x : block.x + block.width - width;
+  const y = block.y - LANE_GAP - height;
+  if (x < margin || x + width > viewport.width - margin || y < margin) return null;
+  return { side: "above", direction: "up", align, rect: { x: Math.round(x), y: Math.round(y), width, height } };
 }
 
 export type Placement =
-  | { mode: "expanded"; at: Point; laneHeight: number; lane: LaneLayout }
+  | { mode: "expanded"; at: Point; lane: LaneLayout }
   | { mode: "collapsed"; at: Point };
 
 /**
- * The free place nearest `desired` for the character block and its lane:
- * the tallest lane that fits anywhere wins. The character also keeps off
- * `text`, the lines of the page's text, wherever a place without any exists;
- * a page with no such place still keeps it off every control. The answer
+ * What a set of rectangles covers, as a summed-area table over 2 px cells: whether a rectangle meets any of
+ * them is then four reads, however many there are. A cell any rectangle reaches into counts as covered, and a
+ * place counts every cell it reaches into, so a place may be refused for a rectangle up to 2 px away from it
+ * (a quarter of the clearance kept from everything) and is never allowed over one.
+ */
+export class Occupancy {
+  static readonly CELL = 2;
+  private readonly table: Int32Array;
+  private readonly columns: number;
+  private readonly rows: number;
+  constructor(viewport: Size, rects: readonly Rect[]) {
+    const cell = Occupancy.CELL;
+    const columns = Math.max(0, Math.ceil(viewport.width / cell));
+    const rows = Math.max(0, Math.ceil(viewport.height / cell));
+    this.columns = columns;
+    this.rows = rows;
+    const mask = new Uint8Array(columns * rows);
+    for (const rect of rects) {
+      if (rect.width <= 0 || rect.height <= 0) continue;
+      const x0 = Math.max(0, Math.floor(rect.x / cell));
+      const x1 = Math.min(columns, Math.ceil((rect.x + rect.width) / cell));
+      const y0 = Math.max(0, Math.floor(rect.y / cell));
+      const y1 = Math.min(rows, Math.ceil((rect.y + rect.height) / cell));
+      if (x1 <= x0 || y1 <= y0) continue;
+      for (let y = y0; y < y1; y += 1) mask.fill(1, y * columns + x0, y * columns + x1);
+    }
+    const stride = columns + 1;
+    const table = new Int32Array(stride * (rows + 1));
+    for (let y = 0; y < rows; y += 1) {
+      let sum = 0;
+      for (let x = 0; x < columns; x += 1) {
+        sum += mask[y * columns + x]!;
+        table[(y + 1) * stride + x + 1] = table[y * stride + x + 1]! + sum;
+      }
+    }
+    this.table = table;
+  }
+  /** Whether the rectangle at `x`, `y` of `width` by `height` meets none of the rectangles. */
+  free(x: number, y: number, width: number, height: number): boolean {
+    const cell = Occupancy.CELL;
+    if (width <= 0 || height <= 0) return true;
+    const x0 = Math.max(0, Math.floor(x / cell));
+    const x1 = Math.min(this.columns, Math.ceil((x + width) / cell));
+    const y0 = Math.max(0, Math.floor(y / cell));
+    const y1 = Math.min(this.rows, Math.ceil((y + height) / cell));
+    if (x1 <= x0 || y1 <= y0) return true;
+    const stride = this.columns + 1;
+    const table = this.table;
+    return table[y1 * stride + x1]! - table[y0 * stride + x1]! - table[y1 * stride + x0]! + table[y0 * stride + x0]! === 0;
+  }
+}
+
+/**
+ * The free place nearest `desired` for the character block and its lane.
+ * Both keep off every control and off `text`, the lines of the page's text,
+ * and first also off `rows`, the surfaces that fill with rows, whole; a lane
+ * beside the character is tried at every height before one above it, and the
+ * tallest that fits wins. With no such place the answer is null and the
+ * companion collapses: it never takes a place over text by itself. A place
+ * the operator asked for is found with no `text` and no `rows`. The answer
  * depends on nothing but the arguments, so one page gives one place.
- * A grid walk; it runs on a drop or a settled page change, never per frame.
+ * A walk over a 4 px grid, each place read from the summed-area tables of
+ * what it must keep off; it runs on a drop or a settled page change, never
+ * per frame.
  */
 export function placeExpanded(input: {
-  viewport: Size; block: Size; obstacles: readonly Rect[]; text?: readonly Rect[]; desired: Point; heights?: readonly number[]; clearance?: number; step?: number;
+  viewport: Size; block: Size; obstacles: readonly Rect[]; text?: readonly Rect[]; rows?: readonly Rect[]; desired: Point; heights?: readonly number[]; clearance?: number; step?: number;
 }): Extract<Placement, { mode: "expanded" }> | null {
-  const { viewport, block, obstacles, text = [], desired, heights = LANE_HEIGHTS, clearance = CONTROL_CLEARANCE, step = 8 } = input;
-  const padded = obstacles.map((obstacle) => inflate(obstacle, clearance));
-  const lines = text.map((line) => inflate(line, clearance));
-  const free = (rect: Rect) => padded.every((obstacle) => intersectionArea(rect, obstacle) === 0);
+  const { viewport, block, obstacles, text = [], rows = [], desired, heights = LANE_HEIGHTS, clearance = CONTROL_CLEARANCE, step = 4 } = input;
   const start = clampToViewport(desired, viewport, block);
   const maxX = viewport.width - block.width - VIEWPORT_MARGIN;
   const maxY = viewport.height - block.height - VIEWPORT_MARGIN;
   if (maxX < VIEWPORT_MARGIN || maxY < VIEWPORT_MARGIN) return null;
+  const pad = (rects: readonly Rect[]) => rects.map((rect) => inflate(rect, clearance));
+  const kept = new Occupancy(viewport, [...pad(obstacles), ...pad(text)]);
+  const away = rows.length ? new Occupancy(viewport, pad(rows)) : null;
   /* Candidates nearest first, so the first free one is the answer; the place asked for leads them. */
   const candidates = nearestFirst(start, { x: VIEWPORT_MARGIN, y: VIEWPORT_MARGIN }, { x: maxX, y: maxY }, step);
-  for (const avoid of lines.length ? [lines, []] : [[]]) {
-    const clear = (rect: Rect) => avoid.every((line) => intersectionArea(rect, line) === 0);
+  type Free = (x: number, y: number, width: number, height: number) => boolean;
+  const passes: Free[] = away
+    ? [(x, y, width, height) => kept.free(x, y, width, height) && away.free(x, y, width, height), (x, y, width, height) => kept.free(x, y, width, height)]
+    : [(x, y, width, height) => kept.free(x, y, width, height)];
+  const { width, height: tall } = block;
+  /* The walk allocates nothing per candidate: the lane is read as numbers, and made an object once it is the answer. */
+  const lane = { x: 0, y: 0, height: 0 };
+  for (const free of passes) {
+    /* Where the character itself may stand, read once for every lane tried. */
+    const stands = candidates.filter((point) => free(point.x, point.y, width, tall));
     for (const height of heights) {
-      for (const point of candidates) {
-        const rect = { ...point, ...block };
-        if (!free(rect) || !clear(rect)) continue;
-        const lane = laneLayout(viewport, rect, height);
-        if (lane.rect.height >= height && free(lane.rect)) return { mode: "expanded", at: point, laneHeight: height, lane };
+      for (const point of stands) {
+        sideLane(viewport, point.x, point.y, width, tall, height, lane);
+        if (lane.height >= height && free(lane.x, lane.y, BUBBLE_MAX_WIDTH, lane.height)) return { mode: "expanded", at: point, lane: laneLayout(viewport, { ...point, ...block }, height) };
+      }
+    }
+    for (const height of heights) {
+      for (const point of stands) {
+        /* Lined up with the edge that faces the middle of the screen first. */
+        const first: "start" | "end" = point.x + width / 2 < viewport.width / 2 ? "start" : "end";
+        for (const align of [first, first === "start" ? "end" : "start"] as const) {
+          const x = align === "start" ? point.x : point.x + width - BUBBLE_MAX_WIDTH;
+          const y = point.y - LANE_GAP - height;
+          if (x < VIEWPORT_MARGIN || x + BUBBLE_MAX_WIDTH > viewport.width - VIEWPORT_MARGIN || y < VIEWPORT_MARGIN || !free(x, y, BUBBLE_MAX_WIDTH, height)) continue;
+          return { mode: "expanded", at: point, lane: laneAbove(viewport, { ...point, ...block }, height, align)! };
+        }
       }
     }
   }
@@ -146,20 +248,32 @@ export function placeExpanded(input: {
 
 /** The free place nearest `desired` for the collapsed shape alone. */
 export function placeCollapsed(input: { viewport: Size; size: Size; obstacles: readonly Rect[]; desired: Point; clearance?: number; step?: number }): Point | null {
-  const { viewport, size, obstacles, desired, clearance = CONTROL_CLEARANCE, step = 8 } = input;
+  const { viewport, size, obstacles, desired, clearance = CONTROL_CLEARANCE, step = 4 } = input;
   const start = clampToViewport(desired, viewport, size);
   const max = { x: viewport.width - size.width - VIEWPORT_MARGIN, y: viewport.height - size.height - VIEWPORT_MARGIN };
   if (max.x < VIEWPORT_MARGIN || max.y < VIEWPORT_MARGIN) return null;
-  if (isFree({ ...start, ...size }, obstacles, clearance)) return start;
-  return nearestFirst(start, { x: VIEWPORT_MARGIN, y: VIEWPORT_MARGIN }, max, step).find((point) => isFree({ ...point, ...size }, obstacles, clearance)) ?? null;
+  const kept = new Occupancy(viewport, obstacles.map((obstacle) => inflate(obstacle, clearance)));
+  return nearestFirst(start, { x: VIEWPORT_MARGIN, y: VIEWPORT_MARGIN }, max, step).find((point) => kept.free(point.x, point.y, size.width, size.height)) ?? null;
 }
+
+/* The orders last computed, for the open block and for the collapsed shape: the grid and the place asked for
+   change rarely, the page often. */
+const ordered = new Map<string, Point[]>();
+const ORDERS_KEPT = 4;
 
 /** The grid points between `min` and `max`, `start` first and then by distance from it. */
 function nearestFirst(start: Point, min: Point, max: Point, step: number): Point[] {
+  const key = [start.x, start.y, min.x, min.y, max.x, max.y, step].join(",");
+  const known = ordered.get(key);
+  if (known) return known;
   const points: Point[] = [start];
   for (let y = min.y; y <= max.y; y += step) for (let x = min.x; x <= max.x; x += step) points.push({ x, y });
   const distance = (point: Point) => (point.x - start.x) ** 2 + (point.y - start.y) ** 2;
-  return points.sort((left, right) => distance(left) - distance(right));
+  /* Ties go to the lower and then the left one, so the order never depends on the sort. */
+  points.sort((left, right) => distance(left) - distance(right) || left.y - right.y || left.x - right.x);
+  if (ordered.size >= ORDERS_KEPT) ordered.delete(ordered.keys().next().value!);
+  ordered.set(key, points);
+  return points;
 }
 
 /** A sentence that ends a bubble holding at least this many characters closes it. */

@@ -11,7 +11,7 @@ import { OfficialVoiceCompanionAdapter } from "@/lib/voiceCompanion/liveAdapter"
 import { scenarioScript } from "@/lib/voiceCompanion/scenarios";
 import { createSimulatedCompanion } from "@/lib/voiceCompanion/simulator";
 
-import { COMPANION_PROTECT, COMPANION_ROWS, COMPANION_SETTINGS_EVENT, companionReserved } from "./hostSurfaces";
+import { COMPANION_PROTECT, COMPANION_ROWS, COMPANION_SETTINGS_EVENT, companionReserved, companionShellReady } from "./hostSurfaces";
 import { VoiceCompanion } from "./VoiceCompanion";
 
 /**
@@ -74,6 +74,7 @@ function MountedCompanion({ project, demo, keyMissing, capReached, onSessionEnd 
       protect={COMPANION_PROTECT}
       rows={COMPANION_ROWS}
       reserve={companionReserved}
+      ready={companionShellReady}
     />
   );
 }

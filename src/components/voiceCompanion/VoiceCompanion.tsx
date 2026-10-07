@@ -90,6 +90,8 @@ const EXIT_ROOM = 18;
 /* Room kept at the character's end of the lane, where the lane is clipped, for a shadow. */
 const END_ROOM = 8;
 const DRAG_THRESHOLD = 6;
+/* The longest the first appearance waits for the host's late surfaces. */
+const SHELL_WAIT_MS = 3_000;
 /* An element that comes out at the character's end reaches full opacity over this part of the rise. */
 const ENTER_SHOWN = 0.5;
 /* An element that appears away from the character's end (the count of unseen calls) fades in where it is. */
@@ -160,8 +162,17 @@ function controlRects(self: Element | null, extra: string | undefined, rows: str
   return rects;
 }
 
-/** Every line of visible text on the page outside the companion. The collapsed
-    shape keeps off these too: at rest it hides no label and no count. */
+/** The element that draws `element`'s text: itself, or for one with `display: contents`, which has no
+    box of its own and which `checkVisibility` therefore calls hidden, the nearest ancestor that has one.
+    A conversation's messages sit in such wrappers, so reading their own visibility would miss every line. */
+function boxOf(element: Element): Element {
+  let at = element;
+  while (at.parentElement && getComputedStyle(at).display === "contents") at = at.parentElement;
+  return at;
+}
+
+/** Every line of visible text on the page outside the companion. Neither the
+    character, its lane nor the collapsed shape is placed over one by itself. */
 function textRects(self: Element | null): Rect[] {
   const rects: Rect[] = [];
   const clips = new Map<Element, DOMRect | null>();
@@ -171,7 +182,7 @@ function textRects(self: Element | null): Rect[] {
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
     const parent = node.parentElement;
     if (!parent || !node.nodeValue?.trim() || self?.contains(parent)) continue;
-    if (!shown.has(parent)) shown.set(parent, parent.tagName !== "STYLE" && parent.tagName !== "SCRIPT" && (parent.checkVisibility?.({ checkOpacity: true, checkVisibilityCSS: true }) ?? true));
+    if (!shown.has(parent)) shown.set(parent, parent.tagName !== "STYLE" && parent.tagName !== "SCRIPT" && (boxOf(parent).checkVisibility?.({ checkOpacity: true, checkVisibilityCSS: true }) ?? true));
     if (!shown.get(parent)) continue;
     range.selectNodeContents(node);
     for (const line of range.getClientRects()) {
@@ -183,12 +194,20 @@ function textRects(self: Element | null): Rect[] {
   return rects;
 }
 
+/** The surfaces that fill with rows (a conversation's feed), as the part of each a reader can see. */
+function rowSurfaces(self: Element | null, rows: string | undefined): Rect[] {
+  if (!rows) return [];
+  const clips = new Map<Element, DOMRect | null>();
+  return [...document.querySelectorAll<HTMLElement>(rows)].filter((surface) => !self?.contains(surface))
+    .flatMap((surface) => reachable(surface.parentElement, surface.getBoundingClientRect(), clips) ?? []);
+}
+
 const reducedMotion = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 const mark = (name: string, durationMs: number) => { try { performance.mark(name, { detail: { durationMs } }); } catch { /* measurement only */ } };
 const viewportSize = (): Size => ({ width: innerWidth, height: innerHeight });
 
 type Layout =
-  | { mode: "expanded"; at: Point; laneHeight: number }
+  | { mode: "expanded"; at: Point; lane: LaneLayout }
   /* `yielded`: the companion was open but no free place held its lane. */
   | { mode: "collapsed"; at: Point; yielded: boolean };
 
@@ -262,7 +281,7 @@ const tied = (text: string) => (text.trim().split(/\s+/u).length > 2 ? text.repl
 const DELEGATION_SETTLED = new Set(["answered", "refused", "cancelled", "failed"]);
 const speechLocaleOf = (locale: string): Locale => (locale === "uk" ? "uk" : "en");
 
-export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, preflight, onOpenSettings, protect, rows, reserve, defaultCollapsed = false }: {
+export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, preflight, onOpenSettings, protect, rows, reserve, ready, defaultCollapsed = false }: {
   adapter: VoiceCompanionAdapter;
   /** The project in view; null on a view that shows none, where a conversation cannot start. */
   project: string | null;
@@ -286,6 +305,10 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
       shows under itself while the reader is away from its end), as viewport rectangles. Read with
       the page; the function itself must stay the same between renders. */
   reserve?: () => Rect[];
+  /** Whether the host's surfaces that arrive late (a panel whose figures come from its first poll) are on the
+      page. The companion makes its first appearance once they are, or 3 s after it mounted, so it appears
+      where it will stay and is not moved by them a moment later. */
+  ready?: () => boolean;
   defaultCollapsed?: boolean;
 }) {
   const { t, locale } = useLocale();
@@ -319,7 +342,8 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
   /* Where the operator last put the character, as its bottom-right corner:
      the corner survives a change of size between open and collapsed. */
   const anchor = useRef<Point | null>(null);
-  /* Whether the operator put the character where it is. A place of their choosing may lie over text. */
+  /* Whether the operator put the character where it is, or opened it where no place free of text was left.
+     A place of their choosing may lie over text; one the companion takes by itself never does. */
   const chosen = useRef(false);
   /* What the last placement was computed from: the same page gives the same place without a second search. */
   const settledFor = useRef<string | null>(null);
@@ -327,43 +351,58 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
 
   const shape = SHAPE;
   const block = BLOCK;
+  const [shellReady, setShellReady] = useState(() => !ready || ready());
+  useEffect(() => {
+    if (shellReady) return;
+    const done = () => setShellReady(true);
+    const observer = new MutationObserver(() => { if (ready?.() ?? true) done(); });
+    observer.observe(document.body, { subtree: true, childList: true });
+    const timer = setTimeout(done, SHELL_WAIT_MS);
+    return () => { observer.disconnect(); clearTimeout(timer); };
+  }, [shellReady, ready]);
 
   /** Open at the free place nearest the anchor; with none, collapse there instead.
-      The answer depends on the page, the viewport and the anchor alone. */
-  const settle = useCallback((isCollapsed: boolean) => {
+      The answer depends on the page, the viewport and the anchor alone. `read`: the controls and the text,
+      when the caller has just read them from the page. */
+  const settle = useCallback((isCollapsed: boolean, read?: { obstacles: Rect[]; text: Rect[] }) => {
+    const began = performance.now();
     const viewport = viewportSize();
-    const obstacles = [...controlRects(root.current, protect, rows), ...(reserve?.() ?? [])];
-    const text = textRects(root.current);
+    const obstacles = read?.obstacles ?? [...controlRects(root.current, protect, rows), ...(reserve?.() ?? [])];
+    const text = read?.text ?? textRects(root.current);
+    const surfaces = rowSurfaces(root.current, rows);
     const corner = anchor.current ?? { x: viewport.width - 16, y: viewport.height - 16 };
-    const inputs = JSON.stringify([viewport, isCollapsed, corner, chosen.current, obstacles, text]);
+    const inputs = JSON.stringify([viewport, isCollapsed, corner, chosen.current, obstacles, text, surfaces]);
     if (inputs === settledFor.current) return;
     settledFor.current = inputs;
     let next: Layout | null = null;
     const desired = { x: corner.x - shape.width, y: corner.y - shape.height };
     if (!isCollapsed) {
-      const open = placeExpanded({ viewport, block, obstacles, text: chosen.current ? [] : text, desired: { x: corner.x - block.width, y: corner.y - block.height } });
-      if (open) next = { mode: "expanded", at: open.at, laneHeight: open.laneHeight };
+      const open = placeExpanded({ viewport, block, obstacles, text: chosen.current ? [] : text, rows: chosen.current ? [] : surfaces, desired: { x: corner.x - block.width, y: corner.y - block.height } });
+      if (open) next = { mode: "expanded", at: open.at, lane: open.lane };
     }
     if (!next) {
-      /* The shape keeps off the page's text as well; a page with no such place still keeps it off every control. */
-      const at = placeCollapsed({ viewport, size: shape, obstacles: [...obstacles, ...text], desired })
+      /* The shape keeps off the page's text and out of the feeds as well, wherever such a place exists. */
+      const at = placeCollapsed({ viewport, size: shape, obstacles: [...obstacles, ...text, ...surfaces], desired })
+        ?? placeCollapsed({ viewport, size: shape, obstacles: [...obstacles, ...text], desired })
         ?? placeCollapsed({ viewport, size: shape, obstacles, desired })
         ?? clampToViewport(desired, viewport, shape);
       next = { mode: "collapsed", at, yielded: !isCollapsed };
     }
+    mark("vc:settle", performance.now() - began);
     setLayout((current) => (current && JSON.stringify(current) === JSON.stringify(next) ? current : next));
   }, [block, protect, rows, reserve, shape]);
 
-  /* First placement, and again whenever the viewport changes. */
+  /* First placement, once the host's late surfaces are on the page, and again whenever the viewport changes. */
   useLayoutEffect(() => {
+    if (!shellReady) return;
     settle(collapsed);
     const onResize = () => settle(collapsed);
     addEventListener("resize", onResize);
     return () => removeEventListener("resize", onResize);
-  }, [collapsed, settle]);
+  }, [collapsed, settle, shellReady]);
 
   const expanded = layout?.mode === "expanded";
-  const lane = useMemo(() => (layout?.mode === "expanded" ? laneLayout(viewportSize(), { ...layout.at, ...block }, layout.laneHeight) : null), [layout, block]);
+  const lane = layout?.mode === "expanded" ? layout.lane : null;
   const shownLane = heldView ? heldView.lane : lane;
 
   /** The rectangles the companion reserves where it stands: the character, and the lane when open. */
@@ -430,6 +469,9 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
      and one not stamped yet is the newest there is. */
   const [arrival, setArrival] = useState<ReadonlyMap<string, number>>(new Map());
   const [settledAt, setSettledAt] = useState<ReadonlyMap<string, number>>(new Map());
+  /* What arrived beside a proposal that waits for the operator and found no room: it never comes out, so the
+     card with its buttons is never sent off the far end by what was said after it. The transcript keeps it. */
+  const [withheld, setWithheld] = useState<ReadonlySet<string>>(new Set());
   const arrivals = useRef(0);
   useEffect(() => {
     const keys = new Set(candidates.map((floater) => floater.key));
@@ -440,6 +482,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
       for (const floater of fresh) next.set(floater.key, arrivals.current += 1);
       return next;
     });
+    setWithheld((current) => (current.size && [...current].some((key) => !keys.has(key)) ? new Set([...current].filter((key) => keys.has(key))) : current));
     setSettledAt((current) => {
       const next = new Map([...current].filter(([key]) => keys.has(key)));
       const stamp = Date.now();
@@ -459,7 +502,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
   const [gate, setGate] = useState(0);
   const { floaters, departs } = useMemo(() => {
     const order = (floater: Floater) => arrival.get(floater.key) ?? Number.POSITIVE_INFINITY;
-    const ordered = [...candidates].sort((left, right) => order(left) - order(right));
+    const ordered = [...candidates].filter((floater) => !withheld.has(floater.key)).sort((left, right) => order(left) - order(right));
     const lane = ordered.filter((floater) => order(floater) > gate);
     const expired = (floater: Floater) => floater.kind !== "more" && settledAt.has(floater.key) && now - settledAt.get(floater.key)! >= LINGER_MS[floater.kind];
     let cut = 0;
@@ -474,7 +517,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     const unseen = ordered.filter((floater) => floater.kind === "call" && !floater.settled && !shown.includes(floater)).length;
     const more: Floater[] = unseen ? [{ kind: "more", key: `more:${Math.max(gate, departs)}`, count: unseen, settled: false }] : [];
     return { floaters: [...more, ...shown], departs };
-  }, [candidates, arrival, settledAt, now, gate]);
+  }, [candidates, arrival, settledAt, now, gate, withheld]);
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- what left stays out
     if (departs > gate) setGate(departs);
@@ -489,19 +532,31 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
   }, [lingering]);
 
   /* The page changes under the companion (a menu opens, a message arrives with
-     its controls, a font loads). At rest, with nothing in the lane, the placement
-     is read again from the page as it is now, so the place never depends on the
-     order the page arrived in. While a conversation is in the lane the companion
-     holds its place, and moves only when a control ends up beneath what it reserves. */
-  const atRest = floaters.length === 0;
+     its controls, a font loads). At rest, with nothing in the lane and no answer
+     on its way (not connecting, thinking or speaking), the placement is read
+     again from the page as it is now, so the place never depends on the order the
+     page arrived in, and text that arrived under the companion while it talked is
+     left within a second of the lane emptying. Otherwise the companion holds its
+     place, and moves only when a control or a line of text ends up beneath what
+     it reserves. */
+  const atRest = floaters.length === 0 && !starting && state.phase !== "thinking" && state.phase !== "speaking";
   useEffect(() => {
     if (!layout || dragging) return;
     let timer: ReturnType<typeof setTimeout> | null = null;
     const check = () => {
       timer = null;
-      if (atRest || layout.mode === "collapsed") { settle(collapsed); return; }
+      if (atRest) { settle(collapsed); return; }
       const obstacles = [...controlRects(root.current, protect, rows), ...(reserve?.() ?? [])];
-      if (footprint().some((rect) => !isFree(rect, obstacles))) { settledFor.current = null; settle(collapsed); }
+      /* Text that arrived under what it reserves (a row of the conversation it stands in) moves it too, unless the
+         operator put it there: it takes the place the rule gives now, and with none free of text it collapses to
+         its tile, which flags the answer when it comes. The row it made way for is the record of what was sent.
+         A page that reads as it did at the last placement gives the same answer: the search is not run again. */
+      const reserved = footprint();
+      if (reserved.some((rect) => !isFree(rect, obstacles))) { settle(collapsed, { obstacles, text: textRects(root.current) }); return; }
+      if (!chosen.current) {
+        const text = textRects(root.current);
+        if (reserved.some((rect) => !isFree(rect, text, 0))) settle(collapsed, { obstacles, text });
+      }
     };
     const schedule = () => { timer ??= setTimeout(check, 250); };
     const observer = new MutationObserver((records) => {
@@ -551,15 +606,22 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
       if (was && node.offsetHeight < was.height) node.style.minHeight = `${was.height}px`;
     }
     /* Fit: the stack keeps to the lane, less the room a leaving element drifts into and the room kept at
-       the character's end. What does not fit leaves from the far end; the newest always stays. */
+       the character's end. What does not fit leaves from the far end; the newest always stays. A proposal
+       that waits for the operator's answer does not leave for want of room: what is older than it may, and
+       what arrives after it and does not fit beside it is withheld instead. */
     const room = shownLane.rect.height - EXIT_ROOM - END_ROOM;
     let excess = nodes.reduce((sum, node) => sum + node.offsetHeight, 0) + Math.max(0, nodes.length - 1) * 8 - room;
     let sent = 0;
-    for (const node of nodes.slice(0, -1)) {
+    const waits = nodes.findIndex((node) => node.dataset.awaiting !== undefined);
+    for (const node of nodes.slice(0, waits === -1 ? -1 : waits)) {
       if (excess <= 0) break;
       if (node.dataset.kind === "more") continue;
       excess -= node.offsetHeight + 8;
       sent = Math.max(sent, arrived(node) ?? 0);
+    }
+    if (excess > 0 && waits !== -1) {
+      const unseen = nodes.slice(waits + 1).filter((node) => !before.has(node.dataset.floater!)).map((node) => node.dataset.floater!);
+      if (unseen.length) { setWithheld((current) => new Set([...current, ...unseen])); return; }
     }
     /* An element that went from the middle (the session dropped it) takes the older ones along. */
     const here = new Set(nodes.map((node) => node.dataset.floater!));
@@ -589,6 +651,8 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     let entered = 0;
     let rose = false;
     let moved = false;
+    /* An element that fades in where it stands (the count of unseen calls, at the far end). */
+    let faded = false;
     if (motion) {
       const sign = up ? 1 : -1;
       const flight = (node: HTMLElement) => new DOMMatrixReadOnly(getComputedStyle(node).transform).m42;
@@ -625,7 +689,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
               { duration: RISE_MS, easing },
             );
             flies(animation);
-          } else node.animate([{ opacity: 0 }, { opacity: 1 }], { duration: FADE_IN_MS, easing: "ease-out" });
+          } else { node.animate([{ opacity: 0 }, { opacity: 1 }], { duration: FADE_IN_MS, easing: "ease-out" }); faded = true; }
           continue;
         }
         if (!shifted || Math.abs(travel) < 1) continue;
@@ -648,9 +712,10 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     if (entered > 1 || (entered === 1 && stamp - lastEntry.current < RISE_MS)) mark("vc:together", RISE_MS);
     if (entered) lastEntry.current = stamp;
     /* What left: it drifts away from the character and fades where it was. When the stack is rising
-       into its place, or a new element comes out where it stood (it was the last one there), it is
-       gone at once, so no element shows through another. */
-    const taken = moved || (motion && arrivals.length > 0);
+       into its place, a new element comes out where it stood (it was the last one there), or the count of
+       unseen calls fades in at the far end where it leaves, it is gone at once, so no element shows through
+       another. */
+    const taken = moved || (motion && arrivals.length > 0) || faded;
     if (taken && motion) for (const node of stack.querySelectorAll<HTMLElement>(":scope > [data-leaving]")) fadeAtOnce(node);
     const gone = [...before.keys()].filter((key) => !after.has(key) && contents.current.has(key));
     if (gone.length && motion) {
@@ -716,7 +781,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     }
     const size = expanded ? block : shape;
     held.at = clampToViewport({ x: held.originX + dx, y: held.originY + dy }, viewportSize(), size, 0);
-    setHeld({ at: held.at, lane: layout?.mode === "expanded" ? laneLayout(viewportSize(), { ...held.at, ...block }, layout.laneHeight) : null });
+    setHeld({ at: held.at, lane: layout?.mode === "expanded" ? laneLayout(viewportSize(), { ...held.at, ...block }, layout.lane.rect.height) : null });
   };
   const onPointerUp = (event: React.PointerEvent<HTMLElement>) => {
     const held = drag.current;
@@ -729,7 +794,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     anchor.current = { x: held.at.x + size.width, y: held.at.y + size.height };
     chosen.current = true;
     settledFor.current = null;
-    setLayout(layout?.mode === "expanded" ? { ...layout, at: held.at } : { mode: "collapsed", at: held.at, yielded: false });
+    setLayout(layout?.mode === "expanded" ? { mode: "expanded", at: held.at, lane: laneLayout(viewportSize(), { ...held.at, ...block }, layout.lane.rect.height) } : { mode: "collapsed", at: held.at, yielded: false });
     setDragging(false);
     setHeld(null);
     settle(collapsed);
@@ -757,7 +822,9 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
       anchor.current = { x: layout.at.x + size.width, y: layout.at.y + size.height };
     }
     setCollapsed(next);
-    /* Reopening a companion that collapsed for want of room asks for room again. */
+    /* Opening a companion that collapsed for want of a place free of text is the operator's request, answered
+       as a drop is: the nearest place free of controls, which may lie over text. Home gives the default rule back. */
+    if (!next && layout?.mode === "collapsed" && layout.yielded) { chosen.current = true; settledFor.current = null; }
     if (!next && !collapsed) settle(false);
   };
   const speechLocale: Locale = sessionLocale ?? (locale === "uk" ? "uk" : "en");
@@ -910,6 +977,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
       data-mode={adapter.mode}
       data-starting={starting ? "" : undefined}
       data-layout={layout?.mode ?? "expanded"}
+      data-placed={layout ? "" : undefined}
       data-yielded={layout?.mode === "collapsed" && layout.yielded ? "" : undefined}
       data-phase={state.phase}
       data-collapsed={!expanded ? "" : undefined}
@@ -923,12 +991,14 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
           className="vc-lane"
           data-companion-lane
           data-side={shownLane.side}
+          data-align={shownLane.align}
           data-direction={shownLane.direction}
-          style={{ left: shownLane.rect.x - at.x, top: shownLane.rect.y - at.y, width: shownLane.rect.width, height: shownLane.rect.height }}
+          style={{ left: shownLane.rect.x - at.x, top: shownLane.rect.y - at.y, width: shownLane.rect.width, height: shownLane.rect.height, ["--vc-room" as string]: `${shownLane.rect.height - EXIT_ROOM - END_ROOM}px` }}
         >
           <div className="vc-stack" ref={stackEl}>
             {floaters.map((floater, index) => (
-              <div key={floater.key} className="vc-floater" data-floater={floater.key} data-arrival={arrival.get(floater.key)} data-kind={floater.kind} data-speaker={floater.kind === "speech" ? floater.speaker : undefined}>{renderFloater(floater, index === floaters.length - 1)}</div>
+              <div key={floater.key} className="vc-floater" data-floater={floater.key} data-arrival={arrival.get(floater.key)} data-kind={floater.kind} data-speaker={floater.kind === "speech" ? floater.speaker : undefined}
+                data-awaiting={floater.kind === "delegation" && floater.delegation.stage === "awaiting-confirmation" ? "" : undefined}>{renderFloater(floater, index === floaters.length - 1)}</div>
             ))}
             {leaving.map(({ floater, top, left, width, quick }) => (
               <div key={`leaving:${floater.key}`} ref={leavingRef} className="vc-floater" aria-hidden inert data-leaving={quick ? "quick" : ""} data-kind={floater.kind} data-speaker={floater.kind === "speech" ? floater.speaker : undefined} style={{ position: "absolute", top, left, width }}>{renderFloater(floater)}</div>

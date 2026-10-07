@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 
 import { READ_TOOL_NAMES } from "./boardReads";
 import type { CompanionEvent, Delivery, Payload, Proposal, Recipient } from "./contract";
+import { COMPANION_MESSAGES } from "./errors";
 import { admitDelegationProposal, explicitDelegationRequest } from "./gate";
 import { bezierProgress, bezierSlope, maxFrameShare, riseCurve, RISE_FRAME_SHARE, RISE_FROM_REST, RISE_IN_FLIGHT, RISE_MS } from "./motion";
 import { BUBBLE_MAX_CHARS, CONTROL_SELECTOR, defaultAnchor, intersectionArea, isFree, isPassiveCursor, laneLayout, LANE_HEIGHTS, placeCollapsed, placeExpanded, splitSpeech, type Rect } from "./placement";
@@ -838,6 +839,14 @@ describe("a delivery and its answer bind the whole frozen identity", () => {
   });
 });
 
+describe("failures in plain words", () => {
+  test("every line names the product as the interface does, in Latin letters, in both languages", () => {
+    for (const [code, lines] of Object.entries(COMPANION_MESSAGES)) for (const line of lines) expect([code, /Делегатус/u.test(line)]).toEqual([code, false]);
+    expect(COMPANION_MESSAGES.COMPANION_UNAVAILABLE[1]).toContain("Delegatus");
+    expect(COMPANION_MESSAGES.AUDIO_REFUSED[1]).toContain("Delegatus");
+  });
+});
+
 describe("geometry", () => {
   const viewport = { width: 1440, height: 900 };
   const block = { width: 132, height: 148 };
@@ -870,7 +879,7 @@ describe("geometry", () => {
   test("an empty page keeps the bottom-right corner with the tallest lane", () => {
     const placed = placeExpanded({ viewport, block, obstacles: [], desired: defaultAnchor(viewport, block) })!;
     expect(placed.at).toEqual({ x: 1292, y: 736 });
-    expect(placed.laneHeight).toBe(LANE_HEIGHTS[0]);
+    expect(placed.lane.rect.height).toBe(LANE_HEIGHTS[0]);
   });
 
   test("a control under the lane moves the character until both are free", () => {
@@ -880,28 +889,59 @@ describe("geometry", () => {
     expect(isFree(placed.lane.rect, obstacles)).toBe(true);
   });
 
-  test("the open character keeps off the page's text where a place without any exists, and one page gives one place", () => {
+  test("the open character and its whole lane keep off the page's text, and one page gives one place", () => {
     /* A paragraph across the corner the character asks for, and a control beside it. */
     const text = [rect(1000, 700, 420, 18), rect(1000, 722, 420, 18), rect(1000, 744, 300, 18), rect(1000, 860, 420, 18)];
     const obstacles = [rect(900, 820, 80, 30)];
     const desired = defaultAnchor(viewport, block);
     const placed = placeExpanded({ viewport, block, obstacles, text, desired })!;
     expect(isFree({ ...placed.at, ...block }, [...obstacles, ...text])).toBe(true);
-    expect(isFree(placed.lane.rect, obstacles)).toBe(true);
-    /* The lane may lie over text: only the character is held off it. Without the text the corner itself is taken. */
+    expect(isFree(placed.lane.rect, [...obstacles, ...text])).toBe(true);
+    /* Without the text the corner itself is taken. */
     expect(placeExpanded({ viewport, block, obstacles, desired })!.at).not.toEqual(placed.at);
     /* The same arguments, the same answer, whatever was placed before. */
-    for (let turn = 0; turn < 3; turn += 1) expect(placeExpanded({ viewport, block, obstacles: [...obstacles].reverse(), text: [...text].reverse(), desired })!.at).toEqual(placed.at);
+    for (let turn = 0; turn < 3; turn += 1) expect(placeExpanded({ viewport, block, obstacles: [...obstacles].reverse(), text: [...text].reverse(), desired })).toEqual(placed);
   });
 
-  test("a page that is text everywhere still gets an open character, off every control", () => {
+  test("a page that is text everywhere leaves the open companion no place: it never stands on text by itself", () => {
     const text: Rect[] = [];
     for (let y = 0; y < 900; y += 20) text.push(rect(0, y, 1440, 16));
     const obstacles = [rect(1300, 800, 100, 60)];
-    const placed = placeExpanded({ viewport, block, obstacles, text, desired: defaultAnchor(viewport, block) })!;
+    expect(placeExpanded({ viewport, block, obstacles, text, desired: defaultAnchor(viewport, block) })).toBeNull();
+    /* A place the operator asked for keeps off controls only. */
+    const asked = placeExpanded({ viewport, block, obstacles, desired: defaultAnchor(viewport, block) })!;
+    expect(isFree({ ...asked.at, ...block }, obstacles)).toBe(true);
+    expect(isFree(asked.lane.rect, obstacles)).toBe(true);
+  });
+
+  test("the surface rows arrive in is kept clear, its empty part included, wherever a place outside it exists", () => {
+    /* A conversation's feed in the middle with two rows at its top, and room beside it. */
+    const feed = rect(320, 60, 700, 640);
+    const text = [rect(370, 80, 500, 18), rect(370, 160, 400, 18)];
+    const desired = defaultAnchor(viewport, block);
+    const placed = placeExpanded({ viewport, block, obstacles: [], text, rows: [feed], desired })!;
+    expect(isFree({ ...placed.at, ...block }, [feed, ...text])).toBe(true);
+    expect(isFree(placed.lane.rect, [feed, ...text])).toBe(true);
+    /* With no room outside the feed, its empty part is taken, still off its text. */
+    const walls = [rect(0, 0, 320, 900), rect(1020, 0, 420, 900), rect(320, 700, 700, 200)];
+    const inside = placeExpanded({ viewport, block, obstacles: walls, text, rows: [feed], desired })!;
+    expect(isFree({ ...inside.at, ...block }, [...walls, ...text])).toBe(true);
+    expect(isFree(inside.lane.rect, [...walls, ...text])).toBe(true);
+    expect(intersectionArea(inside.lane.rect, feed)).toBeGreaterThan(0);
+  });
+
+  test("a column too narrow for the lane beside the character takes the lane above it, rising away from it", () => {
+    /* A free column 300 px wide on the left and 420 px tall; everything else is text. */
+    const text = [rect(330, 0, 1110, 900), rect(0, 0, 330, 180), rect(0, 610, 330, 290)];
+    const placed = placeExpanded({ viewport, block, obstacles: [], text, desired: defaultAnchor(viewport, block) })!;
     expect(placed).not.toBeNull();
-    expect(isFree({ ...placed.at, ...block }, obstacles)).toBe(true);
-    expect(isFree(placed.lane.rect, obstacles)).toBe(true);
+    expect(placed.lane.side).toBe("above");
+    expect(placed.lane.direction).toBe("up");
+    expect(placed.lane.rect.y + placed.lane.rect.height).toBeLessThanOrEqual(placed.at.y);
+    expect(placed.lane.rect.height).toBeGreaterThanOrEqual(LANE_HEIGHTS.at(-1)!);
+    expect(isFree({ ...placed.at, ...block }, text)).toBe(true);
+    expect(isFree(placed.lane.rect, text)).toBe(true);
+    expect(intersectionArea(placed.lane.rect, { ...placed.at, ...block })).toBe(0);
   });
 
   test("no frame of a rise carries more than 12 % of its path, from rest or taking over a rise in flight, even when one frame is missed", () => {

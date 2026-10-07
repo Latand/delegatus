@@ -11,7 +11,7 @@ import { ROLE_DEFAULTS } from "@/lib/roles/defaults";
 import { ROLE_VARIANT_DEFAULTS } from "@/lib/roles/paramConfig";
 import { RuntimePill } from "@/components/RuntimePill";
 import { createRoot } from "react-dom/client";
-import { COMPANION_PROTECT, COMPANION_ROWS, companionReserved } from "@/components/voiceCompanion/hostSurfaces";
+import { COMPANION_PROTECT, COMPANION_ROWS, companionReserved, companionShellReady } from "@/components/voiceCompanion/hostSurfaces";
 import { VoiceCompanion } from "@/components/voiceCompanion/VoiceCompanion";
 import type { CompanionEvent } from "@/lib/voiceCompanion/contract";
 import { DEMO_IDS, demoAnswer, demoInstruction, isScenario, scenarioScript } from "@/lib/voiceCompanion/scenarios";
@@ -112,7 +112,7 @@ const FEED_CONTINUITY = SCENARIO === "feed-continuity";
    character over it in its one final look, driven by the simulator on the shared event contract.
    `&script=<scenario>` picks the scripted scenario (delegation by default), `&collapsed=1` starts it as its small
    tile, `&delivered=1` opens with the delegated message and the orchestrator's answer already in the seat's
-   conversation, `&engine=codex` seats a Codex orchestrator, `&surface=underlay` replaces the board with a field of
+   conversation, `&full=1` puts earlier exchanges above them, enough to fill the conversation to its whole height, `&engine=codex` seats a Codex orchestrator, `&surface=underlay` replaces the board with a field of
    plain click-counting cells (no controls), where the character can be taken to any edge, and `&surface=buttons`
    with small real buttons every 100 px, where no lane fits. `&failure=<code>` makes Talk refuse with that failure,
    as the product does for a missing key or a reached cap, and `&seat=none` says the project has no orchestrator.
@@ -1988,7 +1988,13 @@ function transcriptOf(pathname: string): string {
     const answered = (secondsAgo: number, text: string) => codex
       ? line(secondsAgo, { type: "response_item", payload: { type: "message", id: "voice_answer", role: "assistant", content: [{ type: "output_text", text }] } })
       : said(secondsAgo, text);
+    /* Earlier exchanges: the operator's question and the orchestrator's answer, eight times over. */
+    const earlier = new URLSearchParams(location.search).get("full") === "1" ? Array.from({ length: 8 }, (_, index) => [
+      (codex ? (secondsAgo: number, text: string) => line(secondsAgo, { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text }] } }) : asked)((60 - index * 6) * MIN, L(`Where does lane ${index + 1} stand, and is anything waiting on me?`, `Як справи зі смугою ${index + 1} і чи щось чекає на мене?`)),
+      answered((59 - index * 6) * MIN, L(`Lane ${index + 1} passed review on its second attempt and is merging; nothing is waiting on you there.`, `Смуга ${index + 1} пройшла рев’ю з другої спроби й зливається; там на вас нічого не чекає.`)),
+    ]).flat() : [];
     return `${[
+      ...earlier,
       relayed(5 * MIN, VOICE_INTERNAL_UUID, voiceInternalText()),
       answered(4 * MIN, L("Noted. The retry banner lane can merge.", "Прийнято. Смугу банера повтору можна зливати.")),
       ...(voice.delivered ? [relayed(40, VOICE_RELAY_UUID, demoInstruction(UK ? "uk" : "en"))] : []),
@@ -3218,7 +3224,7 @@ function voiceCompanionScene() {
           ))}
         </div>
       ) : <Viewer />}
-      {VOICE_PRODUCT ? null : <VoiceCompanion adapter={shown} project={PROJECT} defaultCollapsed={params.get("collapsed") === "1"} seat={params.get("seat") === "none" ? false : undefined} preflight={failure ? () => failure : undefined} onOpenSettings={() => { voice.settingsOpened += 1; }} protect={COMPANION_PROTECT} rows={COMPANION_ROWS} reserve={companionReserved} />}
+      {VOICE_PRODUCT ? null : <VoiceCompanion adapter={shown} project={PROJECT} defaultCollapsed={params.get("collapsed") === "1"} seat={params.get("seat") === "none" ? false : undefined} preflight={failure ? () => failure : undefined} onOpenSettings={() => { voice.settingsOpened += 1; }} protect={COMPANION_PROTECT} rows={COMPANION_ROWS} reserve={companionReserved} ready={companionShellReady} />}
     </>
   );
 }

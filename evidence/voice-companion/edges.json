@@ -24,12 +24,12 @@
         "width": 280,
         "height": 360
       },
-      "peakFloaters": 5,
+      "peakFloaters": 6,
       "samples": {
-        "samples": 31,
-        "maxBubbles": 3,
+        "samples": 33,
+        "maxBubbles": 4,
         "maxCalls": 2,
-        "maxFloaters": 5,
+        "maxFloaters": 6,
         "maxBubbleLines": 1,
         "maxBubbleWidth": 219,
         "maxBubbleSlackPx": 0,
@@ -37,7 +37,11 @@
         "controlUnder": "",
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
-        "samplesOverControls": 0
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
       }
     },
     {
@@ -62,7 +66,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 32,
+        "samples": 39,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -73,7 +77,11 @@
         "controlUnder": "",
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
-        "samplesOverControls": 0
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
       }
     },
     {
@@ -98,7 +106,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 44,
+        "samples": 53,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -109,7 +117,11 @@
         "controlUnder": "",
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
-        "samplesOverControls": 0
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
       }
     },
     {
@@ -134,7 +146,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 46,
+        "samples": 45,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -145,7 +157,11 @@
         "controlUnder": "",
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
-        "samplesOverControls": 0
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
       }
     },
     {
@@ -170,7 +186,7 @@
       },
       "peakFloaters": 5,
       "samples": {
-        "samples": 28,
+        "samples": 31,
         "maxBubbles": 3,
         "maxCalls": 2,
         "maxFloaters": 5,
@@ -181,7 +197,11 @@
         "controlUnder": "",
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
-        "samplesOverControls": 0
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
       }
     },
     {
@@ -206,7 +226,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 43,
+        "samples": 52,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -217,7 +237,11 @@
         "controlUnder": "",
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
-        "samplesOverControls": 0
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
       }
     },
     {
@@ -242,7 +266,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 46,
+        "samples": 50,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -253,7 +277,11 @@
         "controlUnder": "",
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
-        "samplesOverControls": 0
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
       }
     },
     {
@@ -278,7 +306,7 @@
       },
       "peakFloaters": 5,
       "samples": {
-        "samples": 30,
+        "samples": 31,
         "maxBubbles": 3,
         "maxCalls": 2,
         "maxFloaters": 5,
@@ -289,7 +317,11 @@
         "controlUnder": "",
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
-        "samplesOverControls": 0
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
       }
     },
     {
@@ -314,7 +346,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 46,
+        "samples": 43,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -325,7 +357,11 @@
         "controlUnder": "",
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
-        "samplesOverControls": 0
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
       }
     },
     {
@@ -348,12 +384,12 @@
         "width": 280,
         "height": 360
       },
-      "peakFloaters": 5,
+      "peakFloaters": 6,
       "samples": {
-        "samples": 32,
-        "maxBubbles": 3,
+        "samples": 30,
+        "maxBubbles": 4,
         "maxCalls": 2,
-        "maxFloaters": 5,
+        "maxFloaters": 6,
         "maxBubbleLines": 1,
         "maxBubbleWidth": 246,
         "maxBubbleSlackPx": 0,
@@ -361,7 +397,11 @@
         "controlUnder": "",
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
-        "samplesOverControls": 0
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
       }
     },
     {
@@ -397,7 +437,11 @@
         "controlUnder": "",
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
-        "samplesOverControls": 0
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
       }
     },
     {
@@ -422,7 +466,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 36,
+        "samples": 44,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -433,7 +477,11 @@
         "controlUnder": "",
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
-        "samplesOverControls": 0
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
       }
     },
     {
@@ -458,7 +506,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 48,
+        "samples": 62,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -469,7 +517,11 @@
         "controlUnder": "",
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
-        "samplesOverControls": 0
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
       }
     },
     {
@@ -505,7 +557,11 @@
         "controlUnder": "",
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
-        "samplesOverControls": 0
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
       }
     },
     {
@@ -528,12 +584,12 @@
         "width": 280,
         "height": 360
       },
-      "peakFloaters": 5,
+      "peakFloaters": 6,
       "samples": {
-        "samples": 32,
-        "maxBubbles": 3,
+        "samples": 39,
+        "maxBubbles": 4,
         "maxCalls": 2,
-        "maxFloaters": 5,
+        "maxFloaters": 6,
         "maxBubbleLines": 1,
         "maxBubbleWidth": 219,
         "maxBubbleSlackPx": 0,
@@ -541,7 +597,11 @@
         "controlUnder": "",
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
-        "samplesOverControls": 0
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
       }
     },
     {
@@ -566,7 +626,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 53,
+        "samples": 55,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -577,7 +637,11 @@
         "controlUnder": "",
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
-        "samplesOverControls": 0
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
       }
     },
     {
@@ -602,7 +666,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 45,
+        "samples": 53,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -613,7 +677,11 @@
         "controlUnder": "",
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
-        "samplesOverControls": 0
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
       }
     },
     {
@@ -638,7 +706,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 34,
+        "samples": 42,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -649,7 +717,11 @@
         "controlUnder": "",
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
-        "samplesOverControls": 0
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
       }
     },
     {
@@ -674,7 +746,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 54,
+        "samples": 56,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -685,7 +757,11 @@
         "controlUnder": "",
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
-        "samplesOverControls": 0
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
       }
     },
     {
@@ -710,7 +786,7 @@
       },
       "peakFloaters": 6,
       "samples": {
-        "samples": 40,
+        "samples": 43,
         "maxBubbles": 4,
         "maxCalls": 2,
         "maxFloaters": 6,
@@ -721,7 +797,11 @@
         "controlUnder": "",
         "samplesOutsideViewport": 0,
         "samplesOutsideLane": 0,
-        "samplesOverControls": 0
+        "samplesOverControls": 0,
+        "preTalkTextLines": 0,
+        "preTalkTextUnderElementsMaxPx2": 0,
+        "samplesOverPreTalkText": 0,
+        "preTalkTextCovered": ""
       }
     }
   ],

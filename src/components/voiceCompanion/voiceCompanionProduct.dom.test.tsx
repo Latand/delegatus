@@ -67,8 +67,15 @@ afterEach(async () => {
 });
 async function mount(node: React.ReactNode): Promise<HTMLDivElement> {
   const host = document.createElement("div");
+  /* The shell's resources footer, whose arrival the companion waits for before it first appears; beside the
+     root, which the render empties. */
+  const footer = document.createElement("div");
+  footer.setAttribute("data-resources-footer", "");
+  host.append(footer);
   document.body.append(host);
-  const root = createRoot(host);
+  const container = document.createElement("div");
+  host.append(container);
+  const root = createRoot(container);
   mounted = { root, host };
   await act(async () => root.render(node));
   await act(async () => settle());

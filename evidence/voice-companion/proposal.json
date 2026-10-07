@@ -351,7 +351,8 @@
         "delegation.tool.result",
         "delegation.delivery.settled"
       ],
-      "dispatches": 1
+      "dispatches": 1,
+      "sentShownIn": "card"
     },
     {
       "viewport": "1000x800",
@@ -371,7 +372,8 @@
         "delegation.tool.result",
         "delegation.delivery.settled"
       ],
-      "dispatches": 1
+      "dispatches": 1,
+      "sentShownIn": "conversation"
     },
     {
       "viewport": "1440x900",
@@ -391,7 +393,8 @@
         "delegation.tool.result",
         "delegation.delivery.settled"
       ],
-      "dispatches": 1
+      "dispatches": 1,
+      "sentShownIn": "card"
     },
     {
       "viewport": "1000x800",
@@ -411,7 +414,8 @@
         "delegation.tool.result",
         "delegation.delivery.settled"
       ],
-      "dispatches": 1
+      "dispatches": 1,
+      "sentShownIn": "conversation"
     }
   ]
 }

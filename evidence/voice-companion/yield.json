@@ -5,16 +5,16 @@
   "drag": {
     "before": {
       "block": {
-        "x": 760,
-        "y": 400,
+        "x": 184,
+        "y": 448,
         "width": 132,
         "height": 148
       },
       "lane": {
-        "x": 470,
-        "y": 188,
+        "x": 36,
+        "y": 218,
         "width": 280,
-        "height": 360
+        "height": 220
       }
     },
     "overComposer": {
@@ -27,14 +27,14 @@
       },
       "dropped": {
         "block": {
-          "x": 472,
-          "y": 400,
+          "x": 476,
+          "y": 404,
           "width": 132,
           "height": 148
         },
         "lane": {
-          "x": 614,
-          "y": 188,
+          "x": 618,
+          "y": 192,
           "width": 280,
           "height": 360
         },
@@ -78,16 +78,16 @@
       "height": 148
     },
     "home": {
-      "x": 760,
-      "y": 400,
+      "x": 184,
+      "y": 448,
       "width": 132,
       "height": 148
     }
   },
   "collapsedProposal": {
     "flagged": {
-      "x": 836,
-      "y": 492,
+      "x": 260,
+      "y": 540,
       "width": 56,
       "height": 56
     },
@@ -96,8 +96,8 @@
     },
     "ended": {
       "block": {
-        "x": 836,
-        "y": 492,
+        "x": 260,
+        "y": 540,
         "width": 56,
         "height": 56
       },
@@ -109,18 +109,18 @@
       "note": "You took this back, so nothing was sent. Ask once more and I will send it.",
       "dispatches": 0,
       "block": {
-        "x": 760,
-        "y": 400,
+        "x": 184,
+        "y": 448,
         "width": 132,
         "height": 148
       }
     },
     "uk-light": {
-      "note": "Ви забрали це прохання, тож нічого не надіслано. Попросіть ще раз, і я надішлю.",
+      "note": "left with its element",
       "dispatches": 0,
       "block": {
-        "x": 760,
-        "y": 400,
+        "x": 184,
+        "y": 448,
         "width": 132,
         "height": 148
       }
@@ -129,8 +129,8 @@
       "note": "You took this back, so nothing was sent. Ask once more and I will send it.",
       "dispatches": 0,
       "block": {
-        "x": 760,
-        "y": 400,
+        "x": 184,
+        "y": 448,
         "width": 132,
         "height": 148
       }
@@ -154,14 +154,14 @@
       "layout": "collapsed",
       "yielded": true,
       "tile": {
-        "x": 1376,
-        "y": 736,
+        "x": 1372,
+        "y": 740,
         "width": 56,
         "height": 56
       },
       "end": {
-        "x": 1408,
-        "y": 768,
+        "x": 1404,
+        "y": 772,
         "width": 24,
         "height": 24
       },
@@ -176,14 +176,14 @@
       "layout": "collapsed",
       "yielded": true,
       "tile": {
-        "x": 776,
-        "y": 496,
+        "x": 576,
+        "y": 112,
         "width": 56,
         "height": 56
       },
       "end": {
-        "x": 808,
-        "y": 528,
+        "x": 608,
+        "y": 144,
         "width": 24,
         "height": 24
       },
