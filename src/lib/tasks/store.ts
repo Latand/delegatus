@@ -4,6 +4,7 @@ import path from "node:path";
 import { isTaskNote } from "./note";
 
 import { statePath } from "@/lib/configDir";
+import { deepFreeze } from "@/lib/deepFreeze";
 import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
 import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { assertNotOperatorStateUnderTest } from "@/lib/stateOwnership";
@@ -515,10 +516,18 @@ export function taskSelectionSource(filePath = TASKS_FILE) {
 const listSnapshots = new WeakMap<object, { aliases: string; tasks: readonly BoardTask[] }>();
 const listRows = new WeakMap<object, { aliases: string; task: BoardTask }>();
 /** Immutable list source. SQLite refreshes changed rows by revision; a repeated
- * list does not clone and validate every task and assignment again. */
+ * list does not clone and validate every task and assignment again.
+ *
+ * The list, every task and everything a task holds are frozen, because they
+ * are the cache every later caller reads: a reader that wrote into one would
+ * have changed the next reader's tasks. Anything that changes a task goes
+ * through `mutateTasks`, and anything that overlays one copies the task it
+ * changes. A row the collection hands out is decoded for its cache alone and a
+ * write reads its rows through clones, so freezing the nested values a task
+ * shares with its row leaves no writer holding a frozen object. */
 export function loadTasksForList(filePath = TASKS_FILE): readonly BoardTask[] {
   const collection = taskCollection(filePath, "read");
-  if (!collection) return readLegacyTasksFile(filePath).tasks;
+  if (!collection) return deepFreeze(readLegacyTasksFile(filePath).tasks);
   const rows = collection.loadReadonly();
   const aliases = JSON.stringify(projectAliasSnapshot().aliases);
   const cached = listSnapshots.get(rows);
@@ -531,10 +540,12 @@ export function loadTasksForList(filePath = TASKS_FILE): readonly BoardTask[] {
     if (!task) {
       task = coerceTask(row) ?? undefined;
       if (!task) throw new Error("invalid persisted task row");
+      deepFreeze(task);
       listRows.set(row, { aliases, task });
     }
     tasks.push(task);
   }
+  Object.freeze(tasks);
   listSnapshots.set(rows, { aliases, tasks });
   return tasks;
 }

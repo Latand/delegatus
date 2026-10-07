@@ -5,6 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 
 import type { Database as BunDatabase } from "bun:sqlite";
 
+import { deepFreeze } from "@/lib/deepFreeze";
 import { openCurrentDatabase } from "@/lib/state/currentDatabase";
 
 import { reboundAssembledMcpGrants, rowClaimsBeyondBaselineGrant, type McpGrantPolicy } from "./mcpAllowlist";
@@ -52,6 +53,31 @@ type LookupField = "conversationId" | "artifactPath" | "command.operationId" | "
 const LOOKUP_PATHS: Record<LookupField, string> = { conversationId: "$.conversationId", artifactPath: "$.artifactPath", "command.operationId": "$.command.operationId", alias: "$" };
 const keyedReaders = new WeakMap<RegistryFile, (collection: RowCollection, field: LookupField, value: LookupValue) => string[]>();
 const pathReaders = new WeakMap<RegistryFile, (path: string) => string[]>();
+
+/**
+ * The shared view every whole-file read-only reader holds. A loaded file keeps
+ * its loader's accessors, and an accessor's setter still runs on a frozen
+ * object, so `view.receipts = {}` used to replace the collection every later
+ * reader got. The view is plain data instead: its root, each collection's
+ * record of rows and each meta value are frozen, so a reader can neither
+ * replace a collection nor add, replace or delete a row of it, and the next
+ * reader gets what the store loaded. Rows themselves stay as loaded: they are
+ * the parse cache's objects, which a later load decides grants on in place.
+ * The keyed and path readers of the loaded file still serve the view.
+ */
+function readOnlyRegistryView(file: RegistryFile): RegistryFile {
+  if (Object.isFrozen(file)) return file;
+  const view = {} as Record<string, unknown>;
+  for (const key of Object.keys(file)) view[key] = (file as unknown as Record<string, unknown>)[key];
+  for (const collection of ROW_COLLECTIONS) Object.freeze(view[collection]);
+  for (const field of META_FIELDS) deepFreeze(view[field]);
+  const frozen = Object.freeze(view) as unknown as RegistryFile;
+  const keyed = keyedReaders.get(file);
+  if (keyed) keyedReaders.set(frozen, keyed);
+  const paths = pathReaders.get(file);
+  if (paths) pathReaders.set(frozen, paths);
+  return frozen;
+}
 
 /** Indexed selection inside the same lazy transaction, including pending writes. */
 export function registryRowsMatching<C extends RowCollection>(file: RegistryFile, collection: C, field: LookupField, value: LookupValue): RegistryFile[C][string][] {
@@ -643,7 +669,12 @@ export class SqliteAgentRegistryStore {
        rewrites a row without advancing it would leave the decision over the old
        rows standing in every whole-file read. */
     if (this.readOnlyCache?.revision === revision && this.readOnlyCache.stamp === this.storeStamp()) return this.readOnlyCache;
-    this.readOnlyCache = this.loadSnapshot(true);
+    return this.rememberReadOnly(this.loadSnapshot(true));
+  }
+
+  /** Every snapshot the shared cache holds is the frozen view of it. */
+  private rememberReadOnly(snapshot: StampedSnapshot): StampedSnapshot {
+    this.readOnlyCache = { ...snapshot, file: readOnlyRegistryView(snapshot.file) };
     return this.readOnlyCache;
   }
 
@@ -1211,7 +1242,7 @@ export class SqliteAgentRegistryStore {
              mutation persists the rows its decision rewrites. */
           const snapshot = this.loadInTransaction(true);
           if (this.readOnlyCache?.revision !== revision || this.readOnlyCache.stamp !== stamp()) {
-            this.readOnlyCache = { file: snapshot.file, revision, stamp: stamp() };
+            this.rememberReadOnly({ file: snapshot.file, revision, stamp: stamp() });
           }
         }
         recordedDecisions = unchanged() && recordHolds() ? this.grantDecisions : null;
@@ -1268,6 +1299,14 @@ export class SqliteAgentRegistryStore {
               ? structuredClone(parsed)
               : parsed;
             if (trackMutations) baseline.set(row.row_key, row.value_json);
+          }
+          /* Every stored row is cached by now, so a larger cache holds rows
+             this complete read proved gone. Without this a deleted row's parsed
+             JSON stayed in the process for its lifetime. */
+          const parsedRows = useRowCache ? this.rowCache.get(collection) : undefined;
+          if (parsedRows && parsedRows.size > storedRows.length) {
+            const stored = new Set(storedRows.map((row) => row.row_key));
+            for (const key of parsedRows.keys()) if (!stored.has(key)) parsedRows.delete(key);
           }
           const input: Record<string, unknown> = { version: 2, entries: {}, receipts: {} };
           input[collection] = storedValue;
@@ -1487,7 +1526,8 @@ export class SqliteAgentRegistryStore {
         if (stored !== null) value = this.normalize({ version: 2, entries: {}, receipts: {}, [field]: JSON.parse(stored) })[field] as typeof value;
         loaded = true;
         loadedMeta.set(field, value);
-        baselineMeta.set(field, structuredClone(value));
+        /* Only a mutation compares against the baseline. */
+        if (trackMutations) baselineMeta.set(field, structuredClone(value));
       };
       Object.defineProperty(file, field, {
         configurable: true,
@@ -1613,7 +1653,7 @@ export class SqliteAgentRegistryStore {
       for (const field of changes.meta) {
         (nextFile as unknown as Record<string, unknown>)[field] = structuredClone(file[field]);
       }
-      this.readOnlyCache = { file: nextFile, revision, stamp: stamps.after };
+      this.rememberReadOnly({ file: nextFile, revision, stamp: stamps.after });
     } else {
       this.readOnlyCache = null;
     }

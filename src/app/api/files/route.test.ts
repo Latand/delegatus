@@ -34,6 +34,7 @@ import {
   setFileCatalogMembershipProbeForTests,
 } from "@/lib/scanner/scanCache";
 import { setFilesResponseWorkerRuntimeForTests, shutdownFilesResponseWorker } from "@/lib/scanner/filesResponseWorker";
+import { deepFreeze } from "@/lib/deepFreeze";
 import { setFilesResponseDependenciesForTests } from "./dependencies";
 
 let scans = 0;
@@ -103,7 +104,9 @@ beforeEach(() => {
     loadFlows: () => flowsStore() as never,
     loadPipelinesForProjection: () => pipelinesStore() as never,
     filterPipelinesForFileScan: (pipelines: readonly Pipeline[]) => pipelineVisibility([...pipelines]) as Pipeline[],
-    loadTasks: () => boardTasksStore() as never,
+    /* Frozen as production hands it out: the shared task list. A files read
+       that wrote into one of these would throw in every case below. */
+    loadTasks: () => deepFreeze(boardTasksStore()) as never,
     loadWorkflows: () => [],
     filterWorkflowsForFileScan: () => [],
     tmuxEndpointHealth: () => tmuxHealth as never,
@@ -3832,6 +3835,28 @@ test("the board carries each record's resolved PR and issue links, and leaves ou
   } finally {
     pipelinesStore = () => [];
     pipelineVisibility = () => [];
+    boardTasksStore = () => [];
+  }
+});
+
+test("files reconciles the frozen shared task list by copying the task it changes", async () => {
+  const deadPanePid = 2_147_483_646;
+  const stored = [
+    { id: "task-dead-pane", project: "repo", text: "Spawn that died", status: "assigned", placement: "unplaced",
+      assignments: [{ path: null, panePid: deadPanePid, state: "spawning", error: null, at: "2026-10-07T00:00:00Z" }],
+      createdAt: "2026-10-07T00:00:00Z", updatedAt: "2026-10-07T00:00:00Z" },
+    { id: "task-untouched", project: "repo", text: "Nothing to reconcile", status: "inbox", placement: "unplaced",
+      assignments: [], createdAt: "2026-10-07T00:00:00Z", updatedAt: "2026-10-07T00:00:00Z" },
+  ];
+  boardTasksStore = () => stored;
+  try {
+    const response = await GET(new Request("http://127.0.0.1/api/files"));
+    const body = await response.json() as { tasks: Array<{ id: string; assignments: Array<{ state: string }> }> };
+    expect(body.tasks.find((task) => task.id === "task-dead-pane")?.assignments[0]?.state).toBe("failed");
+    expect(body.tasks.find((task) => task.id === "task-untouched")).toBeDefined();
+    expect(Object.isFrozen(stored[0])).toBe(true);
+    expect(stored[0]!.assignments[0]!.state).toBe("spawning");
+  } finally {
     boardTasksStore = () => [];
   }
 });
