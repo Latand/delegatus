@@ -48,35 +48,82 @@ const META_FIELDS = [
 ] as const satisfies ReadonlyArray<keyof RegistryFile>;
 
 export type RowCollection = (typeof ROW_COLLECTIONS)[number];
+const ROW_COLLECTION_KEYS: ReadonlySet<string> = new Set(ROW_COLLECTIONS);
 type LookupValue = string | readonly string[];
 type LookupField = "conversationId" | "artifactPath" | "command.operationId" | "alias";
 const LOOKUP_PATHS: Record<LookupField, string> = { conversationId: "$.conversationId", artifactPath: "$.artifactPath", "command.operationId": "$.command.operationId", alias: "$" };
 const keyedReaders = new WeakMap<RegistryFile, (collection: RowCollection, field: LookupField, value: LookupValue) => string[]>();
 const pathReaders = new WeakMap<RegistryFile, (path: string) => string[]>();
 
+/** A reader's frozen copy of one row and the JSON of the decided row it copies. */
+type ReaderRow = { json: string; row: unknown };
+
 /**
- * The shared view every whole-file read-only reader holds. A loaded file keeps
- * its loader's accessors, and an accessor's setter still runs on a frozen
- * object, so `view.receipts = {}` used to replace the collection every later
- * reader got. The view is plain data instead: its root, each collection's
- * record of rows and each meta value are frozen, so a reader can neither
- * replace a collection nor add, replace or delete a row of it, and the next
- * reader gets what the store loaded. Rows themselves stay as loaded: they are
- * the parse cache's objects, which a later load decides grants on in place.
- * The keyed and path readers of the loaded file still serve the view.
+ * The shared view every whole-file read-only reader holds, and the only objects
+ * it is built from. The store's own objects stay private and mutable: the parse
+ * cache, which a later load normalizes again, and the loaded rows, which the
+ * assembled grant decision rewrites in place. A reader gets frozen copies of
+ * them instead, all the way down, so an assignment, push or delete on any part
+ * of the view throws, and the next reader gets what the store loaded.
+ *
+ * A copy is only made for a row whose decided JSON changed. A view patched
+ * after a local commit carries the frozen rows of the view before it; a reload
+ * stringifies each decided row and reuses the copy whose JSON is the same, which
+ * costs about a quarter of copying the rows again. A copy is never changed, so
+ * a view a reader already holds stays as it was.
  */
-function readOnlyRegistryView(file: RegistryFile): RegistryFile {
-  if (Object.isFrozen(file)) return file;
-  const view = {} as Record<string, unknown>;
-  for (const key of Object.keys(file)) view[key] = (file as unknown as Record<string, unknown>)[key];
-  for (const collection of ROW_COLLECTIONS) Object.freeze(view[collection]);
-  for (const field of META_FIELDS) deepFreeze(view[field]);
-  const frozen = Object.freeze(view) as unknown as RegistryFile;
-  const keyed = keyedReaders.get(file);
-  if (keyed) keyedReaders.set(frozen, keyed);
-  const paths = pathReaders.get(file);
-  if (paths) pathReaders.set(frozen, paths);
-  return frozen;
+class RegistryReaderViews {
+  private readonly rows = new Map<RowCollection, Map<string, ReaderRow>>();
+  private readonly owned = new WeakSet<object>();
+
+  view(file: RegistryFile): RegistryFile {
+    if (this.owned.has(file)) return file;
+    const source = file as unknown as Record<string, unknown>;
+    const view = {} as Record<string, unknown>;
+    for (const key of Object.keys(file)) {
+      view[key] = ROW_COLLECTION_KEYS.has(key)
+        ? this.collection(key as RowCollection, source[key] as Record<string, unknown>)
+        : this.value(source[key]);
+    }
+    const frozen = this.own(Object.freeze(view)) as unknown as RegistryFile;
+    const keyed = keyedReaders.get(file);
+    if (keyed) keyedReaders.set(frozen, keyed);
+    const paths = pathReaders.get(file);
+    if (paths) pathReaders.set(frozen, paths);
+    return frozen;
+  }
+
+  private collection(collection: RowCollection, rows: Record<string, unknown>): Record<string, unknown> {
+    if (this.owned.has(rows)) return rows;
+    const previous = this.rows.get(collection);
+    const next = new Map<string, ReaderRow>();
+    const record: Record<string, unknown> = {};
+    for (const [key, row] of Object.entries(rows)) {
+      const known = previous?.get(key);
+      let reader: ReaderRow;
+      if (known && known.row === row) reader = known;
+      else {
+        const json = JSON.stringify(row);
+        reader = known?.json === json ? known : { json, row: this.value(row) };
+      }
+      next.set(key, reader);
+      record[key] = reader.row;
+    }
+    /* Only the rows of this view: a row it no longer holds is not kept. */
+    this.rows.set(collection, next);
+    return this.own(Object.freeze(record));
+  }
+
+  /** A private, deeply frozen copy; a copy this made already is returned as is. */
+  private value(value: unknown): unknown {
+    if (value === null || typeof value !== "object" || this.owned.has(value)) return value;
+    return this.own(deepFreeze(structuredClone(value)));
+  }
+
+  private own<T extends object>(value: T): T {
+    this.owned.add(value);
+    return value;
+  }
 }
 
 /** Indexed selection inside the same lazy transaction, including pending writes. */
@@ -420,6 +467,9 @@ export class SqliteAgentRegistryStore {
   /** Stamped like the grant record: a complete snapshot is only ever handed
       out again over exactly the database it was loaded from. */
   private readOnlyCache: StampedSnapshot | null = null;
+  /** Keyed by a row's decided JSON, so a copy stays valid across a reopened
+      or replaced database: equal JSON is the same row. */
+  private readonly readerViews = new RegistryReaderViews();
   /** What the assembled grant decision (#739) returned for every grant-bearing
       row at one stored revision. A keyed read of a row claiming more than the
       baseline otherwise assembles, clones and decides the whole file, per read:
@@ -672,9 +722,9 @@ export class SqliteAgentRegistryStore {
     return this.rememberReadOnly(this.loadSnapshot(true));
   }
 
-  /** Every snapshot the shared cache holds is the frozen view of it. */
+  /** Every snapshot the shared cache holds is the frozen reader view of it. */
   private rememberReadOnly(snapshot: StampedSnapshot): StampedSnapshot {
-    this.readOnlyCache = { ...snapshot, file: readOnlyRegistryView(snapshot.file) };
+    this.readOnlyCache = { ...snapshot, file: this.readerViews.view(snapshot.file) };
     return this.readOnlyCache;
   }
 

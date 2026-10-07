@@ -80,6 +80,94 @@ test("a reader cannot add, replace or delete a row, or change a meta value, of t
   expect(next.engineRouting.codex.revision).toBe(store.snapshot().file.engineRouting.codex.revision);
 });
 
+test("a reader cannot change a row's own fields or anything nested in it, and the next reader keeps the originals", () => {
+  const { open, kept, conversation, delivery } = fixture();
+  const store = open();
+  const view = store.readOnlySnapshot().file;
+  const receipt = view.receipts[kept]!;
+  const row = view.conversations[conversation.id]!;
+  const held = view.heldDeliveries[delivery.id]!;
+  const originalPath = row.generations[0]!.path;
+  const originalOperation = held.command.operationId;
+
+  /* The review's reproduction: each of these used to land in the next read. */
+  expect(attempt(() => { receipt.error = "reader-corruption"; })).toBe(false);
+  expect(attempt(() => { row.generations[0]!.path = "/sessions/reader-corruption.jsonl"; })).toBe(false);
+  expect(attempt(() => { held.command.operationId = "reader-corruption"; })).toBe(false);
+  expect(attempt(() => { (held.command as { text?: string }).text = "reader-corruption"; })).toBe(false);
+  expect(attempt(() => { held.text = "reader-corruption"; })).toBe(false);
+  expect(attempt(() => { row.generations.push(row.generations[0]!); })).toBe(false);
+  expect(attempt(() => { row.continuityPaths.push("/sessions/reader-corruption.jsonl"); })).toBe(false);
+  expect(attempt(() => { row.generations.splice(0, 1); })).toBe(false);
+  expect(attempt(() => { delete (held.command as { kind?: string }).kind; })).toBe(false);
+  for (const value of [receipt, row, row.generations, row.generations[0], held, held.command]) {
+    expect(Object.isFrozen(value)).toBe(true);
+  }
+
+  const next = store.readOnlySnapshot().file;
+  expect(next.receipts[kept]?.error).toBeNull();
+  expect(next.conversations[conversation.id]?.generations).toHaveLength(1);
+  expect(next.conversations[conversation.id]?.generations[0]?.path).toBe(originalPath);
+  expect(next.heldDeliveries[delivery.id]?.command).toEqual(store.snapshot().file.heldDeliveries[delivery.id]!.command);
+  expect(next.heldDeliveries[delivery.id]?.command.operationId).toBe(originalOperation);
+  expect(next.heldDeliveries[delivery.id]?.text).toBe("held for the view");
+});
+
+test("the store's parse cache stays its own: the view shares no object with it, and a write still edits the row", () => {
+  const { open, kept, conversation } = fixture();
+  const store = open();
+  const view = store.readOnlySnapshot().file;
+  const viewObjects = new Set<unknown>();
+  const walk = (value: unknown) => {
+    if (value === null || typeof value !== "object" || viewObjects.has(value)) return;
+    viewObjects.add(value);
+    for (const child of Object.values(value)) walk(child);
+  };
+  walk(view);
+  const parsed = (store as unknown as { rowCache: Map<string, Map<string, { parsed: unknown }>> }).rowCache;
+  for (const rows of parsed.values()) {
+    for (const { parsed: row } of rows.values()) {
+      const shared: unknown[] = [];
+      const visit = (value: unknown) => {
+        if (value === null || typeof value !== "object") return;
+        if (viewObjects.has(value)) shared.push(value);
+        expect(Object.isFrozen(value)).toBe(false);
+        for (const child of Object.values(value)) visit(child);
+      };
+      visit(row);
+      expect(shared).toEqual([]);
+    }
+  }
+
+  store.mutate((file) => {
+    file.receipts[kept]!.error = "written after a read";
+    file.conversations[conversation.id]!.continuityPaths.push("/sessions/written-after-a-read.jsonl");
+  }, false);
+  const next = store.readOnlySnapshot().file;
+  expect(next.receipts[kept]?.error).toBe("written after a read");
+  expect(next.conversations[conversation.id]?.continuityPaths).toContain("/sessions/written-after-a-read.jsonl");
+  expect(Object.isFrozen(next.conversations[conversation.id]?.continuityPaths)).toBe(true);
+  expect(view.receipts[kept]?.error).toBeNull();
+  expect(view.conversations[conversation.id]?.continuityPaths).not.toContain("/sessions/written-after-a-read.jsonl");
+});
+
+test("a reload copies only the rows whose decided value changed", () => {
+  const { open, kept, removed, conversation, delivery } = fixture();
+  const reader = open();
+  const writer = open();
+  const before = reader.readOnlySnapshot().file;
+
+  writer.mutate((file) => { file.receipts[kept]!.error = "written elsewhere"; }, false);
+  const after = reader.readOnlySnapshot().file;
+  expect(after).not.toBe(before);
+  expect(after.receipts[kept]).not.toBe(before.receipts[kept]);
+  expect(after.receipts[kept]?.error).toBe("written elsewhere");
+  expect(after.receipts[removed]).toBe(before.receipts[removed]);
+  expect(after.conversations[conversation.id]).toBe(before.conversations[conversation.id]);
+  expect(after.heldDeliveries[delivery.id]).toBe(before.heldDeliveries[delivery.id]);
+  expect(before.receipts[kept]?.error).toBeNull();
+});
+
 test("two readers share one view and neither can corrupt the other; a detached snapshot stays mutable", () => {
   const { open, kept } = fixture();
   const store = open();
