@@ -1,4 +1,4 @@
-import type { AgentRegistry, DeliveryOperationOwner } from "@/lib/agent/registry";
+import { ownsItsSettlement, type AgentRegistry, type DeliveryOperationOwner } from "@/lib/agent/registry";
 import { ACCOUNT_MIGRATION_PASS_INTERVAL_MS } from "@/lib/accounts/migration/controllerSignal";
 import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { migrationLaneRunning } from "@/lib/accounts/migration/lanes";
@@ -6,7 +6,7 @@ import { actingOperation } from "@/lib/deliveryActuation";
 
 import type { DeliveryProgressRecord, DeliveryProgressSink } from "./deliveryProgress";
 import { ACTIVE_DELIVERY_PHASES, type DeliveryWaitReason } from "./deliveryWaitReason";
-import { settlementDeadlineForRow } from "./sendSettlement";
+import { sendReceiptFor, settlementDeadlineForRow } from "./sendSettlement";
 
 /**
  * The one writer of an accepted send's progress record before the runtime
@@ -33,6 +33,8 @@ export interface RecordedWait {
   /** When the next look is due; null for a wait the request itself is in.
       The migration pass by default. */
   nextWakeMs?: number | null;
+  /** When the wait began, for one recorded after the fact. */
+  sinceMs?: number;
 }
 
 /** The switch phase a send held behind its conversation's account switch
@@ -68,6 +70,7 @@ export function recordWait(
       admittedAt: reservation.createdAt,
       nextWakeMs: switching || wait.nextWakeMs === undefined ? ACCOUNT_MIGRATION_PASS_INTERVAL_MS : wait.nextWakeMs,
       ...(wait.attempted ? { attempted: true } : {}),
+      ...(wait.sinceMs !== undefined && Number.isFinite(wait.sinceMs) ? { sinceMs: wait.sinceMs } : {}),
     });
     const deadline = settlementDeadlineForRow(registry, { delivery: reservation });
     progress.deadline(operationId, deadline?.deadlineAt ?? null, deadline?.policy ?? null);
@@ -126,6 +129,7 @@ export function recordDirectWait(
       admittedAt: owner.createdAt,
       nextWakeMs: wait.nextWakeMs === undefined ? ACCOUNT_MIGRATION_PASS_INTERVAL_MS : wait.nextWakeMs,
       ...(wait.attempted ? { attempted: true } : {}),
+      ...(wait.sinceMs !== undefined && Number.isFinite(wait.sinceMs) ? { sinceMs: wait.sinceMs } : {}),
     });
     const deadline = settlementDeadlineForRow(registry, { owner });
     progress.deadline(operationId, deadline?.deadlineAt ?? null, deadline?.policy ?? null);
@@ -177,4 +181,74 @@ export function recordObservedWait(
     section holder or a coordinator lane. */
 export function conversationActorRunning(conversationId: string): boolean {
   return actingOperation(conversationId) !== null || migrationLaneRunning(conversationId);
+}
+
+/** The store A3 restores into: the Viewer's own. */
+export type RestorableProgress = DeliveryProgressPort & {
+  knows(operationId: string): boolean;
+  backfillEnded(ended: Parameters<import("./deliveryProgress").DeliveryProgressStore["backfillEnded"]>[0]): boolean;
+  completenessMark(): number;
+};
+
+const RESTORED_DETAIL = "recorded from the delivery record";
+const RESTORE_ENDED_LIMIT = 5_000;
+
+/**
+ * What the settlement sweep restores before it settles anything
+ * (docs/design/delivery-progress-and-drain.md, A3). It covers what the writers
+ * at each step cannot: a record owed when the Viewer died (the store writes
+ * behind), and a send claimed or ended by the inventory sidecar, which owns no
+ * store.
+ *
+ * 1. Every open reservation and open direct-admission row without a record
+ *    gets one, dated from its admission, so an active phase shows its stall
+ *    at once. A `held` reservation is included on purpose.
+ * 2. Every owner row that ended at or after the store's completeness mark,
+ *    and whose operation the store holds nowhere, gets its ending under its
+ *    original key, as the receipt reads it. Nothing is sent, re-armed or woken.
+ */
+export function restoreMissingRecords(registry: AgentRegistry, progress: RestorableProgress, now = Date.now()): void {
+  const file = registry.readOnlySnapshot();
+  for (const delivery of Object.values(file.heldDeliveries)) {
+    if (delivery.state !== "held" && delivery.state !== "assigned" && delivery.state !== "delivery-uncertain") continue;
+    const operationId = delivery.command.operationId;
+    if (!operationId || progress.knows(operationId)) continue;
+    recordWait(progress, registry, delivery, {
+      reason: delivery.state === "delivery-uncertain" ? "evidence-unreadable" : "checking",
+      detail: RESTORED_DETAIL,
+      sinceMs: Date.parse(delivery.createdAt),
+    });
+  }
+  for (const [operationId, owner] of Object.entries(file.deliveryOperationOwners)) {
+    if (!ownsItsSettlement(owner) || owner.terminalState !== null || progress.knows(operationId)) continue;
+    recordDirectWait(progress, registry, owner, { reason: "checking", detail: RESTORED_DETAIL, sinceMs: Date.parse(owner.createdAt) });
+  }
+  const mark = progress.completenessMark();
+  const ended = Object.entries(file.deliveryOperationOwners)
+    .filter(([, owner]) => {
+      if (owner.terminalState === null) return false;
+      const settledAt = Date.parse(owner.settledAt ?? "");
+      return Number.isFinite(settledAt) && settledAt >= mark && settledAt <= now;
+    })
+    .sort(([, left], [, right]) => (right.settledAt ?? "").localeCompare(left.settledAt ?? ""))
+    .slice(0, RESTORE_ENDED_LIMIT);
+  for (const [operationId, owner] of ended) {
+    if (progress.knows(operationId)) continue;
+    const receipt = sendReceiptFor(file, operationId);
+    if (!receipt || receipt.state === "in-flight") continue;
+    try {
+      progress.backfillEnded({
+        operationId,
+        conversationId: owner.runtimeConversationId,
+        originalKey: owner.clientMessageId,
+        kind: owner.command.kind,
+        admittedAt: owner.createdAt,
+        settledAt: owner.settledAt,
+        state: receipt.state === "delivered" ? "delivered" : receipt.duplicateRisk ? "uncertain" : "failed",
+        reason: receipt.reason ?? null,
+      });
+    } catch (error) {
+      logged(error);
+    }
+  }
 }

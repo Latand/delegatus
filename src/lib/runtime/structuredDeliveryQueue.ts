@@ -1,6 +1,7 @@
 import { blockingHostActivityFlags } from "./hostActivityFlags";
 import { NativeQueueProtocolRefusal } from "./nativeCodexQueue";
 import { RetryBackoff } from "./retryBackoff";
+import { REGISTRY_WRITER_BUSY } from "@/lib/agent/registry";
 import type { NativeQueueCommand } from "./nativeQueueContracts";
 import { parseRuntimeCommand, parseRuntimeIdleKillFence, parseRuntimeSendSettings } from "./commands";
 import { parseSelectedContextRef, type SelectedContextRef } from "@/lib/selection/selectedContext";
@@ -66,7 +67,7 @@ export interface StructuredDeliveryQueuePort {
   /** The failed account switch holding this conversation's messages, or null (#1846). */
   switchHold?(conversationId: string): { accountId: string; reason: string } | null;
   /** Records that the account switch a message engaged failed, so that message and the ones after it stay held. */
-  holdForFailedSwitch?(effect: StructuredReconfigureEffect, reason: string): void;
+  holdForFailedSwitch?(effect: StructuredReconfigureEffect, reason: string): void | Promise<void>;
   effects(kinds?: readonly string[], afterEventSeq?: number): Promise<StructuredDeliveryEffect[]>;
   transition(
     operationId: string,
@@ -2691,12 +2692,21 @@ export class StructuredDeliveryQueue {
         isCurrent: () => this.isCurrentReconfigure(effect),
       });
     } catch (error) {
+      /* A registry write the lock refused changed nothing: the switch is
+         neither failed nor applied, and it stays listed for a later pass
+         (docs/design/delivery-progress-and-drain.md, C3). */
+      if (error instanceof Error && error.message === REGISTRY_WRITER_BUSY) {
+        await this.transitionReconfigure(effect, "queued", { reason: REGISTRY_WRITER_BUSY });
+        retry.fail();
+        this.retrySoon();
+        return true;
+      }
       await this.transitionReconfigure(effect, "failed", { reason: failureReason(error) });
       /* Keep the failed account hold; the unactuated messages below settle
          with its reason. Supersedence and cancellation create no failure hold. */
       if (effect.accountId && !this.port.reconfigureCancelled?.(effect)
         && error instanceof Error && error.name !== "StructuredReconfigureSupersededError" && error.name !== "StructuredReconfigureCancelledError") {
-        this.port.holdForFailedSwitch?.(effect, failureReason(error));
+        await this.port.holdForFailedSwitch?.(effect, failureReason(error));
       }
       return false;
     }

@@ -5239,3 +5239,83 @@ test("a send behind an earlier admission on its conversation records conversatio
     journal.close();
   }
 });
+
+test("a held send whose drain lane is still inside its delivery is never called a lost wake and shows its stall", async () => {
+  /* docs/design/delivery-progress-and-drain.md, A4. */
+  const fixture = idleHostedConversation("a4-acting-lane", "5eed0008-8888-\x34888-8888-888888888888");
+  const { registry, conversation, key } = fixture;
+  const journal = fixture.openJournal();
+  const client = runtimeJournalClient(journal);
+  const progress = new DeliveryProgressStore(null);
+  const held = registry.holdDelivery(conversation.id, "inside the lane", "a4-acting-key");
+  const operationId = held.command.operationId;
+  progress.note(operationId, conversation.id, { waitReason: "dispatching", originalKey: "a4-acting-key", nextWakeMs: 10 });
+  let release!: () => void;
+  const { withConversationActuation } = await import("@/lib/deliveryActuation");
+  const lane = withConversationActuation(conversation.id, async (lease) => {
+    lease.act(operationId);
+    await new Promise<void>((resolve) => { release = resolve; });
+  });
+  try {
+    await bindStructuredDeliveryQueue([{ key, host: observableFakeHost(new FakeEngineHost()) }], {
+      registry, client, progress, watchdogIntervalMs: 20, settlementSweepMs: 0, queueTiming: { stallMs: 50 },
+    });
+    await waitForCondition(() => progress.get(operationId)?.stalledSince != null, 2_000);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(progress.get(operationId)).toMatchObject({ waitReason: "dispatching", wakeLostAt: null });
+    release();
+    await lane;
+    /* With nothing acting on it any more, the overdue wake is lost. */
+    await waitForCondition(() => progress.get(operationId)?.wakeLostAt != null, 2_000);
+  } finally {
+    release?.();
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close();
+  }
+});
+
+test("a send held behind a switch that fails says switch-failed at its next overdue wake", async () => {
+  const fixture = idleHostedConversation("a4-switch-failed", "5eed0009-9999-\x34999-8999-999999999999");
+  const { registry, conversation, key } = fixture;
+  const journal = fixture.openJournal();
+  const client = runtimeJournalClient(journal);
+  const progress = new DeliveryProgressStore(null);
+  registry.requestConversationReseat(conversation.id, "successor-account");
+  const held = registry.holdDelivery(conversation.id, "behind the switch", "a4-switch-key");
+  expect(held.state).toBe("held");
+  const operationId = held.command.operationId;
+  progress.note(operationId, conversation.id, { waitReason: "switching-accounts", originalKey: "a4-switch-key", nextWakeMs: 10 });
+  const migration = registry.conversation(conversation.id)!.migration!;
+  registry.transitionConversationMigration(conversation.id, migration.revision, [migration.phase], { phase: "failed-recoverable", error: "successor failed" });
+  try {
+    await bindStructuredDeliveryQueue([{ key, host: observableFakeHost(new FakeEngineHost()) }], {
+      registry, client, progress, watchdogIntervalMs: 20, settlementSweepMs: 0,
+    });
+    await waitForCondition(() => progress.get(operationId)?.waitReason !== "switching-accounts", 2_000);
+    expect(progress.get(operationId)).toMatchObject({ waitReason: "switch-failed", wakeLostAt: null, terminal: null });
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close();
+  }
+});
+
+test("a reservation whose record was owed at a crash gets it back from the next sweep, dated from its admission", async () => {
+  const fixture = idleHostedConversation("a3-open-owed", "5eed000a-aaaa-\x34aaa-8aaa-aaaaaaaaaaaa");
+  const { registry, conversation, key } = fixture;
+  const journal = fixture.openJournal();
+  const client = runtimeJournalClient(journal);
+  const progress = new DeliveryProgressStore(null);
+  const held = registry.holdDelivery(conversation.id, "owed at a crash", "a3-open-key");
+  try {
+    await bindStructuredDeliveryQueue([{ key, host: observableFakeHost(new FakeEngineHost()) }], {
+      registry, client, progress, watchdogIntervalMs: 0, settlementSweepMs: 50,
+    });
+    await waitForCondition(() => progress.get(held.command.operationId) !== null, 2_000);
+    expect(progress.get(held.command.operationId)).toMatchObject({
+      originalKey: "a3-open-key", terminal: null, phaseSince: held.createdAt, detail: "recorded from the delivery record",
+    });
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close();
+  }
+});

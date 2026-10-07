@@ -4,6 +4,11 @@ import { handoffQueue } from "./handoffQueueStore";
 import { blockingHostActivityFlags } from "./hostActivityFlags";
 import { runtimeIdleKillMatches } from "./contracts";
 import { settleNativeQueueEntry } from "./nativeQueueSettlement";
+import { conversationActorRunning, recordObservedWait, recordWait, restoreMissingRecords } from "./recordWait";
+
+/** How many times a failed switch's hold is asked for before it is given up
+    and logged; each attempt waits up to the registry's lock deadline. */
+const SWITCH_HOLD_WRITE_ATTEMPTS = 6;
 import { NativeQueueExecutor } from "./nativeQueueExecutor";
 import { RetryBackoff } from "./retryBackoff";
 import crypto from "node:crypto";
@@ -12,7 +17,8 @@ import { activeRestartGate } from "@/lib/selfUpdate/restartGate";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 
 import { ACCOUNT_MIGRATION_PASS_INTERVAL_MS, requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
-import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
+import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migration/contracts";
+import { actingOperation } from "@/lib/deliveryActuation";
 import { agentRegistry, REGISTRY_WRITER_BUSY, resolveConversationAlias, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile } from "@/lib/agent/registry";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { forEachStartupBatch } from "./startupWork";
@@ -433,10 +439,17 @@ async function reconcileTerminalDeliveries(
   const pendingAcknowledgements: string[] = [];
   const flushOutcomes = async () => {
     if (pendingOutcomes.length === 0) return;
-    registry.recordDeliveryOutcomesForOperations(pendingOutcomes.splice(0));
+    const outcomes = pendingOutcomes.splice(0);
+    const acknowledgements = pendingAcknowledgements.splice(0);
+    /* Off the loop (rule c). Refused, the outcomes stay owed: nothing is
+       acknowledged to the journal, whose retention keeps them, and the drain
+       and the sweep project them. */
+    const written = await registry.deliveryWrite({ label: "delivery.startup-settle", operationId: outcomes[0]?.operationId ?? null },
+      () => registry.recordDeliveryOutcomesForOperations(outcomes));
+    if (!written.acquired) return;
     /* Only after the settlement is durable: the journal's retention is what
        stands in for it until then (#1612). */
-    await acknowledgeTerminalProjection(client, pendingAcknowledgements.splice(0));
+    await acknowledgeTerminalProjection(client, acknowledgements);
   };
   for (let offset = 0; offset < unsettledDeliveries.length && isCurrent(); offset += TERMINAL_RECONCILIATION_PAGE_SIZE) {
     const page = unsettledDeliveries.slice(offset, offset + TERMINAL_RECONCILIATION_PAGE_SIZE);
@@ -835,15 +848,37 @@ export async function bindStructuredDeliveryQueue(
       /* A send held before the journal is the account-migration drain's: a
          wake of its that passed with nothing looking is lost, and that drain
          is asked for a pass now. */
+      /* A4: the reservation is asked before a wake is called lost. The
+         operation a lane or section is acting on keeps its own phase and
+         stall; another assigned send of a conversation something works on
+         gets the observer's note; a send held behind a switch says what the
+         switch is doing. Only the rest are lost wakes. */
       unlistedWakeDue: (records) => {
+        let lost = false;
         for (const record of records) {
+          let reservation: HeldDelivery | null = null;
+          try {
+            reservation = Object.values(registry.deliverySnapshotForOperation(record.operationId).heldDeliveries)
+              .find((candidate) => candidate.command.operationId === record.operationId) ?? null;
+          } catch { reservation = null; }
+          const conversationId = reservation ? registry.canonicalConversationId(reservation.conversationId) : record.conversationId;
+          if (actingOperation(conversationId) === record.operationId) continue;
+          if (reservation?.state === "assigned" && conversationActorRunning(conversationId)) {
+            recordObservedWait(progressStore, registry, reservation, "an earlier delivery on this conversation is still in progress");
+            continue;
+          }
+          if (reservation?.state === "held") {
+            recordWait(progressStore, registry, reservation, { reason: "switching-accounts" });
+            continue;
+          }
           progressStore.note(record.operationId, record.conversationId, {
             waitReason: "wake-lost",
             detail: "no delivery pass reached it when due",
             nextWakeMs: ACCOUNT_MIGRATION_PASS_INTERVAL_MS,
           });
+          lost = true;
         }
-        requestAccountMigrationTick();
+        if (lost) requestAccountMigrationTick();
       },
       /* Original-key reconciliation reads the host's own evidence: the Claude
          delivery ledger and transcript, the Codex thread. It never writes input. */
@@ -860,12 +895,21 @@ export async function bindStructuredDeliveryQueue(
       deferTarget: (conversationId) => startupPending && hostResolver(registry, hosts)(conversationId) === null,
       reconfigureCancelled: (effect) => registry.reconfigureCancelled(effect.conversationId as ViewerConversationId, effect.operationId),
       switchHold: (conversationId) => registry.switchHold(conversationId as ViewerConversationId),
-      holdForFailedSwitch: (effect, reason) => {
-        registry.holdForFailedSwitch(effect.conversationId as ViewerConversationId, {
-          operationId: effect.operationId,
-          accountId: effect.accountId!,
-          reason,
-        });
+      /* Off the loop (rule c). The switch already failed in the journal, so
+         its effect is no longer listed for a later pass: a hold the lock
+         refused is written again until it lands, and until then the
+         conversation's unactuated messages wait. */
+      holdForFailedSwitch: async (effect, reason) => {
+        const hold = () => registry.deliveryWrite({ label: "delivery.switch-hold", operationId: effect.operationId },
+          () => registry.holdForFailedSwitch(effect.conversationId as ViewerConversationId, {
+            operationId: effect.operationId,
+            accountId: effect.accountId!,
+            reason,
+          }));
+        for (let attempt = 0; attempt < SWITCH_HOLD_WRITE_ATTEMPTS; attempt += 1) {
+          if ((await hold()).acquired) return;
+        }
+        console.error("[structured delivery] a failed switch's hold could not be written", { operationId: effect.operationId });
       },
       effects: (kinds, afterEventSeq) => client.effectBatch(kinds, afterEventSeq),
       bindDeliveryGeneration: async (operationId, generationId) => {
@@ -1885,7 +1929,10 @@ export async function bindStructuredDeliveryQueue(
   const watchdogMs = dependencies.watchdogIntervalMs ?? DELIVERY_WATCHDOG_MS;
   if (watchdogMs > 0) {
     watchdogTimer = setInterval(() => {
-      if (stopped || state.activeQueue !== queue || startupPending) return;
+      /* A7: it runs while startup still seats hosts. Marking stalls and lost
+         wakes only writes records; an unregistered host's target stays
+         deferred by the drain, which notes `startup` on its records. */
+      if (stopped || state.activeQueue !== queue) return;
       void queue.tick().catch((error) => {
         console.error("[structured delivery] watchdog failed", { error: error instanceof Error ? error.message : String(error) });
       });
@@ -1900,7 +1947,18 @@ export async function bindStructuredDeliveryQueue(
     const settling = new Set<string>();
     settlementSweepTimer = setInterval(() => {
       if (stopped || state.activeQueue !== queue) return;
-      mirrorSettledReceipts(registry, progressStore);
+      /* A3: an open record or an ending a crash or the inventory sidecar left
+         missing is restored first; once the endings are restored up to this
+         sweep, a checkpoint is taken, persisted with the records it covers.
+         Its margin covers a row stamped just before the snapshot. */
+      const sweptAt = Date.now();
+      try {
+        restoreMissingRecords(registry, progressStore, sweptAt);
+        mirrorSettledReceipts(registry, progressStore);
+        progressStore.checkpoint(sweptAt - sweepMs);
+      } catch (error) {
+        console.error("[structured delivery] progress restoration failed", { error: error instanceof Error ? error.message : String(error) });
+      }
       void settleDueSends({
         registry,
         client,

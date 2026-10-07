@@ -140,7 +140,14 @@ const SCHEMA = `
   CREATE INDEX IF NOT EXISTS delivery_progress_conversation ON delivery_progress(conversation_id, updated_at);
   CREATE INDEX IF NOT EXISTS delivery_progress_original_key ON delivery_progress(original_key);
   CREATE INDEX IF NOT EXISTS delivery_progress_terminal ON delivery_progress(terminal, updated_at);
+  CREATE TABLE IF NOT EXISTS delivery_progress_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
 `;
+
+/** The meta row of the completeness checkpoint (A3). */
+const CHECKED_THROUGH = "checked_through";
 
 export class DeliveryProgressStore implements DeliveryProgressSink {
   private readonly records = new Map<string, DeliveryProgressRecord>();
@@ -149,6 +156,12 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private lastPruneAt = 0;
   private loaded = false;
+  /** Every ending whose owner row settled before this has a record in the
+      file. Null when the file holds no checkpoint (A3). */
+  private checkedThrough: number | null = null;
+  /** A checkpoint taken by a sweep, written only in a flush, in the same
+      transaction as every record still owed when it is written. */
+  private pendingCheckpoint: number | null = null;
 
   /** `filename` null keeps the records in memory only. */
   constructor(
@@ -294,6 +307,77 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
     return this.records.get(operationId) ?? null;
   }
 
+  /** Whether the store holds a record of the operation, in memory or only on
+      disk (a terminal record trimmed from memory). */
+  knows(operationId: string): boolean {
+    this.load();
+    if (this.records.has(operationId)) return true;
+    if (this.filename === null || !fs.existsSync(this.filename)) return false;
+    try {
+      return this.connection().query<{ found: number }, [string]>("SELECT 1 AS found FROM delivery_progress WHERE operation_id = ?").get(operationId) !== null;
+    } catch {
+      /* Unreadable: assume it is there, so nothing is written over it. */
+      return true;
+    }
+  }
+
+  /**
+   * Writes the ending of a send the store never recorded (A3): its original
+   * key, admission time, kind and the ending the delivery record holds, with
+   * the existing retention and nothing else: no rearm, no wake, no dispatch.
+   * Answers whether a record was written.
+   */
+  backfillEnded(ended: {
+    operationId: string;
+    conversationId: string;
+    originalKey: string | null;
+    kind: string;
+    admittedAt: string | null;
+    settledAt: string | null;
+    state: DeliveryProgressTerminalState;
+    reason: string | null;
+  }): boolean {
+    if (this.knows(ended.operationId)) return false;
+    const at = ended.settledAt ?? new Date(this.now()).toISOString();
+    this.put({
+      operationId: ended.operationId,
+      conversationId: ended.conversationId,
+      originalKey: ended.originalKey,
+      kind: ended.kind,
+      waitReason: "queued",
+      detail: "recorded from the delivery record",
+      attempt: 0,
+      admittedAt: ended.admittedAt,
+      phaseSince: ended.admittedAt ?? at,
+      lastProgressAt: at,
+      deadlineAt: null,
+      deadlinePolicy: null,
+      nextWakeAt: null,
+      stalledSince: null,
+      wakeLostAt: null,
+      executorId: null,
+      terminal: { state: ended.state, at, reason: boundedDetail(ended.reason) },
+      updatedAt: new Date(this.now()).toISOString(),
+    });
+    return true;
+  }
+
+  /** How far back an ending may be missing from this store: the persisted
+      checkpoint, or the whole record retention when there is none. */
+  completenessMark(): number {
+    this.load();
+    return this.checkedThrough ?? this.now() - DELIVERY_PROGRESS_TERMINAL_RETENTION_MS;
+  }
+
+  /** Takes a checkpoint after a sweep restored every ending up to it; it is
+      persisted with the next flush. */
+  checkpoint(throughMs: number): void {
+    this.load();
+    if (!Number.isFinite(throughMs)) return;
+    this.pendingCheckpoint = Math.max(throughMs, this.pendingCheckpoint ?? throughMs);
+    this.scheduleFlush(FLUSH_DELAY_MS);
+  }
+
   open(): DeliveryProgressRecord[] {
     this.load();
     return [...this.records.values()].filter((record) => !record.terminal);
@@ -315,8 +399,11 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
   flush(): boolean {
     if (this.flushTimer) clearTimeout(this.flushTimer);
     this.flushTimer = null;
-    if (this.dirty.size === 0 || this.filename === null) {
+    const checkpoint = this.pendingCheckpoint;
+    if ((this.dirty.size === 0 && checkpoint === null) || this.filename === null) {
       this.dirty.clear();
+      if (checkpoint !== null) this.checkedThrough = Math.max(checkpoint, this.checkedThrough ?? checkpoint);
+      this.pendingCheckpoint = null;
       return true;
     }
     const pending = [...this.dirty];
@@ -337,6 +424,12 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
           upsert.run(record.operationId, record.conversationId, record.originalKey, record.terminal ? 1 : 0,
             Date.parse(record.updatedAt), JSON.stringify(record));
         }
+        /* The checkpoint lands with every record still owed, so a file can
+           never claim an ending it does not hold. */
+        if (checkpoint !== null) {
+          db.query("INSERT INTO delivery_progress_meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+            .run(CHECKED_THROUGH, String(checkpoint));
+        }
         if (this.now() - this.lastPruneAt >= PRUNE_INTERVAL_MS) this.prune(db);
         db.exec("COMMIT");
       } catch (error) {
@@ -344,6 +437,10 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
         throw error;
       }
       for (const operationId of pending) this.dirty.delete(operationId);
+      if (checkpoint !== null) {
+        this.checkedThrough = Math.max(checkpoint, this.checkedThrough ?? checkpoint);
+        if (this.pendingCheckpoint === checkpoint) this.pendingCheckpoint = null;
+      }
       return true;
     } catch (error) {
       /* Busy or unwritable: the records stay owed and in memory, and the next
@@ -443,6 +540,14 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
       for (const row of rows) {
         const record = parseRecord(row.record_json);
         if (record && !this.records.has(record.operationId)) this.records.set(record.operationId, record);
+      }
+      /* A file written by an earlier build has no meta table: no checkpoint. */
+      try {
+        const stored = this.connection().query<{ value: string }, [string]>("SELECT value FROM delivery_progress_meta WHERE key = ?").get(CHECKED_THROUGH);
+        const through = stored ? Number(stored.value) : NaN;
+        this.checkedThrough = Number.isFinite(through) ? through : null;
+      } catch {
+        this.checkedThrough = null;
       }
     } catch (error) {
       console.error("[delivery progress] read failed", { error: error instanceof Error ? error.message : String(error) });

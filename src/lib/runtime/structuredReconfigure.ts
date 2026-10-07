@@ -2,7 +2,7 @@ import { accountManager } from "@/lib/accounts/manager";
 import { advanceConversationMigration } from "@/lib/accounts/migration/coordinator";
 import { RegisteredSuccessorProvider } from "@/lib/accounts/migration/provider";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
-import { agentRegistry, type AgentRegistry, type RegistryConversation } from "@/lib/agent/registry";
+import { agentRegistry, REGISTRY_WRITER_BUSY, type AgentRegistry, type RegistryConversation } from "@/lib/agent/registry";
 import type { SessionKey } from "@/lib/agent/sessionKey";
 
 import type { StructuredReconfigureEffect } from "./structuredDeliveryQueue";
@@ -26,6 +26,10 @@ export class StructuredReconfigureCancelledError extends Error {
 }
 
 const settledElsewhere = (error: unknown) => error instanceof StructuredReconfigureSupersededError || error instanceof StructuredReconfigureCancelledError;
+/** A registry write the lock refused: nothing was settled, and the queue keeps
+    the switch listed (docs/design/delivery-progress-and-drain.md, C3). */
+const registryBusy = (error: unknown) => error instanceof Error && error.message === REGISTRY_WRITER_BUSY;
+const SETTLE_WRITE_ATTEMPTS = 6;
 
 async function releaseStructuredHost(key: SessionKey): Promise<boolean> {
   const { releaseStructuredDeliveryHost } = await import("./structuredDeliveryController");
@@ -103,13 +107,19 @@ export async function applyStructuredReconfigure(
   const inheritedApplyingOperation = conversation.reconfigure?.status === "applying";
 
   if (!await ownsOperation()) throw new StructuredReconfigureSupersededError();
-  const claim = registry.claimConversationReconfigure(conversationId, {
-    operationId: effect.operationId,
-    revision: effect.eventSeq,
-    profile: profilePatch(effect),
-    ...(effect.previousProfile ? { previousProfile: effect.previousProfile } : {}),
-    ...(effect.accountId ? { accountId: effect.accountId } : {}),
-  });
+  /* Off the loop (docs/design/delivery-progress-and-drain.md, C3): it binds
+     the conversation's kept deliveries. Refused, nothing changed, and the
+     queue keeps the switch listed for its next pass. */
+  const claimed = await registry.deliveryWrite({ label: "delivery.reconfigure", operationId: effect.operationId },
+    () => registry.claimConversationReconfigure(conversationId, {
+      operationId: effect.operationId,
+      revision: effect.eventSeq,
+      profile: profilePatch(effect),
+      ...(effect.previousProfile ? { previousProfile: effect.previousProfile } : {}),
+      ...(effect.accountId ? { accountId: effect.accountId } : {}),
+    }));
+  if (!claimed.acquired) throw new Error(REGISTRY_WRITER_BUSY);
+  const claim = claimed.value;
   if (claim.kind === "withdrawn") throw new StructuredReconfigureCancelledError();
   if (claim.kind === "stale") throw new StructuredReconfigureSupersededError();
   if (claim.state.status === "cancelled") throw new StructuredReconfigureCancelledError();
@@ -118,13 +128,22 @@ export async function applyStructuredReconfigure(
 
   const settle = async (status: "applied" | "failed", error: unknown = null): Promise<void> => {
     if (!await ownsOperation()) throw new StructuredReconfigureSupersededError();
-    const settled = registry.settleConversationReconfigure(
-      conversationId,
-      effect.operationId,
-      effect.eventSeq,
-      status,
-      status === "failed" ? failureMessage(error) : null,
-    );
+    /* The switch itself has already happened or failed by now, so a settle
+       the lock refused is asked for again before it is given up; given up,
+       nothing is settled either way and the queue keeps the switch listed. */
+    let written: { acquired: true; value: ReturnType<AgentRegistry["settleConversationReconfigure"]> } | { acquired: false } = { acquired: false };
+    for (let attempt = 0; attempt < SETTLE_WRITE_ATTEMPTS && !written.acquired; attempt += 1) {
+      written = await registry.deliveryWrite({ label: "delivery.reconfigure", operationId: effect.operationId },
+        () => registry.settleConversationReconfigure(
+          conversationId,
+          effect.operationId,
+          effect.eventSeq,
+          status,
+          status === "failed" ? failureMessage(error) : null,
+        ));
+    }
+    if (!written.acquired) throw new Error(REGISTRY_WRITER_BUSY);
+    const settled = written.value;
     if (settled.kind === "stale") throw new StructuredReconfigureSupersededError();
   };
 
@@ -204,7 +223,7 @@ export async function applyStructuredReconfigure(
       await settle("applied");
       return "applied";
     } catch (error) {
-      if (settledElsewhere(error)) throw error;
+      if (settledElsewhere(error) || registryBusy(error)) throw error;
       await settle("failed", error);
       await restoreCommittedSuccessor(generation.id);
       throw error;
@@ -281,7 +300,7 @@ export async function applyStructuredReconfigure(
       await settle("applied");
       return "applied";
     } catch (error) {
-      if (settledElsewhere(error)) throw error;
+      if (settledElsewhere(error) || registryBusy(error)) throw error;
       await settle("failed", error);
       if (committedSuccessorId) await restoreCommittedSuccessor(committedSuccessorId);
       throw error;
@@ -303,7 +322,7 @@ export async function applyStructuredReconfigure(
     await settle("applied");
     return "applied";
   } catch (error) {
-    if (settledElsewhere(error)) throw error;
+    if (settledElsewhere(error) || registryBusy(error)) throw error;
     await settle("failed", error);
     await recover({ path: generation.path, conversationId }, {
       registry,

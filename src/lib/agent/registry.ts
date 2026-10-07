@@ -9254,11 +9254,23 @@ export class AgentRegistry {
       keeps the delivery operation queryable and removes it from startup's
       pending-work set. */
   drainDeadSupersededHeldDeliveries(): string[] {
+    const candidates = this.deadSupersededHeldDeliveryCandidates();
+    if (candidates.length === 0) return [];
+    return this.drainDeadSupersededHeldDeliveryCandidates(candidates);
+  }
+
+  /** The read half of {@link drainDeadSupersededHeldDeliveries}: the
+      reservations its mutation would end, so the mutation alone can wait for
+      the lock off the loop (docs/design/delivery-progress-and-drain.md, C0). */
+  deadSupersededHeldDeliveryCandidates(): string[] {
     const snapshot = this.readOnlySnapshot();
-    const candidates = Object.values(snapshot.heldDeliveries)
+    return Object.values(snapshot.heldDeliveries)
       .filter((delivery) => heldDeliveryTargetsDeadSupersededSession(snapshot, delivery, this.ownerAlive))
       .map((delivery) => delivery.id);
-    if (candidates.length === 0) return [];
+  }
+
+  /** The mutation half: each candidate is checked again inside the transaction. */
+  drainDeadSupersededHeldDeliveryCandidates(candidates: readonly string[]): string[] {
     return this.mutate((file) => candidates.flatMap((id) => {
       const delivery = file.heldDeliveries[id];
       if (!delivery || !heldDeliveryTargetsDeadSupersededSession(file, delivery, this.ownerAlive)) return [];

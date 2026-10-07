@@ -1462,7 +1462,13 @@ async function adoptStructuredHostsPass(
       retainedRecoveryHostKeys(),
     );
     rememberStructuredStartupRetry(registry, nextAdoptedHosts, orchestratorRecoveries);
-    registry.drainDeadSupersededHeldDeliveries();
+    /* Off the loop (rule c); refused, it is skipped this pass and the next
+       startup pass runs it. */
+    const superseded = registry.deadSupersededHeldDeliveryCandidates();
+    if (superseded.length > 0) {
+      await registry.deliveryWrite({ label: "delivery.superseded", operationId: null },
+        () => registry.drainDeadSupersededHeldDeliveryCandidates(superseded));
+    }
     /* Pending work makes a terminal conversation adoption-eligible. Clear any
        provably dead wrapper before that decision so its stale writer fence
        cannot block the startup recovery path. */
