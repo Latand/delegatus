@@ -424,7 +424,11 @@ test("a read that does not answer claims nothing about the tick, and neither doe
   getFails = 500;
   const refused = await mount();
   expect(chip().getAttribute("data-seat-tick-chip")).toBe("unknown");
-  expect(chip().getAttribute("title")).toBe("Tick: could not be read\nDrag to change how often the seat wakes · click for settings");
+  /* With no record there is no stop to drag from, so the title offers no drag
+     and the cursor is the one a click gets. */
+  expect(chip().getAttribute("title")).toBe("Tick: could not be read");
+  expect(chip().className).toContain("cursor-pointer");
+  expect(chip().className).not.toContain("cursor-grab");
   await open(refused.root);
   /* No record, so no form bound to one and no facts asserted. */
   expect(body().querySelector("[data-seat-tick-details]")).toBeNull();
@@ -443,7 +447,7 @@ test("a read that does not answer claims nothing about the tick, and neither doe
   getFails = "malformed";
   await mount();
   expect(chip().getAttribute("data-seat-tick-chip")).toBe("unknown");
-  expect(chip().getAttribute("title")).toBe("Tick: could not be read\nDrag to change how often the seat wakes · click for settings");
+  expect(chip().getAttribute("title")).toBe("Tick: could not be read");
   expect(chip().textContent).toContain("—");
 });
 

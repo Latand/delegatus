@@ -368,7 +368,9 @@ export function SeatTickSwitch({ read, reading, now, surface, open, onOpen, onRe
       aria-haspopup="dialog"
       aria-expanded={open}
       aria-busy={read.saving || undefined}
-      title={`${reading.line}\n${t("seatTick.switch.hint")}`}
+      /* With no record there is no stop to move from, so the control only
+         opens the settings and says nothing about a drag. */
+      title={place ? `${reading.line}\n${t("seatTick.switch.hint")}` : reading.line}
       data-seat-tick-chip={reading.state}
       data-seat-tick-switch={dragging ? "dragging" : pending !== null ? "pending" : waiting !== null ? "queued" : "rest"}
       data-seat-tick-surface={surface}
@@ -380,7 +382,7 @@ export function SeatTickSwitch({ read, reading, now, surface, open, onOpen, onRe
       onClick={onClick}
       onKeyDown={onKeyDown}
       style={{ "--tick-thumb": `${thumb}px`, "--tick-inset": `${geometry.inset}px`, "--tick-travel": `${geometry.travel}px`, "--tick-clear": clear.toFixed(3), touchAction: "pan-y" } as CSSProperties}
-      className={`seat-tick-switch group/tick inline-flex shrink-0 select-none items-center outline-none gap-1.5 ${dragging ? "cursor-grabbing" : "cursor-grab"} ${className}`}
+      className={`seat-tick-switch group/tick inline-flex shrink-0 select-none items-center outline-none gap-1.5 ${!place ? "cursor-pointer" : dragging ? "cursor-grabbing" : "cursor-grab"} ${className}`}
     >
       <span
         data-seat-tick-track

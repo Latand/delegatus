@@ -78,7 +78,9 @@ export function MobileSeatTickSheet({ project, projectName, onClose }: {
  * switch the desktop header carries, 36 px tall in the 44 px row: a tap on it
  * opens the sheet too, and a horizontal drag changes the stop, while a vertical
  * one still scrolls the seat sheet. The row is a group and not one button,
- * because a slider cannot live inside a button.
+ * because a slider cannot live inside a button; a tap on its own padding or on
+ * the gap between the two opens the sheet as well, so the whole row stays the
+ * target it was when it was one button.
  */
 export function MobileSeatTickRow({ project, onOpen }: { project: string; onOpen: () => void }) {
   const { t } = useLocale();
@@ -86,7 +88,11 @@ export function MobileSeatTickRow({ project, onOpen }: { project: string; onOpen
   const now = Date.now();
   const reading = seatTickReading(read, now, t);
   return (
-    <div data-seat-tick-row={reading.state} className="flex min-h-11 w-full items-center gap-3 px-4 text-body font-semibold text-primary">
+    <div
+      data-seat-tick-row={reading.state}
+      onClick={(event) => { if (event.target === event.currentTarget) onOpen(); }}
+      className="flex min-h-11 w-full items-center gap-3 px-4 text-body font-semibold text-primary"
+    >
       <button
         type="button"
         data-mobile2-open="tick"

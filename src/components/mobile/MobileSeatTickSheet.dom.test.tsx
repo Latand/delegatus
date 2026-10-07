@@ -470,6 +470,14 @@ function finger(type: string, x: number): void {
   flushSync(() => { rowSwitch().dispatchEvent(event); });
 }
 
+test("a tap on the row's own padding opens the tick sheet, as it did when the row was one button", async () => {
+  const root = await mount();
+  flushSync(() => row()!.click());
+  await settle(root);
+  expect(tickSheet()).not.toBeNull();
+  expect(puts()).toHaveLength(0);
+});
+
 test("a tap on the switch opens the tick sheet, exactly as the label does, and writes nothing", async () => {
   const root = await mount();
   expect(rowSwitch().getAttribute("data-seat-tick-surface")).toBe("mobile");
