@@ -1123,3 +1123,13 @@ test("loaded provider recovery state does not alias the cached persisted record"
   expect(second.providerWait!.capacityProbes).toBe(1);
   expect(second.providerRecoveries![0]!.condition.label).toBe("auth refresh race");
 }));
+
+test("runtime-switch state survives store reopening and malformed targets are refused", async () => isolatedDelivery(async () => {
+  const pipeline = deliveryFixture("runtime-switch-store");
+  pipeline.state = "running";
+  const seat = { engine: "codex" as const, model: "gpt-6.1-sol", effort: "high", serviceTier: null, accountId: "account-a" };
+  const record = { id: "runtime-switch-store:build:1:1", seq: 1, requestedAt: "2026-10-02T10:00:00.000Z", actor: { kind: "operator" as const }, mode: "fork" as const, phase: "requested" as const, from: { ...seat, conversationId: "conversation_store", launchId: "launch-store", sessionId: "session-store", agentPath: "/sessions/store.jsonl" }, to: { ...seat, accountId: "account-b", accountPinned: false } };
+  pipeline.runs[0]!.attempts.push({ n: 1, state: "running", effectiveRole: structuredClone(pipeline.stages[0]!.effectiveRole), launchId: "launch-store", conversationId: "conversation_store", sessionId: "session-store", agentPath: "/sessions/store.jsonl", paneId: null, flowId: null, startedAt: record.requestedAt, completedAt: null, input: "brief", activatedBy: null, output: null, verdict: null, error: null, runtimeSwitches: [record] });
+  savePipelines([pipeline]); expect(loadPipelines()[0]?.runs[0]?.attempts[0]?.runtimeSwitches).toEqual([record]);
+  record.to.model = 123 as never; expect(() => savePipelines([pipeline])).toThrow("malformed pipeline record"); expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches![0]!.to.model).toBe("gpt-6.1-sol");
+}));

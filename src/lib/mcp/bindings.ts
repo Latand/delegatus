@@ -2263,6 +2263,7 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     ...(action === "attach-link" || action === "detach-link" ? { workLinks: pipelineWorkLinks(result.pipeline), ...(result.unchanged ? { unchanged: true } : {}) } : {}),
     ...(result.close ? { close: result.close } : {}),
     ...(result.graphEdit ? { graphEdit: result.graphEdit } : {}),
+    ...(result.runtimeSwitch !== undefined ? { runtimeSwitch: result.runtimeSwitch, replayed: result.replayed, appliedNow: result.appliedNow } : {}),
     ...newLegacyReviewFields(result),
     ...(result.decisionAnswer ? { decisionAnswer: {
       clientRequestId: result.decisionAnswer.clientRequestId,

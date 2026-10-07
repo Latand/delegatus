@@ -1359,3 +1359,14 @@ test("structured reconfigure captures an exact ultrafast rollback profile before
     fast: false, previousProfile: { model: "gpt-6-astra", effort: "high", fast: true, serviceTier: "ultrafast" },
   })]);
 });
+
+test("the pipeline switch adapter recognizes receipt-free native reconfigure success", async () => {
+  const { runtimeSwitchControlAcknowledgement } = await import("@/lib/pipelines/runtimeSwitch");
+  const fixture = profiledConversation();
+  const { journal, client, commands } = journalClient("pipeline-current");
+  try {
+    const result = await pickAccount(fixture, client, "pipeline-current", { model: "gpt-5.6-sol", effort: "high", fast: true, accountId: "codex-subscription" });
+    expect(runtimeSwitchControlAcknowledgement(result)).toBe("already-current");
+    expect(commands).toHaveLength(0);
+  } finally { journal.close(); }
+});
