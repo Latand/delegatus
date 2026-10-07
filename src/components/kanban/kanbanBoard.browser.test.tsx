@@ -18185,6 +18185,385 @@ describe("parallel ask idle fallback", () => {
   }, 120_000);
 });
 
+/* What moves the board under a scroll. Installed once the board is drawn: it
+   records every programmatic scroll (a `scrollTop` write, `scrollTo`,
+   `scrollBy`, `scrollIntoView`) with the element and the caller, every change
+   of a card's height with where the card stood against its column's window,
+   and every layout shift with the nodes the browser blames for it. */
+type ScrollWrite = { at: number; call: string; target: string; stack: string };
+type CardResize = { at: number; card: string; column: string; from: number; to: number; where: "above" | "in view" | "below"; scrollTop: number };
+type ScrollProbe = { writes: ScrollWrite[]; resizes: CardResize[]; shifts: Array<{ at: number; value: number; recent: boolean; sources: string[] }> };
+async function installScrollProbe(page: Page) {
+  await page.evaluate(() => {
+    const probe: ScrollProbe = { writes: [], resizes: [], shifts: [] };
+    (window as unknown as { __scrollProbe: ScrollProbe }).__scrollProbe = probe;
+    const nameOf = (node: Node | null) => {
+      if (!(node instanceof Element)) return "?";
+      const card = node.closest<HTMLElement>(".card[data-id]");
+      const column = node.closest<HTMLElement>(".column[data-status]")?.dataset.status;
+      const own = `${node.tagName.toLowerCase()}.${String(node.getAttribute("class") ?? "").split(/\s+/).slice(0, 2).join(".")}`;
+      return `${own}${card ? ` in ${card.dataset.id}` : ""}${column ? ` [${column}]` : ""}`;
+    };
+    const caller = () => (new Error().stack ?? "").split("\n").slice(3, 7).map((line) => line.trim().replace(/https?:\/\/[^/]+\//, "")).join(" < ");
+    const top = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
+    Object.defineProperty(Element.prototype, "scrollTop", {
+      configurable: true, get: top.get,
+      set(this: Element, value: number) { probe.writes.push({ at: performance.now(), call: `scrollTop = ${value}`, target: nameOf(this), stack: caller() }); top.set!.call(this, value); },
+    });
+    for (const call of ["scrollTo", "scrollBy", "scrollIntoView"] as const) {
+      const original = Element.prototype[call] as (...args: unknown[]) => void;
+      (Element.prototype as unknown as Record<string, unknown>)[call] = function (this: Element, ...args: unknown[]) {
+        probe.writes.push({ at: performance.now(), call: `${call}(${JSON.stringify(args[0] ?? null)})`, target: nameOf(this), stack: caller() });
+        return original.apply(this, args);
+      };
+    }
+    const heights = new WeakMap<Element, number>();
+    const resize = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const element = entry.target as HTMLElement;
+        const height = entry.borderBoxSize[0]!.blockSize;
+        const before = heights.get(element);
+        heights.set(element, height);
+        const body = element.closest<HTMLElement>(".col-body");
+        if (before === undefined || Math.abs(before - height) < 0.5 || !body) continue;
+        const view = body.getBoundingClientRect();
+        const box = element.getBoundingClientRect();
+        probe.resizes.push({
+          at: performance.now(), card: element.dataset.id ?? "?", column: body.closest<HTMLElement>(".column")?.dataset.status ?? "?", from: Math.round(before), to: Math.round(height),
+          where: box.bottom <= view.top ? "above" : box.top >= view.bottom ? "below" : "in view", scrollTop: Math.round(body.scrollTop),
+        });
+      }
+    });
+    for (const element of document.querySelectorAll(".kb .col-body .card[data-id]")) resize.observe(element);
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries() as unknown as Array<{ startTime: number; value: number; hadRecentInput: boolean; sources?: Array<{ node: Node | null }> }>) {
+        probe.shifts.push({ at: entry.startTime, value: Number(entry.value.toFixed(4)), recent: entry.hadRecentInput, sources: (entry.sources ?? []).slice(0, 4).map((source) => nameOf(source.node)) });
+      }
+    }).observe({ type: "layout-shift" });
+  });
+}
+
+/* One wheel notch over a column, sampled on every frame until the page and
+   every column rest. A card that is in the window before the notch and after
+   it may move by the notch and by nothing else: `moved` is how far it went,
+   and `back` is the furthest a single frame carried it against the wheel. */
+type ScrollStep = {
+  step: number; wheel: number; under: string; page: [number, number]; column: [number, number]; columnHeight: [number, number]; atEnd: boolean; still: boolean;
+  cards: Array<{ card: string; column: string; moved: number; back: number }>;
+};
+async function wheelStep(page: Page, column: string, at: { x: number; y: number }, wheel: number, step: number, between?: () => Promise<void>): Promise<ScrollStep> {
+  await page.evaluate(() => {
+    const scroller = document.querySelector<HTMLElement>(".kb .kb-page")!;
+    const bodies = [...document.querySelectorAll<HTMLElement>(".kb .column[data-status] > .col-body")];
+    const tracked = bodies.flatMap((body) => {
+      const view = body.getBoundingClientRect();
+      return [...body.querySelectorAll<HTMLElement>(":scope > .card[data-id]")].filter((card) => {
+        const box = card.getBoundingClientRect();
+        return box.bottom > Math.max(view.top, 0) + 1 && box.top < Math.min(view.bottom, innerHeight) - 1;
+      });
+    });
+    const key = () => [scroller, ...bodies].map((element) => `${element.scrollTop}:${element.scrollHeight}`).join(" ");
+    const state = {
+      running: true, key, from: key(), rest: { key: "", since: 0 }, page: scroller.scrollTop,
+      bodies: new Map(bodies.map((body) => [body, { top: body.scrollTop, height: body.scrollHeight }])), tracked, frames: [] as Array<Map<HTMLElement, number>>,
+    };
+    (window as unknown as { __scrollStep: typeof state }).__scrollStep = state;
+    const sample = () => {
+      state.frames.push(new Map(tracked.map((card) => [card, card.getBoundingClientRect().top])));
+      if (state.running) requestAnimationFrame(sample);
+    };
+    sample();
+  });
+  await page.mouse.move(at.x, at.y);
+  await page.mouse.wheel(0, wheel);
+  await between?.();
+  /* The notch lands a few frames after it is sent; at an end of the scroller nothing follows it. */
+  await page.waitForFunction(() => { const state = (window as unknown as { __scrollStep: { key(): string; from: string } }).__scrollStep; return state.key() !== state.from; }, undefined, { polling: "raf", timeout: 500 }).catch(() => {});
+  /* Rest: no scroll position and no content height changed for 200 ms. */
+  await page.waitForFunction(() => {
+    const state = (window as unknown as { __scrollStep: { key(): string; rest: { key: string; since: number } } }).__scrollStep;
+    const key = state.key();
+    if (state.rest.key !== key) state.rest = { key, since: performance.now() };
+    return performance.now() - state.rest.since > 200;
+  }, undefined, { polling: "raf", timeout: 10_000 });
+  return page.evaluate(({ column, wheel, step }) => {
+    const state = (window as unknown as { __scrollStep: { running: boolean; key(): string; from: string; page: number; bodies: Map<HTMLElement, { top: number; height: number }>; tracked: HTMLElement[]; frames: Array<Map<HTMLElement, number>> } }).__scrollStep;
+    state.running = false;
+    const scroller = document.querySelector<HTMLElement>(".kb .kb-page")!;
+    const under = document.querySelector<HTMLElement>(`.kb .column[data-status="${column}"] > .col-body`)!;
+    const first = state.frames[0]!;
+    const direction = Math.sign(wheel);
+    /* A card the step carried out of the window is still read: a jump is what carries it out. */
+    const cards = state.tracked.flatMap((card) => {
+      const body = card.closest<HTMLElement>(".col-body");
+      if (!card.isConnected || !body) return [];
+      const box = card.getBoundingClientRect();
+      let back = 0;
+      for (let index = 1; index < state.frames.length; index += 1) back = Math.max(back, direction * (state.frames[index]!.get(card)! - state.frames[index - 1]!.get(card)!));
+      return [{ card: card.dataset.id!, column: body.closest<HTMLElement>(".column")!.dataset.status!, moved: Number((box.top - first.get(card)!).toFixed(1)), back: Number(back.toFixed(1)) }];
+    });
+    const from = state.bodies.get(under)!;
+    const ended = (element: HTMLElement) => direction > 0 ? element.scrollHeight - element.clientHeight - element.scrollTop < 1 : element.scrollTop < 1;
+    return {
+      step, wheel, under: column, page: [Math.round(state.page), Math.round(scroller.scrollTop)] as [number, number], column: [Math.round(from.top), Math.round(under.scrollTop)] as [number, number],
+      columnHeight: [from.height, under.scrollHeight] as [number, number], atEnd: ended(under) && (scroller.scrollTop === state.page || ended(scroller)),
+      still: state.key() === state.from && cards.every((card) => card.moved === 0), cards,
+    };
+  }, { column, wheel, step });
+}
+/* The cards of a step that moved by something other than the wheel. Short of
+   an end of its scrollers a card under the pointer moves by the whole notch,
+   whatever the scroll position did to keep it there; in the notch that
+   reaches an end it moves by what was left to scroll. A card of another
+   column moves only when the page does. */
+function scrollJumps(reading: ScrollStep) {
+  const pageDelta = reading.page[1] - reading.page[0];
+  const scrolled = reading.column[1] - reading.column[0] + pageDelta;
+  return reading.cards.flatMap((card) => {
+    const expected = card.column !== reading.under ? -pageDelta : reading.atEnd ? -scrolled : -reading.wheel;
+    return Math.abs(card.moved - expected) > 1.5 || card.back > 1.5
+      ? [{ step: reading.step, wheel: reading.wheel, card: card.card, column: card.column, moved: card.moved, expected, back: card.back, scroll: reading.column, height: reading.columnHeight }] : [];
+  });
+}
+
+describe("the board holds still under a scroll", () => {
+  /*
+   * The operator's report: scrolling a column of a board of 22 tasks down,
+   * near the end the lower cards were pulled in and the scroll position moved
+   * on its own. Measured on the board of forty-eight cards of mixed heights
+   * this case scrolls (`?scenario=drag-board`, 28 of them in one column), the
+   * cause was the column's own layout: a card whose contents the browser skips
+   * was a flex item with nothing to stop it shrinking, so it collapsed to its
+   * 26 px of padding the moment it passed out of the browser's rendering
+   * margin above the window. One 200 px notch collapsed six cards of 227 to
+   * 270 px and carried the window past five cards; three notches later the
+   * content was 907 px shorter and the scroll position fell back by 39 px on
+   * its own. Two smaller movements shared the column: with scroll anchoring
+   * off, a card above the window that grew on a data refresh pushed the window
+   * by its growth (32 px), and the column widening under a resting mouse moved
+   * the cards in the window by 264 to 288 px.
+   *
+   * Each column is scrolled to its end one wheel notch at a time and back,
+   * with the orchestrator's seat open over the board and with it folded.
+   * While the long column scrolls, a card above the window is rewritten longer
+   * and another task arrives in the column. The same drive then runs as the
+   * stylesheet was, and with only the anchoring taken away, and has to jump
+   * both times. Readings go to `evidence/board-scroll-steady/scroll.json`.
+   *
+   *   CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "holds still"
+   */
+  const WHEEL = 240;
+  /* The two rules of kanbanBoard.css this case holds, each taken away in turn below. */
+  const ANCHORLESS = ".kb .board:not(.tabs) .col-body { overflow-anchor: none !important; }";
+  const UNFIXED = `.kb .col-body > .card { flex-shrink: 1 !important; } ${ANCHORLESS}`;
+  const LONG_TITLE = "Investigate why the nightly export of the partner ledger drops rows when the upstream feed arrives after the cut-off window, and why the retry that follows writes the same rows twice into the staging table before the reconciliation job has read them";
+  type Evidence = { agentWritesTitle(id: string, title: string): void; setTaskStatus(id: string, status: string): void };
+  async function openBoard(browser: Browser, base: string, seat: "open" | "folded") {
+    const opened = await openFixture(browser, `${base}?scenario=drag-board`, { width: 1440, height: 900 }, "light", "en");
+    if (seat === "folded") {
+      await opened.context.addInitScript(() => localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: { atlas: true }, placement: "top", width: null })));
+      await opened.page.reload();
+    }
+    await opened.page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 30_000 });
+    await opened.page.waitForTimeout(1_000);
+    return opened;
+  }
+  /* The columns in the window, and a point in each that the wheel turns over. */
+  const columnsOf = (page: Page) => page.evaluate(() => [...document.querySelectorAll<HTMLElement>(".kb .column[data-status] > .col-body")].flatMap((element) => {
+    const box = element.getBoundingClientRect();
+    const head = element.closest<HTMLElement>(".column")!.querySelector<HTMLElement>(".col-head h2")!.getBoundingClientRect();
+    if (box.left + box.width / 2 > innerWidth - 8 || head.top > innerHeight - 8) return [];
+    return [{
+      column: element.closest<HTMLElement>(".column")!.dataset.status!, cards: element.querySelectorAll(":scope > .card[data-id]").length,
+      at: { x: Math.round(box.left + box.width / 2), y: Math.round(Math.min(innerHeight - 30, Math.max(box.top + 40, (Math.max(box.top, 0) + Math.min(box.bottom, innerHeight)) / 2))) },
+      head: { x: Math.round(head.left + head.width / 2), y: Math.round(head.top + head.height / 2) },
+    }];
+  }));
+  /* A press in a column keeps it from widening under the mouse until the mouse leaves it,
+     so the notches read the scroll alone. The widening has its own case below. */
+  async function scrollColumn(page: Page, column: { column: string; at: { x: number; y: number }; head: { x: number; y: number } }, events: Record<number, () => Promise<unknown>> = {}) {
+    await page.mouse.click(column.head.x, column.head.y);
+    const steps: ScrollStep[] = [];
+    const fired: unknown[] = [];
+    for (const direction of [1, -1]) {
+      for (let count = 0; count < 120; count += 1) {
+        const event = direction > 0 ? events[count] : undefined;
+        const reading = await wheelStep(page, column.column, column.at, direction * WHEEL, steps.length, event && (async () => { fired.push(await event()); }));
+        steps.push(reading);
+        if (reading.still) break;
+      }
+    }
+    const heights = steps.flatMap((reading) => reading.columnHeight);
+    const probe = await page.evaluate(() => {
+      const probe = (window as unknown as { __scrollProbe: ScrollProbe }).__scrollProbe;
+      const copy = { writes: [...probe.writes], resizes: [...probe.resizes], shifts: probe.shifts.filter((shift) => !shift.recent) };
+      probe.writes.length = 0; probe.resizes.length = 0; probe.shifts.length = 0;
+      return copy;
+    });
+    /* A task that leaves a column for this one closes the gap it left there: that column's cards move with it. */
+    const left = new Map(fired.flatMap((event, index) => { const entry = event as { step?: number; leaves?: string }; return entry.leaves ? [[entry.step ?? index, entry.leaves] as const] : []; }));
+    return {
+      steps: steps.length, furthest: Math.max(...steps.map((reading) => reading.column[1])), contentHeight: [Math.min(...heights), Math.max(...heights)],
+      jumps: steps.flatMap(scrollJumps).filter((jump) => left.get(jump.step) !== jump.column), fired,
+      collapsedAbove: probe.resizes.filter((resize) => resize.where === "above" && resize.to <= 30).length, resizes: probe.resizes, writes: probe.writes,
+      shifts: probe.shifts.filter((shift) => shift.sources.some((source) => source.endsWith(`[${column.column}]`))),
+    };
+  }
+
+  /* While the long column scrolls: the card just above its window is rewritten longer by an agent,
+     and a task another client moved here arrives. The card is the one before the first card the
+     notch read in the window, so it was above the window before the wheel turned: one picked
+     against the window as it is now could be a card the notch itself carried out, and its top
+     edge then follows the scroll position that grew to hold the cards under it. */
+  const arrivals = (page: Page): Record<number, () => Promise<unknown>> => ({
+    3: () => page.evaluate((title) => {
+      const body = document.querySelector<HTMLElement>('.kb .column[data-status="assigned"] > .col-body')!;
+      const cards = [...body.querySelectorAll<HTMLElement>(':scope > .card[data-id^="task:"]')];
+      const read = (window as unknown as { __scrollStep: { tracked: HTMLElement[] } }).__scrollStep.tracked.find((card) => card.parentElement === body);
+      const above = read ? cards[cards.indexOf(read) - 1] : undefined;
+      if (!above) return { event: "rewrite", card: null };
+      (window as unknown as { evidence: Evidence }).evidence.agentWritesTitle(above.dataset.id!.slice(5), title);
+      return { event: "rewrite", card: above.dataset.id, heightBefore: Math.round(above.getBoundingClientRect().height) };
+    }, LONG_TITLE),
+    6: () => page.evaluate(() => {
+      const from = document.querySelector<HTMLElement>('.kb .column[data-status="inbox"] > .col-body > .card[data-id^="task:"]');
+      if (!from) return { event: "arrival", card: null };
+      (window as unknown as { evidence: Evidence }).evidence.setTaskStatus(from.dataset.id!.slice(5), "assigned");
+      return { event: "arrival", card: from.dataset.id, step: 6, leaves: "inbox" };
+    }),
+  });
+
+  browserTest("a card in the window moves by the wheel and by nothing else, to the end of every column and back, while cards above it change", async () => {
+    const out = path.resolve(".artifacts/board-scroll-steady");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const cases: Record<string, unknown>[] = [];
+    const failures: string[] = [];
+    try {
+      for (const seat of ["open", "folded"] as const) {
+        const { context, page, pageErrors } = await openBoard(browser, server.base, seat);
+        try {
+          const columns = await columnsOf(page);
+          await installScrollProbe(page);
+          if (columns.length < 3) failures.push(`seat ${seat}: only ${columns.length} columns in the window`);
+          for (const column of columns) {
+            const events = column.column === "assigned" ? arrivals(page) : {};
+            const reading = await scrollColumn(page, column, events);
+            const landed = await page.evaluate((fired) => fired.map((event) => {
+              const card = event.card ? document.querySelector<HTMLElement>(`.kb .card[data-id="${CSS.escape(event.card)}"]`) : null;
+              const body = card?.closest<HTMLElement>(".col-body");
+              return { ...event, column: body?.closest<HTMLElement>(".column")?.dataset.status ?? null, heightAfter: card ? Math.round(card.getBoundingClientRect().height) : null, index: card && body ? [...body.querySelectorAll(":scope > .card[data-id]")].indexOf(card) : null };
+            }), reading.fired as Array<{ event: string; card: string | null; heightBefore?: number }>);
+            cases.push({ seat, column: column.column, cards: column.cards, steps: reading.steps, furthest: reading.furthest, contentHeight: reading.contentHeight, collapsedAbove: reading.collapsedAbove, events: landed, jumps: reading.jumps, programmaticScrolls: reading.writes, layoutShifts: reading.shifts });
+            const label = `seat ${seat}, ${column.column}`;
+            if (reading.jumps.length) failures.push(`${label}: ${reading.jumps.length} jumps, the first ${JSON.stringify(reading.jumps[0])}`);
+            if (reading.collapsedAbove) failures.push(`${label}: ${reading.collapsedAbove} cards collapsed above the window, the first ${JSON.stringify(reading.resizes.find((resize) => resize.where === "above" && resize.to <= 30))}`);
+            if (reading.writes.length) failures.push(`${label}: a programmatic scroll during the wheel, ${JSON.stringify(reading.writes[0])}`);
+            if (column.column === "assigned") {
+              if (reading.furthest < 4_000) failures.push(`${label}: the long column only scrolled ${reading.furthest} px, so its far cards never left the rendering margin`);
+              const rewrite = landed.find((event) => event.event === "rewrite");
+              const arrival = landed.find((event) => event.event === "arrival");
+              if (!rewrite?.card || !(rewrite.heightAfter! > rewrite.heightBefore!)) failures.push(`${label}: no card above the window grew, ${JSON.stringify(rewrite)}`);
+              if (!arrival?.card || arrival.column !== "assigned") failures.push(`${label}: no task arrived in the column, ${JSON.stringify(arrival)}`);
+            }
+          }
+          if (pageErrors.length) failures.push(`seat ${seat}: page errors ${pageErrors.join(" | ")}`);
+        } finally {
+          await context.close();
+        }
+      }
+      /* The red paths, over the long column: the stylesheet as it was, and then with only the anchoring taken away. */
+      for (const [name, css] of [["as it was", UNFIXED], ["no anchoring", ANCHORLESS]] as const) {
+        const { context, page } = await openBoard(browser, server.base, "folded");
+        try {
+          await page.addStyleTag({ content: css });
+          await page.waitForTimeout(500);
+          const column = (await columnsOf(page)).find((entry) => entry.column === "assigned")!;
+          await installScrollProbe(page);
+          const reading = await scrollColumn(page, column, name === "no anchoring" ? arrivals(page) : {});
+          cases.push({ seat: "folded", unfixed: name, css, column: column.column, cards: column.cards, steps: reading.steps, furthest: reading.furthest, contentHeight: reading.contentHeight, collapsedAbove: reading.collapsedAbove, jumps: reading.jumps.length, firstJump: reading.jumps[0] ?? null, largestJump: Number(Math.max(0, ...reading.jumps.map((jump) => Math.abs(jump.moved - jump.expected))).toFixed(1)) });
+          if (!reading.jumps.length) failures.push(`${name}: the column held still, so this check cannot fail`);
+          if (name === "as it was" && !reading.collapsedAbove) failures.push(`${name}: no card collapsed above the window, so this check cannot fail`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/board-scroll-steady", { recursive: true });
+    fs.writeFileSync("evidence/board-scroll-steady/scroll.json", `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", viewport: { width: 1440, height: 900 }, wheel: WHEEL, cases, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 900_000);
+
+  /* A narrow column widens one second after the mouse comes to rest in it, and scrolling it is
+     resting in it. Every card above the window rewraps to another height then, in the column that
+     widens and in the one that gives the width up. The first card in each window stays where it was. */
+  browserTest("a column that widens under a resting mouse keeps the first card of each scrolled window in place", async () => {
+    const out = path.resolve(".artifacts/board-scroll-steady");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    let reading: Record<string, unknown> = {};
+    try {
+      const { context, page, pageErrors } = await openBoard(browser, server.base, "folded");
+      try {
+        const columns = await columnsOf(page);
+        const wide = columns.find((entry) => entry.column === "assigned")!, narrow = columns.find((entry) => entry.column === "inbox")!;
+        await installScrollProbe(page);
+        /* The wide column cannot widen, so the mouse in it starts nothing. */
+        for (let step = 0; step < 4; step += 1) await wheelStep(page, wide.column, wide.at, WHEEL, step);
+        for (let step = 0; step < 4; step += 1) await wheelStep(page, narrow.column, narrow.at, WHEEL, step);
+        const windows = () => page.evaluate(() => Object.fromEntries(["inbox", "assigned"].map((status) => {
+          const body = document.querySelector<HTMLElement>(`.kb .column[data-status="${status}"] > .col-body`)!;
+          const view = body.getBoundingClientRect();
+          const cards = [...body.querySelectorAll<HTMLElement>(":scope > .card[data-id]")];
+          const first = cards.find((card) => card.getBoundingClientRect().bottom > view.top + 1)!;
+          return [status, {
+            width: Math.round(view.width), scrollTop: Math.round(body.scrollTop), first: first.dataset.id!, above: Math.round(first.getBoundingClientRect().top - view.top + body.scrollTop),
+            tops: Object.fromEntries(cards.map((card) => [card.dataset.id!, Number((card.getBoundingClientRect().top - view.top).toFixed(1))])),
+          }];
+        })) as Record<string, { width: number; scrollTop: number; first: string; above: number; tops: Record<string, number> }>);
+        const before = await windows();
+        await page.waitForSelector('.kb .column[data-status="inbox"][data-wide="1"]', { timeout: 5_000 });
+        await page.waitForFunction(() => !document.querySelector(".kb")!.hasAttribute("data-column-layout"), undefined, { polling: "raf", timeout: 5_000 });
+        await page.waitForTimeout(150);
+        const after = await windows();
+        const writes = await page.evaluate(() => (window as unknown as { __scrollProbe: ScrollProbe }).__scrollProbe.writes.map((write) => ({ call: write.call, target: write.target })));
+        const columnsRead = Object.fromEntries(Object.keys(before).map((status) => [status, {
+          width: [before[status]!.width, after[status]!.width], scrollTop: [before[status]!.scrollTop, after[status]!.scrollTop], first: before[status]!.first,
+          /* How far the cards above the window grew or shrank in all, which is what the window would have moved by. */
+          heightAbove: [before[status]!.above, after[status]!.tops[before[status]!.first]! + after[status]!.scrollTop],
+          moved: Number((after[status]!.tops[before[status]!.first]! - before[status]!.tops[before[status]!.first]!).toFixed(1)),
+        }]));
+        for (const [status, column] of Object.entries(columnsRead)) {
+          if (Math.abs(column.width[1]! - column.width[0]!) < 100) failures.push(`${status}: the column did not change width, ${column.width.join(" → ")}`);
+          if (Math.abs(column.heightAbove[1]! - column.heightAbove[0]!) < 40) failures.push(`${status}: the cards above the window kept their height (${column.heightAbove.join(" → ")}), so this check cannot fail`);
+          if (Math.abs(column.moved) > 1.5) failures.push(`${status}: the first card in the window, ${column.first}, moved by ${column.moved} px with no scroll`);
+        }
+        /* The wheel still turns the widened column by the notch. */
+        const next = await wheelStep(page, narrow.column, narrow.at, WHEEL, 8);
+        const jumps = scrollJumps(next);
+        if (jumps.length) failures.push(`the notch after the widening: ${JSON.stringify(jumps[0])}`);
+        if (pageErrors.length) failures.push(`page errors ${pageErrors.join(" | ")}`);
+        reading = { columns: columnsRead, scrollWrites: writes, nextNotch: { scroll: next.column, jumps } };
+      } finally {
+        await context.close();
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/board-scroll-steady", { recursive: true });
+    fs.writeFileSync("evidence/board-scroll-steady/widening.json", `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", viewport: { width: 1440, height: 900 }, wheel: WHEEL, ...reading, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 120_000);
+});
+
 describe("the left sidebar: one tidy panel with a compact system block", () => {
   /*
    * Rendered evidence for the built sidebar (docs/design/sidebar-redesign.md, variant 1):
