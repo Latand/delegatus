@@ -382,7 +382,10 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
           onClick={() => { if (!speaking) setPicked(entry.id); }}
         >
           {t("proto.round", { n: at + 1 })}
-          {entry.decision ? <Check className="h-3 w-3" aria-label={t("proto.round.decided")} /> : <span className="h-1.5 w-1.5 rounded-full bg-accent" role="img" aria-label={t("proto.round.waiting")} />}
+          {entry.decision ? <Check className="h-3 w-3" aria-label={t("proto.round.decided")} />
+            /* A later decision retired this round: it stays readable, and waits for nothing. */
+            : entry.supersededBy ? <span data-prototype-superseded={entry.supersededBy} className="h-1.5 w-1.5 rounded-full border border-current" role="img" aria-label={t("proto.round.superseded", { n: rounds.findIndex((other) => other.id === entry.supersededBy) + 1 })} />
+            : <span className="h-1.5 w-1.5 rounded-full bg-accent" role="img" aria-label={t("proto.round.waiting")} />}
         </button>
       ))}
     </div>

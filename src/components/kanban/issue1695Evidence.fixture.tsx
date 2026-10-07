@@ -33,6 +33,7 @@ import { withTaskCompletion } from "@/lib/tasks/completion";
 import { admissionSnapshot } from "@/lib/tasks/groupHide";
 import { getRuntimeBus } from "@/hooks/runtimeBus";
 import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
+import { prototypeReviewSummary, prototypeRoundsSuperseded } from "@/lib/prototypeReview/model";
 import type { PrototypeDeliveryState, PrototypeMediaView, PrototypeReviewSummary, PrototypeRoundView } from "@/lib/prototypeReview/types";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
@@ -2581,13 +2582,9 @@ const PROTO = params.get("proto");
 const protoPosts: unknown[] = [];
 const protoRounds: Record<string, PrototypeRoundView[]> = {};
 const protoSaveState: Record<string, PrototypeDeliveryState> = { "t-upload": "no-orchestrator" };
+/* The Viewer's own selectors: which round waits and which a later decision retired. */
 function protoSummary(rounds: PrototypeRoundView[]): PrototypeReviewSummary {
-  const latest = rounds.at(-1)!;
-  const waiting = rounds.findLast((round) => !round.decision);
-  return {
-    latestReviewId: latest.id, waitingReviewId: waiting?.id ?? null, title: latest.title, rounds: rounds.length, createdAt: (waiting ?? latest).createdAt,
-    ...(latest.decision ? { decision: { chosen: latest.variants.filter((variant) => latest.decision!.chosen.includes(variant.number)).map(({ number, name }) => ({ number, name })), comment: latest.decision.comment, at: latest.decision.at, delivery: latest.decision.delivery.state } } : {}),
-  };
+  return prototypeReviewSummary(rounds)!;
 }
 function protoPublish(): void {
   for (const [taskId, rounds] of Object.entries(protoRounds)) {
@@ -2636,6 +2633,13 @@ if (PROTO) {
     { number: 2, name: L("Segmented control", "Сегментований перемикач"), description: L("The presets as one segmented control.", "Пресети одним сегментованим перемикачем."), videos: [], frames: [{ image: image(960, 600, 80, "segments", false, false), caption: L("presets", "пресети"), width: 1440 }] },
     { number: 3, name: L("Advanced drawer", "Шухляда розширених"), description: L("Eleven toggles behind one disclosure.", "Одинадцять перемикачів за одним розкриттям."), videos: [], frames: [{ image: image(960, 600, 120, "drawer", false, false), caption: L("advanced", "розширені"), width: 1440 }] },
   ], { mediaRemovedAt: iso(2 * 24 * 60 * MIN), decision: decided([2, 3], L("Take the segmented control and keep the drawer closed by default.", "Беремо сегментований перемикач, шухляда типово закрита."), 38 * 24 * 60 * MIN, "sent") })];
+  /* `&retired=1`: export's design round was never answered and its decided
+     round came after it, as on the task a revise stage answered. The decision
+     retires that earlier round, so export waits for nothing. */
+  if (params.get("retired") === "1") protoRounds["t-export"]!.unshift(round("r-export-0", "t-export", L("Export presets, first take", "Пресети експорту, перша спроба"), 41 * 24 * 60 * MIN, [
+    { number: 1, name: L("One long list", "Один довгий список"), description: L("Every preset in one list.", "Усі пресети одним списком."), videos: [], frames: [{ image: image(960, 600, 60, "list", false, false), caption: L("presets", "пресети"), width: 1440, lang: "en" }] },
+    { number: 2, name: L("Two tabs", "Дві вкладки"), description: L("Simple and advanced presets on two tabs.", "Прості й розширені пресети на двох вкладках."), videos: [], frames: [{ image: image(960, 600, 90, "tabs", false, false), caption: L("presets", "пресети"), width: 1440, lang: "en" }] },
+  ], { mediaRemovedAt: iso(2 * 24 * 60 * MIN) }));
   protoRounds["t-links"] = [
     round("r-links-1", "t-links", L("Release notes links", "Посилання в нотатках релізу"), 3 * 24 * 60 * MIN, [
       { number: 1, name: L("Inline arrows", "Стрілки в рядку"), description: L("An arrow after every repaired link.", "Стрілка після кожного виправленого посилання."), videos: [], frames: [{ image: image(960, 600, 20, "arrows"), caption: L("notes", "нотатки"), width: 1440 }] },
@@ -2917,7 +2921,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       protoPublish();
     }
     return json({
-      taskId, rounds, waitingReviewId: rounds.findLast((entry) => !entry.decision)?.id ?? null,
+      taskId, rounds: rounds.map((entry) => { const by = prototypeRoundsSuperseded(rounds).get(entry.id); return by ? { ...entry, supersededBy: by } : entry; }),
+      waitingReviewId: rounds.length ? protoSummary(rounds).waitingReviewId : null,
       ...(rounds.length ? { summary: protoSummary(rounds) } : {}),
       ...(PROTO === "elsewhere" ? { unavailable: "another-installation" } : {}),
     });

@@ -1741,6 +1741,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "proto.round": "Раунд {n}",
   "proto.round.decided": "вирішено",
   "proto.round.waiting": "чекає на вибір",
+  "proto.round.superseded": "замінено раундом {n}",
   "proto.round.speaking": "Інший раунд відкриється, коли диктування ляже в цей",
   "proto.choose": "Обрати варіант {variant}",
   "proto.unchoose": "Прибрати варіант {variant} з вибору",

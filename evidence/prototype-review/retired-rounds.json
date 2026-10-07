@@ -1,0 +1,142 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "readings": {
+    "desktop-1440-en-menu": [
+      "t-links",
+      "t-search",
+      "t-upload"
+    ],
+    "desktop-1440-en-plaque": {
+      "count": "3",
+      "tasks": [
+        "t-links",
+        "t-search",
+        "t-upload"
+      ]
+    },
+    "desktop-1440-en-card": {
+      "state": "decided",
+      "text": "Prototype"
+    },
+    "desktop-1440-en-rounds": {
+      "shown": "r-export",
+      "tabs": [
+        {
+          "round": "r-export-0",
+          "superseded": "r-export",
+          "marks": [
+            "superseded by round 2"
+          ]
+        },
+        {
+          "round": "r-export",
+          "superseded": null,
+          "marks": [
+            "decided"
+          ]
+        }
+      ]
+    },
+    "desktop-1440-uk-menu": [
+      "t-links",
+      "t-search",
+      "t-upload"
+    ],
+    "desktop-1440-uk-plaque": {
+      "count": "3",
+      "tasks": [
+        "t-links",
+        "t-search",
+        "t-upload"
+      ]
+    },
+    "desktop-1440-uk-card": {
+      "state": "decided",
+      "text": "Прототип"
+    },
+    "desktop-1440-uk-rounds": {
+      "shown": "r-export",
+      "tabs": [
+        {
+          "round": "r-export-0",
+          "superseded": "r-export",
+          "marks": [
+            "замінено раундом 2"
+          ]
+        },
+        {
+          "round": "r-export",
+          "superseded": null,
+          "marks": [
+            "вирішено"
+          ]
+        }
+      ]
+    },
+    "phone-390-en-menu": [
+      "t-links",
+      "t-search",
+      "t-upload"
+    ],
+    "phone-390-en-plaque": {
+      "count": "3",
+      "label": "Prototype ready: Restore search results after the index rebuild. Go to prototype"
+    },
+    "phone-390-en-card": {
+      "state": "decided",
+      "text": "Prototype"
+    },
+    "phone-390-en-rounds": {
+      "shown": "r-export",
+      "tabs": [
+        {
+          "round": "r-export-0",
+          "superseded": "r-export",
+          "marks": [
+            "superseded by round 2"
+          ]
+        },
+        {
+          "round": "r-export",
+          "superseded": null,
+          "marks": [
+            "decided"
+          ]
+        }
+      ]
+    },
+    "phone-390-uk-menu": [
+      "t-links",
+      "t-search",
+      "t-upload"
+    ],
+    "phone-390-uk-plaque": {
+      "count": "3",
+      "label": "Прототип готовий: Restore search results after the index rebuild. До прототипу"
+    },
+    "phone-390-uk-card": {
+      "state": "decided",
+      "text": "Прототип"
+    },
+    "phone-390-uk-rounds": {
+      "shown": "r-export",
+      "tabs": [
+        {
+          "round": "r-export-0",
+          "superseded": "r-export",
+          "marks": [
+            "замінено раундом 2"
+          ]
+        },
+        {
+          "round": "r-export",
+          "superseded": null,
+          "marks": [
+            "вирішено"
+          ]
+        }
+      ]
+    }
+  },
+  "failures": []
+}

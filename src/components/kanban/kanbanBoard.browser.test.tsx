@@ -22699,3 +22699,134 @@ describe("orchestrator wires after a seat action", () => {
     } finally { await browser.close(); server.stop(); server = null; }
   }, 300_000);
 });
+
+describe("prototype review: a decided round retires the earlier undecided rounds of its task", () => {
+  /*
+   * Export carries a design round nobody answered and, after it, a revise
+   * round the operator decided (`?proto=1&retired=1`): the shape of the task
+   * that kept its prototype in the operator's menu after the answer. The
+   * fixture answers through the Viewer's own selectors, so these frames draw
+   * what the server projects. At 1440 and 390, in English and Ukrainian: the
+   * needs-you menu lists the three waiting tasks and not export, the
+   * orchestrator's notice counts three and never names export, export's card
+   * button says decided, and its review marks the first round superseded by
+   * the second and nothing as waiting.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "retires the earlier"
+   *
+   * Frames go to PROTOTYPE_REVIEW_PNG_DIR (default `.artifacts/prototype-review/`);
+   * readings to `evidence/prototype-review/retired-rounds.json`.
+   */
+  const SIZES = [
+    { name: "desktop-1440", viewport: { width: 1440, height: 900 }, phone: false },
+    { name: "phone-390", viewport: { width: 390, height: 844 }, phone: true },
+  ] as const;
+  const WAITING = ["t-links", "t-search", "t-upload"];
+
+  browserTest("prototype review: the retired round leaves the menu, the notice and the card, and reads as superseded", async () => {
+    const out = path.resolve(".artifacts/prototype-review");
+    const pngDir = process.env.PROTOTYPE_REVIEW_PNG_DIR ?? out;
+    fs.mkdirSync(pngDir, { recursive: true });
+    fs.mkdirSync("evidence/prototype-review", { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const readings: Record<string, unknown> = {};
+    try {
+      for (const size of SIZES) for (const lang of ["en", "uk"] as const) {
+        const label = `${size.name}-${lang}`;
+        const tr = (key: Parameters<typeof translate>[1], vars?: Record<string, string | number>) => translate(lang, key, vars);
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?proto=1&retired=1`, size.viewport, "light", lang, "reduce", size.phone);
+        const shot = (name: string) => page.screenshot({ path: path.join(pngDir, `retired-${label}-${name}.png`) });
+        const record = (name: string, value: unknown) => { readings[`${label}-${name}`] = value; };
+        try {
+          await page.waitForSelector(size.phone ? "[data-phone-kanban]" : "[data-prototype-button]", { state: "attached", timeout: 30_000 });
+          await page.waitForTimeout(400);
+
+          /* The menu: everything that waits on the operator, the prototypes among it. */
+          const LIST = size.phone ? '[data-mobile2-sheet="attention"]' : "[data-needs-you-panel]";
+          await page.locator(size.phone ? "[data-mobile2-attention-count]" : "[data-attention-count]").click();
+          await page.waitForSelector(`${LIST} [data-attention-prototype]`, { timeout: 10_000 });
+          await page.waitForTimeout(250);
+          const menu = await page.evaluate((list) => [...document.querySelectorAll<HTMLElement>(`${list} [data-attention-prototype]`)]
+            .map((row) => row.dataset.attentionPrototype ?? null).sort(), LIST);
+          record("menu", menu);
+          await shot("menu");
+          if (JSON.stringify(menu) !== JSON.stringify(WAITING)) failures.push(`${label}: the menu lists the prototypes of ${JSON.stringify(menu)}, expected ${JSON.stringify(WAITING)}`);
+          await page.keyboard.press("Escape");
+          await page.reload();
+          await page.waitForSelector(size.phone ? "[data-phone-kanban]" : "[data-prototype-button]", { state: "attached", timeout: 30_000 });
+          await page.waitForTimeout(400);
+
+          /* The plaque: the orchestrator's notice above its message field, or the phone seat card's chip. */
+          if (size.phone) {
+            const chip = page.locator("[data-mobile2-seat-card] [data-prototype-notice-chip]");
+            await chip.waitFor({ timeout: 15_000 });
+            const plaque = { count: await chip.getAttribute("data-prototype-notice-chip"), label: await chip.getAttribute("aria-label") };
+            record("plaque", plaque);
+            await page.locator("[data-mobile2-seat-card]").screenshot({ path: path.join(pngDir, `retired-${label}-plaque.png`) });
+            if (plaque.count !== "3" || plaque.label?.includes("Export")) failures.push(`${label}: the seat card's notice reads ${JSON.stringify(plaque)}, expected three waiting tasks and no export`);
+          } else {
+            if (await page.locator('[data-kanban-seat][data-collapsed="1"]').count()) await page.locator("[data-kanban-seat] [data-seat-collapse]").click();
+            const list = page.locator("[data-orchestrator-conversation] [data-prototype-notices]");
+            await list.waitFor({ timeout: 15_000 });
+            const more = page.locator("[data-orchestrator-conversation] [data-prototype-notice-more]");
+            if (await more.count()) await more.click();
+            await page.waitForTimeout(250);
+            await list.scrollIntoViewIfNeeded();
+            const plaque = await page.evaluate(() => ({
+              count: document.querySelector<HTMLElement>("[data-orchestrator-conversation] [data-prototype-notices]")?.dataset.prototypeNotices ?? null,
+              tasks: [...document.querySelectorAll<HTMLElement>("[data-orchestrator-conversation] [data-prototype-notice]")].map((row) => row.dataset.prototypeNotice ?? null).sort(),
+            }));
+            record("plaque", plaque);
+            await shot("plaque");
+            if (plaque.count !== "3" || JSON.stringify(plaque.tasks) !== JSON.stringify(WAITING)) failures.push(`${label}: the orchestrator's notice reads ${JSON.stringify(plaque)}, expected ${JSON.stringify(WAITING)}`);
+          }
+
+          /* The card: export's review button says decided. */
+          if (size.phone) {
+            const tab = page.locator('[data-phone-kanban-tab="assigned"]');
+            if (await tab.count()) await tab.first().click();
+            await page.waitForTimeout(300);
+          }
+          const button = page.locator(size.phone ? '[data-phone-card-prototype-button="t-export"]' : '[data-prototype-button="t-export"]');
+          await button.scrollIntoViewIfNeeded();
+          const card = { state: await button.getAttribute("data-prototype-state"), text: (await button.textContent())?.trim() ?? null };
+          record("card", card);
+          await page.locator(size.phone ? '[data-phone-card-frame="task:t-export"]' : '[data-kanban-board] .card[data-id="task:t-export"]').screenshot({ path: path.join(pngDir, `retired-${label}-card.png`) });
+          if (card.state !== "decided") failures.push(`${label}: export's review button reads ${JSON.stringify(card)}, expected decided`);
+
+          /* The review: the decided round opens, the first round reads as superseded by it and nothing waits. */
+          await button.click();
+          await page.waitForSelector("[data-prototype-review] [data-prototype-rounds]", { timeout: 10_000 });
+          await page.waitForTimeout(400);
+          const rounds = await page.evaluate(() => ({
+            shown: document.querySelector<HTMLElement>("[data-prototype-round-shown]")?.dataset.prototypeRoundShown ?? null,
+            tabs: [...document.querySelectorAll<HTMLElement>("[data-prototype-review] [data-prototype-round]")].map((tab) => ({
+              round: tab.dataset.prototypeRound ?? null,
+              superseded: tab.querySelector<HTMLElement>("[data-prototype-superseded]")?.dataset.prototypeSuperseded ?? null,
+              marks: [...tab.querySelectorAll("[aria-label]")].map((mark) => mark.getAttribute("aria-label")),
+            })),
+          }));
+          record("rounds", rounds);
+          await shot("rounds");
+          const first = rounds.tabs.find((tab) => tab.round === "r-export-0");
+          if (rounds.shown !== "r-export") failures.push(`${label}: export's review opened on ${rounds.shown}, expected its decided round`);
+          if (first?.superseded !== "r-export" || JSON.stringify(first.marks) !== JSON.stringify([tr("proto.round.superseded", { n: 2 })])) failures.push(`${label}: the first round's tab reads ${JSON.stringify(first)}, expected superseded by round 2`);
+          if (rounds.tabs.some((tab) => tab.marks.includes(tr("proto.round.waiting")))) failures.push(`${label}: a round of export still says it waits: ${JSON.stringify(rounds.tabs)}`);
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          failures.push(`${label}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+          await shot("failed-here").catch(() => {});
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync("evidence/prototype-review/retired-rounds.json", `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 600_000);
+});
