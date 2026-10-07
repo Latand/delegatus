@@ -2292,7 +2292,8 @@ async function killedSweeper(root: string, dir: string, tip: string, phase: stri
     await sweepMergedWorktrees({ mode: "on", git: async (args, cwd) => {
       if (args[0] === "worktree" && args[1] === "list" && ++listings === 2) die();
       return realGit(args, cwd);
-    }, pipelines: [{ id: "crash-lane", repoDir: root, worktreeDir: dir, branch: "topic/crash", state: "completed", runs: [] }],
+    }, ...(phase === "held-host" ? { accessiblePath: file => "/proc/self/root" + file } : {}),
+    pipelines: [{ id: "crash-lane", repoDir: root, worktreeDir: dir, branch: "topic/crash", state: "completed", runs: [] }],
       mergedPullRequests: () => [{ number: 251, url: "https://github.com/example/widgets/pull/251", headRefName: "topic/crash", headRefOid: tip }],
       conversationCwds: () => [], scan: () => ({ ownNamespace: null, processes: [] }), recordResolution: () => true });
   `;
@@ -2365,4 +2366,26 @@ test("another sweep preserves locks held by a living sweeper", async () => {
   } });
   expect(report.errors).toEqual([]);
   expect(report.removed.map(row => row.path)).toEqual([dir]);
+});
+
+
+test.skipIf(process.platform !== "linux")("an unavailable host view retains orphan lock records until a validated view returns", async () => {
+  const root = repository();
+  const { dir, tip } = lane(root, path.join(caseDir, "crash-host-lane"), "topic/crash");
+  await killedSweeper(root, dir, tip, "held-host");
+  const ordinary = ports({ repositories: [root], prs: [merged(251, "topic/crash", tip)] });
+  const records = path.join(process.env.LLV_STATE_DIR!, "worktree-sweep-locks");
+  const journals = fs.readdirSync(records);
+  expect(journals).toHaveLength(1);
+  const headLock = git(["rev-parse", "--git-path", "HEAD.lock"], dir);
+  const unavailable = await sweepMergedWorktrees({ ...ordinary, accessiblePath: file => "/proc/0/root" + file });
+  expect(unavailable.errors).toContain("HEAD lock recovery: a record could not be released");
+  expect(unavailable.removed).toEqual([]);
+  expect(fs.readdirSync(records)).toEqual(journals);
+  expect(fs.existsSync(headLock)).toBe(true);
+  const recovered = await sweepMergedWorktrees(ordinary);
+  expect(recovered.errors).toEqual([]);
+  expect(recovered.removed.map(row => row.path)).toEqual([dir]);
+  expect(fs.existsSync(headLock)).toBe(false);
+  expect(fs.readdirSync(records)).toEqual([]);
 });

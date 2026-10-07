@@ -878,3 +878,100 @@ test.skipIf(process.platform === "win32")("hard-linked allocations contribute on
     fs.rmSync(fixture, { recursive: true, force: true });
   }
 });
+
+
+test.each(["report", "lock"])("failed %s writes preserve one local episode, wake readiness and recovery", async failure => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pressure-write-failure-"));
+  const originalState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = directory;
+  const caches = new Map();
+  let clock = Date.parse("2026-10-07T10:00:00Z");
+  let freeBytes = 20 * GiB;
+  const options = { caches, roots: [{ role: "state", directory }], now: () => clock, probe: () => ({ volume: "fixture", freeBytes }) };
+  let patch: { mockRestore(): void } | undefined;
+  try {
+    await readDiskPressure(options);
+    // Simulate a long consumer walk: readiness must eventually stop waiting.
+    caches.get(directory).measuring = Promise.resolve();
+    const file = path.join(directory, "disk-pressure-report.json");
+    if (failure === "report") {
+      const rename = fs.renameSync;
+      patch = spyOn(fs, "renameSync").mockImplementation(((from: fs.PathLike, to: fs.PathLike) => {
+        if (String(to) === file) throw Object.assign(new Error("full disk"), { code: "ENOSPC" });
+        return rename(from, to);
+      }) as typeof rename);
+    } else {
+      const open = fs.openSync;
+      patch = spyOn(fs, "openSync").mockImplementation(((target: fs.PathLike, ...args: unknown[]) => {
+        if (String(target) === file + ".write-lock") throw Object.assign(new Error("quota exceeded"), { code: "EDQUOT" });
+        return Reflect.apply(open, fs, [target, ...args]);
+      }) as typeof open);
+    }
+    freeBytes = GiB;
+    clock += 31_000;
+    const first = await readDiskPressure(options);
+    expect(first.episode).not.toBeNull();
+    expect(diskPressureWakeReady(first, clock)).toBe(false);
+    clock += 31_000;
+    expect((await readDiskPressure(options)).episode).toBe(first.episode);
+    clock += 15 * 60_000;
+    const ready = await readDiskPressure(options);
+    expect(ready.episode).toBe(first.episode);
+    expect(diskPressureWakeReady(ready, clock)).toBe(true);
+    expect(JSON.parse(fs.readFileSync(file, "utf8")).episode).toBeNull();
+    freeBytes = 20 * GiB;
+    clock += 31_000;
+    expect((await readDiskPressure(options)).episode).toBeNull();
+    freeBytes = GiB;
+    clock += 31_000;
+    const recrossed = await readDiskPressure(options);
+    expect(recrossed.episode).not.toBe(first.episode);
+    expect(recrossed.episode).not.toBeNull();
+    patch.mockRestore(); patch = undefined;
+    clock += 31_000;
+    expect((await readDiskPressure(options)).episode).toBe(recrossed.episode);
+    expect(JSON.parse(fs.readFileSync(file, "utf8")).episode).toBe(recrossed.episode);
+  } finally {
+    patch?.mockRestore();
+    if (originalState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = originalState;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("an unwritten local episode yields to another writer's changed durable report", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-pressure-writer-change-"));
+  const originalState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = directory;
+  const caches = new Map();
+  let clock = Date.parse("2026-10-07T11:00:00Z");
+  let freeBytes = 20 * GiB;
+  const options = { caches, roots: [{ role: "state", directory }], now: () => clock, probe: () => ({ volume: "fixture", freeBytes }) };
+  const file = path.join(directory, "disk-pressure-report.json");
+  const rename = fs.renameSync;
+  let refuse = true;
+  let patch: { mockRestore(): void } | undefined;
+  try {
+    await readDiskPressure(options);
+    caches.get(directory).measuring = Promise.resolve();
+    patch = spyOn(fs, "renameSync").mockImplementation(((from: fs.PathLike, to: fs.PathLike) => {
+      if (String(to) === file && refuse) throw Object.assign(new Error("full disk"), { code: "ENOSPC" });
+      return rename(from, to);
+    }) as typeof rename);
+    freeBytes = GiB; clock += 31_000;
+    const unpublished = await readDiskPressure(options);
+    expect(unpublished.episode).not.toBeNull();
+    refuse = false; clock += 31_000;
+    const shared = observeDiskPressureReport(file, () => diskVolumes(options.roots, options.probe), new Date(clock).toISOString());
+    expect(shared.episode).not.toBe(unpublished.episode);
+    refuse = true; clock += 31_000;
+    expect((await readDiskPressure(options)).episode).toBe(shared.episode);
+    clock += 31_000;
+    expect((await readDiskPressure(options)).episode).toBe(shared.episode);
+  } finally {
+    patch?.mockRestore();
+    if (originalState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = originalState;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

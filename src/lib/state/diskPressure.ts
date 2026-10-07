@@ -204,7 +204,7 @@ export function diskPressureWakeReady(pressure: DiskPressure, now = Date.now()):
   return pressure.consumers.length > 0 || now - Date.parse(pressure.episode) >= CONSUMER_WAKE_WAIT_MS;
 }
 
-type PressureCache = { pressure: DiskPressure; observedAt: number; consumersAt: number; measuring?: Promise<void> };
+type PressureCache = { pressure: DiskPressure; observedAt: number; consumersAt: number; measuring?: Promise<void>; unwrittenAgainst?: string };
 const caches = new Map<string, PressureCache>();
 
 function readReport(file: string): DiskPressure | null {
@@ -215,18 +215,34 @@ function readReport(file: string): DiskPressure | null {
 /** All readers join the same episode under the shared state-file lock. The
     caller's in-memory observation cannot overwrite another process's episode.
     Probe inside the lock so a delayed observation cannot close a newer one. */
-export function observeDiskPressureReport(file: string, probe: () => DiskVolume[], at: string): DiskPressure {
+export function observeDiskPressureReport(file: string, probe: () => DiskVolume[], at: string, cache?: PressureCache): DiskPressure {
+  const observe = () => {
+    const persisted = readReport(file);
+    const baseline = JSON.stringify(persisted);
+    // Reuse an unwritten observation only while its durable baseline is
+    // unchanged. Another writer's recovery or episode takes precedence.
+    const prior = cache?.unwrittenAgainst === baseline ? cache.pressure : persisted;
+    return { pressure: observeDiskPressure(probe(), prior, at), baseline };
+  };
   try {
     return withFileTransactionSync(file, "disk pressure report is busy", () => {
-      const pressure = observeDiskPressure(probe(), readReport(file), at);
-      try { writeJsonDurably(file, pressure); }
-      catch { /* A full disk still needs a visible warning. */ }
+      const { pressure, baseline } = observe();
+      try {
+        writeJsonDurably(file, pressure);
+        if (cache) delete cache.unwrittenAgainst;
+      } catch {
+        // A full disk still needs a stable, visible warning and a wake that
+        // can become ready even while consumer measurement remains pending.
+        if (cache) cache.unwrittenAgainst = baseline;
+      }
       return pressure;
     });
   } catch {
-    // A full disk can also prevent acquiring the file lock. This read-only
-    // observation preserves a persisted episode and cannot replace it.
-    return observeDiskPressure(probe(), readReport(file), at);
+    // A full disk can also prevent acquiring the lock. Keep this observation
+    // locally until the shared report changes or publication succeeds.
+    const { pressure, baseline } = observe();
+    if (cache) cache.unwrittenAgainst = baseline;
+    return pressure;
   }
 }
 /** The current pressure, read from the volumes at most every 30 s. The
@@ -274,7 +290,7 @@ export async function readDiskPressure(ports: {
     ...worktrees.map(directory => ({ role: "worktrees", directory: accessible(directory), view: worktreeView(directory) })),
     ...tempRoots.map(root => ({ role: "temp", directory: root.via + root.path, view: root }))];
   const previousEpisode = cached.pressure.episode;
-  cached.pressure = observeDiskPressureReport(file, () => diskVolumes(roots, ports.probe), new Date(now()).toISOString());
+  cached.pressure = observeDiskPressureReport(file, () => diskVolumes(roots, ports.probe), new Date(now()).toISOString(), cached);
   if (previousEpisode !== cached.pressure.episode) {
     cached.consumersAt = 0;
   }

@@ -626,13 +626,26 @@ function registrationHold(root: string, directory: string, target: string,
   } catch { return { path: directory, reason: "uncommitted", detail: "worktree registration could not be refreshed" }; }
 }
 
-type SweepHeadLock = { file: string; prepared: string; dev: string; ino: string };
+type SweepHeadLock = { file: string; prepared: string; dev: string; ino: string; hostNamespace?: string };
 type SweepHeadLockRecord = { owner: ProcessIdentity; locks: SweepHeadLock[] };
 const HEAD_LOCK_RECORDS = () => statePath("worktree-sweep-locks");
+
+/** Identify the actual mount view before treating an absent lock as removed.
+    A vanished proc anchor supplies no evidence about its host filesystem. */
+function headLockViewNamespace(file: string, reached: string): string {
+  if (reached === file) return fs.readlinkSync("/proc/self/ns/mnt");
+  if (!reached.endsWith(file)) throw new Error("unrecognized lock filesystem view");
+  try { return fs.readlinkSync(path.join(path.dirname(reached.slice(0, -file.length)), "ns/mnt")); }
+  catch { throw new Error("recorded HEAD lock namespace is unavailable"); }
+}
 
 /** Only our recorded inodes can be released. Retain the journal on an I/O
     failure so the next sweep can retry, including after a lost namespace view. */
 function releaseRecordedHeadLocks(record: SweepHeadLockRecord, journal: string, accessible: (directory: string) => string): void {
+  // Validate every view first; a partial view must retain the whole record.
+  for (const lock of record.locks) if (lock.hostNamespace
+    && headLockViewNamespace(lock.file, accessible(lock.file)) !== lock.hostNamespace)
+    throw new Error("recorded HEAD lock namespace is unavailable");
   for (const lock of record.locks) for (const file of [lock.file, lock.prepared]) {
     const reached = accessible(file);
     try {
@@ -691,12 +704,13 @@ function lockCheckoutHead(directory: string, accessible: (directory: string) => 
       const prepared = path.join(path.dirname(file), `.delegatus-sweep-${randomUUID()}`);
       const reached = accessible(file);
       const preparedPath = accessible(prepared);
+      const hostNamespace = reached === file ? undefined : headLockViewNamespace(file, reached);
       fs.mkdirSync(path.dirname(reached), { recursive: true });
       const fd = fs.openSync(preparedPath, "wx", 0o600);
       try {
         fs.fsyncSync(fd);
         const stat = fs.fstatSync(fd, { bigint: true });
-        record.locks.push({ file, prepared, dev: String(stat.dev), ino: String(stat.ino) });
+        record.locks.push({ file, prepared, dev: String(stat.dev), ino: String(stat.ino), ...(hostNamespace ? { hostNamespace } : {}) });
       } finally { fs.closeSync(fd); }
       writeJsonDurably(journal, record);
       fs.linkSync(preparedPath, reached); // Atomic exclusive claim; an existing Git lock stays.
