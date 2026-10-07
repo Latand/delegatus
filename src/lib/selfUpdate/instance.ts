@@ -195,7 +195,7 @@ export function productionDeps(env: Readonly<Record<string, string | undefined>>
       runtimeSnapshot: async () => {
         const client = runtimeHostClient();
         if (!client) throw new Error("runtime host is unavailable");
-        return client.snapshot(undefined, { timeoutMs: 10_000 });
+        return client.snapshot();
       },
       pipelines: loadPipelinesForList,
       flows: () => loadFlows(),

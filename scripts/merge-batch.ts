@@ -302,8 +302,10 @@ export const commandRunner: CommandRunner = (cwd, args, env = process.env) => ne
   child.on("close", (code) => done({ code: code ?? 1, output }));
 });
 
-/** Every gate command runs inside one machine-wide slot and its own memory
- * scope, never inside the merger agent's scope. */
+/** Every gate command runs inside one machine-wide slot, CPU-pressure
+ * admission and its own scope (docs/design/cpu-placement.md), never inside the
+ * merger agent's scope. The copy beside this script is used, so a bisect
+ * subject or a trusted base checkout cannot swap it. */
 export const GATE_SLOT = join(import.meta.dir, "gate-slot.sh");
 export const isBrowserTest = (path: string) => path.includes(".browser.test.");
 /** Test processes reach no live Viewer: port 9 (discard) is closed. */

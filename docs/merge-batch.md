@@ -31,10 +31,11 @@ non-machine `Co-Authored-By` trailer is refused.
 `gate` validates one exact candidate: main's full SHA and the ordered list of
 PR numbers with their full reviewed head SHAs. It installs frozen dependencies,
 runs TypeScript, comparative ESLint, tests and the trusted publication gate.
-Every command runs through `scripts/gate-slot.sh`, in a machine-wide slot and
-its own memory scope, and the script queues them so no two run at once: a
-merger that ran installs, type checks and test files side by side inside its
-own scope was killed by its memory cap twice. Commands use isolated state;
+Every command runs through `scripts/gate-slot.sh` (a shared machine slot,
+CPU-pressure admission and its own scope in the CPU work slice; see
+`docs/design/cpu-placement.md`), and the script queues them so no two run at
+once: a merger that ran installs, type checks and test files side by side inside
+its own scope was killed by its memory cap twice. Commands use isolated state;
 tests also use isolated home, config and temp roots, a Viewer control URL on a
 closed port, and run one file at a time with JUnit reports.
 

@@ -1,4 +1,4 @@
-import { expect, test, afterEach } from "bun:test";
+import { expect, test, afterAll, afterEach } from "bun:test";
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync, readFileSync, chmodSync, copyFileSync, symlinkSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -171,6 +171,12 @@ test("October 6 reduced identities decide six pre-existing and three attributed"
   expect(decision.attributed).toHaveLength(3);
   expect(decision.attributed.every(entry => entry.prs.join() === "13")).toBeTrue();
 });
+
+// Gates these tests start take their slot from a private directory: the
+// machine's slots are busy whenever this file runs inside a hook's own gate.
+const gateLocks = mkdtempSync(join(tmpdir(), "merge-batch-gate-locks-"));
+process.env.LLV_GATE_LOCK_DIR = gateLocks;
+afterAll(() => rmSync(gateLocks, { recursive: true, force: true }));
 
 test("review inputs require unique PRs and unambiguous hexadecimal heads", () => {
   expect(parseReviewedPrs("12@abcdef1, 13@1234567")).toEqual([

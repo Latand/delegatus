@@ -40,6 +40,8 @@ const EMPTY_DRAFT: Draft = { chosen: [], comment: "" };
 
 /** A moment as the product writes one: day, month and a 24-hour clock, no seconds. */
 const when = (at: string, locale: string) => new Intl.DateTimeFormat(locale === "uk" ? "uk-UA" : "en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(new Date(at));
+/** A day as the product writes one: day, month name and year. A closing abbreviation point is dropped so a sentence ending on the date keeps one point, not two. */
+const whenDate = (at: string, locale: string) => new Intl.DateTimeFormat(locale === "uk" ? "uk-UA" : "en-GB", { day: "numeric", month: "short", year: "numeric" }).format(new Date(at)).replace(/\.$/, "");
 
 const variantLabel = (variant: Variant) => `${variant.number} · ${variant.name}`;
 const slideLabel = (slide: Slide) => (slide.caption ? `${variantLabel(slide.variant)} — ${slide.caption}` : variantLabel(slide.variant));
@@ -359,7 +361,7 @@ export function PrototypeReview({ taskId, reviewId, taskTitle, onClose }: Protot
         <p role="status" data-prototype-elsewhere="" className="m-0 border-b border-border bg-sunken px-4 py-2 text-label text-secondary">{t("proto.elsewhere")}</p>
       ) : round?.mediaRemovedAt ? (
         <p role="status" data-prototype-retired="" className="m-0 border-b border-border bg-sunken px-4 py-2 text-label text-secondary">
-          {t("proto.retired", { date: new Date(round.mediaRemovedAt).toLocaleDateString(locale) })}
+          {t("proto.retired", { date: whenDate(round.mediaRemovedAt, locale) })}
         </p>
       ) : null}
       {data?.historyTruncated ? <p role="status" className="m-0 border-b border-border bg-sunken px-4 py-2 text-label text-secondary">{t("proto.truncated")}</p> : null}
