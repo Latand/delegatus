@@ -28,6 +28,10 @@
  * ancestor, and its last line sits inside the page. PNGs go to
  * LANDING_RENDER_DIR.
  *
+ * `--check-conversation` opens the «A conversation» frame at 1440 in both
+ * languages and fails unless the agent window fills the frame and its reader
+ * wears the plain border, without the role ribbon or a focus ring nobody asked for.
+ *
  * `--check-request=10` renders nothing: it plays the hero's script that many
  * times in each language and width and fails unless every step shows the
  * visitor's request exactly once in the orchestrator's chat, above the reply.
@@ -647,6 +651,67 @@ if (promptCheck) {
   for (const failure of failures) console.error(failure);
   console.log(failures.length ? `${failures.length} clipped prompt(s)` : "every expanded prompt reads to its last line");
   process.exit(failures.length ? 1 : 0);
+}
+
+/* The «A conversation» frame opens a builder in the agent window. The window
+   is the whole frame, with no margin of board round it, and its reader wears
+   the plain border: no builder's amber ribbon round the frame, and the role
+   named the quiet way, with no ribbon tag. Desktop only: the phone frame has
+   no agent window. */
+async function checkConversation() {
+  const failures: string[] = [];
+  for (const lang of ["en", "uk"] as Locale[]) {
+    for (const viewport of VIEWPORTS.filter((entry) => !entry.phone)) {
+      const key = `${lang}-${viewport.name}`;
+      if (only && only !== key) continue;
+      const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: 1, colorScheme });
+      try {
+        const page = await context.newPage();
+        const errors: string[] = [];
+        page.on("pageerror", (error) => errors.push(error.message));
+        await page.goto(`${base}?lang=${lang}`);
+        await page.locator(".live-open").scrollIntoViewIfNeeded();
+        const frame = await frameOf(page, ".live-open");
+        await frame.waitForSelector("[data-agent-window] [data-kanban-reader] [data-tool-row]", { timeout: 30_000 });
+        await settle(page, 1200);
+        const seen = await frame.evaluate(() => {
+          const window_ = document.querySelector<HTMLElement>("[data-agent-window-frame]")!;
+          const rect = window_.getBoundingClientRect();
+          const reader = window_.querySelector<HTMLElement>(".reader.conv[data-role-host]");
+          const mark = reader?.querySelector<HTMLElement>(".role-mark");
+          return {
+            window: { x: rect.x, y: rect.y, width: rect.width, height: rect.height, radius: getComputedStyle(window_).borderTopLeftRadius },
+            frame: { width: innerWidth, height: innerHeight },
+            role: reader?.dataset.role ?? null,
+            ribbon: reader ? getComputedStyle(reader, "::after").display : null,
+            border: reader ? getComputedStyle(reader).borderTopWidth : null,
+            ring: reader ? getComputedStyle(reader).boxShadow : null,
+            tag: mark ? { background: getComputedStyle(mark).backgroundColor, clipPath: getComputedStyle(mark).clipPath } : null,
+          };
+        });
+        await shoot(page, ".live-open", `${key}-3-open-conversation-check.png`);
+        const fail = (why: string) => failures.push(`${key}: ${why} ${JSON.stringify(seen)}`);
+        if (Math.abs(seen.window.x) > 1 || Math.abs(seen.window.y) > 1 || Math.abs(seen.window.width - seen.frame.width) > 1 || Math.abs(seen.window.height - seen.frame.height) > 1) fail("the agent window leaves a margin of board round it");
+        if (seen.window.radius !== "0px") fail("the agent window rounds its corners inside the frame");
+        if (!seen.role || seen.role === "orchestrator") fail("the frame opens no builder");
+        if (seen.ribbon !== "none") fail("the reader wears the role ribbon");
+        if (seen.border !== "1px") fail("the reader has no plain border");
+        if (seen.ring !== "none") fail("the reader wears the keyboard's focus ring though nobody touched the frame");
+        if (seen.tag && (seen.tag.background !== "rgba(0, 0, 0, 0)" || seen.tag.clipPath !== "none")) fail("the role reads as a ribbon tag");
+        if (errors.length) fail(`page errors ${errors.join("; ")}`);
+        console.log(`${key}: ${JSON.stringify(seen)}`);
+      } finally { await context.close(); }
+    }
+  }
+  for (const failure of failures) console.error(failure);
+  console.log(failures.length ? `${failures.length} failure(s)` : "the conversation frame is the agent window, plain and whole");
+  return failures.length === 0;
+}
+
+if (process.argv.includes("--check-conversation")) {
+  let ok = false;
+  try { ok = await checkConversation(); } finally { await browser.close(); server.stop(true); }
+  process.exit(ok ? 0 : 1);
 }
 
 if (fullscreenCheck) {

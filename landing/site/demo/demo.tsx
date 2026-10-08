@@ -627,8 +627,12 @@ async function navigateView(view: string) {
   }
   if (view === "conversation") {
     location.hash = `#c=${encodeURIComponent(`conversation_${step >= 3 ? "refunds-builder" : "webhook-retries"}`)}`;
-    /* The link opens the conversation in the agent window. */
+    /* The link opens the conversation in the agent window and focuses its
+       reader. Nobody has touched the frame yet, so the browser would draw the
+       keyboard's focus ring round the whole conversation. */
     await waitFor(() => document.querySelector("[data-agent-window] [data-kanban-reader]"));
+    const focused = await waitFor(() => document.activeElement?.closest<HTMLElement>("[data-agent-window] .reader.conv"), 10).catch(() => null);
+    if (focused && document.activeElement === focused) focused.blur();
     /* Unfold the builder's tool calls, so the edit reads as a diff and the test run shows its output. */
     await waitFor(() => document.querySelector("[data-tool-row]"));
     for (const details of document.querySelectorAll<HTMLDetailsElement>("details:not([open])")) {
