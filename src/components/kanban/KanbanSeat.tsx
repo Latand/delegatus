@@ -132,9 +132,15 @@ export function KanbanSeat({ project, projectName, projectCwd, files, tasks, boa
     });
     observer.observe(section, { subtree: true, childList: true, attributes: true, attributeFilter: ["style"] });
     window.addEventListener("resize", measure);
+    /* The seat eases its height, so the commit that sets a new height is
+       measured against the old one: what the form lacks at the grip's lower
+       stop is known once the height has arrived. */
+    const arrived = (event: TransitionEvent) => { if (event.target === section && event.propertyName === "height") measure(); };
+    section.addEventListener("transitionend", arrived);
     return () => {
       observer.disconnect();
       window.removeEventListener("resize", measure);
+      section.removeEventListener("transitionend", arrived);
       section.style.removeProperty("--seat-grow");
     };
   }, [side, seat.collapsed, height, topWidth]);
@@ -260,7 +266,10 @@ export function KanbanSeat({ project, projectName, projectCwd, files, tasks, boa
   const onGripKey = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
     event.preventDefault();
-    const current = sectionRef.current?.getBoundingClientRect().height ?? height ?? 0;
+    /* Step from the height the seat is going to. The seat's height eases,
+       so a held arrow that read the drawn height mid-transition stepped from
+       a passing height and went nowhere, or back. */
+    const current = height ?? sectionRef.current?.getBoundingClientRect().height ?? 0;
     seat.setHeight(current + (event.key === "ArrowDown" ? SEAT_KEY_STEP : -SEAT_KEY_STEP));
   }, [height, seat]);
 

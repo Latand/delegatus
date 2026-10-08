@@ -5495,12 +5495,17 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       {chipProject ? <PrototypeNoticeRow project={chipProject} /> : null}
       {chipProject ? <TaskChipRow project={chipProject} /> : null}
       {/* Proactive hold hint: while the card is switching accounts, the next
-          send is queued for the successor rather than delivered live. Shown
+          send is queued for the successor rather than delivered live. It says
+          a message is held only while one of this card's messages is still
+          undelivered; with nothing sent it speaks of the next one (2026-10-07:
+          "message held" for 8 s on a switch where nothing was sent). Shown
           identically under the desktop and mobile composers. */}
       {heldSwitchHint || holdsSends ? (
         <div role="status" aria-live="polite" className="flex items-center gap-1.5 rounded-control border border-warning/45 bg-warning-soft px-2 py-1 text-label font-semibold text-warning">
           <ArrowUpToLine className="h-3 w-3 shrink-0" aria-hidden />
-          <span data-composer-switch-hint className="min-w-0 whitespace-normal break-words">{heldSwitchHint ?? t("migrate.heldSend")}</span>
+          <span data-composer-switch-hint className="min-w-0 whitespace-normal break-words">
+            {heldSwitchHint ?? t(outbox.some((entry) => entry.state === "queued" || entry.state === "delivering") ? "migrate.heldSend" : "migrate.nextSendHeld")}
+          </span>
         </div>
       ) : null}
       {pipComposerSlot
