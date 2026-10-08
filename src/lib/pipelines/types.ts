@@ -520,7 +520,14 @@ export type PipelineStageAttempt = {
   };
   /** Prompt context for a fresh attempt created after this attempt was interrupted.
       `cause` is absent on records written before causes were told apart. */
-  restartContext?: { previousAttempt: number; transcriptPath: string; cause?: PipelineStageInterruptionCause };
+  restartContext?: {
+    previousAttempt: number;
+    /** Null when the attempt was cut before its transcript was discovered. */
+    transcriptPath: string | null;
+    cause?: PipelineStageInterruptionCause;
+    /** The interrupted attempt's newest message, bounded, for the replacement's first message. */
+    lastReport?: string;
+  };
   /** The succession this attempt's turn was open across, and the one
       continuation the controller owes it (#1747). `silentSince` is the newest
       transcript record at the moment the new epoch was first sighted: while it
