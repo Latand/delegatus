@@ -574,6 +574,9 @@ if (FIRST_MESSAGE && !FM_SEAT) fmApply();
 /* K4b: the merge task's implementer, and a spike closed on the board. */
 const mergeImpl = EDITING ? add(conversation("merge-impl", "Implementer: merge the queue adapter", { mtime: now - 26 * 60 * MIN })) : null;
 const oldSpike = EDITING ? add(conversation("old-spike", "Spike: a virtualized Done column", { mtime: now - 5 * 24 * 60 * MIN })) : null;
+/* K4b: the release task's own worker beside the seat. Since #1841 a task that
+   holds the seat and nothing else draws no card; this one keeps its card. */
+const seatNotes = EDITING ? add(conversation("seat-notes", "Drafting the release notes", { mtime: now - 40 * MIN })) : null;
 /* K5a: a helper conversation the search builder brought in, and a review that took five rounds. */
 /* #1820's two other projects. Working evidence is the one the board's «N
    working» counter reads: a live transcript whose turn never closed. */
@@ -1620,7 +1623,9 @@ const tasks: BoardTask[] = [
   task("t-interrupt", "done", "Universal interrupt and stop for every engine", "", 8 * 60 * MIN),
   task("t-attach", "done", "Finish responsive native attachment delivery", "", 12 * 60 * MIN),
   task("t-compact", "done", "Compact board stages and separate history from live work", "", 2 * 24 * 60 * MIN),
-  task("t-voice", "done", "Keep the orchestrator role when voice is enabled", "", 3 * 24 * 60 * MIN),
+  /* Done three days ago leaves the board (8fcf1be0a): t-voice stays an hour
+     inside that window, t-queue is past it. */
+  task("t-voice", "done", "Keep the orchestrator role when voice is enabled", "", 3 * 24 * 60 * MIN - 60 * MIN),
   task("t-queue", "done", "Preserve native queue recovery through journal compaction", "", 4 * 24 * 60 * MIN),
   task("t-old", "done", "An empty task someone took off the board", "", 9 * 24 * 60 * MIN, [], { board: "hidden" }),
   ...(PIPELINES ? [task("t-rounds", "assigned", "Rework the retry banner until review passes", "", 12 * MIN)] : []),
@@ -1966,7 +1971,7 @@ if (EDITING) {
   hide("t-verify-a", "agent", 5 * 60 * MIN);
   hide("t-compact", "operator", 20 * 60 * MIN);
   /* Hidden by an agent before this conversation took the seat: the seat keeps it on the board. */
-  tasks.push(task("t-seat", "assigned", "Coordinate the atlas release", "What the orchestrator is steering this week.", 30 * MIN, [orchestrator]));
+  tasks.push(task("t-seat", "assigned", "Coordinate the atlas release", "What the orchestrator is steering this week.", 30 * MIN, [orchestrator, seatNotes!]));
   hide("t-seat", "agent", 10 * 60 * MIN);
 }
 
