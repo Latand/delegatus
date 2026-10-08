@@ -1068,11 +1068,11 @@ test("independent attack: a deleted transcript cannot hide a live path-only fixi
   })]), flows: loadFlows, runtimeSnapshot: async () => journal.snapshot() };
   try {
     const now = Date.now();
-    // The implementer's process holds its stage. With no transcript it shows
-    // no sign of a turn, so its own turn is unknown: counted, and bounded (R8).
+    // Its durable pid/start identity confirms the implementer even when its
+    // transcript is gone. Neither stage nor turn protection has a bound (R8).
     for (const at of [now, now + FIVE_MINUTES, now + 12 * 60 * 60_000]) {
-      expect(await probeQuiet(snapshot, p, at, true)).toMatchObject({ quiet: false, blockers: { stages: 1, unresolved: 1,
-        turns: at === now ? 1 : 0, unresolvedBlocking: at === now ? 1 : 0 } });
+      expect(await probeQuiet(snapshot, p, at, true)).toMatchObject({ quiet: false, blockers: { stages: 1, unresolved: 0,
+        turns: 1, unresolvedBlocking: 0 } });
     }
     child.kill();
     await child.exited;

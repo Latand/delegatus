@@ -355,13 +355,13 @@ test("production fallback projection keeps a live registry process without an at
       reads++;
       expect(structuredDeliveryHeldHosts().size).toBe(0);
       const read = await production(rows, probe);
-      // The copy names no writer and the transcript says nothing, so the live
-      // process is unknown: held, counted, and bounded (R5, R8).
+      // The copy names no writer. The durable pid/start record confirms this
+      // host, so missing turn evidence cannot age its protection away (R8).
       expect(read.owners).toMatchObject([{ role: "host", process: "alive", handle: null, rowReference: false, journal: null, tail: { turn: "unknown" } }]);
       return read;
     };
-    expect(await probeQuiet(snapshot, p, NOW)).toMatchObject({ quiet: false, blockers: { turns: 1, discounted: 0, unresolved: 1,
-      turnList: [{ conversationId: conversation.id, reason: "turn-unread", unresolved: true }] } });
+    expect(await probeQuiet(snapshot, p, NOW)).toMatchObject({ quiet: false, blockers: { turns: 1, discounted: 0, unresolved: 0,
+      turnList: [{ conversationId: conversation.id, reason: "turn-unread" }] } });
     expect(reads).toBe(1);
   } finally {
     await bindStructuredDeliveryQueue([], { registry, client: null });

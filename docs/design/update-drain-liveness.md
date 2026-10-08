@@ -182,8 +182,8 @@ already durable; kept under Deferred.
   three fields a turn claim is read from (`sessionClaimsOpenTurn`). The row's
   **status mark**, `writerStatus`, is the journal's record of what the row's
   writer last published: its session key, its fence and those three values.
-  The mark **stands** while the row still carries the mark's fence, that is
-  until a later publication names another writer or none. While it stands,
+  The mark **stands** for the owner its own key and writer epoch name,
+  independently of the row's current fence. While that owner lives,
   the three values in the mark are that writer's statement, whatever later
   writes did to the row's own status (R5, "Whose statement a row's status
   is").
@@ -264,18 +264,18 @@ For a live owner in the host role:
 2. **Row reference**: `structuredHost.activeTurnRef` of the owner's own entry,
    for an entry without a tmux host.
 3. **Journal row**: the status mark of the session row **whose mark names
-   the owner's entry key and the entry's writer, and stands**: the entry has a
+   the owner's entry key and the entry's writer**: the entry has a
    writer, the mark's `sessionKey` is the entry's key, the mark's
-   `writerClaim` is a string ending in that writer's epoch, and the row's own
-   `writerClaim` is still the mark's. The `host`, `turn` and `activeTurnId`
+   `writerClaim` is a string ending in that writer's epoch. The `host`, `turn` and `activeTurnId`
    read are the ones in the mark, which its writer published; the row's own
    three fields are not read for the owner. It counts when the mark claims a
    turn (`sessionClaimsOpenTurn`, `structuredDeliveryController.ts:544`: a
    running or interrupt-requested turn, an active turn id, a registering or
    recovering host). A mark under
-   another key, at another writer epoch, or on a row that a later publication
-   left naming another writer or none says nothing about this owner, and
-   neither does a row that names no writer. A write that changed the row's
+   another key or at another writer epoch says nothing about this owner. A
+   row with no mark and no writer says nothing either. A retained mark
+   survives a foreign publication that changes or clears the row's fence. A
+   write that changed the row's
    status and named no writer leaves the mark as the writer published it, so
    it neither adds a turn to the owner nor takes one away. An owner whose
    entry has no writer reads no row. A row under the owner's key at the
@@ -412,8 +412,7 @@ record.** One write and one read:
   `host`, `turn` and `activeTurnId` that publication left on the row. Every
   other write keeps the record as it finds it, and a `writerStatus` sent in a
   payload is discarded;
-- the reader takes a writer's statement from the record while the mark
-  stands, that is while the row's `writerClaim` is still the record's, and
+- the reader takes a writer's statement from the record by the key and writer epoch recorded in the mark, and
   gives it to the owner whose entry key and writer epoch the record names.
   The row's own `host`, `turn` and `activeTurnId` are not read for that
   owner.
@@ -425,8 +424,8 @@ A writer's statement therefore changes only when a publication replaces it:
   is what ends its own turn claim;
 - a publication that names no writer, a copy of the registry or a host's own
   publication after its claim was released, writes `null`; the row no longer
-  carries the record's fence, the mark no longer stands, and the owner is
-  judged on its handle, its row reference and its tail;
+  carries the record's fence. The retained mark still speaks for the owner
+  its own key and writer epoch name; that copy cannot withdraw its claim;
 - another writer's publication records that writer's statement in place of
   the first one, since the journal keeps one row per conversation (R12).
 
@@ -561,11 +560,12 @@ or `unhosted`, is judged by its handle and its tail.
 | alive | setup | not read | holds | `setup` |
 | alive | reviewer | not read | holds | `reviewer` |
 | alive | host | handle busy | holds | `host-turn` |
-| alive | host | no handle, and the row reference or the owner's journal statement (R5 source 3: the status mark that names the owner's key and writer, while it stands) claims a turn | holds | `turn-claimed` |
+| alive | host | no handle, and the row reference or the owner's journal statement (R5 source 3: the status mark that names the owner's key and writer, independently of the row's current fence) claims a turn | holds | `turn-claimed` |
 | alive | host | tail busy | holds | `turn-open` |
-| alive | host | no handle, and a row under the owner's key at the owner's fence claims a turn and carries no status mark | unknown | `turn-unattributed` |
-| alive | host | none of the above, tail idle | released | `turn-settled` |
-| alive | host | none of the above, tail unknown | unknown | `turn-unread` |
+| alive | host | no handle, and a row under the owner's key at its fence claims a turn without a status mark | holds if confirmed; unknown if unconfirmed | `turn-unattributed` |
+| alive | host | none of the above, own handle or journal statement idle, or tail idle | released | `turn-settled` |
+| alive | host | none of the above, confirmed pid/start identity, tail unknown | holds | `turn-unread` |
+| alive | host | none of the above, unconfirmed launch, tail unknown | unknown | `turn-unread` |
 
 Read top to bottom; the first matching row decides. Four consequences worth
 stating:
@@ -575,9 +575,9 @@ stating:
   under a live host whose own writer's row claims a turn, with no handle,
   still holds, as `main` pins it: only the host that would run the turn can
   say none was admitted;
-- a busy verdict needs one positive sign from the owner's own sources, and an
-  idle verdict needs a settled tail and no sign of a turn. A live process with
-  neither is unknown;
+- a confirmed live host whose tail cannot be read keeps holding without a
+  clock. An idle verdict needs its own idle evidence and no positive sign of
+  a turn. A launch without a confirmed identity or turn source is unknown;
 - a row that an earlier writer published, under the same key or under the key
   a relabel replaced, is no sign of a turn for the host recorded now, and
   neither is a row that names no writer: a copy of the registry, or a late
@@ -588,63 +588,71 @@ stating:
   and a settled tail, is released at once, whatever its predecessor's row
   still says and whatever a predecessor wrote onto its own row afterwards. A
   successor host whose own last publication claims a turn holds, whatever a
-  predecessor wrote onto that row afterwards, until it publishes again, its
-  process is gone, or a publication that names no writer replaces its
-  statement (R5). A tmux host has no row reference and reads no row, so
+  predecessor wrote onto that row afterwards, until its own idle publication
+  or handle ends it, or its process is proven gone or reused (R5). A tmux host
+  has no row reference and reads no row, so
   without a handle it is judged on its tail: busy holds, settled releases,
   unreadable is `turn-unread`;
-- a turn claim under the owner's fence with no mark at all is unknown, since
-  the journal that wrote it recorded no author. An open tail still holds
-  ahead of it, and a handle that says idle still releases.
+- a turn claim under the owner's fence with no mark at all has no recorded
+  author. A confirmed host holds; an unconfirmed launch remains bounded. An
+  open tail still holds ahead of it, and a handle that says idle releases.
 
 A reading that throws is no verdict. It holds admission through
 `blockers.unreadable`, as today, and is read again by the next probe.
 
-### R8 — Unknown is bounded and visible
+### R8 — Confirmed owners survive lost evidence; unconfirmed launches are bounded
 
-Four things are unknown:
+The bounded grace covers launches that have never been confirmed: an ownerless
+hosted row, an open receipt without admission evidence, an unregistered claim,
+or a host record without a usable start identity and without a positive turn
+source. An unattributed journal claim remains bounded when its host launch is
+unconfirmed. A confirmed host keeps holding as `turn-unattributed`.
+Unconfirmed items stay visible in `blockers.unresolved` after their grace
+expires.
 
-- a live host owner with no sign of a turn and no settled tail (`turn-unread`);
-- a live host owner with no handle whose row, at its own fence, claims a turn
-  and carries no status mark (`turn-unattributed`, R5 "Rows without a mark");
-- an ownerless record: a hosted row with no process, an open receipt with no
-  admission owner (`launch-unproven`);
-- a claim the registry knows nothing about (`unresolved`, R9).
+The grace is `UNRESOLVED_TURN_GRACE_MS` (five minutes), on the existing clocks:
 
-Each holds for the launch grace, `UNRESOLVED_TURN_GRACE_MS`
-(`quiet.ts:59`, five minutes), and is then released while it stays counted in
-`blockers.unresolved`. The grace runs on the clocks the code already has, in
-this order:
+1. an ownerless hosted row's `updatedAt`;
+2. the newest readable record of its own transcript;
+3. the first probe that saw it when neither timestamp can be read.
 
-1. a hosted registry row with no process whose `updatedAt` is older than the
-   grace is released at once, as `hostEvidence` decides today;
-2. otherwise, when the item names a transcript whose newest record can be
-   read, the grace runs from that record, as `evaluateLiveness`
-   (`liveness.ts:525`) ages a host it cannot see;
-3. otherwise it runs from the first probe that saw the item
-   (`firstUnresolved`, `quiet.ts:220`).
+**A durable host identity confirms the launch.** A recorded host pid and start
+identity that still answer protect an unreadable or unknown tail with
+`turn-unread`, without a timeout. This rule runs on the first probe of a new
+Viewer or a new ports object too. Deleting the transcript, appending truncated
+JSON, or pushing markers outside the bounded tail with a 200 KiB reasoning
+record cannot turn that confirmed host into an unconfirmed launch. The same
+rules apply when earlier ports already read its open turn. Its own settled
+tail, own idle statement or handle, or proven death/PID reuse release it.
+Missing evidence alone supplies no end of a turn. The ports-local proven-turn
+map preserves observed proof and the displayed reason; the durable pid/start
+record supplies the cold-read protection independently of that map.
 
-No further age rule is added.
+**Foreign writes cannot revoke the host's own current statement.** The
+journal's retained `writerStatus` names its own session key and writer epoch.
+The drain reads it by those fields even after a registry fallback clears the
+row's `writerClaim`, relabels the row, or a late turn event changes the row's
+turn. A mark from a predecessor key or epoch speaks for that predecessor only.
+An own idle mark supersedes its own running mark; a fallback and an event
+supply no such idle statement.
 
-A process that shows a positive sign of work is never released by a clock. A
-turn that is really running shows one well inside five minutes: its host's
-handle, its row reference, its journal row or an open tail. A turn claim
-whose author nobody recorded is no such sign, which is why it is bounded: for
-a host whose transcript settled more than five minutes ago, clock 2 has
-already run out and the host is released on the first probe. A host that
-keeps writing records with no turn marker in them stays held by clock 2 for as
-long as it writes.
+A structured registry checkpoint can legally wait behind
+`captureStructuredTerminationSurvivors` (`src/lib/runtime/registry.ts`). The
+host can already be active while its registry `activeTurnRef` is still null
+and its transcript ends in an older completion. Its own later running
+publication holds across controller disconnect, fallback and late events,
+including a fresh Viewer's first read. That older settled tail cannot end the
+later claim. The host's own idle publication/handle or proven death/PID reuse
+release it. A standalone host with no running structured statement releases
+when its own transcript completes.
 
-A turn an owner's own sources have proved is never made unknown by losing its
-evidence. Once a live host owner holds as `host-turn`, `turn-claimed` or
-`turn-open`, the drain remembers that under the owner's id, which names its
-pid and start identity. If a later probe reads it as unknown (its transcript
-deleted, a torn line at its end, or its markers pushed out of the read tail by
-one large record), it keeps holding under the reason that proved the turn, with
-no bound and outside `blockers.unresolved`. It is released by its own settled
-tail, by a handle that says idle, by its process being gone, or by its record
-naming another process (a reused pid). An owner that never showed a turn keeps
-the bounded grace above.
+The regression cases run through `AgentRegistry`, `RuntimeJournal`,
+`bindCodexHostPersistence`, `bindStructuredDeliveryQueue`,
+`projectEngineHostEvent`, the production owner census reader and `probeQuiet`.
+They cover the six cold/fresh-ports loss variants, the legally deferred
+checkpoint and reconnect sequence, idle/death/reuse endings, and the
+unconfirmed-launch grace. All fifteen decisive cases and successor isolation
+remain required.
 
 ### R9 — A journal row is a claim
 
@@ -829,7 +837,7 @@ onto it. Key B and epoch 1 both match B, so the epoch rule alone held B as
 | B's writer publishes its own running row at epoch 2 with B's turn id; A's delayed `turn-ended`, or A's `turn-started` under A's turn id, then lands on it; no handle, no row reference, settled tail | holds, `turn-claimed`, until B publishes again or B's process is gone | R5 source 3: the event changes the row and leaves B's mark, which still records B's running publication. R7, R12 |
 | the same, then B's own idle publication | released at once, `turn-settled` | R5 source 3: B's idle statement replaces its running one. R7 |
 | B's writer publishes its own idle row at epoch 2, then A's delayed `turn-started` lands on it; no handle, no row reference, settled tail | released at once, `turn-settled`; the row counts in `blockers.discounted` | R5 source 3: B's mark records idle, whatever the row now says. R7, R9 |
-| B's claim is released while B lives, and the row is B's at epoch 2 | holds while B's mark stands and claims a turn | R5 source 3: a release keeps the epoch. The next publication for the conversation names no writer (`:666` writes `null` without a claim owner, a copy writes `null`), and B is judged on its own sources from then |
+| B's claim is released while B lives, and the row is B's at epoch 2 | holds while B's own mark claims a turn | R5/R8: a release keeps the epoch. A later publication without a writer cannot prove B's turn ended |
 | a claim at epoch 2 with no live host process, setup in flight | holds, `setup`, while the claimant lives | R6 |
 | A is still alive at epoch 1 under the same key (no successor) | A's row is A's evidence: holds, `turn-claimed` | R5 source 3 at A's epoch, with A's mark |
 | B is the same process as A, adopted from a terminal row at epoch 2 | judged on B's handle, the row reference the claim carried over, and the tail | R5, "An adopted wrapper" |
@@ -909,7 +917,7 @@ from the mark itself, which no write of A's touches.
 | the same, then B's own idle publication | released at once, `turn-settled` | R5 source 3: B's own idle statement replaces its running one |
 | B's own running publication, then an interrupt command, or a late send outcome for A's turn | holds, `turn-claimed` | the same rule: the mark still records B's running publication |
 | B's own running publication, then a spawn placeholder that moves the row to the key of a resume it admits | B holds, `turn-claimed`; the mark gives nothing to an owner under the new key | R5: the mark names B's key and keeps its fence |
-| B's own running publication, then a copy of the registry, then A's late event; no handle, no row reference, settled tail | released at once | R5: the copy writes `null`, the mark no longer stands, and B is judged on its handle, row reference and tail. In production B's row reference carries the turn B's writer published, written under the same claim (R12) |
+| B's own running publication, then a copy of the registry, then A's late event; no handle, no row reference, older settled tail | holds | R5/R8: B's retained mark still names B's key and epoch. A captured termination can legally defer the registry checkpoint; a copy or late event cannot withdraw B's running statement |
 | the carried fixture shape: a publication with idle labels, a turn id and the fixture's fence | holds, `turn-claimed` | R5 source 3 |
 | the same, then a foreign `turn-started` | holds, `turn-claimed` | R5 source 3: the mark records the fixture's publication |
 | a row at B's fence that claims a turn and carries no mark (a runtime host from before the build, or a row last published before it); no handle, settled tail | unknown, `turn-unattributed`: held until five minutes after the transcript's newest record, then released and counted in `blockers.unresolved`; released on the first probe when that record is older | R5 "Rows without a mark", R7, R8 |

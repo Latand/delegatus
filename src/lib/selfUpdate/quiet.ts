@@ -26,8 +26,8 @@ export interface QuietBlockers {
   stageList?: BlockingStage[];
   /** Journal rows that claim an open turn while every owner they name is released. */
   discounted?: number;
-  /** What nothing can say is working or finished (R8): a live host with no
-      sign of a turn and no settled transcript, a turn claim with no recorded
+  /** What nothing can say is working or finished (R8): an unconfirmed host
+      launch with no sign of a turn and no settled transcript, a turn claim with no recorded
       author, a row that claims a host and records no process, and a journal
       row or stage the registry knows nothing about. */
   unresolved?: number;
@@ -90,7 +90,8 @@ interface OwnerPlace {
  * - `handle`: the host this Viewer holds under the owner's session key;
  * - `rowReference`: the active turn reference of the owner's own entry;
  * - `journal`: the status mark of the journal row whose mark names the
- *   owner's key and writer, while it stands (`claimed` when it claims a turn),
+ *   owner's key and writer (`claimed` when it claims a turn, `idle` when that
+ *   writer reports idle), independently of the row's current fence,
  *   or a row at the owner's fence that claims a turn and carries no mark
  *   (`unattributed`);
  * - `tail`: the owner's own transcript.
@@ -98,9 +99,12 @@ interface OwnerPlace {
 export interface OwnerReading extends OwnerPlace {
   role: OwnerRole;
   process: "alive" | "gone";
+  /** A durable host record names this live pid and its start identity. Even
+      a cold Viewer must protect it when its turn evidence cannot be read. */
+  confirmed?: boolean;
   handle?: "busy" | "idle" | null;
   rowReference?: boolean;
-  journal?: "claimed" | "unattributed" | null;
+  journal?: "claimed" | "idle" | "unattributed" | null;
   tail?: TailReading | null;
 }
 
@@ -157,21 +161,24 @@ export function sessionClaimsOpenTurn(session: Pick<RuntimeSession, "host" | "tu
 /**
  * The verdict table (R7), read top to bottom; the first matching row decides.
  * A busy verdict needs one positive sign from the owner's own sources, an idle
- * one needs a settled tail and no sign of a turn, and a live process with
- * neither is unknown. A handle that says idle supersedes the row reference and
+ * one needs its own idle evidence and no sign of a turn. A confirmed live
+ * host with unreadable turn evidence holds; an unconfirmed launch is unknown.
+ * A handle that says idle supersedes the row reference and
  * the journal, both copies of what the host said earlier.
  */
-export function ownerVerdict(owner: Pick<OwnerReading, "role" | "process" | "handle" | "rowReference" | "journal" | "tail">):
+export function ownerVerdict(owner: Pick<OwnerReading, "role" | "process" | "confirmed" | "handle" | "rowReference" | "journal" | "tail">):
   { verdict: "released"; reason: "process-gone" | "turn-settled" } | { verdict: "holds" | "unknown"; reason: OwnerReason } {
   if (owner.process === "gone") return { verdict: "released", reason: "process-gone" };
   if (owner.role === "setup") return { verdict: "holds", reason: "setup" };
   if (owner.role === "reviewer") return { verdict: "holds", reason: "reviewer" };
   if (owner.handle === "busy") return { verdict: "holds", reason: "host-turn" };
-  const handle = owner.handle === "idle";
-  if (!handle && (owner.rowReference || owner.journal === "claimed")) return { verdict: "holds", reason: "turn-claimed" };
+  const handleIdle = owner.handle === "idle";
+  if (!handleIdle && (owner.rowReference || owner.journal === "claimed")) return { verdict: "holds", reason: "turn-claimed" };
   if (owner.tail?.turn === "busy") return { verdict: "holds", reason: "turn-open" };
-  if (!handle && owner.journal === "unattributed") return { verdict: "unknown", reason: "turn-unattributed" };
+  if (handleIdle || owner.journal === "idle") return { verdict: "released", reason: "turn-settled" };
+  if (owner.journal === "unattributed") return { verdict: owner.confirmed ? "holds" : "unknown", reason: "turn-unattributed" };
   if (owner.tail?.turn === "idle") return { verdict: "released", reason: "turn-settled" };
+  if (owner.confirmed) return { verdict: "holds", reason: "turn-unread" };
   return { verdict: "unknown", reason: "turn-unread" };
 }
 
@@ -252,7 +259,9 @@ const firstUnresolved = new WeakMap<QuietPorts, Map<string, number>>();
    names the process and its start identity, with the reason that showed it. A
    proven turn holds through a later unreadable tail until the owner's own
    sources say idle or its process is gone or reused (R8). Kept per set of
-   ports, as `firstUnresolved` is. */
+   ports to retain observed proof and its display reason. Cold safety comes
+   independently from the durable host identity and retained writer statement
+   in OwnerReading (R8). */
 const provenTurns = new WeakMap<QuietPorts, Map<string, OwnerReason>>();
 
 const emptyCensus: OwnerCensusReading = {
@@ -415,9 +424,9 @@ export async function probeQuiet(snapshot: Snapshot, ports: QuietPorts, now: num
       // owner's settled tail, its handle saying idle, or its process being
       // gone ends what its own sources showed.
       if (verdict === "released" || owner.handle === "idle") proven.delete(owner.id);
-      else if (verdict === "holds" && owner.role === "host") proven.set(owner.id, reason);
+      else if (verdict === "holds" && owner.role === "host" && !proven.has(owner.id)) proven.set(owner.id, reason);
       if (verdict === "released") continue;
-      const kept = verdict === "unknown" ? proven.get(owner.id) : undefined;
+      const kept = verdict === "unknown" || reason === "turn-unread" ? proven.get(owner.id) : undefined;
       if (kept) {
         holding.set(owner.id, { item: owner, reason: kept, unresolved: false });
         continue;

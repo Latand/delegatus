@@ -178,7 +178,9 @@ for (const status of ["dead", "unhosted", "idle"] as const) {
         f.registry.upsert({ ...entry, structuredHost: { ...entry.structuredHost!,
           process: { ...entry.structuredHost!.process!, startIdentity: "different-start" } } });
       }
-      journalRow();
+      // An idle owner's own publication says idle. A later running
+      // publication over its earlier completion would prove a new turn (R8).
+      journalRow(control === "idle" ? { turn: "idle", activeTurnId: null } : {});
       await fallback(status);
       inactiveHistory();
       snapshotSelection(true);

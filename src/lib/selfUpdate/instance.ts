@@ -92,8 +92,8 @@ export function fenceEpoch(writerClaim: string | null | undefined): number | nul
 
 /**
  * What the journal rows say about one owner (R5, source 3): every status mark
- * that names the owner's entry key and writer, while its row still carries the
- * mark's fence. The marks' own `host`, `turn` and `activeTurnId` are read,
+ * that names the owner's entry key and writer. The marks' own `host`, `turn`
+ * and `activeTurnId` are read,
  * whatever later writes did to the rows. The owner's writer can stand on
  * several rows at once, so they are read as a set: an idle mark on one row
  * takes nothing from a running mark on another, whichever order the snapshot
@@ -104,21 +104,24 @@ export function fenceEpoch(writerClaim: string | null | undefined): number | nul
 export function journalStatement(
   rows: readonly RuntimeSession[],
   owner: { entryKey: string | null; writerEpoch: number | null },
-): "claimed" | "unattributed" | null {
+): "claimed" | "idle" | "unattributed" | null {
   if (owner.writerEpoch === null || owner.entryKey === null) return null;
   let claimed = false;
   let unattributed = false;
+  let idle = false;
   for (const row of rows) {
     const mark = row.writerStatus;
     if (mark) {
-      if (rowKeyId(mark.sessionKey) === owner.entryKey && fenceEpoch(mark.writerClaim) === owner.writerEpoch
-        && row.writerClaim === mark.writerClaim && sessionClaimsOpenTurn(mark)) claimed = true;
+      if (rowKeyId(mark.sessionKey) === owner.entryKey && fenceEpoch(mark.writerClaim) === owner.writerEpoch) {
+        if (sessionClaimsOpenTurn(mark)) claimed = true;
+        else if (mark.turn === "idle" && mark.activeTurnId === null) idle = true;
+      }
       continue;
     }
     if (rowKeyId(row.sessionKey) === owner.entryKey && fenceEpoch(row.writerClaim) === owner.writerEpoch
       && sessionClaimsOpenTurn(row)) unattributed = true;
   }
-  return claimed ? "claimed" : unattributed ? "unattributed" : null;
+  return claimed ? "claimed" : idle ? "idle" : unattributed ? "unattributed" : null;
 }
 
 /** What a handle's health says about its host's turn; null when it reports
@@ -264,6 +267,10 @@ export function ownerCensusReader(
           }
         }
         reading.handle = handle;
+        // Recording the host's pid and start identity confirms its launch.
+        // The evidence survives a Viewer restart and an unreadable transcript;
+        // only the owner's own idle/settlement or proven death can release it.
+        reading.confirmed = owner.identities.some((identity) => identity.startIdentity !== null && identityAlive(identity, probe));
         reading.rowReference = !!owner.entry && !owner.entry.host && !!owner.entry.structuredHost?.activeTurnRef && owner.structuredHost;
         reading.journal = owner.writerEpoch === null ? null : journalStatement(await rowsFor(owner), owner);
         reading.tail = await tail(owner.artifactPath, owner.engine);
