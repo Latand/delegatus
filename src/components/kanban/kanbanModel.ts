@@ -378,7 +378,9 @@ export function holdsOnlyDrafts(card: Pick<KanbanCard, "task" | "drafts" | "memb
  * place right under the last card the operator is reading in the column. The
  * draft waited in Inbox beside that card; the launch writes a task that sorts
  * above it, and the card being read would drop below the new card's reader and
- * out of the window. With no other card read, the launched card stands first:
+ * out of the window. When the launched agent's turn ends its card sorts below
+ * the working ones, and it keeps the same place under the card being read
+ * instead. With no other card read, the launched card stands first:
  * the motion order would put it under a needs-you card, below the window's
  * edge, where the draft it replaced stood in view. Closing either reader lets
  * the launched card sort as any other. Reorders `cards` in place.
@@ -387,17 +389,11 @@ export function landUnderReading(cards: KanbanCard[], reading: ReadonlySet<strin
   if (!reading?.size || !launched) return;
   const held = (card: KanbanCard) => card.members.some((member) => reading.has(conversationIdentity(member.file)));
   const landing = (card: KanbanCard) => held(card) && card.members.some((member) => launched(member.file));
-  let anchor = -1;
-  cards.forEach((card, index) => { if (held(card) && !landing(card)) anchor = index; });
-  if (anchor < 0) {
-    const first = cards.filter(landing);
-    if (first.length) cards.splice(0, cards.length, ...first, ...cards.filter((card) => !landing(card)));
-    return;
-  }
-  const above = cards.slice(0, anchor + 1);
-  const moved = above.filter(landing);
+  const moved = cards.filter(landing);
   if (!moved.length) return;
-  cards.splice(0, anchor + 1, ...above.filter((card) => !landing(card)), ...moved);
+  const rest = cards.filter((card) => !landing(card));
+  const anchor = rest.findLastIndex(held);
+  cards.splice(0, cards.length, ...rest.slice(0, anchor + 1), ...moved, ...rest.slice(anchor + 1));
 }
 
 export function compareCards(a: KanbanCard, b: KanbanCard): number {

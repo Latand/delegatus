@@ -1,0 +1,191 @@
+// Draft of the describe block for src/components/kanban/kanbanBoard.browser.test.tsx
+// (docs/design/orchestrator-wire-routing.md §6). Run as
+//   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chrome> WIRE_ROUTING_LABEL=rule bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "orchestrator wire routing"
+describe("orchestrator wire routing across the board's layouts", () => {
+  /* docs/design/orchestrator-wire-routing.md: every seat/card layout the board
+     produces, one seat action each, and the route the layer draws for it —
+     bends, length, and whether it runs through a card, the seat or a line of
+     text. WIRE_ROUTING_LABEL names the build measured (current / proposed). */
+  const label = process.env.WIRE_ROUTING_LABEL ?? "current";
+  const out = path.resolve(process.env.WIRE_ROUTING_OUT ?? ".artifacts/orchestrator-wire-routing", label);
+  type SeatAt = "top" | "top-folded" | "top-narrow" | "side";
+  const seatInit = (seat: SeatAt, lang: "en" | "uk") => `try {
+    localStorage.setItem("llv_lang", "${lang}");
+    localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ height: null, collapsed: ${seat === "top-folded" ? "{ atlas: true }" : "{}"}, placement: "${seat === "side" ? "side" : "top"}", width: null, topWidths: ${seat === "top-narrow" ? "{ atlas: 640 }" : "{}"}, sideWidths: {}, heightV: 2 }));
+    ${seat === "side" ? 'localStorage.setItem("llv:rail-hidden:v1", "hidden");' : ""}
+  } catch {}`;
+  type Probe = { advance(ms: number): void; freeze(ms?: number): void; settle(): void };
+  type Hooks = { orchestratorAct(act: unknown): Promise<{ landed: boolean }>; orchestratorWires(): Probe | null };
+  const act = (page: Page, action: unknown) => page.evaluate((action) => (window as unknown as Hooks).orchestratorAct(action), action);
+  const probe = (page: Page, call: "advance" | "freeze" | "settle", ms?: number) => page.evaluate(({ call, ms }) => (window as unknown as Hooks).orchestratorWires()?.[call](ms as number), { call, ms });
+
+  /* The board as the layer sees it, and every wire on it, measured. */
+  const measure = (page: Page) => page.evaluate(() => {
+    const round = (value: number) => Math.round(value * 10) / 10;
+    const box = (node: Element) => { const r = node.getBoundingClientRect(); return { l: round(r.left), t: round(r.top), r: round(r.right), b: round(r.bottom) }; };
+    type B = ReturnType<typeof box>;
+    const shown = (b: B) => b.r - b.l > 0 && b.b - b.t > 0 && b.r > 0 && b.l < innerWidth && b.b > 0 && b.t < innerHeight;
+    const inside = (b: B, x: number, y: number, inset = 1.5) => x > b.l + inset && x < b.r - inset && y > b.t + inset && y < b.b - inset;
+    /* A card is an obstacle where it is painted: clipped to its column's scroller. */
+    const cards = [...document.querySelectorAll<HTMLElement>("[data-kanban-board] .card[data-id], [data-phone-card]")].map((node) => {
+      const own = box(node);
+      const scroller = node.closest(".col-body, [data-phone-kanban-column]");
+      const clip = scroller ? box(scroller) : own;
+      return { id: node.dataset.id ?? node.dataset.phoneCard ?? "", l: Math.max(own.l, clip.l), t: Math.max(own.t, clip.t), r: Math.min(own.r, clip.r), b: Math.min(own.b, clip.b) };
+    }).filter(shown);
+    const seatNode = document.querySelector("[data-kanban-seat], [data-mobile2-seat-card]");
+    const seat = seatNode ? box(seatNode) : null;
+    const text = [...document.querySelectorAll("[data-kanban-board] .col-head, [data-kanban-board] .tabs-nav button, [data-phone-kanban-tab], [data-orchestrator-wires] .oa-stub, [data-kanban-board] .open-rail")].map(box).filter(shown);
+    const columns = [...document.querySelectorAll<HTMLElement>("[data-kanban-board] section.column[data-status], [data-phone-kanban-column]")].map((node) => ({ status: node.dataset.status ?? node.dataset.phoneKanbanColumn, ...box(node) })).filter(shown);
+    const paths = [...document.querySelectorAll<SVGPathElement>("[data-orchestrator-wires] path.oa-wire")];
+    const sample = (path: SVGPathElement) => { const points: { x: number; y: number }[] = []; for (let at = 0, length = path.getTotalLength(); at <= length; at += 2) { const p = path.getPointAtLength(at); points.push({ x: p.x, y: p.y }); } return points; };
+    const samples = paths.map(sample);
+    const wires = paths.map((path, index) => {
+      const d = path.getAttribute("d") ?? "";
+      const own = samples[index]!;
+      const group = path.closest<SVGGElement>("g[data-wire]");
+      const taskId = group?.dataset.wire ?? null;
+      const card = taskId ? cards.find((entry) => entry.id === `task:${taskId}`) ?? null : null;
+      /* Shared with another wire: within 2 px of it. A shared run that is a prefix of this wire is the tree's trunk. */
+      const shared = own.map((point) => samples.some((other, j) => j !== index && other.some((q) => Math.hypot(q.x - point.x, q.y - point.y) <= 2)));
+      const near = own.filter((point, k) => !shared[k] && samples.some((other, j) => j !== index && other.some((q) => Math.hypot(q.x - point.x, q.y - point.y) <= 6))).length;
+      const lastShared = shared.lastIndexOf(true);
+      const sharedPrefix = lastShared < 0 || shared.slice(0, lastShared + 1).every(Boolean);
+      return {
+        taskId, stub: path.hasAttribute("data-stub"), d,
+        bends: (d.match(/Q/g) ?? []).length,
+        length: Math.round(path.getTotalLength()),
+        cardHits: own.filter((p) => cards.some((b) => inside(b, p.x, p.y))).length * 2,
+        hitCards: [...new Set(own.flatMap((p) => cards.filter((b) => inside(b, p.x, p.y)).map((b) => `${b.id}@${b.l},${b.t},${b.r},${b.b}@${Math.round(p.x)},${Math.round(p.y)}`)))].slice(0, 3),
+        seatHits: seat ? own.filter((p) => inside(seat, p.x, p.y)).length * 2 : 0,
+        textHits: own.filter((p) => text.some((b) => inside(b, p.x, p.y, 0))).length * 2,
+        sharedPx: shared.filter(Boolean).length * 2, sharedPrefix, nearPx: near * 2,
+        start: own[0] ? { x: round(own[0].x), y: round(own[0].y) } : null,
+        end: own.at(-1) ? { x: round(own.at(-1)!.x), y: round(own.at(-1)!.y) } : null,
+        card,
+      };
+    });
+    return {
+      viewport: { width: innerWidth, height: innerHeight },
+      mode: document.querySelector<HTMLElement>("[data-kanban-board] [data-board]")?.dataset.mode ?? (document.querySelector("[data-phone-kanban-column]") ? "phone" : null),
+      seat, columns, wires, text,
+      stubs: [...document.querySelectorAll("[data-orchestrator-wires] .oa-stub")].map((chip) => chip.textContent),
+      seatPorts: [...document.querySelectorAll<SVGCircleElement>("[data-orchestrator-wires] .oa-port[data-seat]")].map((port) => ({ x: Number(port.getAttribute("cx")), y: Number(port.getAttribute("cy")) })),
+    };
+  });
+
+  /* The cards to aim at, read from the board as drawn: the first and the deepest visible card of each column. */
+  const targets = (page: Page) => page.evaluate(() => {
+    const result: Record<string, string[]> = {};
+    for (const column of document.querySelectorAll<HTMLElement>("[data-kanban-board] section.column[data-status], [data-phone-kanban-column]")) {
+      const status = column.dataset.status ?? column.dataset.phoneKanbanColumn ?? "";
+      const view = (column.querySelector(".col-body") ?? column).getBoundingClientRect();
+      if (!view.width) continue;
+      result[status] = [...column.querySelectorAll<HTMLElement>(".card[data-id], [data-phone-card]")]
+        .filter((card) => { const r = card.getBoundingClientRect(); return r.width > 0 && r.top + 22 > view.top + 6 && r.top + 22 < Math.min(view.bottom, innerHeight) - 6; })
+        .map((card) => (card.dataset.id ?? card.dataset.phoneCard ?? "").replace(/^task:/, ""));
+    }
+    return result;
+  });
+  const hiddenBelow = (page: Page, status: string) => page.evaluate((status) => {
+    const column = document.querySelector<HTMLElement>(`[data-kanban-board] section.column[data-status="${status}"], [data-phone-kanban-column="${status}"]`);
+    if (!column) return null;
+    const view = (column.querySelector(".col-body") ?? column).getBoundingClientRect();
+    const card = [...column.querySelectorAll<HTMLElement>(".card[data-id], [data-phone-card]")].find((node) => node.getBoundingClientRect().top + 22 > Math.min(view.bottom, innerHeight) - 6);
+    return card ? (card.dataset.id ?? card.dataset.phoneCard ?? "").replace(/^task:/, "") : null;
+  }, status);
+
+  const FORMS = {
+    "1920": { viewport: { width: 1920, height: 1080 }, phone: false },
+    "1440": { viewport: { width: 1440, height: 900 }, phone: false },
+    "1280": { viewport: { width: 1280, height: 800 }, phone: false },
+    "1000": { viewport: { width: 1000, height: 700 }, phone: false },
+    "390": { viewport: { width: 390, height: 844 }, phone: true },
+  } as const;
+  type Form = keyof typeof FORMS;
+  type Case = { id: string; form: Form; seat: SeatAt; lang: "en" | "uk"; many?: boolean; aim: (page: Page) => Promise<string[] | null>; before?: (page: Page) => Promise<void>; shoot?: boolean };
+  const first = (status: string, at = 0) => async (page: Page) => { const list = (await targets(page))[status] ?? []; return list[at] ? [list[at]!] : null; };
+  const deepest = (status: string) => async (page: Page) => { const list = (await targets(page))[status] ?? []; return list.length ? [list.at(-1)!] : null; };
+  const several = async (page: Page) => {
+    const all = await targets(page);
+    const picks = [all.inbox?.[0], all.assigned?.[0], all.assigned?.[2], all.blocked?.[0]].filter((id): id is string => !!id);
+    return picks.length ? picks : null;
+  };
+  const scrollColumn = (status: string, by: number) => async (page: Page) => { await page.evaluate(({ status, by }) => {
+    const column = document.querySelector<HTMLElement>(`[data-kanban-board] section.column[data-status="${status}"] .col-body, [data-phone-kanban-column="${status}"]`);
+    if (column) column.scrollTop += by;
+  }, { status, by }); await page.waitForTimeout(150); };
+  const tab = (status: string) => async (page: Page) => { const button = page.locator(`[data-phone-kanban-tab="${status}"]`); if (await button.count()) { await button.click(); await page.waitForTimeout(450); } };
+
+  const cases: Case[] = [];
+  for (const lang of ["en", "uk"] as const) {
+    for (const form of ["1920", "1440", "1280", "1000"] as const) {
+      for (const seat of ["top", "top-folded", "side"] as const) {
+        const tag = `${form}-${seat}-${lang}`;
+        cases.push(
+          { id: `${tag}-inbox-first`, form, seat, lang, aim: first("inbox") },
+          { id: `${tag}-assigned-first`, form, seat, lang, aim: first("assigned"), shoot: true },
+          { id: `${tag}-assigned-deep`, form, seat, lang, aim: deepest("assigned") },
+          { id: `${tag}-blocked-first`, form, seat, lang, aim: first("blocked") },
+          { id: `${tag}-several`, form, seat, lang, aim: several, shoot: true },
+          { id: `${tag}-hidden-below`, form, seat, lang, many: true, aim: async (page) => { const id = await hiddenBelow(page, "assigned"); return id ? [id] : null; } },
+          { id: `${tag}-hidden-above`, form, seat, lang, many: true, before: scrollColumn("assigned", 900), aim: async (page) => {
+            /* The first card of the column, scrolled out above the scroller's top. */
+            const id = await page.evaluate(() => document.querySelector<HTMLElement>('[data-kanban-board] section.column[data-status="assigned"] .card[data-id]')?.dataset.id?.replace(/^task:/, "") ?? null);
+            return id ? [id] : null;
+          } },
+          { id: `${tag}-deep-scrolled`, form, seat, lang, many: true, before: scrollColumn("assigned", 600), aim: deepest("assigned") },
+        );
+      }
+    }
+    /* The seat on top narrowed with its width grip (#2179): columns on both sides of it. */
+    for (const at of ["inbox-first", "assigned-first", "blocked-first", "several"] as const) {
+      cases.push({ id: `1920-top-narrow-${lang}-${at}`, form: "1920", seat: "top-narrow", lang, shoot: at === "several",
+        aim: at === "several" ? several : at === "inbox-first" ? first("inbox") : at === "assigned-first" ? first("assigned") : first("blocked") });
+    }
+    cases.push(
+      { id: `390-phone-${lang}-assigned-first`, form: "390", seat: "top", lang, before: tab("assigned"), aim: first("assigned"), shoot: true },
+      { id: `390-phone-${lang}-assigned-deep`, form: "390", seat: "top", lang, before: tab("assigned"), aim: deepest("assigned") },
+      { id: `390-phone-${lang}-inbox-first`, form: "390", seat: "top", lang, before: tab("inbox"), aim: first("inbox") },
+      { id: `390-phone-${lang}-several`, form: "390", seat: "top", lang, before: tab("assigned"), aim: async (page) => { const list = (await targets(page)).assigned ?? []; return list.slice(0, 3); }, shoot: true },
+      { id: `390-phone-${lang}-hidden-below`, form: "390", seat: "top", lang, many: true, before: tab("assigned"), aim: async (page) => { const id = await hiddenBelow(page, "assigned"); return id ? [id] : null; } },
+      { id: `390-phone-${lang}-other-tab`, form: "390", seat: "top", lang, before: tab("assigned"), aim: async (page) => { await tab("inbox")(page); const list = (await targets(page)).inbox ?? []; await tab("assigned")(page); return list.slice(0, 1); } },
+    );
+  }
+
+  browserTest("every seat/card layout the board produces, one action each: the route's bends, length and crossings", async () => {
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    let browser = await chromium.launch(LAUNCH);
+    const results: Record<string, unknown>[] = [];
+    try {
+      const only = process.env.WR_ONLY ? new RegExp(process.env.WR_ONLY) : null;
+      for (const entry of cases.filter((c) => !only || only.test(c.id))) {
+        if (!browser.isConnected()) browser = await chromium.launch(LAUNCH);
+        const { viewport, phone } = FORMS[entry.form];
+        const context = await browser.newContext({ viewport, colorScheme: "light", reducedMotion: "reduce", ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+        await context.addInitScript(seatInit(entry.seat, entry.lang));
+        const page = await context.newPage();
+        const errors: string[] = [];
+        page.on("pageerror", (error) => errors.push(error.message));
+        try {
+          await page.goto(`${server.base}?scenario=orchestrator-arrows${entry.many ? "&many=1" : ""}${phone ? "&kanban=1" : ""}`);
+          await page.locator(phone ? "[data-phone-card]" : "[data-kanban-board] .card[data-id]").first().waitFor({ state: "attached", timeout: 20_000 });
+          await page.locator(phone ? "[data-mobile2-seat-card]" : "[data-kanban-seat]").first().waitFor({ state: "attached", timeout: 20_000 });
+          await page.waitForTimeout(600);
+          await entry.before?.(page);
+          const aimed = await entry.aim(page);
+          if (!aimed?.length) { results.push({ id: entry.id, form: entry.form, seat: entry.seat, lang: entry.lang, skipped: "no target in this layout" }); continue; }
+          await act(page, aimed.map((taskId) => ({ kind: "pipeline", taskId })));
+          await page.waitForTimeout(200);
+          await probe(page, "settle");
+          await probe(page, "freeze");
+          const state = await measure(page);
+          results.push({ id: entry.id, form: entry.form, seat: entry.seat, lang: entry.lang, many: !!entry.many, aimed, ...state, errors });
+          if (entry.shoot || /^(1920|1440)-top-/.test(entry.id)) await page.screenshot({ path: path.join(out, `${entry.id}.png`) });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.writeFileSync(path.join(out, "routes.json"), JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", label, results }, null, 2) + "\n");
+  }, 1_800_000);
+});
