@@ -12,6 +12,8 @@ import { censusIndex, ownerProcessAlive, registryOwners, rowKeyId, type Ownerles
 import type { EngineHost, HostState } from "@/lib/runtime/engineHost";
 import { structuredDeliveryHeldHosts } from "@/lib/runtime/structuredDeliveryController";
 import { captureProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
+import { readStableTailRecords } from "@/lib/scanner/activity";
+import { turnStateFromRecords } from "@/lib/accounts/migration/turnState";
 import type { Engine } from "@/lib/types";
 import { activeOrchestratorSeats } from "@/lib/orchestrator/seats";
 import { viewerOwnProjectKeys } from "@/lib/monitor/seatTickSources";
@@ -129,12 +131,13 @@ export function journalStatement(
     to an earlier writer stays that writer's. An unfamiliar turn under the
     current key can be current work, so it holds until a later own idle/end.
     Missing history supplies no release proof for an answering process. */
-function orderedJournalStatement(rows: readonly RuntimeSession[], owner: RecordedOwner, events: readonly RuntimeEvent[]): OwnerReading["journal"] {
+function orderedJournalStatement(rows: readonly RuntimeSession[], owner: RecordedOwner, events: readonly RuntimeEvent[], missingHistory: boolean, engineCursor: number | null): OwnerReading["journal"] {
   const statement = journalStatement(rows, owner);
   const turns = new Map<string, number>();
   const turnOwners = new Map<string, { key: string; epoch: number }>();
   const rowKeys = new Map<string, string>();
   const statements = new Map<string, Map<string | null, number | null>>();
+  const checkpoints = new Set<string>();
   const turnKey = (key: string, turn: string) => `${key}\0${turn}`;
   const prefix = `engine-host:${owner.entryKey}:`;
   for (const event of events) {
@@ -160,12 +163,16 @@ function orderedJournalStatement(rows: readonly RuntimeSession[], owner: Recorde
         const cursor = match ? Number(match[1]) : null;
         const claims = statements.get(event.scope.id) ?? new Map<string | null, number | null>();
         if (busy) {
+          checkpoints.delete(event.scope.id);
           const previous = claims.get(active);
           claims.set(active, previous === undefined || previous === null ? cursor : cursor === null ? null : Math.max(previous, cursor));
         } else {
           // Append order cannot make a queued, older health sample newer than
           // an engine event. A missing source cursor cannot settle a claim.
           for (const [turn, started] of claims) if (cursor !== null && started !== null && cursor > started) claims.delete(turn);
+          // The engine's durable high-water mark survives retention. Only an
+          // own publication beyond it can settle an engine start we lost.
+          if (cursor !== null && engineCursor !== null && engineCursor > 0 && cursor > engineCursor) checkpoints.add(event.scope.id);
         }
         statements.set(event.scope.id, claims);
       }
@@ -211,6 +218,7 @@ function orderedJournalStatement(rows: readonly RuntimeSession[], owner: Recorde
     if (ordered.size) return "claimed";
     idle = true;
   }
+  if (missingHistory && (!statements.size || [...statements.keys()].some((id) => !checkpoints.has(id)))) return "unattributed";
   for (const row of rows) {
     const own = row.writerStatus && rowKeyId(row.writerStatus.sessionKey) === owner.entryKey
       && fenceEpoch(row.writerStatus.writerClaim) === owner.writerEpoch;
@@ -236,6 +244,8 @@ export interface OwnerCensusReaderOptions {
   readSession?: (query: { conversationId?: string; artifactPath?: string }) => Promise<RuntimeSession | null>;
   /** Existing journal replay, for ordered start/completion evidence. */
   readEvents?: (after: number) => Promise<RuntimeReplay>;
+  /** Durable engine high-water mark, including events pruned from replay. */
+  readProducerCursor?: (kind: string, prefix: string) => Promise<number>;
   /** The hosts this Viewer holds, by session key. */
   heldHosts?: () => ReadonlyMap<string, EngineHost>;
   /** This Viewer's own process, the claimant of the claims it makes (R6b). */
@@ -269,6 +279,11 @@ export function ownerCensusReader(
     return client.events(after);
   });
   const heldHosts = options.heldHosts ?? structuredDeliveryHeldHosts;
+  const readProducerCursor = options.readProducerCursor ?? (async (kind, prefix) => {
+    const client = runtimeHostClient();
+    if (!client) throw new Error("runtime host is unavailable for retained turn checkpoint");
+    return client.producerCursor(kind, prefix);
+  });
   const viewer = options.viewerIdentity ?? (() => viewerIdentity === undefined ? (viewerIdentity = captureProcessIdentity(process.pid)) : viewerIdentity);
   return async (sessions, _probe, read = (_reference, reading) => reading()) => {
     base ??= sources();
@@ -279,16 +294,17 @@ export function ownerCensusReader(
     const held = heldHosts();
     // One replay per probe, only when an own journal statement needs ordering.
     // Keep only deciding events; payloads from live output are never retained.
-    let history: Promise<RuntimeEvent[]> | null = null;
+    let history: Promise<{ events: RuntimeEvent[]; incomplete: boolean }> | null = null;
     const events = () => (history ??= (async () => {
       const result: RuntimeEvent[] = [];
       let cursor = 0;
       let page = await readEvents(cursor);
+      const incomplete = page.reset;
       if (page.reset) { cursor = page.floorSeq; page = await readEvents(cursor); }
       while (true) {
         if (page.reset) throw new Error("runtime turn history changed during drain probe");
         for (const event of page.events) if (["session-status", "turn-started", "turn-ended"].includes(event.kind)) result.push(event);
-        if (!page.events.length) return result;
+        if (!page.events.length) return { events: result, incomplete };
         const next = page.events.at(-1)!.seq;
         if (next <= cursor) throw new Error("runtime turn history did not advance");
         cursor = next;
@@ -396,9 +412,27 @@ export function ownerCensusReader(
           reading.rowReference = !!owner.entry && !owner.entry.host && !!owner.entry.structuredHost?.activeTurnRef && owner.structuredHost;
           if (owner.writerEpoch !== null) {
             const rows = await rowsFor(owner);
-            reading.journal = orderedJournalStatement(rows, owner, await events());
+            const history = await events();
+            // Only these engine producers retain their cursor across pruning.
+            const kind = owner.engine === "codex" ? "codex-app-server" : owner.engine === "claude" ? "claude-broker" : null;
+            const cursor = history.incomplete && kind ? await readProducerCursor(kind, `engine-host:${owner.entryKey}:`) : null;
+            reading.journal = orderedJournalStatement(rows, owner, history.events, history.incomplete, cursor);
+          } else if (owner.entry && ["starting", "live", "handoff"].includes(owner.entry.status)) {
+            // A standalone input can be accepted before its transcript start.
+            // The completion must follow this owner's live admission record.
+            const at = Date.parse(owner.entry.updatedAt);
+            reading.settlementAfter = Number.isFinite(at) ? at : Infinity;
           }
           reading.tail = await tail(owner.artifactPath, owner.engine);
+          if (reading.settlementAfter !== undefined && reading.tail?.turn === "idle" && owner.artifactPath
+            && (owner.engine === "codex" || owner.engine === "claude")) {
+            // Record freshness includes output after a completion. Date the
+            // actual terminal marker, so such output cannot settle new work.
+            const records = await readStableTailRecords(owner.artifactPath, undefined, { strict: true });
+            const turn = records.integrity === "complete" ? turnStateFromRecords(records.records, owner.engine) : null;
+            const at = turn?.state === "terminal" && turn.terminalAt ? Date.parse(turn.terminalAt) : NaN;
+            reading.tail = { ...reading.tail, settledAt: Number.isFinite(at) ? at : null };
+          }
         }
         owners.push(reading);
       });
@@ -418,7 +452,7 @@ export function ownerCensusReader(
         if (state.pid !== null) {
           const pid = state.pid, start = state.processStartIdentity;
           if (gone.some((record) => record.key === key && record.identity.pid === pid
-            && (start === null || record.identity.startIdentity === null || record.identity.startIdentity === start))) return;
+            && start !== null && record.identity.startIdentity !== null && record.identity.startIdentity === start)) return;
           if (!identityAlive({ pid, startIdentity: start }, probe)) return;
         }
         owners.push({ id: `handle:${key}:${state.pid ?? ""}`, binding, artifactPath: entry?.artifactPath ?? null, entryKey: key,

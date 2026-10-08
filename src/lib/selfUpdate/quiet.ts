@@ -67,7 +67,7 @@ export type OwnerReason = "setup" | "reviewer" | "host-turn" | "turn-claimed" | 
   | "turn-unattributed" | "turn-unread" | "launch-unproven" | "unresolved";
 
 /** The turn state of one transcript tail and its newest record. */
-export interface TailReading { turn: "busy" | "idle" | "unknown"; lastRecordAt: number | null }
+export interface TailReading { turn: "busy" | "idle" | "unknown"; lastRecordAt: number | null; settledAt?: number | null }
 
 /** Where an owner is shown and found. It never chooses evidence. */
 interface OwnerPlace {
@@ -101,6 +101,8 @@ export interface OwnerReading extends OwnerPlace {
   handle?: "busy" | "idle" | null;
   rowReference?: boolean;
   journal?: "claimed" | "idle" | "unattributed" | null;
+  /** A standalone live admission needs its own strictly newer completion. */
+  settlementAfter?: number;
   tail?: TailReading | null;
 }
 
@@ -165,7 +167,7 @@ export function sessionClaimsOpenTurn(session: Pick<RuntimeSession, "host" | "tu
  * An unordered positive source always holds. Missing evidence never expires
  * a recorded process, including one whose saved start identity is null.
  */
-export function ownerVerdict(owner: Pick<OwnerReading, "role" | "process" | "handle" | "rowReference" | "journal" | "tail">):
+export function ownerVerdict(owner: Pick<OwnerReading, "role" | "process" | "handle" | "rowReference" | "journal" | "tail" | "settlementAfter">):
   { verdict: "released"; reason: "process-gone" | "turn-settled" } | { verdict: "holds"; reason: OwnerReason } {
   if (owner.process === "gone") return { verdict: "released", reason: "process-gone" };
   if (owner.role === "setup") return { verdict: "holds", reason: "setup" };
@@ -175,7 +177,8 @@ export function ownerVerdict(owner: Pick<OwnerReading, "role" | "process" | "han
   if (owner.tail?.turn === "busy") return { verdict: "holds", reason: "turn-open" };
   if (owner.journal === "unattributed") return { verdict: "holds", reason: "turn-unattributed" };
   if (owner.handle === "idle" || owner.journal === "idle") return { verdict: "released", reason: "turn-settled" };
-  if (owner.tail?.turn === "idle") return { verdict: "released", reason: "turn-settled" };
+  if (owner.tail?.turn === "idle" && (owner.settlementAfter === undefined
+    || (owner.tail.settledAt != null && owner.tail.settledAt > owner.settlementAfter))) return { verdict: "released", reason: "turn-settled" };
   return { verdict: "holds", reason: "turn-unread" };
 }
 
