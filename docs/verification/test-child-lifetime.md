@@ -225,6 +225,8 @@ wait. Ordinary Node/Bun children retain their original handles.
 | `src/lib/scanner/filesResponseWorker.test.ts` | Mid-build fault injection captures the live identity; every shutdown waits for that identity to be reaped before returning. |
 | `scripts/owned-runner.integration.test.ts` | Hard-kill fault injection uses the shared identity signal; recovery already retains original identities. |
 | `src/lib/testing/fixtureProcess.ts` | Shared bounded cleanup checks the recorded start/boot identity before TERM and KILL; report failure stops a registered tree before its root. |
+| `src/lib/runtime/cpuPlacement.scope.test.ts` | Private tmux server identity is captured before scope/readiness assertions; pane, agent, descendant and orphan identities are captured while alive. Cleanup awaits bounded identity-checked TERM/KILL for every record. |
+| `src/components/kanban/kanbanBoard.browser.test.tsx` | Sidebar browser server identity is captured before connecting. After Playwright closes its handles, recovery awaits bounded identity-checked cleanup before recording the process as closed. |
 
 The remaining direct destructive PID calls in test files have original-identity
 fences in the runner/verifier, generation-lifetime, startup and native host
@@ -291,8 +293,8 @@ readiness report to establish ownership. Disposition **synchronous**: the
 caller waits for the command; the runner contains any descendants if the
 synchronous call or its parent is interrupted.
 
-The reconciled census contains 244 files: 162 with asynchronous primitives and
-82 with only synchronous primitives. These dispositions describe the verified
+The reconciled census contains 254 files: 167 with asynchronous primitives and
+87 with only synchronous primitives. These dispositions describe the verified
 Linux path.
 
 The executable AST primitive-reference scan reconciles the helper census and
@@ -394,6 +396,7 @@ repeated for this inventory correction.
 | `src/lib/mcp/writerConcurrency.test.ts` | 68, 221 | owned |
 | `src/lib/memory/controller.test.ts` | 79, 100 | owned |
 | `src/lib/memory/hook.test.ts` | 33, 47, 72, 91, 113, 150, 198 | owned |
+| `src/lib/memory/index.test.ts` | 248 | owned; fresh-process memory queries retain the Bun handle and await output and exit |
 | `src/lib/monitor/seatTickController.test.ts` | 826 | owned |
 | `src/lib/pipelines/engine.test.ts` | 4026, 4056, 5096, 5450, 5452, 7622, 7623, 7624, 7626, 7627, 7628, 9436, 10521, 13682, 13702, 13733, 13754, 13802, 16616, 16653, 16708, 16818, 16863, 17003, 17033, 17158, 17328, 17355, 17515, 18278, 19189, 19206, 20520 | owned |
 | `src/lib/pipelines/fixtures/generationParent.ts` | 7 | contained helper |
@@ -411,6 +414,7 @@ repeated for this inventory correction.
 | `src/lib/proc/darwinArgv.test.ts` | 91 | owned |
 | `src/lib/proc/windows.test.ts` | 45 | owned |
 | `src/lib/processGroup.test.ts` | 159 | owned |
+| `src/lib/prototypeReview/decision.integration.test.ts` | 97 | owned; the decision-stop child retains its Bun handle and its exit is awaited |
 | `src/lib/resourceViewerTree.test.ts` | 150, 153 | owned |
 | `src/lib/resources.structuredHosts.test.ts` | 221, 382, 423, 494 | owned |
 | `src/lib/resources.test.ts` | 518, 563, 617, 1750, 1926, 2051, 2138, 2600, 3329, 3334, 3337 | owned |
@@ -418,6 +422,7 @@ repeated for this inventory correction.
 | `src/lib/runtime/agentMemory.scope.test.ts` | 9, 19 | owned |
 | `src/lib/runtime/agentMemory.test.ts` | 241 | owned |
 | `src/lib/runtime/claudeStreamBrokerHost.test.ts` | 782, 858, 2276, 2351 | owned |
+| `src/lib/runtime/cpuPlacement.scope.test.ts` | Node spawn plus synchronous systemd, tmux and gate probes | owned; private units contain detached fixtures, original PID/start/boot identities are captured while alive and bounded cleanup is awaited |
 | `src/lib/runtime/codexAppServerHost.injectCli.test.ts` | 43, 62 | owned |
 | `src/lib/runtime/codexAppServerHost.injectResponses.test.ts` | 90 | owned |
 | `src/lib/runtime/codexAppServerHost.test.ts` | 5043 | owned |
@@ -453,9 +458,11 @@ repeated for this inventory correction.
 | `src/lib/selfUpdate/pid.test.ts` | 68 | owned |
 | `src/lib/selfUpdate/quietDeadHosts.test.ts` | 48, 327, 346, 393, 494, 571, 606, 629, 650, 684, 746, 762, 812, 847, 903, 976, 1016, 1052, 1090, 1116, 1141, 1194, 1276, 1289 | owned |
 | `src/lib/selfUpdate/snapshotIdentity.test.ts` | 34 | owned |
+| `src/lib/selfUpdate/workEvidence.test.ts` | 544, 620; synchronous Git and mkdir | owned; HTTP clients retain Bun handles and existing finally cleanup; the runner contains cancellation and detached descendants |
 | `src/lib/session/titleStore.interprocess.test.ts` | 32 | owned |
 | `src/lib/state/buildPhaseGuard.test.ts` | 133 | owned |
 | `src/lib/state/durability.test.ts` | 60, 69, 366, 423 | owned |
+| `src/lib/state/diskPressure.test.ts` | 420, 544; forwarded synchronous namespace-reader probes | owned; reader handles and exit promises are retained, parallel fixture children stay in the owning service |
 | `src/lib/state/hotStateStores.sqlite.test.ts` | 41, 118, 235, 284, 367, 444, 808, 862, 870 | owned |
 | `src/lib/state/stateLeaseRecovery.test.ts` | 168 | owned |
 | `src/lib/tasks/store.sqlite.test.ts` | 65 | owned |
@@ -479,6 +486,7 @@ repeated for this inventory correction.
 | --- | --- | --- |
 | `bin/agent-binaries.test.ts` | 75, 93 | synchronous |
 | `bin/envAlias.test.ts` | 65, 121 | synchronous |
+| `bin/install-cpu-placement.test.ts` | 37, 42 | synchronous; isolated installer queries are awaited and the runner contains interrupted descendants |
 | `bin/launcher-custody.test.ts` | 73 | synchronous |
 | `bin/self-update-supervisor.test.ts` | 27 | synchronous |
 | `bin/skillLinks.test.ts` | 18 | synchronous |
@@ -511,6 +519,7 @@ repeated for this inventory correction.
 | `src/components/Viewer.switching.dom.test.tsx` | 299 | synchronous |
 | `src/components/kanban/issue1695BrowserHarness.ts` | 26, 320, 324 | synchronous |
 | `src/components/kanban/kanbanBoard.browser.test.tsx` | 6709, 11921, 12068 | synchronous |
+| `src/components/mobile/issue1671Evidence.browser.test.tsx` | 8387 | synchronous; ffmpeg fixture generation is awaited, browser handles are owned by the shared browser harness and test service |
 | `src/lib/accounts/claudeCredentials.test.ts` | 97, 127 | synchronous |
 | `src/lib/agent/spawnCommand.contention.test.ts` | 92, 155, 226 | synchronous |
 | `src/lib/agent/transcript.test.ts` | 36, 40 | synchronous |
@@ -518,6 +527,7 @@ repeated for this inventory correction.
 | `src/lib/boardMaintenance/run.test.ts` | 245 (dynamic import), 248 (`git` helper) | synchronous; caller waits for Git init/commit/branch in an isolated repository, and the runner contains descendants on deadline or cancellation |
 | `src/lib/flows/git.test.ts` | 19, 20, 46 | synchronous |
 | `src/lib/forge/autoMerge.test.ts` | 258, 292, 336, 375, 406 | synchronous |
+| `src/lib/issueReports/store.test.ts` | 64 | synchronous; isolated race helper has a 60-second deadline and stays in the owning service |
 | `src/lib/git/agentForgeCredentials.test.ts` | 70, 87, 88, 89, 119, 120, 413, 419, 435, 438 | synchronous |
 | `src/lib/git/agentHistoryGuard.test.ts` | 46, 130 | synchronous |
 | `src/lib/git/codexShellPolicy.test.ts` | 69 | synchronous |
@@ -533,6 +543,7 @@ repeated for this inventory correction.
 | `src/lib/pipelines/remoteActions.test.ts` | 75, 155, 212, 663, 721 | synchronous |
 | `src/lib/pipelines/stageInput.test.ts` | 18, 142, 183, 211, 268 | synchronous |
 | `src/lib/projects/succession.test.ts` | 55 | synchronous |
+| `src/lib/prototypeReview/fences.test.ts` | 103 | synchronous; private FIFO creation is awaited and runner-contained |
 | `src/lib/reaperRuntime.test.ts` | 1654, 1655, 1656, 1658, 1659, 1660, 1696, 1697, 1698, 1700, 1701, 1702, 1704, 1705 | synchronous |
 | `src/lib/review/extraction.test.ts` | 73 | synchronous |
 | `src/lib/reviewHistory/reader.test.ts` | 546 | synchronous |
@@ -550,6 +561,7 @@ repeated for this inventory correction.
 | `src/lib/stateOwnership.test.ts` | 98 | synchronous |
 | `src/lib/tasks/ghostSettlement.test.ts` | 122 | synchronous |
 | `src/lib/telegram/bot/service.test.ts` | 654 | synchronous |
+| `src/lib/telegram/fixtures/releaseConnector.ts` | 49; generated supervisor spawn at 36 | synchronous helper; generated supervisor retains the connector handle and writes its product ownership record, caller cleanup checks its original identity and the owning service contains the detached connector |
 | `src/lib/telegram/packaging.test.ts` | 72, 149, 183, 213, 302, 369, 447, 468 | synchronous |
 | `src/lib/telegram/vendorPagination.test.ts` | 64 | synchronous |
 | `src/lib/tempDirs.test.ts` | 88 | synchronous |
@@ -579,7 +591,7 @@ Additional launch wiring checked by text and imports:
 | `src/lib/telegram/reportRunner.test.ts` | A substituted launch port creates synthetic reports. |
 
 Referenced production and operational companions are explicitly excluded from
-the 244-file test/helper census. They remain reconciled by the independent
+the 254-file test/helper census. They remain reconciled by the independent
 reference scan. Their execution by a test is contained by the same service;
 this disposition does not change their production process contract.
 
@@ -613,6 +625,8 @@ this disposition does not change their production process contract.
 | `src/lib/accounts/claudeCredentials.ts` | Product credential helpers exercised by tests; actual process primitive calls contained by preload/service |
 | `src/lib/agent/cli.ts` | Product CLI queries exercised by tests; bounded calls contained by preload/service |
 | `src/lib/proc/windows.ts` | Product process backend; bounded synchronous probes, native Windows execution outside this Linux run |
+| `src/lib/pipelines/worktreeSweep.ts` | Product worktree-maintenance Git port; awaited commands have a 120-second timeout and test executions stay in the owning service; live worktree maintenance is outside fixture cleanup |
+| `src/lib/runtime/cpuPlacement.ts` | Product CPU-placement port; synchronous systemd queries have five-second timeouts and test executions stay in the owning service; live agent placement is outside fixture cleanup |
 | `src/lib/processIdentity.ts` | Product boot identity probes; bounded synchronous sysctl on macOS, contained test calls |
 | `src/lib/resources.ts` | Product resource commands exercised by tests; actual primitive calls contained by preload/service |
 | `src/lib/runtime/claudeStreamBrokerHost.ts` | Product structured host launch port; test calls captured before spawn returns and service owns descendants |
