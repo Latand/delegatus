@@ -1,3 +1,4 @@
+import { recoverSeatAuthentication, type SeatAuthRecoveryPorts } from "./seatAuthRecovery";
 import { productionBoardMaintenanceController, type BoardMaintenanceController } from "@/lib/boardMaintenance/run";
 import crypto from "node:crypto";
 import path from "node:path";
@@ -113,6 +114,7 @@ import type {
  */
 
 export interface SeatTickControllerDependencies {
+  seatAuth?: SeatAuthRecoveryPorts;
   maintenance?: BoardMaintenanceController | null;
   sources?: SeatTickSources;
   /** Records the identity successions seated projects owe (#1874); the sweep
@@ -230,6 +232,7 @@ function absorbedAttempts(existing: BoardTask | undefined, key: string): number 
 }
 
 function cardText(project: string, card: SeatTickCard, at: string, existing?: BoardTask): string {
+  if (card.kind === "auth-failed") return redactBounded(`${card.detail}\n\n${MONITOR_REF_PREFIX} ${card.ref}`, CARD_TEXT_LIMIT);
   if (card.kind === "no-seat") return orchestratorAlertCardText(card.detail, at);
   if (card.kind === "mcp-unavailable") return redactBounded([
     "Orchestrator seat cannot use its Viewer MCP",
@@ -1446,7 +1449,7 @@ async function check(
         || (verdict.kind !== "wake" && verdict.kind !== "proactive")) return null;
       return alarmPayload(input, verdict, issues, wake.preparedAt);
     },
-    mayDispatch: () => !activeDrain() && (!openingSeat?.conversationId
+    mayDispatch: () => !opened.authIncident && !activeDrain() && (!openingSeat?.conversationId
       || mcpHealthFor({ ...openingSeat, conversationId: openingSeat.conversationId }, sources.now()).status !== "dead"),
     settingsUpdatedAt: settingsUpdatedAtFor(canonical, sources),
     at: new Date(opening).toISOString(),
@@ -1466,6 +1469,7 @@ async function check(
      unread again at the next check. */
   let input = await refreshSeatTickEvidence(gathered, sources);
   input = { ...input, state: seatTickStateForEpoch(input.state, input.seat?.seatEpoch ?? null) };
+  const authDetail = await recoverSeatAuthentication(input, sources, readState, writeState, ensureCard, dependencies.seatAuth ?? {});
   let proposalIssues: readonly ProposalIssue[] = [];
   if (seatTickDecision(input).verdict.kind === "proactive") {
     proposalIssues = await (dependencies.proposalIssues ?? defaultProposalIssues)(input.project, sources);
@@ -1607,6 +1611,9 @@ async function check(
       // No attempt has entered transport; leave its work for the release tick.
       delivery = { clientMessageId, outcome: "update-held" };
       fenceDetail = "new seat work is held for the automatic update";
+    } else if (state.authIncident && state.authIncident.rotation.state !== "rotated") {
+      delivery = { clientMessageId, outcome: "seat-auth-failed" };
+      fenceDetail = authDetail;
     } else if (mcpHealth?.status === "dead" && !(
       verdict.kind === "wake" && verdict.reasons.some((reason) => reason.kind === "stalled")
       && verdict.items.some((item) => (item.kind === "pipeline" || item.kind === "provisioning") && item.stallToken
@@ -1740,7 +1747,7 @@ async function check(
     deferred: verdict.kind === "wake" ? verdict.deferred : 0,
     eventsThrough: state.eventsThrough ?? 0,
     delivery,
-    detail: [rollbackDetail, verdictDetail(verdict), fenceDetail, sendDetail, ...maintenanceDetails].filter((part): part is string => !!part).join("; ") || null,
+    detail: [rollbackDetail, authDetail, verdictDetail(verdict), fenceDetail, sendDetail, ...maintenanceDetails].filter((part): part is string => !!part).join("; ") || null,
   };
   appendRecord(record);
   return record;

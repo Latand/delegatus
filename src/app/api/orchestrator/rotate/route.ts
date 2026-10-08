@@ -8,8 +8,9 @@ import type { ApiError } from "@/lib/types";
 
 /* Explicit orchestrator rotation (two-axis contract). Behavior lives in
    `@/lib/orchestrator/seatCommand`; a route module may export only the
-   documented route fields. Rotation is NEVER automatic — this route runs only
-   when explicitly called, and context pressure elsewhere only recommends.
+   documented route fields. This route runs when explicitly called. The seat tick
+   also calls the command in-process after an authentication failure, onto
+   another allowed account. Context pressure elsewhere only recommends.
 
    Authority lives there too, in ONE contract this route and the
    `rotate_orchestrator` MCP tool share (#1402): the tool posts here, so

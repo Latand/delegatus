@@ -1,4 +1,4 @@
-import { afterAll, afterEach, expect, spyOn, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7265,4 +7265,267 @@ test("a second interruption parking an announced running stall wakes its seat de
   expect(parked.sent).toHaveLength(1);
   await runSeatTickCheck(PROJECT, parked.deps);
   expect(parked.sent).toHaveLength(1);
+});
+
+
+// Authentication recovery drives the actual transcript, selector, seat command,
+// bridge and Telegram service. Only process launch and bot HTTP are replaced.
+describe("seat authentication recovery through production seams", () => {
+  const AUTH_AT = "2026-10-08T00:05:00.000Z";
+  const AUTH_TS = Date.parse(AUTH_AT);
+  const ERROR_TEXT = "Failed to authenticate: OAuth session expired and could not be refreshed";
+
+  async function authFixture(allowed: boolean, run: (fixture: Awaited<ReturnType<typeof makeAuthFixture>>) => Promise<void>) {
+    const previous = { LLV_STATE_DIR: process.env.LLV_STATE_DIR, LLV_CLAUDE_HOME: process.env.LLV_CLAUDE_HOME, LLV_CODEX_HOME: process.env.LLV_CODEX_HOME };
+    const dir = fs.mkdtempSync(path.join(SANDBOX, "auth-case-"));
+    process.env.LLV_STATE_DIR = path.join(dir, "state");
+    process.env.LLV_CLAUDE_HOME = path.join(dir, "legacy-claude");
+    process.env.LLV_CODEX_HOME = path.join(dir, "legacy-codex");
+    let fixture: Awaited<ReturnType<typeof makeAuthFixture>> | undefined;
+    try { fixture = await makeAuthFixture(dir, allowed); await run(fixture); }
+    finally {
+      await fixture?.telegram.stopPoller();
+      setAgentRegistryForTests(null);
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key]; else process.env[key] = value;
+      }
+    }
+  }
+
+  async function makeAuthFixture(dir: string, allowed: boolean) {
+    const { createManagedClaudeAccount } = await import("@/lib/accounts/claude");
+    const { BINDINGS_SOURCE } = await import("@/lib/accounts/accountsStore");
+    const { seedAccountSource, persistedAccountSource } = await import("@/lib/accounts/accountsStoreFixture");
+    const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, orchestratorSeatFor } = await import("@/lib/orchestrator/seats");
+    const { executeOrchestratorRotation, productionSeatCommandDependencies } = await import("@/lib/orchestrator/seatCommand");
+    const { defaultSeatTickSources } = await import("./seatTickSources");
+    const { setReportTelegram } = await import("@/lib/projects/settings");
+    const { writeSeatTickSettings, readSeatTickSettingsFile } = await import("./seatTickSettings");
+    const { readBridgeReportLog } = await import("@/lib/bridge/store");
+    const { loadTasks } = await import("@/lib/tasks/store");
+    const { TelegramBotService, productionTelegramBotDependencies } = await import("@/lib/telegram/bot/service");
+    const { FakeBotTransport, fakeBotToken, ok } = await import("@/lib/telegram/bot/fakeTransport");
+    const a = createManagedClaudeAccount("Account A");
+    const b = createManagedClaudeAccount("Account B");
+    for (const account of [a, b]) fs.writeFileSync(path.join(account.home, ".credentials.json"), "{}", { mode: 0o600 });
+    const binding = { schemaVersion: 1, bindings: (allowed ? [a, b] : [a]).map((account) => ({ engine: "claude", accountId: account.id, project: PROJECT, createdAt: AUTH_AT })) };
+    seedAccountSource(BINDINGS_SOURCE, binding);
+    // The current account migration tombstones the legacy JSON path. Both
+    // that directory and the durable binding rows must remain untouched.
+    const bindingFile = statePath("account-project-bindings.json");
+    const bindingStat = fs.statSync(bindingFile);
+    expect(bindingStat.isDirectory()).toBe(true);
+    const bindingEntries = fs.readdirSync(bindingFile);
+    const storedBinding = JSON.stringify(persistedAccountSource(BINDINGS_SOURCE));
+    const transcript = path.join(a.projectsDir, "fixture", `${crypto.randomUUID()}.jsonl`);
+    fs.mkdirSync(path.dirname(transcript), { recursive: true });
+    function appendTurn(error: string | null = "authentication_failed", at = AUTH_AT, providerText = ERROR_TEXT) {
+      fs.appendFileSync(transcript, JSON.stringify({ type: "user", timestamp: at, message: { role: "user", content: "seat tick" } }) + "\n"
+        + JSON.stringify({ type: "assistant", timestamp: at, ...(error ? { error, isApiErrorMessage: true } : {}),
+          message: { model: error ? "<synthetic>" : "fixture-model", role: "assistant", ...(error === "authentication_failed" ? {} : { stop_reason: "end_turn" }),
+            content: [{ type: "text", text: error === "authentication_failed" ? providerText : error ? "You've hit your session limit" : "Work is complete." }] } }) + "\n");
+    }
+    appendTurn();
+    const registry = new AgentRegistry(path.join(dir, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+    registry.setEngineRouting("claude", a.id);
+    const capacity = (accountId: string, usedPercent: number) => {
+      const now = Date.now();
+      registry.recordQuotaObservation({ engine: "claude", accountId, authenticated: true,
+        authCheckedAt: new Date(now).toISOString(), observedAt: new Date(now).toISOString(), bootId: "auth-fixture",
+        limits: { session: { usedPercent, resetsAt: Math.floor(now / 1000) + 3600 }, weekly: null, plan: "max", capturedAt: Math.floor(now / 1000) },
+        provenance: { source: "live", reason: null, staleSince: null } });
+    };
+    capacity(a.id, 5); capacity(b.id, 20);
+    const conversation = registry.ensureConversation("claude", transcript, null);
+    registry.reconcileConversations([{ engine: "claude", path: transcript, accountId: a.id,
+      launchProfile: emptyLaunchProfile({ cwd: dir }), turn: { state: "idle", source: "assistant", terminalAt: AUTH_AT }, observedAt: AUTH_AT }]);
+    setAgentRegistryForTests(registry);
+    beginOrchestratorSeatIntent({ project: PROJECT, mandate: "Own the board and report results.", engine: "claude", model: "opus", clientRequestId: "seed_auth_fixture", mode: "spawn", now: "2026-10-08T00:00:00Z" });
+    completeOrchestratorSeatIntent({ project: PROJECT, clientRequestId: "seed_auth_fixture", conversationId: conversation.id, path: transcript, now: "2026-10-08T00:00:00Z" });
+    const original = orchestratorSeatFor(PROJECT).active!;
+    const successorPath = path.join(b.projectsDir, "fixture", `${crypto.randomUUID()}.jsonl`);
+    fs.mkdirSync(path.dirname(successorPath), { recursive: true }); fs.writeFileSync(successorPath, "");
+    const successor = registry.ensureConversation("claude", successorPath, null);
+    const spawns: Record<string, unknown>[] = [];
+    const command: import("@/lib/orchestrator/seatCommand").SeatCommandDependencies = {
+      spawn: async (body) => {
+        spawns.push(body);
+        expect(body.accountId).toBe(b.id);
+        return { status: 200, body: { ok: true, conversationId: successor.id, path: successorPath } };
+      },
+      deliver: async () => ({ ok: true, outcome: "delivered" }),
+      conversationTarget: productionSeatCommandDependencies.conversationTarget,
+      resolvedConversation: productionSeatCommandDependencies.resolvedConversation,
+      summarizeHandoffs: productionSeatCommandDependencies.summarizeHandoffs,
+      launchSettlement: productionSeatCommandDependencies.launchSettlement,
+      stampRegistryIdentity: productionSeatCommandDependencies.stampRegistryIdentity,
+      runtimeIdentity: productionSeatCommandDependencies.runtimeIdentity,
+      now: () => "2026-10-08T00:06:00.000Z",
+    };
+    const transport = new FakeBotTransport();
+    transport.script("getMe", ok({ id: 4242424, is_bot: true, first_name: "Fixture Bot", username: "fixture_bot", can_join_groups: true }));
+    let messageId = 1;
+    transport.handlers.sendMessage = () => ok({ message_id: messageId++, date: 1, chat: { id: -1000000000101, type: "supergroup", title: "Fixture" }, text: "sent" });
+    const telegram = new TelegramBotService({ ...productionTelegramBotDependencies(), transportFor: () => transport,
+      now: () => new Date(AUTH_AT), sleep: async () => {}, conversationTitle: () => null });
+    await telegram.connect(fakeBotToken()); await telegram.stopPoller();
+    transport.script("getUpdates", ok([{ update_id: 1, my_chat_member: { chat: { id: -1000000000101, type: "supergroup", title: "Fixture" }, date: 1, new_chat_member: { status: "member" } } }]));
+    await telegram.pollOnce(new AbortController().signal);
+    telegram.setChat("-1000000000101", "auth-fixture", true);
+    const chat = telegram.listChats().chats[0]!.alias!;
+    setReportTelegram(PROJECT, { chat, name: "Fixture" }, "fixture");
+    writeSeatTickSettings(PROJECT, { ...defaultSeatTickSettings(PROJECT), monitorPrompt: "Keep reporting owed work" });
+    const noteBefore = JSON.stringify(readSeatTickSettingsFile());
+    let clock = AUTH_TS + 2 * 60 * MINUTE;
+    const rig = harness({ registry, now: clock });
+    rig.deps.sources!.seatFor = orchestratorSeatFor;
+    rig.deps.sources!.seatTurnOutcome = defaultSeatTickSources().seatTurnOutcome;
+    rig.deps.sources!.now = () => clock;
+    rig.deps.readState = readSeatTickState;
+    rig.deps.writeState = writeSeatTickState;
+    rig.deps.reconcileSeat = () => null;
+    delete rig.deps.ensureCard;
+    const sendRequests: string[] = [];
+    rig.deps.seatAuth = { rotate: (body) => executeOrchestratorRotation(body, command, null), telegram: async (input) => { sendRequests.push(String(input.clientRequestId)); return telegram.send(input); } };
+    return { a, b, original, successor, transcript, registry, command, rig, spawns, telegram, transport, appendTurn, capacity, sendRequests,
+      check: async () => { const result = await runSeatTickCheck(PROJECT, rig.deps); clock += 5 * MINUTE; return result; },
+      seat: () => orchestratorSeatFor(PROJECT).active!, row: () => readSeatTickState(PROJECT),
+      reports: () => readBridgeReportLog().reports, cards: () => loadTasks(statePath("tasks.json")).filter((task) => task.text.includes("monitor-ref: seat-auth-failed")),
+      unchangedBinding: () => { expect(fs.statSync(bindingFile).ino).toBe(bindingStat.ino); expect(fs.readdirSync(bindingFile)).toEqual(bindingEntries); expect(JSON.stringify(persistedAccountSource(BINDINGS_SOURCE))).toBe(storedBinding); },
+      unchangedNote: () => expect(JSON.stringify(readSeatTickSettingsFile())).toBe(noteBefore),
+    };
+  }
+
+  test("first failure rotates once to the allowed account with handoff and one independent notice", async () => {
+    await authFixture(true, async (f) => {
+      await f.check();
+      expect(f.spawns).toHaveLength(1); expect(f.spawns[0]!.accountId).toBe(f.b.id);
+      expect(f.spawns[0]!.prompt).toContain("Automatic rotation after authentication failure");
+      expect(f.seat().seatEpoch).toBe(f.original.seatEpoch + 1);
+      expect(f.seat().predecessorConversationId).toBe(f.original.conversationId);
+      f.unchangedNote(); f.unchangedBinding();
+      expect(f.reports()).toHaveLength(1); expect(f.reports()[0]!.class).toBe("status");
+      expect(f.reports()[0]!.origin).toMatchObject({ kind: "agent", role: "seat-tick", conversationId: null });
+      expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      expect(f.cards()).toHaveLength(1); expect(f.cards()[0]!.status).toBe("done");
+      f.appendTurn("authentication_failed", "2026-10-08T00:08:00Z");
+      for (let n = 0; n < 3; n++) await f.check();
+      expect(f.spawns).toHaveLength(1); expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+    });
+  });
+
+  test("none allowed parks once, names the outside account and resumes after re-login without stale reopening", async () => {
+    await authFixture(false, async (f) => {
+      expect((await f.check())?.delivery?.outcome).toBe("seat-auth-failed");
+      expect(f.spawns).toHaveLength(0); expect(f.reports()).toHaveLength(1); expect(f.reports()[0]!.class).toBe("blocked");
+      expect(f.reports()[0]!.body).toContain("Account B"); expect(f.reports()[0]!.body).toContain("увійдіть");
+      expect(f.cards()[0]!.status).toBe("inbox"); f.unchangedBinding();
+      f.appendTurn("authentication_failed", "2026-10-08T00:08:00Z");
+      for (let n = 0; n < 3; n++) expect((await f.check())?.delivery?.outcome).toBe("seat-auth-failed");
+      expect(f.rig.sent).toHaveLength(0); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      fs.writeFileSync(path.join(f.a.home, ".credentials.json"), "{\"refreshed\":true}", { mode: 0o600 });
+      await f.check(); await f.check();
+      expect(f.row().authIncident).toBeUndefined(); expect(f.rig.sent.length).toBeGreaterThan(0); expect(f.cards()[0]!.status).toBe("done");
+      f.appendTurn("authentication_failed", "2026-10-08T00:30:00Z");
+      await f.check(); expect(f.reports()).toHaveLength(2);
+    });
+  });
+
+  test("a long provider diagnostic keeps the login action and outside-binding account in every notice", async () => {
+    await authFixture(false, async (f) => {
+      fs.writeFileSync(f.transcript, ""); f.appendTurn("authentication_failed", AUTH_AT, ERROR_TEXT + " detail".repeat(1000));
+      await f.check();
+      expect(f.reports()[0]!.body).toContain("увійдіть"); expect(f.reports()[0]!.body).toContain("Account B");
+      expect(f.cards()[0]!.text).toContain("увійдіть");
+      expect(String(f.transport.callsOf("sendMessage")[0]!.params.text)).toContain("увійдіть");
+    });
+  });
+
+  test("an allowed alternative without capacity parks without widening the binding", async () => {
+    await authFixture(true, async (f) => {
+      f.capacity(f.b.id, 100); await f.check(); await f.check();
+      expect(f.row().authIncident?.rotation.state).toBe("none-allowed");
+      expect(f.spawns).toHaveLength(0); expect(f.rig.sent).toHaveLength(0);
+      expect(f.reports()).toHaveLength(1); f.unchangedBinding();
+    });
+  });
+
+  test("a newer normal terminal turn clears the fence and resolves the notice card", async () => {
+    await authFixture(false, async (f) => {
+      await f.check(); f.appendTurn(null, "2026-10-08T00:10:00Z"); await f.check();
+      expect(f.row().authIncident).toBeUndefined(); expect(f.cards()[0]!.status).toBe("done"); expect(f.rig.sent).toHaveLength(1);
+    });
+  });
+
+  test("usage limits, ordinary answers and pre-designation authentication failures keep ordinary wakes", async () => {
+    for (const error of ["rate_limit", null, "old-auth"] as const) await authFixture(false, async (f) => {
+      fs.writeFileSync(f.transcript, ""); f.appendTurn(error === "old-auth" ? "authentication_failed" : error, error === "old-auth" ? "2026-10-07T23:59:00Z" : AUTH_AT);
+      await f.check(); expect(f.row().authIncident).toBeUndefined(); expect(f.reports()).toHaveLength(0); expect(f.rig.sent).toHaveLength(1);
+    });
+  });
+
+  test("an update drain holds rotation and notice until the first check after release", async () => {
+    await authFixture(true, async (f) => {
+      const lease = { id: "auth-fixture-drain", target: "fixture", since: new Date().toISOString(), until: Date.now() + 60_000 };
+      writeDrain(drainFile(), lease);
+      try { await f.check(); expect(f.row().authIncident?.rotation.state).toBe("held"); expect(f.spawns).toHaveLength(0); expect(f.reports()).toHaveLength(0); expect(f.rig.sent).toHaveLength(0); }
+      finally { releaseDrain(drainFile(), lease.id); }
+      await f.check(); expect(f.spawns).toHaveLength(1); expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+    });
+  });
+
+  test("a lost final state write replays the real bridge, bot and board receipts without another notice", async () => {
+    await authFixture(false, async (f) => {
+      let failOnce = true;
+      f.rig.deps.writeState = (project, row) => {
+        if (failOnce && row.authIncident?.notice?.card) { failOnce = false; throw new Error("lost state write"); }
+        writeSeatTickState(project, row);
+      };
+      await f.check(); await f.check();
+      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1); expect(f.cards()).toHaveLength(1);
+      expect(f.row().authIncident?.notice?.card).toBe(true);
+      expect(f.sendRequests).toHaveLength(2); expect(new Set(f.sendRequests).size).toBe(1);
+    });
+  });
+
+  test("a rotation that lands before its outcome write is recovered from the durable request identity", async () => {
+    await authFixture(true, async (f) => {
+      let failOnce = true;
+      f.rig.deps.writeState = (project, row) => {
+        if (failOnce && row.authIncident?.rotation.state === "rotated" && !row.authIncident.notice) {
+          failOnce = false; throw new Error("lost rotation outcome write");
+        }
+        writeSeatTickState(project, row);
+      };
+      await f.check(); await f.check(); await f.check();
+      expect(f.spawns).toHaveLength(1); expect(f.reports()).toHaveLength(1);
+      expect(f.transport.callsOf("sendMessage")).toHaveLength(1); expect(f.cards()).toHaveLength(1);
+      expect(f.cards()[0]!.status).toBe("done");
+    });
+  });
+
+  test("a refused allowed-account rotation parks the seat and tells the operator the refusal", async () => {
+    await authFixture(true, async (f) => {
+      f.command.spawn = async () => ({ status: 503, body: { error: "fixture launch refused" } });
+      await f.check(); await f.check();
+      expect(f.row().authIncident?.rotation.state).toBe("refused");
+      expect(f.rig.sent).toHaveLength(0); expect(f.reports()).toHaveLength(1);
+      expect(f.reports()[0]!.body).toContain("fixture launch refused");
+      expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+    });
+  });
+
+  test("a concurrent manual designation fences automatic rotation before it can replace the new seat", async () => {
+    await authFixture(true, async (f) => {
+      const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
+      const { executeOrchestratorRotation } = await import("@/lib/orchestrator/seatCommand");
+      f.rig.deps.seatAuth!.rotate = async (body) => {
+        beginOrchestratorSeatIntent({ project: PROJECT, mandate: "Manual handoff", engine: "claude", model: "opus", clientRequestId: "manual_auth_fixture", mode: "spawn", now: "2026-10-08T00:06:00Z" });
+        completeOrchestratorSeatIntent({ project: PROJECT, clientRequestId: "manual_auth_fixture", conversationId: f.successor.id, path: f.transcript, now: "2026-10-08T00:06:00Z" });
+        const result = await executeOrchestratorRotation(body, f.command, null);
+        expect(result.status).toBe(409); expect(result.body.code).toBe("incumbent_changed"); return result;
+      };
+      await f.check(); expect(f.spawns).toHaveLength(0); expect(f.row().authIncident).toBeUndefined(); expect(f.reports()).toHaveLength(0); expect(f.transport.callsOf("sendMessage")).toHaveLength(0);
+    });
+  });
 });

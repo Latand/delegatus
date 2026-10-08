@@ -1,3 +1,4 @@
+import { normalizeSeatAuthIncident } from "./seatAuthIncident";
 import fs from "node:fs";
 import path from "node:path";
 import { SeatTickAccounting } from "./seatTickAccounting";
@@ -233,6 +234,8 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
     if (typeof count === "number" && Number.isInteger(count) && count >= 0) wakesWithoutChange[kind] = count;
   }
   return {
+    authIncident: normalizeSeatAuthIncident(raw.authIncident),
+    ...(typeof raw.authRecoveredThrough === "number" && Number.isFinite(raw.authRecoveredThrough) ? { authRecoveredThrough: raw.authRecoveredThrough } : {}),
     ...(typeof raw.diskPressureShown === "string" ? { diskPressureShown: raw.diskPressureShown } : {}),
     seatEpoch: typeof raw.seatEpoch === "number" && Number.isSafeInteger(raw.seatEpoch) ? raw.seatEpoch : null,
     lastCheckAt: isoOrNull(raw.lastCheckAt),
@@ -344,6 +347,7 @@ export function seatTickStateForEpoch(row: SeatTickProjectState, seatEpoch: numb
   return {
     ...emptySeatTickState(),
     seatEpoch,
+    authIncident: row.authIncident,
     diskPressureShown: row.diskPressureShown,
     eventsThrough: row.eventsThrough,
     lastWakeAt: row.lastWakeAt,

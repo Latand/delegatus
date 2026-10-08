@@ -1389,8 +1389,9 @@ function rotationTrigger(actor: ViewerActor): OrchestratorSeatTrigger {
  * every earlier handoff, and this rotation's fresh handoff — so a seat that has
  * rotated a dozen times designates exactly as cheaply as one that never has.
  *
- * Never automatic: context pressure only ever produces a recommendation
- * (`./health`), and this function runs solely when explicitly called.
+ * Context pressure only produces a recommendation (`./health`). The seat tick
+ * automatically calls this path after an authentication failure, selecting
+ * another allowed account; all other rotations are explicitly requested.
  */
 export function executeOrchestratorRotation(
   rawBody: Record<string, unknown>,
@@ -1455,6 +1456,10 @@ async function runOrchestratorRotation(
         ...rollbackReport,
       },
     };
+  }
+  if (typeof rawBody.expectedIncumbentSeatEpoch === "number"
+    && rawBody.expectedIncumbentSeatEpoch !== incumbent.seatEpoch) {
+    return incumbentChangedResult(project, Number(rawBody.expectedIncumbentSeatEpoch), incumbent);
   }
   // An accepted rotation can be replayed during a hold. Defer a fresh one
   // before composition, which may itself launch a handoff summarizer.
